@@ -1,6 +1,6 @@
 ---
 name: persistence-contract
-description: How a saved blob survives a change — the container-level serde(default) rule and its field-level exception, and why the UI_PERSIST_VERSION floor is no guard against a dropped enum variant. Use before adding, renaming or dropping a persisted field, struct or enum variant.
+description: How a saved blob survives a change — the container-level serde(default) rule, and why the UI_PERSIST_VERSION floor is no guard against a dropped enum variant. Use before adding, renaming or dropping a persisted field, struct or enum variant.
 ---
 
 # The persistence contract

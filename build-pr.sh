@@ -76,6 +76,10 @@ build_one() {
     if [[ -d "$MAIN/target/release" ]]; then
       mkdir -p "$wt/target"
       cp -c -R -p "$MAIN/target/release" "$wt/target/" || rm -rf "$wt/target/release"
+      # Main's finished plugin and renderer came along too. A build that fails
+      # or is interrupted would leave them for load-plugin.sh to list as this
+      # branch's, untagged and "ok fresh" by mtime; cargo relinks both anyway.
+      rm -f "$wt/target/release/libharmonigraph_plugin.dylib" "$wt/target/release/harmonigraph-offline"
     fi
   fi
 

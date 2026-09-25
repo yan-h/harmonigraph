@@ -57,6 +57,7 @@ cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 skipping it leaves exports drawn by an old binary with nothing on screen saying so (PR #340).
 Push and open the PR first, then build while CI runs.
 End by telling Yan it's loadable via `./load-plugin.sh <branch>` and naming the overlay tag it will show.
+A session on a remote machine (a cloud session) has no local worktree for the loader to find, so it hands over `./build-pr.sh --load <PR>` instead.
 Skip the build only when nothing plugin-visible changed (docs, backlog, pure-test edits).
 The `build-handover` skill has the loader, the tag and why not `cargo xtask bundle`.
 
