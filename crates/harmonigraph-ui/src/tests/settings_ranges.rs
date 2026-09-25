@@ -68,7 +68,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // and checked directly in `loaded`.
     poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
-        attack, release, keyline, roll_seconds, roll_thickness, roll_opacity, roll_lead,
+        attack, release, keyline_lift, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the

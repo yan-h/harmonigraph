@@ -123,9 +123,11 @@ pub(crate) fn spectrum_settings_pane(
             );
 
         ValueBar::new(&mut cfg.atmosphere.analyzer_softness, 0.0..=1.0, "Spectrum fill softness")
-            .percent().show(ui).on_hover_text("Blend the live spectrum from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram effects and Spectrum outline.");
-        ValueBar::new(&mut cfg.keyline, 0.0..=1.0, "Spectrum outline").percent().show(ui).on_hover_text(
-            "Opacity of the white spectrum outline. Independent of Spectrum fill softness; 0% hides it.",
+            .percent().show(ui).on_hover_text("Blend the live spectrum from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram effects and Spectrum outline lift.");
+        ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline lift").percent().show(ui).on_hover_text(
+            "How bright the spectrum outline is kept. The outline takes the color of the spectrum under it, \
+                 and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
+                 100% is a white outline, 0% is exactly the color under it. Independent of Spectrum fill softness.",
         );
     });
     // Beside View rather than inside it: these are sections of their own, and

@@ -87,10 +87,6 @@ const PLAIN_FILL_ALPHA: f32 = PLAIN_FILL_ALPHA_U8 as f32 / 255.0;
 /// position is the one the halo's smoothing never touches.
 pub(super) const BODY_STOPS: [(f32, f32); 3] = [(0.0, 0.28), (0.72, 0.59), (1.0, 0.86)];
 
-/// Outline opacity below which the stroke is not worth a shape at all: one
-/// 8-bit alpha level is 1/255, so anything under this rounds away.
-const KEYLINE_VISIBLE_MIN: f32 = 0.004;
-
 pub(super) fn draw_profile(
     painter: &Painter,
     axes: &Axes,
@@ -200,14 +196,79 @@ pub(super) fn draw_profile(
     connect(&mut body, samples.len(), BODY_STOPS.len());
     painter.add(body);
 
-    // The white contour supplies contrast at the palette's dark end.
-    // Its color, width and opacity never depend on the material's softness.
-    let opacity = cfg.keyline.clamp(0.0, 1.0);
-    if opacity > KEYLINE_VISIBLE_MIN && samples.iter().any(|&(_, d, _)| d > 0.0) {
-        let top = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
-        painter.add(egui::Shape::line(
-            top,
-            egui::Stroke::new(1.0, Color32::WHITE.gamma_multiply(opacity)),
+    // The contour takes the color of the fill it bounds, lifted toward white
+    // only as far as the Lift dial's luminance floor asks: a bright level
+    // wears its own color, a dark one stays bright enough to read. It is
+    // opaque, and never depends on the material's softness.
+    if samples.iter().any(|&(_, d, _)| d > 0.0) {
+        let floor = keyline_floor(cfg.keyline_lift);
+        let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
+        let colors: Vec<_> =
+            samples.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
+        painter.add(stroke_mesh(
+            &points,
+            &colors,
+            KEYLINE_WIDTH_PT,
+            1.0 / painter.pixels_per_point(),
         ));
     }
+}
+
+/// The outline's width, in points.
+const KEYLINE_WIDTH_PT: f32 = 1.0;
+
+/// The Lift dial, gamma-encoded so it reads evenly, as the linear luminance
+/// floor [`keyline_color`] lifts to.
+pub(super) fn keyline_floor(lift: f32) -> f32 {
+    egui::ecolor::linear_f32_from_gamma_u8((lift.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// `fill` lifted toward white just far enough that its linear luminance
+/// reaches `floor`, and untouched where it is already brighter. A floor of 1
+/// is plain white and a floor of 0 is the fill itself.
+pub(super) fn keyline_color(fill: Color32, floor: f32) -> Color32 {
+    let c = egui::Rgba::from(fill);
+    let luminance = 0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b();
+    let lift = if luminance < floor { (floor - luminance) / (1.0 - luminance) } else { 0.0 };
+    let up = |v: f32| v + (1.0 - v) * lift;
+    egui::Rgba::from_rgb(up(c.r()), up(c.g()), up(c.b())).into()
+}
+
+/// An open polyline as an antialiased ribbon whose color follows its points,
+/// which `Shape::line` cannot do: it takes one color for the whole path.
+///
+/// Four vertices across: a transparent rim, the solid core's two edges, and
+/// the other rim, `feather` (one pixel) apart at each side. A line thinner
+/// than a pixel has no core and fades its peak instead, so it lays down the
+/// same ink as a line of its true width — the same answer egui's own
+/// tessellator gives.
+fn stroke_mesh(points: &[egui::Pos2], colors: &[Color32], width: f32, feather: f32) -> Mesh {
+    let (core, strength) =
+        if width > feather { ((width - feather) / 2.0, 1.0) } else { (0.0, width / feather) };
+    let across = [(-(core + feather), false), (-core, true), (core, true), (core + feather, false)];
+    let mut mesh = Mesh::default();
+    for (i, (&p, &color)) in points.iter().zip(colors).enumerate() {
+        let normal = |a: egui::Pos2, b: egui::Pos2| (b - a).normalized().rot90();
+        let into = if i > 0 { normal(points[i - 1], p) } else { egui::Vec2::ZERO };
+        let out = if i + 1 < points.len() { normal(p, points[i + 1]) } else { egui::Vec2::ZERO };
+        let one = if into == egui::Vec2::ZERO { out } else { into };
+        let one = if one == egui::Vec2::ZERO { egui::Vec2::Y } else { one };
+        // The miter: the averaged normal, lengthened so the ribbon keeps its
+        // width through a bend, and capped so a spike's tip does not shoot off.
+        let mitre = (into + out).normalized();
+        let offset = if mitre == egui::Vec2::ZERO { one } else { mitre / mitre.dot(one).max(0.5) };
+        for (distance, solid) in across {
+            let color = if solid { color.gamma_multiply(strength) } else { Color32::TRANSPARENT };
+            mesh.colored_vertex(p + offset * distance, color);
+        }
+    }
+    for row in 1..points.len() as u32 {
+        for band in 0..across.len() as u32 - 1 {
+            let a = (row - 1) * across.len() as u32 + band;
+            let b = a + across.len() as u32;
+            mesh.add_triangle(a, b, a + 1);
+            mesh.add_triangle(a + 1, b, b + 1);
+        }
+    }
+    mesh
 }
