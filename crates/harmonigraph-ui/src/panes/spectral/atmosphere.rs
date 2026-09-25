@@ -5,7 +5,7 @@ use egui::{Color32, Mesh, Painter};
 
 use super::axes::{loudness_db, power_db, spectrogram_level_db, Axes};
 use super::spectrogram::cell_color;
-use crate::{KeylineStyle, SpectrumConfig};
+use crate::{theme, Backdrop, KeylineStyle, SpectrumConfig};
 
 /// How far apart the halo's taps sit along the curve, as a fraction of the
 /// curve's own length. Pane-relative and not sample-relative, so the smoothing
@@ -124,6 +124,22 @@ pub(super) fn draw_profile(
     let vertex = |mesh: &mut Mesh, t, d, color| {
         mesh.colored_vertex(axes.at(t, sd(d)), color);
     };
+    // The backdrop first, under the halo and the body it frames.
+    let spacing = match cfg.backdrop {
+        Backdrop::Off => None,
+        Backdrop::Stripes => Some(cfg.backdrop_period.max(1.0) as usize),
+        Backdrop::Gradient => Some(1),
+    };
+    if let Some(spacing) = spacing {
+        let edge: Vec<_> = samples.iter().map(|&(t, d, _)| (t, d)).collect();
+        painter.add(backdrop_mesh(
+            &edge,
+            spacing,
+            cfg.backdrop_height * budget,
+            theme::picture_ruling().gamma_multiply(cfg.backdrop_strength),
+            |t, d| axes.at(t, sd(d)),
+        ));
+    }
     let connect = |mesh: &mut Mesh, rows: usize, bands: usize| {
         for row in 1..rows {
             for band in 0..bands - 1 {
@@ -200,7 +216,7 @@ pub(super) fn draw_profile(
     // only as far as the Lift dial's luminance floor asks: a bright level
     // wears its own color, a dark one stays bright enough to read. It is
     // opaque, and never depends on the material's softness.
-    if samples.iter().any(|&(_, d, _)| d > 0.0) {
+    if cfg.keyline_style != KeylineStyle::Off && samples.iter().any(|&(_, d, _)| d > 0.0) {
         let floor = keyline_floor(cfg.keyline_lift);
         let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
         let colors: Vec<_> =
@@ -215,8 +231,78 @@ pub(super) fn draw_profile(
                 let spacing = axes.pitch_len() / samples.len() as f32;
                 pixel_caps_mesh(&points, &colors, along, spacing, pixel)
             }
+            KeylineStyle::Off => unreachable!("an absent outline is not drawn"),
         });
     }
+}
+
+/// The backdrop over the curve's `edge` (`(pitch fraction, depth)` per sample):
+/// the region above the edge and below `top`, lit `ink` at the floor and fading
+/// linearly to nothing at `top`, in one pixel column of every `spacing`. A
+/// `spacing` of 1 lights every column, which is the Gradient.
+///
+/// The fade is AFFINE in depth, so a vertex anywhere carrying its own depth's
+/// alpha is exact across every triangle, and the region can follow the body's
+/// own edge — the same straight segments between the same samples — rather
+/// than a per-column step. The two then tile: no pixel is both, and none is
+/// neither, whatever the column's offset from the pixel grid. Where a segment
+/// rises through `top` it is cut at the crossing rather than clamped, since a
+/// clamped vertex would lay the backdrop over the flank below it.
+///
+/// A stripe spans one column of the pitch axis, from halfway to the previous
+/// sample to halfway to the next — the columns the samples stand for, which
+/// are a device pixel each, so a stripe is one pixel wide.
+fn backdrop_mesh(
+    edge: &[(f32, f32)],
+    spacing: usize,
+    top: f32,
+    ink: Color32,
+    at: impl Fn(f32, f32) -> egui::Pos2,
+) -> Mesh {
+    let mut mesh = Mesh::default();
+    if edge.len() < 2 || top <= 0.0 {
+        return mesh;
+    }
+    let lit = |d: f32| ink.gamma_multiply((1.0 - d / top).clamp(0.0, 1.0));
+    // The part of the segment `p`-`q` below `top`, as a quad up to `top`.
+    let mut piece = |p: (f32, f32), q: (f32, f32)| {
+        if q.0 <= p.0 || (p.1 >= top && q.1 >= top) {
+            return;
+        }
+        let cross =
+            |a: (f32, f32), b: (f32, f32)| (a.0 + (b.0 - a.0) * (top - a.1) / (b.1 - a.1), top);
+        let (p, q) = match (p.1 < top, q.1 < top) {
+            (true, false) => (p, cross(p, q)),
+            (false, true) => (cross(p, q), q),
+            _ => (p, q),
+        };
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(at(p.0, p.1), lit(p.1));
+        mesh.colored_vertex(at(q.0, q.1), lit(q.1));
+        mesh.colored_vertex(at(q.0, top), Color32::TRANSPARENT);
+        mesh.colored_vertex(at(p.0, top), Color32::TRANSPARENT);
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base, base + 2, base + 3);
+    };
+    if spacing <= 1 {
+        for pair in edge.windows(2) {
+            piece(pair[0], pair[1]);
+        }
+        return mesh;
+    }
+    let last = edge.len() - 1;
+    // Halfway along the segment from sample `i` to its neighbour `j`.
+    let mid = |i: usize, j: usize| {
+        let (a, b) = (edge[i], edge[j]);
+        (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1))
+    };
+    for i in (0..=last).step_by(spacing) {
+        let before = if i > 0 { mid(i - 1, i) } else { edge[i] };
+        let after = if i < last { mid(i, i + 1) } else { edge[i] };
+        piece(before, edge[i]);
+        piece(edge[i], after);
+    }
+    mesh
 }
 
 /// One solid cap at each point, all in one mesh: a device `pixel` deep and
