@@ -1,22 +1,22 @@
-//! The At rest section of the Lattice settings page: what the lattice
+//! The Idle lattice section of the Lattice settings page: what the lattice
 //! draws when nothing is playing — how bright that picture is, and the cross
 //! standing at each node position that makes up most of it.
 //!
 //! An idle position draws no disc of its own, so the markers and the node
 //! rings standing at their empty state are the whole of it. Two brightness bars
 //! open the section, on one `L*` axis so they are read against each other:
-//! Ground is the NODE at rest, one grey under the audio ring where it reads
-//! silence and the octave band where an octave is not sounding
-//! ([`ViewConfig::lattice_ground`](harmonigraph_scene::ViewConfig)), and Marker
-//! ink is the field of crosses
+//! Idle ring brightness is the NODE at rest, one grey under the audio ring where
+//! it reads silence and the octave band where an octave is not sounding
+//! ([`ViewConfig::lattice_ground`](harmonigraph_scene::ViewConfig)), and Idle
+//! label/cross brightness is the field of crosses
 //! ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)).
 //!
 //! They are both here rather than one of them living under the note whose rings
 //! it moves, because the question they answer is the same one and it is about
 //! this picture: how visible is the lattice with nothing playing. Equal numbers
 //! are the whole resting lattice in one grey. What wants them apart is the glow
-//! — a Ground dark enough for the light behind the notes to read takes the node
-//! rings down where it should and the marker field with them, and the field is
+//! — an Idle ring brightness dark enough for the light behind the notes to read
+//! takes the node rings down where it should and the marker field with them, and the field is
 //! what says where the positions ARE.
 //!
 //! Nothing is drawn BETWEEN the positions, and a CROSS is why that costs the
@@ -88,8 +88,8 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
         // marker field's own switch, and every setting of this one draws.
         ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
             .unit(1.0, "%")
-            // Whole points on the same L* axis as Ground, and that IS the point of
-            // the units: two bars a person is meant to read against each other
+            // Whole points on the same L* axis as Idle ring brightness, and that
+            // IS the point of the units: two bars a person is meant to read against each other
             // have to be counted in the same thing.
             .integer()
             .show(ui)

@@ -266,9 +266,9 @@ struct Cloud {
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
     // 1 when the cloud's scalar tone has been drawn into `cloud_tone` at the
-    // resolution `Cloud pixel size` asks for, so the composite reads it there
-    // instead of walking the cells per pixel. 0 is the native path, which is
-    // what every `cloud_pixel` at or under one device pixel takes.
+    // fixed cloud sample spacing (0.5 pt since #1042, `CloudSampling`), so the
+    // composite reads it there instead of walking the cells per pixel. 0 is
+    // the native path, which a spacing at or under one device pixel takes.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
     // are the sanitized settings. The filter shader declares only the head of
@@ -303,7 +303,7 @@ struct Cloud {
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
-/// The cloud's scalar tone, one texel per `cloud_pixel` of pane, as `fs_cloud_tone`
+/// The cloud's scalar tone, one texel per cloud sample of pane, as `fs_cloud_tone`
 /// drew it. Bound whether or not it holds anything — a pass that RENDERS into it
 /// binds a stand-in here, since wgpu validates every resource in a bound group
 /// against the attachments whether the shader reads it or not.
@@ -1281,8 +1281,8 @@ fn cloud_tone_at(pt: vec2<f32>) -> f32 {
     return scale_tone(pt);
 }
 
-// The cloud's tone reduced to a target of its own, one texel per `Cloud pixel
-// size` of pane. The coverage quad carries the pane-relative 0..1 fraction in
+// The cloud's tone reduced to a target of its own, one texel per cloud sample
+// (a fixed 0.5 pt) of pane. The coverage quad carries the pane-relative 0..1 fraction in
 // its `slab`/`t`, which is what makes this the same `pt` the composite would
 // have walked under each of its own pixels.
 @fragment

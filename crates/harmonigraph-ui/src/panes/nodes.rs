@@ -118,8 +118,9 @@ fn octaves_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // No solidity control and no Backdrop switch: the glyphs are always the crisp
     // classic shapes, and the silent octaves always stand in behind the
     // sounding ones — that backdrop is what completes the ring, so a lone
-    // octave still reads as a whole note. How BRIGHT it stands is the At rest
-    // section's Ground bar at the foot of the page, which is not this layer's
+    // octave still reads as a whole note. How BRIGHT it stands is the Idle
+    // lattice section's Idle ring brightness bar at the foot of the page, which
+    // is not this layer's
     // to own: the audio ring reads its own silence in that same grey.
 }
 

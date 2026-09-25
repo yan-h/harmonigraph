@@ -21,12 +21,12 @@ fn for_drags() -> crate::SharedState {
 }
 
 /// Drag the Spectral pane's spectrum/spectrogram divider through the REAL
-/// dock — `root_ui`, egui_dock, the tab body's ScrollArea and all.
+/// workspace — `root_ui`, the fixed section layout, its chrome and the
+/// Analyzer's region folds.
 ///
 /// The pane's own tests drive `spectral_pane` into a bare child Ui, which
-/// skips every layer the dock puts between the pointer and the handle. Any
-/// of those could swallow the drag (the ScrollArea registers a drag-sensing
-/// background widget of its own), and the failure would look exactly like
+/// skips every layer the workspace puts between the pointer and the handle.
+/// Any of those could swallow the drag, and the failure would look exactly like
 /// "dragging doesn't work" — silent, with the handle still lighting up on
 /// hover. So the assertion is that the split actually MOVED.
 #[test]

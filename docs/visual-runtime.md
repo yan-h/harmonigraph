@@ -125,7 +125,7 @@ Dock plus preview reduced median total CPU work by about 8.1% in this harness.
 Its UI-and-tessellation portion decreased from 0.612 to 0.551 ms,
 while analysis remained around 0.163–0.165 ms.
 The single dock's median is essentially unchanged.
-Removing the temporary empty `DockState` eliminates allocations in every dock frame;
+Removing the temporary empty `DockState` eliminated allocations in every dock frame (since #1056 there is no `DockState`: egui_dock gave way to fixed foldable pane layouts);
 sharing Fold removes additional work when both surfaces consume it.
 
 The initial no-drawing tail increase is retained in the table rather than labeled neutral.

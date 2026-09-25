@@ -41,9 +41,3 @@ ignore = [
   "RUSTSEC-2026-0194", # quadratic run time on duplicate attribute names
   "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation (DoS)
 ]
-
-# Deliberately NOT ignored, and deliberately not escalated either: RUSTSEC-2024-0436,
-# `paste` 1.0.15 unmaintained, reached through `egui_dock`. `unmaintained` is
-# informational, so it prints without failing the run — which is the right
-# weight. Listing it here would silence a line worth reading; promoting it to
-# an error would block on someone else's maintenance.

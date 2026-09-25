@@ -410,7 +410,7 @@ impl Camera {
             finite_or(self.distance, fresh.distance).clamp(Self::MIN_DISTANCE, Self::MAX_DISTANCE);
 
         // The two cabinet knobs, ranged to what their own bars offer
-        // ("Sevenths angle" 0..=90°, "Sevenths length" 0.1..=1.0).
+        // ("Depth angle" 0..=90°, "Depth step scale" 0.1..=1.0).
         self.cabinet_angle = finite_or(self.cabinet_angle, fresh.cabinet_angle)
             .clamp(0.0, std::f32::consts::FRAC_PI_2);
         self.cabinet_scale = finite_or(self.cabinet_scale, fresh.cabinet_scale).clamp(0.1, 1.0);

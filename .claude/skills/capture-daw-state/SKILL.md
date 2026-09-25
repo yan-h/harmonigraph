@@ -1,6 +1,6 @@
 ---
 name: capture-daw-state
-description: Recover the plugin's live settings out of a Bitwig project — camera, dock, ViewConfig, params. Use when Yan has dialed in a look in the DAW and wants it captured as a new default, or when reproducing a bug against real saved state.
+description: Recover the plugin's live settings out of a Bitwig project — camera, layout, ViewConfig, params. Use when Yan has dialed in a look in the DAW and wants it captured as a new default, or when reproducing a bug against real saved state.
 ---
 
 # Reading the plugin's live settings back out of Bitwig
@@ -16,7 +16,7 @@ The exact values are recoverable:
 ./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ```
 
-**The trap, which costs a round trip with Yan every time it's missed:** the UI state (dock, camera, ViewConfig) is written into the plugin state ONLY when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`, `crates/harmonigraph-plugin/src/editor/window.rs`).
+**The trap, which costs a round trip with Yan every time it's missed:** the UI state (`layout` and `folded_sections`, camera, ViewConfig) is written into the plugin state ONLY when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`, `crates/harmonigraph-plugin/src/editor/window.rs`).
 Saving a project with the plugin window open silently keeps the previous values, with no warning.
 So ask Yan for, in order:
 
@@ -57,7 +57,7 @@ retuning the look here is free.
 key now picks the new value up.
 That is the intended trade (backwards compatibility is not a constraint —
 see CLAUDE.md), not an accident, but it means "restyle the fresh view" and "restyle an under-specified saved view" are the same edit.
-- Camera zoom and dock are navigation state, deliberately not baked into
+- Camera zoom, `layout` and `folded_sections` are navigation state, deliberately not baked into
 defaults.
 
 ## Container format, if the script ever needs fixing
@@ -66,7 +66,7 @@ defaults.
 Plugin state sits in a raw-DEFLATE section (wbits=-15, no zlib header) as nice-plug's plain JSON `{"version","params","fields"}`, and `fields["ui-state"]` is the RON from `SharedState::save_persist`.
 The version-7 editor save nests camera, view, spectrum, spiral framing and the whole video configuration under `appearance`.
 `--appearance` extracts that document for `harmonigraph-offline --appearance FILE`, requiring exactly one editor appearance in the project.
-The take carries that appearance independently of dock layout and editor organization.
+The take carries that appearance independently of the editor layout and its folds.
 nice-plug can also zstd the JSON.
 The script's own header documents this too.
 

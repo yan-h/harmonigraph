@@ -597,10 +597,13 @@ fn default_skin() -> String {
 }
 
 /// The current [`UiPersist`] layout version, and the FLOOR under it. Bumped
-/// when the `Tab` set changes shape (rename/split/add/merge), which would
-/// otherwise strand the user with missing or doubled tabs.
+/// when a saved shape changes in a way that still parses but would load
+/// wrong. 1 to 6 below bumped for `Tab` set changes, which stranded a saved
+/// dock with missing or doubled tabs; since #1056 the layout is fixed and
+/// every tab is always placed, so a tab change no longer owes one (#1083
+/// replaced Display without a bump).
 ///
-/// A bump costs the whole blob, not the dock alone: `load_persist` refuses
+/// A bump costs the whole blob, not the layout alone: `load_persist` refuses
 /// anything below this outright, so camera, view, spectrum and render settings
 /// all fall back to defaults with it. That is what lets a format change be
 /// made outright rather than shimmed.

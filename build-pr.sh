@@ -26,7 +26,7 @@ TARGETS=()
 for arg in "$@"; do
   case "$arg" in
     --load) LOAD=1 ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *) TARGETS+=("$arg") ;;
   esac
 done
