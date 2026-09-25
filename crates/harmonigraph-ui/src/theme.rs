@@ -22,6 +22,12 @@ pub fn panel() -> Color32 {
 pub fn well() -> Color32 {
     c(active_skin().well)
 }
+/// Pane headers and folded rails (see [`Skin::header`]).
+///
+/// [`Skin::header`]: harmonigraph_scene::skin::Skin::header
+pub fn header() -> Color32 {
+    c(active_skin().header())
+}
 /// Subtly raised surface between panel and widget (hovered tabs, faint
 /// striping).
 pub fn surface_faint() -> Color32 {

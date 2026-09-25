@@ -31,7 +31,7 @@ pub struct Skin {
     // dialled while a picture is being read.
     /// Window/panel background.
     pub panel: [u8; 3],
-    /// Recessed areas: console scrollback, tab bar, meters.
+    /// Recessed areas: console scrollback, tracks, meters.
     pub well: [u8; 3],
     /// Subtly raised surface between panel and widget: hovered tabs,
     /// faint striping.
@@ -101,6 +101,18 @@ impl Skin {
 }
 
 impl Skin {
+    /// Pane headers and folded rails: halfway from `panel` to `widget`.
+    ///
+    /// Derived rather than chosen per skin, because what it has to do is sit
+    /// between two colours every skin already has. Off `panel`, so a header
+    /// reads apart from the settings below it and from the black picture
+    /// ground; short of `widget`, so the fold button's square still reads on
+    /// it. `well` does neither reliably: some skins put it under `panel`, the
+    /// same black as a picture.
+    pub fn header(&self) -> [u8; 3] {
+        mix(self.panel, self.widget, 0.5)
+    }
+
     /// A skin from a base16 scheme's sixteen slots (`0xRRGGBB`, `base00`
     /// first), mapped the way the scheme's own roles suggest: `base00` the
     /// pane, `base01` the tracks and wells, `base02` buttons, rules and
