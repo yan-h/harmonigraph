@@ -152,7 +152,7 @@ pub(super) fn draw_profile(
     };
 
     if softness > 0.0 {
-        let mut halo = Mesh::default();
+        let mut halo = grid_mesh(samples.len(), HALO_BANDS);
         let stride = ((samples.len() as f32 * HALO_TAP_SPACING).round() as usize).max(1);
         let reach = axes.pitch_len().min(axes.depth_len()) * HALO_REACH_FRACTION
             / axes.depth_len().max(1.0);
@@ -197,7 +197,7 @@ pub(super) fn draw_profile(
         painter.add(halo);
     }
 
-    let mut body = Mesh::default();
+    let mut body = grid_mesh(samples.len(), BODY_STOPS.len());
     for &(t, d, color) in &samples {
         // A dark translucent foot, a colored body, then the exact measured
         // edge. Peak positions and the volume-color lookup stay unchanged.
@@ -234,6 +234,17 @@ pub(super) fn draw_profile(
             KeylineStyle::Off => unreachable!("an absent outline is not drawn"),
         });
     }
+}
+
+/// An empty mesh with exactly the room a grid of `rows` by `bands` vertices
+/// takes, two triangles per cell, so filling it never grows a buffer. Without
+/// this the profile's meshes doubled their way up from empty every frame, about
+/// 3.8 MB of allocator traffic (#1103).
+fn grid_mesh(rows: usize, bands: usize) -> Mesh {
+    let mut mesh = Mesh::default();
+    mesh.reserve_vertices(rows * bands);
+    mesh.reserve_triangles(2 * rows.saturating_sub(1) * bands.saturating_sub(1));
+    mesh
 }
 
 /// The backdrop over the curve's `edge` (`(pitch fraction, depth)` per sample):
@@ -331,6 +342,9 @@ fn pixel_caps_mesh(
     let across = egui::Vec2::splat(1.0) - along;
     let half = 0.5 * (along * spacing + across * pixel);
     let mut mesh = Mesh::default();
+    // `add_colored_rect` is four vertices and two triangles.
+    mesh.reserve_vertices(4 * points.len());
+    mesh.reserve_triangles(2 * points.len());
     for (&p, &color) in points.iter().zip(colors) {
         mesh.add_colored_rect(egui::Rect::from_min_max(p - half, p + half), color);
     }
@@ -369,7 +383,7 @@ fn stroke_mesh(points: &[egui::Pos2], colors: &[Color32], width: f32, feather: f
     let (core, strength) =
         if width > feather { ((width - feather) / 2.0, 1.0) } else { (0.0, width / feather) };
     let across = [(-(core + feather), false), (-core, true), (core, true), (core + feather, false)];
-    let mut mesh = Mesh::default();
+    let mut mesh = grid_mesh(points.len(), across.len());
     for (i, (&p, &color)) in points.iter().zip(colors).enumerate() {
         let normal = |a: egui::Pos2, b: egui::Pos2| (b - a).normalized().rot90();
         let into = if i > 0 { normal(points[i - 1], p) } else { egui::Vec2::ZERO };

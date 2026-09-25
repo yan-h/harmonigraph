@@ -159,6 +159,7 @@ pub fn derive_scene(
         mark_thickness: rings.mark_thickness,
         background: crate::skin::picture_color(),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
+        pitch_lut_spacing: crate::LutSpacing::of(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
         // Repaired but not bounded, which is the one pair here that splits the

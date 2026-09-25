@@ -8,7 +8,7 @@
 
 use egui::{Color32, CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{
-    hue_circle, pitch_ramp_lut, Gradient, ViewConfig, HUE_CIRCLE_N, PITCH_LUT_N,
+    gradient_color, hue_circle, Gradient, ViewConfig, HUE_CIRCLE_N, PITCH_LUT_N,
 };
 
 use super::bar::{
@@ -263,17 +263,18 @@ impl GradientPreview {
     pub fn show(self, ui: &Ui, gradient: &Gradient) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let response = ui.interact(self.rect, self.id, Sense::hover());
-        // One column per table entry, so every color in the table lands on a
-        // column of its own and only the vertices between two of them are
-        // interpolated.
-        let lut = pitch_ramp_lut(gradient.sanitized());
+        // Read the way every picture reads the table, through `gradient_color`,
+        // since a bent gradient's entries are not evenly spaced along the bar
+        // (`LutSpacing`). A column per point rather than per entry, so the
+        // entries a steep bend packs into a few points of the bar are each
+        // still drawn; never fewer columns than entries.
+        let gradient = gradient.sanitized();
         // Rounded at both ends: the preview is a band in its own right, and
         // each of its ends meets the pane rather than another shape.
         let corner = f32::from(bar_radius(scale));
-        gradient_strip(ui.painter(), self.rect, PITCH_LUT_N - 1, (corner, corner), |p| {
-            let f = p.clamp(0.0, 1.0) * (PITCH_LUT_N - 1) as f32;
-            let i0 = f.floor() as usize;
-            scene_color(lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()), 1.0)
+        let columns = (self.rect.width().round() as usize).max(PITCH_LUT_N - 1);
+        gradient_strip(ui.painter(), self.rect, columns, (corner, corner), |p| {
+            scene_color(gradient_color(p, gradient), 1.0)
         });
         response
     }
@@ -2374,8 +2375,8 @@ mod tests {
     #[test]
     fn the_handles_reach_is_the_same_at_every_chrome_scale() {
         // Inside GRAB_PX, and outside what the smallest scale would leave of
-        // it: 14 * 0.7 is 9.8.
-        let offset = 12.0;
+        // it were the reach scaled.
+        let offset = GRAB_PX * (1.0 + *theme::UI_SCALE_RANGE.start()) * 0.5;
         for scale in [1.0f32, 0.7, 1.5] {
             let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
             let mut g = before;

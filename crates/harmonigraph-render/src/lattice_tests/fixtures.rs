@@ -236,6 +236,7 @@ pub(super) fn parity_scene() -> Scene {
             let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
             Vec4::new(t, 0.4, 1.0 - t, 1.0)
         }),
+        pitch_lut_spacing: harmonigraph_scene::LutSpacing::EVEN,
         darkest_pitch: 24.0,
         brightest_pitch: 108.0,
         render_scale: 1.0,
@@ -649,7 +650,7 @@ pub(super) const PROBE_RANGE: f32 = 200.0;
 /// band leaves these measurements nothing to find. The shipped stack's active
 /// layers are held where they belong, on the fresh view itself, by
 /// `harmonigraph_scene`'s
-/// `the_fresh_node_spends_its_stack_on_octaves_and_marks`.
+/// `the_fresh_node_fits_its_stack_inside_the_quad`.
 ///
 /// The PADDING is the probe's for a second reason: the shared gap is what
 /// separates every layer of a node, and a gap of the order the fresh view
