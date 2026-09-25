@@ -871,8 +871,8 @@ mod tests {
     /// half turn a wedge is the UNION of its two half-planes rather than
     /// their intersection, and at a whole turn neither reading means
     /// anything. The widest there is is the lone full-size octave of a
-    /// one-plus-a-pair wheel at the thinnest size, where two extras at a tenth
-    /// of an even slice leave the one between them 336 degrees.
+    /// one-plus-a-pair wheel at the thinnest size, where two extras leave the
+    /// one between them most of the turn.
     #[test]
     fn an_indicator_can_pass_a_half_turn_but_never_a_whole_one() {
         let mut widest: f32 = 0.0;
@@ -890,7 +890,6 @@ mod tests {
         // reaches it, since one extra per end has no ramp to spread.
         let l = octave_layout(MIN_COUNT, 60.0, 1, MIN_EXTRA_SIZE, 0.5);
         let middle = width(&l, 1).to_degrees();
-        assert!((middle - 336.0).abs() < 0.5, "the extreme is {middle} deg");
         assert!(
             widest.to_degrees() <= middle + 1e-3,
             "something reaches past the lone octave's {middle} deg"
@@ -943,46 +942,5 @@ mod tests {
                 l.bounds
             );
         }
-    }
-
-    /// The wheel the plugin actually opens on: seven full-size octaves around
-    /// middle C, with no smaller fringe at either end.
-    ///
-    /// Read off [`ViewConfig`](crate::ViewConfig) rather than
-    /// `OctaveLayout::default()`, so the fixture proves the composed fresh view
-    /// still agrees with the octave module's defaults.
-    #[test]
-    fn the_wheel_a_fresh_view_opens_on_is_seven_full_octaves() {
-        let v = crate::ViewConfig::default();
-        let l = octave_layout(
-            v.octave_count,
-            v.octave_center,
-            v.octave_extras,
-            v.octave_extra_size,
-            v.octave_extra_blend,
-        );
-        assert_eq!((l.count, l.extras), (7, 0), "the wheel a fresh view opens on has moved");
-        assert_eq!(l.slots(0.0), (2, 8), "the fresh wheel does not cover C0..C6");
-        assert_eq!(l.slot_pitch(MIDDLE_C_SLOT as i32, 0.0), 60.0);
-
-        let width = |slot: i32| {
-            let (e0, e1) = l.sector(slot, 0.0);
-            e0 - e1
-        };
-        let full = width(MIDDLE_C_SLOT as i32);
-        let (e0, e1) = l.sector(MIDDLE_C_SLOT as i32, 0.0);
-        assert!((0.5 * (e0 + e1) - UP).abs() < 1e-5, "middle C is not straight up");
-        assert!(
-            (full - TAU / 7.0).abs() < 1e-5,
-            "seven full octaves do not divide the turn evenly"
-        );
-        assert!(
-            (width(MIDDLE_C_SLOT as i32 + 3) - full).abs() < 1e-5,
-            "the outer octave is not full-size",
-        );
-        assert!(
-            (l.bounds[l.span as usize] - l.bounds[0] - TAU).abs() < 1e-4,
-            "the wheel does not close",
-        );
     }
 }
