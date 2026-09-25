@@ -2017,13 +2017,13 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     );
 }
 
-/// Dots put one disc on each sample's own level and nothing between samples:
-/// a spike rising the whole depth in one sample leaves its flank to the fill.
-/// Each is as opaque as its lift, so the bright spike's is gone and the
-/// palette-black floor's is solid at the floor's brightness. Two samples per point, as a 2x display
-/// draws them, so the flank is steeper than any dot can span.
+/// Dots cap each sample with one device pixel on its own level and draw
+/// nothing between samples: a spike rising the whole depth in one sample
+/// leaves its flank to the fill. The caps are opaque and in the line's own
+/// colors, so the bright spike wears its fill's color and the palette-black
+/// floor is lifted to the lift's floor.
 #[test]
-fn analyzer_dots_mark_each_level_and_leave_flanks_to_the_fill() {
+fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
     let mut cfg = SpectrumConfig {
         floor_db: -100.0,
         ceiling_db: 0.0,
@@ -2039,7 +2039,9 @@ fn analyzer_dots_mark_each_level_and_leave_flanks_to_the_fill() {
     let spike = n / 2;
     let level = |i: usize| if i == spike { 0.0 } else { -99.0 };
     let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
+    let mut pixel = 0.0;
     let out = painted_into(SCREEN, WIDE, |ui| {
+        pixel = 1.0 / ui.ctx().pixels_per_point();
         let budget = plot_budget(1.0, axes.depth_len());
         atmosphere::draw_profile(ui.painter(), &axes, &cfg, &visible, budget, 1.0);
     });
@@ -2051,38 +2053,46 @@ fn analyzer_dots_mark_each_level_and_leave_flanks_to_the_fill() {
             _ => None,
         })
         .collect();
-    let [body, dots] = &meshes[..] else { panic!("expected the body and the dots") };
+    let [body, caps] = &meshes[..] else { panic!("expected the body and the caps") };
     let stops = atmosphere::BODY_STOPS.len();
     let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
-    let per_dot = 1 + 2 * atmosphere::DOT_SIDES;
-    assert_eq!(dots.vertices.len(), n * per_dot, "one dot per sample");
+    assert_eq!(caps.vertices.len(), n * 4, "one square per sample");
     let floor = atmosphere::keyline_floor(cfg.keyline_lift);
     for (i, &(midi, _, level)) in visible.iter().enumerate() {
-        let center = &dots.vertices[i * per_dot];
-        assert!(center.pos.distance(contour(i)) < 1e-3, "dot {i} is off its level");
+        let corners = &caps.vertices[i * 4..i * 4 + 4];
+        let square = egui::Rect::from_points(&corners.iter().map(|v| v.pos).collect::<Vec<_>>());
+        assert!(square.center().distance(contour(i)) < 1e-3, "cap {i} is off its level");
+        assert!(
+            (square.size() - egui::Vec2::splat(pixel)).length() < 1e-4,
+            "cap {i} is not a pixel"
+        );
         let fill = super::spectrogram::cell_color(
             cfg.spectrogram_gradient,
             spectrogram_level_db(&cfg, level, midi),
         );
-        assert_eq!(center.color, atmosphere::keyline_dot_color(fill, floor));
+        let ink = atmosphere::keyline_color(fill, floor);
+        assert!(corners.iter().all(|v| v.color == ink), "cap {i} is not the line's solid color");
     }
     let luminance = |c: egui::Color32| {
         let c = egui::Rgba::from(c);
         0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
     };
-    let dot = |i: usize| dots.vertices[i * per_dot].color;
-    assert_eq!(dot(spike), egui::Color32::TRANSPARENT, "a bright level kept its dot");
-    assert_eq!(dot(0).a(), 255, "a palette-black level lost its dot");
-    assert!((luminance(dot(0)) - floor).abs() < 0.01, "a dark dot was not lifted to the floor");
+    let cap = |i: usize| caps.vertices[i * 4].color;
+    let bright = super::spectrogram::cell_color(
+        cfg.spectrogram_gradient,
+        spectrogram_level_db(&cfg, 0.0, 69.0),
+    );
+    assert!(luminance(bright) > floor, "fixture needs a spike brighter than the floor");
+    assert_eq!(cap(spike), bright, "a bright level's cap is not its fill's color");
+    assert!((luminance(cap(0)) - floor).abs() < 0.01, "a dark cap was not lifted to the floor");
     let flank = contour(spike).distance(contour(spike - 1));
-    assert!(flank > 20.0, "fixture needs a flank taller than any dot");
-    // Nothing joins two samples: no triangle is wider than one dot and its
-    // one-pixel feather, where a line would lay one up the whole flank.
-    let span = cfg.keyline_dot_size + 2.0;
-    for triangle in dots.indices.chunks_exact(3) {
-        let at = |k: usize| dots.vertices[triangle[k] as usize].pos;
+    assert!(flank > 20.0, "fixture needs a flank taller than a pixel");
+    // Nothing joins two samples, where a line would lay a triangle up the
+    // whole flank.
+    for triangle in caps.indices.chunks_exact(3) {
+        let at = |k: usize| caps.vertices[triangle[k] as usize].pos;
         let widest = at(0).distance(at(1)).max(at(1).distance(at(2))).max(at(0).distance(at(2)));
-        assert!(widest <= span, "a triangle {widest} wide joined samples");
+        assert!(widest <= pixel * 1.5, "a triangle {widest} wide joined samples");
     }
 }
 

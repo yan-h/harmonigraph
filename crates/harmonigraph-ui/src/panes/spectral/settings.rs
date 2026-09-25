@@ -8,7 +8,7 @@ use harmonigraph_scene::{
     PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX, SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
-use crate::config::{BALLISTICS_MAX, KEYLINE_DOT_SIZE_RANGE};
+use crate::config::BALLISTICS_MAX;
 use crate::panes::{edge_bar, section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
@@ -131,12 +131,8 @@ pub(crate) fn spectrum_settings_pane(
         );
         choice_row(ui, "Spectrum outline", &mut cfg.keyline_style, &[
             (KeylineStyle::Line, "Line", "A continuous line along the top of the spectrum."),
-            (KeylineStyle::Dots, "Dots", "A dot on every pixel's level, with nothing joining neighbors. Smooth stretches still read as an edge; steep spikes and dense partials show only their tips and troughs. Dots show only where Spectrum outline lift brightens the color: bright levels have none, and 0% lift hides them all."),
+            (KeylineStyle::Dots, "Dots", "One pixel on every pixel column's level, with nothing joining neighbors. Gentle stretches still read as an edge; steep spikes and dense partials show only their tips and troughs. Colored like the line."),
         ]);
-        ValueBar::new(&mut cfg.keyline_dot_size, KEYLINE_DOT_SIZE_RANGE, "Spectrum dot size")
-            .unit(1.0, " pt")
-            .show(ui)
-            .on_hover_text("Diameter of the outline's dots when Spectrum outline is Dots.");
     });
     // Beside View rather than inside it: these are sections of their own, and
     // folding View must not fold them too.

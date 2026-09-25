@@ -203,52 +203,31 @@ pub(super) fn draw_profile(
     if samples.iter().any(|&(_, d, _)| d > 0.0) {
         let floor = keyline_floor(cfg.keyline_lift);
         let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
-        let ink = match cfg.keyline_style {
-            KeylineStyle::Line => keyline_color,
-            KeylineStyle::Dots => keyline_dot_color,
-        };
-        let colors: Vec<_> = samples.iter().map(|&(_, _, color)| ink(color, floor)).collect();
-        let feather = 1.0 / painter.pixels_per_point();
+        let colors: Vec<_> =
+            samples.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
+        let pixel = 1.0 / painter.pixels_per_point();
         painter.add(match cfg.keyline_style {
-            KeylineStyle::Line => stroke_mesh(&points, &colors, KEYLINE_WIDTH_PT, feather),
-            KeylineStyle::Dots => dots_mesh(&points, &colors, cfg.keyline_dot_size, feather),
+            KeylineStyle::Line => stroke_mesh(&points, &colors, KEYLINE_WIDTH_PT, pixel),
+            KeylineStyle::Dots => pixel_caps_mesh(&points, &colors, pixel),
         });
     }
 }
 
-/// Sides of each dot's polygon. The dots are a few points across, where a
-/// dozen sides is already rounder than the pixels can show.
-pub(super) const DOT_SIDES: usize = 12;
-
-/// One antialiased disc of `diameter` at each point, all in one mesh: a
-/// center, a solid rim and a transparent rim `feather` (one pixel) further
-/// out, the same ramp [`stroke_mesh`] gives its line. A disc narrower than a
-/// pixel fades its core instead, laying down the ink of its true size.
-fn dots_mesh(points: &[egui::Pos2], colors: &[Color32], diameter: f32, feather: f32) -> Mesh {
-    let (core, strength) = if diameter > feather {
-        ((diameter - feather) / 2.0, 1.0)
-    } else {
-        (0.0, diameter / feather)
-    };
-    let rim: Vec<_> = (0..DOT_SIDES)
-        .map(|side| egui::Vec2::angled(std::f32::consts::TAU * side as f32 / DOT_SIDES as f32))
-        .collect();
+/// One solid square a device `pixel` across at each point, all in one mesh:
+/// the top pixel of each stem, since the profile has one sample per pixel
+/// column. No antialiasing rim, on purpose. A square exactly one pixel wide
+/// covers exactly one pixel center wherever it lands, so the GPU paints it as
+/// one crisp pixel, the nearest to the true level; a feathered one would
+/// smear a dimmer blot over four and shimmer as the level moves.
+///
+/// Opaque and in [`keyline_color`], the line's own rule: a single pixel at the
+/// fill's edge in the fill's own color is the fill a pixel further out, so a
+/// bright level needs no fade to disappear.
+fn pixel_caps_mesh(points: &[egui::Pos2], colors: &[Color32], pixel: f32) -> Mesh {
+    let half = egui::Vec2::splat(0.5 * pixel);
     let mut mesh = Mesh::default();
     for (&p, &color) in points.iter().zip(colors) {
-        let center = mesh.vertices.len() as u32;
-        let color = color.gamma_multiply(strength);
-        mesh.colored_vertex(p, color);
-        for &out in &rim {
-            mesh.colored_vertex(p + out * core, color);
-            mesh.colored_vertex(p + out * (core + feather), Color32::TRANSPARENT);
-        }
-        for side in 0..DOT_SIDES as u32 {
-            let next = (side + 1) % DOT_SIDES as u32;
-            let (solid, next_solid) = (center + 1 + 2 * side, center + 1 + 2 * next);
-            mesh.add_triangle(center, solid, next_solid);
-            mesh.add_triangle(solid, solid + 1, next_solid);
-            mesh.add_triangle(next_solid, solid + 1, next_solid + 1);
-        }
+        mesh.add_colored_rect(egui::Rect::from_min_max(p - half, p + half), color);
     }
     mesh
 }
@@ -271,21 +250,6 @@ pub(super) fn keyline_color(fill: Color32, floor: f32) -> Color32 {
     let lift = if luminance < floor { (floor - luminance) / (1.0 - luminance) } else { 0.0 };
     let up = |v: f32| v + (1.0 - v) * lift;
     egui::Rgba::from_rgb(up(c.r()), up(c.g()), up(c.b())).into()
-}
-
-/// A dot's ink: [`keyline_color`], only as opaque as the lift it took. A fill
-/// at or above the floor needs no lift and its dot is gone, so a bright level
-/// is left to the fill alone; a palette-black one gets a solid dot at the
-/// floor's brightness. A floor of 0 hides every dot.
-///
-/// The line needs no such fade, because it lies ON the fill's edge and in the
-/// fill's own color; a dot stands half off the edge, where it reads against
-/// the background whatever color it is.
-pub(super) fn keyline_dot_color(fill: Color32, floor: f32) -> Color32 {
-    let c = egui::Rgba::from(fill);
-    let luminance = 0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b();
-    let opacity = if floor > 0.0 { ((floor - luminance) / floor).clamp(0.0, 1.0) } else { 0.0 };
-    keyline_color(fill, floor).gamma_multiply(opacity)
 }
 
 /// An open polyline as an antialiased ribbon whose color follows its points,
