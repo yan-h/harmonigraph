@@ -77,10 +77,9 @@ pub enum Expression {
     /// 0 to 1, released to pressed hard.
     Pressure,
     /// Linear amplitude where 1 is unity (CLAP's note volume). CLAP promises
-    /// at most 4 (+12 dB) and nothing caps it here: a Bitwig take sat at
-    /// exactly 4 for its first 0.4 s under a cap at 4, which is either Bitwig's
-    /// ceiling or the cap hiding more, and a take can only say which if it
-    /// keeps what was sent.
+    /// at most 4 (+12 dB); nothing caps it here, so a take keeps what a host
+    /// sent. Bitwig's Gain lane reaches +18 dB but arrives capped at exactly 4
+    /// (measured 2026-09-25, uncapped build), so +12 dB and up read as one.
     Gain,
     /// 0 to 1 (CLAP's brightness; MPE's CC 74).
     Timbre,
