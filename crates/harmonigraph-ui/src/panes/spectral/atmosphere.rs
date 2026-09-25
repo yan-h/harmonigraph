@@ -87,10 +87,6 @@ const PLAIN_FILL_ALPHA: f32 = PLAIN_FILL_ALPHA_U8 as f32 / 255.0;
 /// position is the one the halo's smoothing never touches.
 pub(super) const BODY_STOPS: [(f32, f32); 3] = [(0.0, 0.28), (0.72, 0.59), (1.0, 0.86)];
 
-/// Outline opacity below which the stroke is not worth a shape at all: one
-/// 8-bit alpha level is 1/255, so anything under this rounds away.
-const KEYLINE_VISIBLE_MIN: f32 = 0.004;
-
 pub(super) fn draw_profile(
     painter: &Painter,
     axes: &Axes,
@@ -202,16 +198,13 @@ pub(super) fn draw_profile(
 
     // The contour takes the color of the fill it bounds, lifted toward white
     // only as far as the Lift dial's luminance floor asks: a bright level
-    // wears its own color, a dark one stays bright enough to read. Its width
-    // and opacity never depend on the material's softness.
-    let opacity = cfg.keyline.clamp(0.0, 1.0);
-    if opacity > KEYLINE_VISIBLE_MIN && samples.iter().any(|&(_, d, _)| d > 0.0) {
+    // wears its own color, a dark one stays bright enough to read. It is
+    // opaque, and never depends on the material's softness.
+    if samples.iter().any(|&(_, d, _)| d > 0.0) {
         let floor = keyline_floor(cfg.keyline_lift);
         let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
-        let colors: Vec<_> = samples
-            .iter()
-            .map(|&(_, _, color)| keyline_color(color, floor).gamma_multiply(opacity))
-            .collect();
+        let colors: Vec<_> =
+            samples.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
         painter.add(stroke_mesh(
             &points,
             &colors,

@@ -1846,24 +1846,24 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
 
 #[test]
 fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
-    let mut cfg = SpectrumConfig {
-        show_spectrogram: false,
-        show_roll: false,
-        keyline: 0.0,
-        ..Default::default()
-    };
+    let mut cfg =
+        SpectrumConfig { show_spectrogram: false, show_roll: false, ..Default::default() };
     cfg.atmosphere.analyzer_softness = 1.0;
+    // The fill alone: the outline is always drawn, last, and is checked by
+    // `analyzer_outline_is_independent_of_softness_and_leaves_silence_dark`.
     let meshes = |cfg| {
-        paint_tone(reference_pane(), cfg)
+        let mut meshes = paint_tone(reference_pane(), cfg)
             .into_iter()
             .filter_map(|shape| match shape {
                 egui::Shape::Mesh(mesh) => Some(mesh),
                 _ => None,
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        meshes.pop().expect("the outline");
+        meshes
     };
     let soft = meshes(cfg);
-    assert_eq!(soft.len(), 2, "fixture must draw the halo and body, without an outline");
+    assert_eq!(soft.len(), 2, "fixture must draw the halo and body");
     cfg.atmosphere.pitch_softness = 0.0;
     cfg.atmosphere.time_softness = 0.0;
     cfg.atmosphere.contour_strength = 0.0;
@@ -1953,7 +1953,6 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     let mut contour = None;
     for softness in [0.0, 0.5, 1.0] {
         cfg.atmosphere.analyzer_softness = softness;
-        cfg.keyline = 0.3;
         let (meshes, outlines) = draw(cfg, &visible);
         assert_eq!(outlines.len(), 1);
         assert_eq!(outlines[0].vertices.len(), visible.len() * 4);
@@ -1972,24 +1971,16 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
             body.vertices[8].pos.distance(body.vertices[6].pos) > atmosphere::BODY_SLIVER_PT,
             "fixture needs a visible quiet contour"
         );
-        cfg.keyline = 0.7;
-        let (brighter_meshes, brighter_outlines) = draw(cfg, &visible);
-        assert_eq!(brighter_meshes, meshes, "outline opacity changed the fill or halo");
+        cfg.keyline_lift = 1.0;
+        let (white_meshes, white_outlines) = draw(cfg, &visible);
+        assert_eq!(white_meshes, meshes, "the outline's lift changed the fill or halo");
         let pos = |m: &egui::Mesh| m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>();
-        assert_eq!(pos(&brighter_outlines[0]), pos(&outlines[0]));
-        assert!(solid(&brighter_outlines[0])
-            .iter()
-            .zip(solid(&outlines[0]))
-            .all(|(b, d)| b.a() > d.a()));
-        cfg.keyline = 0.0;
-        let (hidden_meshes, hidden_outlines) = draw(cfg, &visible);
-        assert_eq!(hidden_meshes, meshes);
-        assert!(hidden_outlines.is_empty(), "zero opacity must hide the outline");
+        assert_eq!(pos(&white_outlines[0]), pos(&outlines[0]), "the lift moved the outline");
+        cfg.keyline_lift = SpectrumConfig::default().keyline_lift;
     }
     // The outline takes the fill's color: the palette-black quiet levels are
     // lifted to the floor, the bright peak keeps its own color, and a full
     // lift is the plain white outline.
-    cfg.keyline = 1.0;
     let fill = |i: usize| {
         let (midi, _, level) = visible[i];
         super::spectrogram::cell_color(
@@ -2013,7 +2004,6 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     cfg.keyline_lift = 1.0;
     assert!(solid(&draw(cfg, &visible).1[0]).iter().all(|&c| c == egui::Color32::WHITE));
     cfg.keyline_lift = SpectrumConfig::default().keyline_lift;
-    cfg.keyline = 1.0;
     cfg.tilt = -6.0;
     assert!(loudness_db(&cfg, -120.0, 135.0) > 0.05, "fixture must lift the stored silence floor");
     let (silence, outlines) = draw(cfg, &[(135.0, 0.0, -120.0), (135.0, 1.0, -120.0)]);

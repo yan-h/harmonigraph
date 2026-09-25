@@ -373,9 +373,6 @@ pub struct SpectrumConfig {
     /// one of several, and a blob that pinned the old picture would be
     /// preserving it.
     pub marking_scale: f32,
-    /// Opacity of the analyzer outline, independent of softness.
-    /// Zero hides the outline.
-    pub keyline: f32,
     /// How far the analyzer outline is lifted toward white, as a luminance
     /// floor on the fill color it takes on, in gamma-encoded units: 1 is a
     /// white outline, 0 is exactly the color under it, and between, bright
@@ -644,7 +641,6 @@ impl SpectrumConfig {
         } else {
             fresh.tilt
         };
-        self.keyline = bounded(self.keyline, fresh.keyline, 0.0, 1.0);
         self.keyline_lift = bounded(self.keyline_lift, fresh.keyline_lift, 0.0, 1.0);
         self.atmosphere = self.atmosphere.sanitized();
         self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
@@ -881,11 +877,10 @@ impl Default for SpectrumConfig {
             // couple of kHz.
             tilt: -4.5,
             marking_scale: 1.184_416_5,
-            // Keep quiet contours visible without lifting the fill's dark end.
-            keyline: 0.3,
             // Bright levels wear their own color; dark ones are lifted to a
-            // pastel of theirs that still reads against the backdrop.
-            keyline_lift: 0.7,
+            // pastel of theirs about as bright as the old white outline at
+            // 30% opacity, which kept quiet contours visible.
+            keyline_lift: 0.6,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,

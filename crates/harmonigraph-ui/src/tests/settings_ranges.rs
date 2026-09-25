@@ -68,7 +68,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // and checked directly in `loaded`.
     poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
-        attack, release, keyline, keyline_lift, roll_seconds, roll_thickness, roll_opacity, roll_lead,
+        attack, release, keyline_lift, roll_seconds, roll_thickness, roll_opacity, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the
@@ -241,7 +241,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::LatticeSettings => 17 + 14 + 4,
             // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
             // two shadow groups.
-            panes::Tab::AnalyzerSettings => 8 + 18 + 1 + 1 + 4,
+            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
             panes::Tab::System => 4,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
@@ -265,7 +265,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         wash: true,
-        visits: 8 + 20 + 1 + 1 + 4,
+        visits: 7 + 20 + 1 + 1 + 4,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
