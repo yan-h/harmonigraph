@@ -72,6 +72,8 @@ Local GPU tests may skip without an adapter;
 set the same variable to require one locally.
 GPU setup honors `WGPU_BACKEND`,
 and an empty value disables all backends for testing the unavailable-adapter path.
+CI also sets `HARMONIGRAPH_REQUIRE_FFMPEG=1` and installs ffmpeg for the group that runs `harmonigraph-offline`'s tests,
+so the real encoder and export-length tests fail rather than skip without `ffmpeg` and `ffprobe`.
 
 ## Loading a worktree build in Bitwig
 

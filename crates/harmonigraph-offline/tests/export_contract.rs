@@ -47,8 +47,14 @@ fn render(take: &Path, out: &Path, extra: &[&str]) -> std::process::Output {
 
 #[test]
 fn cli_preserves_default_tail_explicit_end_late_start_and_loop_tail() {
-    if Command::new("ffprobe").arg("-version").output().is_err() {
-        eprintln!("skipping real export test: ffprobe unavailable");
+    // The same policy as `sink::tests::real_ffmpeg`, which this test target
+    // cannot import: CI requires ffprobe rather than passing without it.
+    if let Err(error) = Command::new("ffprobe").arg("-version").output() {
+        assert!(
+            std::env::var("HARMONIGRAPH_REQUIRE_FFMPEG").as_deref() != Ok("1"),
+            "HARMONIGRAPH_REQUIRE_FFMPEG=1: the real export test requires ffprobe: {error}"
+        );
+        eprintln!("skipping real export test: ffprobe unavailable: {error}");
         return;
     }
     let dir =
