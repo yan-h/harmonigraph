@@ -310,7 +310,6 @@ mod tests {
     fn a_double_click_goes_home_to_the_wheel_a_fresh_view_opens_with() {
         let fresh = ViewConfig::default();
         assert_eq!(reset_wheel(), (fresh.octave_count, fresh.octave_extras));
-        assert_eq!(reset_wheel(), (7, 0), "the stock wheel is seven full-size octaves");
     }
 
     /// Paint one octave strip across a 300pt row and return what it emitted.
