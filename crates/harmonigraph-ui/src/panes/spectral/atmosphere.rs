@@ -208,23 +208,42 @@ pub(super) fn draw_profile(
         let pixel = 1.0 / painter.pixels_per_point();
         painter.add(match cfg.keyline_style {
             KeylineStyle::Line => stroke_mesh(&points, &colors, KEYLINE_WIDTH_PT, pixel),
-            KeylineStyle::Dots => pixel_caps_mesh(&points, &colors, pixel),
+            KeylineStyle::Dots => {
+                // Axis-aligned in every orientation, so the pitch axis's
+                // direction is a unit vector along x or y.
+                let along = (axes.at(1.0, 0.0) - axes.at(0.0, 0.0)).normalized().abs();
+                let spacing = axes.pitch_len() / samples.len() as f32;
+                pixel_caps_mesh(&points, &colors, along, spacing, pixel)
+            }
         });
     }
 }
 
-/// One solid square a device `pixel` across at each point, all in one mesh:
-/// the top pixel of each stem, since the profile has one sample per pixel
-/// column. No antialiasing rim, on purpose. A square exactly one pixel wide
-/// covers exactly one pixel center wherever it lands, so the GPU paints it as
-/// one crisp pixel, the nearest to the true level; a feathered one would
-/// smear a dimmer blot over four and shimmer as the level moves.
+/// One solid cap at each point, all in one mesh: a device `pixel` deep and
+/// one column `spacing` wide along the pitch axis (`along`), so neighbouring
+/// caps tile the axis edge to edge. The profile has about one sample per
+/// pixel column, but only about: the column count is rounded, and capped on a
+/// very wide pane, and caps a fixed pixel wide would then skip a column
+/// somewhere and leave a hole in a solid edge. Tiled, every pixel column gets
+/// exactly one cap.
+///
+/// No antialiasing rim, on purpose. A cap one pixel deep covers exactly one
+/// pixel center across the depth wherever it lands, so the GPU paints it
+/// crisp, the nearest pixel to the true level; a feathered one would smear a
+/// dimmer blot over two and shimmer as the level moves.
 ///
 /// Opaque and in [`keyline_color`], the line's own rule: a single pixel at the
 /// fill's edge in the fill's own color is the fill a pixel further out, so a
 /// bright level needs no fade to disappear.
-fn pixel_caps_mesh(points: &[egui::Pos2], colors: &[Color32], pixel: f32) -> Mesh {
-    let half = egui::Vec2::splat(0.5 * pixel);
+fn pixel_caps_mesh(
+    points: &[egui::Pos2],
+    colors: &[Color32],
+    along: egui::Vec2,
+    spacing: f32,
+    pixel: f32,
+) -> Mesh {
+    let across = egui::Vec2::splat(1.0) - along;
+    let half = 0.5 * (along * spacing + across * pixel);
     let mut mesh = Mesh::default();
     for (&p, &color) in points.iter().zip(colors) {
         mesh.add_colored_rect(egui::Rect::from_min_max(p - half, p + half), color);

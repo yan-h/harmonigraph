@@ -2017,8 +2017,8 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     );
 }
 
-/// Dots cap each sample with one device pixel on its own level and draw
-/// nothing between samples: a spike rising the whole depth in one sample
+/// Dots cap each sample with one device pixel of depth on its own level,
+/// tiling the pitch axis edge to edge, and draw nothing between samples: a spike rising the whole depth in one sample
 /// leaves its flank to the fill. The caps are opaque and in the line's own
 /// colors, so the bright spike wears its fill's color and the palette-black
 /// floor is lifted to the lift's floor.
@@ -2056,16 +2056,23 @@ fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
     let [body, caps] = &meshes[..] else { panic!("expected the body and the caps") };
     let stops = atmosphere::BODY_STOPS.len();
     let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
-    assert_eq!(caps.vertices.len(), n * 4, "one square per sample");
+    assert_eq!(caps.vertices.len(), n * 4, "one cap per sample");
+    let climb = (axes.at(1.0, 0.0) - axes.at(0.0, 0.0)).normalized();
+    let along = climb.abs();
+    let spacing = axes.pitch_len() / n as f32;
+    assert!((spacing - pixel).abs() > 0.1, "fixture needs columns off the pixel grid");
+    let mut previous: Option<egui::Rect> = None;
     let floor = atmosphere::keyline_floor(cfg.keyline_lift);
     for (i, &(midi, _, level)) in visible.iter().enumerate() {
         let corners = &caps.vertices[i * 4..i * 4 + 4];
         let square = egui::Rect::from_points(&corners.iter().map(|v| v.pos).collect::<Vec<_>>());
         assert!(square.center().distance(contour(i)) < 1e-3, "cap {i} is off its level");
-        assert!(
-            (square.size() - egui::Vec2::splat(pixel)).length() < 1e-4,
-            "cap {i} is not a pixel"
-        );
+        let size = along * spacing + (egui::Vec2::splat(1.0) - along) * pixel;
+        assert!((square.size() - size).length() < 1e-4, "cap {i} is not a column by a pixel");
+        if let Some(previous) = previous.replace(square) {
+            let gap = (square.center() - previous.center()).dot(climb) - spacing;
+            assert!(gap.abs() < 1e-3, "caps {} and {i} do not tile the pitch axis", i - 1);
+        }
         let fill = super::spectrogram::cell_color(
             cfg.spectrogram_gradient,
             spectrogram_level_db(&cfg, level, midi),
