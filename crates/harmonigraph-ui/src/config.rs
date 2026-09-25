@@ -32,6 +32,23 @@ impl SpectrumWindow {
     }
 }
 
+/// How the analyzer marks its measured edge, picked in the Analyzer settings
+/// beside the outline's lift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum KeylineStyle {
+    /// A continuous line joining every sample to the next.
+    Line,
+    /// A dot on each sample's own level and nothing joining neighbours: a
+    /// stem-and-dot analyzer whose stems, one per pixel, are the fill. Where
+    /// the curve is smooth the dots overlap into an edge; a flank too steep
+    /// for them to overlap is left to the fill, so dense partials read as
+    /// dots at their tips and troughs rather than as hairlines between them.
+    Dots,
+}
+
+/// The range of [`SpectrumConfig::keyline_dot_size`], in points.
+pub const KEYLINE_DOT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 1.0..=5.0;
+
 /// How many tapers the analyzer averages, picked in the Analyzer settings
 /// section beside the window length.
 ///
@@ -380,6 +397,10 @@ pub struct SpectrumConfig {
     /// white outline, 0 is exactly the color under it, and between, bright
     /// levels keep their own color while dark ones are brightened to it.
     pub keyline_lift: f32,
+    /// Whether that outline is a line or a dot per sample.
+    pub keyline_style: KeylineStyle,
+    /// The dots' diameter in points, when [`KeylineStyle::Dots`] draws them.
+    pub keyline_dot_size: f32,
     /// Spectral light and note halos, independent of the lattice's atmosphere.
     pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -644,6 +665,12 @@ impl SpectrumConfig {
             fresh.tilt
         };
         self.keyline_lift = bounded(self.keyline_lift, fresh.keyline_lift, 0.0, 1.0);
+        self.keyline_dot_size = bounded(
+            self.keyline_dot_size,
+            fresh.keyline_dot_size,
+            *KEYLINE_DOT_SIZE_RANGE.start(),
+            *KEYLINE_DOT_SIZE_RANGE.end(),
+        );
         self.atmosphere = self.atmosphere.sanitized();
         self.roll_fraction = bounded(self.roll_fraction, fresh.roll_fraction, 0.0, 1.0);
         self.roll_seconds =
@@ -883,6 +910,8 @@ impl Default for SpectrumConfig {
             // pastel of theirs about as bright as the old white outline at
             // 30% opacity, which kept quiet contours visible.
             keyline_lift: 0.6,
+            keyline_style: KeylineStyle::Line,
+            keyline_dot_size: 2.0,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,

@@ -6,7 +6,7 @@ use super::gestures::*;
 use super::settings::*;
 use super::*;
 use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
-use crate::{SpectralOrientation, SpectrumConfig, SpectrumWindow};
+use crate::{KeylineStyle, SpectralOrientation, SpectrumConfig, SpectrumWindow};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
@@ -2017,31 +2017,26 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     );
 }
 
-/// A trough narrower than the outline can trace is bridged at the lower of
-/// its peaks, in that peak's color; a wide one is followed down exactly.
-/// Two samples per point, as a 2x display draws them, so the dense run's
-/// one-sample troughs are the sub-point comb the bridge exists for.
+/// Dots put one disc on each sample's own level, in the outline's color, and
+/// nothing between samples: a spike rising the whole depth in one sample
+/// leaves its flank to the fill. Two samples per point, as a 2x display
+/// draws them, so the flank is steeper than any dot can span.
 #[test]
-fn analyzer_outline_bridges_troughs_too_narrow_to_trace() {
+fn analyzer_dots_mark_each_level_and_leave_flanks_to_the_fill() {
     let mut cfg = SpectrumConfig {
         floor_db: -100.0,
         ceiling_db: 0.0,
         volume_floor_db: -40.0,
         volume_ceiling_db: 0.0,
         tilt: 0.0,
+        keyline_style: KeylineStyle::Dots,
         ..Default::default()
     };
     cfg.atmosphere.analyzer_softness = 0.0;
     let axes = Axes::new(WIDE, &cfg);
     let n = (axes.pitch_len() * 2.0) as usize;
-    assert!(n >= 180, "fixture needs room for both troughs");
-    let level = |i: usize| match i {
-        20..80 if i.is_multiple_of(2) => 0.0,
-        20..80 => -80.0,
-        120 | 160 => 0.0,
-        121..160 => -80.0,
-        _ => -99.0,
-    };
+    let spike = n / 2;
+    let level = |i: usize| if i == spike { 0.0 } else { -99.0 };
     let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
     let out = painted_into(SCREEN, WIDE, |ui| {
         let budget = plot_budget(1.0, axes.depth_len());
@@ -2055,26 +2050,31 @@ fn analyzer_outline_bridges_troughs_too_narrow_to_trace() {
             _ => None,
         })
         .collect();
-    let [body, outline] = &meshes[..] else { panic!("expected the body and the outline") };
+    let [body, dots] = &meshes[..] else { panic!("expected the body and the dots") };
     let stops = atmosphere::BODY_STOPS.len();
     let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
-    let line = |i: usize| {
-        let across = &outline.vertices[i * 4..i * 4 + 4];
-        (across[1].pos + across[2].pos.to_vec2()) / 2.0
-    };
-    assert_eq!(outline.vertices.len(), n * 4);
-    for i in (21..79).step_by(2) {
-        assert!(contour(i).distance(contour(i - 1)) > 20.0, "fixture needs deep narrow troughs");
-        assert!(
-            line(i).distance(line(i - 1)) < 1.0,
-            "a one-sample trough at {i} was traced rather than bridged"
+    let per_dot = 1 + 2 * atmosphere::DOT_SIDES;
+    assert_eq!(dots.vertices.len(), n * per_dot, "one dot per sample");
+    let floor = atmosphere::keyline_floor(cfg.keyline_lift);
+    for (i, &(midi, _, level)) in visible.iter().enumerate() {
+        let center = &dots.vertices[i * per_dot];
+        assert!(center.pos.distance(contour(i)) < 1e-3, "dot {i} is off its level");
+        let fill = super::spectrogram::cell_color(
+            cfg.spectrogram_gradient,
+            spectrogram_level_db(&cfg, level, midi),
         );
-        assert_eq!(outline.vertices[i * 4 + 1].color, outline.vertices[i * 4 - 3].color);
+        assert_eq!(center.color, atmosphere::keyline_color(fill, floor));
     }
-    for i in (0..n).filter(|i| !(19..=80).contains(i)) {
-        assert!(line(i).distance(contour(i)) < 1e-3, "the wide contour moved at {i}");
+    let flank = contour(spike).distance(contour(spike - 1));
+    assert!(flank > 20.0, "fixture needs a flank taller than any dot");
+    // Nothing joins two samples: no triangle is wider than one dot and its
+    // one-pixel feather, where a line would lay one up the whole flank.
+    let span = cfg.keyline_dot_size + 2.0;
+    for triangle in dots.indices.chunks_exact(3) {
+        let at = |k: usize| dots.vertices[triangle[k] as usize].pos;
+        let widest = at(0).distance(at(1)).max(at(1).distance(at(2))).max(at(0).distance(at(2)));
+        assert!(widest <= span, "a triangle {widest} wide joined samples");
     }
-    assert!(contour(140).distance(contour(120)) > 20.0, "fixture needs a deep wide trough");
 }
 
 /// The whole pane, painted in every orientation with a roll that has
