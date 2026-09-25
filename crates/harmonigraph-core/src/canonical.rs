@@ -3,7 +3,7 @@
 //! credit validation belongs to the audio owner before this publication boundary.
 use crate::configuration::ResolvedConfig;
 use crate::confirmed::{ConfirmedPitch, PitchProvenance, HELD_PER_SOURCE};
-use crate::{LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
+use crate::{Expressions, LatticePos, NoteEvent, NoteEventKind, SourceId, Time, VoiceKey};
 
 /// Clock provenance only, never authorization for replayed data.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,6 +80,7 @@ impl NoteDelta {
             || self.event.note >= 128
             || matches!(self.event.kind, NoteEventKind::On { velocity } if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity))
             || matches!(self.event.kind, NoteEventKind::Tuning { semitones } if !semitones.is_finite())
+            || matches!(self.event.kind, NoteEventKind::Expression { expression, value } if !expression.range().contains(&value))
             || (self.provenance == PitchProvenance::ObservedDirect
                 && self.event.source != SourceId::DIRECT)
             || (self.provenance == PitchProvenance::AcceptedOutput
@@ -130,6 +131,9 @@ pub struct VoiceBaseline {
     pub player_tuning: f64,
     pub frozen_offset_microcents: i64,
     pub velocity: f32,
+    /// Where the voice's expressions stand now, so a note resumed from a
+    /// baseline does not snap back to [`Expressions::NEUTRAL`].
+    pub expressions: Expressions,
     pub provenance: PitchProvenance,
     pub assignment: Option<ResolvedConfig>,
     pub decision: u64,
@@ -155,6 +159,7 @@ impl Default for VoiceBaseline {
             player_tuning: 0.0,
             frozen_offset_microcents: 0,
             velocity: 0.0,
+            expressions: Expressions::NEUTRAL,
             provenance: PitchProvenance::ObservedDirect,
             assignment: None,
             decision: 0,
@@ -265,6 +270,7 @@ impl SourceBaseline {
                 || !voice.player_tuning.is_finite()
                 || !voice.velocity.is_finite()
                 || !(0.0..=1.0).contains(&voice.velocity)
+                || !voice.expressions.valid()
                 || voice.onset.is_some_and(|t| !t.valid())
                 || (voice.provenance == PitchProvenance::ObservedDirect
                     && self.source != SourceId::DIRECT)

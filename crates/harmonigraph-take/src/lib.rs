@@ -116,10 +116,44 @@ pub enum NoteKind {
     Tuning {
         semitones: f32,
     },
+    /// Any other per-note expression, in the units the host sent it in.
+    Expression {
+        expression: ExpressionKind,
+        value: f32,
+    },
     /// Release this record's source; channel and note are ignored.
     SourceReset,
     /// Release every source; source, channel and note are ignored.
     SessionReset,
+}
+
+/// Mirrors `harmonigraph_core::Expression`, for the reason [`NoteKind`] does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExpressionKind {
+    Pressure,
+    Gain,
+    Timbre,
+}
+
+impl From<harmonigraph_core::Expression> for ExpressionKind {
+    fn from(expression: harmonigraph_core::Expression) -> Self {
+        use harmonigraph_core::Expression as Core;
+        match expression {
+            Core::Pressure => Self::Pressure,
+            Core::Gain => Self::Gain,
+            Core::Timbre => Self::Timbre,
+        }
+    }
+}
+
+impl From<ExpressionKind> for harmonigraph_core::Expression {
+    fn from(expression: ExpressionKind) -> Self {
+        match expression {
+            ExpressionKind::Pressure => Self::Pressure,
+            ExpressionKind::Gain => Self::Gain,
+            ExpressionKind::Timbre => Self::Timbre,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -150,6 +184,9 @@ impl From<harmonigraph_core::NoteEvent> for NoteRecord {
                 Core::On { velocity } => NoteKind::On { velocity },
                 Core::Off => NoteKind::Off,
                 Core::Tuning { semitones } => NoteKind::Tuning { semitones },
+                Core::Expression { expression, value } => {
+                    NoteKind::Expression { expression: expression.into(), value }
+                }
                 Core::SourceReset => NoteKind::SourceReset,
                 Core::SessionReset => NoteKind::SessionReset,
             },
@@ -169,6 +206,9 @@ impl From<NoteRecord> for harmonigraph_core::NoteEvent {
                 NoteKind::On { velocity } => Core::On { velocity },
                 NoteKind::Off => Core::Off,
                 NoteKind::Tuning { semitones } => Core::Tuning { semitones },
+                NoteKind::Expression { expression, value } => {
+                    Core::Expression { expression: expression.into(), value }
+                }
                 NoteKind::SourceReset => Core::SourceReset,
                 NoteKind::SessionReset => Core::SessionReset,
             },
@@ -593,6 +633,13 @@ mod tests {
                 channel: 0,
                 note: 60,
                 kind: NoteKind::Tuning { semitones: -0.5 },
+            },
+            NoteRecord {
+                source: 0,
+                t: 0.75,
+                channel: 0,
+                note: 60,
+                kind: NoteKind::Expression { expression: ExpressionKind::Pressure, value: 0.4 },
             },
             NoteRecord { source: 0, t: 1.0, channel: 0, note: 60, kind: NoteKind::Off },
             NoteRecord { source: 0, t: 2.0, channel: 3, note: 0, kind: NoteKind::SessionReset },

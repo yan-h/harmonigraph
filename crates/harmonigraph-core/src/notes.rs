@@ -53,10 +53,94 @@ pub enum NoteEventKind {
     Tuning {
         semitones: f32,
     },
+    /// Any other per-note expression the picture can read, in the units it
+    /// arrived in (see [`Expression`]).
+    Expression {
+        expression: Expression,
+        value: f32,
+    },
     /// Release this event's source only. Channel and note are ignored.
     SourceReset,
     /// Release every source. Source, channel and note are ignored.
     SessionReset,
+}
+
+/// A per-note expression besides tuning: the three Bitwig writes as a note's
+/// Pressure, Gain and Timbre, which reach a CLAP plugin as the pressure,
+/// volume and brightness note expressions.
+///
+/// Recorded as the host states them, so a take keeps what was played and a
+/// reader decides what it means. Pan, vibrato and CLAP's generic `expression`
+/// are dropped at the shell: nothing reads them.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Expression {
+    /// 0 to 1, released to pressed hard.
+    Pressure,
+    /// Linear amplitude where 1 is unity (CLAP's note volume). CLAP promises
+    /// at most 4 (+12 dB); nothing caps it here, so a take keeps what a host
+    /// sent. Bitwig's Gain lane reaches +18 dB but arrives capped at exactly 4
+    /// (measured 2026-09-25, uncapped build), so +12 dB and up read as one.
+    Gain,
+    /// 0 to 1 (CLAP's brightness; MPE's CC 74).
+    Timbre,
+}
+
+impl Expression {
+    /// The range the host promises, which a delta outside is refused for.
+    pub fn range(self) -> std::ops::RangeInclusive<f32> {
+        match self {
+            Expression::Pressure | Expression::Timbre => 0.0..=1.0,
+            Expression::Gain => 0.0..=f32::MAX,
+        }
+    }
+
+    /// A host's value brought into [`range`](Self::range), or `None` when it
+    /// is not a number. Clamped rather than refused at the shell, because a
+    /// canonical delta out of range is a publication gap and a host rounding a
+    /// hair past its own limit should not cost one.
+    pub fn accept(self, value: f32) -> Option<f32> {
+        let range = self.range();
+        value.is_finite().then(|| value.clamp(*range.start(), *range.end()))
+    }
+}
+
+/// Where each [`Expression`] stands on one note.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Expressions {
+    pub pressure: f32,
+    pub gain: f32,
+    pub timbre: f32,
+}
+
+impl Expressions {
+    /// A note nothing has touched: no pressure, unity gain, and timbre at the
+    /// centre MPE resets CC 74 to. A host that never sends an expression
+    /// leaves every note here.
+    pub const NEUTRAL: Self = Self { pressure: 0.0, gain: 1.0, timbre: 0.5 };
+
+    pub fn set(&mut self, expression: Expression, value: f32) {
+        match expression {
+            Expression::Pressure => self.pressure = value,
+            Expression::Gain => self.gain = value,
+            Expression::Timbre => self.timbre = value,
+        }
+    }
+
+    pub fn valid(self) -> bool {
+        [
+            (Expression::Pressure, self.pressure),
+            (Expression::Gain, self.gain),
+            (Expression::Timbre, self.timbre),
+        ]
+        .into_iter()
+        .all(|(expression, value)| expression.range().contains(&value))
+    }
+}
+
+impl Default for Expressions {
+    fn default() -> Self {
+        Self::NEUTRAL
+    }
 }
 
 /// A note's MIDI channel carries no meaning here. It is kept on [`Voice`] and
@@ -368,6 +452,9 @@ pub struct Voice {
     /// tuning (PolyTuning/MPE). Equal to `note` until a tuning arrives.
     pub pitch: f32,
     pub pitch_class: PitchClass,
+    /// Where the note's expressions stand now; [`Expressions::NEUTRAL`] until
+    /// the host sends one.
+    pub expressions: Expressions,
     pub on_time: Time,
     /// Presentation timestamp before a shell's moving clock offset.
     original_onset: Time,
@@ -401,6 +488,7 @@ impl Voice {
             velocity,
             pitch: 0.0,
             pitch_class: PitchClass::from_cents(0.0),
+            expressions: Expressions::NEUTRAL,
             on_time,
             original_onset: on_time,
             visible_at_release: true,
@@ -771,6 +859,7 @@ impl NoteTracker {
                 voice
             });
             voice.set_pitch(row.pitch());
+            voice.expressions = row.expressions;
             voice.assignment = row.metadata();
         }
         let cursor = self.canonical.entry(frame.source).or_default();
@@ -820,6 +909,12 @@ impl NoteTracker {
                     // Octave indicators track the sounding pitch too.
                     voice.set_pitch(f32::from(event.note) + semitones);
                     self.roll.bend(event.key(), event.time, voice.pitch);
+                }
+            }
+            NoteEventKind::Expression { expression, value } => {
+                if let Some(voice) = self.held.get_mut(&event.key()) {
+                    voice.expressions.set(expression, value);
+                    self.roll.express(event.key(), event.time, voice.expressions);
                 }
             }
         }
@@ -1545,6 +1640,27 @@ mod tests {
         assert_eq!(tracker.voices().count(), 0);
         let visited: Vec<_> = tracker.history().visits().map(|visit| visit.pitch).collect();
         assert_eq!(visited, vec![55.0, 60.0]);
+    }
+
+    /// A baseline states a voice's expressions along with its pitch: a note it
+    /// opens starts at them, and a note it resumes after an outage takes the
+    /// value it came back with as a step, rather than snapping to neutral.
+    #[test]
+    fn a_baseline_carries_its_voices_expressions() {
+        let source = SourceId(1);
+        let mut row = published_voice(60, 61);
+        row.expressions.pressure = 0.5;
+        let mut tracker = NoteTracker::new();
+        let baseline = |id, time, row| SourceBaseline::new(source, id, time, 0, true, &[row]);
+        assert_eq!(tracker.replace_source(&baseline(1, 2.0, row).unwrap()), Ok(true));
+        assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
+        row.expressions.pressure = 0.8;
+        assert_eq!(tracker.replace_source(&baseline(2, 3.2, row).unwrap()), Ok(true));
+
+        assert_eq!(tracker.held.values().next().unwrap().expressions.pressure, 0.8);
+        let note = tracker.roll().notes().next().unwrap();
+        let points: Vec<_> = note.expressions().iter().map(|(t, e)| (*t, e.pressure)).collect();
+        assert_eq!(points, vec![(2.0, 0.5), (3.2, 0.5), (3.2, 0.8)]);
     }
 
     /// The other half of the outage above: publication comes BACK, and the

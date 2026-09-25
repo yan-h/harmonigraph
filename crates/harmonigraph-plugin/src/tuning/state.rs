@@ -245,6 +245,22 @@ impl State {
                     Some(voice.pitch_microcents),
                 ));
             }
+        } else if let Some((expression, value)) = event.expression() {
+            if let Some(voice) = self
+                .voices
+                .iter_mut()
+                .flatten()
+                .find(|v| event.matches(v.host_note_id, v.channel, v.note))
+            {
+                voice.expressions.set(expression, value);
+                result = Some((
+                    voice.lifetime,
+                    voice.channel,
+                    voice.note,
+                    NoteEventKind::Expression { expression, value },
+                    None,
+                ));
+            }
         }
         if let Event::Midi { port: 0, data, .. } = event {
             let index = usize::from(data[0] & 15);

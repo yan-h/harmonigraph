@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
+use harmonigraph_core::notes::{Expression, NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
@@ -573,8 +573,33 @@ fn mapped_note(event: NoteEvent<()>) -> Option<MappedNote> {
             note,
             kind: NoteEventKind::Tuning { semitones: tuning },
         }),
+        NoteEvent::PolyPressure { timing, channel, note, pressure, .. } => {
+            expression(timing, channel, note, Expression::Pressure, pressure)
+        }
+        NoteEvent::PolyVolume { timing, channel, note, gain, .. } => {
+            expression(timing, channel, note, Expression::Gain, gain)
+        }
+        NoteEvent::PolyBrightness { timing, channel, note, brightness, .. } => {
+            expression(timing, channel, note, Expression::Timbre, brightness)
+        }
         _ => None,
     }
+}
+
+fn expression(
+    timing: u32,
+    channel: u8,
+    note: u8,
+    expression: Expression,
+    value: f32,
+) -> Option<MappedNote> {
+    let value = expression.accept(value)?;
+    Some(MappedNote {
+        timing,
+        channel,
+        note,
+        kind: NoteEventKind::Expression { expression, value },
+    })
 }
 
 /// Which input plane the take's right channel reads from. A take's WAV is
@@ -1589,6 +1614,45 @@ mod tests {
         );
     }
 
+    /// Pressure, gain and timbre reach the lattice as expressions on the note
+    /// they address, clamped into range; a value that is not a number reaches
+    /// nothing.
+    #[test]
+    fn pressure_gain_and_timbre_are_expressions() {
+        let at = |kind| Some(MappedNote { timing: 5, channel: 1, note: 67, kind });
+        let expression = |expression, value| NoteEventKind::Expression { expression, value };
+        let pressure = NoteEvent::PolyPressure {
+            timing: 5,
+            voice_id: None,
+            channel: 1,
+            note: 67,
+            pressure: 0.25,
+        };
+        assert_eq!(mapped_note(pressure), at(expression(Expression::Pressure, 0.25)));
+        let gain =
+            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: 5.0 };
+        assert_eq!(mapped_note(gain), at(expression(Expression::Gain, 5.0)), "past CLAP's +12 dB");
+        let cut =
+            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: -1.0 };
+        assert_eq!(mapped_note(cut), at(expression(Expression::Gain, 0.0)), "clamped to silence");
+        let timbre = NoteEvent::PolyBrightness {
+            timing: 5,
+            voice_id: None,
+            channel: 1,
+            note: 67,
+            brightness: 0.75,
+        };
+        assert_eq!(mapped_note(timbre), at(expression(Expression::Timbre, 0.75)));
+        let nan = NoteEvent::PolyPressure {
+            timing: 5,
+            voice_id: None,
+            channel: 1,
+            note: 67,
+            pressure: f32::NAN,
+        };
+        assert_eq!(mapped_note(nan), None);
+    }
+
     /// The negatives are where this goes wrong quietly. `MidiConfig::Basic`
     /// delivers every poly expression below, and each carries the same
     /// `{ timing, channel, note, .. }` shape as the PolyTuning arm — so each is
@@ -1596,16 +1660,8 @@ mod tests {
     /// `#[non_exhaustive]` guaranteeing the compiler never points at the
     /// omission.
     #[test]
-    fn the_poly_expressions_are_not_notes() {
+    fn the_other_poly_expressions_are_not_notes() {
         let not_notes = [
-            NoteEvent::PolyPressure {
-                timing: 5,
-                voice_id: None,
-                channel: 1,
-                note: 67,
-                pressure: 0.5,
-            },
-            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: 0.5 },
             NoteEvent::PolyPan { timing: 5, voice_id: None, channel: 1, note: 67, pan: 0.5 },
             NoteEvent::PolyVibrato {
                 timing: 5,
@@ -1620,13 +1676,6 @@ mod tests {
                 channel: 1,
                 note: 67,
                 expression: 0.5,
-            },
-            NoteEvent::PolyBrightness {
-                timing: 5,
-                voice_id: None,
-                channel: 1,
-                note: 67,
-                brightness: 0.5,
             },
             // Plugin-to-host: this one cannot arrive on the path at all.
             NoteEvent::VoiceTerminated { timing: 5, voice_id: None, channel: 1, note: 67 },
