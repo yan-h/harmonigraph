@@ -22,6 +22,8 @@
 //!   colour schemes the plugin has (the analyzer's, by loudness).
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
+//! - [`intensity`] — how loud each note is drawn, from its velocity and
+//!   expressions.
 //!
 //! Every public item is re-exported at the crate root, so downstream code
 //! keeps using `harmonigraph_scene::Camera` rather than module paths.
@@ -30,6 +32,7 @@ pub mod atmosphere;
 pub mod camera;
 pub mod color;
 pub mod derive;
+pub mod intensity;
 pub mod motion;
 pub mod octaves;
 pub mod skin;
@@ -52,6 +55,7 @@ pub use color::{
     HUE_CIRCLE_N,
 };
 pub use derive::derive_scene;
+pub use intensity::{IntensitySettings, GAIN_RANGE_MAX, GAIN_RANGE_MIN, INTENSITY_WEIGHT_MAX};
 pub use motion::NodeMotion;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,

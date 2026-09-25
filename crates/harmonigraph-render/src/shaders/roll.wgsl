@@ -99,6 +99,9 @@ struct VertexOut {
     /// Width of one coverage sample in points. A visible note uses one display
     /// pixel; a Gaussian cell uses one of its own deliberately coarser texels.
     @location(12) @interpolate(flat) feather: f32,
+    /// Opacity along depth: at depth offsets `x` and `y`, the opacities `z` and
+    /// `w`, a line between. See [`fade_at`].
+    @location(13) @interpolate(flat) fade: vec4<f32>,
 };
 
 @vertex
@@ -115,6 +118,8 @@ fn vs_note(
     @location(7) cap_reach: f32,
     @location(8) core: vec4<f32>,
     @location(9) outline: vec4<f32>,
+    @location(14) span: vec2<f32>,
+    @location(15) fade: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -143,7 +148,12 @@ fn vs_note(
         half_extent.y + margin,
     );
 
-    let local = corner * extent;
+    // Cut along depth to this instance's own span of the box: a piece of a
+    // segment draws its stretch and no more, and neighbouring pieces share the
+    // cut, so each pixel is drawn once. A whole box's span reaches past both
+    // ends and cuts nothing.
+    var local = corner * extent;
+    local.y = select(max(-extent.y, span.x), min(extent.y, span.y), corner.y > 0.0);
     let pos = center + locals.pitch_dir * local.x + locals.depth_dir * local.y;
 
     let in_viewport = pos - locals.origin_points;
@@ -167,6 +177,7 @@ fn vs_note(
     out.at = pos;
     out.who = who;
     out.feather = locals.feather;
+    out.fade = fade;
     return out;
 }
 
@@ -217,6 +228,9 @@ fn vs_shadow_cell(
     out.at = point;
     out.who = u32(box_who.x + 0.5);
     out.feather = 1.0 / max(box_meta.x, 1e-6);
+    // The cell holds the segment's whole coverage whatever piece it is for,
+    // so a piece's shadow runs on across the cut; fading is the outline's.
+    out.fade = vec4<f32>(0.0, 0.0, 1.0, 1.0);
     return out;
 }
 
@@ -456,14 +470,25 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
     let wrap =
         outline_coverage(in, d, in.outline_reach) * (1.0 - inside(in, d, 0.0)) * lead_coverage(in);
-    return in.outline * max(wrap, cap_coverage(in));
+    return in.outline * max(wrap, cap_coverage(in)) * fade_at(in);
 }
 
 /// Flat premultiplied gamma-space body color. A leading tip set to fade loses
 /// its contribution through
 /// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
-    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in);
+    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * fade_at(in);
+}
+
+// How opaque the note is at this depth: the note's intensity read through the
+// fade floor, which the caller sampled at the two ends of this piece. The body
+// and its outline fade together, so a note faded to nothing leaves no dark
+// silhouette behind. Held past both ends, which is what carries the newest
+// value into a lead.
+fn fade_at(in: VertexOut) -> f32 {
+    let run = in.fade.y - in.fade.x;
+    let t = select(0.0, clamp((in.local.y - in.fade.x) / run, 0.0, 1.0), abs(run) > 1e-6);
+    return mix(in.fade.z, in.fade.w, t);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used

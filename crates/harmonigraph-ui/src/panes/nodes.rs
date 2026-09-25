@@ -5,10 +5,10 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
-    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    AnimationOrder, SpectralReading, ViewConfig, GAIN_RANGE_MAX, GAIN_RANGE_MIN, GAP_MAX,
+    INTENSITY_WEIGHT_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
+    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
+    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 /// Layer geometry, shared octave layout, the two readings, then note motion.
@@ -21,6 +21,57 @@ pub(super) fn nodes_pane(
     octaves_section(ui, &mut appearance.view);
     audio_section(ui, &mut appearance.view);
     motion_section(ui, &mut appearance.view, params);
+    intensity_section(ui, &mut appearance.view);
+}
+
+/// How loud each note is drawn: one intensity summed from the note's velocity
+/// and expressions, then read by each display through its own floor. Here on
+/// the lattice page, though the roll reads the same one.
+fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    section(ui, "Note intensity", |ui| {
+        fn weight<'a>(value: &'a mut f32, label: &'a str) -> ValueBar<'a> {
+            ValueBar::new(value, -INTENSITY_WEIGHT_MAX..=INTENSITY_WEIGHT_MAX, label)
+                .magnet(0.0, 0.03)
+        }
+        let intensity = &mut view.intensity;
+        weight(&mut intensity.offset, "Offset").show(ui).on_hover_text(
+            "Intensity before any source adds to it. \
+             The sources below add to this, and the sum is held between 0 and 1. \
+             At 1 with every weight at 0, every note draws at full.",
+        );
+        weight(&mut intensity.velocity, "Velocity").show(ui).on_hover_text(
+            "How much the note-on velocity adds. \
+             Try Offset 0 and Velocity 1 to draw each note as hard as it was played.",
+        );
+        weight(&mut intensity.gain, "Gain").show(ui).on_hover_text(
+            "How much the note's gain expression adds, in dB off unity divided by Gain range. \
+             Negative weights turn a boost into a cut.",
+        );
+        ui.add_enabled_ui(intensity.gain != 0.0, |ui| {
+            ValueBar::new(&mut intensity.gain_range, GAIN_RANGE_MIN..=GAIN_RANGE_MAX, "Gain range")
+                .unit(1.0, " dB")
+                .decimals(0)
+                .show(ui)
+                .on_hover_text(
+                    "How many dB of gain move the intensity by the whole Gain weight. \
+                     At 24 dB, +12 dB adds half of it and -24 dB takes all of it away.",
+                );
+        });
+        weight(&mut intensity.pressure, "Pressure").show(ui).on_hover_text(
+            "How much the note's pressure (aftertouch) adds, from 0 unpressed to 1.",
+        );
+        weight(&mut intensity.timbre, "Timbre").show(ui).on_hover_text(
+            "How much the note's timbre expression adds, from 0 to 1. \
+             An untouched timbre lane sits at 0.5.",
+        );
+        ValueBar::new(&mut intensity.fade_floor, 0.0..=1.0, "Fade floor")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Opacity of a note at zero intensity, on the lattice's octave slices and the roll's ribbons. \
+                 100% draws every note fully opaque whatever its intensity.",
+            );
+    });
 }
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a

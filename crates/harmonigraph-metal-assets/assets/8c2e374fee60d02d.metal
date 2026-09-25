@@ -38,6 +38,7 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
+    metal::float4 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -115,8 +116,9 @@ struct vs_shadow_cellOutput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
+    metal::float4 fade [[user(loc13), flat]];
 };
-struct vb_15_type { metal::uchar data[48]; };
+struct vb_15_type { metal::uchar data[72]; };
 struct vb_14_type { metal::uchar data[64]; };
 vertex vs_shadow_cellOutput vs_shadow_cell(
   uint vertex_ [[vertex_id]]
@@ -136,7 +138,7 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     float cap_reach = {};
     metal::float4 core = {};
     metal::float4 outline = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 48)) {
+    if (i_id < (_buffer_sizes.buffer_size15 / 72)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
@@ -193,7 +195,8 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     out.at = point;
     out.who = naga_f2u32(box_who.x + 0.5);
     out.feather = 1.0 / metal::max(box_meta.x, 0.000001);
-    VertexOut _e89 = out;
-    const auto _tmp = _e89;
-    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather };
+    out.fade = metal::float4(0.0, 0.0, 1.0, 1.0);
+    VertexOut _e95 = out;
+    const auto _tmp = _e95;
+    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.fade };
 }

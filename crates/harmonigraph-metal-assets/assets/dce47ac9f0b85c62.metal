@@ -20,6 +20,7 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
+    metal::float4 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -115,25 +116,25 @@ float lead_coverage(
     return metal::mix(_e36, 1.0, note);
 }
 
-metal::float4 core_color(
+float fade_at(
     VertexOut in_5
 ) {
-    float _e2 = box_distance(in_5);
-    float _e4 = inside(in_5, _e2, 0.0);
-    float _e6 = lead_coverage(in_5);
-    return (in_5.core * _e4) * _e6;
+    float run = in_5.fade.y - in_5.fade.x;
+    float t = (metal::abs(run) > 0.000001) ? metal::clamp((in_5.local.y - in_5.fade.x) / run, 0.0, 1.0) : 0.0;
+    return metal::mix(in_5.fade.z, in_5.fade.w, t);
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
+metal::float4 core_color(
+    VertexOut in_6
 ) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
+    float _e2 = box_distance(in_6);
+    float _e4 = inside(in_6, _e2, 0.0);
+    float _e6 = lead_coverage(in_6);
+    float _e8 = fade_at(in_6);
+    return ((in_6.core * _e4) * _e6) * _e8;
 }
 
-struct fs_core_linearInput {
+struct fs_core_gammaInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -147,16 +148,16 @@ struct fs_core_linearInput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
+    metal::float4 fade [[user(loc13), flat]];
 };
-struct fs_core_linearOutput {
+struct fs_core_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_core_linearOutput fs_core_linear(
-  fs_core_linearInput varyings [[stage_in]]
+fragment fs_core_gammaOutput fs_core_gamma(
+  fs_core_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.fade };
     metal::float4 _e1 = core_color(in);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_core_linearOutput { metal::float4(_e3, _e1.w) };
+    return fs_core_gammaOutput { _e1 };
 }

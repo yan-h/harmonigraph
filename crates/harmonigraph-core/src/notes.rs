@@ -126,6 +126,16 @@ impl Expressions {
         }
     }
 
+    /// Each expression `t` of the way from `self` to `to`.
+    pub fn lerp(self, to: Self, t: f32) -> Self {
+        let mix = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            pressure: mix(self.pressure, to.pressure),
+            gain: mix(self.gain, to.gain),
+            timbre: mix(self.timbre, to.timbre),
+        }
+    }
+
     pub fn valid(self) -> bool {
         [
             (Expression::Pressure, self.pressure),

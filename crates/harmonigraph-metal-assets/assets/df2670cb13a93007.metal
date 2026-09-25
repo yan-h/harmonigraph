@@ -37,6 +37,7 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
+    metal::float4 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -55,6 +56,9 @@ float unpackFloat32_(uint b0, uint b1, uint b2, uint b3) {
 metal::float4 unpackUnorm8x4_(metal::uchar b0, metal::uchar b1, metal::uchar b2, metal::uchar b3) {
     return metal::float4(float(b0) / 255.0f, float(b1) / 255.0f, float(b2) / 255.0f, float(b3) / 255.0f);
 }
+metal::float4 unpackFloat32x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7, uint b8, uint b9, uint b10, uint b11, uint b12, uint b13, uint b14, uint b15) {
+    return metal::float4(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4), as_type<float>(b11 << 24 | b10 << 16 | b9 << 8 | b8), as_type<float>(b15 << 24 | b14 << 16 | b13 << 8 | b12));
+}
 
 struct vs_noteOutput {
     metal::float4 position [[position]];
@@ -71,8 +75,9 @@ struct vs_noteOutput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
+    metal::float4 fade [[user(loc13), flat]];
 };
-struct vb_15_type { metal::uchar data[48]; };
+struct vb_15_type { metal::uchar data[72]; };
 vertex vs_noteOutput vs_note(
   uint vertex_ [[vertex_id]]
 , uint who [[instance_id]]
@@ -90,7 +95,9 @@ vertex vs_noteOutput vs_note(
     float cap_reach = {};
     metal::float4 core = {};
     metal::float4 outline = {};
-    if (who < (_buffer_sizes.buffer_size15 / 48)) {
+    metal::float2 span = {};
+    metal::float4 fade = {};
+    if (who < (_buffer_sizes.buffer_size15 / 72)) {
         const vb_15_type vb_15_elem = vb_15_in[who];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
@@ -102,29 +109,36 @@ vertex vs_noteOutput vs_note(
         cap_reach = unpackFloat32_(vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
         core = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         outline = unpackUnorm8x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47]);
+        span = unpackFloat32x2_(vb_15_elem.data[48], vb_15_elem.data[49], vb_15_elem.data[50], vb_15_elem.data[51], vb_15_elem.data[52], vb_15_elem.data[53], vb_15_elem.data[54], vb_15_elem.data[55]);
+        fade = unpackFloat32x4_(vb_15_elem.data[56], vb_15_elem.data[57], vb_15_elem.data[58], vb_15_elem.data[59], vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63], vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67], vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71]);
     }
+    metal::float2 local = {};
     VertexOut out = {};
     metal::float2 corner = metal::float2(((vertex_ & 1u) == 1u) ? 1.0 : -1.0, ((vertex_ & 2u) == 2u) ? 1.0 : -1.0);
-    float _e30 = locals.shadow.w;
-    float _e33 = locals.feather;
-    float reach = _e30 + (0.5 * _e33);
-    float _e39 = locals.feather;
-    float margin = reach + (0.5 * _e39);
+    float _e32 = locals.shadow.w;
+    float _e35 = locals.feather;
+    float reach = _e32 + (0.5 * _e35);
+    float _e41 = locals.feather;
+    float margin = reach + (0.5 * _e41);
     metal::float2 extent = metal::float2((half_extent.x + (metal::abs(shear) * half_extent.y)) + margin, half_extent.y + margin);
-    metal::float2 local = corner * extent;
-    metal::float2 _e55 = locals.pitch_dir;
-    metal::float2 _e61 = locals.depth_dir;
-    metal::float2 pos = (center + (_e55 * local.x)) + (_e61 * local.y);
-    metal::float2 _e67 = locals.origin_points;
-    metal::float2 in_viewport = pos - _e67;
-    float _e77 = locals.viewport_points.x;
-    float _e87 = locals.viewport_points.y;
-    out.position = metal::float4(((2.0 * in_viewport.x) / _e77) - 1.0, 1.0 - ((2.0 * in_viewport.y) / _e87), 0.0, 1.0);
-    out.local = local;
+    local = corner * extent;
+    local.y = (corner.y > 0.0) ? metal::min(extent.y, span.y) : metal::max(-(extent.y), span.x);
+    metal::float2 _e70 = locals.pitch_dir;
+    float _e72 = local.x;
+    metal::float2 _e77 = locals.depth_dir;
+    float _e79 = local.y;
+    metal::float2 pos = (center + (_e70 * _e72)) + (_e77 * _e79);
+    metal::float2 _e84 = locals.origin_points;
+    metal::float2 in_viewport = pos - _e84;
+    float _e94 = locals.viewport_points.x;
+    float _e104 = locals.viewport_points.y;
+    out.position = metal::float4(((2.0 * in_viewport.x) / _e94) - 1.0, 1.0 - ((2.0 * in_viewport.y) / _e104), 0.0, 1.0);
+    metal::float2 _e112 = local;
+    out.local = _e112;
     out.half_extent = half_extent;
     out.shear = shear;
-    float _e101 = locals.shadow.w;
-    out.outline_reach = _e101;
+    float _e119 = locals.shadow.w;
+    out.outline_reach = _e119;
     out.lead = lead;
     out.lead_fade = lead_fade;
     out.lead_alpha = lead_alpha;
@@ -133,9 +147,10 @@ vertex vs_noteOutput vs_note(
     out.outline = outline;
     out.at = pos;
     out.who = who;
-    float _e113 = locals.feather;
-    out.feather = _e113;
-    VertexOut _e114 = out;
-    const auto _tmp = _e114;
-    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather };
+    float _e131 = locals.feather;
+    out.feather = _e131;
+    out.fade = fade;
+    VertexOut _e133 = out;
+    const auto _tmp = _e133;
+    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.fade };
 }

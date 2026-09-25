@@ -164,9 +164,31 @@ pub struct RollInstance {
     /// What color that is stays the pane's decision — this crate draws the
     /// instance it is handed and invents nothing.
     pub outline: [u8; 4],
+    /// The stretch of depth this instance draws, as offsets from
+    /// [`center`](Self::center) in points: [`WHOLE`](Self::WHOLE) for the
+    /// whole box, or one PIECE of it.
+    ///
+    /// Pieces are how a note's opacity follows its intensity along a segment:
+    /// the caller hands over the segment's box once per piece, each with the
+    /// same geometry and a span of its own, and the spans tile the box. So the
+    /// outline, the lead and the cap are the segment's exactly, and no piece
+    /// has an end of its own for an outline to wrap. `vs_note` cuts the quad at
+    /// the span, so two pieces meet on one shared edge and every pixel is
+    /// drawn by one of them.
+    pub span: [f32; 2],
+    /// Opacity along depth: `[a, b, at_a, at_b]`, the opacity at depth offsets
+    /// `a` and `b`, a straight line between them and held past either end.
+    /// Multiplies the body and the outline together. [`UNFADED`](Self::UNFADED)
+    /// is 1 throughout.
+    pub fade: [f32; 4],
 }
 
 impl RollInstance {
+    /// A [`span`](Self::span) that draws the whole box.
+    pub const WHOLE: [f32; 2] = [f32::MIN, f32::MAX];
+    /// A [`fade`](Self::fade) of 1 everywhere.
+    pub const UNFADED: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<RollInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -181,6 +203,10 @@ impl RollInstance {
             7 => Float32,  // cap_reach
             8 => Unorm8x4, // core
             9 => Unorm8x4, // outline
+            // Past `vs_shadow_cell`'s own 10..=13, which come from its second
+            // buffer.
+            14 => Float32x2, // span
+            15 => Float32x4, // fade
         ],
     };
 }
@@ -806,8 +832,16 @@ impl CallbackTrait for RollCallback {
             .instances
             .iter()
             .map(|note| {
-                let half_pitch = note.half_extent[0] + note.shear.abs() * note.half_extent[1];
-                let half_depth = note.half_extent[1];
+                // A piece casts from its own span of the box, so pieces cost
+                // the atlas what their segment would.
+                let lo = (-note.half_extent[1]).max(note.span[0]);
+                let hi = note.half_extent[1].min(note.span[1]).max(lo);
+                let center = [
+                    note.center[0] + self.axes.depth_dir[0] * 0.5 * (lo + hi),
+                    note.center[1] + self.axes.depth_dir[1] * 0.5 * (lo + hi),
+                ];
+                let half_pitch = note.half_extent[0] + note.shear.abs() * lo.abs().max(hi.abs());
+                let half_depth = 0.5 * (hi - lo);
                 let screen_half = [
                     self.axes.pitch_dir[0].abs() * half_pitch
                         + self.axes.depth_dir[0].abs() * half_depth,
@@ -816,8 +850,8 @@ impl CallbackTrait for RollCallback {
                 ];
                 crate::shadow::Caster {
                     rect: [
-                        note.center[0] - screen_half[0],
-                        note.center[1] - screen_half[1],
+                        center[0] - screen_half[0],
+                        center[1] - screen_half[1],
                         2.0 * screen_half[0],
                         2.0 * screen_half[1],
                     ],
@@ -1384,6 +1418,8 @@ mod tests {
             cap_reach: 4.0,
             core: [255, 0, 0, 255],
             outline: [0, 0, 0, 255],
+            span: RollInstance::WHOLE,
+            fade: RollInstance::UNFADED,
         }
     }
 
@@ -1660,6 +1696,8 @@ mod tests {
                     cap_reach: reach,
                     core: [255, 0, 0, 255],
                     outline: [0, 0, 0, 255],
+                    span: RollInstance::WHOLE,
+                    fade: RollInstance::UNFADED,
                 };
                 let cb = RollCallback {
                     rect,
@@ -2693,6 +2731,42 @@ mod tests {
             shadowed(outside),
             "the outline stopped painting at all outside the notes: {outside:?}",
         );
+    }
+
+    /// A note cut into pieces draws exactly the note it was cut from, and a
+    /// fade takes its body and outline out together along depth.
+    ///
+    /// The cut sits off the pixel grid on purpose, where two quads meeting on
+    /// a shared edge is what decides which of them draws the row.
+    #[test]
+    fn pieces_tile_their_note_and_a_fade_runs_along_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let whole = centered_note();
+        let cut = 10.3;
+        let pieces = vec![
+            RollInstance { span: [f32::MIN, cut], ..whole },
+            RollInstance { span: [cut, f32::MAX], ..whole },
+        ];
+        assert!(
+            draw(&device, &queue, pieces, bg_color())
+                == draw(&device, &queue, vec![whole], bg_color()),
+            "two pieces of a note drew something other than the note",
+        );
+
+        // Depth runs down y under `TOP`: transparent at the note's top end
+        // (y 68), opaque at its bottom (y 188).
+        let faded = RollInstance { fade: [-60.0, 60.0, 0.0, 1.0], ..whole };
+        let frame = draw(&device, &queue, vec![faded], bg_color());
+        let red = |y| pixel(&frame, 128, y)[0];
+        assert!(near(pixel(&frame, 128, 69), BG), "top: {:?}", pixel(&frame, 128, 69));
+        assert!(near(pixel(&frame, 128, 187), [255, 0, 0, 255]), "{:?}", pixel(&frame, 128, 187));
+        assert!(red(100) < red(128) && red(128) < red(160), "the fade is not a ramp");
+        assert!(!shadowed(pixel(&frame, 128, 66)), "a faded-out end kept its outline");
+        let reversed = RollInstance { fade: [-60.0, 60.0, 1.0, 0.0], ..whole };
+        let frame = draw(&device, &queue, vec![reversed], bg_color());
+        assert!(shadowed(pixel(&frame, 128, 66)), "an opaque end lost its outline");
     }
 
     /// A glide's outline keeps its thickness instead of thinning with the

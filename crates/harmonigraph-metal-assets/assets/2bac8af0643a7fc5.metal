@@ -20,6 +20,7 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
+    metal::float4 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -115,16 +116,7 @@ float lead_coverage(
     return metal::mix(_e36, 1.0, note);
 }
 
-metal::float4 core_color(
-    VertexOut in_5
-) {
-    float _e2 = box_distance(in_5);
-    float _e4 = inside(in_5, _e2, 0.0);
-    float _e6 = lead_coverage(in_5);
-    return (in_5.core * _e4) * _e6;
-}
-
-struct fs_core_gammaInput {
+struct fs_shadow_coverageInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -138,15 +130,19 @@ struct fs_core_gammaInput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
+    metal::float4 fade [[user(loc13), flat]];
 };
-struct fs_core_gammaOutput {
+struct fs_shadow_coverageOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_core_gammaOutput fs_core_gamma(
-  fs_core_gammaInput varyings [[stage_in]]
+fragment fs_shadow_coverageOutput fs_shadow_coverage(
+  fs_shadow_coverageInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather };
-    metal::float4 _e1 = core_color(in);
-    return fs_core_gammaOutput { _e1 };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.fade };
+    float _e1 = box_distance(in);
+    float _e3 = inside(in, _e1, 0.0);
+    float _e4 = lead_coverage(in);
+    float coverage = _e3 * _e4;
+    return fs_shadow_coverageOutput { metal::float4(coverage, 0.0, 0.0, 1.0) };
 }
