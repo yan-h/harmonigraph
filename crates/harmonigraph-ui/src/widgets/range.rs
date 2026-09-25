@@ -530,6 +530,10 @@ impl<'a> RangeBar<'a> {
             release_grab::<Grab>(ui, grab_id);
         }
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         let r = bar_radius(scale);
         let corner = f32::from(r);
