@@ -79,6 +79,7 @@ fn gradient_sweep() -> Vec<Gradient> {
                             lightness_ramp,
                             chroma,
                             chroma_ramp,
+                            ..Gradient::default()
                         });
                     }
                 }
@@ -521,6 +522,7 @@ fn the_gradient_is_in_gamut_and_flat_when_its_ramp_is() {
         lightness_ramp: 0.0,
         chroma: 50.0,
         chroma_ramp: 0.0,
+        ..Gradient::default()
     };
     assert!(
         !crate::color::ramp_sample_in_gamut(0.5, denominator_inverted),

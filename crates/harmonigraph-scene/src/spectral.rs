@@ -1009,6 +1009,7 @@ mod tests {
             lightness_ramp: 100.0,
             chroma: 0.615,
             chroma_ramp: 0.77,
+            ..Gradient::default()
         }
     }
 

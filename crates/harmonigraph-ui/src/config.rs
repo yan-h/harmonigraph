@@ -265,6 +265,8 @@ impl SpectrogramPreset {
             lightness_ramp: l_hi - l_lo,
             chroma: (c_lo + c_hi) * 0.5,
             chroma_ramp: c_hi - c_lo,
+            // Straight: a preset is a whole look, bends included.
+            ..Gradient::default()
         };
         match self {
             // The hue is unreachable at chroma 0 and is written as the one the
@@ -930,6 +932,7 @@ impl Default for SpectrumConfig {
                 lightness_ramp: 100.0,
                 chroma: 0.794_999_96,
                 chroma_ramp: 0.410_000_03,
+                ..Gradient::default()
             },
             volume_floor_db: -70.808_27,
             volume_ceiling_db: DEFAULT_VOLUME_CEILING_DB,

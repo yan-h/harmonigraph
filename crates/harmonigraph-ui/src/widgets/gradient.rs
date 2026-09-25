@@ -1551,6 +1551,7 @@ mod tests {
             lightness_ramp: 0.0,
             chroma: 0.6,
             chroma_ramp: 0.0,
+            ..Gradient::default()
         };
         let painted = |g: Gradient| {
             let mut g = g;
@@ -1604,6 +1605,7 @@ mod tests {
             lightness_ramp: 60.0,
             chroma: 0.5,
             chroma_ramp: 0.6,
+            ..Gradient::default()
         };
         let track_of = |g: Gradient| {
             let mut g = g;

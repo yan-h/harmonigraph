@@ -33,7 +33,7 @@ fn poisoned_view() -> ViewConfig {
     // literal: taken from `base` the six knobs arrive CLEAN, and the 256-entry
     // `pitch_lut` the sweep walks would be asserted over a gradient nothing
     // ever poisoned — the one float the "written WHOLE" mechanism above cannot
-    // catch by itself, since the field is one name here and six there.
+    // catch by itself, since the field is one name here and seven there.
     //
     // Green today because every consumer funnels through `color::with_lut`,
     // which calls `Gradient::sanitized` before keying its memo. That is the
@@ -46,6 +46,7 @@ fn poisoned_view() -> ViewConfig {
         lightness_ramp: nan,
         chroma: nan,
         chroma_ramp: nan,
+        bend: Bend { at: nan, share: nan, ..Bend::default() },
     };
     let shadow = ShadowStyle {
         kernel: base.shadow.lattice_geometry.kernel,

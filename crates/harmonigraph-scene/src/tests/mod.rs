@@ -3,6 +3,7 @@
 //! [`harness`] holds the scene builder and node lookups more than one of
 //! them needs; everything else is grouped by what it exercises.
 
+mod bend;
 mod camera;
 mod finite;
 mod glow_curve;
