@@ -89,7 +89,7 @@ pub(super) fn filled_polys(shapes: &[egui::Shape]) -> Vec<(Vec<egui::Pos2>, egui
 /// same string, to knock it out through the grip. That is a second pass over
 /// a run already counted, so counting it here would say a bar draws two
 /// names — and a test asking for "the last run" would get a fragment of one
-/// clipped to 6pt. An override colour is what marks a knockout, and nothing
+/// clipped to a grip's width. An override colour is what marks a knockout, and nothing
 /// else in this module sets one.
 ///
 /// [`grip_over_text`]: super::bar::grip_over_text

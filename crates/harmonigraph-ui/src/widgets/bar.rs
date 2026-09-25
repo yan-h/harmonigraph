@@ -111,10 +111,10 @@ pub(super) const GRAB_PX: f32 = 14.0;
 /// slide.
 pub(super) const HANDLE_REACH_SHARE: f32 = 0.35;
 /// Width of every bar's handle grip, strips included. One size across the
-/// pane, so a handle reads as the same kind of thing wherever it stands; a
-/// grip standing on a boundary between two cells hides three points of each,
-/// which the layer stack's handles have always done.
-pub(super) const HANDLE_W: f32 = 6.0;
+/// pane, so a handle reads as the same kind of thing wherever it stands. Four
+/// points is as thin as a grip goes: under that it reads as an edge in the
+/// fill rather than as something to grab.
+pub(super) const HANDLE_W: f32 = 4.0;
 /// How far the value track is inset from the bar's ends, so a handle parked
 /// at either limit still sits fully inside the bar with track visible past
 /// it.
@@ -268,8 +268,8 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// - At a grip's own 2pt the notch is a sliver at the extreme corners of a grip
 ///   drawn 3pt shy of a 20pt row, well outside a Body galley's ink.
 /// - A [`RangeBar::fade_span`] bar hands in the BAR's radius instead, so its
-///   thumb is a 6pt-wide pill (epaint holds a corner to half the width, so 5
-///   becomes 3) and the notch is the whole of the top and bottom 3pt. A
+///   thumb is a 4pt-wide pill (epaint holds a corner to half the width, so 5
+///   becomes 2) and the notch is the whole of the top and bottom 2pt. A
 ///   descender reaches into that band.
 ///
 /// What keeps the second case cheap is where it lands rather than whether it
@@ -287,7 +287,7 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// `Arc` clone, a shape push and a clip-rect split — small, and kept because a
 /// paint list free of invisible shapes is what lets a test assert a knockout
 /// exists by counting. It buys no tessellation back, and the CROSSED case still
-/// tessellates a whole row to show 6pt of it, which no guard here addresses.
+/// tessellates a whole row to show 4pt of it, which no guard here addresses.
 ///
 /// [`RangeBar`]: super::range::RangeBar
 /// [`RangeBar::fade_span`]: super::range::RangeBar::fade_span
