@@ -2208,7 +2208,6 @@ mod tests {
                 assert!((95..=97).contains(&blue), "texture modulated the field at {x},{y}");
             }
         }
-        cb.atmosphere.as_mut().unwrap().settings.analyzer_softness = 0.0;
         cb.atmosphere.as_mut().unwrap().settings.note_glow = 0.0;
         assert_eq!(smooth, fresh_frame(&device, &queue, &cb));
     }

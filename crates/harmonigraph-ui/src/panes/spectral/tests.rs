@@ -20,13 +20,11 @@ const TALL: egui::Rect = egui::Rect { min: egui::pos2(10.0, 20.0), max: egui::po
 /// clipped away by a screen the size of the pane.
 const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
 
-/// The 8-bit alpha the analyzer body's OUTERMOST stop paints at full Softness:
-/// `draw_profile`'s own rounding of the last entry in
-/// [`atmosphere::BODY_STOPS`]. Several tests pick the body out of the pane's
-/// shape list by it, and derived here so that retuning the material moves the
-/// tests with it rather than leaving them matching nothing.
-const BODY_EDGE_ALPHA: u8 =
-    (atmosphere::BODY_STOPS[atmosphere::BODY_STOPS.len() - 1].1 * 255.0 + 0.5) as u8;
+/// The 8-bit alpha the analyzer body paints. Several tests pick the body out
+/// of the pane's shape list by it, and it is the pane's own constant so that
+/// retuning the fill moves the tests with it rather than leaving them matching
+/// nothing.
+const BODY_ALPHA: u8 = atmosphere::FILL_ALPHA_U8;
 
 /// One frame of the whole Spectral pane into `rect` at `now`, on a themed
 /// context of its own.
@@ -1749,17 +1747,15 @@ fn the_curve_clears_the_pane_edge_by_the_same_points_at_any_size() {
     // the full budget and the slab end nearest `edge` IS the clearance. `edge`
     // is the depth the curve grows toward, which is the only thing the two
     // layouts below disagree about.
-    let reach = |rect: egui::Rect, mut cfg: SpectrumConfig, edge: f32| {
-        cfg.atmosphere.analyzer_softness = 1.0;
+    let reach = |rect: egui::Rect, cfg: SpectrumConfig, edge: f32| {
         let axes = Axes::new(rect, &cfg);
         let mut nearest = f32::INFINITY;
         for shape in paint_tone(rect, cfg) {
             let egui::Shape::Mesh(mesh) = shape else { continue };
-            // The cloud material's body ends at the original measured
-            // contour, and that outermost stop's fill is the most opaque
-            // thing on the pane — distinct from every band of the halo.
+            // The body ends at the original measured contour, and its
+            // floor vertices sit at the far end of the curve from `edge`.
             for vertex in &mesh.vertices {
-                if vertex.color.a() == BODY_EDGE_ALPHA {
+                if vertex.color.a() == BODY_ALPHA {
                     let depth = (axes.depth_at(vertex.pos) - edge).abs();
                     nearest = nearest.min(depth * axes.depth_len());
                 }
@@ -1823,12 +1819,11 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
 }
 
 #[test]
-fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
+fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
     let mut cfg =
         SpectrumConfig { show_spectrogram: false, show_roll: false, ..Default::default() };
-    cfg.atmosphere.analyzer_softness = 1.0;
     // The fill alone: the outline is always drawn, last, and is checked by
-    // `analyzer_outline_is_independent_of_softness_and_leaves_silence_dark`.
+    // `analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark`.
     let meshes = |cfg| {
         let mut meshes = paint_tone(reference_pane(), cfg)
             .into_iter()
@@ -1840,52 +1835,27 @@ fn analyzer_softness_is_independent_and_keeps_the_measured_contour() {
         meshes.pop().expect("the outline");
         meshes
     };
-    let soft = meshes(cfg);
-    assert_eq!(soft.len(), 2, "fixture must draw the halo and body");
+    let fill = meshes(cfg);
+    let [body] = &fill[..] else { panic!("expected the body alone, not {} meshes", fill.len()) };
+    assert!(body.vertices.len() > 100, "fixture must reach the sampled contour");
+    // Each sample is one color and one alpha from the floor to its contour:
+    // the flat fill, or nothing where the curve is a sliver.
+    for column in body.vertices.chunks_exact(atmosphere::BODY_STOPS) {
+        let tall = column[1].pos.distance(column[0].pos) > atmosphere::BODY_SLIVER_PT;
+        let alpha = if tall { BODY_ALPHA } else { 0 };
+        assert!(column.iter().all(|v| v.color == column[0].color && v.color.a() == alpha));
+    }
+    assert!(body.vertices.iter().any(|v| v.color.a() == BODY_ALPHA), "fixture must draw a body");
     cfg.atmosphere.pitch_softness = 0.0;
     cfg.atmosphere.time_softness = 0.0;
     cfg.atmosphere.contour_strength = 0.0;
     cfg.atmosphere.cloud_depth = 0.0;
     cfg.atmosphere.note_glow = 0.0;
-    assert_eq!(meshes(cfg), soft, "other effects changed the analyzer");
-    cfg.atmosphere.analyzer_softness = 0.5;
-    let half = meshes(cfg);
-    assert_eq!(half.len(), 2);
-    for (full, half) in soft.iter().zip(&half) {
-        assert_eq!(full.indices, half.indices);
-        assert!(full.vertices.len() > 100, "fixture must reach the sampled contour");
-        assert_eq!(
-            full.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
-            half.vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
-            "softness moved measured frequencies or levels"
-        );
-        assert_ne!(full, half, "the dial did not change this part of the treatment");
-    }
-    let stops = atmosphere::BODY_STOPS.len();
-    for (full, half) in
-        soft[1].vertices.chunks_exact(stops).zip(half[1].vertices.chunks_exact(stops))
-    {
-        // The first and last stop sit at the floor and on the contour, so the
-        // distance between them IS the curve's height in points.
-        let tall = full[stops - 1].pos.distance(full[0].pos) > atmosphere::BODY_SLIVER_PT;
-        let plain_alpha = if tall { u16::from(atmosphere::PLAIN_FILL_ALPHA_U8) } else { 0 };
-        for (full, half) in full.iter().zip(half) {
-            let expected = (plain_alpha + u16::from(full.color.a())) / 2;
-            assert!(u16::from(half.color.a()).abs_diff(expected) <= 1);
-        }
-    }
-    cfg.atmosphere.analyzer_softness = 0.0;
-    let plain = meshes(cfg);
-    assert_eq!(plain.len(), 1, "zero softness must draw only the flat fill");
-    assert_eq!(
-        soft[1].vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
-        plain[0].vertices.iter().map(|v| v.pos).collect::<Vec<_>>(),
-    );
-    assert!(plain[0].vertices.iter().any(|v| v.color.a() == atmosphere::PLAIN_FILL_ALPHA_U8));
+    assert_eq!(meshes(cfg), fill, "other effects changed the analyzer");
 }
 
 #[test]
-fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
+fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     let mut cfg = SpectrumConfig {
         floor_db: -100.0,
         ceiling_db: 0.0,
@@ -1917,10 +1887,9 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
                 _ => None,
             })
             .collect();
-        // The halo (with softness), the body, then the outline when shown.
-        let fills = if cfg.atmosphere.analyzer_softness > 0.0 { 2 } else { 1 };
-        let outlines = meshes.split_off(fills.min(meshes.len()));
-        assert_eq!(meshes.len(), fills);
+        // The body, then the outline when shown.
+        let outlines = meshes.split_off(1.min(meshes.len()));
+        assert_eq!(meshes.len(), 1);
         assert!(outlines.len() <= 1);
         (meshes, outlines)
     };
@@ -1928,34 +1897,32 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     let solid = |outline: &egui::Mesh| {
         outline.vertices.chunks_exact(4).map(|across| across[1].color).collect::<Vec<_>>()
     };
-    let mut contour = None;
-    for softness in [0.0, 0.5, 1.0] {
-        cfg.atmosphere.analyzer_softness = softness;
-        let (meshes, outlines) = draw(cfg, &visible);
-        assert_eq!(outlines.len(), 1);
-        assert_eq!(outlines[0].vertices.len(), visible.len() * 4);
-        assert_eq!(
-            contour.get_or_insert(outlines.clone()),
-            &outlines,
-            "softness changed the outline"
-        );
-        let body = meshes.last().unwrap();
-        assert_eq!(body.vertices.len(), visible.len() * atmosphere::BODY_STOPS.len());
-        assert!(
-            body.vertices[6..12].iter().all(|v| v.color.r().max(v.color.g()).max(v.color.b()) <= 2),
-            "quiet measured frequencies must keep their near-black fill"
-        );
-        assert!(
-            body.vertices[8].pos.distance(body.vertices[6].pos) > atmosphere::BODY_SLIVER_PT,
-            "fixture needs a visible quiet contour"
-        );
-        cfg.keyline_lift = 1.0;
-        let (white_meshes, white_outlines) = draw(cfg, &visible);
-        assert_eq!(white_meshes, meshes, "the outline's lift changed the fill or halo");
-        let pos = |m: &egui::Mesh| m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>();
-        assert_eq!(pos(&white_outlines[0]), pos(&outlines[0]), "the lift moved the outline");
-        cfg.keyline_lift = SpectrumConfig::default().keyline_lift;
-    }
+    let (meshes, outlines) = draw(cfg, &visible);
+    assert_eq!(outlines.len(), 1);
+    assert_eq!(outlines[0].vertices.len(), visible.len() * 4);
+    let stops = atmosphere::BODY_STOPS;
+    let body = &meshes[0];
+    assert_eq!(body.vertices.len(), visible.len() * stops);
+    assert!(
+        body.vertices[2 * stops..4 * stops].iter().all(|v| v
+            .color
+            .r()
+            .max(v.color.g())
+            .max(v.color.b())
+            <= 2),
+        "quiet measured frequencies must keep their near-black fill"
+    );
+    assert!(
+        body.vertices[2 * stops + stops - 1].pos.distance(body.vertices[2 * stops].pos)
+            > atmosphere::BODY_SLIVER_PT,
+        "fixture needs a visible quiet contour"
+    );
+    cfg.keyline_lift = 1.0;
+    let (white_meshes, white_outlines) = draw(cfg, &visible);
+    assert_eq!(white_meshes, meshes, "the outline's lift changed the fill");
+    let pos = |m: &egui::Mesh| m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>();
+    assert_eq!(pos(&white_outlines[0]), pos(&outlines[0]), "the lift moved the outline");
+    cfg.keyline_lift = SpectrumConfig::default().keyline_lift;
     // The outline takes the fill's color: the palette-black quiet levels are
     // lifted to the floor, the bright peak keeps its own color, and a full
     // lift is the plain white outline.
@@ -2002,7 +1969,7 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
 /// floor is lifted to the lift's floor.
 #[test]
 fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
-    let mut cfg = SpectrumConfig {
+    let cfg = SpectrumConfig {
         floor_db: -100.0,
         ceiling_db: 0.0,
         volume_floor_db: -40.0,
@@ -2011,7 +1978,6 @@ fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
         keyline_style: KeylineStyle::Dots,
         ..Default::default()
     };
-    cfg.atmosphere.analyzer_softness = 0.0;
     let axes = Axes::new(WIDE, &cfg);
     let n = (axes.pitch_len() * 2.0) as usize;
     let spike = n / 2;
@@ -2032,7 +1998,7 @@ fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
         })
         .collect();
     let [body, caps] = &meshes[..] else { panic!("expected the body and the caps") };
-    let stops = atmosphere::BODY_STOPS.len();
+    let stops = atmosphere::BODY_STOPS;
     let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
     assert_eq!(caps.vertices.len(), n * 4, "one cap per sample");
     let climb = (axes.at(1.0, 0.0) - axes.at(0.0, 0.0)).normalized();
@@ -2099,7 +2065,6 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
         backdrop_period: 3.0,
         ..Default::default()
     };
-    cfg.atmosphere.analyzer_softness = 0.0;
     let axes = Axes::new(WIDE, &cfg);
     let n = 60;
     // Digital silence, a shelf under the backdrop's height, and a spike through it.
@@ -2113,7 +2078,7 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
     let budget = plot_budget(1.0, axes.depth_len());
     let top = cfg.backdrop_height * budget;
     let ink = crate::theme::picture_ruling().gamma_multiply(cfg.backdrop_strength);
-    let stops = atmosphere::BODY_STOPS.len();
+    let stops = atmosphere::BODY_STOPS;
     let at = |v: &egui::epaint::Vertex| (axes.pitch_at(v.pos), axes.depth_at(v.pos));
     for (backdrop, stripe) in [(Backdrop::Gradient, None), (Backdrop::Stripes, Some(3))] {
         cfg.backdrop = backdrop;
@@ -2872,13 +2837,12 @@ struct PaintedRuling {
 
 /// One frame of the pane with a tone in it, split into the frequency rulings
 /// and the shape indices of the spectrum's own slabs.
-fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    cfg.atmosphere.analyzer_softness = 1.0;
+fn painted_rulings(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
     let strong = theme::picture_ruling().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut rulings, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
-        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == BODY_EDGE_ALPHA))
+        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == BODY_ALPHA))
         {
             slabs.push(i);
         }
@@ -2894,13 +2858,12 @@ fn painted_rulings(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRul
 /// NUMBERED level takes — the only thing in the shape list that says which
 /// rulings the pane wrote a number beside, since the numbers themselves leave
 /// it as one opaque text callback.
-fn painted_levels(rect: egui::Rect, mut cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
-    cfg.atmosphere.analyzer_softness = 1.0;
+fn painted_levels(rect: egui::Rect, cfg: SpectrumConfig) -> (Vec<PaintedRuling>, Vec<usize>) {
     let strong = theme::picture_ruling().gamma_multiply(RULING_FADE.0 * 0.4);
     let axes = Axes::new(rect, &cfg);
     let (mut levels, mut slabs) = (Vec::new(), Vec::new());
     for (i, shape) in paint_tone(rect, cfg).into_iter().enumerate() {
-        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == BODY_EDGE_ALPHA))
+        if matches!(&shape, egui::Shape::Mesh(mesh) if mesh.vertices.iter().any(|v| v.color.a() == BODY_ALPHA))
         {
             slabs.push(i);
         }
