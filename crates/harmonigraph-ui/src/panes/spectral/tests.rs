@@ -1931,16 +1931,24 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
                 1.0,
             );
         });
-        let (mut meshes, mut outlines) = (Vec::new(), Vec::new());
-        for s in out.shapes {
-            match s.shape {
-                egui::Shape::Mesh(mesh) => meshes.push(mesh),
-                egui::Shape::Path(path) => outlines.push(path),
-                _ => {}
-            }
-        }
-        assert_eq!(meshes.len(), if cfg.atmosphere.analyzer_softness > 0.0 { 2 } else { 1 });
+        let mut meshes: Vec<_> = out
+            .shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh),
+                _ => None,
+            })
+            .collect();
+        // The halo (with softness), the body, then the outline when shown.
+        let fills = if cfg.atmosphere.analyzer_softness > 0.0 { 2 } else { 1 };
+        let outlines = meshes.split_off(fills.min(meshes.len()));
+        assert_eq!(meshes.len(), fills);
+        assert!(outlines.len() <= 1);
         (meshes, outlines)
+    };
+    // Four vertices across the ribbon, the second of them solid.
+    let solid = |outline: &egui::Mesh| {
+        outline.vertices.chunks_exact(4).map(|across| across[1].color).collect::<Vec<_>>()
     };
     let mut contour = None;
     for softness in [0.0, 0.5, 1.0] {
@@ -1948,11 +1956,7 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
         cfg.keyline = 0.3;
         let (meshes, outlines) = draw(cfg, &visible);
         assert_eq!(outlines.len(), 1);
-        assert_eq!(outlines[0].points.len(), visible.len());
-        assert_eq!(
-            outlines[0].stroke,
-            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.3)).into()
-        );
+        assert_eq!(outlines[0].vertices.len(), visible.len() * 4);
         assert_eq!(
             contour.get_or_insert(outlines.clone()),
             &outlines,
@@ -1971,16 +1975,44 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
         cfg.keyline = 0.7;
         let (brighter_meshes, brighter_outlines) = draw(cfg, &visible);
         assert_eq!(brighter_meshes, meshes, "outline opacity changed the fill or halo");
-        assert_eq!(brighter_outlines[0].points, outlines[0].points);
-        assert_eq!(
-            brighter_outlines[0].stroke,
-            egui::Stroke::new(1.0, egui::Color32::WHITE.gamma_multiply(0.7)).into()
-        );
+        let pos = |m: &egui::Mesh| m.vertices.iter().map(|v| v.pos).collect::<Vec<_>>();
+        assert_eq!(pos(&brighter_outlines[0]), pos(&outlines[0]));
+        assert!(solid(&brighter_outlines[0])
+            .iter()
+            .zip(solid(&outlines[0]))
+            .all(|(b, d)| b.a() > d.a()));
         cfg.keyline = 0.0;
         let (hidden_meshes, hidden_outlines) = draw(cfg, &visible);
         assert_eq!(hidden_meshes, meshes);
         assert!(hidden_outlines.is_empty(), "zero opacity must hide the outline");
     }
+    // The outline takes the fill's color: the palette-black quiet levels are
+    // lifted to the floor, the bright peak keeps its own color, and a full
+    // lift is the plain white outline.
+    cfg.keyline = 1.0;
+    let fill = |i: usize| {
+        let (midi, _, level) = visible[i];
+        super::spectrogram::cell_color(
+            cfg.spectrogram_gradient,
+            spectrogram_level_db(&cfg, level, midi),
+        )
+    };
+    let luminance = |c: egui::Color32| {
+        let c = egui::Rgba::from(c);
+        0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
+    };
+    let floor = atmosphere::keyline_floor(cfg.keyline_lift);
+    assert!(luminance(fill(4)) > floor, "fixture needs a peak brighter than the floor");
+    assert!(luminance(fill(2)) < 0.01, "fixture needs a palette-black level");
+    let tinted = solid(&draw(cfg, &visible).1[0]);
+    assert_eq!(tinted[4], fill(4), "a bright level must wear its own color");
+    assert!(
+        (luminance(tinted[2]) - floor).abs() < 0.01,
+        "a dark level must be lifted to the floor"
+    );
+    cfg.keyline_lift = 1.0;
+    assert!(solid(&draw(cfg, &visible).1[0]).iter().all(|&c| c == egui::Color32::WHITE));
+    cfg.keyline_lift = SpectrumConfig::default().keyline_lift;
     cfg.keyline = 1.0;
     cfg.tilt = -6.0;
     assert!(loudness_db(&cfg, -120.0, 135.0) > 0.05, "fixture must lift the stored silence floor");
