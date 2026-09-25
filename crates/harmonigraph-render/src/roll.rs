@@ -2740,44 +2740,64 @@ mod tests {
         );
     }
 
-    /// A steep glide's outline stands its full width off the note at the note's
-    /// ENDS, where a sheared note's ink reaches furthest along pitch.
+    /// A steep glide's outline wraps the note's ENDS at the same distance as
+    /// every other edge: round about the corner, where a sheared note's ink
+    /// reaches furthest along pitch, and no further.
     ///
-    /// Two things have to be right for the ink to be there, and either alone
-    /// would leave it black at the flank and short of where it belongs. The
-    /// outline is measured perpendicular to the edge it stands against (the
-    /// test above), so along PITCH it covers `sqrt(1+slope^2)` times its own
-    /// reach; and the quad the vertex stage grows has to hold all of that, or
-    /// the fragment stage never runs where the ink was owed and the outline is
-    /// cut off along a straight line at nothing in particular.
-    ///
-    /// Sampled at the note's own last row, since both shortfalls grow with
-    /// `|local.y|` and are zero at its middle — which is where a scanline
-    /// measurement like the one above would look.
+    /// Two ways to get it wrong, one each side. The quad the vertex stage grows
+    /// has to hold the corner's outline, or the fragment stage never runs there
+    /// and the outline is cut off along a straight line at nothing in
+    /// particular. And the distance has to be the true one: measured in the
+    /// sheared box's own coordinates, the end reads its depth offset alone, so
+    /// the outline carries on past the corner along the shear — `sqrt(1 +
+    /// slope^2)` times its reach along pitch here, and without bound on a
+    /// steeper glide (the next test).
     #[test]
-    fn a_steep_glides_outline_still_stands_off_at_the_notes_ends() {
+    fn a_steep_glides_outline_wraps_its_ends_at_its_own_reach() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
         // 8 points across pitch, 40 along time, bending 3 points of pitch per
-        // point of depth: steep enough that `skew` is 3.16, so the outline
-        // stands 6.3 points out along pitch rather than 2.
+        // point of depth, in the harness's two-point outline.
         let steep = RollInstance { half_extent: [4.0, 20.0], shear: 3.0, ..centered_note() };
         let frame = draw(&device, &queue, vec![steep], bg_color());
         // Row 147 samples `local.y = 19.5` — inside the note's box, half a
-        // point short of its end. There the note's center line has drifted 58.5
-        // points, so the far flank's ribbon ends at 190.5 and its outline runs
-        // out to 196.8 — where an outline that kept its width along pitch
-        // rather than perpendicular to the edge would stop at 192.5.
+        // point short of its end. The far flank's ribbon ends at 190.5 there,
+        // and the box's far corner stands at (192, 20).
         let at = |x: u32| pixel(&frame, x, 147);
-        assert!(shadowed(at(193)), "the outline is missing at the note's end: {:?}", at(193),);
         assert!(
-            shadowed(at(195)),
-            "the outline is cut off at the note's end ({:?}) — it thins with the angle, \
-             or the quad was grown by its flat reach rather than its sheared one",
-            at(195),
+            shadowed(at(193)),
+            "the outline is cut off at the note's end ({:?}) — the quad is short of its corner",
+            at(193),
         );
-        assert!(near(at(197), BG), "the outline reaches further than it should: {:?}", at(197));
+        // 4.5 points past the corner, out of the outline's reach, where the
+        // sheared end's outline ran on to 196.8.
+        assert!(near(at(196), BG), "the outline runs on past the note's corner: {:?}", at(196));
+    }
+
+    /// A glide a hundredth of a point long paints nothing beyond its own reach
+    /// along pitch.
+    ///
+    /// Per-note tuning makes these: the tuning lands samples after the note-on,
+    /// so the note opens on a segment far shorter than a pixel that carries it
+    /// part of a semitone — a slope in the thousands. Distance measured in the
+    /// sheared box's coordinates called a strip `slope` times the outline's
+    /// reach tall "near" it, which drew its outline, and a flickering
+    /// antialiased hairline of body color, through the whole pane.
+    #[test]
+    fn a_sliver_glide_paints_nothing_along_pitch_past_its_reach() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // The center line drifts 5 points each way, so the box spans pitch
+        // 119..137 and its outline reaches two points past that.
+        let sliver = RollInstance { half_extent: [4.0, 0.005], shear: 1000.0, ..centered_note() };
+        let frame = draw(&device, &queue, vec![sliver], bg_color());
+        let x_far = (0..112).chain(145..SIZE[0]);
+        for (x, y) in x_far.flat_map(|x| (118..138).map(move |y| (x, y))) {
+            let got = pixel(&frame, x, y);
+            assert!(near(got, BG), "the sliver painted {got:?} at ({x}, {y}), far along pitch");
+        }
     }
 }
 

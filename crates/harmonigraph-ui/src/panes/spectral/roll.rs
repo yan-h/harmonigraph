@@ -436,20 +436,14 @@ fn roll_instances_with_floor(
     // Across pitch there is no margin to be had at the NOTE's level, and that
     // is the whole reason the test moved down into the loop.
     //
-    // How far a segment's outline stands out along pitch is `skew * reach`,
-    // where `skew` is a reading of that ONE segment's slope (see the reach in
-    // [`note_instances`]'s loop, and `vs_note`) — so a note's pitch endpoints,
-    // which are all a filter here can see, do not bound it. A segment can be
-    // steeper than the note it belongs to, and its drawn length has no floor of
-    // its own: the floor is the note's, so a note long enough to draw honestly
-    // can still carry a segment a hundredth of a point long across a semitone,
-    // which per-note tuning produces routinely. A flat margin of the outline's
-    // own reach, as this was, drops such a glide while `(skew - 1)` times that
-    // reach of its outline is still owed inside the range.
+    // A segment's ink along pitch is its own drawn pitch span, widened by the
+    // ribbon's half width and the outline's reach (see the cull in
+    // [`note_instances`]'s loop, and `vs_note`), and a note's segments each
+    // span less than the note does. Testing them one by one draws only the
+    // segments of a long, bent note that are actually in range.
     //
     // What that costs is sorting the notes that are inside the WINDOW but off
-    // the octave zoom — a comparison each. What it buys is a cull that is
-    // exact instead of one that is wrong by however steep the picture is.
+    // the octave zoom — a comparison each.
     let mut notes: Vec<&RollNote> = roll
         .notes()
         .filter(|note| note.stop(now) >= edge || lead_alpha(note, now, cfg.roll_lead_release) > 0.0)
@@ -750,15 +744,12 @@ fn roll_instances_with_floor(
             //
             // Term for term what `vs_note` grows the quad by along pitch: the
             // drawn ribbon's own half width, the center line's drift over the
-            // quad's half length (ends included), and the outline's reach
-            // turned into a distance ALONG pitch, which on a sheared note is
-            // `skew` times what it is across the note's long edges. Measured
+            // box's half length, and the outline's reach — the shader's
+            // distance being Euclidean, the same reach every way. Measured
             // from the segment's own center, which is where the shader
             // measures it from.
-            let skew = (1.0 + slope * slope).sqrt();
-            let ink_pitch_px = half_pitch
-                + slope.abs() * (half_depth + outline_reach_px + 0.5 * feather_px)
-                + skew * outline_reach_px;
+            let ink_pitch_px =
+                half_pitch + slope.abs() * half_depth + outline_reach_px + 0.5 * feather_px;
             let ink_pitch = ink_pitch_px / axes.pitch_len().max(1e-3);
             let center_pitch = (a0 + a1) * 0.5;
             if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
@@ -2195,17 +2186,18 @@ mod tests {
         assert_eq!(lead(&cfg, &axes, 0.0), (0.0, 0.0), "a pane with no spectrum drew a lead",);
     }
 
-    /// A note off the octave zoom is dropped when its INK is off it, and how
-    /// far its ink reaches along pitch is a reading of its own slope.
+    /// A note off the octave zoom is dropped when its INK is off it, and a
+    /// glide's ink along pitch is bounded by the pitches it spans, however
+    /// steep it is.
     ///
-    /// `vs_note` grows the quad by `skew * reach` along pitch, where `skew` is
-    /// `sqrt(1 + slope^2)` — so the outline of a steep glide stands a multiple
-    /// of its own reach out along that axis, and a cull that used the plain
-    /// reach dropped such a note while ink was still owed inside the range.
-    /// Two notes with the SAME pitch endpoints settle it: the cull cannot be
-    /// reading only those, or the two come out alike.
+    /// `vs_note` reads a Euclidean distance, so a segment's outline stands its
+    /// own reach off the box in every direction. It used to run on past a
+    /// sheared box's ends by `slope` times that reach, and a glide the tuning
+    /// lands in one block drew a strip through pitches nothing sounded; the
+    /// cull kept it for that ink. Two notes with the SAME pitch endpoints
+    /// settle it: steepness no longer decides anything here.
     #[test]
-    fn a_steep_glide_is_kept_for_the_outline_it_still_owes_the_range() {
+    fn a_glide_off_the_zoom_is_dropped_however_steep() {
         // The bend applied `after` seconds into a note held from 2 s to 5 s.
         // Immediately (one block, what per-note tuning actually does) it is a
         // segment a fraction of a point long carrying the whole semitone;
@@ -2239,15 +2231,12 @@ mod tests {
             "a note two semitones off the zoom drew anyway; the cull is doing nothing",
         );
         // Steep: the same note, bent in one block instead of over two seconds
-        // — the same two endpoints, and an outline that does reach in.
-        let steep = glide(0.011);
+        // — a segment a fraction of a point long with the same two endpoints,
+        // and no more ink along pitch than the ramp.
         assert!(
-            !steep.is_empty(),
-            "a steep glide was culled while its outline still stood inside the range",
-        );
-        assert!(
-            steep.iter().any(|n| n.shear.abs() > 1.0),
-            "no segment is steep enough for the skew to matter; the case is vacuous",
+            glide(0.011).is_empty(),
+            "a steep glide two semitones off the zoom drew anyway — its reach along pitch \
+             is being read off its slope",
         );
     }
 
