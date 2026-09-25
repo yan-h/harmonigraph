@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use harmonigraph_core::spectrogram::{db_of, BucketDb, DB_STEP};
 use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI};
-use harmonigraph_render::{SpectrogramGrid, SpectrogramRead, SpectrogramShades};
+use harmonigraph_render::{SpectrogramGrid, SpectrogramRead, SpectrogramShades, SpectrogramSlab};
 
 use crate::panes::spectral::axes::{spectrogram_level_raw, PitchScale};
 use crate::SpectrumConfig;
@@ -273,7 +273,7 @@ struct FoldedRun {
     key: RunKey,
     first_key: i64,
     capacity: usize,
-    run: Arc<Vec<u8>>,
+    run: Arc<[SpectrogramSlab]>,
     layout: TexLayout,
 }
 
@@ -300,11 +300,11 @@ impl FoldedGrid {
         key: RunKey,
         first_key: i64,
         capacity: usize,
-        run: Vec<u8>,
+        run: Arc<[SpectrogramSlab]>,
         layout: TexLayout,
     ) {
-        debug_assert!(run.len() / SPECTRUM_BINS <= capacity);
-        self.run = Some(FoldedRun { key, first_key, capacity, run: Arc::new(run), layout });
+        debug_assert!(run.len() <= capacity);
+        self.run = Some(FoldedRun { key, first_key, capacity, run, layout });
     }
 
     fn grid(&self) -> Option<SpectrogramGrid> {
@@ -349,7 +349,7 @@ impl FoldedGrid {
     /// Number of slabs in the currently memoized run, for test diagnostics.
     #[cfg(test)]
     pub(crate) fn run_slabs(&self) -> usize {
-        self.run.as_ref().map_or(0, |run| run.run.len() / SPECTRUM_BINS)
+        self.run.as_ref().map_or(0, |run| run.run.len())
     }
 }
 
@@ -606,13 +606,13 @@ pub(crate) fn frame_data(
 fn aggregate_slabs<'a>(
     columns: impl Iterator<Item = &'a crate::SpectrogramColumn>,
     bucket: f64,
-) -> (Vec<f64>, Vec<BucketDb>) {
+) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
     let mut grid = SlabGrid::default();
     for col in columns {
         grid.fold(col, bucket, None);
     }
     grid.finish();
-    (grid.centers, grid.power)
+    (grid.centers, grid.power.into())
 }
 
 /// The same accumulator serves incremental and batch aggregation.
@@ -657,13 +657,25 @@ impl PowerMean {
 
 /// Completed slabs stay byte-sized. Only the active slab retains sums/counts;
 /// continuing it after a display read never averages its quantized output.
+///
+/// One shared [`SpectrogramSlab`] per slab rather than one flat byte run, so a
+/// frame's snapshot is a list of pointers and the renderer can tell the slabs
+/// that moved from the ones that did not without reading either. The contract
+/// that makes that exact is the one [`SlabGrid::finish`] keeps: a slab is
+/// written only through `Arc::make_mut`, so one a snapshot still holds is
+/// copied rather than changed under it.
 #[derive(Default, Clone)]
 struct SlabGrid {
     mean: PowerMean,
     dirty: bool,
     centers: Vec<f64>,
-    power: Vec<BucketDb>,
+    power: Vec<SpectrogramSlab>,
     cur_key: Option<i64>,
+}
+
+/// A fresh slab of silence, which is what every slab starts as.
+fn silent_slab() -> SpectrogramSlab {
+    SpectrogramSlab::from([0; SPECTRUM_BINS])
 }
 
 impl SlabGrid {
@@ -675,7 +687,6 @@ impl SlabGrid {
     /// `min_key` is an explicit live retention bound; the batch driver passes
     /// `None`. One older seed may survive until an admitted column arrives.
     fn fold(&mut self, col: &crate::SpectrogramColumn, bucket: f64, min_key: Option<i64>) -> bool {
-        let nb = SPECTRUM_BINS;
         let key = (col.time / bucket).floor() as i64;
         if self.cur_key != Some(key) {
             self.finish();
@@ -703,14 +714,16 @@ impl SlabGrid {
                         // Hold the previous column: at this width one empty
                         // slab is just a long frame, and painting it black
                         // would leave a stripe of false silence scrolling
-                        // across the display for the rest of the window.
-                        self.power.extend_from_within(self.power.len() - nb..);
+                        // across the display for the rest of the window. The
+                        // held slab is already final, so the copy shares it.
+                        let held = self.power.last().expect("a current slab").clone();
+                        self.power.push(held);
                     } else {
-                        self.power.resize(self.power.len() + nb, 0);
+                        self.power.push(silent_slab());
                     }
                 }
                 self.centers.push((key as f64 + 0.5) * bucket);
-                self.power.resize(self.power.len() + nb, 0);
+                self.power.push(silent_slab());
                 self.cur_key = Some(key);
                 true
             }
@@ -720,7 +733,7 @@ impl SlabGrid {
             other => {
                 self.cur_key = Some(key);
                 self.centers.push((key as f64 + 0.5) * bucket);
-                self.power.resize(self.power.len() + nb, 0);
+                self.power.push(silent_slab());
                 other.is_none()
             }
         };
@@ -734,8 +747,10 @@ impl SlabGrid {
 
     fn finish(&mut self) {
         if self.dirty {
-            let base = self.power.len() - SPECTRUM_BINS;
-            self.mean.write(&mut self.power[base..]);
+            // Through `make_mut`: the last frame's snapshot may hold this slab,
+            // and it must go on reading what it was handed.
+            let open = self.power.last_mut().expect("a dirty grid has a current slab");
+            self.mean.write(Arc::make_mut(open));
             self.dirty = false;
         }
     }
@@ -749,7 +764,7 @@ impl SlabGrid {
             .partition_point(|&c| ((c / bucket).floor() as i64) < min_key)
             .min(self.centers.len().saturating_sub(1));
         self.centers.drain(..drop);
-        self.power.drain(..drop * SPECTRUM_BINS);
+        self.power.drain(..drop);
     }
 
     /// Normal geometric growth is at most twice the admitted slabs plus a
@@ -760,7 +775,7 @@ impl SlabGrid {
         if self.centers.capacity() > bound.max(4) {
             self.centers.shrink_to_fit();
         }
-        if self.power.capacity() > bound * SPECTRUM_BINS {
+        if self.power.capacity() > bound {
             self.power.shrink_to_fit();
         }
     }
@@ -880,7 +895,7 @@ impl SpectrogramAgg {
         first: usize,
         bucket: f64,
         keep: usize,
-    ) -> (Vec<f64>, Vec<BucketDb>) {
+    ) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
         let target = history.get(first).map(|c| (c.time / bucket).floor() as i64);
         let newest = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
         let min_key = history
@@ -930,14 +945,16 @@ impl SpectrogramAgg {
     /// averages and jitter copies stay unchanged as individual source columns
     /// scroll out. Keeping the preceding slabs internally lets a widening Span
     /// or a history-tier merge reach back without refolding the retained grid.
-    fn view(&self, bucket: f64, target: Option<i64>) -> (Vec<f64>, Vec<BucketDb>) {
+    ///
+    /// The slabs come out shared, not copied — see [`SlabGrid`].
+    fn view(&self, bucket: f64, target: Option<i64>) -> (Vec<f64>, Arc<[SpectrogramSlab]>) {
         let (Some(t), Some(&front_center)) = (target, self.grid.centers.first()) else {
-            return (self.grid.centers.clone(), self.grid.power.clone());
+            return (self.grid.centers.clone(), self.grid.power.as_slice().into());
         };
         let front = (front_center / bucket).floor() as i64;
         let kept = self.grid.centers.len().saturating_sub(1) as i64;
         let start = (t - front).clamp(0, kept) as usize;
-        (self.grid.centers[start..].to_vec(), self.grid.power[start * SPECTRUM_BINS..].to_vec())
+        (self.grid.centers[start..].to_vec(), self.grid.power[start..].into())
     }
 }
 
@@ -1158,9 +1175,9 @@ mod tests {
         let keep = ring_slots(1024);
         let bounded = |grid: &SlabGrid| {
             assert!(grid.centers.len() <= keep + 1, "at most retention plus one seed");
-            assert_eq!(grid.power.len(), grid.centers.len() * SPECTRUM_BINS);
+            assert_eq!(grid.power.len(), grid.centers.len());
             assert!(grid.centers.capacity() <= 2 * (keep + 1));
-            assert!(grid.power.capacity() <= 2 * (keep + 1) * SPECTRUM_BINS);
+            assert!(grid.power.capacity() <= 2 * (keep + 1));
         };
         for span in [12.0, 180.0, 600.0] {
             for gap in [1.0, 2.0, 60.0, 600.0, 620.0, 1_000_000.0] {
@@ -1207,7 +1224,7 @@ mod tests {
                         .map(|c| c.db()[5])
                         .max()
                         .unwrap();
-                    assert_eq!(power[power.len() - SPECTRUM_BINS + 5], newest_max);
+                    assert_eq!(power[power.len() - 1][5], newest_max);
                     if gap <= 2.0 {
                         let expected =
                             aggregate_slabs(complete_first_slab(&history, first, bucket), bucket);
@@ -1222,9 +1239,7 @@ mod tests {
                             let key = (center / bucket).floor() as i64;
                             if key > old_key && key < newest_key {
                                 assert!(
-                                    power[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
-                                        .iter()
-                                        .all(|&b| b == 0),
+                                    power[j].iter().all(|&b| b == 0),
                                     "old audio leaked into gap {span}/{gap}/{entry}"
                                 );
                             }
@@ -1260,7 +1275,7 @@ mod tests {
         let mut agg = SpectrogramAgg::new();
         let (centers, power) = agg.window(&history, 0, 1.0, 2);
         assert_eq!(centers, [1.5, 2.5]);
-        assert_eq!([power[5], power[SPECTRUM_BINS + 5]], [q(0.625), q(0.5)]);
+        assert_eq!([power[0][5], power[1][5]], [q(0.625), q(0.5)]);
 
         // A larger retained budget cannot invent the missing older coverage.
         for key in 3..=10 {
@@ -1273,10 +1288,10 @@ mod tests {
         assert_eq!(agg.rebuilds, rebuilds + 1);
 
         agg.grid.centers.reserve(10_000);
-        agg.grid.power.reserve(10_000 * SPECTRUM_BINS);
+        agg.grid.power.reserve(10_000);
         agg.window(&history, 0, 1.0, 3);
         assert!(agg.grid.centers.capacity() <= 8);
-        assert!(agg.grid.power.capacity() <= 8 * SPECTRUM_BINS);
+        assert!(agg.grid.power.capacity() <= 8);
         assert_eq!(agg.grid.centers.len(), 3);
     }
 
@@ -1291,7 +1306,7 @@ mod tests {
         ];
         let (centers, power) = aggregate_slabs(cols.iter(), 1.0);
         assert_eq!(centers.len(), 1, "one slab of width 1.0 s holds all three");
-        assert_eq!(power[5], q((0.001 + 1.0 + 0.002) / 3.0), "mean power, not max or mean dB");
+        assert_eq!(power[0][5], q((0.001 + 1.0 + 0.002) / 3.0), "mean power, not max or mean dB");
     }
 
     /// A stall in the analyzer leaves a hole in the column stream — switching
@@ -1308,7 +1323,7 @@ mod tests {
         let cols = [col(0.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
         let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
         assert_eq!(centers.len(), 5, "one row per slab, silent ones included");
-        let at = |slab: usize| power[slab * SPECTRUM_BINS + 5];
+        let at = |slab: usize| power[slab][5];
         assert_eq!(at(0), q(1.0), "the column before the gap");
         assert_eq!([at(1), at(2), at(3)], [0, 0, 0], "the gap reads as silence, not as a smear");
         assert_eq!(at(4), q(0.5), "the column after it");
@@ -1331,8 +1346,8 @@ mod tests {
         let cols = [col(0.0, &[(5, 1.0)]), col(0.5, &[(5, 0.5)])];
         let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
         assert_eq!(centers.len(), 3, "the empty slab still gets its row");
-        assert_eq!(power[SPECTRUM_BINS + 5], q(1.0), "and holds the column before it");
-        assert_eq!(power[2 * SPECTRUM_BINS + 5], q(0.5));
+        assert_eq!(power[1][5], q(1.0), "and holds the column before it");
+        assert_eq!(power[2][5], q(0.5));
     }
 
     /// Time running backwards (a transport jump) starts a fresh row rather
@@ -1343,7 +1358,7 @@ mod tests {
         let cols = [col(10.0, &[(5, 1.0)]), col(1.0, &[(5, 0.5)])];
         let (centers, power) = aggregate_slabs(cols.iter(), 0.25);
         assert_eq!(centers.len(), 2);
-        assert_eq!(power[SPECTRUM_BINS + 5], q(0.5), "the rewound column landed in its own row");
+        assert_eq!(power[1][5], q(0.5), "the rewound column landed in its own row");
     }
 
     #[test]
@@ -1611,8 +1626,8 @@ mod tests {
         }
         assert_eq!(agg.grid.centers.len(), 3, "retention must discard older slabs");
         let expected = aggregate_slabs(history.iter_from(2), bucket);
-        assert_eq!(expected.1[4], q((0.7 + 0.6 + 0.1) / 3.0));
-        assert_eq!(expected.1[SPECTRUM_BINS + 4], expected.1[4], "one-slab jitter copy");
+        assert_eq!(expected.1[0][4], q((0.7 + 0.6 + 0.1) / 3.0));
+        assert_eq!(expected.1[1][4], expected.1[0][4], "one-slab jitter copy");
         for first in 2..=4 {
             assert_eq!(agg.window(&history, first, bucket, 3), expected);
             let mut fresh = SpectrogramAgg::new();
@@ -1620,7 +1635,7 @@ mod tests {
         }
         let advanced = agg.window(&history, 5, bucket, 3);
         assert_eq!(advanced.0, [1.125]);
-        assert_eq!(advanced.1[4], q(0.5));
+        assert_eq!(advanced.1[0][4], q(0.5));
         assert_eq!(agg.rebuilds(), 1);
     }
 
@@ -1700,9 +1715,9 @@ mod tests {
         assert_eq!(history.back().unwrap().count, 1);
         let (centers, power) = aggregate_slabs(history.iter(), 100.0);
         assert_eq!(centers.len(), 1);
-        assert_eq!(power[5], q((sum / n as f64) as f32));
-        assert_eq!(power[6], q(1e-7), "quiet content uses the same count");
-        assert_eq!(power[7], 0);
+        assert_eq!(power[0][5], q((sum / n as f64) as f32));
+        assert_eq!(power[0][6], q(1e-7), "quiet content uses the same count");
+        assert_eq!(power[0][7], 0);
     }
 
     /// The bug this guards: a Span LONGER than the finest tier's ~16 s reach
@@ -1732,7 +1747,7 @@ mod tests {
             let first = history.partition_point(|c| c.time < t - window_span).saturating_sub(1);
             let (centers, power) = agg.window(&history, first, bucket, KEEP);
             // The window it serves is still the right shape and length.
-            assert_eq!(power.len(), centers.len() * SPECTRUM_BINS, "grid shape at column {i}");
+            assert_eq!(power.len(), centers.len(), "grid shape at column {i}");
             assert!(
                 centers.len() <= LIVE_SLAB_CAP as usize + 2,
                 "the served window grew past the Span at column {i}: {} slabs",
@@ -2383,6 +2398,51 @@ mod tests {
         assert_eq!(surfaces.at(0).folded.full_uploads(), 0, "folding is not an upload");
     }
 
+    /// What makes the renderer's comparison cheap: while audio streams in,
+    /// consecutive snapshots share every slab but the one being filled and the
+    /// one just opened, so all the rest compare by pointer. The fixture keeps
+    /// a slab open across several frames, holds one missed slab, and trims
+    /// the front at the retention bound, so each of those paths is taken.
+    #[test]
+    fn a_streaming_run_shares_every_slab_but_the_ones_it_is_filling() {
+        let bucket = 4.0 * crate::AudioSpectrum::FFT_INTERVAL;
+        let keep = ring_slots(64);
+        let mut history = crate::SpectrumHistory::default();
+        let mut agg = SpectrogramAgg::new();
+        let mut previous: Option<(i64, Arc<[SpectrogramSlab]>)> = None;
+        let (mut trimmed, mut held) = (false, false);
+        for i in 0..1200 {
+            // A slab and a half of missed columns, once: exactly one slab
+            // empty, which holds its predecessor.
+            if (600..606).contains(&i) {
+                continue;
+            }
+            let time = i as f64 * crate::AudioSpectrum::FFT_INTERVAL;
+            history.push(col(time, &[(5, 0.1 + (i % 7) as f32 * 0.1)]));
+            let (centers, run) = agg.window(&history, 0, bucket, keep);
+            let first_key = (centers[0] / bucket).floor() as i64;
+            if let Some((was_first, was)) = &previous {
+                trimmed |= first_key > *was_first;
+                let moved = run
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, slab)| {
+                        usize::try_from(first_key + j as i64 - was_first)
+                            .ok()
+                            .and_then(|at| was.get(at))
+                            .is_none_or(|old| !Arc::ptr_eq(old, slab))
+                    })
+                    .count();
+                assert!(moved <= 2, "column {i}: {moved} of {} slabs moved", run.len());
+            }
+            held |= run.windows(2).any(|pair| Arc::ptr_eq(&pair[0], &pair[1]));
+            previous = Some((first_key, run));
+        }
+        assert!(trimmed, "the run never reached the retention bound");
+        assert!(held, "no jitter hold shared its predecessor");
+        assert_eq!(agg.rebuilds(), 1, "the fixture left the incremental path");
+    }
+
     #[test]
     fn the_folded_snapshot_changes_only_at_oldest_slab_boundaries() {
         let view = PaneView {
@@ -2414,8 +2474,11 @@ mod tests {
         let grid = surfaces.at(0).folded.grid().unwrap();
         assert_eq!(grid.first_key, 2);
         assert_eq!(advanced.t_origin, 2.0 * bucket);
-        assert_eq!(grid.run.as_ref(), &snapshot.run[2 * SPECTRUM_BINS..]);
+        assert_eq!(grid.run.as_ref(), &snapshot.run[2..]);
         assert!(!Arc::ptr_eq(&snapshot.run, &grid.run));
+        // A new snapshot, and the same slabs: what the renderer compares by
+        // pointer rather than by reading them.
+        assert!(grid.run.iter().zip(&snapshot.run[2..]).all(|(a, b)| Arc::ptr_eq(a, b)));
         assert_eq!(surfaces.at(0).agg.as_ref().unwrap().rebuilds(), 1);
     }
 
@@ -2494,7 +2557,7 @@ mod tests {
                     let (centers, power) =
                         fresh.window(spectrum.history(), 0, plan.bucket, capacity);
                     assert_eq!(layout.t_origin, centers[0] - plan.bucket * 0.5);
-                    assert_eq!(*state.folded.run.as_ref().unwrap().run, power);
+                    assert_eq!(state.folded.run.as_ref().unwrap().run, power);
                     assert_eq!(state.agg.as_ref().unwrap().rebuilds(), rebuilds);
                     assert_eq!(state.folded.full_uploads(), 0, "CPU folds never report uploads");
                     if depth == 512.0 && rebuilds == 2 {
@@ -2508,9 +2571,9 @@ mod tests {
                     fresh.window(&spectrum.history, 0, resize.bucket, resize.capacity);
                 assert_eq!(recovered.t_origin, centers[0] - resize.bucket * 0.5);
                 assert_eq!(recovered.tex_span, centers.len() as f64 * resize.bucket);
-                assert_eq!(*run, power);
+                assert_eq!(run, power);
                 assert_eq!(centers.len(), resize.capacity);
-                assert!(fresh.grid.power.capacity() <= 2 * (resize.capacity + 1) * SPECTRUM_BINS);
+                assert!(fresh.grid.power.capacity() <= 2 * (resize.capacity + 1));
             }
         }
     }
@@ -3030,7 +3093,7 @@ mod tests {
                 capacity: slabs as u32,
                 bins: SPECTRUM_BINS as u32,
                 first_key: 0,
-                run: Arc::new(run),
+                run: SpectrogramGrid::slabs_of(&run, SPECTRUM_BINS),
             }
         }
 
@@ -3250,7 +3313,7 @@ mod tests {
                         && surfaces.at(0).agg.as_ref().map_or(0, |a| a.rebuilds()) > refolds,
                 );
                 let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
-                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let slabs = grid.run.len() as u32;
                 let read = read_of(view, plan.rows);
                 let vertices = run_quad(slabs, SIZE);
 
@@ -3262,10 +3325,7 @@ mod tests {
                 t.last = Some((plan.bucket, grid.first_key));
                 // A HELD slab is a copy of the one before it, which is the only way
                 // two neighbours can carry the same bytes under this fixture.
-                t.holds += u32::from((1..slabs as usize).any(|j| {
-                    grid.run[(j - 1) * SPECTRUM_BINS..j * SPECTRUM_BINS]
-                        == grid.run[j * SPECTRUM_BINS..(j + 1) * SPECTRUM_BINS]
-                }));
+                t.holds += u32::from((1..slabs as usize).any(|j| grid.run[j - 1] == grid.run[j]));
 
                 let delta = headless.frame(
                     0,
@@ -3396,7 +3456,7 @@ mod tests {
                 let plan = Plan::new(&view, &columns, None);
                 run_for(spectrum.history(), &mut surfaces, 0, &plan).expect("a run to draw");
                 let (grid, _) = frame_data(&mut surfaces, 0, &cfg).expect("a grid to draw");
-                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let slabs = grid.run.len() as u32;
                 let first_slot = grid.first_key.rem_euclid(i64::from(grid.capacity)) as u32;
                 negative += u32::from(grid.first_key < 0);
                 wrapped += u32::from(first_slot + slabs > grid.capacity);
@@ -3411,7 +3471,7 @@ mod tests {
                     probe_shades(),
                 );
                 for j in 0..slabs {
-                    let want = grid.run[j as usize * SPECTRUM_BINS];
+                    let want = grid.run[j as usize][0];
                     let got = pixel(&frame, SIZE, block_centre(j, slabs, SIZE), SIZE[1] / 2)[0];
                     assert_eq!(
                         got,
@@ -3420,12 +3480,12 @@ mod tests {
                         grid.first_key,
                         (grid.first_key + i64::from(j)).rem_euclid(i64::from(grid.capacity)),
                         grid.capacity,
-                        (0..slabs).find(|&k| grid.run[k as usize * SPECTRUM_BINS] == got),
+                        (0..slabs).find(|&k| grid.run[k as usize][0] == got),
                     );
                     if j > 0 {
                         assert_ne!(
                             want,
-                            grid.run[(j - 1) as usize * SPECTRUM_BINS],
+                            grid.run[(j - 1) as usize][0],
                             "slabs {} and {j} draw alike, so a swap between them is invisible",
                             j - 1,
                         );
@@ -3979,7 +4039,7 @@ mod tests {
                 let plan = Plan::new(&view, &columns, None);
                 run_for(spectrum.history(), surfaces, 0, &plan).expect("a run to draw");
                 let (grid, shades) = frame_data(surfaces, 0, &cfg).expect("a grid to draw");
-                let slabs = (grid.run.len() / SPECTRUM_BINS) as u32;
+                let slabs = grid.run.len() as u32;
                 let read = read_of(&view, plan.rows);
                 headless.frame(0, SIZE, run_quad(slabs, SIZE), grid, read, shades);
             };

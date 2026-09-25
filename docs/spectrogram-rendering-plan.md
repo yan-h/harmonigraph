@@ -25,7 +25,8 @@ Tracker:
 The method follows [the lattice plan](lattice-rendering-plan.md) and [#643](https://github.com/yan-h/harmonigraph/issues/643), but the dependencies are established independently for this path.
 
 **Scope decision, 2026-09-06, settled:** Yan was satisfied with spectrogram performance and selected **SG1, SG4A and SG2** for their resource/correctness benefit relative to ongoing maintenance.
-SG3, SG4B/C, SG5 and SG6 are **deferred and not planned**, and their issues are closed as not planned.
+SG3, SG4B/C, SG5 and SG6 were **deferred and not planned**, and their issues closed as not planned.
+Yan reprioritized SG4B/C on 2026-09-25, and it landed as shared slabs in [#1101](https://github.com/yan-h/harmonigraph/pull/1101) (see SG4 below).
 The original evidence and component briefs remain preserved below;
 their earlier priority and dependency language does not schedule the deferred work.
 No implementation, profiling campaign or periodic re-evaluation of those components is planned.
@@ -41,14 +42,13 @@ It closed [#654](https://github.com/yan-h/harmonigraph/issues/654), [#655](https
 | SG2: offline slice timestamps | [#656](https://github.com/yan-h/harmonigraph/issues/656) | **Done** in #710; closed completed |
 | SG4A: upload staging only | [#658](https://github.com/yan-h/harmonigraph/issues/658) | **Done** in #710; closed completed |
 | SG3: whole-song temporal coverage | [#657](https://github.com/yan-h/harmonigraph/issues/657) | Retired with Playhead under #973; historical defect belongs to the removed path |
-| SG4B/C: CPU handoff/storage refactors | [#670](https://github.com/yan-h/harmonigraph/issues/670) | Deferred, not planned; it did not follow SG1/SG4A |
+| SG4B/C: CPU handoff/storage refactors | [#670](https://github.com/yan-h/harmonigraph/issues/670) | **Done** as shared slabs in #1101, reprioritized 2026-09-25 |
 | SG5: lifetime/retention | [#659](https://github.com/yan-h/harmonigraph/issues/659) | Deferred, not planned |
 | SG6: attribution and experiments | [#660](https://github.com/yan-h/harmonigraph/issues/660) | Deferred as a dedicated project; the selected fixes carried their own verification |
 
 | Deferred work | Reopening condition, followed by explicit reprioritization |
 |---|---|
 | SG3 | Retired with Playhead under #973; no implementation is planned. |
-| SG4B/C | A reproduced CPU preparation problem or necessary ownership change justifies a simpler local improvement. Require representative stage evidence before explicit dirty tracking; circular storage additionally needs material cost remaining after smaller changes. |
 | SG5 | A concrete memory-pressure/lifetime problem remains after SG1. Preserve folded temporal fidelity and compare retirement against reopen cost. |
 | SG6 | A concrete rendering performance or visual problem requires attribution to decide a necessary change. Start with the smallest probe for that question; broader GPU/text/export experiments require a demonstrated bottleneck. |
 
@@ -335,8 +335,20 @@ This is a rendering-coverage defect, separate from #310's optional multi-resolut
 
 ### SG4 — reduce CPU handoff and upload staging churn in stages
 
-**A is implemented in #710, under #658.** B and C are deferred, not planned, in #670;
-they were never subsequent stages of the implemented change.
+**A is implemented in #710, under #658.** B and C were deferred in #670 until Yan reprioritized them on 2026-09-25;
+[#1101](https://github.com/yan-h/harmonigraph/pull/1101) then replaced both with one smaller change, and the B/C briefs below are history.
+
+**What landed instead of B and C: shared slabs.** The aggregator keeps one `Arc<[u8]>` per slab rather than one flat byte run,
+and a frame's snapshot is a list of those pointers.
+Consecutive snapshots of a scrolling run share every slab but the one being filled,
+so `changed_slabs` compares by pointer and reads bytes only where the pointers differ — the open slab, or every slab after a refold — and still picks exactly the dirty slabs the whole-run byte comparison did.
+The contract is that a shared slab is never written: the open slab is written through `Arc::make_mut`, and safe Rust offers no other way to write one.
+There is no generation, serial, dirty range or circular store,
+and the full-upload scatter, dropped-callback handling and full-recovery snapshot are unchanged.
+Measured on an x86 VM at a 12 s Span on a 1024-slab pane with dense spectra (750 slabs, one new column a frame),
+the fold, the view and the renderer's comparison together went from 0.63–0.70 ms to 0.05 ms per surface per frame at an identical dirty count;
+what remains is mostly quantizing the open slab.
+`a_streaming_run_shares_every_slab_but_the_ones_it_is_filling` holds the sharing in place.
 
 **Problem/evidence:** M/S:
 ordinary changing runs allocate/copy about 1.3–2.9 MB per update and compare the entire visible byte run to choose 1–3 dirty slabs.

@@ -64,7 +64,7 @@ pub use roll::{
 mod spectrogram;
 pub use spectrogram::{
     spectrogram_paint_callback, SpectrogramAtmosphere, SpectrogramGrid, SpectrogramHeadless,
-    SpectrogramRead, SpectrogramShades, SpectrogramVertex,
+    SpectrogramRead, SpectrogramShades, SpectrogramSlab, SpectrogramVertex,
 };
 
 mod dot_shadow;

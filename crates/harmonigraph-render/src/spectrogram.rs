@@ -59,11 +59,31 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
 pub struct SpectrogramGrid {
     pub capacity: u32,
     pub bins: u32,
-    /// Keys `first_key .. first_key + run.len() / bins`, contiguous and slab-major.
+    /// Keys `first_key .. first_key + run.len()`, one [`SpectrogramSlab`] of `bins` bytes
+    /// each, oldest first.
     pub first_key: i64,
-    pub run: Arc<Vec<u8>>,
+    pub run: Arc<[SpectrogramSlab]>,
     /// Actual full uploads, for the performance overlay. Never a cache input.
     pub full_uploads: Arc<AtomicU32>,
+}
+
+/// One slab's stored bytes, shared rather than copied between snapshots.
+///
+/// A scrolling run changes by a slab or two a frame, so consecutive snapshots
+/// hold the same allocations for everything else, and
+/// [`GridBuffer::changed_slabs`] finds the few that moved by pointer instead of
+/// reading the whole run. That is exact only because a slab is never written
+/// once shared: the aggregator writes the slab it is still filling through
+/// `Arc::make_mut`, which copies it whenever a snapshot holds it.
+pub type SpectrogramSlab = Arc<[u8]>;
+
+impl SpectrogramGrid {
+    /// Cut a slab-major byte run into slabs of `bins` bytes, in fresh
+    /// allocations — a fixture helper for tests in this crate and the UI's; the
+    /// live aggregator builds its slabs one at a time and shares them.
+    pub fn slabs_of(bytes: &[u8], bins: usize) -> Arc<[SpectrogramSlab]> {
+        bytes.chunks_exact(bins).map(SpectrogramSlab::from).collect()
+    }
 }
 
 /// The row read's scalars: the row geometry, the two arms and the level
@@ -251,19 +271,23 @@ impl GridBuffer {
 
     /// Indices needing writes, matched by absolute slab key rather than ring slot.
     /// A newly entering key must be written even if another key had equal bytes.
+    ///
+    /// The same allocation is the same bytes (see [`SpectrogramSlab`]), so a slab both
+    /// snapshots share costs a pointer comparison. A different allocation —
+    /// the slab being filled, or every slab after a refold — is compared by
+    /// bytes, so a refold that reproduced a slab still skips its write.
     fn changed_slabs(&self, grid: &SpectrogramGrid) -> Vec<usize> {
         let previous = &self.snapshot;
         if previous.first_key == grid.first_key && Arc::ptr_eq(&previous.run, &grid.run) {
             return Vec::new();
         }
-        let bins = grid.bins as usize;
-        let held = previous.run.len() / bins;
-        (0..grid.run.len() / bins)
+        (0..grid.run.len())
             .filter(|&j| {
                 let at = grid.first_key + j as i64 - previous.first_key;
-                !(0..held as i64).contains(&at)
-                    || previous.run[at as usize * bins..(at as usize + 1) * bins]
-                        != grid.run[j * bins..(j + 1) * bins]
+                usize::try_from(at).ok().and_then(|at| previous.run.get(at)).is_none_or(|held| {
+                    let fresh = &grid.run[j];
+                    !Arc::ptr_eq(held, fresh) && held[..] != fresh[..]
+                })
             })
             .collect()
     }
@@ -473,7 +497,7 @@ impl CallbackTrait for SpectrogramCallback {
 
         let bins = self.grid.bins as usize;
         let stride = slab_stride(self.grid.bins);
-        let run_slabs = if bins == 0 { 0 } else { self.grid.run.len() / bins };
+        let run_slabs = self.grid.run.len();
         let levels = self.shades.lut.len() as u32;
         // Every one of these is a degenerate the shader has no answer for — a
         // zero modulus, an empty run to clamp into, a table with no entry to
@@ -489,6 +513,7 @@ impl CallbackTrait for SpectrogramCallback {
             pane.count = 0;
             return Vec::new();
         }
+        debug_assert!(self.grid.run.iter().all(|slab| slab.len() == bins));
         debug_assert!(
             run_slabs <= self.grid.capacity as usize,
             "a run of {run_slabs} slabs puts two keys in one of {} slots",
@@ -518,7 +543,7 @@ impl CallbackTrait for SpectrogramCallback {
             for j in 0..run_slabs {
                 let at = slot_of(self.grid.first_key + j as i64, self.grid.capacity) as usize
                     * stride as usize;
-                staging[at..at + bins].copy_from_slice(&self.grid.run[j * bins..(j + 1) * bins]);
+                staging[at..at + bins].copy_from_slice(&self.grid.run[j]);
             }
             queue.write_buffer(&buffer, 0, &staging);
             self.grid.full_uploads.fetch_add(1, Ordering::Relaxed);
@@ -528,7 +553,7 @@ impl CallbackTrait for SpectrogramCallback {
             // Production slabs are aligned already; generic test grids may need padding.
             let mut padded = (bins != stride as usize).then(|| vec![0u8; stride as usize]);
             for j in changed.expect("an existing buffer was compared") {
-                let slab = &self.grid.run[j * bins..(j + 1) * bins];
+                let slab = &self.grid.run[j][..];
                 let bytes = match padded.as_mut() {
                     Some(padded) => {
                         padded[..bins].copy_from_slice(slab);
@@ -1088,7 +1113,25 @@ mod tests {
     }
 
     fn grid_of(run: Arc<Vec<u8>>, bins: u32, capacity: u32, first_key: i64) -> SpectrogramGrid {
+        let run = SpectrogramGrid::slabs_of(&run, bins as usize);
         SpectrogramGrid { full_uploads: Arc::default(), capacity, bins, first_key, run }
+    }
+
+    impl SpectrogramGrid {
+        /// The run as slab-major bytes, the form the fixtures write it in.
+        fn bytes(&self) -> Vec<u8> {
+            self.run.iter().flat_map(|slab| slab.iter().copied()).collect()
+        }
+
+        /// Replace the run with slab-major `bytes`, in fresh slabs.
+        fn set_bytes(&mut self, bytes: &[u8]) {
+            self.run = SpectrogramGrid::slabs_of(bytes, self.bins as usize);
+        }
+
+        /// Every stored byte set to `value`, over the same extent.
+        fn fill(&mut self, value: u8) {
+            self.set_bytes(&vec![value; self.run.len() * self.bins as usize]);
+        }
     }
 
     /// A quad over the whole surface: `slab` running 0..n left to right, `t`
@@ -1154,11 +1197,11 @@ mod tests {
         }
 
         fn run_slabs(&self) -> usize {
-            self.grid.run.len() / self.bins()
+            self.grid.run.len()
         }
 
         fn stored(&self, j: usize, bucket: usize) -> u8 {
-            self.grid.run[j * self.bins() + bucket]
+            self.grid.run[j][bucket]
         }
 
         /// Where a pitch fraction sits on the bucket axis.
@@ -1354,11 +1397,10 @@ mod tests {
     /// Per-bucket noise alone averages almost flat under the fixture's footprint.
     fn refracted_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
-        cb.grid.run = Arc::new(
-            (0..cb.grid.run.len())
-                .map(|i| [20, 80, 150, 230][(i / BINS as usize + (i % BINS as usize) / 96) % 4])
-                .collect(),
-        );
+        let bytes: Vec<u8> = (0..cb.grid.bytes().len())
+            .map(|i| [20, 80, 150, 230][(i / BINS as usize + (i % BINS as usize) / 96) % 4])
+            .collect();
+        cb.grid.set_bytes(&bytes);
         // A curved palette with a non-black floor exposes level changes that a
         // linear blue ramp can hide, as well as any invented black background.
         cb.shades.lut = Arc::new(
@@ -1445,7 +1487,7 @@ mod tests {
                 );
                 cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
                 for value in [0, 1, 64, 150, 255] {
-                    cb.grid.run = Arc::new(vec![value; cb.grid.run.len()]);
+                    cb.grid.fill(value);
                     // The GPU cache must re-upload when the supplied samples change.
                     let bent = frame_with(&device, &queue, &mut resources, &cb);
                     cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
@@ -1576,7 +1618,7 @@ mod tests {
                 if smooth { 120.0 } else { 0.0 };
             let mut previous = 0;
             for value in [0, 1, 3, 8, 13, 20, 64, 96, 128, 160, 192, 224, 255] {
-                cb.grid.run = Arc::new(vec![value; cb.grid.run.len()]);
+                cb.grid.fill(value);
                 let frame = fresh_frame(&device, &queue, &cb);
                 let blue = frame[(64 * 128 + 64) * 4 + 2];
                 if value == 0 {
@@ -1616,7 +1658,7 @@ mod tests {
         {
             let mut cb = cloud_fixture();
             cb.target_format = wgpu::TextureFormat::Rgba16Float;
-            cb.grid.run = Arc::new(vec![96; cb.grid.run.len()]);
+            cb.grid.fill(96);
             cb.shades.lut = Arc::new(vec![[128, 128, 128, 255]; 256]);
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.contour_strength = contour_strength;
@@ -1908,9 +1950,9 @@ mod tests {
         // One bright bucket per period: both equal mixtures and narrow
         // bright bands must survive averaging over many source buckets.
         for period in [2, 8] {
-            let bytes =
+            let bytes: Vec<u8> =
                 (0..12 * BINS as usize).map(|i| if i % period == 0 { 255 } else { 0 }).collect();
-            cb.grid.run = Arc::new(bytes);
+            cb.grid.set_bytes(&bytes);
             let encoded_mean = 1.0 / period as f32;
             let expected = (255.0 * 2.0 * encoded_mean / (0.1 + (0.01 + 3.6 * encoded_mean).sqrt()))
                 .round() as u8;
@@ -1932,7 +1974,7 @@ mod tests {
         let mut cb = cloud_fixture();
         // A broad smooth field, quiet band, granular broadband patch, and black
         // margins. No peak recognition can explain these shapes.
-        let mut bytes = vec![0; cb.grid.run.len()];
+        let mut bytes = vec![0; cb.grid.bytes().len()];
         for slab in 1..11 {
             for bin in 80..944 {
                 let y = bin as f32 / 1024.0;
@@ -1947,7 +1989,7 @@ mod tests {
                 bytes[slab * BINS as usize + bin] = ((level + grain).min(1.0) * 255.0) as u8;
             }
         }
-        cb.grid.run = Arc::new(bytes);
+        cb.grid.set_bytes(&bytes);
         // The three looks the retired style enum named, each reached by its
         // dials, against the frames that enum drew: the blur the fixture pins,
         // the same with the terraces at full strength, and everything off.
@@ -1982,7 +2024,7 @@ mod tests {
             "sRGB target changed the cloud material"
         );
         cb.target_format = FORMAT;
-        cb.grid.run = Arc::new(vec![0; cb.grid.run.len()]);
+        cb.grid.fill(0);
         let silent = fresh_frame(&device, &queue, &cb);
         assert!(silent.chunks_exact(4).all(|p| p == [0, 0, 0, 255]), "silence emitted light");
     }
@@ -2063,7 +2105,8 @@ mod tests {
     fn spectral_diffusion_softens_faint_detail_with_one_fade_to_the_palettes_floor() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
-        cb.grid.run = Arc::new(cb.grid.run.iter().map(|&v| if v > 0 { 102 } else { 0 }).collect());
+        let bytes: Vec<u8> = cb.grid.bytes().iter().map(|&v| if v > 0 { 102 } else { 0 }).collect();
+        cb.grid.set_bytes(&bytes);
         // An edited palette may start above black, and then the diffused tail
         // has to land on THAT and stop, not carry on down to a black the scheme
         // never named. What the tail owes is an end, which the monotone check
@@ -2100,11 +2143,11 @@ mod tests {
             let mut cb = cloud_fixture();
             // History starts inside the pane. A ten-pixel ridge seeds enough
             // scalar density for a visible tail six pixels beyond that edge.
-            let mut bytes = vec![0; cb.grid.run.len()];
+            let mut bytes = vec![0; cb.grid.bytes().len()];
             for slab in 0..4 {
                 bytes[slab * BINS as usize + 472..slab * BINS as usize + 552].fill(255);
             }
-            cb.grid.run = Arc::new(bytes);
+            cb.grid.set_bytes(&bytes);
             for vertex in &mut cb.vertices {
                 vertex.pos[0] = 40.0 + vertex.pos[0] * 0.375;
                 for _ in 0..turns {
@@ -2160,7 +2203,7 @@ mod tests {
     fn spectral_diffusion_adds_no_texture_or_analyzer_coupling() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
-        cb.grid.run = Arc::new(vec![96; cb.grid.run.len()]);
+        cb.grid.fill(96);
         let smooth = fresh_frame(&device, &queue, &cb);
         // A broad uniform field must stay uniform. Keep the probes beyond
         // the wide filter's reach from the image edges.
@@ -2347,7 +2390,7 @@ mod tests {
         // Mode or viewport changes can replace the grid while diffusion is
         // disabled. Re-enabling at the same pane size must use that new grid.
         cb.grid.capacity *= 2;
-        cb.grid.run = Arc::new(vec![64; cb.grid.run.len()]);
+        cb.grid.fill(64);
         let disabled = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere = None;
         assert_eq!(
@@ -2672,7 +2715,7 @@ mod tests {
             for &key in step.mutate {
                 *version.entry(key).or_insert(0) += 1;
             }
-            let run = (0..step.slabs as i64)
+            let run: Vec<u8> = (0..step.slabs as i64)
                 .flat_map(|j| {
                     let key = step.first_key + j;
                     versioned_slab(key, *version.entry(key).or_insert(0), bins)
@@ -2682,7 +2725,7 @@ mod tests {
                 capacity: step.capacity,
                 bins: bins as u32,
                 first_key: step.first_key,
-                run: Arc::new(run),
+                run: SpectrogramGrid::slabs_of(&run, bins),
                 full_uploads: uploads.clone(),
             };
             let changed = resources
@@ -2736,7 +2779,7 @@ mod tests {
             let dropped = SpectrogramGrid {
                 full_uploads: uploads.clone(),
                 first_key: last.first_key + j,
-                run: Arc::new(vec![64; 6 * bins]),
+                run: SpectrogramGrid::slabs_of(&vec![64; 6 * bins], bins),
                 ..last.clone()
             };
             let mut cb = callback(full_quad(6), &dropped, &read);
@@ -2744,7 +2787,7 @@ mod tests {
                 cb.vertices.clear();
                 prepare_once(device, queue, &mut resources, &cb);
             } else if j == 2 {
-                cb.grid.run = Arc::new(Vec::new());
+                cb.grid.run = Arc::new([]);
                 prepare_once(device, queue, &mut resources, &cb);
             }
             // The third callback is constructed and discarded without prepare.
@@ -2763,14 +2806,16 @@ mod tests {
         let resumed = SpectrogramGrid {
             full_uploads: uploads.clone(),
             first_key: last.first_key + 2,
-            run: Arc::new(
-                (0..6)
-                    .flat_map(|j| {
-                        let key = last.first_key + 2 + j;
-                        versioned_slab(key, *version.entry(key).or_insert(0), bins)
-                    })
-                    .collect(),
-            ),
+            run: (0..6)
+                .map(|j| {
+                    let key = last.first_key + 2 + j;
+                    SpectrogramSlab::from(versioned_slab(
+                        key,
+                        *version.entry(key).or_insert(0),
+                        bins,
+                    ))
+                })
+                .collect(),
             ..last.clone()
         };
         let cb = callback(full_quad(6), &resumed, &read);
@@ -2796,7 +2841,7 @@ mod tests {
         let resized = SpectrogramGrid {
             full_uploads: uploads.clone(),
             bins: bins as u32 + 4,
-            run: Arc::new(vec![100; 6 * (bins + 4)]),
+            run: SpectrogramGrid::slabs_of(&vec![100; 6 * (bins + 4)], bins + 4),
             ..resumed
         };
         frame_with(device, queue, &mut resources, &callback(full_quad(6), &resized, &read));
@@ -2819,7 +2864,7 @@ mod tests {
         let slabs = SIZE[0] as usize;
         let run: Vec<u8> =
             (0..slabs).flat_map(|j| std::iter::repeat_n((j * 2) as u8, bins)).collect();
-        let run = Arc::new(run);
+        let run = SpectrogramGrid::slabs_of(&run, bins);
         // No tilt: a column is then one colour top to bottom, so a wrong slot
         // cannot hide behind the pitch axis.
         let read = SpectrogramRead { level_per_midi: 0.0, ..read_of(18.0, 4.0, 96) };
@@ -2934,7 +2979,7 @@ mod tests {
     /// constant is that constant.
     fn flat_cloud_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
-        cb.grid.run = Arc::new(vec![150; cb.grid.run.len()]);
+        cb.grid.fill(150);
         cb
     }
 
@@ -3365,7 +3410,7 @@ fn cs_wrap_probe() {
         };
         let over_structure = moved_by_refraction(&mut wash_fixture());
         let mut flat = wash_fixture();
-        flat.grid.run = Arc::new(vec![150; flat.grid.run.len()]);
+        flat.grid.fill(150);
         let over_flat = moved_by_refraction(&mut flat);
         assert!(
             over_structure > 0.02,
@@ -3436,8 +3481,9 @@ fn cs_wrap_probe() {
             return;
         };
         for (name, mut cb) in [("Mosaic", cloud_fixture()), ("Watercolor", wash_fixture())] {
-            cb.grid.run =
-                Arc::new((0..cb.grid.run.len()).map(|i| ((i * 37 + i / 19) % 256) as u8).collect());
+            let bytes: Vec<u8> =
+                (0..cb.grid.bytes().len()).map(|i| ((i * 37 + i / 19) % 256) as u8).collect();
+            cb.grid.set_bytes(&bytes);
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.pitch_softness = 0.0;
             s.time_softness = 0.0;
