@@ -43,6 +43,8 @@ pub enum KeylineStyle {
     /// the curve is smooth the dots overlap into an edge; a flank too steep
     /// for them to overlap is left to the fill, so dense partials read as
     /// dots at their tips and troughs rather than as hairlines between them.
+    /// A dot is only as opaque as the lift its level needed, so levels
+    /// brighter than the lift's floor have none.
     Dots,
 }
 

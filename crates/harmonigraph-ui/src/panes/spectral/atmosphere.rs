@@ -203,8 +203,11 @@ pub(super) fn draw_profile(
     if samples.iter().any(|&(_, d, _)| d > 0.0) {
         let floor = keyline_floor(cfg.keyline_lift);
         let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
-        let colors: Vec<_> =
-            samples.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
+        let ink = match cfg.keyline_style {
+            KeylineStyle::Line => keyline_color,
+            KeylineStyle::Dots => keyline_dot_color,
+        };
+        let colors: Vec<_> = samples.iter().map(|&(_, _, color)| ink(color, floor)).collect();
         let feather = 1.0 / painter.pixels_per_point();
         painter.add(match cfg.keyline_style {
             KeylineStyle::Line => stroke_mesh(&points, &colors, KEYLINE_WIDTH_PT, feather),
@@ -268,6 +271,21 @@ pub(super) fn keyline_color(fill: Color32, floor: f32) -> Color32 {
     let lift = if luminance < floor { (floor - luminance) / (1.0 - luminance) } else { 0.0 };
     let up = |v: f32| v + (1.0 - v) * lift;
     egui::Rgba::from_rgb(up(c.r()), up(c.g()), up(c.b())).into()
+}
+
+/// A dot's ink: [`keyline_color`], only as opaque as the lift it took. A fill
+/// at or above the floor needs no lift and its dot is gone, so a bright level
+/// is left to the fill alone; a palette-black one gets a solid dot at the
+/// floor's brightness. A floor of 0 hides every dot.
+///
+/// The line needs no such fade, because it lies ON the fill's edge and in the
+/// fill's own color; a dot stands half off the edge, where it reads against
+/// the background whatever color it is.
+pub(super) fn keyline_dot_color(fill: Color32, floor: f32) -> Color32 {
+    let c = egui::Rgba::from(fill);
+    let luminance = 0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b();
+    let opacity = if floor > 0.0 { ((floor - luminance) / floor).clamp(0.0, 1.0) } else { 0.0 };
+    keyline_color(fill, floor).gamma_multiply(opacity)
 }
 
 /// An open polyline as an antialiased ribbon whose color follows its points,

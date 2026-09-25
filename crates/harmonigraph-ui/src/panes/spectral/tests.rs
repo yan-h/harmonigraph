@@ -2017,9 +2017,10 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     );
 }
 
-/// Dots put one disc on each sample's own level, in the outline's color, and
-/// nothing between samples: a spike rising the whole depth in one sample
-/// leaves its flank to the fill. Two samples per point, as a 2x display
+/// Dots put one disc on each sample's own level and nothing between samples:
+/// a spike rising the whole depth in one sample leaves its flank to the fill.
+/// Each is as opaque as its lift, so the bright spike's is gone and the
+/// palette-black floor's is solid at the floor's brightness. Two samples per point, as a 2x display
 /// draws them, so the flank is steeper than any dot can span.
 #[test]
 fn analyzer_dots_mark_each_level_and_leave_flanks_to_the_fill() {
@@ -2063,8 +2064,16 @@ fn analyzer_dots_mark_each_level_and_leave_flanks_to_the_fill() {
             cfg.spectrogram_gradient,
             spectrogram_level_db(&cfg, level, midi),
         );
-        assert_eq!(center.color, atmosphere::keyline_color(fill, floor));
+        assert_eq!(center.color, atmosphere::keyline_dot_color(fill, floor));
     }
+    let luminance = |c: egui::Color32| {
+        let c = egui::Rgba::from(c);
+        0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
+    };
+    let dot = |i: usize| dots.vertices[i * per_dot].color;
+    assert_eq!(dot(spike), egui::Color32::TRANSPARENT, "a bright level kept its dot");
+    assert_eq!(dot(0).a(), 255, "a palette-black level lost its dot");
+    assert!((luminance(dot(0)) - floor).abs() < 0.01, "a dark dot was not lifted to the floor");
     let flank = contour(spike).distance(contour(spike - 1));
     assert!(flank > 20.0, "fixture needs a flank taller than any dot");
     // Nothing joins two samples: no triangle is wider than one dot and its
