@@ -4,8 +4,13 @@ use crate::{NoteAnimationConfig, OctaveLayout, RingFade, Scene, ViewConfig};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+// Fixed-seed rather than per-process: nothing here is keyed by input an
+// attacker chooses, and a fixed seed keeps iteration order the same on every
+// run rather than varying between them.
+type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::FixedState>;
+type HashSet<K> = std::collections::HashSet<K, foldhash::fast::FixedState>;
 
 type Identity = (VoiceKey, u64);
 #[derive(Clone, Copy)]
@@ -16,6 +21,13 @@ struct FactualTip {
 #[derive(Clone, Copy)]
 struct Held {
     pitch: f32,
+    /// `pitch`'s class, converted once rather than per visible node.
+    class: PitchClass,
+}
+impl Held {
+    fn new(pitch: f32) -> Self {
+        Self { pitch, class: PitchClass::from_cents(pitch * 100.0) }
+    }
 }
 #[derive(Clone, Copy)]
 struct Edge {
@@ -98,6 +110,23 @@ impl MarkMotion {
         (if level > 0.0 { 1 << slot } else { 0 }, level, slot)
     }
 }
+/// The longest Fade a host can set: the top of `ParamKey::Fade`'s range, which
+/// this crate cannot see. It only bounds how long [`NodeMotion`] keeps an
+/// ended note's cursor; a longer fade still animates correctly, and at worst
+/// replays its horizon once when it is raised further.
+const FADE_MAX: f32 = 1.0;
+
+/// How far back a surface replays note edges.
+///
+/// The 2.0 is not a round number: one animation now spans
+/// `duration * (1 + stagger_spread)`, so the horizon has to exceed that
+/// or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
+/// wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
+/// puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
+/// that ceiling means raising this too, and 1.0 would leave none.
+fn horizon(duration: f32, mark_delay: f32) -> f64 {
+    f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay) + 0.001
+}
 fn mark_delay(view: &ViewConfig) -> f32 {
     crate::view::finite_or(view.mark_delay, 0.0).clamp(0.0, crate::MARK_DELAY_MAX)
 }
@@ -114,7 +143,27 @@ fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     }
 }
 impl Motion {
+    /// Nothing held, nothing moving and nothing left to fade: `advance` would
+    /// write back exactly what is here. Most visible nodes are this at once.
+    fn at_rest(&self) -> bool {
+        !self.gate
+            && !self.audio_waiting
+            && self.melody.target.is_none()
+            && self.bass.target.is_none()
+            && [self.progress, self.delay, self.levels, self.targets]
+                .iter()
+                .chain([
+                    &self.melody.levels,
+                    &self.melody.waits,
+                    &self.bass.levels,
+                    &self.bass.waits,
+                ])
+                .all(|values| values.iter().all(|&v| v == 0.0))
+    }
     fn advance(&mut self, dt: f64, env: &Envelope) {
+        if self.at_rest() {
+            return;
+        }
         // The slice reveal runs the envelope's own length rather than a second
         // duration handed in beside it: `ViewConfig::envelope` puts one time on
         // both ends, so the two were always the same number and a parameter
@@ -183,6 +232,7 @@ impl NodeMotion {
         let high = self.held.values().map(|v| v.pitch).max_by(f32::total_cmp);
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         for node in &scene.nodes {
+            let node_class = PitchClass::from_cents(node.cents);
             let newly_visible = !self.nodes.contains_key(&node.lattice_pos);
             let motion = self.nodes.entry(node.lattice_pos).or_default();
             let (lo, hi) = scene.octave_layout.slots(node.cents);
@@ -191,10 +241,7 @@ impl NodeMotion {
             let mut bass = None;
             let mut preexisting = false;
             for (id, held) in &self.held {
-                if !tuning.matches(
-                    PitchClass::from_cents(held.pitch * 100.0),
-                    PitchClass::from_cents(node.cents),
-                ) {
+                if !tuning.matches(held.class, node_class) {
                     continue;
                 }
                 preexisting |= self.at.is_some_and(|at| f64::from_bits(id.1) < at);
@@ -228,7 +275,7 @@ impl NodeMotion {
                 && motion.levels.iter().all(|&v| v == 0.0)
                 && !tracker.voices().any(|voice| {
                     (env.attack_time <= 0.0 || voice.on_time < now)
-                        && tuning.matches(voice.pitch_class, PitchClass::from_cents(node.cents))
+                        && tuning.matches(voice.pitch_class, node_class)
                 })
             {
                 motion.audio_waiting = true;
@@ -242,12 +289,7 @@ impl NodeMotion {
                 node.lattice_pos.hash(&mut hash);
                 self.held
                     .iter()
-                    .filter(|(_, held)| {
-                        tuning.matches(
-                            PitchClass::from_cents(held.pitch * 100.0),
-                            PitchClass::from_cents(node.cents),
-                        )
-                    })
+                    .filter(|(_, held)| tuning.matches(held.class, node_class))
                     .map(|(id, _)| id.1)
                     .min()
                     .hash(&mut hash);
@@ -313,30 +355,33 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
-        let duration = env.fade_time;
-        // The 2.0 is not a round number: one animation now spans
-        // `duration * (1 + stagger_spread)`, so the horizon has to exceed that
-        // or a gap longer than it seeds a MID-FLIGHT arrival as settled and the
-        // wheel pops. The spread's 0.9 ceiling (`ValueBar` and `sanitize` both)
-        // puts the longest arrival at 1.9, leaving 0.1 of margin — so raising
-        // that ceiling means raising this too, and 1.0 would leave none.
-        let horizon = f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay(view)) + 0.001;
+        let horizon = horizon(env.fade_time, mark_delay(view));
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
         if self.at.is_some_and(|at| now < at || now - at > horizon) {
             *self = Self::default();
         }
         let floor = now - horizon;
-        let notes: Vec<_> = tracker.roll().notes().collect();
-        let mut seen = HashMap::new();
+        // A note that ended before every horizon a host can set can never
+        // count as late again, whatever the settings do next, so its cursor
+        // has nothing left to guard. Skipping it bounds this scan by the last
+        // few seconds of playing rather than by the whole roll.
+        let retained = now - horizon.max(self::horizon(FADE_MAX, crate::MARK_DELAY_MAX));
+        let notes: Vec<_> = tracker
+            .roll()
+            .notes()
+            .filter(|note| note.end.is_none_or(|at| at >= retained))
+            .collect();
+        let mut seen = HashMap::default();
         let mut late = false;
         for note in &notes {
             let id = (note.key(), note.start.to_bits());
             let old = self.seen.get(&id);
             let end = note.end.map(f64::to_bits);
             // Completed old lifetimes cannot acquire more bends. Retain their
-            // cursor even outside today's horizon so a longer fade setting
-            // cannot mistake them for newly delivered notes.
+            // cursor even outside today's horizon, up to the longest a host can
+            // set, so a longer fade setting cannot mistake them for newly
+            // delivered notes.
             let tip = if note.end.is_some_and(|at| at < floor) && old.is_some_and(|v| v.end == end)
             {
                 *old.unwrap()
@@ -383,7 +428,7 @@ impl NodeMotion {
                     .map(|((_, pitch), _)| pitch)
                     .last()
                     .unwrap_or(note.start_pitch());
-                self.held.insert(id, Held { pitch });
+                self.held.insert(id, Held::new(pitch));
             }
             let mut add = |at, value| {
                 let edge = Edge { at, id, value };
@@ -394,9 +439,9 @@ impl NodeMotion {
                     edges.push(edge);
                 }
             };
-            add(note.start, Some(Held { pitch: note.start_pitch() }));
+            add(note.start, Some(Held::new(note.start_pitch())));
             for ((at, pitch), _) in note.segments(now) {
-                add(at, Some(Held { pitch }));
+                add(at, Some(Held::new(pitch)));
             }
             if let Some(at) = note.end {
                 add(at, None);
@@ -448,7 +493,7 @@ impl NodeMotion {
         // whose missing history must not be treated as fabricated note-offs.
         self.held.clear();
         for voice in tracker.voices().filter(|v| matches!(v.state, VoiceState::Held)) {
-            self.held.insert((voice.key(), voice.on_time.to_bits()), Held { pitch: voice.pitch });
+            self.held.insert((voice.key(), voice.on_time.to_bits()), Held::new(voice.pitch));
         }
         self.gates(scene, tuning, view, env, fade, tracker, now, false);
         self.advance(0.0, env);
@@ -657,6 +702,8 @@ mod tests {
         draw_duration(&mut motion, &mut tracker, &view, 0.5, false, 0.05);
         let longer = draw_duration(&mut motion, &mut tracker, &view, 0.6, false, 1.0);
         assert_eq!(origin(&longer).activation, 0.0, "a longer horizon replayed an old note");
+        // The activation alone cannot tell: this note's replay also ends dark.
+        assert_eq!(motion.replayed_edges, 0, "a longer horizon forgot an old note's cursor");
     }
     #[test]
     fn reopening_a_hidden_surface_bounds_replay_to_the_settle_horizon() {

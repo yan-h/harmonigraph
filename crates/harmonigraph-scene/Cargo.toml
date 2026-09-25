@@ -10,6 +10,7 @@ harmonigraph-core = { workspace = true }
 glam = { workspace = true }
 color_space = { workspace = true }
 serde = { workspace = true }
+foldhash = { workspace = true }
 
 # A probe's dependency, not the plugin's: `tests/hue_space.rs` measures the
 # Oklab hybrid it prices against Google's HCT, which is the same structure

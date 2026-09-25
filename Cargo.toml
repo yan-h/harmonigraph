@@ -73,6 +73,10 @@ color_space = "0.5"
 # Shader validation for hot-reload (dev only); version tracks wgpu's.
 naga = "29"
 bytemuck = { version = "1", features = ["derive"] }
+# Hashing for maps keyed on lattice positions and note identities, which
+# nothing outside the plugin chooses: SipHash's flooding resistance buys
+# nothing there and costs it every frame. Already in the graph via wgpu.
+foldhash = "0.2"
 rtrb = "0.3"
 crossbeam = "0.8"
 parking_lot = "0.12"
