@@ -122,8 +122,6 @@ pub(crate) fn spectrum_settings_pane(
                      1× is the reference size; labels stay the same size when you zoom.",
             );
 
-        ValueBar::new(&mut cfg.atmosphere.analyzer_softness, 0.0..=1.0, "Spectrum fill softness")
-            .percent().show(ui).on_hover_text("Blend the live spectrum from a flat fill into translucent shading and a soft halo. The measured contour stays unchanged. Independent of spectrogram effects and Spectrum outline lift.");
         choice_row(ui, "Spectrum outline", &mut cfg.keyline_style, &[
             (KeylineStyle::Line, "Line", "A continuous line along the top of the spectrum."),
             (KeylineStyle::Dots, "Dots", "One pixel on every pixel column's level, with nothing joining neighbors. Gentle stretches still read as an edge; steep spikes and dense partials show only their tips and troughs. Colored like the line."),
@@ -134,7 +132,7 @@ pub(crate) fn spectrum_settings_pane(
             ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline lift").percent().show(ui).on_hover_text(
                 "How bright the spectrum outline is kept. The outline takes the color of the spectrum under it, \
                      and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
-                     100% is a white outline, 0% is exactly the color under it. Independent of Spectrum fill softness.",
+                     100% is a white outline, 0% is exactly the color under it.",
             );
         }
         choice_row(ui, "Spectrum backdrop", &mut cfg.backdrop, &[

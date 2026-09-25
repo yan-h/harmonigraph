@@ -84,7 +84,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // reach them. #933's contract is that a size the bar can offer is a size
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness, analyzer_softness, note_glow,
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness, note_glow,
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
     saved.workspace.interaction.ui_scale = v;
@@ -242,7 +242,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::LatticeSettings => 17 + 14 + 4,
             // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
             // two shadow groups.
-            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
+            panes::Tab::AnalyzerSettings => 6 + 18 + 1 + 1 + 4,
             panes::Tab::System => 4,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
@@ -267,7 +267,7 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         wash: true,
-        visits: 7 + 20 + 1 + 1 + 4,
+        visits: 6 + 20 + 1 + 1 + 4,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {

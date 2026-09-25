@@ -287,11 +287,11 @@ struct Cloud {
     wash_lobe: f32,
     wash_refract: f32,
     wash_layers: f32,
-    // The tile's period in cells, 0 for the live walk. Above zero the cell a
-    // hash is taken at is folded onto the square period described beside
-    // `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the two paths
-    // below read that texture instead of walking the ring per pixel. The wash
-    // rotates that read; the mosaic keeps the square tile's original axes.
+    // The tile's period in cells, above zero whenever a cloud is drawn. The
+    // cell a hash is taken at is folded onto the square period described
+    // beside `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the two
+    // paths below read that texture instead of walking the ring per pixel. The
+    // wash rotates that read; the mosaic keeps the square tile's original axes.
     tile_cells: u32,
     // 1 when pitch is the pane's Y axis, 0 when it is X. The wash's 3-4-5
     // rotation is defined in (time, pitch), so its basis follows this
@@ -528,9 +528,9 @@ const SCALE_CELLS: f32 = 6.0 / 2.2;
 // octaves on fractional cells and draw a seam.
 //
 // WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
-// what lands a negative cell in the range. A period of 0 is the live walk and
-// returns the cell whole, so the untiled arithmetic is untouched; the branch
-// is on a uniform, so no two lanes disagree about taking it.
+// what lands a negative cell in the range. A period of 0 returns the cell
+// whole: no production pass asks for it, but it is the unwrapped walk the
+// tests hold the tile against.
 fn wrap_cell_for_tile(cell: vec2<i32>, period: i32) -> vec2<i32> {
     if period <= 0 {
         return cell;
@@ -689,7 +689,8 @@ struct Pile {
 // lost the argument about whose face this pixel reads. The union is continuous
 // across the whole plane either way.
 //
-// `period` is the tile's own, in THIS octave's cells, and 0 for the live walk.
+// `period` is the tile's own, in THIS octave's cells, and 0 for the unwrapped
+// walk the tile test holds the bake against.
 // Only the hash's cell is folded by it; the centre below is built from the
 // unwrapped cell, so a dome at the tile's far edge still sits where it sits.
 fn dome_octave(r: vec2<f32>, period: i32) -> Pile {
@@ -814,23 +815,15 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
     let scale_units = SCALE_CELLS / cloud.scale_size;
     let scale_points = cloud.size.y / CLOUD_UNITS / scale_units;
     let r = q * scale_units;
-    // Either the ring walked under this pixel, or one tap into the period of it
-    // `fs_cloud_tile` already walked. The whole of the walk's output is the two
-    // vectors below, so the tile is one `Rgba16Float` read and the rest of this
-    // function — the refraction — is unchanged.
+    // One tap into the period of the ring `fs_cloud_tile` already walked. The
+    // whole of the walk's output is the two vectors below, so the tile is one
+    // `Rgba16Float` read and the rest of this function — the refraction — is
+    // what runs per pixel. There is deliberately no live-walk arm here: even
+    // never taken, it cost this full-resolution shader 16 to 21% (#1100).
+    let tile = textureSampleLevel(cloud_tile_a, tile_sampler, r / f32(cloud.tile_cells), 0.0);
     var pile: Pile;
-    if cloud.tile_cells > 0u {
-        let tile = textureSampleLevel(
-            cloud_tile_a,
-            tile_sampler,
-            r / f32(cloud.tile_cells),
-            0.0,
-        );
-        pile.face = tile.xy;
-        pile.to_centre = tile.zw;
-    } else {
-        pile = cloud_domes(r, 0);
-    }
+    pile.face = tile.xy;
+    pile.to_centre = tile.zw;
 
     // THE REFRACTION. `DOME_FACE` has already put the offset in scale widths
     // whatever the scale size is, and in each glob's OWN width whatever
@@ -994,7 +987,8 @@ fn wash_noise(p: vec2<f32>, salt: u32, period: i32) -> f32 {
 // line up, and no tile period makes `2.07 * P` a whole number of the finer
 // lattice's cells — so a tiled walk runs it at exactly 2 instead, which doubles
 // the period with it and tiles for every `P` the coarse lattice already does.
-// The live walk keeps 2.07 bit for bit; the branch is on a uniform.
+// A period of 0, the unwrapped walk that no production pass draws since #1100,
+// keeps 2.07 bit for bit.
 const WASH_FBM_FINE: f32 = 2.07;
 const WASH_FBM_FINE_TILED: f32 = 2.0;
 fn wash_fbm(p: vec2<f32>, salt: u32, period: i32) -> f32 {
@@ -1191,17 +1185,16 @@ fn wash_level(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> f32 {
 //
 // Five numbers, not one of which reads the light, the sound or the clock —
 // which is exactly why `fs_cloud_tile` can bake them into two `Rgba16Float`
-// targets and the per-frame shader can read them back. `want_fine` is the live
-// path's `Layers` 0 saving, which drops the second ring walk outright; the BAKE
-// always takes both, because `Layers` is a mix over channels the tile already
-// holds and so is deliberately not in the tile's key.
+// targets and the per-frame shader can read them back. The bake always walks
+// both octaves, because `Layers` is a mix over channels the tile already holds
+// and so is deliberately not in the tile's key.
 struct WashField {
     coarse: Wet,
     fine: Wet,
     cover: f32,
 };
 
-fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
+fn wash_field(r: vec2<f32>, period: i32) -> WashField {
     // One shared field, evaluated once per pixel and then read by every glob of
     // every octave: a domain warp of glob space, which is what stops a glob
     // being a circle. It is read at the UNWARPED point and stays small — a heavy
@@ -1218,19 +1211,14 @@ fn wash_field(r: vec2<f32>, period: i32, want_fine: bool) -> WashField {
     }
     var out: WashField;
     out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, period), warped);
-    out.fine = Wet(vec2<f32>(0.0));
-    out.cover = 0.0;
     // Coarse to fine, the finer octave a translucent wash over the one below and
     // sparse, so a big wash sometimes carries a small one and sometimes sits
-    // beside it. At `Layers` 0 it is not walked at all, which is also the
-    // cheapest this path gets.
-    if want_fine {
-        let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
-        let fine =
-            wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, i32(round(WASH_LACUNARITY * f32(period))));
-        out.fine = wash_wet(fine, fine_r);
-        out.cover = fine.cover;
-    }
+    // beside it.
+    let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
+    let fine =
+        wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, i32(round(WASH_LACUNARITY * f32(period))));
+    out.fine = wash_wet(fine, fine_r);
+    out.cover = fine.cover;
     return out;
 }
 
@@ -1271,14 +1259,9 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     let pane_per_cell = cloud.size.y / CLOUD_UNITS / cells;
     let r = q * cells;
 
-    // Either the two ring walks under this pixel, or one or two taps into the
-    // period of them `fs_cloud_tile` already walked.
-    var field: WashField;
-    if cloud.tile_cells > 0u {
-        field = wash_tile_field(r);
-    } else {
-        field = wash_field(r, 0, cloud.wash_layers > 0.0);
-    }
+    // One or two taps into the period of the two ring walks `fs_cloud_tile`
+    // already walked; no live arm, for the reason `scale_tone` gives.
+    let field = wash_tile_field(r);
     var level = wash_level(field.coarse, pane_per_cell, pt);
     if cloud.wash_layers > 0.0 {
         let fine_level = wash_level(field.fine, pane_per_cell / WASH_LACUNARITY, pt);
@@ -1309,7 +1292,7 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
 
 // ====================== ONE PERIOD OF THE CELL WALK ========================
 //
-// The tile, baked when `Cloud tile` is on and read by both paths above. It has
+// The tile, baked whenever a cloud is drawn and read by both paths above. It has
 // no pane, no drift and no light in it: it is one square period of whichever
 // walk the style selects. The Watercolor read turns that whole field by 36.87
 // degrees; the Mosaic read leaves it square. That is why a resize, a drift or
@@ -1352,9 +1335,9 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
-        // Five channels of glob geometry. `want_fine` is true whatever `Layers`
+        // Five channels of glob geometry, the fine octave whatever `Layers`
         // says, so turning that dial up is a mix and never a rebake.
-        let field = wash_field(wash_cell, period, true);
+        let field = wash_field(wash_cell, period);
         out.a = vec4<f32>(field.coarse.offset, 0.0, 0.0);
         out.b = vec4<f32>(field.fine.offset, 0.0, field.cover);
     } else {
