@@ -843,8 +843,8 @@ fn spectrum_config_round_trips_through_persist() {
     state.picture.appearance.spectrum.window = SpectrumWindow::Precise;
     state.picture.appearance.spectrum.low_midi = 40.5;
     state.picture.appearance.spectrum.show_spectrogram = true;
-    // A gradient no preset writes, so what round-trips is the six numbers and
-    // not a name that happens to rebuild them.
+    // A gradient no preset writes, so what round-trips is the numbers and not a
+    // name that happens to rebuild them — a bend included, which no preset has.
     state.picture.appearance.spectrum.spectrogram_gradient = harmonigraph_scene::Gradient {
         hue_start: 137.5,
         hue_span: -85.25,
@@ -852,6 +852,8 @@ fn spectrum_config_round_trips_through_persist() {
         lightness_ramp: 71.5,
         chroma: 0.375,
         chroma_ramp: -0.25,
+        hue_bend: harmonigraph_scene::Bend { at: 0.9, share: 0.15 },
+        ..Default::default()
     };
     let saved = state.save_persist();
 
@@ -1479,6 +1481,7 @@ fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
             lightness_ramp: 71.5,
             chroma: 0.375,
             chroma_ramp: -0.25,
+            ..Default::default()
         };
         let saved = state.save_persist();
         let was = if key == "lightness" { "44.0" } else { "0.375" };

@@ -14,6 +14,7 @@
 //! which file it is in.
 
 mod bar;
+mod bend;
 mod fold;
 mod gradient;
 mod label;
@@ -31,6 +32,9 @@ mod stack;
 mod tabs;
 mod value;
 
+#[cfg(test)]
+pub(crate) use bend::bend_plot_height;
+pub use bend::BendPlot;
 pub(crate) use fold::{paint_chevron, paint_fold};
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, GROUP_GAP};

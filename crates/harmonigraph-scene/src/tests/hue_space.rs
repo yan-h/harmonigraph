@@ -88,6 +88,7 @@ fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
             lightness_ramp: 0.0,
             chroma: chroma_fraction as f32,
             chroma_ramp: 0.0,
+            ..Gradient::default()
         },
     )
 }

@@ -1643,6 +1643,7 @@ impl Default for ViewConfig {
                 // ramp that competed with it would take one end of the range
                 // grey.
                 chroma_ramp: 0.069_999_99,
+                ..Gradient::default()
             },
             // A narrow octave band, stopping short of the quad edge, with a
             // tight gap everywhere: the octaves read as a ring of distinct

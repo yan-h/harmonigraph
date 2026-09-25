@@ -208,9 +208,19 @@ fn what_decides_a_texel(g: Gradient) -> Gradient {
     // 0..=100 and keeps a -0.0 out of the ramp, so a pair at the wall lands on
     // exactly these two numbers.
     let unlit = g.lightness_ramp == 0.0 && (g.lightness == 0.0 || g.lightness == 100.0);
+    // A bend rides with the pair it shapes: where that pair decides nothing,
+    // neither does the walk along it.
+    let straight = harmonigraph_scene::Bend::STRAIGHT;
+    let hueless = Gradient { hue_start: 0.0, hue_span: 0.0, hue_bend: straight, ..g };
     match (toneless, unlit) {
-        (_, true) => Gradient { hue_start: 0.0, hue_span: 0.0, chroma: 0.0, chroma_ramp: 0.0, ..g },
-        (true, false) => Gradient { hue_start: 0.0, hue_span: 0.0, ..g },
+        (_, true) => Gradient {
+            chroma: 0.0,
+            chroma_ramp: 0.0,
+            chroma_bend: straight,
+            lightness_bend: straight,
+            ..hueless
+        },
+        (true, false) => Gradient { chroma_bend: straight, ..hueless },
         (false, false) => g,
     }
 }
@@ -2669,6 +2679,7 @@ mod tests {
                     chroma_ramp: 0.0,
                     hue_start: 40.0,
                     hue_span: 120.0,
+                    ..Gradient::default()
                 },
                 ..cfg
             };
@@ -2707,6 +2718,7 @@ mod tests {
                 chroma_ramp: 0.0,
                 hue_start: 40.0,
                 hue_span: 120.0,
+                ..Gradient::default()
             },
             ..cfg
         };

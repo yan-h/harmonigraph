@@ -394,9 +394,13 @@ fn every_bar_has_its_declared_height() {
             for cs in &shapes {
                 let egui::Shape::Rect(r) = &cs.shape else { continue };
                 let width = r.rect.width();
+                // The curve plot is the one full-width well that is not a row
+                // high, and says so by its own declared height.
+                let plot = crate::widgets::bend_plot_height(scale);
                 if r.fill != crate::theme::well()
                     || !r.rect.is_finite()
                     || ((width - PANE_WIDTH).abs() > 1.0 && (width - track).abs() > 1.0)
+                    || (r.rect.height() - plot).abs() < 0.01
                 {
                     continue;
                 }

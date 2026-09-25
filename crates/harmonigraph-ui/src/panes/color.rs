@@ -4,7 +4,7 @@
 
 use super::section;
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{GradientPreview, RangeBar, SpectrumBar, SpreadBar};
+use crate::widgets::{BendPlot, GradientPreview, RangeBar, SpectrumBar, SpreadBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::ViewConfig;
 
@@ -20,7 +20,8 @@ pub(super) fn color_pane(
         // over. Both feed the one table every pitch-colored shape reads, so a
         // change here repaints the discs, the octave glyphs, the trail and the
         // piano roll together.
-        spectrum_group(ui, &mut appearance.view);
+        let pitches = (params.get(ParamKey::DarkestPitch), params.get(ParamKey::BrightestPitch));
+        spectrum_group(ui, &mut appearance.view, pitches);
         super::param_range_bar(
             ui,
             params,
@@ -42,7 +43,14 @@ pub(super) fn color_pane(
     });
 }
 
-fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
+/// The tooltip both groups' curve plots carry: the axis is named by the
+/// readout, so the words can be shared.
+const BEND_HINT: &str = "How the chosen channel spreads its change across the range. \
+                 Across is the range, up is how much of the change has happened. \
+                 Drag to move the bend, for example to hold the hue until the loudest few dB. \
+                 Double-click straightens it.";
+
+fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig, (darkest, brightest): (f32, f32)) {
     // The row first, the colors last — see [`GradientPreview`]: read where it
     // stands, the picture would spend every frame of every drag below it one
     // frame behind the bar being dragged.
@@ -61,6 +69,8 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Saturation at the low and high pitches: 0% is gray, 100% is the most vivid available color. \
                  Double-click resets.",
     );
+    let pitch_at = |t: f32| super::pitch_readout(darkest + t * (brightest - darkest));
+    BendPlot::new("pitch", &mut view.pitch_gradient, &pitch_at).show(ui).on_hover_text(BEND_HINT);
     preview
         .show(ui, &view.pitch_gradient)
         .on_hover_text("MIDI note colors from low pitch on the left to high pitch on the right.");
@@ -132,6 +142,14 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "Saturation at the low and high audio levels: 0% is gray, 100% is the most vivid available color. \
                  Double-click resets.",
     );
+    // Read before the range bar below writes them, so a drag of that bar
+    // reaches this readout a frame late — the one place it shows.
+    let (floor, ceiling) = (cfg.volume_floor_db, cfg.volume_ceiling_db);
+    let level_at = |t: f32| format!("{:.0} dB", floor + t * (ceiling - floor));
+    BendPlot::new("level", &mut cfg.spectrogram_gradient, &level_at)
+        .home(home)
+        .show(ui)
+        .on_hover_text(BEND_HINT);
     RangeBar::new(
         &mut cfg.volume_floor_db,
         &mut cfg.volume_ceiling_db,

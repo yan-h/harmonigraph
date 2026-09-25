@@ -1,5 +1,5 @@
 //! The visual-style settings the view config carries: the enums it selects
-//! between, with the shader indices they map to, and the gradient's six knobs.
+//! between, with the shader indices they map to, and the gradient's knobs.
 //! Adding a style means touching this file and the matching branch in
 //! `lattice.wgsl`; the gradient reaches the shader as a color table instead,
 //! and needs no branch there at all.
@@ -44,7 +44,10 @@ use crate::view::finite_or;
 /// top of the range goes vivid against a washed-out bottom, and negative puts
 /// the color at the bottom.
 ///
-/// Nothing here can leave the sRGB gamut, whatever the six are set to, which
+/// Each of the three also has a [`Bend`], which says where along the range it
+/// spends its change rather than how much it spends.
+///
+/// Nothing here can leave the sRGB gamut, whatever the knobs are set to, which
 /// is what makes them safe to expose as free knobs — see
 /// [`chroma`](Self::chroma).
 ///
@@ -87,6 +90,9 @@ pub struct Gradient {
     /// gradient rather than either end, so that
     /// [`lightness_ramp`](Self::lightness_ramp) opens symmetrically about it
     /// and this knob keeps meaning "how bright is the picture" at every ramp.
+    /// Strictly it is the value halfway between the two ends, which is the
+    /// value at the centre of the range while
+    /// [`lightness_bend`](Self::lightness_bend) is straight.
     pub lightness: f32,
     /// Signed `L*` difference from the bottom of the range to the top: how
     /// much of the gradient's separation is spent on brightness. 0 is exactly
@@ -103,7 +109,10 @@ pub struct Gradient {
     /// hold, which is a different number at every hue. The middle rather than
     /// either end, so that
     /// [`chroma_ramp`](Self::chroma_ramp) opens symmetrically about it and this
-    /// knob keeps meaning "how colorful is the picture" at every ramp.
+    /// knob keeps meaning "how colorful is the picture" at every ramp. As with
+    /// [`lightness`](Self::lightness), that is halfway between the ends, and
+    /// the centre of the range only while
+    /// [`chroma_bend`](Self::chroma_bend) is straight.
     ///
     /// The gamut is the reason it is a fraction. At a fixed `L*` sRGB admits a
     /// different maximum Oklab chroma at every hue (0.115 at the tightest point
@@ -153,6 +162,133 @@ pub struct Gradient {
     /// vivid end would sit outside the gamut over whatever part of the arc
     /// could not hold it.
     pub chroma_ramp: f32,
+    /// How the hue walks its arc across the range: where along the range it
+    /// has covered how much of [`hue_span`](Self::hue_span). Straight by
+    /// default, which walks the arc evenly. See [`Bend`].
+    pub hue_bend: Bend,
+    /// How brightness walks from one end of its pair to the other. See
+    /// [`Bend`].
+    pub lightness_bend: Bend,
+    /// How the chroma fraction walks from one end of its pair to the other.
+    /// See [`Bend`].
+    pub chroma_bend: Bend,
+}
+
+/// Where one channel of a [`Gradient`] spends its change along the range: by
+/// [`at`](Self::at) of the way up the range it has covered
+/// [`share`](Self::share) of the way from its bottom value to its top one.
+///
+/// **One point, because one point is the shape asked for.** "Hue barely moves
+/// until the loudest few dB, then turns fast" is a single bend at 90% of the
+/// range holding 15% of the change, and so is its opposite and every S that
+/// leans one way. A power curve is half the numbers and cannot say WHERE the
+/// turn is; a list of points can say anything, costs the gradient `Copy` and
+/// the LUT memo a fixed-size key, and draws nothing a person reaches for that
+/// one point does not.
+///
+/// The ends are fixed — 0 at the bottom of the range, 1 at the top — so a
+/// bend never moves the colors a gradient opens and closes on, and everything
+/// the ramps' bounds promise about those ends holds at every bend. What it
+/// moves is the MIDDLE: the pairs' "centre" knobs mean the value halfway
+/// between the two ends, which is the value at the centre of the range only
+/// while the bend is straight.
+///
+/// Through the point on a monotone cubic (Fritsch–Carlson, with Brodlie's
+/// weighted harmonic slope inside), not on two straight segments: a corner in
+/// the hue walk is a place the heatmap would draw a seam, and the smooth curve
+/// costs no extra number. Monotone so a louder level is never further back
+/// along the channel than a quieter one.
+///
+/// Straight when `share == at`, which [`warp`](Self::warp) returns exactly
+/// rather than through the cubic, so a gradient that has never been bent
+/// draws bit for bit what it did before bends existed.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Bend {
+    /// Where along the range the bend stands, 0..1 from the bottom. Kept off
+    /// the very ends, where the segment beside it would have no width.
+    pub at: f32,
+    /// How much of the channel's change is spent by then, 0..1.
+    pub share: f32,
+}
+
+impl Default for Bend {
+    fn default() -> Self {
+        Bend::STRAIGHT
+    }
+}
+
+impl Bend {
+    /// The even walk every gradient had before bends existed.
+    pub const STRAIGHT: Bend = Bend { at: 0.5, share: 0.5 };
+
+    /// How close to either end of the range the bend may stand.
+    pub const AT_LIMITS: (f32, f32) = (0.01, 0.99);
+
+    /// Held to what the curve is defined for, and finite: the bend is part of
+    /// the LUT memo's key through [`Gradient::sanitized`].
+    pub fn sanitized(self) -> Bend {
+        let finite = |v: f32| if v.is_finite() { v } else { 0.5 };
+        Bend {
+            at: finite(self.at).clamp(Self::AT_LIMITS.0, Self::AT_LIMITS.1),
+            share: finite(self.share).clamp(0.0, 1.0),
+        }
+    }
+
+    /// The same bend read from the top of the range down, which is what a
+    /// channel run the other way needs to keep every sample where it was.
+    pub fn mirrored(self) -> Bend {
+        Bend { at: 1.0 - self.at, share: 1.0 - self.share }
+    }
+
+    /// Whether this is the even walk, and [`warp`](Self::warp) the identity.
+    pub fn is_straight(self) -> bool {
+        self.at == self.share
+    }
+
+    /// How far along the channel's change the range is at `t`: 0 at `t` 0, 1
+    /// at `t` 1, through (`at`, `share`) on a monotone cubic between.
+    ///
+    /// Sanitizes its own inputs rather than trusting them, since
+    /// [`Gradient::chroma_at`] reads its gradient raw; the output is always in
+    /// 0..=1.
+    pub fn warp(self, t: f64) -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        let b = self.sanitized();
+        if b.is_straight() {
+            return t;
+        }
+        let (k, v) = (f64::from(b.at), f64::from(b.share));
+        let (h0, h1) = (k, 1.0 - k);
+        let (d0, d1) = (v / h0, (1.0 - v) / h1);
+        // Brodlie's weighted harmonic mean at the bend, 0 where either side is
+        // flat. Each weight is at least a third of their sum, so the slope is
+        // under three times either secant — Fritsch–Carlson's monotone region.
+        let (w0, w1) = (2.0 * h1 + h0, h1 + 2.0 * h0);
+        let mid = if d0 == 0.0 || d1 == 0.0 { 0.0 } else { (w0 + w1) / (w0 / d0 + w1 / d1) };
+        // The three-point end slope, floored at 0. It cannot pass three times
+        // its own secant here: with both secants non-negative and the two
+        // widths summing to 1, it is at most (1 + h) times it.
+        let end = |near_h: f64, far_h: f64, near_d: f64, far_d: f64| {
+            ((2.0 * near_h + far_h) * near_d - near_h * far_d).max(0.0)
+        };
+        let (m_lo, m_hi) = (end(h0, h1, d0, d1), end(h1, h0, d1, d0));
+        // Cubic Hermite on whichever segment `t` is in.
+        let hermite = |x0: f64, h: f64, y0: f64, y1: f64, m0: f64, m1: f64| {
+            let s = (t - x0) / h;
+            let (s2, s3) = (s * s, s * s * s);
+            (2.0 * s3 - 3.0 * s2 + 1.0) * y0
+                + (s3 - 2.0 * s2 + s) * h * m0
+                + (-2.0 * s3 + 3.0 * s2) * y1
+                + (s3 - s2) * h * m1
+        };
+        let w = if t <= k {
+            hermite(0.0, h0, 0.0, v, m_lo, mid)
+        } else {
+            hermite(k, h1, v, 1.0, mid, m_hi)
+        };
+        w.clamp(0.0, 1.0)
+    }
 }
 
 /// The hue the bottom of the range opens on: a deep blue-violet.
@@ -230,6 +366,9 @@ impl Default for Gradient {
             lightness_ramp: default_lightness_ramp(),
             chroma: default_chroma(),
             chroma_ramp: default_chroma_ramp(),
+            hue_bend: Bend::STRAIGHT,
+            lightness_bend: Bend::STRAIGHT,
+            chroma_bend: Bend::STRAIGHT,
         }
     }
 }
@@ -239,7 +378,7 @@ impl Gradient {
     /// arc there is. Past it the gradient would revisit hues it already used.
     pub const MAX_HUE_SPAN: f32 = 360.0;
 
-    /// Fit the six to what their controls can produce. A bar cannot make a
+    /// Fit the knobs to what their controls can produce. A bar cannot make a
     /// nonsense value but a hand-edited RON can, and these feed a color
     /// conversion whose output goes straight into the instance buffer: a
     /// non-finite `L*` would ride out as a NaN color rather than announce
@@ -292,6 +431,9 @@ impl Gradient {
             // hue on the far side of the circle from the one the arc names.
             chroma_ramp: finite(self.chroma_ramp, default_chroma_ramp())
                 .clamp(-widest_chroma_ramp, widest_chroma_ramp),
+            hue_bend: self.hue_bend.sanitized(),
+            lightness_bend: self.lightness_bend.sanitized(),
+            chroma_bend: self.chroma_bend.sanitized(),
         }
     }
 
@@ -311,6 +453,8 @@ impl Gradient {
         Gradient {
             hue_start: (g.hue_start + g.hue_span).rem_euclid(360.0),
             hue_span: -g.hue_span,
+            // The arc is read from its far end now, so its bend is too.
+            hue_bend: g.hue_bend.mirrored(),
             ..g
         }
         .sanitized()
@@ -327,8 +471,10 @@ impl Gradient {
     pub fn lightness_and_hue(self, t: f64) -> (f64, f64) {
         let g = self.sanitized();
         let t = t.clamp(0.0, 1.0);
-        let l = f64::from(g.lightness) + (t - 0.5) * f64::from(g.lightness_ramp);
-        let h = (f64::from(g.hue_start) + t * f64::from(g.hue_span)).rem_euclid(360.0);
+        let l =
+            f64::from(g.lightness) + (g.lightness_bend.warp(t) - 0.5) * f64::from(g.lightness_ramp);
+        let h =
+            (f64::from(g.hue_start) + g.hue_bend.warp(t) * f64::from(g.hue_span)).rem_euclid(360.0);
         // The clamp cannot fire for a sanitized gradient, and it is worth
         // knowing why rather than assuming it might: the widest ramp is
         // `2 * min(l, 100 - l)`, whose every step is exact in f32 — `100 - l`
@@ -368,7 +514,7 @@ impl Gradient {
     /// and `neither_end_of_the_curve_leaves_the_chroma_axis` is what keeps it
     /// there.
     pub fn chroma_at(self, t: f64) -> f64 {
-        f64::from(self.chroma) + (t.clamp(0.0, 1.0) - 0.5) * f64::from(self.chroma_ramp)
+        f64::from(self.chroma) + (self.chroma_bend.warp(t) - 0.5) * f64::from(self.chroma_ramp)
     }
 }
 
