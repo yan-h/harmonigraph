@@ -5,7 +5,7 @@
 //! it is written down, and one living inside a caller reads as that caller's
 //! own until the day it is changed for it.
 
-use egui::{Color32, CornerRadius, Response, Ui};
+use egui::{Color32, CornerRadius, Response, Ui, Vec2};
 
 use crate::theme;
 
@@ -110,9 +110,10 @@ pub(super) const GRAB_PX: f32 = 14.0;
 /// handles can never claim the whole of a narrow range and leave nothing to
 /// slide.
 pub(super) const HANDLE_REACH_SHARE: f32 = 0.35;
-/// Width of a [`RangeBar`] handle grip.
-///
-/// [`RangeBar`]: super::range::RangeBar
+/// Width of every bar's handle grip, strips included. One size across the
+/// pane, so a handle reads as the same kind of thing wherever it stands; a
+/// grip standing on a boundary between two cells hides three points of each,
+/// which the layer stack's handles have always done.
 pub(super) const HANDLE_W: f32 = 6.0;
 /// How far the value track is inset from the bar's ends, so a handle parked
 /// at either limit still sits fully inside the bar with track visible past
@@ -178,6 +179,25 @@ pub(super) fn grip_color(lit: bool) -> Color32 {
     } else {
         theme::text_dim()
     }
+}
+
+/// The rect a handle centered at `x` is drawn in on `row`: [`HANDLE_W`] wide
+/// and a point and a half shy of the row at each end, so it stands inside
+/// the bar's well rather than on its border.
+pub(super) fn grip_rect(x: f32, row: egui::Rect, scale: f32) -> egui::Rect {
+    egui::Rect::from_center_size(
+        egui::pos2(x, row.center().y),
+        Vec2::new(HANDLE_W * scale, row.height() - 3.0 * scale),
+    )
+}
+
+/// Corner rounding of a handle grip, the one exception being a
+/// [`RangeBar::fade_span`] thumb, which is rounded like the bar it can stand
+/// in the corner of.
+///
+/// [`RangeBar::fade_span`]: super::range::RangeBar::fade_span
+pub(super) fn grip_radius(scale: f32) -> CornerRadius {
+    CornerRadius::same(theme::scaled_points(2, scale))
 }
 
 /// Where a press on this bar would land if it were made now: the pointer over

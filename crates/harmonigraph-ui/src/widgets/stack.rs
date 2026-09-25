@@ -9,8 +9,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, grabbed, grip_color, grip_over_text, poised, release_grab,
-    track_fill, BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
+    aimed_at, bar_radius, bar_width, grabbed, grip_color, grip_over_text, grip_radius, grip_rect,
+    poised, release_grab, track_fill, BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use crate::theme;
 
@@ -652,15 +652,11 @@ impl<'a> StackBar<'a> {
         // are painted in does not matter.
         let in_hand =
             holding.or_else(|| poised(ui, &response).map(|p| aimed(p.x, thumbs, half_thumb)));
-        let grip_radius = CornerRadius::same(theme::scaled_points(2, scale));
         for (layer, x) in LAYERS.into_iter().zip(thumbs) {
             grip_over_text(
                 painter,
-                egui::Rect::from_center_size(
-                    egui::pos2(x, rect.center().y),
-                    Vec2::new(HANDLE_W * scale, rect.height() - 3.0 * scale),
-                ),
-                grip_radius,
+                grip_rect(x, rect, scale),
+                grip_radius(scale),
                 grip_color(in_hand.is_none_or(|held| held == layer)),
                 &runs,
             );

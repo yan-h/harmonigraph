@@ -12,9 +12,9 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, poised,
-    release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
-    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
+    grip_rect, poised, release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
+    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -639,11 +639,8 @@ impl<'a> SpectrumBar<'a> {
         let in_hand = holding.or_else(|| poised(ui, &response).map(|p| grab_at(p, handle_x)));
         let turning = matches!(in_hand, Some(SpectrumGrab::Rotate { .. }));
         painter.rect_filled(
-            egui::Rect::from_center_size(
-                egui::pos2(handle_x, track_rect.center().y),
-                Vec2::new(HANDLE_W * scale, track_rect.height() - 3.0 * scale),
-            ),
-            CornerRadius::same(theme::scaled_points(2, scale)),
+            grip_rect(handle_x, track_rect, scale),
+            grip_radius(scale),
             grip_color(!turning),
         );
 
@@ -1259,15 +1256,11 @@ impl<'a> SpreadBar<'a> {
         };
         let mut thumbs = [(lx, left_lit), (hx, right_lit)];
         thumbs.sort_by_key(|&(_, lit)| lit);
-        let handle_w = HANDLE_W * scale;
         for (x, lit) in thumbs {
             grip_over_text(
                 painter,
-                egui::Rect::from_center_size(
-                    egui::pos2(x, rect.center().y),
-                    Vec2::new(handle_w, rect.height() - 3.0 * scale),
-                ),
-                CornerRadius::same(theme::scaled_points(2, scale)),
+                grip_rect(x, rect, scale),
+                grip_radius(scale),
                 grip_color(lit),
                 &[(label_pos, label.clone()), (value_pos, value.clone())],
             );

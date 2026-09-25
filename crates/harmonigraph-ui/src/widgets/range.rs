@@ -6,9 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, poised,
-    release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
-    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
+    grip_rect, poised, release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
+    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -767,15 +767,11 @@ impl<'a> RangeBar<'a> {
         };
         let mut thumbs = [(lgx, low_lit), (hgx, high_lit)];
         thumbs.sort_by_key(|&(_, lit)| lit);
-        let grip_radius =
-            CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
+        let grip_radius = if self.fade_span { CornerRadius::same(r) } else { grip_radius(scale) };
         for (x, lit) in thumbs {
             grip_over_text(
                 painter,
-                egui::Rect::from_center_size(
-                    egui::pos2(x, rect.center().y),
-                    Vec2::new(handle_w, rect.height() - 3.0 * scale),
-                ),
+                grip_rect(x, rect, scale),
                 grip_radius,
                 grip_color(lit),
                 &[(label_pos, label.clone())],
