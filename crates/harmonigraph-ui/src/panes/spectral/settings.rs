@@ -12,7 +12,7 @@ use crate::config::BALLISTICS_MAX;
 use crate::panes::{edge_bar, section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
-use crate::PictureState;
+use crate::{KeylineStyle, PictureState};
 
 /// A MIDI note as the frequency an analyzer would label it: whole hertz down
 /// low, kHz to one decimal above 1000, each carrying its unit so the number
@@ -129,6 +129,10 @@ pub(crate) fn spectrum_settings_pane(
                  and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
                  100% is a white outline, 0% is exactly the color under it. Independent of Spectrum fill softness.",
         );
+        choice_row(ui, "Spectrum outline", &mut cfg.keyline_style, &[
+            (KeylineStyle::Line, "Line", "A continuous line along the top of the spectrum."),
+            (KeylineStyle::Dots, "Dots", "One pixel on every pixel column's level, with nothing joining neighbors. Gentle stretches still read as an edge; steep spikes and dense partials show only their tips and troughs. Colored like the line."),
+        ]);
     });
     // Beside View rather than inside it: these are sections of their own, and
     // folding View must not fold them too.

@@ -6,7 +6,7 @@ use super::gestures::*;
 use super::settings::*;
 use super::*;
 use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
-use crate::{SpectralOrientation, SpectrumConfig, SpectrumWindow};
+use crate::{KeylineStyle, SpectralOrientation, SpectrumConfig, SpectrumWindow};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
@@ -2015,6 +2015,92 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
             .all(|v| v.color == egui::Color32::TRANSPARENT),
         "tilt gave digital silence a visible body"
     );
+}
+
+/// Dots cap each sample with one device pixel of depth on its own level,
+/// tiling the pitch axis edge to edge, and draw nothing between samples: a spike rising the whole depth in one sample
+/// leaves its flank to the fill. The caps are opaque and in the line's own
+/// colors, so the bright spike wears its fill's color and the palette-black
+/// floor is lifted to the lift's floor.
+#[test]
+fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
+    let mut cfg = SpectrumConfig {
+        floor_db: -100.0,
+        ceiling_db: 0.0,
+        volume_floor_db: -40.0,
+        volume_ceiling_db: 0.0,
+        tilt: 0.0,
+        keyline_style: KeylineStyle::Dots,
+        ..Default::default()
+    };
+    cfg.atmosphere.analyzer_softness = 0.0;
+    let axes = Axes::new(WIDE, &cfg);
+    let n = (axes.pitch_len() * 2.0) as usize;
+    let spike = n / 2;
+    let level = |i: usize| if i == spike { 0.0 } else { -99.0 };
+    let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
+    let mut pixel = 0.0;
+    let out = painted_into(SCREEN, WIDE, |ui| {
+        pixel = 1.0 / ui.ctx().pixels_per_point();
+        let budget = plot_budget(1.0, axes.depth_len());
+        atmosphere::draw_profile(ui.painter(), &axes, &cfg, &visible, budget, 1.0);
+    });
+    let meshes: Vec<_> = out
+        .shapes
+        .into_iter()
+        .filter_map(|s| match s.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .collect();
+    let [body, caps] = &meshes[..] else { panic!("expected the body and the caps") };
+    let stops = atmosphere::BODY_STOPS.len();
+    let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
+    assert_eq!(caps.vertices.len(), n * 4, "one cap per sample");
+    let climb = (axes.at(1.0, 0.0) - axes.at(0.0, 0.0)).normalized();
+    let along = climb.abs();
+    let spacing = axes.pitch_len() / n as f32;
+    assert!((spacing - pixel).abs() > 0.1, "fixture needs columns off the pixel grid");
+    let mut previous: Option<egui::Rect> = None;
+    let floor = atmosphere::keyline_floor(cfg.keyline_lift);
+    for (i, &(midi, _, level)) in visible.iter().enumerate() {
+        let corners = &caps.vertices[i * 4..i * 4 + 4];
+        let square = egui::Rect::from_points(&corners.iter().map(|v| v.pos).collect::<Vec<_>>());
+        assert!(square.center().distance(contour(i)) < 1e-3, "cap {i} is off its level");
+        let size = along * spacing + (egui::Vec2::splat(1.0) - along) * pixel;
+        assert!((square.size() - size).length() < 1e-4, "cap {i} is not a column by a pixel");
+        if let Some(previous) = previous.replace(square) {
+            let gap = (square.center() - previous.center()).dot(climb) - spacing;
+            assert!(gap.abs() < 1e-3, "caps {} and {i} do not tile the pitch axis", i - 1);
+        }
+        let fill = super::spectrogram::cell_color(
+            cfg.spectrogram_gradient,
+            spectrogram_level_db(&cfg, level, midi),
+        );
+        let ink = atmosphere::keyline_color(fill, floor);
+        assert!(corners.iter().all(|v| v.color == ink), "cap {i} is not the line's solid color");
+    }
+    let luminance = |c: egui::Color32| {
+        let c = egui::Rgba::from(c);
+        0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
+    };
+    let cap = |i: usize| caps.vertices[i * 4].color;
+    let bright = super::spectrogram::cell_color(
+        cfg.spectrogram_gradient,
+        spectrogram_level_db(&cfg, 0.0, 69.0),
+    );
+    assert!(luminance(bright) > floor, "fixture needs a spike brighter than the floor");
+    assert_eq!(cap(spike), bright, "a bright level's cap is not its fill's color");
+    assert!((luminance(cap(0)) - floor).abs() < 0.01, "a dark cap was not lifted to the floor");
+    let flank = contour(spike).distance(contour(spike - 1));
+    assert!(flank > 20.0, "fixture needs a flank taller than a pixel");
+    // Nothing joins two samples, where a line would lay a triangle up the
+    // whole flank.
+    for triangle in caps.indices.chunks_exact(3) {
+        let at = |k: usize| caps.vertices[triangle[k] as usize].pos;
+        let widest = at(0).distance(at(1)).max(at(1).distance(at(2))).max(at(0).distance(at(2)));
+        assert!(widest <= pixel * 1.5, "a triangle {widest} wide joined samples");
+    }
 }
 
 /// The whole pane, painted in every orientation with a roll that has
