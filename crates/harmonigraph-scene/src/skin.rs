@@ -143,54 +143,37 @@ impl Skin {
     }
 }
 
-/// The contrast dim text keeps against the page at every [`Chrome`].
+/// The contrast dim text keeps against the page at every page lightness.
 pub const LABEL_FLOOR: f32 = 4.0;
 
-/// How the chrome's neutral layers are laid out: the page's OKLab lightness,
-/// and the lightness gap from each layer to the next. The two dials a user
-/// turns; everything else about a skin comes from its scheme.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub struct Chrome {
-    pub lightness: f32,
-    pub step: f32,
-}
+/// The OKLab lightness between one neutral layer and the next. Fixed rather
+/// than a dial: 0.07 is where it was tuned by eye, and moving it would move
+/// the range [`LIGHTNESS_RANGE`] was fitted to.
+pub const STEP: f32 = 0.07;
 
-impl Chrome {
-    /// Both ranges end where the lightest corner, a track at 0.16 + 2 × 0.07,
-    /// still leaves every skin's slider fill reading against its track. Below
-    /// 0.08 the page is within a byte or two of black, where OKLab lightness
-    /// moves in steps too coarse to lay a ladder on.
-    pub const LIGHTNESS_RANGE: RangeInclusive<f32> = 0.08..=0.16;
-    pub const STEP_RANGE: RangeInclusive<f32> = 0.02..=0.07;
+/// Where the page's lightness can be dialled. The top is where the lightest
+/// track, 0.16 + 2 × [`STEP`], still leaves every skin's slider fill reading
+/// against it; below 0.08 the page is within a byte or two of black, where
+/// OKLab lightness moves in steps too coarse to lay a ladder on.
+pub const LIGHTNESS_RANGE: RangeInclusive<f32> = 0.08..=0.16;
 
-    /// Inside both ranges, a non-finite value going back to its default, so
-    /// a hand-edited blob cannot put the dials somewhere the chrome is not.
-    pub fn sanitize(self) -> Self {
-        let fit = |v: f32, range: RangeInclusive<f32>, fallback: f32| {
-            if v.is_finite() {
-                v.clamp(*range.start(), *range.end())
-            } else {
-                fallback
-            }
-        };
-        let default = Self::default();
-        Self {
-            lightness: fit(self.lightness, Self::LIGHTNESS_RANGE, default.lightness),
-            step: fit(self.step, Self::STEP_RANGE, default.step),
-        }
-    }
-}
+/// The page lightness a fresh install opens at.
+pub const DEFAULT_LIGHTNESS: f32 = 0.15;
 
-impl Default for Chrome {
-    fn default() -> Self {
-        Self { lightness: 0.15, step: 0.06 }
+/// `lightness` inside [`LIGHTNESS_RANGE`], a non-finite value going back to
+/// the default, so a hand-edited blob cannot put the dial somewhere the chrome
+/// is not.
+pub fn sane_lightness(lightness: f32) -> f32 {
+    if lightness.is_finite() {
+        lightness.clamp(*LIGHTNESS_RANGE.start(), *LIGHTNESS_RANGE.end())
+    } else {
+        DEFAULT_LIGHTNESS
     }
 }
 
 impl Skin {
-    /// This skin with its neutral layers laid out by `chrome`: each a whole
-    /// number of steps above the page, in the page colour's hue and tint.
+    /// This skin with its page at `lightness` and its other neutral layers a
+    /// whole number of [`STEP`]s above it, in the page colour's hue and tint.
     ///
     /// | layer | steps |
     /// |---|---|
@@ -211,15 +194,15 @@ impl Skin {
     /// [`LABEL_FLOOR`] against the page: a lighter page would otherwise take a
     /// scheme's darker greys under it (Berlin's `base04` sits at 3.97:1 on
     /// the default page).
-    pub fn stepped(&self, chrome: Chrome) -> Skin {
+    pub fn stepped(&self, lightness: f32) -> Skin {
         let [_, a, b] = oklab(self.panel);
-        let layer = |steps: f32| srgb(chrome.lightness + steps * chrome.step, a, b);
+        let layer = |steps: f32| srgb(lightness + steps * STEP, a, b);
         let (panel, header, well, widget) = (layer(0.0), layer(1.0), layer(2.0), layer(3.0));
-        let [mut lightness, dim_a, dim_b] = oklab(self.text_dim);
+        let [mut dim, dim_a, dim_b] = oklab(self.text_dim);
         let mut text_dim = self.text_dim;
-        while contrast(text_dim, panel) < LABEL_FLOOR && lightness < 1.0 {
-            lightness += 0.005;
-            text_dim = srgb(lightness, dim_a, dim_b);
+        while contrast(text_dim, panel) < LABEL_FLOOR && dim < 1.0 {
+            dim += 0.005;
+            text_dim = srgb(dim, dim_a, dim_b);
         }
         Skin {
             text_dim,
@@ -418,12 +401,12 @@ pub fn skin_index(id: &str) -> Option<usize> {
     skins().iter().position(|entry| entry.id == id)
 }
 
-/// The skin in force: which of [`skins`], at which [`Chrome`], and the
+/// The skin in force: which of [`skins`], at which page lightness, and the
 /// stepped result, kept so a colour lookup is a copy rather than a remix.
 #[derive(Clone, Copy)]
 struct Active {
     index: usize,
-    chrome: Chrome,
+    lightness: f32,
     skin: Skin,
 }
 
@@ -432,35 +415,36 @@ thread_local! {
 }
 
 fn active() -> Active {
-    ACTIVE.get().unwrap_or_else(|| {
-        let chrome = Chrome::default();
-        Active { index: 0, chrome, skin: skins()[0].skin.stepped(chrome) }
+    ACTIVE.get().unwrap_or_else(|| Active {
+        index: 0,
+        lightness: DEFAULT_LIGHTNESS,
+        skin: skins()[0].skin.stepped(DEFAULT_LIGHTNESS),
     })
 }
 
-/// Put `skins()[index]` in force on this thread, stepped by `chrome`; an
+/// Put `skins()[index]` in force on this thread, its page at `lightness`; an
 /// index past the end is the default. See the module doc for why this is per
-/// thread. Restepped only when the index or the chrome moved, the two things
-/// the stepped skin is made of.
-pub fn set_active_skin(index: usize, chrome: Chrome) {
+/// thread. Restepped only when the index or the lightness moved, the two
+/// things the stepped skin is made of.
+pub fn set_active_skin(index: usize, lightness: f32) {
     let index = if index < skins().len() { index } else { 0 };
     let current = active();
-    if (current.index, current.chrome) == (index, chrome) {
+    if (current.index, current.lightness) == (index, lightness) {
         ACTIVE.set(Some(current));
         return;
     }
-    ACTIVE.set(Some(Active { index, chrome, skin: skins()[index].skin.stepped(chrome) }));
+    ACTIVE.set(Some(Active { index, lightness, skin: skins()[index].skin.stepped(lightness) }));
 }
 
-/// The index and chrome [`active_skin`] was stepped from, for a context to
-/// remember which skin its style was built in.
-pub fn active_skin_key() -> (usize, Chrome) {
+/// The index and page lightness [`active_skin`] was stepped from, for a
+/// context to remember which skin its style was built in.
+pub fn active_skin_key() -> (usize, f32) {
     let active = active();
-    (active.index, active.chrome)
+    (active.index, active.lightness)
 }
 
-/// The skin in force on this thread; [`DEFAULT_SKIN`]'s at the default
-/// [`Chrome`] until one is set.
+/// The skin in force on this thread; [`DEFAULT_SKIN`]'s at
+/// [`DEFAULT_LIGHTNESS`] until one is set.
 pub fn active_skin() -> Skin {
     active().skin
 }

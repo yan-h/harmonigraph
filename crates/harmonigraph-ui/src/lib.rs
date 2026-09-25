@@ -240,7 +240,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // one in force is whichever that editor last set. A scale change below
     // rebuilds the style from it.
     let interaction = &state.workspace.interaction;
-    let reskinned = theme::set_skin(ui.ctx(), &interaction.skin, interaction.chrome);
+    let reskinned = theme::set_skin(ui.ctx(), &interaction.skin, interaction.skin_lightness);
     if startup::draw(ui, state) {
         return;
     }
