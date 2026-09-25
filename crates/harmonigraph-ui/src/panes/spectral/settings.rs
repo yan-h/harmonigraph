@@ -353,10 +353,22 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
             ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, "Labels follow note onset").on_hover_text(
-                    "Place labels at the start of each note so they travel with its onset. \
-                     Turn off to keep labels at the newest edge.",
-                );
+                // The box moves a name to its ribbon's other END, which is the
+                // onset only where time runs the screen's way (`Anchor::of`).
+                let (label, hover) = if cfg.orientation.is_time_reversed() {
+                    (
+                        "Labels wait at the now-line",
+                        "Place labels at the newest end of each note, so a held note's name waits at the now-line. \
+                         Turn off to have labels travel with each note's onset.",
+                    )
+                } else {
+                    (
+                        "Labels follow note onset",
+                        "Place labels at the start of each note so they travel with its onset. \
+                         Turn off to keep labels at the newest edge.",
+                    )
+                };
+                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, label).on_hover_text(hover);
                 ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
                     .unit(1.0, "×")
                     .show(ui)
