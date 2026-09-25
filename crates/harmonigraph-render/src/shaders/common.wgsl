@@ -99,8 +99,7 @@ struct ShadowCaster {
     // was packed.
     cell: vec4<f32>,
     // The map from a point of the pane to a texel of that cell —
-    // `xy + points * z`. For lattice nodes and labels, w links the next node caster in
-    // painter order (index + 1; zero ends the list). Other surfaces leave 0.
+    // `xy + points * z`. w is unused and zero.
     map: vec4<f32>,
     // What this caster SPENDS, none of it a coordinate. x: how much of its
     // shadow lands, 0..=1; y: what its cell HOLDS, 0 blurred ink and
@@ -128,6 +127,13 @@ const DISTANCE_COVERAGE_KIND: f32 = 2.0;
 // shadow.rs); and a cell is read by a node, a marker and a name alike, so one
 // array they all index is also one place the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
+
+// Which node casters can cover each part of the pane (`shadow::node_occluders`):
+// columns, rows, the grid's origin in points and its bins per point as f32
+// bits, then `columns * rows + 1` absolute offsets, then each bin's casters in
+// painter order. A surface with no node casters binds a zero-column grid.
+@group(3) @binding(1) var<storage, read> node_occluders: array<u32>;
+const OCCLUDER_HEADER: u32 = 5u;
 
 // How much a caster's Gaussian is multiplied up by before it is spent, which is
 // what a caster THIN against σ is worth against a solid one.
@@ -311,28 +317,40 @@ struct SceneOut {
 };
 
 // Lattice ink, including names, fades through the same foreground-node field.
-// Links contain only later node casters, excluding the receiver and its name.
-// Box rejection keeps clamped atlas edges from occluding distant ink.
+// Only node casters LATER than the receiver in painter order count, which
+// excludes the receiver and its name. The point's bin lists every node caster
+// whose box can hold it, in painter order; the box test is what decides, and
+// also keeps clamped atlas edges from occluding distant ink.
 fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
     let strength = clamp(occlusion, 0.0, 1.0);
     if strength == 0.0 {
         return 1.0;
     }
-    var at = u32(max(who, 0.0));
-    if at >= arrayLength(&shadow_casters) {
+    let receiver = u32(max(who, 0.0));
+    let casters = arrayLength(&shadow_casters);
+    let words = arrayLength(&node_occluders);
+    if receiver >= casters || words < OCCLUDER_HEADER {
         return 1.0;
     }
+    let columns = node_occluders[0];
+    let rows = node_occluders[1];
+    let origin = vec2<f32>(bitcast<f32>(node_occluders[2]), bitcast<f32>(node_occluders[3]));
+    let bin = floor((points - origin) * bitcast<f32>(node_occluders[4]));
+    // Written so a NaN fails it: off the grid, no caster's box holds the point.
+    if !(all(bin >= vec2<f32>(0.0)) && bin.x < f32(columns) && bin.y < f32(rows)) {
+        return 1.0;
+    }
+    let slot = OCCLUDER_HEADER + u32(bin.y) * columns + u32(bin.x);
+    if slot + 1u >= words {
+        return 1.0;
+    }
+    let end = min(node_occluders[slot + 1u], words);
     var visibility = 1.0;
-    loop {
-        let next = u32(shadow_casters[at].map.w);
-        if next == 0u {
-            break;
+    for (var k = node_occluders[slot]; k < end; k++) {
+        let at = node_occluders[k];
+        if at <= receiver || at >= casters {
+            continue;
         }
-        let candidate = next - 1u;
-        if candidate <= at || candidate >= arrayLength(&shadow_casters) {
-            break;
-        }
-        at = candidate;
         let caster = shadow_casters[at];
         // Reject before sampling: clamping an out-of-box sample to the cell
         // edge would otherwise extend its last nonzero texel indefinitely.

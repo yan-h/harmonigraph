@@ -1293,6 +1293,9 @@ struct PaneBuffers {
     caster_buffer: wgpu::Buffer,
     caster_capacity: usize,
     caster_count: usize,
+    /// The words of `shadow::node_occluders`, bound beside the casters.
+    occluder_buffer: wgpu::Buffer,
+    occluder_capacity: usize,
     caster_bind_group: wgpu::BindGroup,
     /// The scene pass's whole order (see [`Draw`]), held to what actually
     /// reached the buffers above.
@@ -2808,6 +2811,7 @@ impl LatticeResources {
             glow_statistics_layout: &self.compiled.glow_statistics_layout,
         };
         let want_casters = wants.casters;
+        let want_occluders = wants.occluders;
         let pane = self.panes.entry(pane_id).or_insert_with(|| {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("lattice_uniforms"),
@@ -2823,8 +2827,12 @@ impl LatticeResources {
                     resource: uniform_buffer.as_entire_binding(),
                 }],
             });
-            let (caster_buffer, caster_bind_group) =
-                shadow::caster_buffer(device, caster_layout, INITIAL_BOX_CAPACITY);
+            let (caster_buffer, occluder_buffer, caster_bind_group) = shadow::caster_buffers(
+                device,
+                caster_layout,
+                INITIAL_BOX_CAPACITY,
+                INITIAL_OCCLUDER_CAPACITY,
+            );
             PaneBuffers {
                 uniform_buffer,
                 bind_group,
@@ -2871,6 +2879,8 @@ impl LatticeResources {
                 caster_buffer,
                 caster_capacity: INITIAL_BOX_CAPACITY,
                 caster_count: 0,
+                occluder_buffer,
+                occluder_capacity: INITIAL_OCCLUDER_CAPACITY,
                 caster_bind_group,
                 draws: Vec::new(),
                 glyph_uniform_buffer: device.create_buffer(&wgpu::BufferDescriptor {
@@ -2936,13 +2946,20 @@ impl LatticeResources {
         {
             offscreen.ensure_bloom(device, &shared, &pane.uniform_buffer, wants.bloom);
         }
-        // The casters' kernels, whose buffer and bind group are one object:
-        // rebuilt together or the group names a buffer that is gone.
-        if want_casters > pane.caster_capacity {
-            pane.caster_capacity = want_casters.next_power_of_two();
-            let (buffer, bind_group) =
-                shadow::caster_buffer(device, caster_layout, pane.caster_capacity);
-            pane.caster_buffer = buffer;
+        // The casters' kernels and occluder grid, whose buffers and bind group
+        // are one object: rebuilt together or the group names a buffer that is
+        // gone.
+        if want_casters > pane.caster_capacity || want_occluders > pane.occluder_capacity {
+            pane.caster_capacity = pane.caster_capacity.max(want_casters.next_power_of_two());
+            pane.occluder_capacity = pane.occluder_capacity.max(want_occluders.next_power_of_two());
+            let (casters, occluders, bind_group) = shadow::caster_buffers(
+                device,
+                caster_layout,
+                pane.caster_capacity,
+                pane.occluder_capacity,
+            );
+            pane.caster_buffer = casters;
+            pane.occluder_buffer = occluders;
             pane.caster_bind_group = bind_group;
         }
         pane
@@ -2959,6 +2976,10 @@ const INITIAL_GLYPH_CAPACITY: usize = 512;
 
 /// And for the names' shadow boxes: one per named node.
 const INITIAL_BOX_CAPACITY: usize = 64;
+
+/// And the words of the node occluder grid: a header, a few hundred offsets
+/// and a handful of casters per bin.
+const INITIAL_OCCLUDER_CAPACITY: usize = 4096;
 
 /// Which of a pane's optional targets this frame wants, and how tall the ink
 /// strip has to be — the answers `pane_buffers` acts on that come off the
@@ -2987,6 +3008,9 @@ struct PaneTargets {
     /// buffers below, because a storage buffer's bind group has to be rebuilt
     /// with it and this is where the layout is in scope.
     casters: usize,
+    /// And how many words this frame's occluder grid is, bound in the same
+    /// group (`shadow::caster_buffers`).
+    occluders: usize,
 }
 
 /// A `capacity`-element vertex buffer (VERTEX | COPY_DST) sized for `T`.

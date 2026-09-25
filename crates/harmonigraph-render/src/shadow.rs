@@ -319,9 +319,8 @@ pub(crate) struct ShadowCaster {
     /// its own scene draw.
     pub cell: [f32; 4],
     /// The map from a point of the pane to a texel of that cell: x/y the
-    /// origin, z the scale, so a texel is `xy + points * z`.
-    /// Lattice preparation uses w for the next node caster's index + 1 in
-    /// painter order; zero ends the list. Other surfaces leave it zero.
+    /// origin, z the scale, so a texel is `xy + points * z`. w is unused and
+    /// zero: which node casters can cover a point is [`node_occluders`]'.
     ///
     /// Pre-composed on the CPU rather than sent as (cell origin, box origin,
     /// scale) for the shader to combine: a fragment would otherwise repeat the
@@ -782,84 +781,198 @@ pub(crate) fn read_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// What binds the casters to the scene pipelines: one read-only storage
-/// buffer, at group 3.
+/// What binds the casters to the scene pipelines, at group 3: the casters'
+/// kernels at binding 0 and the [`node_occluders`] grid at binding 1, both
+/// read-only storage.
 ///
-/// A group of its own rather than a third binding beside the atlas, because
+/// A group of its own rather than more bindings beside the atlas, because
 /// the two have different lifetimes and different readers. The atlas layout is
 /// shared with the BLUR pipelines, which sweep the cells and have no use for
 /// the array; and the atlas's own bind groups are made once with its textures,
-/// where this buffer is rewritten and regrown every frame. One layout carrying
-/// both would rebuild the atlas's bind groups whenever a name arrived.
+/// where these buffers are rewritten and regrown every frame. One layout
+/// carrying both would rebuild the atlas's bind groups whenever a name arrived.
 pub(crate) fn caster_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    // The VERTEX stage as well: a caster's quad is its widest term's box, and
-    // that box is in here (`vs_shadow_box` in text.wgsl).
-    storage_list_layout(
-        device,
-        "lattice_shadow_casters_layout",
-        wgpu::ShaderStages::VERTEX_FRAGMENT,
-    )
+    let storage = |binding, visibility| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("lattice_shadow_casters_layout"),
+        entries: &[
+            // The VERTEX stage as well: a caster's quad is its widest term's
+            // box, and that box is in here (`vs_shadow_box` in text.wgsl).
+            storage(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+            // Read by `node_visibility` alone, which only fragments call.
+            storage(1, wgpu::ShaderStages::FRAGMENT),
+        ],
+    })
 }
 
-/// A buffer for `capacity` casters' kernels and the bind group naming it
-/// ([`storage_list`]).
+/// A buffer for `capacity` casters' kernels and the bind group naming it,
+/// for a surface with no node casters: its occluder grid is one zero word,
+/// which `node_visibility` reads as an empty grid.
 pub(crate) fn caster_buffer(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     capacity: usize,
 ) -> (wgpu::Buffer, wgpu::BindGroup) {
-    storage_list::<ShadowCaster>(device, layout, capacity, "lattice_shadow_casters")
+    let (casters, _, bind_group) = caster_buffers(device, layout, capacity, 1);
+    (casters, bind_group)
 }
 
-/// The layout every per-frame list the shaders walk binds through: one
-/// read-only storage buffer at binding 0, visible to `stages`. The casters
-/// above use it for the occlusion walk.
-pub(crate) fn storage_list_layout(
-    device: &wgpu::Device,
-    label: &str,
-    stages: wgpu::ShaderStages,
-) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(label),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: stages,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    })
-}
-
-/// A buffer for `capacity` entries of `T` and the bind group naming it, under
-/// a [`storage_list_layout`].
+/// Buffers for `casters` kernels and `occluders` words of [`node_occluders`],
+/// and the bind group naming both.
 ///
-/// The two together because they cannot come apart: a storage buffer's bind
-/// group names the buffer, so a pane that outgrows one rebuilds both. Floored
-/// at one entry, an empty storage binding being a validation error and a frame
-/// with nothing in the list still having to bind SOMETHING for the pipeline's
-/// layout.
-pub(crate) fn storage_list<T: bytemuck::Pod>(
+/// The three together because they cannot come apart: a storage buffer's bind
+/// group names the buffer, so a pane that outgrows either rebuilds all three.
+/// Each is floored at one entry, an empty storage binding being a validation
+/// error and a frame with nothing in the list still having to bind SOMETHING
+/// for the pipeline's layout. A fresh buffer is zeroed, which is an empty grid.
+pub(crate) fn caster_buffers(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
-    capacity: usize,
-    label: &str,
-) -> (wgpu::Buffer, wgpu::BindGroup) {
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size: (std::mem::size_of::<T>() * capacity.max(1)) as u64,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    casters: usize,
+    occluders: usize,
+) -> (wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = |label, bytes: usize| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    };
+    let kernels =
+        buffer("lattice_shadow_casters", std::mem::size_of::<ShadowCaster>() * casters.max(1));
+    let grid = buffer("lattice_node_occluders", std::mem::size_of::<u32>() * occluders.max(1));
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(&format!("{label}_bind_group")),
+        label: Some("lattice_shadow_casters_bind_group"),
         layout,
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: kernels.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: grid.as_entire_binding() },
+        ],
     });
-    (buffer, bind_group)
+    (kernels, grid, bind_group)
+}
+
+/// Words ahead of the offsets in [`node_occluders`]: columns, rows, the grid's
+/// origin in points (x then y, as f32 bits) and bins per point (f32 bits).
+pub(crate) const OCCLUDER_HEADER: usize = 5;
+
+/// Bins along the longer side of the node casters' union box.
+///
+/// Coarse on purpose: a bin only has to be small against the spread of the
+/// casters for its list to be a handful rather than all of them. At 1,025
+/// nodes on a 1536-point pane that is about 48 points a bin.
+const OCCLUDER_BINS: f32 = 32.0;
+
+/// Which node casters can cover each part of the pane, for `node_visibility`
+/// (common.wgsl): a coarse grid over the union of their boxes, each bin
+/// listing, in painter order, every caster whose box reaches it.
+///
+/// The fragment reads its own bin's list and keeps the casters LATER than its
+/// receiver, where it used to follow a linked list through every later node
+/// caster on the pane — about half of them per fragment, 500 steps at 1,025
+/// nodes (#1098). The picture is the same bit for bit: the shader still
+/// applies its exact box test, the list only has to hold every caster whose
+/// box contains the point, and it is walked in the same ascending order, so
+/// the product multiplies the same factors in the same sequence.
+///
+/// Holding every containing caster is what the bin ranges below are built
+/// for. Each box is widened by a hundredth of a bin before it is binned, so a
+/// GPU rounding the point's bin differently from this CPU still lands inside
+/// the range, and a one-bin margin surrounds the union so no point in any box
+/// falls off the grid's near edge. A point outside the grid is covered by no
+/// caster, and the shader answers 1 there.
+///
+/// `node_cells` are the node casters' indices; only those whose shadow lands
+/// (`shade[0] > 0`) occlude, as they did in the list this replaces. Layout,
+/// in `u32` words: [`OCCLUDER_HEADER`], then `cols * rows + 1` absolute
+/// offsets, then the lists. A frame with no occluder is the header alone, a
+/// zero-column grid.
+pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32]) -> Vec<u32> {
+    let mut occluders: Vec<u32> = node_cells
+        .iter()
+        .copied()
+        .filter(|&i| casters.get(i as usize).is_some_and(|c| c.shade[0] > 0.0))
+        .collect();
+    occluders.sort_unstable();
+    occluders.dedup();
+    let rect = |i: u32| {
+        let r = casters[i as usize].rect;
+        ([r[0], r[1]], [r[0] + r[2], r[1] + r[3]])
+    };
+    // A box that is not finite contains nothing the shader's test accepts,
+    // except an infinite one, which `pack` never makes.
+    occluders.retain(|&i| {
+        let (min, max) = rect(i);
+        min.iter().chain(&max).all(|v| v.is_finite())
+    });
+    let mut out = vec![0u32; OCCLUDER_HEADER];
+    let Some((min, max)) = occluders.iter().map(|&i| rect(i)).reduce(|(a0, a1), (b0, b1)| {
+        ([a0[0].min(b0[0]), a0[1].min(b0[1])], [a1[0].max(b1[0]), a1[1].max(b1[1])])
+    }) else {
+        return out;
+    };
+    let extent = [max[0] - min[0], max[1] - min[1]];
+    let per_point = OCCLUDER_BINS / extent[0].max(extent[1]).max(1.0);
+    let bin_points = 1.0 / per_point;
+    let origin = [min[0] - bin_points, min[1] - bin_points];
+    // One margin bin before the union, one after, and one for the far edge.
+    let dims = extent.map(|e| (e * per_point).floor() as usize + 3);
+    let pad = 0.01 * bin_points;
+    let span = |i: u32| {
+        let (lo, hi) = rect(i);
+        let bin = |v: f32, axis: usize| {
+            (((v - origin[axis]) * per_point).floor().max(0.0) as usize).min(dims[axis] - 1)
+        };
+        [0, 1].map(|axis| bin(lo[axis] - pad, axis)..=bin(hi[axis] + pad, axis))
+    };
+    // A counting sort: sizes, then offsets, then each list filled in the
+    // occluders' own ascending order, which is the order the shader needs.
+    let bins = dims[0] * dims[1];
+    let mut count = vec![0u32; bins + 1];
+    for &i in &occluders {
+        let [xs, ys] = span(i);
+        for y in ys {
+            for x in xs.clone() {
+                count[y * dims[0] + x + 1] += 1;
+            }
+        }
+    }
+    // `count[k + 1]` holds bin k's size, so an inclusive running sum turns
+    // `count[k]` into where bin k's list starts, and `count[bins]` the end.
+    let mut offset = (OCCLUDER_HEADER + bins + 1) as u32;
+    for c in &mut count {
+        offset += *c;
+        *c = offset;
+    }
+    out[0] = dims[0] as u32;
+    out[1] = dims[1] as u32;
+    out[2] = origin[0].to_bits();
+    out[3] = origin[1].to_bits();
+    out[4] = per_point.to_bits();
+    out.extend_from_slice(&count);
+    out.resize(offset as usize, 0);
+    let mut cursor: Vec<u32> = count[..bins].to_vec();
+    for &i in &occluders {
+        let [xs, ys] = span(i);
+        for y in ys {
+            for x in xs.clone() {
+                let at = &mut cursor[y * dims[0] + x];
+                out[*at as usize] = i;
+                *at += 1;
+            }
+        }
+    }
+    out
 }
 
 /// The two pipelines that sweep blur cells.
@@ -931,6 +1044,94 @@ pub(crate) fn create_cell_pipelines(
 pub(crate) mod tests {
     use super::*;
     use harmonigraph_scene::REACH_SIGMAS;
+
+    /// The occluder grid holds, for every point, every later node caster whose
+    /// box holds that point, in painter order — which is what makes
+    /// `node_visibility` multiply the same factors in the same order as the
+    /// linked list through every later node caster it replaced (#1098).
+    ///
+    /// The fixture is a label receiver with a disabled shadow, overlapped by
+    /// two later nodes and one later node whose shadow does not land, behind an
+    /// earlier node, under a marker box covering everything, and beside a row
+    /// of later nodes far away. Points run over a half-point lattice and every
+    /// box edge, where a bin boundary is most likely to drop one.
+    #[test]
+    fn the_occluder_grid_lists_every_later_node_box_under_a_point() {
+        assert_eq!(
+            shader_const(crate::COMMON_SRC, "OCCLUDER_HEADER").trim_end_matches('u'),
+            OCCLUDER_HEADER.to_string()
+        );
+        let caster = |rect: [f32; 4], shade: f32| ShadowCaster {
+            rect,
+            shade: [shade, 0.0, 0.0, 0.0],
+            ..NO_CASTER
+        };
+        let mut casters = vec![
+            caster([-50.0, -50.0, 800.0, 500.0], 1.0), // a marker, not a node
+            caster([10.0, 10.0, 30.0, 30.0], 1.0),     // an earlier node
+            caster([20.0, 20.0, 40.0, 12.0], 0.0),     // the label receiver
+            caster([30.0, 15.0, 25.0, 25.0], 1.0),     // later, overlapping
+            caster([50.0, 20.0, 20.0, 20.0], 1.0),     // later, overlapping
+            caster([25.0, 25.0, 10.0, 10.0], 0.0),     // later, shadow shut
+            caster([44.5, 26.0, 0.0, 0.0], 1.0),       // later, a bare point
+        ];
+        casters.extend((0..20).map(|i| caster([200.0 + 20.0 * i as f32, 300.0, 15.0, 15.0], 1.0)));
+        let node_cells: Vec<u32> = (1..casters.len() as u32).filter(|&i| i != 2).collect();
+        let grid = node_occluders(&casters, &node_cells);
+
+        // The shader's own arithmetic, in f32.
+        let list = |p: [f32; 2]| -> &[u32] {
+            let origin = [f32::from_bits(grid[2]), f32::from_bits(grid[3])];
+            let per_point = f32::from_bits(grid[4]);
+            let bin = [0, 1].map(|a| ((p[a] - origin[a]) * per_point).floor());
+            if bin[0] < 0.0 || bin[1] < 0.0 || bin[0] >= grid[0] as f32 || bin[1] >= grid[1] as f32
+            {
+                return &[];
+            }
+            let slot = OCCLUDER_HEADER + bin[1] as usize * grid[0] as usize + bin[0] as usize;
+            &grid[grid[slot] as usize..grid[slot + 1] as usize]
+        };
+        let holds = |i: u32, p: [f32; 2]| {
+            let r = casters[i as usize].rect;
+            p[0] >= r[0] && p[1] >= r[1] && p[0] <= r[0] + r[2] && p[1] <= r[1] + r[3]
+        };
+        let mut points: Vec<[f32; 2]> = (-20..1400)
+            .flat_map(|x| (-20..760).step_by(7).map(move |y| [x as f32 * 0.5, y as f32 * 0.5]))
+            .collect();
+        for c in &casters {
+            let [x, y, w, h] = c.rect;
+            for px in [x, x + w] {
+                for py in [y, y + h, y + h * 0.5] {
+                    points.push([px, py]);
+                    points.push([x + w * 0.5, py]);
+                }
+            }
+        }
+        let (mut crowded, mut compared) = (0, 0);
+        for &p in &points {
+            let listed = list(p);
+            assert!(listed.is_sorted(), "a bin out of painter order at {p:?}");
+            crowded += usize::from(listed.len() >= 2);
+            for who in 0..casters.len() as u32 {
+                let want: Vec<u32> = node_cells
+                    .iter()
+                    .copied()
+                    .filter(|&j| j > who && casters[j as usize].shade[0] > 0.0 && holds(j, p))
+                    .collect();
+                let got: Vec<u32> =
+                    listed.iter().copied().filter(|&j| j > who && holds(j, p)).collect();
+                assert_eq!(got, want, "receiver {who} at {p:?}");
+                compared += want.len();
+            }
+        }
+        assert!(crowded > 100 && compared > 1000, "the fixture overlaps too little: {crowded}");
+        // And it is a grid rather than the whole list again: a point on the
+        // label under both overlapping nodes lists them and none of the far row.
+        let near = list([52.0, 30.0]);
+        assert!(near.contains(&3) && near.contains(&4) && !near.contains(&5));
+        assert!(near.iter().all(|&j| j < 7), "the far row reached the label: {near:?}");
+        assert_eq!(node_occluders(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
+    }
 
     /// A shader's `const NAME: T = value;`, as text.
     pub(crate) fn shader_const(src: &str, name: &str) -> String {

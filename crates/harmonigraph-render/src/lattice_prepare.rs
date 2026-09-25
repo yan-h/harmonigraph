@@ -10,6 +10,9 @@ struct PreparedFrame {
     glow: bool,
     has_light: bool,
     packed: shadow::Packed,
+    /// Which node casters can cover each part of the pane
+    /// (`shadow::node_occluders`), for the receivers' occlusion.
+    occluders: Vec<u32>,
     shadow_wanted: Option<[u32; 2]>,
     blurs: bool,
 }
@@ -112,6 +115,7 @@ impl CallbackTrait for LatticeCallback {
                 // pipeline's layout — one zeroed entry, which is a caster with
                 // no cells and a multiply of 1.
                 casters: frame.packed.casters.len().max(1),
+                occluders: frame.occluders.len(),
             },
             shared_sdf.texture.as_ref(),
         );
@@ -385,6 +389,8 @@ impl LatticeCallback {
             if packed.casters.is_empty() { &[shadow::NO_CASTER] } else { &packed.casters };
         queue.write_buffer(&pane.caster_buffer, 0, bytemuck::cast_slice(entries));
         pane.caster_count = packed.casters.len();
+        // Always at least the header, so an empty grid overwrites last frame's.
+        queue.write_buffer(&pane.occluder_buffer, 0, bytemuck::cast_slice(&frame.occluders));
 
         // The casters' boxes, whether or not there is a font sheet to cut a
         // name out of: a node and a marker cast without one.
@@ -600,21 +606,11 @@ impl LatticeCallback {
                 packed.casters[cell as usize].shade[1] = shadow::DISTANCE_COVERAGE_KIND;
             }
         }
-        // Every receiver, including a label with its own shadow disabled,
-        // starts at the next node caster in painter order. Names immediately
-        // follow their owner, so that owner can never occlude its own text.
-        // Index + 1 leaves zero as the end, independent of buffer capacity.
-        let mut next = 0;
-        let mut nodes = self.node_cells.iter().rev().peekable();
-        for (i, caster) in packed.casters.iter_mut().enumerate().rev() {
-            caster.map[3] = next as f32;
-            if nodes.peek().is_some_and(|&&node| node as usize == i) {
-                nodes.next();
-                if caster.shade[0] > 0.0 {
-                    next = i as u32 + 1;
-                }
-            }
-        }
+        // Every receiver, including a label with its own shadow disabled, is
+        // occluded by the node casters after it in painter order whose box
+        // holds the point. Names immediately follow their owner, so that owner
+        // can never occlude its own text.
+        let occluders = shadow::node_occluders(&packed.casters, &self.node_cells);
         // A placeholder box preserves the caster index for a distance field
         // evaluated directly by its scene draw. Only a real cell asks for the
         // atlas; a markers-only Distance frame therefore allocates no atlas.
@@ -628,7 +624,16 @@ impl LatticeCallback {
         // pass nor the plane.
         let blurs =
             packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.who[1] < 0.5 * shadow::DISTANCE_KIND);
-        PreparedFrame { offscreen_size, screen_size, glow, has_light, packed, shadow_wanted, blurs }
+        PreparedFrame {
+            offscreen_size,
+            screen_size,
+            glow,
+            has_light,
+            packed,
+            occluders,
+            shadow_wanted,
+            blurs,
+        }
     }
 
     fn encode_shadows(
