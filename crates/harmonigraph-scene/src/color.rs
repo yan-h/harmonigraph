@@ -640,8 +640,9 @@ fn with_lut<R>(gradient: Gradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R)
                 None => {
                     #[cfg(test)]
                     REBUILDS.with(|n| n.set(n.get() + 1));
+                    let spacing = LutSpacing::of(gradient);
                     let lut = std::array::from_fn(|k| {
-                        ramp_color(k as f64 / (PITCH_LUT_N - 1) as f64, gradient)
+                        ramp_color(spacing.height(k as f64 / (PITCH_LUT_N - 1) as f64), gradient)
                     });
                     memo.truncate(LUT_SLOTS - 1);
                     memo.insert(0, (gradient, lut));
@@ -655,9 +656,112 @@ fn with_lut<R>(gradient: Gradient, read: impl FnOnce(&[Vec4; PITCH_LUT_N]) -> R)
     })
 }
 
-/// One gradient's ramp, sampled into [`PITCH_LUT_N`] colors evenly spaced over
-/// the full `t` range. Both sides read it: the renderer uploads it for the
-/// shader to index, and [`pitch_lut_color`] walks it on the CPU.
+/// Where a gradient table's entries stand along the range: evenly in `t` for a
+/// gradient that is not bent, and packed along the bend where it is.
+///
+/// A table spaced evenly in `t` spends its entries evenly, and a steep bend
+/// spends most of a channel's change between one or two of them — the loudest
+/// few dB of a brightness bend drawn as one straight sRGB segment where the
+/// plot shows a curve (#1097). A bigger even table does not catch up, because
+/// the steep line's slope grows without bound as the corner nears the edge.
+/// So a bent gradient's table is built over
+///
+/// ```text
+/// u = (t + warp(t)) / 2
+/// ```
+///
+/// which is monotone and runs 0..1 like `t`, and is dense in `t` wherever the
+/// curve is steep. ONE table serves every channel, on the curve or off it: a
+/// channel on the curve moves with `warp(t)` and one off it with `t`, and `u`
+/// moves at least half as fast as either, so neither can change faster than
+/// twice the rate an unbent table's channels do. What that costs is the flat
+/// side, where the entries stand up to twice as far apart in `t` as an even
+/// table's, and a channel still walking there is drawn about as finely as an
+/// even table of half the entries would draw it.
+///
+/// Every reader maps `t` to `u` before it indexes: [`gradient_color`] here,
+/// and `lut_position` in `lattice.wgsl`, which is handed the corner as a
+/// uniform and walks [`Bend::warp`]'s arithmetic again in f32. A reader that
+/// indexed by `t` alone would read a bent table at the wrong entries, so
+/// anything handed a table is handed its spacing beside it.
+///
+/// Even whenever the curve moves nothing — a straight corner, or one with no
+/// channel switched onto it — and even spacing is `u = t` exactly, so a
+/// gradient that has never been bent builds and reads its table bit for bit as
+/// before.
+///
+/// [`Bend::warp`]: crate::Bend::warp
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LutSpacing {
+    /// The bend's corner, sanitized: where along the range it stands...
+    pub at: f32,
+    /// ...and how much of the change it stands at. Equal to `at` for even
+    /// spacing.
+    pub share: f32,
+}
+
+impl LutSpacing {
+    /// Entries evenly spaced in `t`, which every table was before bends.
+    pub const EVEN: LutSpacing = LutSpacing { at: 0.5, share: 0.5 };
+
+    /// The spacing `gradient`'s table is built with.
+    pub fn of(gradient: Gradient) -> LutSpacing {
+        let bend = gradient.bend.sanitized();
+        if bend.is_straight() || !(bend.hue || bend.lightness || bend.chroma) {
+            return LutSpacing::EVEN;
+        }
+        LutSpacing { at: bend.at, share: bend.share }
+    }
+
+    fn is_even(self) -> bool {
+        self.at == self.share
+    }
+
+    fn warp(self, t: f64) -> f64 {
+        crate::Bend { at: self.at, share: self.share, ..crate::Bend::default() }.warp(t)
+    }
+
+    /// Where height `t` falls in the table, 0..1: `(t + warp(t)) / 2`, and `t`
+    /// itself when the spacing is even.
+    pub fn position(self, t: f64) -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        if self.is_even() {
+            return t;
+        }
+        0.5 * (t + self.warp(t))
+    }
+
+    /// The height a table position stands for — [`position`](Self::position)
+    /// run backwards, which is what builds the table.
+    ///
+    /// By bisection rather than in closed form: [`position`](Self::position)
+    /// rises at least half as fast as `t` everywhere, so sixty halvings land
+    /// under an f64 ulp, and the build runs this [`PITCH_LUT_N`] times against
+    /// as many gamut searches. A closed form would be a second copy of the
+    /// curve's three pieces to keep in step with [`Bend::warp`](crate::Bend::warp).
+    fn height(self, u: f64) -> f64 {
+        // The ends exactly, which a bisection only approaches: a bend never
+        // moves the colors a gradient opens and closes on.
+        if self.is_even() || u <= 0.0 || u >= 1.0 {
+            return u.clamp(0.0, 1.0);
+        }
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if self.position(mid) < u {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+}
+
+/// One gradient's ramp, sampled into [`PITCH_LUT_N`] colors over the full `t`
+/// range, spaced as [`LutSpacing`] says — evenly unless the gradient is bent.
+/// Both sides read it: the renderer uploads it for the shader to index, and
+/// [`pitch_lut_color`] walks it on the CPU.
 ///
 /// Each side maps a pitch to a `t` FIRST and indexes with that, so the
 /// gradient's endpoints never reach the table and it stays range-independent.
@@ -808,7 +912,10 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
     // `a_level_off_the_range_lands_on_the_nearest_end` is where both ends are
     // held.
     let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
-    let f = t * (PITCH_LUT_N - 1) as f32;
+    // Onto the table's own spacing first, as the shader's `lut_position` does.
+    // Even spacing hands `t` straight back, bit for bit.
+    let u = LutSpacing::of(gradient).position(f64::from(t)) as f32;
+    let f = u * (PITCH_LUT_N - 1) as f32;
     // The clamp above lands the floor inside the table, so the last entry pairs
     // with itself at a lerp weight of 0.
     let i0 = f.floor() as usize;

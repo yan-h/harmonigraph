@@ -48,7 +48,8 @@ pub use atmosphere::{
 };
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
-    gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, HUE_CIRCLE_N,
+    gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, LutSpacing,
+    HUE_CIRCLE_N,
 };
 pub use derive::derive_scene;
 pub use motion::NodeMotion;
@@ -861,6 +862,9 @@ pub struct Scene {
     /// Pitch->color lookup for the octave glyphs, matching the disc
     /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],
+    /// Where `pitch_lut`'s entries stand along the range, which the shader maps
+    /// a `t` through before indexing (see [`LutSpacing`]).
+    pub pitch_lut_spacing: LutSpacing,
     /// Gradient endpoints (MIDI notes) the shader maps a dot's pitch through
     /// to index `pitch_lut`; mirrors the disc coloring's `FrameParams`.
     pub darkest_pitch: f32,
