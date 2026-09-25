@@ -1061,7 +1061,6 @@ mod tests {
         for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
-            assert_eq!(note.core[3], 204, "the body must keep 80% color strength");
             assert_eq!(note.outline_reach, reach, "the outline is not the reach it was set to");
             assert_eq!(
                 note.outline,

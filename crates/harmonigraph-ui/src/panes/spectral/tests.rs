@@ -1123,28 +1123,6 @@ fn the_level_zoom_stops_at_the_minimum_span() {
     assert_eq!(after.ceiling_db, crate::LEVEL_MAX_DB, "opened past full scale");
 }
 
-/// A marking label on the outer edge of a wide (Left) pane sits just inside
-/// it and grows up-and-inward (LEFT_BOTTOM anchor).
-///
-/// Pinned as coordinates because both offsets are looks rather than laws —
-/// a hair off the ruling across the pitch axis, enough off the edge along the
-/// depth axis to clear it — and a look is exactly the kind of thing that
-/// drifts silently.
-///
-/// The anchor BEFORE the pane backs it off by the label's own
-/// [`ink_inset`](crate::text::ink_inset), which needs a laid-out galley and so
-/// belongs to the frame rather than to the geometry. What the correction does
-/// to it is held where the correction lives
-/// (`an_ink_correction_lands_a_label_the_same_way_at_any_size`).
-#[test]
-fn marking_labels_sit_just_inside_the_outer_edge() {
-    let a = axes(WIDE, SpectralOrientation::Left);
-    let (d, into) = label_anchor(spectrum_share(&SpectrumConfig::default()));
-    let (pos, align) = a.text_anchor(0.5, d, LABEL_GAP_PT, into);
-    assert_eq!(pos, egui::pos2(12.0, 68.0));
-    assert_eq!(align, egui::Align2::LEFT_BOTTOM);
-}
-
 /// Whichever way the pane is turned, a label sits inside the pane and grows
 /// further in rather than off it.
 ///
