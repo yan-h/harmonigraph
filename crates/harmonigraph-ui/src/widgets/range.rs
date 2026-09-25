@@ -6,9 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, poised,
-    release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
-    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
+    grip_rect, poised, release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
+    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -315,7 +315,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// but this bar's two numbers do not get that treatment and a thumb standing in
 /// one still swallows a digit. Only the name is knocked out here. Placement is
 /// the better answer where it is available: a digit on flat track is a plainer
-/// thing to read than one inverted inside a 6pt grip, and the sweep that keeps
+/// thing to read than one inverted inside a 4pt grip, and the sweep that keeps
 /// the numbers off the thumbs would lose its teeth if they had a knockout to
 /// fail into. Below the width that placement holds to, a crossed digit is what
 /// this bar ships — see the paragraph below.
@@ -732,14 +732,14 @@ impl<'a> RangeBar<'a> {
         // The handles go on top of everything, text included: they are the
         // part you operate, and a readout digit sliding under one is a better
         // outcome than a handle disappearing behind a digit. A flat light
-        // thumb, no outline — a 1px dark stroke inside a 6px rounded rect
+        // thumb, no outline — a 1px dark stroke inside a 4px rounded rect
         // lands on fractional pixels and reads as a ragged edge, and the thumb
         // has plenty of contrast against both the filled span and the empty
         // track without one.
         //
         // A thumb that can stand in the bar's own corner is rounded like the
         // bar rather than like a grip, so it follows the arc it is standing in
-        // as closely as six points of width can — epaint holds a corner to half
+        // as closely as four points of width can — epaint holds a corner to half
         // that, which is near enough to keep the thumb inside the well. A bar
         // whose track is inset never gets there, and keeps the grip's own.
         //
@@ -767,15 +767,11 @@ impl<'a> RangeBar<'a> {
         };
         let mut thumbs = [(lgx, low_lit), (hgx, high_lit)];
         thumbs.sort_by_key(|&(_, lit)| lit);
-        let grip_radius =
-            CornerRadius::same(if self.fade_span { r } else { theme::scaled_points(2, scale) });
+        let grip_radius = if self.fade_span { CornerRadius::same(r) } else { grip_radius(scale) };
         for (x, lit) in thumbs {
             grip_over_text(
                 painter,
-                egui::Rect::from_center_size(
-                    egui::pos2(x, rect.center().y),
-                    Vec2::new(handle_w, rect.height() - 3.0 * scale),
-                ),
+                grip_rect(x, rect, scale),
                 grip_radius,
                 grip_color(lit),
                 &[(label_pos, label.clone())],
@@ -1157,9 +1153,9 @@ mod tests {
     /// the "C". Every other bar has to be dragged there.
     ///
     /// It is also the bar that stretches the square clip furthest. Its thumb
-    /// takes the BAR's corner rather than a grip's, which on a 6pt width epaint
-    /// holds to a 3pt pill, so the corner notches the clip cannot follow are
-    /// the whole of the top and bottom 3pt rather than a sliver — see
+    /// takes the BAR's corner rather than a grip's, which on a 4pt width epaint
+    /// holds to a 2pt pill, so the corner notches the clip cannot follow are
+    /// the whole of the top and bottom 2pt rather than a sliver — see
     /// [`grip_over_text`] for why that is a bound worth stating and not a bug
     /// worth code. What is asserted here is what the shape list can answer: the
     /// knockout happens, on the thumb, in the panel colour.

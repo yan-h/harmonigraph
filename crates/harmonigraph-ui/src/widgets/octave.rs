@@ -7,8 +7,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, poised, release_grab,
-    track_fill, BAR_TEXT_PAD,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
+    grip_rect, poised, release_grab, track_fill, BAR_TEXT_PAD, HANDLE_W,
 };
 use crate::theme;
 
@@ -20,15 +20,6 @@ const CELL_GAP: f32 = 1.0;
 /// would come out under a pixel on a short bar, and a cell that is not there
 /// says the octave is not either.
 const CELL_MIN_H: f32 = 3.0;
-
-/// Width of an octave strip's handles. Narrower than a [`RangeBar`]'s, because
-/// this one sits ON a boundary between two cells and hides a slice of each,
-/// and a slot is only a eleventh of the bar to begin with — but not under the
-/// four points a handle needs to read as something to grab rather than as an
-/// edge in the fill.
-///
-/// [`RangeBar`]: super::range::RangeBar
-const STRIP_HANDLE_W: f32 = 4.0;
 
 /// Which of the two counts a drag on the octave strip took hold of, decided on
 /// the first frame of the gesture and remembered for the rest of it.
@@ -235,40 +226,6 @@ impl<'a> OctaveStrip<'a> {
             );
         }
 
-        // Where the count ends and the fringe begins, which is also where a
-        // drag changes its meaning — drawn whether or not there are extras
-        // yet, since that is the edge you drag OUT from to get some.
-        let handle_w = STRIP_HANDLE_W * scale;
-        // Held inside the bar by half a handle, for the reason HANDLE_INSET
-        // holds a RangeBar's ends off theirs: a wheel that spends the whole
-        // budget puts this boundary on the bar's own edge, and a handle
-        // centered there hangs half its width out over the pane, where the
-        // part still on the bar reads as its border rather than as something
-        // to grab. There is nothing outside it to drag toward at that width
-        // anyway — a full count leaves no room for a fringe.
-        //
-        // Lit by what is in hand (see [`grip_color`]). The two are one count
-        // mirrored, so they light together: both when a press would take the
-        // count, neither when it would take the fringe outside them, which has
-        // no handle of its own.
-        let in_hand = holding.or_else(|| {
-            poised(ui, &response).map(|p| StripGrab::at(out(p.x), *self.count, *self.extras))
-        });
-        let fill = grip_color(!matches!(in_hand, Some(StripGrab::Extras { .. })));
-        let inset = 0.5 * handle_w;
-        for side in [-1.0f32, 1.0] {
-            let x = (middle + side * *self.count as f32 * 0.5 * slot)
-                .clamp(rect.left() + inset, rect.right() - inset);
-            painter.rect_filled(
-                egui::Rect::from_center_size(
-                    egui::pos2(x, rect.center().y),
-                    Vec2::new(handle_w, rect.height() - 3.0 * scale),
-                ),
-                cell_radius,
-                fill,
-            );
-        }
-
         // Name and readout as a ValueBar wears them. The readout is the wheel
         // spelled out — the fringe, the count, the fringe — because the number
         // that matters depends on which of them is being dragged, and their
@@ -298,12 +255,40 @@ impl<'a> OctaveStrip<'a> {
         let label = elided_name(painter, job, rect.width(), scale, reserve);
         let centered =
             |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
-        painter.galley(centered(&label, rect.left() + text_pad), label, text_color);
-        painter.galley(
-            centered(&value, rect.right() - text_pad - value.size().x),
-            value,
-            theme::text(),
-        );
+        let label_pos = centered(&label, rect.left() + text_pad);
+        let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
+        painter.galley(label_pos, label.clone(), text_color);
+        painter.galley(value_pos, value.clone(), theme::text());
+
+        // Where the count ends and the fringe begins, which is also where a
+        // drag changes its meaning — drawn whether or not there are extras
+        // yet, since that is the edge you drag OUT from to get some.
+        //
+        // Held inside the bar by half a handle, for the reason HANDLE_INSET
+        // holds a RangeBar's ends off theirs: a wheel that spends the whole
+        // budget puts this boundary on the bar's own edge, and a handle
+        // centered there hangs half its width out over the pane, where the
+        // part still on the bar reads as its border rather than as something
+        // to grab. There is nothing outside it to drag toward at that width
+        // anyway — a full count leaves no room for a fringe.
+        //
+        // Lit by what is in hand (see [`grip_color`]). The two are one count
+        // mirrored, so they light together: both when a press would take the
+        // count, neither when it would take the fringe outside them, which has
+        // no handle of its own. Drawn over the text through `grip_over_text`,
+        // as every other bar's handles are, so the widest wheel's low handle
+        // inverts the name it stands on rather than being written over.
+        let in_hand = holding.or_else(|| {
+            poised(ui, &response).map(|p| StripGrab::at(out(p.x), *self.count, *self.extras))
+        });
+        let fill = grip_color(!matches!(in_hand, Some(StripGrab::Extras { .. })));
+        let inset = 0.5 * HANDLE_W * scale;
+        let runs = [(label_pos, label), (value_pos, value)];
+        for side in [-1.0f32, 1.0] {
+            let x = (middle + side * *self.count as f32 * 0.5 * slot)
+                .clamp(rect.left() + inset, rect.right() - inset);
+            grip_over_text(painter, grip_rect(x, rect, scale), grip_radius(scale), fill, &runs);
+        }
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
@@ -467,7 +452,10 @@ mod tests {
         let hs = handles(&shapes);
         assert_eq!(hs.len(), 2, "the strip did not paint two handles");
         for h in &hs {
-            assert!(h.width() >= 4.0, "a handle thinner than this vanishes into the fill");
+            assert!(
+                (h.width() - HANDLE_W).abs() < 0.01,
+                "a strip handle is the grip every bar wears"
+            );
         }
         // On the outer edge of the wheel, which is what a fringe is dragged
         // out from and the count is dragged in from.
@@ -506,7 +494,10 @@ mod tests {
                 h.left() >= bar.left() - 0.01 && h.right() <= bar.right() + 0.01,
                 "handle {h:?} hangs outside the bar {bar:?}"
             );
-            assert!(h.width() >= 4.0, "a handle thinner than this vanishes into the fill");
+            assert!(
+                (h.width() - HANDLE_W).abs() < 0.01,
+                "a strip handle is the grip every bar wears"
+            );
         }
     }
 

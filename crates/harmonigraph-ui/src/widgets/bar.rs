@@ -5,7 +5,7 @@
 //! it is written down, and one living inside a caller reads as that caller's
 //! own until the day it is changed for it.
 
-use egui::{Color32, CornerRadius, Response, Ui};
+use egui::{Color32, CornerRadius, Response, Ui, Vec2};
 
 use crate::theme;
 
@@ -110,10 +110,11 @@ pub(super) const GRAB_PX: f32 = 14.0;
 /// handles can never claim the whole of a narrow range and leave nothing to
 /// slide.
 pub(super) const HANDLE_REACH_SHARE: f32 = 0.35;
-/// Width of a [`RangeBar`] handle grip.
-///
-/// [`RangeBar`]: super::range::RangeBar
-pub(super) const HANDLE_W: f32 = 6.0;
+/// Width of every bar's handle grip, strips included. One size across the
+/// pane, so a handle reads as the same kind of thing wherever it stands. Four
+/// points is as thin as a grip goes: under that it reads as an edge in the
+/// fill rather than as something to grab.
+pub(super) const HANDLE_W: f32 = 4.0;
 /// How far the value track is inset from the bar's ends, so a handle parked
 /// at either limit still sits fully inside the bar with track visible past
 /// it.
@@ -178,6 +179,25 @@ pub(super) fn grip_color(lit: bool) -> Color32 {
     } else {
         theme::text_dim()
     }
+}
+
+/// The rect a handle centered at `x` is drawn in on `row`: [`HANDLE_W`] wide
+/// and a point and a half shy of the row at each end, so it stands inside
+/// the bar's well rather than on its border.
+pub(super) fn grip_rect(x: f32, row: egui::Rect, scale: f32) -> egui::Rect {
+    egui::Rect::from_center_size(
+        egui::pos2(x, row.center().y),
+        Vec2::new(HANDLE_W * scale, row.height() - 3.0 * scale),
+    )
+}
+
+/// Corner rounding of a handle grip, the one exception being a
+/// [`RangeBar::fade_span`] thumb, which is rounded like the bar it can stand
+/// in the corner of.
+///
+/// [`RangeBar::fade_span`]: super::range::RangeBar::fade_span
+pub(super) fn grip_radius(scale: f32) -> CornerRadius {
+    CornerRadius::same(theme::scaled_points(2, scale))
 }
 
 /// Where a press on this bar would land if it were made now: the pointer over
@@ -248,8 +268,8 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// - At a grip's own 2pt the notch is a sliver at the extreme corners of a grip
 ///   drawn 3pt shy of a 20pt row, well outside a Body galley's ink.
 /// - A [`RangeBar::fade_span`] bar hands in the BAR's radius instead, so its
-///   thumb is a 6pt-wide pill (epaint holds a corner to half the width, so 5
-///   becomes 3) and the notch is the whole of the top and bottom 3pt. A
+///   thumb is a 4pt-wide pill (epaint holds a corner to half the width, so 5
+///   becomes 2) and the notch is the whole of the top and bottom 2pt. A
 ///   descender reaches into that band.
 ///
 /// What keeps the second case cheap is where it lands rather than whether it
@@ -267,7 +287,7 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// `Arc` clone, a shape push and a clip-rect split — small, and kept because a
 /// paint list free of invisible shapes is what lets a test assert a knockout
 /// exists by counting. It buys no tessellation back, and the CROSSED case still
-/// tessellates a whole row to show 6pt of it, which no guard here addresses.
+/// tessellates a whole row to show 4pt of it, which no guard here addresses.
 ///
 /// [`RangeBar`]: super::range::RangeBar
 /// [`RangeBar::fade_span`]: super::range::RangeBar::fade_span

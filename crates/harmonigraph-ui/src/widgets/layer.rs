@@ -5,8 +5,8 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{ViewConfig, SEVENS_LAYER_LIMIT};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, poised,
-    release_grab, track_fill, BAR_TEXT_PAD,
+    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
+    grip_rect, poised, release_grab, track_fill, BAR_TEXT_PAD, HANDLE_W,
 };
 use crate::theme;
 
@@ -18,14 +18,6 @@ const CELL_GAP: f32 = 1.0;
 /// comes out under a pixel on a short row, and a cell that is not there says
 /// the sheet is not either.
 const CELL_MIN_H: f32 = 3.0;
-
-/// Width of the strip's handles — the octave strip's narrower grip rather than
-/// a [`RangeBar`]'s, because these sit ON a boundary between two cells and hide
-/// a slice of each. Not under the four points a handle needs to read as
-/// something to grab rather than as an edge in the fill.
-///
-/// [`RangeBar`]: super::range::RangeBar
-const STRIP_HANDLE_W: f32 = 4.0;
 
 /// Cells on the axis: every sheet [`SEVENS_LAYER_LIMIT`] allows, drawn or not.
 const CELLS: i32 = 2 * SEVENS_LAYER_LIMIT + 1;
@@ -360,8 +352,7 @@ impl<'a> LayerStrip<'a> {
         // end reaches the far left of the bar, where the NAME is, so each grip
         // is drawn through `grip_over_text` — the name is pinned and cannot be
         // placed clear of them the way the readout is.
-        let handle_w = STRIP_HANDLE_W * scale;
-        let inset = 0.5 * handle_w;
+        let inset = 0.5 * HANDLE_W * scale;
         let in_hand =
             holding.or_else(|| poised(ui, &response).map(|p| Grab::at(at(p.x), (low, home, high))));
         let (lit_low, lit_home, lit_high) = in_hand.map_or((true, true, true), Grab::holds);
@@ -380,11 +371,8 @@ impl<'a> LayerStrip<'a> {
                 let x = x_of(*i).clamp(rect.left() + inset, rect.right() - inset);
                 grip_over_text(
                     painter,
-                    egui::Rect::from_center_size(
-                        egui::pos2(x, rect.center().y),
-                        Vec2::new(handle_w, rect.height() - 3.0 * scale),
-                    ),
-                    cell_radius,
+                    grip_rect(x, rect, scale),
+                    grip_radius(scale),
                     grip_color(pass),
                     &name_run,
                 );
@@ -483,7 +471,10 @@ mod tests {
         let hs = handles(&shapes);
         assert_eq!(hs.len(), 3, "the strip did not paint three handles");
         for h in &hs {
-            assert!(h.width() >= 4.0, "a handle thinner than this vanishes into the fill");
+            assert!(
+                (h.width() - HANDLE_W).abs() < 0.01,
+                "a strip handle is the grip every bar wears"
+            );
         }
         let drawn = cells(&shapes);
         let (first, last) = (drawn[0], drawn[drawn.len() - 1]);
