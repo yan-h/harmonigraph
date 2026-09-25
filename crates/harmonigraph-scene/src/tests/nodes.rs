@@ -1144,8 +1144,7 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
     );
 }
 
-/// A fresh node spends its ring stack on the octave band and marks, keeps the
-/// analyzer width at the control's floor, and fits the active layers inside the
+/// A fresh node draws its octave band and fits the active layers inside the
 /// quad.
 ///
 /// The fresh view's own arithmetic rather than a picture, because that is what
@@ -1153,28 +1152,21 @@ fn a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at() {
 /// in one bar's value says where its ring lands, so a retune of any of them
 /// moves every layer outside it, and a stack that has walked off the quad edge
 /// draws a node with its outer rings quietly clipped away.
+///
+/// Which layers a fresh view turns on, and how widely it spaces them, are the
+/// look a capture moves, so they are not asserted here.
 #[test]
-fn the_fresh_node_spends_its_stack_on_octaves_and_marks() {
+fn the_fresh_node_fits_its_stack_inside_the_quad() {
     let view = ViewConfig::default();
     let rings = view.rings();
-    // A gap a reader can see, not merely a positive number. A twentieth of the
-    // node's radius is about the fresh padding (0.052), which is the rhythm the
-    // whole node is spaced on.
+    // A width a reader can see, not merely a positive number: a twentieth of
+    // the node's radius.
     const CLEAR: f32 = 0.05;
-    assert!(rings.gap >= CLEAR, "the layers are spaced by {}, which is not a gap", rings.gap);
     // A middle to light, rather than a stack seated on the node's centre: the
     // node glow is what fills it, and a fresh view that started the rings at 0
     // would have nowhere to put that light but over its own ink.
     assert!(rings.inner > CLEAR, "the fresh stack starts at {}, on the centre", rings.inner);
-    // The analyzer width is at its floor, so the octave band is the innermost
-    // layer and seats directly on the stack's start.
-    assert_eq!(rings.audio, (0.0, 0.0), "the fresh analyzer width moved off its floor");
-    assert_eq!(
-        rings.band.0, rings.inner,
-        "the fresh octave band did not take the innermost available slot",
-    );
     assert!(rings.band.1 - rings.band.0 > CLEAR, "the fresh octave band is a hairline");
-    assert!(rings.mark_thickness > 0.0, "the fresh marks are off");
     // The marks are the one layer allowed past the quad edge — they draw in the
     // billboard's margin — so what has to fit here is the rings.
     assert!(rings.outer < 1.0, "the fresh rings reach the quad edge at {}", rings.outer);

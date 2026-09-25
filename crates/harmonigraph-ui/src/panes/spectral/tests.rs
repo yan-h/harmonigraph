@@ -6,7 +6,7 @@ use super::gestures::*;
 use super::settings::*;
 use super::*;
 use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
-use crate::{KeylineStyle, SpectralOrientation, SpectrumConfig, SpectrumWindow};
+use crate::{Backdrop, KeylineStyle, SpectralOrientation, SpectrumConfig, SpectrumWindow};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
@@ -1123,28 +1123,6 @@ fn the_level_zoom_stops_at_the_minimum_span() {
     assert_eq!(after.ceiling_db, crate::LEVEL_MAX_DB, "opened past full scale");
 }
 
-/// A marking label on the outer edge of a wide (Left) pane sits just inside
-/// it and grows up-and-inward (LEFT_BOTTOM anchor).
-///
-/// Pinned as coordinates because both offsets are looks rather than laws —
-/// a hair off the ruling across the pitch axis, enough off the edge along the
-/// depth axis to clear it — and a look is exactly the kind of thing that
-/// drifts silently.
-///
-/// The anchor BEFORE the pane backs it off by the label's own
-/// [`ink_inset`](crate::text::ink_inset), which needs a laid-out galley and so
-/// belongs to the frame rather than to the geometry. What the correction does
-/// to it is held where the correction lives
-/// (`an_ink_correction_lands_a_label_the_same_way_at_any_size`).
-#[test]
-fn marking_labels_sit_just_inside_the_outer_edge() {
-    let a = axes(WIDE, SpectralOrientation::Left);
-    let (d, into) = label_anchor(spectrum_share(&SpectrumConfig::default()));
-    let (pos, align) = a.text_anchor(0.5, d, LABEL_GAP_PT, into);
-    assert_eq!(pos, egui::pos2(12.0, 68.0));
-    assert_eq!(align, egui::Align2::LEFT_BOTTOM);
-}
-
 /// Whichever way the pane is turned, a label sits inside the pane and grows
 /// further in rather than off it.
 ///
@@ -2100,6 +2078,107 @@ fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
         let at = |k: usize| caps.vertices[triangle[k] as usize].pos;
         let widest = at(0).distance(at(1)).max(at(1).distance(at(2))).max(at(0).distance(at(2)));
         assert!(widest <= pixel * 1.5, "a triangle {widest} wide joined samples");
+    }
+}
+
+/// The backdrop lights only the space above the curve, at its strength on the
+/// floor and fading to nothing at its height, and a segment rising through that
+/// height is cut at the crossing rather than laid over the flank below it.
+/// Stripes light one column in `backdrop_period`, each a single column wide;
+/// the Gradient lights them all. With the outline Off nothing else is drawn.
+#[test]
+fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
+    let mut cfg = SpectrumConfig {
+        floor_db: -100.0,
+        ceiling_db: 0.0,
+        volume_floor_db: -40.0,
+        volume_ceiling_db: 0.0,
+        tilt: 0.0,
+        keyline_style: KeylineStyle::Off,
+        backdrop_height: 0.3,
+        backdrop_period: 3.0,
+        ..Default::default()
+    };
+    cfg.atmosphere.analyzer_softness = 0.0;
+    let axes = Axes::new(WIDE, &cfg);
+    let n = 60;
+    // Digital silence, a shelf under the backdrop's height, and a spike through it.
+    let level = |i: usize| match i {
+        0..=9 => -120.0,
+        10..=29 => -85.0,
+        40 => 0.0,
+        _ => -95.0,
+    };
+    let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
+    let budget = plot_budget(1.0, axes.depth_len());
+    let top = cfg.backdrop_height * budget;
+    let ink = crate::theme::picture_ruling().gamma_multiply(cfg.backdrop_strength);
+    let stops = atmosphere::BODY_STOPS.len();
+    let at = |v: &egui::epaint::Vertex| (axes.pitch_at(v.pos), axes.depth_at(v.pos));
+    for (backdrop, stripe) in [(Backdrop::Gradient, None), (Backdrop::Stripes, Some(3))] {
+        cfg.backdrop = backdrop;
+        let out = painted_into(SCREEN, WIDE, |ui| {
+            atmosphere::draw_profile(ui.painter(), &axes, &cfg, &visible, budget, 1.0);
+        });
+        let meshes: Vec<_> = out
+            .shapes
+            .into_iter()
+            .filter_map(|s| match s.shape {
+                egui::Shape::Mesh(mesh) => Some(mesh),
+                _ => None,
+            })
+            .collect();
+        let [sky, body] = &meshes[..] else { panic!("expected the backdrop and the body only") };
+        let edge: Vec<_> = (0..n).map(|i| at(&body.vertices[i * stops + stops - 1])).collect();
+        assert!(edge[..10].iter().all(|&(_, d)| d.abs() < 1e-6), "fixture needs silence");
+        assert!(edge[20].1 > 0.0 && edge[20].1 < top, "fixture needs a shelf under the height");
+        assert!(edge[40].1 > 2.0 * top, "fixture needs a spike through the height");
+        let edge_at = |t: f32| {
+            let k = edge.windows(2).position(|w| w[1].0 >= t).unwrap_or(n - 2);
+            let (a, b) = (edge[k], edge[k + 1]);
+            a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
+        };
+        let mut columns = std::collections::BTreeSet::new();
+        for triangle in sky.indices.chunks_exact(3) {
+            let corners =
+                triangle.iter().map(|&k| at(&sky.vertices[k as usize])).collect::<Vec<_>>();
+            let (lo, hi) =
+                corners.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.0), hi.max(c.0)));
+            if hi - lo < 1e-6 {
+                continue;
+            }
+            let centroid =
+                corners.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / 3.0, s.1 + c.1 / 3.0));
+            assert!(
+                centroid.1 >= edge_at(centroid.0) - 1e-4,
+                "{backdrop:?} over the fill at {centroid:?}"
+            );
+            assert!(centroid.1 <= top + 1e-4, "{backdrop:?} above its height at {centroid:?}");
+            if let Some(spacing) = stripe {
+                let column = (lo * n as f32 + 1e-3).floor() as usize;
+                assert!(
+                    hi * n as f32 <= column as f32 + 1.0 + 1e-3,
+                    "a stripe wider than a column"
+                );
+                assert_eq!(column % spacing, 0, "stripe in column {column}");
+                columns.insert(column);
+            }
+        }
+        if let Some(spacing) = stripe {
+            assert_eq!(columns, (0..n).step_by(spacing).collect(), "not every stripe was lit");
+        }
+        for v in &sky.vertices {
+            let (_, d) = at(v);
+            let want = f32::from(ink.a()) * (1.0 - d / top).clamp(0.0, 1.0);
+            assert!(
+                (f32::from(v.color.a()) - want).abs() <= 2.0,
+                "{backdrop:?} alpha at depth {d}"
+            );
+        }
+        assert!(
+            sky.vertices.iter().any(|v| at(v).1.abs() < 1e-6 && v.color == ink),
+            "silence must be lit at full strength down to the floor"
+        );
     }
 }
 

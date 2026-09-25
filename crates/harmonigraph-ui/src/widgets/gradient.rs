@@ -2375,8 +2375,8 @@ mod tests {
     #[test]
     fn the_handles_reach_is_the_same_at_every_chrome_scale() {
         // Inside GRAB_PX, and outside what the smallest scale would leave of
-        // it: 14 * 0.7 is 9.8.
-        let offset = 12.0;
+        // it were the reach scaled.
+        let offset = GRAB_PX * (1.0 + *theme::UI_SCALE_RANGE.start()) * 0.5;
         for scale in [1.0f32, 0.7, 1.5] {
             let before = Gradient { hue_start: 40.0, hue_span: 180.0, ..Gradient::default() };
             let mut g = before;
