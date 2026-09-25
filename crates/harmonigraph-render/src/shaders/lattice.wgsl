@@ -107,6 +107,9 @@ struct Uniforms {
     shadow_target: ShadowTargetParams,
     marker_cell: MarkerCellParams,
     lattice_ground: vec4<f32>,
+    // The corner each table's entries are spaced along: pitch_lut's in .xy,
+    // spectral_lut's in .zw (harmonigraph_scene::LutSpacing; see lut_position).
+    lut_spacing: vec4<f32>,
     pitch_lut: array<vec4<f32>, 64>,
     spectral_lut: array<vec4<f32>, 64>,
     spectrum_color: array<vec4<u32>, 240>,
@@ -744,6 +747,9 @@ const MAX_SPAN: u32 = 11u;
 // and the `pitch_lut` array in Uniforms).
 const PITCH_LUT_N: u32 = 64u;
 
+// How much of each line a bend's round takes (harmonigraph_scene::Bend::ROUNDING).
+const BEND_ROUNDING: f32 = 0.4;
+
 // The analyzer's pitch grid, as the audio ring reads it: how many buckets
 // there are, how many of them a semitone spans, and the MIDI pitch the first
 // one starts from (20 Hz). Mirrors harmonigraph_scene::SPECTRAL_BUCKETS,
@@ -1157,7 +1163,7 @@ fn outer_glyph(
 // octave glyph is the same hue as the disc that pitch would light.
 fn pitch_lut_color(pitch: f32) -> vec3<f32> {
     let t = clamp((pitch - u.composite.darkest_pitch) / max(u.composite.brightest_pitch - u.composite.darkest_pitch, 0.01), 0.0, 1.0);
-    let f = t * f32(PITCH_LUT_N - 1u);
+    let f = lut_position(t, u.lut_spacing.xy) * f32(PITCH_LUT_N - 1u);
     let i0 = u32(floor(f));
     let i1 = min(i0 + 1u, PITCH_LUT_N - 1u);
     return mix(u.pitch_lut[i0].rgb, u.pitch_lut[i1].rgb, f - floor(f));
@@ -1173,10 +1179,48 @@ fn pitch_lut_color(pitch: f32) -> vec3<f32> {
 // `harmonigraph_scene::ring_gradient`). The same walk pitch_lut_color does,
 // over the other table and against the other quantity.
 fn spectral_lut_color(level: f32) -> vec3<f32> {
-    let f = clamp(level, 0.0, 1.0) * f32(PITCH_LUT_N - 1u);
+    let f = lut_position(clamp(level, 0.0, 1.0), u.lut_spacing.zw) * f32(PITCH_LUT_N - 1u);
     let i0 = u32(floor(f));
     let i1 = min(i0 + 1u, PITCH_LUT_N - 1u);
     return mix(u.spectral_lut[i0].rgb, u.spectral_lut[i1].rgb, f - floor(f));
+}
+
+// Where height `t` (0..1) falls in a table spaced along the bend whose corner
+// is `corner` (at, share): (t + warp(t)) / 2, and `t` itself when the corner
+// is on the diagonal, which is every table that is not bent. The CPU builds the
+// table over that position and reads it the same way
+// (harmonigraph_scene::LutSpacing), so a steep bend is drawn by entries packed
+// along its steep side rather than by the one or two an even table has there.
+//
+// `warp` is harmonigraph_scene::Bend::warp in f32, piece for piece: the line
+// into the corner, the line out of it, and the quadratic Bézier round between,
+// solved for its parameter in the form that stays stable as the round's
+// x-acceleration goes to 0. The corner arrives sanitized.
+fn lut_position(t: f32, corner: vec2<f32>) -> f32 {
+    let x = corner.x;
+    let y = corner.y;
+    if x == y {
+        return t;
+    }
+    let low = y / x;
+    let high = (1.0 - y) / (1.0 - x);
+    let x0 = x * (1.0 - BEND_ROUNDING);
+    let x2 = x + BEND_ROUNDING * (1.0 - x);
+    var w: f32;
+    if t <= x0 {
+        w = low * t;
+    } else if t >= x2 {
+        w = y + high * (t - x);
+    } else {
+        let y0 = low * x0;
+        let y2 = y + high * (x2 - x);
+        let a = x0 - 2.0 * x + x2;
+        let b = 2.0 * (x - x0);
+        let c = x0 - t;
+        let s = -2.0 * c / (b + sqrt(max(b * b - 4.0 * a * c, 0.0)));
+        w = (1.0 - s) * (1.0 - s) * y0 + 2.0 * s * (1.0 - s) * y + s * s * y2;
+    }
+    return 0.5 * (t + clamp(w, 0.0, 1.0));
 }
 
 // Whether each wedge of the audio ring is ONE reading taken at its own

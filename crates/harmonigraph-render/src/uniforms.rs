@@ -168,6 +168,8 @@ uniform_group! {
         shadow_target: ShadowTargetParams,
         marker_cell: MarkerCellParams,
         lattice_ground: Float4,
+        /// `pitch_lut`'s spacing corner in xy, `spectral_lut`'s in zw.
+        lut_spacing: Float4,
         pitch_lut: [Float4; harmonigraph_scene::PITCH_LUT_N],
         spectral_lut: [Float4; harmonigraph_scene::PITCH_LUT_N],
         /// Analyzer levels through the colour dB window, sixteen bytes per row.

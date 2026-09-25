@@ -200,6 +200,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         background,
         mark_thickness,
         pitch_lut,
+        pitch_lut_spacing,
         darkest_pitch,
         brightest_pitch,
         render_scale,
@@ -281,6 +282,7 @@ fn scene_floats(scene: &Scene) -> Floats {
 
     let SpectralPaint {
         lut,
+        lut_spacing,
         folded: _,
         inner,
         outer,
@@ -291,6 +293,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         color_levels: _,
     } = spectral;
     f.luts("spectral.lut", lut);
+    f.many("spectral.lut_spacing", [lut_spacing.at, lut_spacing.share]);
     f.one("spectral.inner", *inner);
     f.one("spectral.outer", *outer);
     f.one("spectral.range", *range);
@@ -314,6 +317,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.vec4("background", *background);
     f.one("mark_thickness", *mark_thickness);
     f.luts("pitch_lut", pitch_lut);
+    f.many("pitch_lut_spacing", [pitch_lut_spacing.at, pitch_lut_spacing.share]);
     f.one("darkest_pitch", *darkest_pitch);
     f.one("brightest_pitch", *brightest_pitch);
     f.one("render_scale", *render_scale);

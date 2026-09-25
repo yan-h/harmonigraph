@@ -236,6 +236,7 @@ pub(super) fn parity_scene() -> Scene {
             let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
             Vec4::new(t, 0.4, 1.0 - t, 1.0)
         }),
+        pitch_lut_spacing: harmonigraph_scene::LutSpacing::EVEN,
         darkest_pitch: 24.0,
         brightest_pitch: 108.0,
         render_scale: 1.0,

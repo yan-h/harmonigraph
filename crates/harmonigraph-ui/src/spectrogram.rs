@@ -222,12 +222,17 @@ fn what_decides_a_texel(g: Gradient) -> Gradient {
             bend: fresh,
             ..g
         },
-        (true, false) => Gradient {
-            hue_start: 0.0,
-            hue_span: 0.0,
-            bend: harmonigraph_scene::Bend { hue: true, chroma: true, ..g.bend },
-            ..g
-        },
+        // Without tone, the hue and chroma switches no longer decide a color,
+        // but whether EITHER is on still decides how the table is spaced.
+        (true, false) => {
+            let tone = g.bend.hue || g.bend.chroma;
+            Gradient {
+                hue_start: 0.0,
+                hue_span: 0.0,
+                bend: harmonigraph_scene::Bend { hue: tone, chroma: tone, ..g.bend },
+                ..g
+            }
+        }
         (false, false) => g,
     }
 }
