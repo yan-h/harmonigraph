@@ -114,6 +114,21 @@ pub(super) fn system_pane(
         if skins[chosen].id != interaction.skin {
             interaction.skin = skins[chosen].id.to_owned();
         }
+        // The skin lends hue, text and accent; these two lay out its
+        // backgrounds (`Skin::stepped`).
+        use harmonigraph_scene::skin::Chrome;
+        ValueBar::new(&mut interaction.chrome.lightness, Chrome::LIGHTNESS_RANGE, "Background")
+            .decimals(3)
+            .show(ui)
+            .on_hover_text(
+                "Lightness of the settings page. The header, slider tracks and buttons stand a whole number of steps above it.",
+            );
+        ValueBar::new(&mut interaction.chrome.step, Chrome::STEP_RANGE, "Layer step")
+            .decimals(3)
+            .show(ui)
+            .on_hover_text(
+                "Lightness between one background layer and the next: page, header, tracks, buttons.",
+            );
         crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );

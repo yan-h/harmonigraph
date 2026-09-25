@@ -3156,9 +3156,9 @@ fn the_live_time_axis_keeps_a_nonzero_geometry_window() {
 /// the fixed `picture_off_scale` instead.
 #[test]
 fn the_picture_paints_the_same_in_every_skin() {
-    use harmonigraph_scene::skin::{set_active_skin, skins};
+    use harmonigraph_scene::skin::{set_active_skin, skins, Chrome};
     let paint = |index| {
-        set_active_skin(index);
+        set_active_skin(index, Chrome::default());
         let shapes = paint_tone(reference_pane(), SpectrumConfig::default());
         shapes.into_iter().filter(|s| !matches!(s, egui::Shape::Callback(_))).collect::<Vec<_>>()
     };
@@ -3172,5 +3172,5 @@ fn the_picture_paints_the_same_in_every_skin() {
     for (index, entry) in skins().iter().enumerate().skip(1) {
         assert!(paint(index) == default, "{} changed the picture", entry.id);
     }
-    set_active_skin(0);
+    set_active_skin(0, Chrome::default());
 }

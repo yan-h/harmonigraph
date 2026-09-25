@@ -239,7 +239,8 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // color accessor reads it, and on a thread shared with another editor the
     // one in force is whichever that editor last set. A scale change below
     // rebuilds the style from it.
-    let reskinned = theme::set_skin(ui.ctx(), &state.workspace.interaction.skin);
+    let interaction = &state.workspace.interaction;
+    let reskinned = theme::set_skin(ui.ctx(), &interaction.skin, interaction.chrome);
     if startup::draw(ui, state) {
         return;
     }

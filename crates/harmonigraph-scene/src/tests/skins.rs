@@ -1,38 +1,75 @@
 //! The selectable skins: every one legible, and each saved under its own id.
 
-use crate::skin::{contrast, skins, DEFAULT_SKIN, PICTURE};
+use crate::skin::{contrast, oklab, skins, Chrome, DEFAULT_SKIN, LABEL_FLOOR};
 
-/// A floor every skin clears, so one added from a scheme that maps badly is
-/// caught here rather than by squinting at the panel. Labels are secondary
-/// text on the pane; a bar's name sits on its fill where the fill runs under
-/// it; and the fill has to read against its own empty track. How visible the
-/// empty track is against the pane is left to taste: the chosen schemes run
-/// from 1.06 to 1.33 there, and the original's is 1.08.
+/// Every [`Chrome`] the dials can reach: the four corners of the two ranges,
+/// and the default between them. The ladder is linear in both, so a floor
+/// that holds at the corners holds everywhere inside them.
+fn reachable() -> Vec<Chrome> {
+    let (l, s) = (Chrome::LIGHTNESS_RANGE, Chrome::STEP_RANGE);
+    let mut all = vec![Chrome::default()];
+    for lightness in [*l.start(), *l.end()] {
+        for step in [*s.start(), *s.end()] {
+            all.push(Chrome { lightness, step });
+        }
+    }
+    all
+}
+
+/// A floor every skin clears at every reachable chrome, so a scheme or a
+/// range that maps badly is caught here rather than by squinting at the
+/// panel. Labels are secondary text on the page; a bar's name sits on its
+/// fill where the fill runs under it; and the fill has to read against its
+/// own empty track.
 #[test]
 fn every_skin_is_legible() {
     for entry in skins() {
-        let s = &entry.skin;
-        let label = contrast(s.text_dim, s.panel);
-        let on_fill = contrast(s.text, s.accent_fill);
-        let fill = contrast(s.accent_fill, s.well);
-        assert!(label >= 4.0, "{}: labels {label:.2}:1 against the pane", entry.id);
-        assert!(on_fill >= 3.0, "{}: bar names {on_fill:.2}:1 on the fill", entry.id);
-        assert!(fill >= 1.5, "{}: fill {fill:.2}:1 against its track", entry.id);
+        for chrome in reachable() {
+            let s = entry.skin.stepped(chrome);
+            let at = format!("{} at {chrome:?}", entry.id);
+            let label = contrast(s.text_dim, s.panel);
+            let on_fill = contrast(s.text, s.accent_fill);
+            let fill = contrast(s.accent_fill, s.well);
+            assert!(label >= LABEL_FLOOR, "{at}: labels {label:.2}:1 against the page");
+            assert!(on_fill >= 3.0, "{at}: bar names {on_fill:.2}:1 on the fill");
+            assert!(fill >= 1.5, "{at}: fill {fill:.2}:1 against its track");
+        }
     }
 }
 
-/// The pane header stands apart from the page below it and from the black
-/// picture ground, and the fold button's square still stands apart from it.
+/// The neutral layers stand a whole number of steps above the page, in
+/// order, whatever the scheme: a header one step up, tracks two, buttons
+/// three, hover four. Within a byte's rounding of the asked lightness.
 #[test]
-fn every_skin_has_a_header_between_its_pane_and_its_buttons() {
+fn the_neutral_layers_climb_one_step_at_a_time() {
     for entry in skins() {
-        let s = &entry.skin;
-        let header = s.header();
-        for (what, against) in [("pane", s.panel), ("button", s.widget), ("picture", PICTURE)] {
-            let ratio = contrast(header, against);
-            assert!(ratio >= 1.04, "{}: header {ratio:.2}:1 against the {what}", entry.id);
+        for chrome in reachable() {
+            let s = entry.skin.stepped(chrome);
+            for (steps, what, colour) in [
+                (0.0, "page", s.panel),
+                (1.0, "header", s.header),
+                (2.0, "track", s.well),
+                (3.0, "button", s.widget),
+                (4.0, "hover", s.widget_hover),
+            ] {
+                let want = chrome.lightness + steps * chrome.step;
+                let got = oklab(colour)[0];
+                assert!(
+                    (got - want).abs() < 0.008,
+                    "{} at {chrome:?}: the {what} is at lightness {got:.3}, not {want:.3}",
+                    entry.id,
+                );
+            }
         }
     }
+}
+
+/// A hand-edited blob cannot put the dials outside their ranges or at NaN.
+#[test]
+fn chrome_sanitizes_into_its_ranges() {
+    let wild = Chrome { lightness: 9.0, step: f32::NAN }.sanitize();
+    assert_eq!(wild.lightness, *Chrome::LIGHTNESS_RANGE.end());
+    assert_eq!(wild.step, Chrome::default().step);
 }
 
 #[test]

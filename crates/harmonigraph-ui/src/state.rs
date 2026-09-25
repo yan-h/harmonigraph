@@ -254,6 +254,10 @@ pub struct Interaction {
     /// dropped-variant case in the `persistence-contract` skill); the load
     /// says so on the console.
     pub skin: String,
+    /// How dark the chrome's page is and how far apart its layers stand
+    /// (see [`harmonigraph_scene::skin::Skin::stepped`]). Persisted, and
+    /// beside `skin` for the reason it is: panel only, never the picture.
+    pub chrome: harmonigraph_scene::skin::Chrome,
     /// Where the performance overlay's top-left corner sits, in editor
     /// points. Persisted; `None` until the HUD is dragged, which is the only
     /// thing that ever writes it (see [`crate::perf::draw_overlay`]).
@@ -482,6 +486,7 @@ impl SharedState {
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
             skin: self.workspace.interaction.skin.clone(),
+            chrome: self.workspace.interaction.chrome,
             perf_pos: self.workspace.interaction.perf_pos,
         })
         .unwrap_or_default()
@@ -551,6 +556,9 @@ impl SharedState {
             self.log(format!("skin \"{}\" no longer exists; using the default", persist.skin));
             self.workspace.interaction.skin = default_skin();
         }
+        // Clamped for the reason the scale is: the dials read out what the
+        // chrome is drawn at.
+        self.workspace.interaction.chrome = persist.chrome.sanitize();
         // A hand-edited NaN is dropped rather than honoured, on the grounds
         // the spiral framing above is repaired on: it positions drawn
         // geometry, and NaN geometry is a panic inside egui's tessellator. A
@@ -673,6 +681,8 @@ pub(crate) struct UiPersist {
     pub(crate) ui_scale: f32,
     /// See [`Interaction::skin`].
     pub(crate) skin: String,
+    /// See [`Interaction::chrome`]; a blob without it opens at the default.
+    pub(crate) chrome: harmonigraph_scene::skin::Chrome,
     /// Where the performance overlay was dragged to; a blob without one opens
     /// it where an undragged HUD opens. See [`Interaction::perf_pos`].
     pub(crate) perf_pos: Option<egui::Pos2>,
@@ -690,6 +700,7 @@ impl Default for UiPersist {
             fps_cap: None,
             ui_scale: default_ui_scale(),
             skin: default_skin(),
+            chrome: Default::default(),
             perf_pos: None,
         }
     }
@@ -733,6 +744,7 @@ impl Default for Interaction {
             fps_cap: None,
             ui_scale: default_ui_scale(),
             skin: default_skin(),
+            chrome: Default::default(),
             perf_pos: None,
             reset_layout: false,
             dock: workspace::Position::default(),

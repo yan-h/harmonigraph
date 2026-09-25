@@ -22,11 +22,9 @@ pub fn panel() -> Color32 {
 pub fn well() -> Color32 {
     c(active_skin().well)
 }
-/// Pane headers and folded rails (see [`Skin::header`]).
-///
-/// [`Skin::header`]: harmonigraph_scene::skin::Skin::header
+/// Pane headers and folded rails, one step above the page.
 pub fn header() -> Color32 {
-    c(active_skin().header())
+    c(active_skin().header)
 }
 /// Subtly raised surface between panel and widget (hovered tabs, faint
 /// striping).
@@ -373,31 +371,34 @@ pub fn apply_theme(ctx: &egui::Context) {
     // Recorded so [`set_skin`] rebuilds only when the skin it is told differs
     // from the one this style was built in, which on a thread shared with
     // another editor need not be the default.
-    ctx.data_mut(|d| d.insert_temp(skin_id(), skin::active_skin_index()));
+    ctx.data_mut(|d| d.insert_temp(skin_id(), skin::active_skin_key()));
 }
 
-/// Where [`apply_theme`] and [`set_skin`] leave the index of the skin the
-/// context's style was built in.
+/// Where [`apply_theme`] and [`set_skin`] leave the index and chrome of the
+/// skin the context's style was built in.
 fn skin_id() -> egui::Id {
     egui::Id::new("skin")
 }
 
-/// Put the skin saved as `id` in force for this frame: make it this thread's
-/// active skin (what every color accessor reads), and rebuild the context's
-/// style if it was built in another. Reports whether the style moved, the
-/// same cue [`set_ui_scale`] gives. An unknown id is the default.
+/// Put the skin saved as `id`, stepped by `chrome`, in force for this frame:
+/// make it this thread's active skin (what every color accessor reads), and
+/// rebuild the context's style if it was built in another. Reports whether
+/// the style moved, the same cue [`set_ui_scale`] gives. An unknown id is the
+/// default.
 ///
 /// Called every frame, before [`set_ui_scale`], which builds its style from
 /// whatever skin is active. Cheap when nothing changed: one lookup among a
-/// handful of ids.
-pub fn set_skin(ctx: &egui::Context, id: &str) -> bool {
-    let index = skin::skin_index(id).unwrap_or(0);
-    skin::set_active_skin(index);
-    let built = ctx.data(|d| d.get_temp::<usize>(skin_id())).unwrap_or(0);
-    if built == index {
+/// handful of ids, and no restep. Keyed on the index and the chrome, the two
+/// things the colours are made of, so a dial dragged restyles every frame it
+/// moves and no other.
+pub fn set_skin(ctx: &egui::Context, id: &str, chrome: skin::Chrome) -> bool {
+    let key = (skin::skin_index(id).unwrap_or(0), chrome);
+    skin::set_active_skin(key.0, key.1);
+    let built = ctx.data(|d| d.get_temp::<(usize, skin::Chrome)>(skin_id()));
+    if built == Some(key) {
         return false;
     }
-    ctx.data_mut(|d| d.insert_temp(skin_id(), index));
+    ctx.data_mut(|d| d.insert_temp(skin_id(), key));
     ctx.set_style_of(egui::Theme::Dark, style_at(ui_scale(ctx)));
     true
 }

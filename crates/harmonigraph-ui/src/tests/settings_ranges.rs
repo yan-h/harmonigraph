@@ -87,6 +87,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
     saved.workspace.interaction.ui_scale = v;
+    saved.workspace.interaction.chrome = harmonigraph_scene::skin::Chrome { lightness: v, step: v };
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
     // that its text/choice/divider controls are not range-guard coverage.
@@ -241,7 +242,7 @@ fn scenarios() -> Vec<Scenario> {
             // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
             // two shadow groups.
             panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
-            panes::Tab::System => 3,
+            panes::Tab::System => 5,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
