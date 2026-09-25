@@ -1615,8 +1615,8 @@ mod tests {
     }
 
     /// Pressure, gain and timbre reach the lattice as expressions on the note
-    /// they address, clamped into the range the host promised; a value that is
-    /// not a number reaches nothing.
+    /// they address, clamped into range; a value that is not a number reaches
+    /// nothing.
     #[test]
     fn pressure_gain_and_timbre_are_expressions() {
         let at = |kind| Some(MappedNote { timing: 5, channel: 1, note: 67, kind });
@@ -1631,7 +1631,10 @@ mod tests {
         assert_eq!(mapped_note(pressure), at(expression(Expression::Pressure, 0.25)));
         let gain =
             NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: 5.0 };
-        assert_eq!(mapped_note(gain), at(expression(Expression::Gain, 4.0)), "clamped to +12 dB");
+        assert_eq!(mapped_note(gain), at(expression(Expression::Gain, 5.0)), "past CLAP's +12 dB");
+        let cut =
+            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: -1.0 };
+        assert_eq!(mapped_note(cut), at(expression(Expression::Gain, 0.0)), "clamped to silence");
         let timbre = NoteEvent::PolyBrightness {
             timing: 5,
             voice_id: None,

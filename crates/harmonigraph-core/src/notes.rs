@@ -76,7 +76,11 @@ pub enum NoteEventKind {
 pub enum Expression {
     /// 0 to 1, released to pressed hard.
     Pressure,
-    /// Linear amplitude, 0 to 4, where 1 is unity (CLAP's note volume).
+    /// Linear amplitude where 1 is unity (CLAP's note volume). CLAP promises
+    /// at most 4 (+12 dB) and nothing caps it here: a Bitwig take sat at
+    /// exactly 4 for its first 0.4 s under a cap at 4, which is either Bitwig's
+    /// ceiling or the cap hiding more, and a take can only say which if it
+    /// keeps what was sent.
     Gain,
     /// 0 to 1 (CLAP's brightness; MPE's CC 74).
     Timbre,
@@ -87,7 +91,7 @@ impl Expression {
     pub fn range(self) -> std::ops::RangeInclusive<f32> {
         match self {
             Expression::Pressure | Expression::Timbre => 0.0..=1.0,
-            Expression::Gain => 0.0..=4.0,
+            Expression::Gain => 0.0..=f32::MAX,
         }
     }
 
