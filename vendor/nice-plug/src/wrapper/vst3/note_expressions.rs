@@ -144,19 +144,22 @@ impl NoteExpressionController {
                 note,
                 vibrato: event.value as f32,
             }),
-            EXPRESSION_EXPRESSION_ID => Some(NoteEvent::PolyBrightness {
-                timing,
-                voice_id: Some(note_id),
-                channel,
-                note,
-                brightness: event.value as f32,
-            }),
-            BRIGHTNESS_EXPRESSION_ID => Some(NoteEvent::PolyExpression {
+            // Upstream had these two crossed, so a VST3 host's brightness arrived
+            // as the generic expression and passed through to the output as it.
+            // `translate_event_reverse` always had them the right way round.
+            EXPRESSION_EXPRESSION_ID => Some(NoteEvent::PolyExpression {
                 timing,
                 voice_id: Some(note_id),
                 channel,
                 note,
                 expression: event.value as f32,
+            }),
+            BRIGHTNESS_EXPRESSION_ID => Some(NoteEvent::PolyBrightness {
+                timing,
+                voice_id: Some(note_id),
+                channel,
+                note,
+                brightness: event.value as f32,
             }),
             _ => None,
         }

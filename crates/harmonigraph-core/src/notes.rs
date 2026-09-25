@@ -1642,6 +1642,27 @@ mod tests {
         assert_eq!(visited, vec![55.0, 60.0]);
     }
 
+    /// A baseline states a voice's expressions along with its pitch: a note it
+    /// opens starts at them, and a note it resumes after an outage takes the
+    /// value it came back with as a step, rather than snapping to neutral.
+    #[test]
+    fn a_baseline_carries_its_voices_expressions() {
+        let source = SourceId(1);
+        let mut row = published_voice(60, 61);
+        row.expressions.pressure = 0.5;
+        let mut tracker = NoteTracker::new();
+        let baseline = |id, time, row| SourceBaseline::new(source, id, time, 0, true, &[row]);
+        assert_eq!(tracker.replace_source(&baseline(1, 2.0, row).unwrap()), Ok(true));
+        assert_eq!(tracker.handle_canonical(gap(3.0, None)), Ok(true));
+        row.expressions.pressure = 0.8;
+        assert_eq!(tracker.replace_source(&baseline(2, 3.2, row).unwrap()), Ok(true));
+
+        assert_eq!(tracker.held.values().next().unwrap().expressions.pressure, 0.8);
+        let note = tracker.roll().notes().next().unwrap();
+        let points: Vec<_> = note.expressions().iter().map(|(t, e)| (*t, e.pressure)).collect();
+        assert_eq!(points, vec![(2.0, 0.5), (3.2, 0.5), (3.2, 0.8)]);
+    }
+
     /// The other half of the outage above: publication comes BACK, and the
     /// repair baseline says the note never stopped (#936).
     ///
