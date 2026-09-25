@@ -27,6 +27,10 @@ jobs:
     env:
       # Pixel tests must render; a missing adapter must not become a green skip.
       HARMONIGRAPH_REQUIRE_GPU: "1"
+      # The soundtrack and export-length tests need a real ffmpeg and ffprobe
+      # (#1119). Set in both groups, so a test that moves to one without the
+      # install below fails rather than skipping.
+      HARMONIGRAPH_REQUIRE_FFMPEG: "1"
     timeout-minutes: 20
     strategy:
       # Both groups always report. A failure in one says nothing about the
@@ -72,6 +76,15 @@ jobs:
           # them sccache's. The matrix adds a second concurrent writer there
           # that this key cannot gate. Pruning that is its own job.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The runner image has no ffmpeg, and only `workspace` runs
+      # harmonigraph-offline's tests.
+      - name: Install ffmpeg
+        if: matrix.group == 'workspace'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install ffmpeg
 
       # Keep every full gate in ci.sh so local on-demand and remote runs cannot
       # silently diverge: this passes a group, never a gate list.

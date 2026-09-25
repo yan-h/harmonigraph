@@ -661,13 +661,27 @@ mod tests {
 
     /// Use the actual encoder and muxer: inspecting arguments cannot prove
     /// that AAC priming, empty inputs and the container obey the frame plan.
+    /// CI sets `HARMONIGRAPH_REQUIRE_FFMPEG=1`, so a missing encoder fails
+    /// instead of passing with no assertions run.
     fn real_ffmpeg() -> Option<std::path::PathBuf> {
-        let ffmpeg = find_ffmpeg(None).ok()?;
-        if Command::new(ffmpeg.with_file_name("ffprobe")).arg("-version").output().is_err() {
-            eprintln!("skipping real encoder tests: ffprobe unavailable");
-            return None;
+        let found = find_ffmpeg(None).and_then(|ffmpeg| {
+            let ffprobe = ffmpeg.with_file_name("ffprobe");
+            match Command::new(&ffprobe).arg("-version").output() {
+                Ok(_) => Ok(ffmpeg),
+                Err(error) => Err(format!("{}: {error}", ffprobe.display())),
+            }
+        });
+        match found {
+            Ok(ffmpeg) => Some(ffmpeg),
+            Err(error) => {
+                assert!(
+                    std::env::var("HARMONIGRAPH_REQUIRE_FFMPEG").as_deref() != Ok("1"),
+                    "HARMONIGRAPH_REQUIRE_FFMPEG=1: real encoder tests require ffmpeg and ffprobe: {error}"
+                );
+                eprintln!("skipping real encoder tests: {error}");
+                None
+            }
         }
-        Some(ffmpeg)
     }
 
     fn probe(ffmpeg: &std::path::Path, path: &std::path::Path) -> String {
