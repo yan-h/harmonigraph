@@ -13,7 +13,7 @@ Companion instead inherits this Claude session's cwd.
 
 ## Why the brief is the whole Claude-side job
 
-Codex reads `AGENTS.md`, which is a symlink to `CLAUDE.md`, so it arrives knowing the worktree rule, the draft-PR rule and the two-package build.
+Codex reads `AGENTS.md`, the same file Claude reads through `CLAUDE.md`, so it arrives knowing the worktree rule, the draft-PR rule and the two-package build.
 What it does not know is which file, which line, and which constraint —
 and the plugin's `codex:codex-rescue` subagent cannot find out, because its own definition forbids it from reading the repo.
 Whatever crosses the handoff crosses in the prompt.

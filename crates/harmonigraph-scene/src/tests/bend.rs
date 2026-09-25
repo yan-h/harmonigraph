@@ -74,3 +74,36 @@ fn a_bend_moves_only_the_channels_on_it_and_never_their_ends() {
         assert_eq!(bent.lightness_and_hue(t).0, even.lightness_and_hue(t).0);
     }
 }
+
+/// A steep bend is drawn as the curve, not as the one or two straight segments
+/// an evenly spaced table has on its steep side (#1097).
+///
+/// Brightness alone on the curve, at the two extreme corners: all of it in the
+/// last 2% of the range, and all of it in the first. That is the case the
+/// spacing has to serve twice over — the steep channel packed along the bend,
+/// and the hue and chroma walking evenly beside it across the same entries.
+/// An even table misses these by 27/255 and 19/255; spaced along the bend they
+/// measure 3.0/255 and 0.5/255, and the bound is
+/// `the_table_tracks_the_curve_it_samples`'s own for an unbent gradient.
+#[test]
+fn a_steep_bend_is_drawn_as_the_curve() {
+    for (at, share) in [(Bend::AT_LIMITS.1, 0.0), (Bend::AT_LIMITS.0, 1.0)] {
+        let bend = Bend { at, share, hue: false, lightness: true, chroma: false };
+        let g = Gradient { bend, ..Gradient::default() };
+        let mut worst = (0.0f32, 0.0f32);
+        for i in 0..=10_000 {
+            let t = i as f32 / 10_000.0;
+            let curve = crate::color::designed_pitch_ramp(f64::from(t), g);
+            let e = (crate::gradient_color(t, g) - curve).truncate().abs().max_element();
+            if e > worst.0 {
+                worst = (e, t);
+            }
+        }
+        assert!(
+            worst.0 * 255.0 < 4.2,
+            "the corner ({at}, {share}) is drawn {:.1}/255 off its curve at t = {}",
+            worst.0 * 255.0,
+            worst.1,
+        );
+    }
+}

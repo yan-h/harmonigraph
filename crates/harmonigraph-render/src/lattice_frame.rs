@@ -475,6 +475,12 @@ impl LatticeCallback {
                 // Settled by prepare after packing casters[0].
                 marker_cell: bytemuck::Zeroable::zeroed(),
                 lattice_ground: Float4(scene.lattice_ground.to_array()),
+                lut_spacing: Float4([
+                    scene.pitch_lut_spacing.at,
+                    scene.pitch_lut_spacing.share,
+                    scene.spectral.lut_spacing.at,
+                    scene.spectral.lut_spacing.share,
+                ]),
                 pitch_lut: std::array::from_fn(|k| Float4(scene.pitch_lut[k].to_array())),
                 spectral_lut: std::array::from_fn(|k| Float4(scene.spectral.lut[k].to_array())),
                 // No shader reader while the ring is off; skip the bucket pack.

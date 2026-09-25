@@ -625,9 +625,12 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
     let outlined: SpectrumConfig = ron::from_str("(keyline_lift:0.9)").unwrap();
     assert_eq!(outlined.keyline_lift, 0.9);
     type Field = fn(&mut SpectrumConfig) -> &mut f32;
-    let fields: [(Field, f32, f32); 6] = [
+    let fields: [(Field, f32, f32); 9] = [
         (|cfg| &mut cfg.tilt, -6.0, 0.0),
         (|cfg| &mut cfg.keyline_lift, 0.0, 1.0),
+        (|cfg| &mut cfg.backdrop_strength, 0.0, 1.0),
+        (|cfg| &mut cfg.backdrop_height, 0.05, 1.0),
+        (|cfg| &mut cfg.backdrop_period, 2.0, 8.0),
         (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
         (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
         (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),
@@ -652,6 +655,12 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
             assert_eq!(restored.save_persist(), normalized, "normalization is idempotent");
         }
     }
+    // The stripe spacing is whole pixels, so a fraction lands on the nearest.
+    let mut state = fresh();
+    state.picture.appearance.spectrum.backdrop_period = 3.4;
+    let mut restored = fresh();
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(restored.picture.appearance.spectrum.backdrop_period, 3.0);
 }
 
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys

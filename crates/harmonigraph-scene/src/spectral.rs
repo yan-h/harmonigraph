@@ -69,7 +69,7 @@ use harmonigraph_core::spectrum::{
 };
 use harmonigraph_core::Envelope;
 
-use crate::{pitch_ramp_lut, Gradient, OctaveLayout, ViewConfig, PITCH_LUT_N};
+use crate::{pitch_ramp_lut, Gradient, LutSpacing, OctaveLayout, ViewConfig, PITCH_LUT_N};
 
 /// The narrowest and widest a wedge of the audio ring may be dialled to span
 /// ([`ViewConfig::spectral_ring_range`]), in cents.
@@ -244,6 +244,9 @@ pub struct SpectralPaint {
     /// sits on, which [`ring_gradient`] anchors the ramp to before
     /// [`new`](Self::new) bakes the table.
     pub lut: [Vec4; PITCH_LUT_N],
+    /// Where [`lut`](Self::lut)'s entries stand along the level range, which
+    /// the shader maps a level through before indexing (see [`LutSpacing`]).
+    pub lut_spacing: LutSpacing,
     /// Each wedge of the ring is ONE reading taken at its own octave's pitch
     /// ([`SpectralReading::Fold`]) rather than a window of pitch spread across
     /// it ([`SpectralReading::Spectrum`]).
@@ -335,6 +338,7 @@ impl SpectralPaint {
     pub fn silent() -> SpectralPaint {
         SpectralPaint {
             lut: [Vec4::ZERO; PITCH_LUT_N],
+            lut_spacing: LutSpacing::EVEN,
             folded: false,
             inner: 0.0,
             outer: 0.0,
@@ -373,8 +377,10 @@ impl SpectralPaint {
     /// still come out as a node somebody can see.
     pub fn new(view: &ViewConfig, gradient: Gradient) -> SpectralPaint {
         let (inner, outer) = view.rings().audio;
+        let ring = ring_gradient(gradient, view.lattice_ground_lightness());
         SpectralPaint {
-            lut: pitch_ramp_lut(ring_gradient(gradient, view.lattice_ground_lightness())),
+            lut: pitch_ramp_lut(ring),
+            lut_spacing: LutSpacing::of(ring),
             folded: view.spectral_reading == SpectralReading::Fold,
             inner,
             outer,
@@ -1220,13 +1226,14 @@ mod tests {
     /// [`the_band_never_reaches_under_the_gates_floor`]. What must not happen
     /// is a gate ABOVE its floor behaving like one on it.
     ///
-    /// Run at gates under the fresh band of 0.0964, which is the stretch of
-    /// the Gate bar a person reaches by dragging it down to see more of the
+    /// Run at gates under a band of about the fresh one, which is the stretch
+    /// of the Gate bar a person reaches by dragging it down to see more of the
     /// reading.
     #[test]
     fn a_band_reaching_the_gate_releases_on_silence() {
         for gate in [0.02, 0.05, 0.09] {
-            let view = gated(gate, SpectralReading::Fold);
+            let view =
+                ViewConfig { spectral_ring_hysteresis: 0.1, ..gated(gate, SpectralReading::Fold) };
             assert!(
                 view.spectral_ring_hysteresis >= gate,
                 "the test's own band of {} does not reach the gate of {gate}",

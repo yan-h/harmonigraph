@@ -483,54 +483,105 @@ fn a_ring_wedge_wears_its_own_levels_ramp_entry() {
         return;
     };
 
-    let shot_at = |gpu: &mut Shooter, level: u8| -> Vec<u8> {
-        let view = ringing_view();
-        let mut scene = single_marked_node(0, 0);
-        let node = &mut scene.nodes[0];
-        // Nothing held, so what is on screen is the ring alone: the band's own
-        // wedges are the MIDI picture and would sum into the channels below.
-        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
-        node.activation = 1.0;
-        let rings = view.rings();
-        scene.outer_inner = rings.band.0;
-        scene.outer_outer = rings.band.1;
-        scene.rings_outer = rings.outer;
-        scene.octave_gap = view.octave_gap_width();
-        let mut paint = harmonigraph_scene::SpectralPaint::silent();
-        (paint.inner, paint.outer) = rings.audio;
-        paint.folded = true;
-        // Keep the analyzer gate and volume-color ramp at one level, so every
-        // wedge whose octave the axis reaches reads the same entry. Off the
-        // axis `spectrum_color_at` answers 0 whatever the grid holds, which this
-        // wheel stays clear of.
-        paint.levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
-        paint.color_levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
-        paint.lut = std::array::from_fn(|k| {
-            let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
-            if t < 0.5 {
-                glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
-            } else {
-                glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
-            }
-        });
-        scene.spectral = paint;
-        gpu.shot(&scene)
-    };
+    let even = harmonigraph_scene::LutSpacing::EVEN;
+    let low = ring_at_level(&mut gpu, 90, even);
+    let high = ring_at_level(&mut gpu, 217, even);
+    assert_hue_flips(
+        &low,
+        &high,
+        "the ring is not indexing the volume-color ramp at the wedge's own level",
+    );
+}
 
-    let low = shot_at(&mut gpu, 90);
-    let high = shot_at(&mut gpu, 217);
+/// A ring wedge at one flat `level`, read off a ramp that is blue below its
+/// middle entry and red above it, its entries spaced as `spacing` says.
+fn ring_at_level(gpu: &mut Shooter, level: u8, spacing: harmonigraph_scene::LutSpacing) -> Vec<u8> {
+    let view = ringing_view();
+    let mut scene = single_marked_node(0, 0);
+    let node = &mut scene.nodes[0];
+    // Nothing held, so what is on screen is the ring alone: the band's own
+    // wedges are the MIDI picture and would sum into the channels below.
+    node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+    node.activation = 1.0;
+    let rings = view.rings();
+    scene.outer_inner = rings.band.0;
+    scene.outer_outer = rings.band.1;
+    scene.rings_outer = rings.outer;
+    scene.octave_gap = view.octave_gap_width();
+    let mut paint = harmonigraph_scene::SpectralPaint::silent();
+    (paint.inner, paint.outer) = rings.audio;
+    paint.folded = true;
+    // Keep the analyzer gate and volume-color ramp at one level, so every
+    // wedge whose octave the axis reaches reads the same entry. Off the
+    // axis `spectrum_color_at` answers 0 whatever the grid holds, which this
+    // wheel stays clear of.
+    paint.levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
+    paint.color_levels = Box::new([level; harmonigraph_scene::SPECTRAL_BUCKETS]);
+    paint.lut = std::array::from_fn(|k| {
+        let t = k as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
+        if t < 0.5 {
+            glam::Vec4::new(0.0, 0.0, 1.0, 1.0)
+        } else {
+            glam::Vec4::new(1.0, 0.0, 0.0, 1.0)
+        }
+    });
+    paint.lut_spacing = spacing;
+    scene.spectral = paint;
+    gpu.shot(&scene)
+}
+
+/// That `low` is the blue half of [`ring_at_level`]'s ramp and `high` the red.
+fn assert_hue_flips(low: &[u8], high: &[u8], otherwise: &str) {
     let sum = |px: &[u8], ch: usize| -> i64 { px.chunks(4).map(|p| p[ch] as i64).sum() };
-    let (blue_low, blue_high) = (sum(&low, 2), sum(&high, 2));
-    let (red_low, red_high) = (sum(&low, 0), sum(&high, 0));
+    let (blue_low, blue_high) = (sum(low, 2), sum(high, 2));
+    let (red_low, red_high) = (sum(low, 0), sum(high, 0));
     eprintln!("low: red {red_low} blue {blue_low}; high: red {red_high} blue {blue_high}");
     // The margin is a wedge's worth of one channel against antialiasing
     // fringes; the ring itself sums in the tens of thousands.
     const HUE_FLIP: i64 = 5_000;
     assert!(
         blue_low > blue_high + HUE_FLIP && red_high > red_low + HUE_FLIP,
-        "crossing the ramp's half did not flip the wedge's hue: the ring is not \
-         indexing the volume-color ramp at the wedge's own level",
+        "crossing the ramp's half did not flip the wedge's hue: {otherwise}",
     );
+}
+
+/// A bent table's entries are spaced along the bend, and the shader has to
+/// find a level's entry the way the CPU placed it (`lut_position`, against
+/// `LutSpacing::position`) — a shader reading the table by level alone would
+/// draw every bent gradient off the wrong entries, and nothing on the CPU side
+/// would notice.
+///
+/// The levels are the two bytes either side of the ramp's middle pair of
+/// entries as the CPU places them, so the shader's own arithmetic has to land
+/// within about a byte of the CPU's. The corner puts that pair inside the
+/// bend's round, the one piece of `warp` that is more than a line, and far
+/// enough from the middle of the range that reading by level alone would draw
+/// both shots red. That also makes it the check on `BEND_ROUNDING`, the one
+/// number of the curve the shader holds as a literal: a one-sided retune to 0.3
+/// fails here.
+#[test]
+fn a_bent_ring_ramp_is_read_where_its_entries_stand() {
+    const SIZE: [u32; 2] = [256, 256];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let spacing = harmonigraph_scene::LutSpacing { at: 0.9, share: 0.1 };
+    let top = (harmonigraph_scene::PITCH_LUT_N - 1) as f64;
+    let position = |b: u8| spacing.position(f64::from(b) / 255.0) * top;
+    let mid = top * 0.5;
+    // The last byte wholly on the blue entry's side of the middle pair, and
+    // the first wholly on the red one's.
+    let below =
+        (0..=255u8).filter(|&b| position(b) < mid.floor()).max().expect("some byte is blue");
+    let above = (0..=255u8).find(|&b| position(b) > mid.ceil()).expect("some byte is red");
+    assert!(
+        f64::from(below) / 255.0 > 0.6,
+        "byte {below} is under the middle of the range by level alone, so this would \
+         pass with the spacing ignored",
+    );
+    let low = ring_at_level(&mut gpu, below, spacing);
+    let high = ring_at_level(&mut gpu, above, spacing);
+    assert_hue_flips(&low, &high, "the shader does not read a bent table where the CPU built it");
 }
 
 /// The target format the callback was built for, so the test above renders
