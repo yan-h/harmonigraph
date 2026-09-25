@@ -122,7 +122,8 @@ impl LatticeCallback {
         // The audio RING is why this is not a property of the node alone: the
         // ring is a window onto the spectrum rather than a level a node
         // carries, so it takes BOTH the layer being on and this node wearing
-        // some of the ring (`Scene::wear_audio_rings`) for the node to owe an
+        // some of the ring (`NodeMotion::step`: its measured level, floored at
+        // the node's carried MIDI activation) for the node to owe an
         // annulus. With the gate at its floor that is every node in the window,
         // silence included — the ungated picture, and what "the ring reads raw"
         // costs; dialled up, an idle node with nothing sounding at it goes back

@@ -11,9 +11,9 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | Tab | What you will find |
 | --- | --- |
 | Lattice | Camera and seventh layers; note-layer sizes; shared octave layout; melody/bass marks; audio ring; note animation; labels and idle crosses; bloom, glow, glow texture and breathing; shadows for lattice shapes and lattice text. |
-| Analyzer | Dock and spectrum edge; shared frequency range; live spectrum fill/outline; audio input, frequency resolution and averaging; level mapping, tilt and live response; spectrogram visibility and shared history; MIDI ribbons and their bloom; pitch/time softness and wide blur mix; level contours; Mosaic or Watercolor texture; Spiral bloom; shadows for Analyzer/Spiral notes and labels. |
+| Analyzer | Dock and spectrum edge; shared frequency range; live spectrum outline style and lift, and backdrop; audio input, frequency resolution and averaging; level mapping, tilt and live response; spectrogram visibility and shared history; MIDI ribbons and their bloom; pitch/time softness and wide blur mix; level contours; Mosaic or Watercolor texture; Spiral bloom; shadows for Analyzer/Spiral notes and labels. |
 | Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
-| System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, tab-bar visibility and layout reset. |
+| System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, skin and skin lightness, tab-bar visibility and layout reset. |
 
 Settings opens on Tuning in a fresh workspace.
 Tabs that do not fit the column move, from the right, into a trailing overflow menu.

@@ -285,11 +285,12 @@ pub(crate) fn hold_spectrum(state: &mut PictureState, pane: egui::Vec2) {
     }
     let vertical = cfg.orientation.is_time_vertical();
     let depth = if vertical { pane.y } else { pane.x };
-    // A pane with no depth to share out: the first frame of a dock that has not
-    // laid out yet, or a leaf folded to its tab bar. Dividing by it would hand
-    // the picture an infinity, and holding a size against it would price the
-    // dial at zero points. Non-finite is the same case at its limit —
-    // egui_dock's viewport is `Rect::NOTHING` until it has laid out, whose sides
+    // A pane with no depth to share out. Since #1056 the workspace draws no body
+    // that is not positive, so the live pane should not arrive here at zero;
+    // the guard stays because this takes its caller's size on trust. Dividing
+    // by it would hand the picture an infinity, and holding a size against it
+    // would price the dial at zero points. Non-finite is the same case at its
+    // limit — an egui `Rect::NOTHING`, never laid out, has sides that
     // subtract to an infinity rather than to a number worth dividing by.
     if !depth.is_finite() || depth <= 0.0 {
         return;

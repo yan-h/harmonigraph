@@ -124,6 +124,11 @@ not claims of measured defects or completed design reviews.
 
 ### Make planned video duration authoritative
 
+Done in #1061:
+the planned frame count is authoritative,
+and ffmpeg pads the soundtrack with silence (`apad`) and trims it to the video span instead of cutting the video with `-shortest`.
+The proposal as it was written follows.
+
 Today a soundtrack can end the video early through ffmpeg's `-shortest` behavior.
 Using silence after audio ends would preserve the planned frame count,
 including visual release tails and an explicit render end.
@@ -138,6 +143,12 @@ Relevant code: `harmonigraph-offline/src/sink.rs`,
 `render.rs` and `main.rs`.
 
 ### Remove the hidden saved renderer-path override
+
+Done in #1061:
+the recorder always launches `default_renderer_path()`,
+a saved `renderer_path` is ignored on load and not written again,
+and fixtures inject their program through a test-only override.
+The proposal as it was written follows.
 
 `RenderConfig.renderer_path` can retain an absolute executable path in saved appearance and take data,
 although the Video pane does not expose it.
@@ -161,6 +172,12 @@ not a reason for a broad map refactor.
 Relevant code: `harmonigraph-ui/src/lattice_maps.rs` and `harmonigraph-plugin/src/lattice_maps.rs`.
 
 ### Revisit the remaining scene-envelope prepass
+
+Done in #1063 for markers and the audio ring's MIDI floor:
+carried node motion now owns both,
+the preliminary activation, departure and octave derivation is gone,
+and so is `Scene::wear_audio_rings`.
+The proposal as it was written follows.
 
 Scene derivation computes activation,
 departure and octave levels that carried motion later replaces.

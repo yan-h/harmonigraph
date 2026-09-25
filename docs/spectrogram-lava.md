@@ -120,7 +120,7 @@ seven contours and 15% edge softness.
 Contours can be adjusted from 2 to 64.
 The old `diffusion` field is removed,
 so its saved value is ignored and the new controls take their defaults.
-Analyzer softness and note glow remain independent.
+Analyzer softness and note glow remain independent (since #1117 there is no Analyzer softness; the analyzer body is always the flat fill).
 The persisted struct retains container-level defaults and sanitizes every new numeric control.
 
 ## Verification

@@ -3,6 +3,9 @@
 This is the record of the original transition prototype and its measurements,
 not the current settings inventory.
 Overshoot/Pop, Odd/even stagger and independent Starting size were retired as the controls were simplified.
+The Animation choice below went with Pop (#1049),
+and the Display tab is gone too (#1083):
+Order survives as Slice order under Note animation on the Lattice settings tab.
 
 Display tab → Lattice page → Note layers has independent Animation and Order controls.
 Animation is Fade or Pop;

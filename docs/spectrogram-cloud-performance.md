@@ -233,6 +233,7 @@ The measurements and dial descriptions below record the exploration that led to 
 
 Wrap the cell hash every `P` cells and the field is periodic, so ONE tile of `P` by `P` cells, baked once and read through a repeat sampler, is the whole plane.
 `Cloud tile` is `P` in cells: 0 is off — the live walk, and the fresh value, so the goldens do not move — and 20 and 40 are the two periods on offer.
+(Since #1116 there is no off: the composite reads a cloud only out of its tile, and `PROBE_CLOUD_TILE=0` panics on any clouded case, so the tile-off rows below cannot be re-measured.)
 
 Measured with `PROBE_CLOUD_TILE` at 3840x2160 and 2 px/pt, light plus paint, median ms per frame, Bitwig on the same GPU:
 
@@ -274,7 +275,7 @@ The tile is also carried across a rebuild of the light field's targets, which a 
 Removing `Rock`'s accumulator moved `spectrogram-zoomed-in` by 1/255 on three pixels: the Metal compiler scheduling the dome ring differently, isolated by putting a dead accumulator back, which restores the frame.
 - **Inside the first period the tile IS the live field**, since a wrapped hash equals the unwrapped one for cells in `[0, P)`.
 That is what makes "tiled matches walked" testable, up to bilinear resampling, half-float storage and the 2.07 to 2.0 change.
-`a_tiled_cloud_draws_the_live_walk_inside_its_first_period` holds it: mean difference 0.02/255 for the mosaic and 0.37/255 for the wash, worst channel 1 and 21 — the 21 is where the wash's stored offset steps because the glob UNDER the visible one changes, a discontinuity the live walk has too and one texel of bilinear smooths.
+`a_tiled_cloud_draws_the_live_walk_inside_its_first_period` held it (since #1021 `the_mosaic_tile_keeps_the_live_walk_inside_its_first_period` does, for the square Mosaic tile only): mean difference 0.02/255 for the mosaic and 0.37/255 for the wash, worst channel 1 and 21 — the 21 is where the wash's stored offset steps because the glob UNDER the visible one changes, a discontinuity the live walk has too and one texel of bilinear smooths.
 
 What it spends of "similar": up to half a texel of bilinear softening that varies with the drift's phase; half-float offsets, under a tenth of a pixel of lookup error; and visible REPETITION, which is the open question.
 At the fresh sizes a 4K pane is about 52 by 93 wash cells and 27 by 48 mosaic cells, so `P = 20` repeats the glob outlines 2.6 by 4.6 times (wash) and 1.4 by 2.4 times (mosaic), each repeat refracting different sound.

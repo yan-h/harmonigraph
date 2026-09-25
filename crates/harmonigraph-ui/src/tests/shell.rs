@@ -21,11 +21,11 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 }
 
 /// Every tab needs an id of its own, and the title is not allowed to be its
-/// source: egui_dock's default `id()` is the title text, and that id keys the
-/// tab BODY's `Ui` (surface + tab id, no node), so two tabs sharing a title
-/// would share their body state — scrolling one pane scrolls the other.
-/// Variant-keyed ids are what leave a name free to be repeated, and the dock
-/// still trades on that freedom across surfaces: the Spectral pane wears
+/// source: the workspace keys each tab BODY's `Ui` on `Viewer::id`
+/// (`workspace.rs`), so two tabs whose ids came from a shared title would
+/// share their body state — scrolling one pane scrolls the other.
+/// Variant-keyed ids are what leave a name free to be repeated, and the
+/// workspace still trades on that freedom across sections: the Spectral pane wears
 /// "Analyzer", the same word as the settings tab that holds its knobs,
 /// because the display and its knobs are one feature.
 #[test]

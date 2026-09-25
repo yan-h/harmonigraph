@@ -162,8 +162,7 @@ Use one shared codec beside `RenderProgress` in `harmonigraph-take` for an exact
 Keep the existing bounded carriage-return/newline stderr reader and subprocess lifecycle.
 Emit initial `0/planned`,
 periodic `encoded/planned`,
-and an unthrottled final `written/written` report,
-including when the soundtrack shortens the video.
+and an unthrottled final `written/total` report (since #1061 the soundtrack no longer shortens the video).
 The percentage is derived presentation,
 not progress truth.
 Ordinary warning and timing prose can contain frame counts without being mistaken for progress.

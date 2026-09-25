@@ -79,8 +79,9 @@ KNOWN LIMITATION:
 in Bitwig the cursor still doesn't take until the plugin window is first clicked (the host's not-yet-key window appears not to deliver tracking/cursorUpdate events);
 accepted as cosmetic —
 everything is correct from the first click on.
-- **Patch 3** (3 files: `src/event.rs`,
-`src/wrappers/appkit/notification_center.rs`, `src/platform/macos/view.rs`):
+- **Patch 3** (5 files: `src/event.rs`,
+`src/wrappers/appkit/notification_center.rs`, `src/platform/macos/view.rs`,
+`src/wrappers/appkit/view.rs` + `view/implementation.rs`):
 new `WindowEvent::Occluded(bool)` (mirroring winit's event), emitted from an `NSWindowDidChangeOcclusionStateNotification` observer filtered to the view's own window.
 On re-expose the view is marked `setNeedsDisplay` and, more to the point, a frame is run right there in the notification rather than left to the next timer tick —
 nothing can present while the window is occluded, so what is on screen is the drawable from before it was hidden, and the ghost lasts exactly until one frame gets out.
@@ -88,6 +89,14 @@ Waiting for the tick made that up to a frame interval:
 measured at 11-14 ms against a ~15 ms timer, and it scales with the interval, so a frame-rate cap makes it worse;
 painting from the notification measures under 1 ms. `trigger_frame` takes the handler borrow fallibly to stay safe against a notification arriving mid-frame (that direction only —
 `trigger_event` still borrows infallibly and documents its panic), and the handler drops a notification repeating the state the view is already in, which would otherwise buy an off-cadence frame for nothing.
+That state is kept per window attachment (#1070):
+`window_visible` is an `Option<bool>`,
+and a `viewDidMoveToWindow` override (a new `ViewImpl` method registered in the two appkit wrapper files) clears it to `None` and samples the new window,
+so a reparented view reports its new window even when both windows read the same.
+The view also samples once at open, right after the handler's initial resize event;
+`occlusion_ready` holds the override off until then, because the first `viewDidMoveToWindow` runs during parenting before the handler exists.
+That is what lets a window that opens occluded deliver its reveal.
+The open-time sample reports the state without the re-expose frame.
 Together with the egui-baseview patch below, this fixes the outdated ghost image that stayed on screen after tabbing away from the host and back, until the window was clicked.
 macOS only;
 other platforms never emit the event.
@@ -135,7 +144,7 @@ through one the button reads down.
 ci.sh runs them.
 macOS only.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
-re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch, the configurable frame timer, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
+re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the configurable frame timer, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
 - **Upstreaming**: Patch 1 is a good candidate;
 it is an uncontroversial fix that helps every baseview-based plugin.
 The later patches each need their own upstream decision.
@@ -200,13 +209,16 @@ Pure re-export;
 no behavior change.
 - **Patch 8** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): measure the
 frame's other two halves and hand them back through `Queue` —
-`tess_ms` (time in `egui::Context::tessellate`) and `egui_gpu_ms` (GPU time for egui's own render pass, via a timestamp query pair).
+`tess_ms` (time in `egui::Context::tessellate`) and `draw_gpu_ms` (GPU time from paint-callback preparation through egui's composite, lattice 3D included, via a timestamp query pair;
+named `egui_gpu_ms` and bracketing only egui's own pass before #1074).
 Both sat in blind spots:
 tessellation runs after the update closure returns, so it is neither the app's own frame time nor GPU time, and a wgpu paint callback's timer brackets only ITS passes, never the 2D UI around them.
 A frame cost could live entirely in either and read as zero everywhere.
-Both samples are BEGINNING-of-pass writes for the reason `harmonigraph-render` found the hard way:
-Metal grants `TIMESTAMP_QUERY_INSIDE_ENCODERS` and end-of-pass writes, then records zero for both, silently.
-The closing sample therefore rides a 1x1 no-op pass placed after egui's.
+Since #1074 the opening sample is the beginning of a 1x1 pass placed before `update_buffers`, so callback preparation is inside the bracket,
+and the closing sample is the END of egui's render pass, so the bracket cannot close before the composite finishes.
+The former tail pass, whose beginning closed the bracket, could read reversed against egui's own beginning;
+the new pair measured 0 of 60 reversed on Metal.
+Queue-staged uploads and callback-owned command buffers stay outside it.
 Readback is a three-step cycle polled with `PollType::Poll`, never `Wait` —
 blocking for the number would stall the pipeline being measured.
 - **Patch 9** (`src/renderer/wgpu/renderer.rs`, `src/window.rs`): split the

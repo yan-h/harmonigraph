@@ -18,7 +18,10 @@ Watercolor keeps its overlapping globs,
 lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
 Texture mix blends original and displaced levels before the shared Contours and palette lookup.
-Cloud pixel size still reduces the displaced scalar field before that lookup.
+Since #1042 there is no Cloud pixel size:
+cloud sampling is fixed at 0.5 pt,
+which is native on 1x and 2x displays,
+so the displaced scalar field is reduced before that lookup only where a point spans more than two device pixels.
 Tile geometry and the Watercolor tile rotation are unchanged.
 
 At zero Refraction the renderer takes the ordinary texture-off path,
