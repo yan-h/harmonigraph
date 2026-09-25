@@ -355,6 +355,12 @@ impl<'a> ValueBar<'a> {
             }
         }
 
+        // Off screen, the interaction above has already run and nothing below
+        // writes state: a long settings page lays out every bar each frame, and
+        // the half scrolled away need not format and shape its text too.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         let radius = CornerRadius::same(bar_radius(scale));
         let painter = ui.painter();

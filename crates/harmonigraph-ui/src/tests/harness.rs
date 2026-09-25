@@ -269,8 +269,10 @@ pub(super) fn settings_pane_at_width(
 
 /// The height every pane fixture is drawn at: taller than any settings pane's
 /// content, so a column that reaches the bottom is the pane running out of
-/// controls rather than out of window.
-pub(super) const PANE_HEIGHT: f32 = 2400.0;
+/// controls rather than out of window. [`tab_body_on`] asserts it, because a
+/// bar below the clip skips its paint and a page that outgrew this would
+/// otherwise go quietly unchecked past it.
+pub(super) const PANE_HEIGHT: f32 = 3200.0;
 
 /// One tab's body painted into a content box `width` points across on a themed
 /// context of its own, and the frame it produced.
@@ -314,6 +316,14 @@ pub(super) fn tab_body_on(
                 now,
             };
             viewer.ui(&mut body_ui, &mut tab);
+            // A whole-page fixture must hold the whole page (see
+            // [`PANE_HEIGHT`]); a shorter one is a window onto it on purpose.
+            // Video is the exception by construction: its preview takes
+            // whatever height the controls above it leave.
+            if height >= PANE_HEIGHT && tab != panes::Tab::Video {
+                let bottom = body_ui.min_rect().bottom();
+                assert!(bottom <= body.bottom(), "{tab:?} runs to {bottom}, past {height}");
+            }
         },
     )
 }
