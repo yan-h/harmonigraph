@@ -169,8 +169,8 @@ impl RollNote {
     /// last, and double the spacing so it fills at the same rate again.
     ///
     /// Blind to steps: halving can keep one point of a same-time pair and drop
-    /// its partner, which turns that step into a ramp one spacing long. At the
-    /// spacings a thinned note has reached, that is finer than the roll draws.
+    /// its partner, which turns that step into a ramp one spacing long: 20 ms
+    /// after the first halving, doubling with each one after.
     fn thin_expressions(&mut self) {
         let last = self.expressions.len() - 1;
         let mut index = 0;
