@@ -70,13 +70,33 @@ static BUCKET_FREQUENCIES: std::sync::LazyLock<[BucketFrequencies; SPECTRUM_BINS
         })
     });
 
+/// How one pitch bucket reads the transform, settled by
+/// [`plan_buckets`](SpectrumAnalyzer::plan_buckets) from the window length and
+/// the sample rate alone — every column asks each bucket the same question, so
+/// the divisions and roundings that answer it are paid once per configuration
+/// rather than 3,828 times a column.
+#[derive(Clone, Copy)]
+enum BucketRead {
+    /// Outside the usable bins: the bucket reads as nothing.
+    Silent,
+    /// Wider than the bin spacing: the loudest of bins `k0..=k1`.
+    Loudest { k0: u32, k1: u32 },
+    /// Narrower: reconstructed `t` of the way from bin `k` to `k + 1`.
+    Between { k: u32, t: f32 },
+}
+
 /// Rolling analyzer: push mono samples as they arrive, ask for the
 /// spectrum whenever the display wants a fresh frame.
 pub struct SpectrumAnalyzer {
     sample_rate: f32,
     fft_size: usize,
-    /// Forced at construction, so analysis never initializes the shared table.
-    bucket_frequencies: &'static [BucketFrequencies; SPECTRUM_BINS],
+    /// Which bins each bucket reads, derived from exactly `sample_rate` and
+    /// `fft_size` and rebuilt wherever either changes — [`configure`] and
+    /// [`set_sample_rate`] — so there is no key to check per column.
+    ///
+    /// [`configure`]: Self::configure
+    /// [`set_sample_rate`]: Self::set_sample_rate
+    bucket_reads: Box<[BucketRead; SPECTRUM_BINS]>,
     /// The most recent `fft_size` samples, as a circular buffer.
     ring: Vec<f32>,
     write: usize,
@@ -115,9 +135,9 @@ pub struct SpectrumAnalyzer {
     /// per channel per column for nothing.
     ///
     /// SCRATCH and not a cache: it has no key, because every call rewrites it
-    /// whole — `pitch_spectrum` zeroes it before its bucket loop precisely so
-    /// that the loop's one `continue` cannot leave a bucket reading the
-    /// previous column. Nothing reads it that did not just write it.
+    /// whole — `pitch_spectrum` writes every bucket, a silent one as zero, so
+    /// none can be left reading the previous column. Nothing reads it that did
+    /// not just write it.
     buckets: Box<[f32; SPECTRUM_BINS]>,
 }
 
@@ -126,7 +146,7 @@ impl SpectrumAnalyzer {
         let mut analyzer = SpectrumAnalyzer {
             sample_rate: sample_rate.max(1.0),
             fft_size: 0,
-            bucket_frequencies: &BUCKET_FREQUENCIES,
+            bucket_reads: Box::new([BucketRead::Silent; SPECTRUM_BINS]),
             ring: Vec::new(),
             write: 0,
             filled: 0,
@@ -168,6 +188,50 @@ impl SpectrumAnalyzer {
         self.fft = Some(fft);
         self.bin_power = vec![0.0; fft_size / 2];
         self.bin_mag = vec![0.0; fft_size / 2];
+        self.plan_buckets();
+    }
+
+    /// Settle which bins every bucket reads for the current window length and
+    /// sample rate — see [`BucketRead`]. Rewrites the plan in place, so a
+    /// sample-rate change allocates nothing.
+    fn plan_buckets(&mut self) {
+        let bin_hz = self.sample_rate / self.fft_size as f32;
+        let (first, last) = usable_bins(self.fft_size);
+        for (read, frequencies) in self.bucket_reads.iter_mut().zip(BUCKET_FREQUENCIES.iter()) {
+            // The bucket's own frequency band, in bins.
+            let x0 = frequencies.lower_hz / bin_hz;
+            let x1 = frequencies.upper_hz / bin_hz;
+            // The top is CLAMPED rather than required to be in range. A bucket
+            // whose upper edge reaches past the last usable bin still CONTAINS
+            // usable bins, and the loudest of those is what it means; rejecting
+            // it sent it to the branch below instead, which is a bucket wider
+            // than a bin asking to be read BETWEEN two of them. Only reachable
+            // where the axis runs to Nyquist, so at half rates.
+            let (k0, k1) = (x0.ceil(), x1.floor().min(last as f32));
+            *read = if k1 >= k0 && k0 >= first as f32 {
+                // Wider than the bin spacing: the loudest bin it contains.
+                BucketRead::Loudest { k0: k0 as u32, k1: k1 as u32 }
+            } else {
+                // Narrower: reconstruct the spectrum between the bins either
+                // side of the bucket's center, so the log axis comes out smooth
+                // instead of combed where it outruns the FFT.
+                let x = frequencies.center_hz / bin_hz;
+                let k = x.floor();
+                // Exactly the pair being read between, and no wider: the cubic
+                // wants a bin either side of that pair too, but it takes those
+                // by holding the endpoint where the usable range runs out
+                // rather than by demanding them. Requiring them instead put the
+                // bottom of the axis outside its own analyzer — at the Fast
+                // window the first two usable bins span 23 to 35 Hz, and the
+                // seven semitones between them went dark.
+                if k < first as f32 || k + 1.0 > last as f32 {
+                    BucketRead::Silent
+                } else {
+                    let k = k as usize;
+                    BucketRead::Between { k: k as u32, t: x - k as f32 }
+                }
+            };
+        }
     }
 
     /// Change the analysis window length (a power of two): longer =
@@ -231,6 +295,7 @@ impl SpectrumAnalyzer {
         if (sample_rate - self.sample_rate).abs() > f32::EPSILON {
             self.sample_rate = sample_rate;
             self.clear_window();
+            self.plan_buckets();
         }
     }
 
@@ -311,21 +376,19 @@ impl SpectrumAnalyzer {
         // `taper_norm_power` instead, so no pass over the bins exists only to
         // divide by a constant.
         self.bin_power.fill(0.0);
-        // Usable bins: skip DC and bin 1 (where the window's own leakage
-        // dominates) and stay clear of Nyquist. Anything the axis asks for
-        // outside this reads as nothing, which is the truth — a 4096-point
-        // window at 48 kHz cannot see 20 Hz at all. It is also the only range
-        // the transform below fills, so a widening here is work as well as axis.
-        let half = self.fft_size / 2;
-        let (first, last) = (2usize, half - 2);
-        for k in 0..self.taper_count {
-            let taper = k * self.fft_size;
-            // Unroll the ring in time order, preserving f32 window products.
-            for j in 0..half {
-                let even = (self.write + 2 * j) % self.fft_size;
-                let odd = (self.write + 2 * j + 1) % self.fft_size;
-                self.fft_input[2 * j] = self.ring[even] * self.tapers[taper + 2 * j];
-                self.fft_input[2 * j + 1] = self.ring[odd] * self.tapers[taper + 2 * j + 1];
+        let (first, last) = usable_bins(self.fft_size);
+        // The ring in time order is its tail from `write` (oldest first) and
+        // then its head up to `write`: two straight runs rather than an index
+        // wrapped per sample, which the compiler cannot vectorize.
+        let (newer, older) = self.ring.split_at(self.write);
+        for taper in self.tapers.chunks_exact(self.fft_size) {
+            let (taper_older, taper_newer) = taper.split_at(older.len());
+            let (input_older, input_newer) = self.fft_input.split_at_mut(older.len());
+            for ((x, s), w) in input_older.iter_mut().zip(older).zip(taper_older) {
+                *x = s * w;
+            }
+            for ((x, s), w) in input_newer.iter_mut().zip(newer).zip(taper_newer) {
+                *x = s * w;
             }
             self.fft
                 .as_ref()
@@ -348,8 +411,6 @@ impl SpectrumAnalyzer {
         // are POWER and every branch below produces `|X|^2` without ever taking
         // a root, so it is squared there rather than here.
         let norm_power = self.norm_power;
-
-        let bin_hz = self.sample_rate / self.fft_size as f32;
 
         // Magnitudes for the reconstructing branch alone (hence
         // [`INTERP_BIN_CEILING`] rather than the whole spectrum). Once per BIN
@@ -375,51 +436,35 @@ impl SpectrumAnalyzer {
         }
         let bin_mag = &self.bin_mag[..mag_to];
 
-        // The retained buffer starts at silence every call, exactly as the
-        // fresh array it replaced did. The loop's `continue` below leaves a
-        // bucket unwritten, and an unwritten bucket has to read as nothing
-        // rather than as whatever the previous column left there.
-        self.buckets.fill(0.0);
-        for (b, out) in self.buckets.iter_mut().enumerate() {
-            let frequencies = &self.bucket_frequencies[b];
-            // The bucket's own frequency band, in bins.
-            let x0 = frequencies.lower_hz / bin_hz;
-            let x1 = frequencies.upper_hz / bin_hz;
-            // The top is CLAMPED rather than required to be in range. A bucket
-            // whose upper edge reaches past the last usable bin still CONTAINS
-            // usable bins, and the loudest of those is what it means; rejecting
-            // it sent it to the branch below instead, which is a bucket wider
-            // than a bin asking to be read BETWEEN two of them. Only reachable
-            // where the axis runs to Nyquist, so at half rates.
-            let (k0, k1) = (x0.ceil(), x1.floor().min(last as f32));
-            let p = if k1 >= k0 && k0 >= first as f32 {
-                // Wider than the bin spacing: the loudest bin it contains.
-                let (k0, k1) = (k0 as usize, k1 as usize);
-                (k0..=k1).fold(0.0f32, |acc, k| acc.max(self.bin_power[k]))
-            } else {
-                // Narrower: reconstruct the spectrum between the bins either
-                // side of the bucket's center, so the log axis comes out smooth
-                // instead of combed where it outruns the FFT.
-                let x = frequencies.center_hz / bin_hz;
-                let k = x.floor();
-                // Exactly the pair being read between, and no wider: the cubic
-                // wants a bin either side of that pair too, but it takes those
-                // by holding the endpoint where the usable range runs out
-                // rather than by demanding them. Requiring them instead put the
-                // bottom of the axis outside its own analyzer — at the Fast
-                // window the first two usable bins span 23 to 35 Hz, and the
-                // seven semitones between them went dark.
-                if k < first as f32 || k + 1.0 > last as f32 {
-                    continue;
+        // Every bucket is written, silent ones included, so nothing the
+        // previous column left in the retained buffer survives into this one.
+        for (out, read) in self.buckets.iter_mut().zip(self.bucket_reads.iter()) {
+            *out = match *read {
+                BucketRead::Silent => 0.0,
+                BucketRead::Loudest { k0, k1 } => {
+                    let loudest = self.bin_power[k0 as usize..=k1 as usize]
+                        .iter()
+                        .fold(0.0f32, |acc, &p| acc.max(p));
+                    loudest * norm_power
                 }
-                let k = k as usize;
-                let m = reconstruct(bin_mag, k, x - k as f32);
-                m * m
+                BucketRead::Between { k, t } => {
+                    let m = reconstruct(bin_mag, k as usize, t);
+                    m * m * norm_power
+                }
             };
-            *out = p * norm_power;
         }
         Some(&self.buckets)
     }
+}
+
+/// The bins a window of `fft_size` samples can be read at, inclusive: skip DC
+/// and bin 1 (where the window's own leakage dominates) and stay clear of
+/// Nyquist. Anything the axis asks for outside this reads as nothing, which is
+/// the truth — a 4096-point window at 48 kHz cannot see 20 Hz at all. It is
+/// also the only range the transform fills, so a widening here is work as well
+/// as axis.
+fn usable_bins(fft_size: usize) -> (usize, usize) {
+    (2, fft_size / 2 - 2)
 }
 
 /// The spectrum's magnitude between bins `k` and `k + 1`, `t` of the way across:
@@ -1119,6 +1164,31 @@ mod tests {
             analyzer.pitch_spectrum().is_none(),
             "stale samples must not be analyzed under a new clock"
         );
+    }
+
+    /// The bucket plan is derived from the sample rate, so an analyzer that
+    /// changed rate must read exactly as one built at the new rate — including
+    /// a half rate, where the axis runs to Nyquist and the top bucket is clamped.
+    #[test]
+    fn a_sample_rate_change_reads_exactly_like_a_fresh_analyzer() {
+        for rate in [96_000.0, 22_050.0] {
+            let samples: Vec<f32> = (0..DEFAULT_FFT_SIZE + 333)
+                .map(|i| {
+                    let t = i as f32 / rate;
+                    0.5 * (std::f32::consts::TAU * 440.0 * t).sin()
+                        + 0.2 * (std::f32::consts::TAU * 9_000.0 * t).sin()
+                        + if i % 97 == 0 { 0.3 } else { 0.0 }
+                })
+                .collect();
+            let mut changed = SpectrumAnalyzer::new(48_000.0);
+            changed.set_sample_rate(rate);
+            changed.push_samples(&samples);
+            let mut fresh = SpectrumAnalyzer::new(rate);
+            fresh.push_samples(&samples);
+            let expected = *fresh.pitch_spectrum().unwrap();
+            assert!(expected.iter().filter(|p| **p > 0.0).count() > SPECTRUM_BINS / 2);
+            assert_eq!(changed.pitch_spectrum().unwrap(), &expected, "at {rate} Hz");
+        }
     }
 
     #[test]
