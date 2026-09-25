@@ -44,8 +44,8 @@ use crate::view::finite_or;
 /// top of the range goes vivid against a washed-out bottom, and negative puts
 /// the color at the bottom.
 ///
-/// Each of the three also has a [`Bend`], which says where along the range it
-/// spends its change rather than how much it spends.
+/// A [`Bend`] on top of the six says where along the range the channels
+/// switched onto it spend their change, rather than how much they spend.
 ///
 /// Nothing here can leave the sRGB gamut, whatever the knobs are set to, which
 /// is what makes them safe to expose as free knobs — see
@@ -92,7 +92,7 @@ pub struct Gradient {
     /// and this knob keeps meaning "how bright is the picture" at every ramp.
     /// Strictly it is the value halfway between the two ends, which is the
     /// value at the centre of the range while
-    /// [`lightness_bend`](Self::lightness_bend) is straight.
+    /// [`bend`](Self::bend) leaves brightness straight.
     pub lightness: f32,
     /// Signed `L*` difference from the bottom of the range to the top: how
     /// much of the gradient's separation is spent on brightness. 0 is exactly
@@ -112,7 +112,7 @@ pub struct Gradient {
     /// knob keeps meaning "how colorful is the picture" at every ramp. As with
     /// [`lightness`](Self::lightness), that is halfway between the ends, and
     /// the centre of the range only while
-    /// [`chroma_bend`](Self::chroma_bend) is straight.
+    /// [`bend`](Self::bend) leaves chroma straight.
     ///
     /// The gamut is the reason it is a fraction. At a fixed `L*` sRGB admits a
     /// different maximum Oklab chroma at every hue (0.115 at the tightest point
@@ -162,94 +162,89 @@ pub struct Gradient {
     /// vivid end would sit outside the gamut over whatever part of the arc
     /// could not hold it.
     pub chroma_ramp: f32,
-    /// How the hue walks its arc across the range: where along the range it
-    /// has covered how much of [`hue_span`](Self::hue_span). Straight by
-    /// default, which walks the arc evenly. See [`Bend`].
-    pub hue_bend: Bend,
-    /// How brightness walks from one end of its pair to the other. See
-    /// [`Bend`].
-    pub lightness_bend: Bend,
-    /// How the chroma fraction walks from one end of its pair to the other.
-    /// See [`Bend`].
-    pub chroma_bend: Bend,
+    /// Where along the range the channels switched onto it spend their
+    /// change. Straight by default, which walks every channel evenly.
+    pub bend: Bend,
 }
 
-/// Where one channel of a [`Gradient`] spends its change along the range: by
-/// [`at`](Self::at) of the way up the range it has covered
-/// [`share`](Self::share) of the way from its bottom value to its top one.
+/// Where along the range a gradient spends its change, and which of its
+/// three channels that applies to: one curve for the whole gradient, switched
+/// on or off per channel.
 ///
-/// **One point, because one point is the shape asked for.** "Hue barely moves
-/// until the loudest few dB, then turns fast" is a single bend at 90% of the
-/// range holding 15% of the change, and so is its opposite and every S that
-/// leans one way. A power curve is half the numbers and cannot say WHERE the
-/// turn is; a list of points can say anything, costs the gradient `Copy` and
-/// the LUT memo a fixed-size key, and draws nothing a person reaches for that
-/// one point does not.
+/// **One curve, because the question is about the range.** "The color barely
+/// moves until the loudest few dB, then turns fast" is a statement about the
+/// LEVEL axis, and each channel either takes part in it or walks its range
+/// evenly. Three independent curves could say more, and cost a selector to
+/// say it with.
+///
+/// **A rational curve, `t / (c·(1 − t) + 1)`**, which Schlick used as his
+/// bias function. It runs through both ends of the range, rises everywhere,
+/// and is smooth everywhere including at the extremes, where a curve forced
+/// through an arbitrary point has to turn a corner. It is also symmetric about
+/// the anti-diagonal, so the one number it has is best stated as the
+/// [`knee`](Self::knee): where the curve crosses that diagonal. A knee at 0.9
+/// means that 90% of the way up the range the channel has covered 10% of its
+/// change.
+///
+/// What the one number cannot do is set WHERE the curve turns and HOW SHARPLY
+/// separately — a stronger bend is also a later one. That is the bargain for
+/// having no corners.
 ///
 /// The ends are fixed — 0 at the bottom of the range, 1 at the top — so a
 /// bend never moves the colors a gradient opens and closes on, and everything
 /// the ramps' bounds promise about those ends holds at every bend. What it
 /// moves is the MIDDLE: the pairs' "centre" knobs mean the value halfway
 /// between the two ends, which is the value at the centre of the range only
-/// while the bend is straight.
+/// while the curve is straight or switched off for that channel.
 ///
-/// Through the point on a monotone cubic (Fritsch–Carlson, with Brodlie's
-/// weighted harmonic slope inside), not on two straight segments: a corner in
-/// the hue walk is a place the heatmap would draw a seam, and the smooth curve
-/// costs no extra number. Monotone so a louder level is never further back
-/// along the channel than a quieter one.
-///
-/// Straight when `share == at`, which [`warp`](Self::warp) returns exactly
-/// rather than through the cubic, so a gradient that has never been bent
-/// draws bit for bit what it did before bends existed.
+/// A knee of 0.5 is straight, and [`warp`](Self::warp) returns `t` exactly
+/// there, so a gradient that has never been bent draws bit for bit what it did
+/// before bends existed.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Bend {
-    /// Where along the range the bend stands, 0..1 from the bottom. Kept off
-    /// the very ends, where the segment beside it would have no width.
-    pub at: f32,
-    /// How much of the channel's change is spent by then, 0..1.
-    pub share: f32,
+    /// Where the curve crosses the anti-diagonal, as a fraction of the range
+    /// from the bottom: above 0.5 holds the change back for the top of the
+    /// range, below 0.5 spends it early.
+    pub knee: f32,
+    /// Whether the hue walks its arc along the curve.
+    pub hue: bool,
+    /// Whether brightness walks its pair along the curve.
+    pub lightness: bool,
+    /// Whether the chroma fraction walks its pair along the curve.
+    pub chroma: bool,
 }
 
 impl Default for Bend {
+    /// Straight, and applying to every channel once it is bent: a drag on the
+    /// curve should change the picture without a second step.
     fn default() -> Self {
-        Bend::STRAIGHT
+        Bend { knee: 0.5, hue: true, lightness: true, chroma: true }
     }
 }
 
 impl Bend {
-    /// The even walk every gradient had before bends existed.
-    pub const STRAIGHT: Bend = Bend { at: 0.5, share: 0.5 };
-
-    /// How close to either end of the range the bend may stand.
-    pub const AT_LIMITS: (f32, f32) = (0.01, 0.99);
+    /// How close to either end of the range the knee may stand. Past this the
+    /// curve spends nearly all its change inside one entry of the color table.
+    pub const KNEE_LIMITS: (f32, f32) = (0.02, 0.98);
 
     /// Held to what the curve is defined for, and finite: the bend is part of
     /// the LUT memo's key through [`Gradient::sanitized`].
     pub fn sanitized(self) -> Bend {
-        let finite = |v: f32| if v.is_finite() { v } else { 0.5 };
-        Bend {
-            at: finite(self.at).clamp(Self::AT_LIMITS.0, Self::AT_LIMITS.1),
-            share: finite(self.share).clamp(0.0, 1.0),
-        }
+        let knee = if self.knee.is_finite() { self.knee } else { 0.5 };
+        Bend { knee: knee.clamp(Self::KNEE_LIMITS.0, Self::KNEE_LIMITS.1), ..self }
     }
 
-    /// The same bend read from the top of the range down, which is what a
-    /// channel run the other way needs to keep every sample where it was.
-    pub fn mirrored(self) -> Bend {
-        Bend { at: 1.0 - self.at, share: 1.0 - self.share }
-    }
-
-    /// Whether this is the even walk, and [`warp`](Self::warp) the identity.
+    /// Whether the curve is the even walk, and [`warp`](Self::warp) the
+    /// identity.
     pub fn is_straight(self) -> bool {
-        self.at == self.share
+        self.knee == 0.5
     }
 
-    /// How far along the channel's change the range is at `t`: 0 at `t` 0, 1
-    /// at `t` 1, through (`at`, `share`) on a monotone cubic between.
+    /// How far along its change a channel on the curve is at `t`: 0 at `t` 0,
+    /// 1 at `t` 1, through (`knee`, `1 - knee`) between.
     ///
-    /// Sanitizes its own inputs rather than trusting them, since
+    /// Sanitizes its own knee rather than trusting it, since
     /// [`Gradient::chroma_at`] reads its gradient raw; the output is always in
     /// 0..=1.
     pub fn warp(self, t: f64) -> f64 {
@@ -258,36 +253,20 @@ impl Bend {
         if b.is_straight() {
             return t;
         }
-        let (k, v) = (f64::from(b.at), f64::from(b.share));
-        let (h0, h1) = (k, 1.0 - k);
-        let (d0, d1) = (v / h0, (1.0 - v) / h1);
-        // Brodlie's weighted harmonic mean at the bend, 0 where either side is
-        // flat. Each weight is at least a third of their sum, so the slope is
-        // under three times either secant — Fritsch–Carlson's monotone region.
-        let (w0, w1) = (2.0 * h1 + h0, h1 + 2.0 * h0);
-        let mid = if d0 == 0.0 || d1 == 0.0 { 0.0 } else { (w0 + w1) / (w0 / d0 + w1 / d1) };
-        // The three-point end slope, floored at 0. It cannot pass three times
-        // its own secant here: with both secants non-negative and the two
-        // widths summing to 1, it is at most (1 + h) times it.
-        let end = |near_h: f64, far_h: f64, near_d: f64, far_d: f64| {
-            ((2.0 * near_h + far_h) * near_d - near_h * far_d).max(0.0)
-        };
-        let (m_lo, m_hi) = (end(h0, h1, d0, d1), end(h1, h0, d1, d0));
-        // Cubic Hermite on whichever segment `t` is in.
-        let hermite = |x0: f64, h: f64, y0: f64, y1: f64, m0: f64, m1: f64| {
-            let s = (t - x0) / h;
-            let (s2, s3) = (s * s, s * s * s);
-            (2.0 * s3 - 3.0 * s2 + 1.0) * y0
-                + (s3 - 2.0 * s2 + s) * h * m0
-                + (-2.0 * s3 + 3.0 * s2) * y1
-                + (s3 - s2) * h * m1
-        };
-        let w = if t <= k {
-            hermite(0.0, h0, 0.0, v, m_lo, mid)
+        // The curve through (k, 1 - k): solved from `1 - k = k / (c(1 - k) + 1)`.
+        let k = f64::from(b.knee);
+        let c = (k / (1.0 - k) - 1.0) / (1.0 - k);
+        (t / (c * (1.0 - t) + 1.0)).clamp(0.0, 1.0)
+    }
+
+    /// [`warp`](Self::warp) for a channel that is `on` the curve, and `t`
+    /// untouched for one that is not.
+    pub fn along(self, on: bool, t: f64) -> f64 {
+        if on {
+            self.warp(t)
         } else {
-            hermite(k, h1, v, 1.0, mid, m_hi)
-        };
-        w.clamp(0.0, 1.0)
+            t.clamp(0.0, 1.0)
+        }
     }
 }
 
@@ -366,9 +345,7 @@ impl Default for Gradient {
             lightness_ramp: default_lightness_ramp(),
             chroma: default_chroma(),
             chroma_ramp: default_chroma_ramp(),
-            hue_bend: Bend::STRAIGHT,
-            lightness_bend: Bend::STRAIGHT,
-            chroma_bend: Bend::STRAIGHT,
+            bend: Bend::default(),
         }
     }
 }
@@ -431,9 +408,7 @@ impl Gradient {
             // hue on the far side of the circle from the one the arc names.
             chroma_ramp: finite(self.chroma_ramp, default_chroma_ramp())
                 .clamp(-widest_chroma_ramp, widest_chroma_ramp),
-            hue_bend: self.hue_bend.sanitized(),
-            lightness_bend: self.lightness_bend.sanitized(),
-            chroma_bend: self.chroma_bend.sanitized(),
+            bend: self.bend.sanitized(),
         }
     }
 
@@ -453,8 +428,8 @@ impl Gradient {
         Gradient {
             hue_start: (g.hue_start + g.hue_span).rem_euclid(360.0),
             hue_span: -g.hue_span,
-            // The arc is read from its far end now, so its bend is too.
-            hue_bend: g.hue_bend.mirrored(),
+            // The bend stays: it says where along the RANGE the change is
+            // spent, and a flip reverses which hues, not where they change.
             ..g
         }
         .sanitized()
@@ -471,10 +446,10 @@ impl Gradient {
     pub fn lightness_and_hue(self, t: f64) -> (f64, f64) {
         let g = self.sanitized();
         let t = t.clamp(0.0, 1.0);
-        let l =
-            f64::from(g.lightness) + (g.lightness_bend.warp(t) - 0.5) * f64::from(g.lightness_ramp);
-        let h =
-            (f64::from(g.hue_start) + g.hue_bend.warp(t) * f64::from(g.hue_span)).rem_euclid(360.0);
+        let l = f64::from(g.lightness)
+            + (g.bend.along(g.bend.lightness, t) - 0.5) * f64::from(g.lightness_ramp);
+        let h = (f64::from(g.hue_start) + g.bend.along(g.bend.hue, t) * f64::from(g.hue_span))
+            .rem_euclid(360.0);
         // The clamp cannot fire for a sanitized gradient, and it is worth
         // knowing why rather than assuming it might: the widest ramp is
         // `2 * min(l, 100 - l)`, whose every step is exact in f32 — `100 - l`
@@ -514,7 +489,8 @@ impl Gradient {
     /// and `neither_end_of_the_curve_leaves_the_chroma_axis` is what keeps it
     /// there.
     pub fn chroma_at(self, t: f64) -> f64 {
-        f64::from(self.chroma) + (self.chroma_bend.warp(t) - 0.5) * f64::from(self.chroma_ramp)
+        f64::from(self.chroma)
+            + (self.bend.along(self.bend.chroma, t) - 0.5) * f64::from(self.chroma_ramp)
     }
 }
 

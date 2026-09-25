@@ -1,19 +1,20 @@
-//! The [`BendPlot`]: where along its range each channel of a gradient spends
-//! its change.
+//! The [`BendPlot`]: where along its range a gradient spends its change, and
+//! which of its channels do.
 
-use egui::{Color32, CornerRadius, Response, Sense, Stroke, TextStyle, Ui, Vec2};
+use egui::{CornerRadius, Response, Sense, Stroke, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{Bend, Gradient};
 
 use super::bar::{bar_radius, bar_width, BAR_TEXT_PAD, HANDLE_INSET};
 use crate::theme;
 
-/// Rows the plot stands, so a bend at 90% of the range is a drag of a few
+/// Rows the plot stands, so a knee at 90% of the range is a drag of a few
 /// points rather than a single one.
 const PLOT_ROWS: f32 = 3.0;
 
-/// Points each curve is drawn with. The curve is smooth and a plot is a few
-/// hundred points wide, so this is well past where a polyline shows facets.
-const CURVE_SEGMENTS: usize = 96;
+/// Points the curve is drawn with along each axis. Sampled evenly across the
+/// range AND evenly up it, so a steep stretch near one end gets as many
+/// points as a flat one and draws without facets.
+const CURVE_SEGMENTS: usize = 64;
 
 /// Height of a [`BendPlot`]'s well at this scale. Shared with the scale
 /// census, which finds bars by their full-width well and has to know this one
@@ -22,69 +23,31 @@ pub(crate) fn bend_plot_height(scale: f32) -> f32 {
     theme::row_height(scale) * PLOT_ROWS
 }
 
-/// The part of the well the curves are drawn in: inset like a bar's track, so
+/// The part of the well the curve is drawn in: inset like a bar's track, so
 /// both ends of the range are places the handle can stand rather than edges
 /// it merges into.
 fn plot_area(well: egui::Rect, scale: f32) -> egui::Rect {
     well.shrink(HANDLE_INSET * scale + 2.0 * scale)
 }
 
-/// Which of a gradient's three channels the plot has in hand.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Channel {
-    #[default]
-    Hue,
-    Brightness,
-    Saturation,
-}
-
-impl Channel {
-    const ALL: [Channel; 3] = [Channel::Hue, Channel::Brightness, Channel::Saturation];
-
-    fn label(self) -> &'static str {
-        match self {
-            Channel::Hue => "Hue",
-            Channel::Brightness => "Brightness",
-            Channel::Saturation => "Saturation",
-        }
-    }
-
-    fn of(self, g: &Gradient) -> Bend {
-        match self {
-            Channel::Hue => g.hue_bend,
-            Channel::Brightness => g.lightness_bend,
-            Channel::Saturation => g.chroma_bend,
-        }
-    }
-
-    fn of_mut(self, g: &mut Gradient) -> &mut Bend {
-        match self {
-            Channel::Hue => &mut g.hue_bend,
-            Channel::Brightness => &mut g.lightness_bend,
-            Channel::Saturation => &mut g.chroma_bend,
-        }
-    }
-}
-
-/// The bend of one channel at a time, picked on a row of buttons above a plot
-/// of the range (across) against how far that channel has come (up). Drag
-/// anywhere on the plot to put the bend there; double-click to straighten it.
+/// The gradient's [`Bend`]: a row of on/off buttons naming the channels that
+/// follow the curve, over a plot of the range (across) against how far those
+/// channels have come (up). Drag anywhere on the plot to move the knee;
+/// double-click to straighten it.
 ///
-/// **One channel at a time**, because the three start on the same point: every
-/// gradient opens straight, so three handles would stand on one another at the
-/// centre with nothing to say which a press takes. The other two curves are
-/// still drawn, dimmed, since how the channels lean against each other is most
-/// of what a bend is for.
+/// The curve has one number, so the handle rides one line: the anti-diagonal,
+/// which the curve is symmetric about. A press anywhere takes the point on
+/// that line nearest the pointer, so the handle stays under the hand along
+/// the one direction it can move.
 ///
 /// A second picture of the range rather than a mark on the bars above, whose
-/// tracks run along the channel's own VALUE (the hue circle, the `L*` axis)
+/// tracks run along each channel's own VALUE (the hue circle, the `L*` axis)
 /// and not along the range at all.
 ///
-/// The readout says where the bend stands in the range's own units — a note
+/// The readout says where the knee stands in the range's own units — a note
 /// for the pitch gradient, a level for the analyzer's — which is what `axis`
 /// is handed for.
 pub struct BendPlot<'a> {
-    id_salt: &'a str,
     gradient: &'a mut Gradient,
     home: Gradient,
     axis: &'a dyn Fn(f32) -> String,
@@ -92,27 +55,33 @@ pub struct BendPlot<'a> {
 
 impl<'a> BendPlot<'a> {
     /// `axis` names a position along the range, 0 at the bottom and 1 at the
-    /// top. `id_salt` keeps apart which channel two plots on one page hold.
-    pub fn new(
-        id_salt: &'a str,
-        gradient: &'a mut Gradient,
-        axis: &'a dyn Fn(f32) -> String,
-    ) -> Self {
-        BendPlot { id_salt, gradient, home: Gradient::default(), axis }
+    /// top.
+    pub fn new(gradient: &'a mut Gradient, axis: &'a dyn Fn(f32) -> String) -> Self {
+        BendPlot { gradient, home: Gradient::default(), axis }
     }
 
-    /// The gradient a double-click takes the channel in hand back to.
+    /// The gradient a double-click takes the knee back to.
     pub fn home(mut self, home: Gradient) -> Self {
         self.home = home;
         self
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
-        let channel_id = ui.make_persistent_id(("bend_channel", self.id_salt));
-        let mut channel = ui.data(|d| d.get_temp::<Channel>(channel_id)).unwrap_or_default();
-        let options: Vec<_> = Channel::ALL.iter().map(|&c| (c, c.label(), "")).collect();
-        super::choice_row(ui, "Curve", &mut channel, &options);
-        ui.data_mut(|d| d.insert_temp(channel_id, channel));
+        let bend = &mut self.gradient.bend;
+        // Wrapped, so a narrow column puts the buttons on a second line
+        // rather than pushing the pane (and the plot under them) wider.
+        ui.horizontal_wrapped(|ui| {
+            super::label(ui, "Curve");
+            ui.spacing_mut().item_spacing.x = theme::button_gap(theme::ui_scale(ui.ctx()));
+            for (on, name) in [
+                (&mut bend.hue, "Hue"),
+                (&mut bend.lightness, "Brightness"),
+                (&mut bend.chroma, "Saturation"),
+            ] {
+                ui.toggle_value(on, super::option_label(name))
+                    .on_hover_text(format!("Whether {} follows the curve", name.to_lowercase()));
+            }
+        });
 
         let scale = theme::ui_scale(ui.ctx());
         let size = Vec2::new(bar_width(ui), bend_plot_height(scale));
@@ -123,17 +92,18 @@ impl<'a> BendPlot<'a> {
         };
 
         if response.double_clicked() {
-            *channel.of_mut(self.gradient) = channel.of(&self.home.sanitized());
+            self.gradient.bend.knee = self.home.sanitized().bend.knee;
             response.mark_changed();
         } else if response.dragged() || response.clicked() {
             if let Some(p) = response.interact_pointer_pos() {
-                // Whole percentages, so a bend reads out as the numbers it holds.
-                let snap = |v: f32| (v * 100.0).round() / 100.0;
-                let at = snap((p.x - plot.left()) / plot.width().max(1.0));
-                let share = snap((plot.bottom() - p.y) / plot.height().max(1.0));
-                let next = Bend { at, share }.sanitized();
-                if next != channel.of(self.gradient) {
-                    *channel.of_mut(self.gradient) = next;
+                let across = (p.x - plot.left()) / plot.width().max(1.0);
+                let up = (plot.bottom() - p.y) / plot.height().max(1.0);
+                // The nearest point on the anti-diagonal, snapped to whole
+                // percentages so the readout is the number held.
+                let knee = ((across + 1.0 - up) * 0.5 * 100.0).round() / 100.0;
+                let next = Bend { knee, ..self.gradient.bend }.sanitized();
+                if next != self.gradient.bend {
+                    self.gradient.bend = next;
                     response.mark_changed();
                 }
             }
@@ -141,38 +111,37 @@ impl<'a> BendPlot<'a> {
 
         // ---- Paint ---- read back after the write, so the handle is under the
         // pointer on the frame it moved.
-        let g = self.gradient.sanitized();
+        let bend = self.gradient.bend.sanitized();
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
         let hairline = Stroke::new(scale, theme::hairline());
         painter.line_segment([pos_of(0.0, 0.0), pos_of(1.0, 1.0)], hairline);
+        painter.line_segment([pos_of(0.0, 1.0), pos_of(1.0, 0.0)], hairline);
 
+        // Even steps across the range, and the same up it read back through
+        // the curve's symmetry (its inverse is `1 - warp(1 - w)`), merged.
+        let mut ts: Vec<f64> = (0..=CURVE_SEGMENTS)
+            .flat_map(|i| {
+                let s = i as f64 / CURVE_SEGMENTS as f64;
+                [s, 1.0 - bend.warp(1.0 - s)]
+            })
+            .collect();
+        ts.sort_by(f64::total_cmp);
+        let points = ts.into_iter().map(|t| pos_of(t as f32, bend.warp(t) as f32)).collect();
+        let applies = bend.hue || bend.lightness || bend.chroma;
         let live = response.hovered() || response.dragged();
-        let curve = |bend: Bend, color: Color32, width: f32| {
-            let points = (0..=CURVE_SEGMENTS)
-                .map(|i| {
-                    let t = i as f32 / CURVE_SEGMENTS as f32;
-                    pos_of(t, bend.warp(f64::from(t)) as f32)
-                })
-                .collect();
-            painter.add(egui::Shape::line(points, Stroke::new(width * scale, color)));
-        };
-        for other in Channel::ALL.into_iter().filter(|&c| c != channel) {
-            curve(other.of(&g), theme::text_dim().gamma_multiply(0.45), 1.0);
-        }
-        let bend = channel.of(&g);
-        curve(bend, theme::text(), 1.5);
-        let dot = pos_of(bend.at, bend.share);
+        let ink = if applies { theme::text() } else { theme::text_dim() };
+        painter.add(egui::Shape::line(points, Stroke::new(1.5 * scale, ink)));
+        let dot = pos_of(bend.knee, 1.0 - bend.knee);
         let fill = if live { theme::text() } else { theme::text_dim() };
         painter.circle(dot, 4.0 * scale, fill, Stroke::new(scale, theme::panel()));
 
-        let readout = format!("{:.0}% by {}", bend.share * 100.0, (self.axis)(bend.at));
+        let readout = format!("{:.0}% by {}", (1.0 - bend.knee) * 100.0, (self.axis)(bend.knee));
         let text_color = if live { theme::text() } else { theme::text_dim() };
         let galley =
             painter.layout_no_wrap(readout, TextStyle::Monospace.resolve(ui.style()), text_color);
-        // In the top-left corner, which a curve only reaches when it jumps at
-        // the very bottom of the range — and the bottom-right is where the
-        // curve every straight channel draws already runs.
+        // In the top-left corner, which the curve reaches only when it spends
+        // its change at the very bottom of the range.
         let pad = BAR_TEXT_PAD * scale * 0.5;
         painter.galley(rect.left_top() + Vec2::splat(pad), galley, text_color);
 
@@ -211,7 +180,7 @@ mod tests {
                 },
                 |ui| {
                     let axis = |t: f32| format!("{:.0}%", t * 100.0);
-                    plot.set(BendPlot::new("test", g, &axis).show(ui).rect);
+                    plot.set(BendPlot::new(g, &axis).show(ui).rect);
                 },
             );
         };
@@ -226,14 +195,15 @@ mod tests {
     }
 
     #[test]
-    fn a_click_bends_only_the_channel_in_hand_and_a_double_click_straightens_it() {
+    fn a_click_moves_the_knee_to_the_nearest_point_on_its_line_and_a_double_click_straightens_it() {
         let mut g = Gradient::default();
-        click(&mut g, (0.9, 0.15), 1);
-        let bend = g.hue_bend;
-        assert_eq!(bend, Bend { at: 0.9, share: 0.15 });
-        assert_eq!((g.lightness_bend, g.chroma_bend), (Bend::STRAIGHT, Bend::STRAIGHT));
+        g.bend.lightness = false;
+        // Off the anti-diagonal: the knee is where the pointer projects onto it.
+        click(&mut g, (0.95, 0.15), 1);
+        assert_eq!(g.bend, Bend { knee: 0.9, lightness: false, ..Bend::default() });
 
-        click(&mut g, (0.9, 0.15), 2);
-        assert_eq!(g.hue_bend, Bend::STRAIGHT, "a double-click left the hue bent");
+        click(&mut g, (0.95, 0.15), 2);
+        assert!(g.bend.is_straight(), "a double-click left the curve bent: {:?}", g.bend);
+        assert!(!g.bend.lightness, "a double-click switched a channel back on");
     }
 }

@@ -45,9 +45,9 @@ pub(super) fn color_pane(
 
 /// The tooltip both groups' curve plots carry: the axis is named by the
 /// readout, so the words can be shared.
-const BEND_HINT: &str = "How the chosen channel spreads its change across the range. \
+const BEND_HINT: &str = "Where along the range the switched-on channels spend their change. \
                  Across is the range, up is how much of the change has happened. \
-                 Drag to move the bend, for example to hold the hue until the loudest few dB. \
+                 Drag right to hold the change back for the top of the range, for example the loudest few dB. \
                  Double-click straightens it.";
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig, (darkest, brightest): (f32, f32)) {
@@ -70,7 +70,7 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig, (darkest, brightest)
                  Double-click resets.",
     );
     let pitch_at = |t: f32| super::pitch_readout(darkest + t * (brightest - darkest));
-    BendPlot::new("pitch", &mut view.pitch_gradient, &pitch_at).show(ui).on_hover_text(BEND_HINT);
+    BendPlot::new(&mut view.pitch_gradient, &pitch_at).show(ui).on_hover_text(BEND_HINT);
     preview
         .show(ui, &view.pitch_gradient)
         .on_hover_text("MIDI note colors from low pitch on the left to high pitch on the right.");
@@ -146,7 +146,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     // reaches this readout a frame late — the one place it shows.
     let (floor, ceiling) = (cfg.volume_floor_db, cfg.volume_ceiling_db);
     let level_at = |t: f32| format!("{:.0} dB", floor + t * (ceiling - floor));
-    BendPlot::new("level", &mut cfg.spectrogram_gradient, &level_at)
+    BendPlot::new(&mut cfg.spectrogram_gradient, &level_at)
         .home(home)
         .show(ui)
         .on_hover_text(BEND_HINT);
