@@ -4,8 +4,13 @@ use crate::{NoteAnimationConfig, OctaveLayout, RingFade, Scene, ViewConfig};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+// Fixed-seed rather than per-process: nothing here is keyed by input an
+// attacker chooses, and a fixed seed keeps iteration order the same on every
+// run rather than varying between them.
+type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::FixedState>;
+type HashSet<K> = std::collections::HashSet<K, foldhash::fast::FixedState>;
 
 type Identity = (VoiceKey, u64);
 #[derive(Clone, Copy)]
@@ -367,7 +372,7 @@ impl NodeMotion {
             .notes()
             .filter(|note| note.end.is_none_or(|at| at >= retained))
             .collect();
-        let mut seen = HashMap::new();
+        let mut seen = HashMap::default();
         let mut late = false;
         for note in &notes {
             let id = (note.key(), note.start.to_bits());

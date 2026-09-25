@@ -1485,6 +1485,7 @@ name = "harmonigraph-scene"
 version = "0.4.0"
 dependencies = [
  "color_space",
+ "foldhash 0.2.0",
  "glam",
  "harmonigraph-core",
  "hct-cam16",
