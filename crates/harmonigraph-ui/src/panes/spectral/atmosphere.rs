@@ -5,7 +5,7 @@ use egui::{Color32, Mesh, Painter};
 
 use super::axes::{loudness_db, power_db, spectrogram_level_db, Axes};
 use super::spectrogram::cell_color;
-use crate::{theme, Backdrop, KeylineStyle, SpectrumConfig};
+use crate::{theme, SpectrumConfig};
 
 /// Points of curve height below which the body is a sliver rather than a
 /// shape. The fill is off entirely below it, so a sub-pixel curve does not
@@ -49,17 +49,12 @@ pub(super) fn draw_profile(
     let vertex = |mesh: &mut Mesh, t, d, color| {
         mesh.colored_vertex(axes.at(t, sd(d)), color);
     };
-    // The backdrop first, under the body it frames.
-    let spacing = match cfg.backdrop {
-        Backdrop::Off => None,
-        Backdrop::Stripes => Some(cfg.backdrop_period.max(1.0) as usize),
-        Backdrop::Gradient => Some(1),
-    };
-    if let Some(spacing) = spacing {
+    // The backdrop first, under the body it frames. Strength 0 is its off.
+    if cfg.backdrop_strength > 0.0 {
         let edge: Vec<_> = samples.iter().map(|&(t, d, _)| (t, d)).collect();
         painter.add(backdrop_mesh(
             &edge,
-            spacing,
+            cfg.backdrop_gap.max(0.0) as usize + 1,
             cfg.backdrop_height * budget,
             theme::picture_ruling().gamma_multiply(cfg.backdrop_strength),
             |t, d| axes.at(t, sd(d)),
@@ -88,26 +83,16 @@ pub(super) fn draw_profile(
     painter.add(body);
 
     // The contour takes the color of the fill it bounds, lifted toward white
-    // only as far as the Lift dial's luminance floor asks: a bright level
-    // wears its own color, a dark one stays bright enough to read. It is
-    // opaque, and never depends on the fill.
-    if cfg.keyline_style != KeylineStyle::Off && samples.iter().any(|&(_, d, _)| d > 0.0) {
+    // only as far as the Intensity dial's luminance floor asks: a bright
+    // level wears its own color, a dark one stays bright enough to read. It
+    // is opaque, and never depends on the fill.
+    if samples.iter().any(|&(_, d, _)| d > 0.0) {
         let floor = keyline_floor(cfg.keyline_lift);
         let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
         let colors: Vec<_> =
             samples.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
         let pixel = 1.0 / painter.pixels_per_point();
-        painter.add(match cfg.keyline_style {
-            KeylineStyle::Line => stroke_mesh(&points, &colors, KEYLINE_WIDTH_PT, pixel),
-            KeylineStyle::Dots => {
-                // Axis-aligned in every orientation, so the pitch axis's
-                // direction is a unit vector along x or y.
-                let along = (axes.at(1.0, 0.0) - axes.at(0.0, 0.0)).normalized().abs();
-                let spacing = axes.pitch_len() / samples.len() as f32;
-                pixel_caps_mesh(&points, &colors, along, spacing, pixel)
-            }
-            KeylineStyle::Off => unreachable!("an absent outline is not drawn"),
-        });
+        painter.add(stroke_mesh(&points, &colors, KEYLINE_WIDTH_PT, pixel));
     }
 }
 
@@ -191,45 +176,10 @@ fn backdrop_mesh(
     mesh
 }
 
-/// One solid cap at each point, all in one mesh: a device `pixel` deep and
-/// one column `spacing` wide along the pitch axis (`along`), so neighbouring
-/// caps tile the axis edge to edge. The profile has about one sample per
-/// pixel column, but only about: the column count is rounded, and capped on a
-/// very wide pane, and caps a fixed pixel wide would then skip a column
-/// somewhere and leave a hole in a solid edge. Tiled, every pixel column gets
-/// exactly one cap.
-///
-/// No antialiasing rim, on purpose. A cap one pixel deep covers exactly one
-/// pixel center across the depth wherever it lands, so the GPU paints it
-/// crisp, the nearest pixel to the true level; a feathered one would smear a
-/// dimmer blot over two and shimmer as the level moves.
-///
-/// Opaque and in [`keyline_color`], the line's own rule: a single pixel at the
-/// fill's edge in the fill's own color is the fill a pixel further out, so a
-/// bright level needs no fade to disappear.
-fn pixel_caps_mesh(
-    points: &[egui::Pos2],
-    colors: &[Color32],
-    along: egui::Vec2,
-    spacing: f32,
-    pixel: f32,
-) -> Mesh {
-    let across = egui::Vec2::splat(1.0) - along;
-    let half = 0.5 * (along * spacing + across * pixel);
-    let mut mesh = Mesh::default();
-    // `add_colored_rect` is four vertices and two triangles.
-    mesh.reserve_vertices(4 * points.len());
-    mesh.reserve_triangles(2 * points.len());
-    for (&p, &color) in points.iter().zip(colors) {
-        mesh.add_colored_rect(egui::Rect::from_min_max(p - half, p + half), color);
-    }
-    mesh
-}
-
 /// The outline's width, in points.
 const KEYLINE_WIDTH_PT: f32 = 1.0;
 
-/// The Lift dial, gamma-encoded so it reads evenly, as the linear luminance
+/// The Intensity dial, gamma-encoded so it reads evenly, as the linear luminance
 /// floor [`keyline_color`] lifts to.
 pub(super) fn keyline_floor(lift: f32) -> f32 {
     egui::ecolor::linear_f32_from_gamma_u8((lift.clamp(0.0, 1.0) * 255.0).round() as u8)

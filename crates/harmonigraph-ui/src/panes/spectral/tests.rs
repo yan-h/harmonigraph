@@ -6,7 +6,7 @@ use super::gestures::*;
 use super::settings::*;
 use super::*;
 use crate::tests::probe::{fresh_picture as fresh, painted_full, painted_into, themed};
-use crate::{Backdrop, KeylineStyle, SpectralOrientation, SpectrumConfig, SpectrumWindow};
+use crate::{SpectralOrientation, SpectrumConfig, SpectrumWindow};
 use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
 
 /// A 300x100 pane at an offset origin, so a mistake that assumes the
@@ -1962,96 +1962,11 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
     );
 }
 
-/// Dots cap each sample with one device pixel of depth on its own level,
-/// tiling the pitch axis edge to edge, and draw nothing between samples: a spike rising the whole depth in one sample
-/// leaves its flank to the fill. The caps are opaque and in the line's own
-/// colors, so the bright spike wears its fill's color and the palette-black
-/// floor is lifted to the lift's floor.
-#[test]
-fn analyzer_dots_cap_each_level_with_a_pixel_and_leave_flanks_to_the_fill() {
-    let cfg = SpectrumConfig {
-        floor_db: -100.0,
-        ceiling_db: 0.0,
-        volume_floor_db: -40.0,
-        volume_ceiling_db: 0.0,
-        tilt: 0.0,
-        keyline_style: KeylineStyle::Dots,
-        ..Default::default()
-    };
-    let axes = Axes::new(WIDE, &cfg);
-    let n = (axes.pitch_len() * 2.0) as usize;
-    let spike = n / 2;
-    let level = |i: usize| if i == spike { 0.0 } else { -99.0 };
-    let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
-    let mut pixel = 0.0;
-    let out = painted_into(SCREEN, WIDE, |ui| {
-        pixel = 1.0 / ui.ctx().pixels_per_point();
-        let budget = plot_budget(1.0, axes.depth_len());
-        atmosphere::draw_profile(ui.painter(), &axes, &cfg, &visible, budget, 1.0);
-    });
-    let meshes: Vec<_> = out
-        .shapes
-        .into_iter()
-        .filter_map(|s| match s.shape {
-            egui::Shape::Mesh(mesh) => Some(mesh),
-            _ => None,
-        })
-        .collect();
-    let [body, caps] = &meshes[..] else { panic!("expected the body and the caps") };
-    let stops = atmosphere::BODY_STOPS;
-    let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
-    assert_eq!(caps.vertices.len(), n * 4, "one cap per sample");
-    let climb = (axes.at(1.0, 0.0) - axes.at(0.0, 0.0)).normalized();
-    let along = climb.abs();
-    let spacing = axes.pitch_len() / n as f32;
-    assert!((spacing - pixel).abs() > 0.1, "fixture needs columns off the pixel grid");
-    let mut previous: Option<egui::Rect> = None;
-    let floor = atmosphere::keyline_floor(cfg.keyline_lift);
-    for (i, &(midi, _, level)) in visible.iter().enumerate() {
-        let corners = &caps.vertices[i * 4..i * 4 + 4];
-        let square = egui::Rect::from_points(&corners.iter().map(|v| v.pos).collect::<Vec<_>>());
-        assert!(square.center().distance(contour(i)) < 1e-3, "cap {i} is off its level");
-        let size = along * spacing + (egui::Vec2::splat(1.0) - along) * pixel;
-        assert!((square.size() - size).length() < 1e-4, "cap {i} is not a column by a pixel");
-        if let Some(previous) = previous.replace(square) {
-            let gap = (square.center() - previous.center()).dot(climb) - spacing;
-            assert!(gap.abs() < 1e-3, "caps {} and {i} do not tile the pitch axis", i - 1);
-        }
-        let fill = super::spectrogram::cell_color(
-            cfg.spectrogram_gradient,
-            spectrogram_level_db(&cfg, level, midi),
-        );
-        let ink = atmosphere::keyline_color(fill, floor);
-        assert!(corners.iter().all(|v| v.color == ink), "cap {i} is not the line's solid color");
-    }
-    let luminance = |c: egui::Color32| {
-        let c = egui::Rgba::from(c);
-        0.2126 * c.r() + 0.7152 * c.g() + 0.0722 * c.b()
-    };
-    let cap = |i: usize| caps.vertices[i * 4].color;
-    let bright = super::spectrogram::cell_color(
-        cfg.spectrogram_gradient,
-        spectrogram_level_db(&cfg, 0.0, 69.0),
-    );
-    assert!(luminance(bright) > floor, "fixture needs a spike brighter than the floor");
-    assert_eq!(cap(spike), bright, "a bright level's cap is not its fill's color");
-    assert!((luminance(cap(0)) - floor).abs() < 0.01, "a dark cap was not lifted to the floor");
-    let flank = contour(spike).distance(contour(spike - 1));
-    assert!(flank > 20.0, "fixture needs a flank taller than a pixel");
-    // Nothing joins two samples, where a line would lay a triangle up the
-    // whole flank.
-    for triangle in caps.indices.chunks_exact(3) {
-        let at = |k: usize| caps.vertices[triangle[k] as usize].pos;
-        let widest = at(0).distance(at(1)).max(at(1).distance(at(2))).max(at(0).distance(at(2)));
-        assert!(widest <= pixel * 1.5, "a triangle {widest} wide joined samples");
-    }
-}
-
 /// The backdrop lights only the space above the curve, at its strength on the
 /// floor and fading to nothing at its height, and a segment rising through that
 /// height is cut at the crossing rather than laid over the flank below it.
-/// Stripes light one column in `backdrop_period`, each a single column wide;
-/// the Gradient lights them all. With the outline Off nothing else is drawn.
+/// Stripes light one column in `backdrop_gap + 1`, each a single column wide;
+/// a gap of 0 lights them all, and a strength of 0 draws no backdrop at all.
 #[test]
 fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
     let mut cfg = SpectrumConfig {
@@ -2060,9 +1975,8 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
         volume_floor_db: -40.0,
         volume_ceiling_db: 0.0,
         tilt: 0.0,
-        keyline_style: KeylineStyle::Off,
+        backdrop_strength: 0.85,
         backdrop_height: 0.3,
-        backdrop_period: 3.0,
         ..Default::default()
     };
     let axes = Axes::new(WIDE, &cfg);
@@ -2080,20 +1994,30 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
     let ink = crate::theme::picture_ruling().gamma_multiply(cfg.backdrop_strength);
     let stops = atmosphere::BODY_STOPS;
     let at = |v: &egui::epaint::Vertex| (axes.pitch_at(v.pos), axes.depth_at(v.pos));
-    for (backdrop, stripe) in [(Backdrop::Gradient, None), (Backdrop::Stripes, Some(3))] {
-        cfg.backdrop = backdrop;
+    let meshes = |cfg: &SpectrumConfig| -> Vec<egui::Mesh> {
         let out = painted_into(SCREEN, WIDE, |ui| {
-            atmosphere::draw_profile(ui.painter(), &axes, &cfg, &visible, budget, 1.0);
+            atmosphere::draw_profile(ui.painter(), &axes, cfg, &visible, budget, 1.0);
         });
-        let meshes: Vec<_> = out
-            .shapes
+        out.shapes
             .into_iter()
             .filter_map(|s| match s.shape {
-                egui::Shape::Mesh(mesh) => Some(mesh),
+                egui::Shape::Mesh(mesh) => Some(egui::Mesh::clone(&mesh)),
                 _ => None,
             })
-            .collect();
-        let [sky, body] = &meshes[..] else { panic!("expected the backdrop and the body only") };
+            .collect()
+    };
+    let off = SpectrumConfig { backdrop_strength: 0.0, ..cfg };
+    assert_eq!(
+        meshes(&off).len(),
+        2,
+        "strength 0 still drew a backdrop under the body and outline"
+    );
+    for (gap, stripe) in [(0.0, None), (2.0, Some(3))] {
+        cfg.backdrop_gap = gap;
+        let meshes = meshes(&cfg);
+        let [sky, body, _outline] = &meshes[..] else {
+            panic!("expected the backdrop, the body and the outline only")
+        };
         let edge: Vec<_> = (0..n).map(|i| at(&body.vertices[i * stops + stops - 1])).collect();
         assert!(edge[..10].iter().all(|&(_, d)| d.abs() < 1e-6), "fixture needs silence");
         assert!(edge[20].1 > 0.0 && edge[20].1 < top, "fixture needs a shelf under the height");
@@ -2116,9 +2040,9 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
                 corners.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / 3.0, s.1 + c.1 / 3.0));
             assert!(
                 centroid.1 >= edge_at(centroid.0) - 1e-4,
-                "{backdrop:?} over the fill at {centroid:?}"
+                "gap {gap}: over the fill at {centroid:?}"
             );
-            assert!(centroid.1 <= top + 1e-4, "{backdrop:?} above its height at {centroid:?}");
+            assert!(centroid.1 <= top + 1e-4, "gap {gap}: above its height at {centroid:?}");
             if let Some(spacing) = stripe {
                 let column = (lo * n as f32 + 1e-3).floor() as usize;
                 assert!(
@@ -2135,10 +2059,7 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
         for v in &sky.vertices {
             let (_, d) = at(v);
             let want = f32::from(ink.a()) * (1.0 - d / top).clamp(0.0, 1.0);
-            assert!(
-                (f32::from(v.color.a()) - want).abs() <= 2.0,
-                "{backdrop:?} alpha at depth {d}"
-            );
+            assert!((f32::from(v.color.a()) - want).abs() <= 2.0, "gap {gap}: alpha at depth {d}");
         }
         assert!(
             sky.vertices.iter().any(|v| at(v).1.abs() < 1e-6 && v.color == ink),

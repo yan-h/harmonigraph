@@ -630,7 +630,7 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
         (|cfg| &mut cfg.keyline_lift, 0.0, 1.0),
         (|cfg| &mut cfg.backdrop_strength, 0.0, 1.0),
         (|cfg| &mut cfg.backdrop_height, 0.05, 1.0),
-        (|cfg| &mut cfg.backdrop_period, 2.0, 8.0),
+        (|cfg| &mut cfg.backdrop_gap, 0.0, 7.0),
         (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
         (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
         (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),
@@ -657,10 +657,10 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
     }
     // The stripe spacing is whole pixels, so a fraction lands on the nearest.
     let mut state = fresh();
-    state.picture.appearance.spectrum.backdrop_period = 3.4;
+    state.picture.appearance.spectrum.backdrop_gap = 3.4;
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
-    assert_eq!(restored.picture.appearance.spectrum.backdrop_period, 3.0);
+    assert_eq!(restored.picture.appearance.spectrum.backdrop_gap, 3.0);
 }
 
 /// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
@@ -1961,7 +1961,7 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
             _ => false,
         })
     };
-    assert!(!drawn("Spectrum outline lift"), "the View section did not fold");
+    assert!(!drawn("Spectrum outline intensity"), "the View section did not fold");
     for heading in ["AUDIO ANALYSIS", "LEVEL MAPPING", "LIVE RESPONSE"] {
         assert!(drawn(heading), "folding View took {heading} with it");
     }
