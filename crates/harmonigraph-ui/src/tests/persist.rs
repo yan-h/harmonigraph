@@ -1854,7 +1854,6 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
         pitch_softness: f32::NAN,
         contours: 64.0,
         cloud_direction: 725.0,
-        analyzer_softness: 999.0,
         note_glow: 0.27,
         ..Default::default()
     };
@@ -1866,7 +1865,6 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     let expected = SpectralAtmosphere {
         contours: 20.0,
         cloud_direction: 5.0,
-        analyzer_softness: 1.0,
         note_glow: 0.27,
         ..Default::default()
     };
