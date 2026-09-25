@@ -238,7 +238,7 @@ fn control(
         rect.center()
     };
     if rail {
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::well());
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::header());
     }
     let button = if rail { Rect::from_center_size(center, Vec2::splat(size)) } else { rect };
     crate::widgets::paint_fold(ui, &response, button, direction);

@@ -415,18 +415,25 @@ fn every_bar_has_its_declared_height() {
 }
 
 /// Picking a skin rebuilds the chrome's style in it; the same skin again
-/// rebuilds nothing, and going back restores the default's.
+/// rebuilds nothing, a moved lightness rebuilds it lighter or darker, and
+/// going back restores the default's.
 #[test]
 fn a_chosen_skin_is_the_style_the_chrome_draws_with() {
-    use harmonigraph_scene::skin::{skin_index, skins, DEFAULT_SKIN};
+    use harmonigraph_scene::skin::{skin_index, skins, DEFAULT_LIGHTNESS, DEFAULT_SKIN};
     let ctx = crate::tests::probe::themed();
-    let [r, g, b] = skins()[skin_index("original").unwrap()].skin.panel;
-    assert!(crate::theme::set_skin(&ctx, "original"));
-    assert_eq!(
-        ctx.style_of(egui::Theme::Dark).visuals.panel_fill,
+    let panel = |lightness| {
+        let [r, g, b] = skins()[skin_index("original").unwrap()].skin.stepped(lightness).panel;
         egui::Color32::from_rgb(r, g, b)
+    };
+    assert!(crate::theme::set_skin(&ctx, "original", DEFAULT_LIGHTNESS));
+    assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, panel(DEFAULT_LIGHTNESS));
+    assert!(
+        !crate::theme::set_skin(&ctx, "original", DEFAULT_LIGHTNESS),
+        "an unchanged skin rebuilds nothing"
     );
-    assert!(!crate::theme::set_skin(&ctx, "original"), "an unchanged skin rebuilds nothing");
-    assert!(crate::theme::set_skin(&ctx, DEFAULT_SKIN));
+    let darker = *harmonigraph_scene::skin::LIGHTNESS_RANGE.start();
+    assert!(crate::theme::set_skin(&ctx, "original", darker), "a moved lightness rebuilt nothing");
+    assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, panel(darker));
+    assert!(crate::theme::set_skin(&ctx, DEFAULT_SKIN, DEFAULT_LIGHTNESS));
     assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, crate::theme::panel());
 }

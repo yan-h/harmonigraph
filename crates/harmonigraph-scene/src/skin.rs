@@ -18,20 +18,23 @@
 //! another.
 
 use std::cell::Cell;
+use std::ops::RangeInclusive;
 use std::sync::OnceLock;
 
 use glam::Vec4;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Skin {
     // ---- UI chrome (sRGB bytes; converted to egui colors in theme) ----
     // CHROME only. What the lattice is drawn AT REST in — its markers, both of
     // a node's rings where nothing is lit — is a view setting rather than a
     // skin color (`ViewConfig::lattice_ground`), because it is a thing to be
     // dialled while a picture is being read.
-    /// Window/panel background.
+    /// Window/panel background: the settings page, and every popup.
     pub panel: [u8; 3],
-    /// Recessed areas: console scrollback, tab bar, meters.
+    /// Pane headers and folded rails, one step above `panel`.
+    pub header: [u8; 3],
+    /// Recessed areas: console scrollback, tracks, meters.
     pub well: [u8; 3],
     /// Subtly raised surface between panel and widget: hovered tabs,
     /// faint striping.
@@ -80,6 +83,7 @@ impl Skin {
     pub fn original() -> Self {
         Skin {
             panel: [24, 25, 29],
+            header: [24, 25, 29],
             well: [15, 16, 19],
             surface_faint: [46, 48, 57],
             hairline: [64, 67, 77],
@@ -109,19 +113,16 @@ impl Skin {
     /// mixes of the accent into the surface they sit on, so they stay opaque
     /// (see `theme::accent_fill`).
     ///
-    /// Where `base01` is all but the pane colour (under 1.06:1, as several
-    /// schemes ship it) the track is lifted most of the way to `base02`,
-    /// or the bars would have no visible track at all.
+    /// The neutral slots are the scheme's own here; [`Skin::stepped`]
+    /// replaces them, keeping only `base00`'s hue and tint.
     pub fn from_base16(slots: [u32; 16]) -> Skin {
         let b = slots.map(|v| [(v >> 16) as u8, (v >> 8) as u8, v as u8]);
-        let mut track = b[1];
-        if contrast(track, b[0]) < 1.06 {
-            track = mix(b[0], b[2], 0.6);
-        }
+        let track = b[1];
         let widget = b[2];
         let accent = b[13];
         Skin {
             panel: b[0],
+            header: b[0],
             well: track,
             surface_faint: b[2],
             hairline: b[2],
@@ -140,6 +141,134 @@ impl Skin {
             warning_bg: mix(b[0], b[8], 0.2),
         }
     }
+}
+
+/// The contrast dim text keeps against the page at every page lightness.
+pub const LABEL_FLOOR: f32 = 4.0;
+
+/// The OKLab lightness between one neutral layer and the next. Fixed rather
+/// than a dial: 0.07 is where it was tuned by eye, and moving it would move
+/// the range [`LIGHTNESS_RANGE`] was fitted to.
+pub const STEP: f32 = 0.07;
+
+/// Where the page's lightness can be dialled. The top is where the lightest
+/// track, 0.16 + 2 × [`STEP`], still leaves every skin's slider fill reading
+/// against it; below 0.08 the page is within a byte or two of black, where
+/// OKLab lightness moves in steps too coarse to lay a ladder on.
+pub const LIGHTNESS_RANGE: RangeInclusive<f32> = 0.08..=0.16;
+
+/// The page lightness a fresh install opens at.
+pub const DEFAULT_LIGHTNESS: f32 = 0.15;
+
+/// `lightness` inside [`LIGHTNESS_RANGE`], a non-finite value going back to
+/// the default, so a hand-edited blob cannot put the dial somewhere the chrome
+/// is not.
+pub fn sane_lightness(lightness: f32) -> f32 {
+    if lightness.is_finite() {
+        lightness.clamp(*LIGHTNESS_RANGE.start(), *LIGHTNESS_RANGE.end())
+    } else {
+        DEFAULT_LIGHTNESS
+    }
+}
+
+impl Skin {
+    /// This skin with its page at `lightness` and its other neutral layers a
+    /// whole number of [`STEP`]s above it, in the page colour's hue and tint.
+    ///
+    /// | layer | steps |
+    /// |---|---|
+    /// | `panel` (the page) | 0 |
+    /// | `header` | 1 |
+    /// | `well` (tracks) | 2 |
+    /// | `widget`, `hairline`, `surface_faint` | 3 |
+    /// | `widget_hover` | 4 |
+    ///
+    /// Stepped in OKLab lightness, where equal steps look equal, rather than
+    /// taken from the scheme's own backgrounds: base16 has no slot darker than
+    /// its page, and the ones it has are ordered by convention only, so a
+    /// scheme could put its tracks under its page or its header on a button.
+    /// The ladder makes that order a property rather than a hope. The accent
+    /// fills are remixed from the stepped surfaces they sit on.
+    ///
+    /// Dim text is the scheme's, lifted only as far as it takes to keep
+    /// [`LABEL_FLOOR`] against the page: a lighter page would otherwise take a
+    /// scheme's darker greys under it (Berlin's `base04` sits at 3.97:1 on
+    /// the default page).
+    pub fn stepped(&self, lightness: f32) -> Skin {
+        let [_, a, b] = oklab(self.panel);
+        let layer = |steps: f32| srgb(lightness + steps * STEP, a, b);
+        let (panel, header, well, widget) = (layer(0.0), layer(1.0), layer(2.0), layer(3.0));
+        let [mut dim, dim_a, dim_b] = oklab(self.text_dim);
+        let mut text_dim = self.text_dim;
+        while contrast(text_dim, panel) < LABEL_FLOOR && dim < 1.0 {
+            dim += 0.005;
+            text_dim = srgb(dim, dim_a, dim_b);
+        }
+        Skin {
+            text_dim,
+            panel,
+            header,
+            well,
+            widget,
+            hairline: widget,
+            surface_faint: widget,
+            widget_hover: layer(4.0),
+            accent_fill: mix(well, self.accent, 0.42),
+            accent_fill_hover: mix(well, self.accent, 0.58),
+            accent_fill_drag: mix(well, self.accent, 0.78),
+            accent_active: mix(widget, self.accent, 0.55),
+            warning_bg: mix(panel, self.warning_text, 0.2),
+            ..*self
+        }
+    }
+}
+
+/// An sRGB byte triple in OKLab, `[L, a, b]`.
+pub(crate) fn oklab(c: [u8; 3]) -> [f32; 3] {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let [r, g, b] = c.map(lin);
+    let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+/// An OKLab colour as sRGB bytes, its chroma pulled in until it fits sRGB so
+/// the lightness and hue are the ones asked for.
+fn srgb(lightness: f32, a: f32, b: f32) -> [u8; 3] {
+    let linear = |chroma: f32| {
+        let (a, b) = (a * chroma, b * chroma);
+        let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+        let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+        let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+        [
+            4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s,
+            -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s,
+            -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s,
+        ]
+    };
+    let mut chroma = 1.0;
+    let mut rgb = linear(chroma);
+    while chroma > 0.01 && rgb.iter().any(|v| !(-1e-4..=1.0 + 1e-4).contains(v)) {
+        chroma *= 0.9;
+        rgb = linear(chroma);
+    }
+    rgb.map(|v| {
+        let v = v.clamp(0.0, 1.0);
+        let v = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+        (v * 255.0).round() as u8
+    })
 }
 
 /// `a` moved `t` of the way to `b`, per sRGB byte.
@@ -176,6 +305,8 @@ pub struct SkinEntry {
     pub id: &'static str,
     /// What the picker shows.
     pub name: &'static str,
+    /// The scheme as mapped. Its neutral layers only lend the page colour's
+    /// hue and tint: what the chrome wears is this [`Skin::stepped`].
     pub skin: Skin,
 }
 
@@ -270,25 +401,52 @@ pub fn skin_index(id: &str) -> Option<usize> {
     skins().iter().position(|entry| entry.id == id)
 }
 
+/// The skin in force: which of [`skins`], at which page lightness, and the
+/// stepped result, kept so a colour lookup is a copy rather than a remix.
+#[derive(Clone, Copy)]
+struct Active {
+    index: usize,
+    lightness: f32,
+    skin: Skin,
+}
+
 thread_local! {
-    static ACTIVE: Cell<usize> = const { Cell::new(0) };
+    static ACTIVE: Cell<Option<Active>> = const { Cell::new(None) };
 }
 
-/// Put `skins()[index]` in force on this thread; an index past the end is
-/// the default. See the module doc for why this is per thread.
-pub fn set_active_skin(index: usize) {
-    ACTIVE.set(if index < skins().len() { index } else { 0 });
+fn active() -> Active {
+    ACTIVE.get().unwrap_or_else(|| Active {
+        index: 0,
+        lightness: DEFAULT_LIGHTNESS,
+        skin: skins()[0].skin.stepped(DEFAULT_LIGHTNESS),
+    })
 }
 
-/// The index [`active_skin`] reads, for a context to remember which skin its
-/// style was built in.
-pub fn active_skin_index() -> usize {
-    ACTIVE.get()
+/// Put `skins()[index]` in force on this thread, its page at `lightness`; an
+/// index past the end is the default. See the module doc for why this is per
+/// thread. Restepped only when the index or the lightness moved, the two
+/// things the stepped skin is made of.
+pub fn set_active_skin(index: usize, lightness: f32) {
+    let index = if index < skins().len() { index } else { 0 };
+    let current = active();
+    if (current.index, current.lightness) == (index, lightness) {
+        ACTIVE.set(Some(current));
+        return;
+    }
+    ACTIVE.set(Some(Active { index, lightness, skin: skins()[index].skin.stepped(lightness) }));
 }
 
-/// The skin in force on this thread; [`DEFAULT_SKIN`]'s until one is set.
-pub fn active_skin() -> &'static Skin {
-    &skins()[ACTIVE.get()].skin
+/// The index and page lightness [`active_skin`] was stepped from, for a
+/// context to remember which skin its style was built in.
+pub fn active_skin_key() -> (usize, f32) {
+    let active = active();
+    (active.index, active.lightness)
+}
+
+/// The skin in force on this thread; [`DEFAULT_SKIN`]'s at
+/// [`DEFAULT_LIGHTNESS`] until one is set.
+pub fn active_skin() -> Skin {
+    active().skin
 }
 
 /// An sRGB byte triple as the opaque RGBA vector the renderer wants.

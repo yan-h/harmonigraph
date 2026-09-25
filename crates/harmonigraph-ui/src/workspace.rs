@@ -441,7 +441,7 @@ fn section_ui(
     if folded {
         if rail > 0.0 {
             let response = pane.interact(rect, pane.id().with("unfold"), egui::Sense::click());
-            pane.painter().rect_filled(rect, 0.0, theme::well());
+            pane.painter().rect_filled(rect, 0.0, theme::header());
             crate::widgets::paint_fold(
                 &pane,
                 &response,
@@ -482,6 +482,11 @@ fn section_ui(
         let gutter = theme::pane_inner_margin(scale);
         let header_rect =
             Rect::from_min_max(rect.min, pos2(rect.right() - gutter, rect.top() + rail));
+        // The header is chrome, not the first row of the page: its own fill,
+        // across the pane's full width. Its edge is the fill's; a rule there
+        // would be one more line in the colour of the page's own section rules.
+        let band = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + rail));
+        pane.painter().rect_filled(band, 0.0, theme::header());
         let mut header =
             pane.new_child(egui::UiBuilder::new().id_salt("header").max_rect(header_rect));
         header.set_clip_rect(header_rect.intersect(pane.clip_rect()));
