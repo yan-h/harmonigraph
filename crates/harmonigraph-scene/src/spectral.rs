@@ -1220,13 +1220,14 @@ mod tests {
     /// [`the_band_never_reaches_under_the_gates_floor`]. What must not happen
     /// is a gate ABOVE its floor behaving like one on it.
     ///
-    /// Run at gates under the fresh band of 0.0964, which is the stretch of
-    /// the Gate bar a person reaches by dragging it down to see more of the
+    /// Run at gates under a band of about the fresh one, which is the stretch
+    /// of the Gate bar a person reaches by dragging it down to see more of the
     /// reading.
     #[test]
     fn a_band_reaching_the_gate_releases_on_silence() {
         for gate in [0.02, 0.05, 0.09] {
-            let view = gated(gate, SpectralReading::Fold);
+            let view =
+                ViewConfig { spectral_ring_hysteresis: 0.1, ..gated(gate, SpectralReading::Fold) };
             assert!(
                 view.spectral_ring_hysteresis >= gate,
                 "the test's own band of {} does not reach the gate of {gate}",
