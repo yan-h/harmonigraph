@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::canonical::VoiceBaseline;
-use crate::notes::{SourceId, Time, VoiceKey};
+use crate::notes::{Expressions, SourceId, Time, VoiceKey};
 
 /// One press of one key: when it started, when it stopped, and the pitch
 /// it traced in between.
@@ -60,6 +60,16 @@ pub struct RollNote {
     /// replaced by an out-of-window one, and the answer would move — long
     /// after anything derived from it had been told it could not.
     settled: f32,
+    /// Every expression the note has held, oldest first, read as a straight
+    /// line between breakpoints like `bends`. Never empty: the onset seeds it.
+    ///
+    /// Thinned by TIME rather than folded by count. Pressure arrives every
+    /// block, so the fold `bends` uses would spend its whole budget in the
+    /// first moments of a note and draw the rest as one straight line.
+    expressions: Vec<(Time, Expressions)>,
+    /// The closest two breakpoints in `expressions` may sit, which doubles
+    /// every time the note fills its budget.
+    expression_spacing: Time,
 }
 
 impl RollNote {
@@ -110,6 +120,62 @@ impl RollNote {
     /// different moment.
     pub fn settled_pitch(&self) -> f32 {
         self.settled
+    }
+
+    /// Expression breakpoints kept per note before it is thinned to half.
+    pub const MAX_EXPRESSIONS: usize = 128;
+
+    /// The closest two expression breakpoints sit on a fresh note: finer than
+    /// the roll draws at any zoom it offers, coarse enough that a note has to
+    /// be pressed for over a second before it thins.
+    pub const EXPRESSION_SPACING: Time = 0.01;
+
+    /// Every expression the note has held, oldest first, as breakpoints to be
+    /// read as straight lines. Two sharing a time are a step. Never empty.
+    pub fn expressions(&self) -> &[(Time, Expressions)] {
+        &self.expressions
+    }
+
+    /// Record the note's expressions changing to `values` at `at`.
+    ///
+    /// A value arriving within one spacing of the breakpoint before last moves
+    /// the last breakpoint rather than adding one, so the history keeps about
+    /// one point per spacing and its end is always the current value. A value
+    /// arriving after a quiet stretch re-asserts the old value at the same
+    /// instant first: without it the line from the last change would draw a
+    /// slow ramp across the whole of a held level.
+    fn express(&mut self, at: Time, values: Expressions) {
+        let last = self.expressions.len() - 1;
+        let (last_at, last_values) = self.expressions[last];
+        if last_values == values {
+            return;
+        }
+        if at <= last_at
+            || (last > 0 && at - self.expressions[last - 1].0 < self.expression_spacing)
+        {
+            self.expressions[last] = (at.max(last_at), values);
+            return;
+        }
+        if self.expressions.len() + 2 > Self::MAX_EXPRESSIONS {
+            self.thin_expressions();
+        }
+        if at - last_at >= self.expression_spacing {
+            self.expressions.push((at, last_values));
+        }
+        self.expressions.push((at, values));
+    }
+
+    /// Halve the history: keep every other breakpoint, the first and the
+    /// last, and double the spacing so it fills at the same rate again.
+    fn thin_expressions(&mut self) {
+        let last = self.expressions.len() - 1;
+        let mut index = 0;
+        self.expressions.retain(|_| {
+            let keep = index % 2 == 0 || index == last;
+            index += 1;
+            keep
+        });
+        self.expression_spacing *= 2.0;
     }
 
     /// The pitch it is sounding (or last sounded) at.
@@ -233,6 +299,8 @@ impl NoteRoll {
                 bends: vec![(at, pitch)],
                 breaks: Vec::new(),
                 settled: pitch,
+                expressions: vec![(at, Expressions::NEUTRAL)],
+                expression_spacing: RollNote::EXPRESSION_SPACING,
             },
         );
     }
@@ -338,6 +406,7 @@ impl NoteRoll {
                     note.history_complete = false;
                     note.push_point(at, row.pitch(), true);
                 }
+                note.express(at, row.expressions);
                 continue;
             }
             self.live.insert(
@@ -356,6 +425,8 @@ impl NoteRoll {
                     bends: vec![(at, row.pitch())],
                     breaks: Vec::new(),
                     settled: row.pitch(),
+                    expressions: vec![(at, row.expressions)],
+                    expression_spacing: RollNote::EXPRESSION_SPACING,
                 },
             );
         }
@@ -367,6 +438,14 @@ impl NoteRoll {
     pub fn bend(&mut self, key: VoiceKey, at: Time, pitch: f32) {
         if let Some(note) = self.live.get_mut(&key) {
             note.bend(at, pitch);
+        }
+    }
+
+    /// Record a sounding note's expressions changing. Unknown keys are ignored,
+    /// as for [`bend`](Self::bend).
+    pub fn express(&mut self, key: VoiceKey, at: Time, values: Expressions) {
+        if let Some(note) = self.live.get_mut(&key) {
+            note.express(at, values);
         }
     }
 
@@ -798,6 +877,59 @@ mod tests {
         }
         let note = tracker.roll().notes().next().unwrap();
         assert_eq!(note.settled_pitch(), settled, "the onset is over; the answer is fixed");
+    }
+
+    fn pressure(time: Time, note: u8, value: f32) -> NoteEvent {
+        NoteEvent {
+            source: crate::SourceId::DIRECT,
+            time,
+            channel: 0,
+            note,
+            kind: NoteEventKind::Expression { expression: crate::Expression::Pressure, value },
+        }
+    }
+
+    /// A level held through a quiet stretch stays level until the moment it
+    /// changes: the change is a step at its own time, not a ramp from the last
+    /// one. What arrives after the release reaches neither the voice nor the
+    /// roll.
+    #[test]
+    fn an_expression_after_a_held_level_is_a_step() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(pressure(0.0, 60, 0.25));
+        tracker.handle_event(pressure(2.0, 60, 0.75));
+        assert_eq!(tracker.voices().next().unwrap().expressions.pressure, 0.75);
+        tracker.handle_event(off(3.0, 60));
+        tracker.handle_event(pressure(3.5, 60, 1.0));
+        let note = tracker.roll().notes().next().unwrap();
+        let points: Vec<_> = note.expressions().iter().map(|(t, e)| (*t, e.pressure)).collect();
+        assert_eq!(points, vec![(0.0, 0.25), (2.0, 0.25), (2.0, 0.75)]);
+    }
+
+    /// Pressure every millisecond for ten seconds: the history stays inside
+    /// its budget, still covers the whole note rather than its first moments,
+    /// and ends on the current value.
+    #[test]
+    fn a_dense_expression_thins_across_the_whole_note() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        let value = |i: u32| (i % 1000) as f32 / 1000.0;
+        for i in 1..=10_000 {
+            tracker.handle_event(pressure(Time::from(i) / 1000.0, 60, value(i)));
+        }
+        let note = tracker.roll().notes().next().unwrap();
+        let points = note.expressions();
+        assert!(points.len() <= RollNote::MAX_EXPRESSIONS, "{} points", points.len());
+        assert!(points.len() > RollNote::MAX_EXPRESSIONS / 2 - 2, "{} points", points.len());
+        for second in 0..10 {
+            let within = |t: Time| t >= Time::from(second) && t < Time::from(second + 1);
+            assert!(points.iter().any(|(t, _)| within(*t)), "nothing in second {second}");
+        }
+        assert_eq!(
+            *points.last().unwrap(),
+            (10.0, crate::Expressions { pressure: value(10_000), ..Default::default() })
+        );
     }
 
     #[test]

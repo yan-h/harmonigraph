@@ -1239,6 +1239,39 @@ fn the_display_shows_the_schedule_rather_than_the_input() {
     assert_eq!(onset.planned, Some(onset.sample));
 }
 
+/// A paired Tune's pressure reaches the display as an expression on the note
+/// it addresses, in the host's own units, with the tuning route unchanged.
+#[test]
+fn a_tunes_pressure_reaches_the_display_as_an_expression() {
+    use harmonigraph_take::{CanonicalRecord, ExpressionKind, NoteKind};
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    let pressure = Input::Expression(clap_event_note_expression {
+        header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 80),
+        expression_id: CLAP_NOTE_EXPRESSION_PRESSURE,
+        note_id: 1,
+        port_index: -1,
+        channel: -1,
+        key: -1,
+        value: 0.375,
+    });
+    tune.run_format(0, vec![note(1, 0, 60, 64, true), pressure], None, None, 512);
+    hub.run_format(0, vec![], None, None, 512);
+    let kinds: Vec<_> = capture
+        .display_events()
+        .into_iter()
+        .filter_map(|record| match record {
+            CanonicalRecord::Delta(delta) => Some((delta.event.note, delta.event.kind)),
+            _ => None,
+        })
+        .collect();
+    let expected = NoteKind::Expression { expression: ExpressionKind::Pressure, value: 0.375 };
+    assert!(kinds.contains(&(60, expected)), "{kinds:?}");
+}
+
 /// Both a cohort still wholly pending and a sounding set reach the actual
 /// 64-cell ceiling. Refused attacks reach neither the wire nor publication;
 /// every admitted voice keeps its frozen expression and cut ownership.

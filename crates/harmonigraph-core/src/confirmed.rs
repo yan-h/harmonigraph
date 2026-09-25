@@ -188,6 +188,8 @@ impl ConfirmedPitches {
                 self.release(key, None);
                 Ok(())
             }
+            // Pitch confirmation reads pitch alone.
+            NoteEventKind::Expression { .. } => Ok(()),
             NoteEventKind::SourceReset => {
                 self.clear_source(SourceId::DIRECT);
                 Ok(())

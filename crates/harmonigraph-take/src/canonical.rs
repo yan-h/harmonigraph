@@ -2,7 +2,7 @@
 //! frames are validated before either live replay or full-roll reconstruction.
 use harmonigraph_core::canonical::*;
 use harmonigraph_core::confirmed::PitchProvenance;
-use harmonigraph_core::{LatticePos, NoteTracker, SourceId};
+use harmonigraph_core::{Expressions, LatticePos, NoteTracker, SourceId};
 use serde::{Deserialize, Serialize};
 
 use crate::{ConfigurationRecord, NoteRecord};
@@ -152,6 +152,7 @@ pub struct VoiceRecord {
     pub player_tuning: f64,
     pub frozen_offset_microcents: i64,
     pub velocity: f32,
+    pub expressions: ExpressionsRecord,
     pub provenance: ProvenanceRecord,
     pub assignment: Option<ConfigurationRecord>,
     pub decision: u64,
@@ -180,6 +181,7 @@ impl From<VoiceBaseline> for VoiceRecord {
             player_tuning: v.player_tuning,
             frozen_offset_microcents: v.frozen_offset_microcents,
             velocity: v.velocity,
+            expressions: v.expressions.into(),
             provenance: v.provenance.into(),
             assignment: v.assignment.map(|a| ConfigurationRecord::new(v.actual_onset, a)),
             decision: v.decision,
@@ -205,6 +207,7 @@ impl From<&VoiceRecord> for VoiceBaseline {
             player_tuning: v.player_tuning,
             frozen_offset_microcents: v.frozen_offset_microcents,
             velocity: v.velocity,
+            expressions: v.expressions.into(),
             provenance: v.provenance.into(),
             assignment: v.assignment.map(ConfigurationRecord::resolved),
             decision: v.decision,
@@ -212,6 +215,31 @@ impl From<&VoiceRecord> for VoiceBaseline {
             partial_output: v.partial_output,
             release_pending: v.release_pending,
         }
+    }
+}
+
+/// Mirrors `harmonigraph_core::Expressions`; a take written before voices
+/// carried expressions reads every one as neutral.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExpressionsRecord {
+    pub pressure: f32,
+    pub gain: f32,
+    pub timbre: f32,
+}
+impl Default for ExpressionsRecord {
+    fn default() -> Self {
+        Expressions::NEUTRAL.into()
+    }
+}
+impl From<Expressions> for ExpressionsRecord {
+    fn from(e: Expressions) -> Self {
+        Self { pressure: e.pressure, gain: e.gain, timbre: e.timbre }
+    }
+}
+impl From<ExpressionsRecord> for Expressions {
+    fn from(e: ExpressionsRecord) -> Self {
+        Self { pressure: e.pressure, gain: e.gain, timbre: e.timbre }
     }
 }
 
@@ -346,7 +374,8 @@ impl CanonicalRecord {
                     && n.channel < 16
                     && n.note < 128
                     && !matches!(n.kind, crate::NoteKind::On { velocity } if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity))
-                    && !matches!(n.kind, crate::NoteKind::Tuning { semitones } if !semitones.is_finite()) =>
+                    && !matches!(n.kind, crate::NoteKind::Tuning { semitones } if !semitones.is_finite())
+                    && !matches!(n.kind, crate::NoteKind::Expression { expression, value } if !harmonigraph_core::Expression::from(expression).range().contains(&value)) =>
             {
                 Ok(())
             }

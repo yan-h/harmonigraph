@@ -501,6 +501,7 @@ impl App {
                     NoteEventKind::On { .. } => "on",
                     NoteEventKind::Off => "off",
                     NoteEventKind::Tuning { .. } => "tune",
+                    NoteEventKind::Expression { .. } => "expression",
                     NoteEventKind::SourceReset => "source-reset",
                     NoteEventKind::SessionReset => "session-reset",
                 }

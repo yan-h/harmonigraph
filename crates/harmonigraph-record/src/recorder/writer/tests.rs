@@ -177,6 +177,7 @@ impl Bench {
                         NoteEventKind::On { .. } => "on",
                         NoteEventKind::Off => "off",
                         NoteEventKind::Tuning { .. } => "tuning",
+                        NoteEventKind::Expression { .. } => "expression",
                         NoteEventKind::SessionReset => "session-reset",
                         NoteEventKind::SourceReset => "source-reset",
                     };
