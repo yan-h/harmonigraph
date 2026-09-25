@@ -199,12 +199,17 @@ pub(super) fn draw_profile(
     // The contour takes the color of the fill it bounds, lifted toward white
     // only as far as the Lift dial's luminance floor asks: a bright level
     // wears its own color, a dark one stays bright enough to read. It is
-    // opaque, and never depends on the material's softness.
+    // opaque, and never depends on the material's softness. It runs along the
+    // CLOSED contour ([`keyline_contour`]), so a trough too narrow for the line
+    // to trace is bridged rather than scribbled.
     if samples.iter().any(|&(_, d, _)| d > 0.0) {
         let floor = keyline_floor(cfg.keyline_lift);
-        let points: Vec<_> = samples.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
+        let per_pt = samples.len() as f32 / axes.pitch_len().max(1.0);
+        let half = (0.5 * KEYLINE_BRIDGE_PT * per_pt).round() as usize;
+        let contour = keyline_contour(&samples, half);
+        let points: Vec<_> = contour.iter().map(|&(t, d, _)| axes.at(t, sd(d))).collect();
         let colors: Vec<_> =
-            samples.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
+            contour.iter().map(|&(_, _, color)| keyline_color(color, floor)).collect();
         painter.add(stroke_mesh(
             &points,
             &colors,
@@ -216,6 +221,42 @@ pub(super) fn draw_profile(
 
 /// The outline's width, in points.
 const KEYLINE_WIDTH_PT: f32 = 1.0;
+
+/// The narrowest trough the outline follows down, in points. A narrower one
+/// (the dense high partials of a rich tone, a pixel or two apart) has no room
+/// for a line of [`KEYLINE_WIDTH_PT`] to go down and back up, so tracing it
+/// draws a solid scribble; the outline bridges it at its lower rim instead.
+const KEYLINE_BRIDGE_PT: f32 = 3.0;
+
+/// The profile's morphological closing over `2 * half + 1` samples: a running
+/// max, then a running min of that. Every trough narrower than the window is
+/// filled to the lower of the peaks around it, wearing that peak's color,
+/// so a dense loud cluster reads as loud. Everything wider, peaks included,
+/// is returned exactly as measured: closing never lowers a sample, and leaves
+/// it alone wherever the window fits under the curve.
+fn keyline_contour(samples: &[(f32, f32, Color32)], half: usize) -> Vec<(f32, f32, Color32)> {
+    if half == 0 {
+        return samples.to_vec();
+    }
+    let window = |i: usize| i.saturating_sub(half)..(i + half + 1).min(samples.len());
+    let deeper = |a: &&(f32, f32, Color32), b: &&(f32, f32, Color32)| a.1.total_cmp(&b.1);
+    let dilated: Vec<_> =
+        (0..samples.len()).map(|i| *samples[window(i)].iter().max_by(deeper).unwrap()).collect();
+    samples
+        .iter()
+        .enumerate()
+        .map(|(i, &own)| {
+            let (_, d, color) = *dilated[window(i)].iter().min_by(deeper).unwrap();
+            // Closing never lowers a sample, so no rise means untouched: keep
+            // the sample's own color rather than a tied neighbor's.
+            if d > own.1 {
+                (own.0, d, color)
+            } else {
+                own
+            }
+        })
+        .collect()
+}
 
 /// The Lift dial, gamma-encoded so it reads evenly, as the linear luminance
 /// floor [`keyline_color`] lifts to.

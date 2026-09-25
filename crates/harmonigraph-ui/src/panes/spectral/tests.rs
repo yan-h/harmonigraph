@@ -2017,6 +2017,66 @@ fn analyzer_outline_is_independent_of_softness_and_leaves_silence_dark() {
     );
 }
 
+/// A trough narrower than the outline can trace is bridged at the lower of
+/// its peaks, in that peak's color; a wide one is followed down exactly.
+/// Two samples per point, as a 2x display draws them, so the dense run's
+/// one-sample troughs are the sub-point comb the bridge exists for.
+#[test]
+fn analyzer_outline_bridges_troughs_too_narrow_to_trace() {
+    let mut cfg = SpectrumConfig {
+        floor_db: -100.0,
+        ceiling_db: 0.0,
+        volume_floor_db: -40.0,
+        volume_ceiling_db: 0.0,
+        tilt: 0.0,
+        ..Default::default()
+    };
+    cfg.atmosphere.analyzer_softness = 0.0;
+    let axes = Axes::new(WIDE, &cfg);
+    let n = (axes.pitch_len() * 2.0) as usize;
+    assert!(n >= 180, "fixture needs room for both troughs");
+    let level = |i: usize| match i {
+        20..80 if i.is_multiple_of(2) => 0.0,
+        20..80 => -80.0,
+        120 | 160 => 0.0,
+        121..160 => -80.0,
+        _ => -99.0,
+    };
+    let visible: Vec<_> = (0..n).map(|i| (69.0, (i as f32 + 0.5) / n as f32, level(i))).collect();
+    let out = painted_into(SCREEN, WIDE, |ui| {
+        let budget = plot_budget(1.0, axes.depth_len());
+        atmosphere::draw_profile(ui.painter(), &axes, &cfg, &visible, budget, 1.0);
+    });
+    let meshes: Vec<_> = out
+        .shapes
+        .into_iter()
+        .filter_map(|s| match s.shape {
+            egui::Shape::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .collect();
+    let [body, outline] = &meshes[..] else { panic!("expected the body and the outline") };
+    let stops = atmosphere::BODY_STOPS.len();
+    let contour = |i: usize| body.vertices[i * stops + stops - 1].pos;
+    let line = |i: usize| {
+        let across = &outline.vertices[i * 4..i * 4 + 4];
+        (across[1].pos + across[2].pos.to_vec2()) / 2.0
+    };
+    assert_eq!(outline.vertices.len(), n * 4);
+    for i in (21..79).step_by(2) {
+        assert!(contour(i).distance(contour(i - 1)) > 20.0, "fixture needs deep narrow troughs");
+        assert!(
+            line(i).distance(line(i - 1)) < 1.0,
+            "a one-sample trough at {i} was traced rather than bridged"
+        );
+        assert_eq!(outline.vertices[i * 4 + 1].color, outline.vertices[i * 4 - 3].color);
+    }
+    for i in (0..n).filter(|i| !(19..=80).contains(i)) {
+        assert!(line(i).distance(contour(i)) < 1e-3, "the wide contour moved at {i}");
+    }
+    assert!(contour(140).distance(contour(120)) > 20.0, "fixture needs a deep wide trough");
+}
+
 /// The whole pane, painted in every orientation with a roll that has
 /// held notes, bent notes, notes off the pitch range and notes older
 /// than the window. Geometry this fiddly is easy to make degenerate
