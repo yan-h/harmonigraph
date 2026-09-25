@@ -18,8 +18,9 @@ const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Fixed cloud sampling: native on 1x/2x displays, with a 40-cell repeat.
 /// Forty closes every hashed lattice and makes repetition less frequent than
-/// twenty at the same steady-frame cost. Tests retain the live walk as a
-/// reference through a callback-resource override, never persisted settings.
+/// twenty at the same steady-frame cost. Tests and the timing probe override
+/// it through a callback resource, never persisted settings; the period is
+/// never 0, because the composite has no live walk to fall back to (#1100).
 #[derive(Clone, Copy)]
 pub(super) struct CloudSampling {
     pub tile_cells: u32,
@@ -241,7 +242,7 @@ impl TileKey {
     }
 }
 
-/// The tile this frame wants, or `None` where the cells are walked live.
+/// The tile this frame wants, or `None` where no cloud is drawn.
 ///
 /// See [`TileKey`] for what is in it and what deliberately is not.
 pub(super) fn tile_key(
@@ -250,9 +251,13 @@ pub(super) fn tile_key(
     period: u32,
 ) -> Option<TileKey> {
     let settings = atmosphere.settings.sanitized();
-    if !settings.effects().cloud || period == 0 {
+    if !settings.effects().cloud {
         return None;
     }
+    // The composite reads a cloud out of its tile and nowhere else: its
+    // live-walk arm was retired because, never taken, it still cost the
+    // full-resolution shader 16 to 21% (#1100).
+    assert!(period > 0, "a cloud is drawn only out of a tile, so its period cannot be 0");
     let (style, cells, dials) = match settings.cloud_style {
         harmonigraph_scene::CloudStyle::Mosaic => {
             (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0])
@@ -313,7 +318,8 @@ struct Uniforms {
     wash_lobe: f32,
     wash_refract: f32,
     wash_layers: f32,
-    /// The tile's period in cells, 0 for the live walk. See [`TileKey`].
+    /// The tile's period in cells, 0 only when no cloud is drawn and the shader
+    /// never reads it. See [`TileKey`].
     tile_cells: u32,
     /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
@@ -922,8 +928,8 @@ impl Targets {
             wash_lobe: settings.wash_lobe,
             wash_refract: settings.wash_refract,
             wash_layers: settings.wash_layers,
-            // Zero where no tile was allocated, which is the live walk — so the
-            // shader never reads a tile that is not there.
+            // Zero only where no tile was allocated, which is where no cloud is
+            // drawn and the shader returns before the tone.
             tile_cells: tile.map_or(0, TileKey::period),
             pitch_vertical: u32::from(pitch_vertical),
             _pad: [0; 2],
@@ -1082,8 +1088,6 @@ mod tests {
         // Coarse cells on a tall pane run past the ceiling, where the tile is
         // simply coarser than the pane.
         assert_eq!(at(40, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
-        // The test-only zero period is the live reference: nothing allocated.
-        assert_eq!(at(0, 1.0, 1080), None);
     }
 
     /// A reduced tone target exists only where it would be SMALLER than the

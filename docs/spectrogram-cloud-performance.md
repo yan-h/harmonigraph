@@ -225,8 +225,10 @@ Sampled bilinearly at the fractional offset instead, the motion stays smooth and
 both controls and their saved fields are retired.
 Existing appearances use these values when reopened,
 including recorded appearances used for video export.
-The live walk remains a test reference,
-and the timing probe can still override sampling for comparisons.
+The timing probe can still override sampling for comparisons,
+but never to a period of 0:
+the composite's live-walk arm was retired in #1100 (below),
+and the unwrapped walk survives only as the Mosaic tile test's reference.
 The measurements and dial descriptions below record the exploration that led to this choice.
 
 Wrap the cell hash every `P` cells and the field is periodic, so ONE tile of `P` by `P` cells, baked once and read through a repeat sampler, is the whole plane.
@@ -286,6 +288,36 @@ At `P = 20` the same geometry returns to a pitch row after 100 time cells; at `P
 The Watercolor rotation follows the pane's time and pitch axes when its orientation changes, and as an isometry it needs none of the extra tile resolution the stagger's shear did.
 Whether the eye finds that is Yan's call, and the dial exists so he can compare `P` against the live walk in the DAW.
 
+### The never-taken live arm still cost the composite (2026-09-25, #1100)
+
+Once every cloud was tiled, `scale_tone` and `wash_cloud_tone` still carried a `tile_cells == 0` arm that walked the rings under the pixel.
+No production frame took it,
+but it was compiled into `fs_cloud_*`, the one shader that runs at full pane resolution whenever any effect is on.
+The hypothesis was register allocation sized for the worst path.
+
+Measured by building each pipeline twice in one probe run —
+once from the shipping source, once with both arms replaced by the tile read —
+and interleaving the two per frame,
+both compiled from source (`HARMONIGRAPH_SHADER_ASSETS=source`) so neither had the corpus's head start.
+3840x2160 at 2 px/pt, fill 1, 10 s span, opening-begin to paint-end medians,
+four runs of 200 to 300 frames with the stub second in two and first in the other two:
+
+| Case | Unchanged ms | Stubbed ms | Ratio, median of 4 (range) |
+| --- | ---: | ---: | --- |
+| blur only | 1.43–1.87 | 1.30–1.75 | 0.94 (0.91–0.95) |
+| terraces only | 3.24–4.60 | 3.02–3.95 | 0.96 (0.83–1.00) |
+| Mosaic, defaults | 2.14–2.71 | 1.82–2.21 | 0.84 (0.82–0.86) |
+| Watercolor, defaults | 2.75–3.57 | 2.18–2.81 | 0.79 (0.78–0.79) |
+
+The textured cases save 0.3 to 0.5 ms (Mosaic) and 0.6 to 0.8 ms (Watercolor) a frame at 4K in every run and either order,
+so the arm is gone and a cloud is drawn only out of its tile.
+Terraces only is inside the noise:
+its one large gain came from a single run in one order and the reverse order showed none,
+so the issue's reading of the terraces-only versus blur-only gap as this cost is not supported.
+Retiring the arm moved `spectrogram-tall-pane` by 1/255 on 7 of 98,304 pixels,
+the Metal compiler scheduling the composite differently,
+as removing `Rock`'s accumulator did above.
+
 ### The alternative if repetition shows: a scrolling window
 
 A pane-sized bake with toroidal addressing, walking only the strip the drift newly exposes each frame — a column every ten frames or so at `Cloud speed` 1x, two columns a frame at 20x.
@@ -314,7 +346,7 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 1. Yan selected `P = 40`; revisit only if its repetition becomes visible over real music.
 2. Does the drift-phase softening shimmer at `Fuzz` 0 and on Mosaic's creases? If it does, bake at 1.5x texel density before reaching for anything cleverer.
 3. Resolved: fixed 40-cell tiles, with updated golden frames. The shader and pipeline layouts are unchanged; strict catalog validation checks the existing Metal corpus.
-4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk stays as the reference for the tile comparison tests.
+4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk left the composite in #1100; the Mosaic tile test builds its reference by swapping the unwrapped walk back into a test-only copy of the shader.
 5. ~~`Ragged`~~ RETIRED in the PR stacked on #991. It shipped at 1.0 and its wobble was one-sided, so the radius band was scaled by 1.15 (`WASH_RADIUS_MIN` 1.02 → 1.17, `WASH_RADIUS_MAX` 1.66 → 1.91) to keep the default globs their size. The reach bound stopped carrying `(1 + RAGGED)` and `RADIUS_MAX` now sits 1.91 against a bound of 2.217, so a band WIDER than 1.63:1 is available and deliberately untaken — a look change for Yan's eye (#992).
 6. The scrolling window above, only if 1 fails.
 
