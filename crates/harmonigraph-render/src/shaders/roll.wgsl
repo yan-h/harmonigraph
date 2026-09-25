@@ -132,18 +132,15 @@ fn vs_note(
     // wherever the box distance passes `outline_reach`, which is `reach` past
     // every edge and every corner.
     //
-    // Across pitch that reach is measured PERPENDICULAR to the note's long
-    // edges — which on a sheared note is not the pitch axis. `note_color`
-    // divides by `skew` to get that perpendicular distance, so an outline
-    // reaching `w` stands `skew * w` out along pitch, and a steep glide's
-    // outline reaches a multiple of its own reach. The `slope` term is the
-    // drift of the center line over the quad's own half-length, ends included.
-    let skew = sqrt(1.0 + slope * slope);
+    // The distance is Euclidean (see [`box_distance_trimmed`]), so the grown
+    // box is the note's own bounding box — its ribbon's half width plus the
+    // center line's drift over the note's half-length — with the same margin
+    // on both axes, however steep the glide.
     let reach = locals.shadow.w + 0.5 * locals.feather;
-    let half_depth = half_extent.y + reach + 0.5 * locals.feather;
+    let margin = reach + 0.5 * locals.feather;
     let extent = vec2<f32>(
-        half_extent.x + abs(slope) * half_depth + skew * reach,
-        half_depth,
+        half_extent.x + abs(slope) * half_extent.y + margin,
+        half_extent.y + margin,
     );
 
     let local = corner * extent;
@@ -327,8 +324,10 @@ fn lead_coverage(in: VertexOut) -> f32 {
 }
 
 /// Signed distance from this fragment to the note's own box, in points:
-/// negative inside it, positive outside, and measured PERPENDICULAR to the
-/// note's long edges rather than along the pitch axis.
+/// negative inside it, positive outside, and Euclidean — the true distance to
+/// the nearest point of the box, whichever edge or corner that is. On a glide
+/// that is perpendicular to the long edges, so the rim bands keep their
+/// thickness instead of thinning with its angle.
 fn box_distance(in: VertexOut) -> f32 {
     return box_distance_trimmed(in, 0.0);
 }
@@ -338,32 +337,51 @@ fn box_distance(in: VertexOut) -> f32 {
 /// carries one; 0 is the box itself.
 ///
 /// Pulling one end in shortens the box by `trim` and slides its center half
-/// that far along depth. Only the depth term moves: `across` is measured from
-/// the note's center LINE rather than its center point, and the slide runs
-/// along that line, so a sheared box comes out the same number either way and
-/// the shear needs no correction of its own.
+/// that far along the note's center LINE — along depth, and `slope` times that
+/// along pitch — so a sheared box keeps its long edges where they were.
 fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
-    // stay square across the depth axis. Shearing the sample point back
-    // makes it a box again, and dividing by the shear's length turns the
-    // sheared offset into a true perpendicular distance — so the rim bands
-    // keep their thickness on a glide instead of thinning with its angle.
-    let skew = sqrt(1.0 + slope * slope);
-    let across = (in.local.x - slope * in.local.y) / skew;
-    let half_across = in.half_extent.x / skew;
-
-    // Box distance. Square corners, always: a note is a rectangle in the
-    // pane's two axes, and rounding one was a setting until it turned out to
-    // be doing nothing a piano roll wants — on the notes short enough for it
-    // to show (a tapped key), the radius clamps to the note's own half-length
-    // and turns it into a bead. The outline's own corners are round, being a
-    // constant distance from a square one, and that is the shape a note wants
-    // wrapped around it.
-    let along = in.local.y - 0.5 * trim;
+    // stay square across the depth axis, `half_extent.x` either side of the
+    // center line along pitch. That is a parallelogram, and this is its exact
+    // distance (Inigo Quilez's `sdParallelogram`), in (pitch, depth).
+    //
+    // Exact rather than the box distance in sheared coordinates with the
+    // across term divided by the shear's length. That shortcut is right beside
+    // the long edges and wrong past the ends, where it reads the depth offset
+    // alone: on a steep glide the region it calls near runs `slope` times the
+    // outline's reach along pitch. Per-note tuning routinely makes a segment a
+    // hundredth of a point long across part of a semitone — a slope in the
+    // thousands — and that segment's outline and antialiasing ramp became a
+    // hairline strip through the whole pane.
+    //
+    // Square corners, always: a note is a rectangle in the pane's two axes,
+    // and rounding one was a setting until it turned out to be doing nothing a
+    // piano roll wants — on the notes short enough for it to show (a tapped
+    // key), the radius clamps to the note's own half-length and turns it into
+    // a bead. The outline's own corners are round, being a constant distance
+    // from a square one, and that is the shape a note wants wrapped around it.
     let half_along = in.half_extent.y - 0.5 * trim;
-    let q = vec2<f32>(abs(across) - half_across, abs(along) - half_along);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
+    let half_pitch = in.half_extent.x;
+    // The center line's far end, from the center.
+    let end = vec2<f32>(slope * half_along, half_along);
+    var p = in.local - 0.5 * trim * vec2<f32>(slope, 1.0);
+    // The box is point-symmetric: fold onto the far end's half.
+    p = select(p, -p, p.y < 0.0);
+    // Nearest point on that end, and whether `p` is short of it.
+    var w = p - end;
+    w.x -= clamp(w.x, -half_pitch, half_pitch);
+    var near = dot(w, w);
+    var within = -w.y;
+    // Nearest point on the long edge on `p`'s side, and whether `p` is inside
+    // it — the sign alone is read, the magnitude being scaled by `half_along`.
+    let side = p.x * end.y - p.y * end.x;
+    p = select(p, -p, side < 0.0);
+    var v = p - vec2<f32>(half_pitch, 0.0);
+    v -= end * clamp(dot(v, end) / max(dot(end, end), 1e-12), -1.0, 1.0);
+    near = min(near, dot(v, v));
+    within = min(within, half_pitch * half_along - abs(side));
+    return select(sqrt(near), -sqrt(near), within > 0.0);
 }
 
 /// How much of the outline's cap at the NOTE's own leading end is painted
