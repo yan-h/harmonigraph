@@ -116,7 +116,7 @@ def markdown_files(*options: str) -> list[str]:
         ["git", "ls-files", "-z", *options, "--", "*.md"],
         capture_output=True, text=True, check=True,
     ).stdout.split("\0")
-    # AGENTS.md and GEMINI.md are symlinks to CLAUDE.md; following them would
+    # CLAUDE.md and GEMINI.md are symlinks to AGENTS.md; following them would
     # rewrite one file three times and report it three times.
     return [
         f

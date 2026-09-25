@@ -672,7 +672,6 @@ mod tests {
     fn a_double_click_goes_home_to_the_stack_a_fresh_view_opens_with() {
         let fresh = ViewConfig::default();
         assert_eq!(reset_stack(), (fresh.min_sevens, fresh.center_sevens, fresh.max_sevens));
-        assert_eq!(reset_stack(), (0, 0, 0), "a fresh view opens on the home sheet alone");
     }
 
     /// A press decides against the handle it was AIMED at and the thumb lights

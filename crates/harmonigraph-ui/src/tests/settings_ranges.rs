@@ -69,7 +69,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
         attack, release, keyline_lift, roll_seconds, roll_thickness, roll_opacity, roll_lead,
-        roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db);
+        roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db,
+        backdrop_strength, backdrop_height, backdrop_period);
     // Two more that cross this door without a bar of their own. `tilt` is a
     // CHOICE that happens to be spelled as a float — its repair snaps to the
     // nearest offered step rather than clamping — and `roll_fraction` is set
@@ -248,11 +249,12 @@ fn scenarios() -> Vec<Scenario> {
         };
         cases.push(Scenario { pane, visits, ..base });
         // Exercise the conditional groups too: labels, fringe, marks, audio
-        // reading, sevens, roll/note names, glow and Contour shadow falloff
+        // reading, sevens, roll/note names, backdrop, glow and Contour shadow falloff
         // (one bar in each of a page's two groups).
         let visits = match pane {
             panes::Tab::LatticeSettings => visits + 6 + 2,
-            panes::Tab::AnalyzerSettings => visits + 2,
+            // ...and the backdrop's strength, height and stripe spacing.
+            panes::Tab::AnalyzerSettings => visits + 2 + 3,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -301,6 +303,7 @@ fn check(edge: Edge) {
         a.spectrum.show_roll = scenario.enabled;
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
+        a.spectrum.backdrop = if scenario.enabled { Backdrop::Stripes } else { Backdrop::Off };
         a.spectrum.atmosphere.cloud_style = if scenario.wash {
             harmonigraph_scene::CloudStyle::Watercolor
         } else {
