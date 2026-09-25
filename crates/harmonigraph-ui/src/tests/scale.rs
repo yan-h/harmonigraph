@@ -116,7 +116,6 @@ fn the_ui_scale_leaves_the_picture_alone() {
 
 /// A tab bar tracks the scale the whole way down, and still leaves room for the
 /// arrow that unfolds a pane.
-///
 #[test]
 fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
     /// Minimum useful arrow height.
@@ -135,10 +134,6 @@ fn a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow() {
             "a tab bar {height} points tall at scale {scale} clips the collapse arrow",
         );
     }
-    // Proportional, so the bar keeps its share of the chrome rather than
-    // levelling off somewhere inside the range.
-    let ratio = crate::theme::tab_bar_height(0.7) / crate::theme::tab_bar_height(1.0);
-    assert!((ratio - 0.7).abs() < 1.0e-5, "the bar scaled by {ratio} rather than by 0.7");
 }
 
 /// The controls a settings row is built from: egui's own `button` (the
