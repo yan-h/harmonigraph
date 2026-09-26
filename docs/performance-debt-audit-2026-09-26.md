@@ -18,12 +18,12 @@ not a merge-interaction audit or a claim that every path is defect-free.
 
 | Order | Work | Benefit and cost |
 | --- | --- | --- |
-| 1 | Build one complete confirmed snapshot at callback start; remove per-delta Hub publication | Removes repeated audio-thread work and incremental-capacity hazards; small boundary refactor with turnover/learning verification. |
-| 2 | Preserve incomplete-source status at the learning boundary | Prevents learning from an accidentally truncated chord; small state-boundary correction. |
-| 3 | Repair the busy/large-lattice performance fixtures | Makes subsequent performance decisions trustworthy; small diagnostic-only change. |
-| 4 | Reduce repeated full-lattice animation sweeps | Material gain is plausible in wide/deep views and event bursts; medium complexity, requiring exact behavior comparisons. |
+| 1 | [Build one complete confirmed snapshot per callback](https://github.com/yan-h/harmonigraph/issues/1172) | Removes repeated audio-thread work and incremental-capacity hazards; small boundary refactor with turnover/learning verification. |
+| 2 | [Preserve incomplete-source status at the learning boundary](https://github.com/yan-h/harmonigraph/issues/1173) | Prevents learning from an accidentally truncated chord; small state-boundary correction. |
+| 3 | [Repair the busy/large-lattice performance fixtures](https://github.com/yan-h/harmonigraph/issues/1174) | Makes subsequent performance decisions trustworthy; small diagnostic-only change. |
+| 4 | [Reduce repeated full-lattice animation sweeps](https://github.com/yan-h/harmonigraph/issues/1175) | Material gain is plausible in wide/deep views and event bursts; medium complexity, requiring exact behavior comparisons. |
 | 5 | Revisit existing dense spectrogram refold issue [#886](https://github.com/yan-h/harmonigraph/issues/886) | Already measured interaction hitch; folding and logarithmic quantization dominate, so another copy/cache optimization is unlikely to solve it. |
-| 6 | Tighten CLI export output and numeric validation | Two bounded correctness improvements; lower priority for normal plugin use. |
+| 6 | [Fix PNG sequence ownership](https://github.com/yan-h/harmonigraph/issues/1176) and [validate CLI numeric input](https://github.com/yan-h/harmonigraph/issues/1177) | Two bounded correctness improvements; lower priority for normal plugin use. |
 
 No feature removal or broader architecture rewrite is recommended.
 Implementation remains separate from this discovery report.
