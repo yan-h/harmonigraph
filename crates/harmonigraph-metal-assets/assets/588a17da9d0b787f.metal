@@ -192,7 +192,7 @@ metal::uint4 star_bake(
     float sigma = metal::min(s.sigma * size, s.cap) * s.defocus;
     float fade = metal::smoothstep(0.0, STAR_FADE, through) * metal::smoothstep(0.0, STAR_FADE, 1.0 - through);
     metal::uint3 tens = naga_f2u32(metal::rint(metal::clamp(_e75, metal::float3(0.0), metal::float3(1.0)) * 1023.0));
-    return metal::uint4(as_type<uint>(centre.x), as_type<uint>(centre.y), ((tens.x << 20u) | (tens.y << 10u)) | tens.z, as_type<uint>(half2(metal::float2(sigma, fade))));
+    return metal::uint4(as_type<uint>(centre.x), as_type<uint>(centre.y), ((tens.x << 20u) | (tens.y << 10u)) | tens.z, as_type<uint>(half2(metal::float2(1.0 / sigma, fade))));
 }
 metal::int2 naga_f2i32(metal::float2 value) {
     return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));
