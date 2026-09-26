@@ -309,18 +309,14 @@ struct Cloud {
 };
 struct StarSlice {
     offset: vec2<f32>,
-    spread: vec2<f32>,
     cell: f32,
     sigma: f32,
     cap: f32,
     defocus: f32,
     fringe: f32,
-    reach: f32,
     // The atlas texel, counted along its rows, this slice's first cell is
     // baked into; the cell that is; and how many it holds across and down.
     base: i32,
-    // Spelled out so the Rust side's `[i32; 2]` lands where a vec2 aligns.
-    _pad: i32,
     origin: vec2<i32>,
     grid: vec2<i32>,
 };
@@ -1404,13 +1400,12 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // walk reads nine texels a slice and does only the distance and the falloff
 // (#1142).
 //
-// **Lives, so the speeds need not step.** A star's own speed is drawn round its
-// slice's (`Speed spread`), which carries it off its grid; so it lives `Star
-// lifetime`, then its cell draws a new star, fading the old one out and the new
-// one in over the ends of their lives. The spread is what gives way to keep a
-// star in the ring for a whole life: a slice whose cells are small gets less of
-// it. Cells turn over at hashed times, so the field never does at once. The life
-// a star is in is hashed into everything about it.
+// **Lives.** A star lives `Star lifetime`, then its cell draws a new star,
+// fading the old one out and the new one in over the ends of their lives. Cells
+// turn over at hashed times, so the field never does at once. The life a star
+// is in is hashed into everything about it. Each depth moves as one sheet: a
+// `Speed spread` that let each star stray at its own speed paid for it out of
+// every star's reach, and cut the soft edges off the whole field.
 //
 // **One light tap per star, at the star's CURRENT centre.** So a star is one
 // colour and one brightness, never a smear of the pixels under it, and as it
@@ -1437,6 +1432,10 @@ const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
 // How far a centre is hashed off its cell's middle, as a whole width.
 const STAR_JITTER: f32 = 0.6;
+// The ring's reach, in cells: the nearest a star from a cell outside the 3x3
+// walk can come to a pixel, 1.5 less half the jitter (`STAR_REACH_CELLS` in
+// atmosphere.rs). Every star's coverage is windowed to zero by it.
+const STAR_REACH: f32 = 1.2;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // atmosphere.rs), and its log.
 const STAR_ATLAS_WIDTH: i32 = 2048;
@@ -1463,7 +1462,7 @@ const STAR_FADE: f32 = 0.2;
 // How far up the palette the brightest-ranked star is lifted past its level.
 const STAR_LIFT: f32 = 0.18;
 // Where, as a share of the ring's reach, a star's light starts fading to the
-// zero it must reach there. See `StarSlice::reach` and the test that holds it.
+// zero it must reach there. See `STAR_REACH` and the test that holds it.
 const STAR_RING_FADE: f32 = 0.7;
 
 // The level a star sees at pane point `pt`: the Spread-combined light, so
@@ -1508,15 +1507,12 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
     let age = cloud.star_life + star_hash(hashed, salt + 2u).x;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
-    // Jitter and speed. Every life holds a star, so a depth's count is its
-    // cell size alone.
+    // Jitter. Every life holds a star, so a depth's count is its cell size
+    // alone.
     let a = star_hash(hashed, key);
-    // Through its life a star slides off the drift at its own speed, level
-    // with it at mid-life.
     let through = fract(age);
-    let spread = s.spread * ((2.0 * a.w - 1.0) * (through - 0.5));
-    let centre = 0.5 + STAR_JITTER * (a.xy - 0.5) + spread;
-    let at = (vec2<f32>(cell) + 0.5 + STAR_JITTER * (a.xy - 0.5) + spread + s.offset) * s.cell
+    let centre = 0.5 + STAR_JITTER * (a.xy - 0.5);
+    let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
         * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at);
     // Over silence a star is not drawn at all, so a quiet pane is the floor
@@ -1590,7 +1586,8 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, cut: f32) -> vec4<f32> {
     }
     // Zero at the ring's reach, so a star the walk cannot see from this pixel
     // draws nothing here either and no cell edge shows.
-    cover = min(cover, 1.0) * (1.0 - smoothstep(STAR_RING_FADE * s.reach, s.reach, dist));
+    let reach = STAR_REACH * s.cell;
+    cover = min(cover, 1.0) * (1.0 - smoothstep(STAR_RING_FADE * reach, reach, dist));
     cover *= shape.y;
     return vec4<f32>(colour * cover, cover);
 }
@@ -1629,9 +1626,9 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
         let s = cloud.star_slices[k];
         // A fringe has no window of its own, so with one on only the ring's
         // fade bounds a star.
-        var cut = s.reach;
+        var cut = STAR_REACH * s.cell;
         if s.fringe <= 0.0 {
-            cut = min(s.reach, 5.0 * s.cap * s.defocus);
+            cut = min(cut, 5.0 * s.cap * s.defocus);
         }
         let r = sp / s.cell - s.offset;
         let o = floor(r);

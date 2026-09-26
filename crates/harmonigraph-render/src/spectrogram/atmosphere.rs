@@ -79,6 +79,7 @@ const STAR_SLICES: usize = 5;
 /// How far a star's hashed centre may sit from its cell's middle, as a whole
 /// width: `STAR_JITTER / 2` either way. The shader's own constant, mirrored for
 /// the ring's reach and checked against the shipped text.
+#[cfg(test)]
 const STAR_JITTER: f32 = 0.6;
 /// The period the star hash wraps at, in cells of each slice, and the modulus
 /// each slice's drift is reduced by here in f64 before it is narrowed to f32.
@@ -98,16 +99,6 @@ const STAR_HASH_PERIOD: f64 = 65536.0;
 /// shader's mask on the life index wraps with it and a star's life runs
 /// straight across the wrap. The shader's own constant, checked against it.
 const STAR_LIFE_PERIOD: f64 = 4096.0;
-/// The farthest a star's own speed carries it from where its slice's drift
-/// puts it, in cells either way, over one life: the ring's budget for the
-/// spread. A slice whose cells cannot hold a star at its widest spread speed
-/// this close for a whole `Star lifetime` gets a narrower spread instead.
-///
-/// As much as the ring can give while it still reaches half a cell past every
-/// star (the floor `the_star_ring_holds_every_star_that_reaches_a_pixel`
-/// holds): [`STAR_REACH_CELLS`] less this is 0.5. More would take a 4x4 walk,
-/// which would cost every pixel seven more cells in every slice.
-const STAR_SPREAD_REACH: f32 = 0.7;
 /// How fast a depth at `Star speed` 1 travels, in star pixels (a
 /// 540th of the pane's height) per second: the prototype's `(-60, -14)` px/s
 /// over its 540-pixel pane, which is about a ninth of the pane's height a
@@ -135,12 +126,6 @@ struct StarSlice {
     /// This slice's drift, in its own cells, reduced modulo
     /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
     offset: [f32; 2],
-    /// How far, in cells along the drift, a star whose speed is the widest
-    /// `Speed spread` allows moves from its slice's drift over one life. A
-    /// star's own is this times `2h - 1` for its hashed `h`, and it sits at
-    /// that times `age - 0.5` through its life, so it passes where the drift
-    /// puts it at mid-life and strays at most half this either side.
-    spread: [f32; 2],
     /// The cell one star is hashed into: `Star size`'s low end at the far end
     /// over the square root of half the density, times the ratio of its ends
     /// raised to `d^Size curve` — at the fresh 2 to 32 and 2, 32 at the near
@@ -156,18 +141,12 @@ struct StarSlice {
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
-    /// `reach`: `Fringe`, alike at every depth.
+    /// [`STAR_REACH_CELLS`]: `Fringe`, alike at every depth.
     fringe: f32,
-    /// The ring's reach in star pixels — the nearest a star outside the 3x3
-    /// walk can be to the pixel — where every star's coverage is windowed to
-    /// zero.
-    reach: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
     /// many cells it holds across and down. See [`StarLayout`].
     base: i32,
-    /// Puts `origin` on the eight-byte boundary WGSL gives a `vec2<i32>`.
-    _pad: i32,
     origin: [i32; 2],
     grid: [i32; 2],
 }
@@ -315,11 +294,18 @@ pub(super) fn star_atlas_size(needed: [u32; 2], held: Option<[u32; 2]>) -> [u32;
         .unwrap_or([needed[0], rows])
 }
 
-/// How far the ring's reach is from a pixel, in cells, before the spread: a
-/// centre strays `STAR_JITTER / 2` from its own cell's middle, so the nearest
-/// a star from a cell outside the 3x3 walk can come is this. Each slice's
-/// `reach` takes its spread's excursion, at most [`STAR_SPREAD_REACH`], off it
-/// again. The Mosaic's `DOME_RADIUS` proof in one line.
+/// How far the ring's reach is from a pixel, in cells: a centre strays
+/// `STAR_JITTER / 2` from its own cell's middle, so the nearest a star from a
+/// cell outside the 3x3 walk can come is this, and the shader's `STAR_REACH`
+/// fades every star to zero by then. The Mosaic's `DOME_RADIUS` proof in one
+/// line.
+///
+/// Every star keeps the whole of it. A `Speed spread` dial once let each
+/// star's own speed stray from its depth's, and paid for the stray out of this
+/// reach, down to half a cell: at full spread every star's soft edge and
+/// fringe were cut off near its core, and the field read visibly blunter than
+/// at none. Yan preferred the whole reach to the spread, and it was removed.
+#[cfg(test)]
 const STAR_REACH_CELLS: f32 = 1.5 - STAR_JITTER / 2.0;
 
 /// The life clock every slice shares: seconds over `Star lifetime`, reduced
@@ -336,23 +322,15 @@ fn star_speed(settings: harmonigraph_scene::SpectralAtmosphere, k: usize) -> f32
     far + (near - far) * star_depth(k).powf(settings.star_speed_curve)
 }
 
-/// Every slice's numbers for this frame. Every star lives `Star lifetime`, and
-/// `Speed spread` is a share of the widest spread speed the slice can hold:
-/// half the gap to its neighbours' speeds, or whatever carries a star exactly
-/// [`STAR_SPREAD_REACH`] from its drift in one life, if that is less. The ring
-/// stays 3x3 and small cells stray less, rather than living shorter — which
-/// tied every life to seven dials, so dragging any of them reshuffled the
-/// whole field. A share of the most that fits, rather than the gap clamped to
-/// it, because the clamp binds at every depth at the fresh 6 s and left the
-/// dial dead above a few percent.
+/// Every slice's numbers for this frame. Each depth moves as one sheet at its
+/// own speed.
 fn star_slices(
     settings: harmonigraph_scene::SpectralAtmosphere,
     now: f64,
     layout: &StarLayout,
 ) -> [StarSlice; STAR_SLICES] {
-    // Star pixels a second at a speed of one.
-    let rate = star_px_per_second();
-    let travel = now * rate;
+    // Star pixels travelled at a speed of one.
+    let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(settings.cloud_direction).to_radians().sin_cos();
     let small = settings.star_size_min;
     let big = settings.star_size_max;
@@ -371,21 +349,6 @@ fn star_slices(
         let shift = |axis: f64| {
             (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
         };
-        // The gap to the neighbouring depths' speeds, per depth step — the
-        // mean of the two either side, or the one at an end — and the widest
-        // a star's own speed may stray from this depth's, in star pixels a
-        // second: half that gap, so the spreads meet, but no more than keeps
-        // a whole life's excursion inside the budget. `Speed spread` is a
-        // share of that.
-        let (below, above) = (k.saturating_sub(1), (k + 1).min(STAR_SLICES - 1));
-        let gap =
-            (star_speed(settings, above) - star_speed(settings, below)) / (above - below) as f32;
-        let lifetime = settings.star_lifetime;
-        let widest = settings.star_speed_spread
-            * (gap.abs() / 2.0 * rate as f32).min(2.0 * STAR_SPREAD_REACH * cell / lifetime);
-        // The whole swing over a life, in cells: at most twice the budget,
-        // clamped so rounding cannot put it a hair past.
-        let swing = (widest * lifetime / cell).min(2.0 * STAR_SPREAD_REACH);
         let offset = [shift(cos), shift(sin)];
         let grid = layout.grids[k];
         // The cell a pixel at the pane's top left edge is in, as the shader
@@ -394,15 +357,12 @@ fn star_slices(
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
         StarSlice {
             offset,
-            spread: [swing * cos as f32, swing * sin as f32],
             cell,
             sigma,
             cap,
             defocus,
             fringe: settings.star_fringe,
-            reach: (STAR_REACH_CELLS - swing / 2.0) * cell,
             base: layout.bases[k] as i32,
-            _pad: 0,
             origin,
             grid: grid.map(|side| side as i32),
         }
@@ -1433,8 +1393,8 @@ mod tests {
     use super::{
         cloud_drift, retained_size, source_size, star_layout, star_slices, tile_key, tone_size,
         SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
-        STAR_JITTER, STAR_LIFE_PERIOD, STAR_PANE, STAR_REACH_CELLS, STAR_SLICES, STAR_SPREAD_REACH,
-        TILE_MAX, TILE_STEP, WASH_CELLS,
+        STAR_JITTER, STAR_LIFE_PERIOD, STAR_PANE, STAR_REACH_CELLS, STAR_SLICES, TILE_MAX,
+        TILE_STEP, WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -1458,100 +1418,30 @@ mod tests {
     ///
     /// A centre strays `STAR_JITTER / 2` from its cell's middle, so the nearest
     /// a star from a cell OUTSIDE the ring can come to a pixel is
-    /// [`STAR_REACH_CELLS`] — and the shader fades every star to zero by then. That makes the walk exact rather than
+    /// [`STAR_REACH_CELLS`] — and the shader fades every star to zero by then.
+    /// That makes the walk exact rather than
     /// "close enough": the prototype's reach was 0.85 of a cell at its V3, and
     /// its own defocus multiplies past the cell cap, so at the fourth depth the
     /// biggest cores are 0.39 of a cell wide and would have left a tenth of
     /// their peak on the far side of a cell edge without the fade.
     ///
-    /// The spread's excursion is on top of both, along the drift, and each
-    /// slice takes it off its own reach — so the scan runs per slice, at the
-    /// widest spread over the longest life the fastest drift allows, where
-    /// only the clamp on the spread keeps a small cell's stars in the ring.
-    ///
     /// Measured by scanning the geometry rather than trusting the one-line
-    /// formula, at the extremes of every dial that moves a star's extent, and
-    /// with the jitter, slice count and periods read off the shipped shader.
+    /// formula, with the jitter, reach, slice count and periods read off the
+    /// shipped shader. No dial moves a star off its jittered place, so one
+    /// scan covers every setting.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         assert_eq!(STAR_JITTER, shader_number("STAR_JITTER") as f32);
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        // The whole budget still leaves the ring the half cell it holds.
-        assert!((STAR_REACH_CELLS - STAR_SPREAD_REACH - 0.5).abs() < 1e-6);
-        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
-        // The spread at its widest, lived as long as the dial allows, at the
-        // fastest drift: every slice's spread is cut to fit here.
-        let spread = harmonigraph_scene::SpectralAtmosphere {
-            star_speed_spread: 1.0,
-            star_lifetime: harmonigraph_scene::STAR_LIFETIME_MAX,
-            cloud_direction: 30.0,
-            star_speed_min: harmonigraph_scene::STAR_SPEED_MIN,
-            star_speed_max: harmonigraph_scene::STAR_SPEED_MAX,
-            ..fresh
-        };
-        let extremes = [
-            fresh,
-            harmonigraph_scene::SpectralAtmosphere {
-                star_defocus: harmonigraph_scene::STAR_DEFOCUS_MAX,
-                star_fringe: harmonigraph_scene::STAR_FRINGE_MAX,
-                star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
-                star_size_max: harmonigraph_scene::STAR_SIZE_MAX,
-                ..spread
-            },
-            harmonigraph_scene::SpectralAtmosphere {
-                star_density: harmonigraph_scene::STAR_DENSITY_MIN,
-                star_size_min: harmonigraph_scene::STAR_SIZE_MAX,
-                star_size_max: harmonigraph_scene::STAR_SIZE_MAX,
-                ..spread
-            },
-            // The steepest speed gaps sit at the far end at the low curve and
-            // at the near end at the high one.
-            harmonigraph_scene::SpectralAtmosphere {
-                star_speed_curve: harmonigraph_scene::STAR_SPEED_CURVE_MIN,
-                star_size_curve: harmonigraph_scene::STAR_SIZE_CURVE_MIN,
-                ..spread
-            },
-            harmonigraph_scene::SpectralAtmosphere {
-                star_speed_curve: harmonigraph_scene::STAR_SPEED_CURVE_MAX,
-                star_size_curve: harmonigraph_scene::STAR_SIZE_CURVE_MAX,
-                ..spread
-            },
-        ];
-        for settings in extremes {
-            for slice in slices(settings, 0.0) {
-                let excursion = slice.spread[0].hypot(slice.spread[1]) / 2.0;
-                assert!(excursion <= STAR_SPREAD_REACH + 1e-6, "{settings:?}: {slice:?}");
-                // The scan: a pixel anywhere in cell (0, 0), a star in every
-                // cell one ring out pushed as far toward it as the jitter and
-                // the spread allow.
-                let stray = STAR_JITTER / 2.0 + excursion;
-                let reach = slice.reach / slice.cell;
-                assert!(
-                    reach >= 0.5 - 1e-6,
-                    "{settings:?}: the ring holds almost nothing at {reach} cells"
-                );
-                assert!((reach - (STAR_REACH_CELLS - excursion)).abs() < 1e-5, "{slice:?}");
-                let nearest = nearest_outside_the_ring(stray);
-                assert!(
-                    nearest >= reach - 1e-5,
-                    "a star outside the ring comes {nearest} cells from the pixel, inside the \
-                     {reach} it is windowed to zero at"
-                );
-            }
-        }
-        // ...and the excursion is real: at the widest spread the small cells
-        // take the whole budget, where with none they take nothing.
-        let widest = slices(extremes[1], 0.0);
-        let swing = widest[0].spread[0].hypot(widest[0].spread[1]);
-        assert!((swing - 2.0 * STAR_SPREAD_REACH).abs() < 1e-5, "{swing}");
-        let still = slices(
-            harmonigraph_scene::SpectralAtmosphere { star_speed_spread: 0.0, ..spread },
-            0.0,
+        assert!((STAR_REACH_CELLS - shader_number("STAR_REACH") as f32).abs() < 1e-6);
+        let nearest = nearest_outside_the_ring(STAR_JITTER / 2.0);
+        assert!(
+            nearest >= STAR_REACH_CELLS - 1e-5,
+            "a star outside the ring comes {nearest} cells from the pixel, inside the \
+             {STAR_REACH_CELLS} it is windowed to zero at"
         );
-        assert!(still.iter().all(|slice| slice.spread == [0.0; 2]));
     }
 
     /// The nearest a star from a cell outside the 3x3 walk round cell (0, 0) can

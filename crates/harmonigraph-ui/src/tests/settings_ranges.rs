@@ -94,7 +94,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
         star_density, star_randomness, star_fringe,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
-        star_size_curve, star_speed_curve, star_speed_spread, star_lifetime);
+        star_size_curve, star_speed_curve, star_lifetime);
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their

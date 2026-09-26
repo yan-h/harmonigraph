@@ -671,12 +671,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .on_hover_text(
         "How the drift speed grows from the farthest depth to the nearest. 1 steps it evenly; higher values keep most depths slow and the nearest fast, lower ones the reverse. The line previews it.",
     );
-    ValueBar::new(&mut atmosphere.star_speed_spread, 0.0..=1.0, "Speed spread")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How much each star's speed differs from the others at its depth. 0% moves each depth as one sheet; 100% is the most each depth can take: enough to fill the gaps between the depths' speeds where the stars have room, and less for the smallest stars, which must stay near their places over a whole Star lifetime. Shorter lifetimes leave room for more.",
-        );
     ValueBar::new(
         &mut atmosphere.star_lifetime,
         STAR_LIFETIME_MIN..=STAR_LIFETIME_MAX,
@@ -686,7 +680,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .unit(1.0, " s")
     .show(ui)
     .on_hover_text(
-        "How long each star lives before a new one takes its place, fading in and out, alike at every depth. Longer lives leave the smallest stars less Speed spread.",
+        "How long each star lives before a new one takes its place, fading in and out, alike at every depth.",
     );
     ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
         .percent()

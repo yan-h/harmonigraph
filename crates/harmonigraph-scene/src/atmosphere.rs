@@ -359,13 +359,6 @@ pub struct SpectralAtmosphere {
     /// [`Self::star_speed_min`]. 1 steps the speeds evenly. Runs over
     /// [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
     pub star_speed_curve: f32,
-    /// How far each star's own speed is drawn round its depth's, as a share of
-    /// the widest spread the depth can hold: half the gap to the neighbouring
-    /// depths' speeds (at which the parallax is a continuum rather than steps),
-    /// or, if less, the speed that carries a star to the edge of the shader's
-    /// 3x3 ring over its [`Self::star_lifetime`]. So the finest dust strays
-    /// least, and every setting of the dial does something.
-    pub star_speed_spread: f32,
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
@@ -452,7 +445,6 @@ impl Default for SpectralAtmosphere {
             star_speed_min: 0.0,
             star_speed_max: 1.0,
             star_speed_curve: 1.031_25,
-            star_speed_spread: 0.5,
             star_lifetime: 6.0,
             star_fringe: 0.25,
             star_defocus: 0.6,
@@ -542,7 +534,6 @@ impl SpectralAtmosphere {
             STAR_SPEED_CURVE_MIN,
             STAR_SPEED_CURVE_MAX,
         );
-        self.star_speed_spread = clamp(self.star_speed_spread, fresh.star_speed_spread, 0.0, 1.0);
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);

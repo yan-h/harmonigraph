@@ -91,10 +91,6 @@ const CASES: &[(&str, Option<Turn>)] = &[
         }),
     ),
     ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
-    (
-        "stars, no speed spread",
-        Some(|s| (s.cloud_style, s.star_speed_spread) = (CloudStyle::Stars, 0.0)),
-    ),
 ];
 
 struct Case {
