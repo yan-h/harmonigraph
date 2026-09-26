@@ -554,14 +554,20 @@ impl NodeMotion {
             if scene.spectral.ring_draws() {
                 node.audio_ring = fade.level(&scene.octave_layout, node.cents).max(node.activation);
             }
-            // The light each MIDI layer gives off, read by the glow's own
-            // sources rather than the opacity's: the loudest slot or mark is
-            // the node's. Stateless snapshots draw it as it stands; the shell's
-            // glow pass carries it as its target.
+            // The node glow is the node's presence, unfaded and unread by any
+            // display: the loudest slot or mark. Stateless snapshots draw it
+            // as it stands; the shell's glow pass carries it as its target.
             node.glow.level = (0..11)
-                .map(|i| motion.levels[i] * glows[i])
-                .chain([melody_level * glows[melody_slot], bass_level * glows[bass_slot]])
+                .map(|i| motion.levels[i])
+                .chain([melody_level, bass_level])
                 .fold(0.0, f32::max);
+            // The Glow display drives the BLOOM instead, per node: the reading
+            // of its loudest lit slot.
+            let loudest = (0..11).max_by(|&a, &b| motion.levels[a].total_cmp(&motion.levels[b]));
+            node.bloom = match loudest {
+                Some(slot) if motion.levels[slot] > 0.0 => glows[slot],
+                _ => 1.0,
+            };
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -846,6 +852,7 @@ mod tests {
         });
         let pressed = draw(&mut motion, &mut tracker, &view, 1.1, false);
         assert_eq!(slot(&pressed), (0.5, Some(0.5), false, 1.0), "the ink follows at once");
+        assert_eq!(origin(&pressed).bloom, 1.0, "nothing is routed to Glow");
 
         tracker.handle_event(off(1.2, 60));
         let (activation, _, departing, glow) =
@@ -855,8 +862,8 @@ mod tests {
         assert!((glow - 0.5).abs() < 1e-5, "the glow departs on the envelope alone: {glow}");
 
         // Pressure routed to the glow instead, at half weight over a base of
-        // half: a note at half pressure gives off three quarters of its light,
-        // and the slice ink is untouched by it.
+        // half: a note at half pressure gives the bloom three quarters of its
+        // ink, and neither the slice ink nor the node glow is touched by it.
         let view = ViewConfig {
             intensity: crate::IntensitySettings {
                 pressure: IntensitySource { target: IntensityTarget::Glow, weight: 0.5 },
@@ -879,7 +886,8 @@ mod tests {
             },
         });
         let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
-        assert_eq!(slot(&held), (1.0, Some(1.0), false, 0.75));
+        assert_eq!(slot(&held), (1.0, Some(1.0), false, 1.0));
+        assert_eq!(origin(&held).bloom, 0.75);
     }
     #[test]
     fn octaves_and_same_time_replacements_do_not_replay_but_true_disappearance_does() {

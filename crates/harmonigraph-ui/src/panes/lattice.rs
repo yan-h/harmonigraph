@@ -1053,6 +1053,7 @@ mod tests {
             // Nothing here draws a glow, and the labels this fixture is for do
             // not read one: an unlit light on the first row.
             glow: harmonigraph_scene::GlowStep::default(),
+            bloom: 1.0,
             trail: 0.0,
         }
     }

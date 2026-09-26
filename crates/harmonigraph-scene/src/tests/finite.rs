@@ -252,12 +252,14 @@ fn scene_floats(scene: &Scene) -> Floats {
             bass_color,
             audio_ring,
             glow,
+            bloom,
             trail,
         } = node;
         f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
         f.one(format!("nodes[{i}].activation"), *activation);
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);
+        f.one(format!("nodes[{i}].bloom"), *bloom);
         f.one(format!("nodes[{i}].scale"), *scale);
         f.one(format!("nodes[{i}].comma"), *comma);
         f.one(format!("nodes[{i}].cents"), *cents);

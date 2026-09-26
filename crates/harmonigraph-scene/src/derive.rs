@@ -114,6 +114,7 @@ pub fn derive_scene(
             // Stable snapshot row; motion supplies current ink, then the
             // shell's glow pass carries its brightness and row ownership.
             glow: GlowStep { incarnation: 0, level: 0.0, row: nodes.len() as u32 },
+            bloom: 1.0,
             trail: 0.0,
         });
         node_pcs.push(node_pc);

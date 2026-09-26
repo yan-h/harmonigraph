@@ -461,7 +461,10 @@ struct Instance {
     // x: activation 0..1. y/z: the melody and bass marks' own levels, which
     // follow the marked voice rather than this node's activation — each
     // ring eases in over the scene layer's attack when its note takes that
-    // end, and drops to 0 the frame the key comes up.
+    // end, and drops to 0 the frame the key comes up. w: how much of the
+    // bloom's copy of this node's ink is taken away (the Glow display), 0 for
+    // the full bloom and never past 1, so a draw into a cell may overwrite it
+    // with the kinds above 1 that `layer_distance` reads.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
@@ -2570,7 +2573,11 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
     let seen = node_split(paint, paint.seen);
     let bloom = node_split(paint, paint.bloom);
-    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink);
+    // The bloom's copy of the ink at the node's own share of it (the Glow
+    // display, `Instance::params.w` as what is taken away), so a note's halo
+    // follows how it is played while the ink on screen stays as it is. The
+    // shadow the copy carries is left whole.
+    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink * (1.0 - in.params.w));
 }
 
 // ---- Node glow -------------------------------------------------------------

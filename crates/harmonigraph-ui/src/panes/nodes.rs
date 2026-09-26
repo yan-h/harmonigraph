@@ -44,7 +44,7 @@ fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             IntensityTarget::Glow => (
                 target,
                 "Glow",
-                "Drives the light the note gives off: the lattice's node glow and the roll's ribbon bloom.",
+                "Drives how much the note blooms: the halo round its lattice slices (the Bloom bar) and round its roll ribbon (the Ribbon bloom bar). Each needs its bloom above 0.",
             ),
             IntensityTarget::Thickness => (
                 target,

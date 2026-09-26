@@ -30,7 +30,9 @@ pub enum IntensityTarget {
     Off,
     /// The note's opacity: the lattice's octave slices and the roll's ribbons.
     Opacity,
-    /// The light it gives off: the lattice's node glow and the roll's bloom.
+    /// How much the note blooms: the halo round its lattice slices (Bloom) and
+    /// round its roll ribbon (Ribbon bloom). The lattice's node glow does not
+    /// read it.
     Glow,
     /// How thick it is drawn. Nothing draws this yet (#1130 step 4).
     Thickness,

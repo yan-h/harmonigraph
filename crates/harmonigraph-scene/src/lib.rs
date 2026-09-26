@@ -569,6 +569,13 @@ pub struct NodeInstance {
     /// level carried on the Glow attack and release, a row that holds still
     /// while the node keeps glowing, and the coefficient that carried it.
     pub glow: GlowStep,
+    /// How much of this node's ink the lattice's BLOOM takes, 0..1: the Glow
+    /// display's reading (see [`crate::intensity`]) of the loudest note
+    /// lighting it, and 1 where nothing is routed to Glow or nothing is lit.
+    /// The ink on screen is untouched; only the bright pass's copy of it is
+    /// scaled, so a note's halo follows its playing. The node glow above does
+    /// not read it.
+    pub bloom: f32,
     /// Whether the music is remembered here (see [`trail`]): 0 where it has
     /// never been, 1 where it has. A memory never fades, so those are the
     /// only two values a node carries; the field is an `f32` because the

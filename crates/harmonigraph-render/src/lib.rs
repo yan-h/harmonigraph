@@ -565,7 +565,9 @@ struct GpuInstance {
     world_pos: [f32; 3],
     /// x: activation, y: melody mark level, z: bass mark level (see
     /// lattice.wgsl). The mark levels ride with the activation rather than in
-    /// a vertex attribute of their own. w: reserved, always zero.
+    /// a vertex attribute of their own. w: how much of the bloom's copy of
+    /// this node's ink is taken away, `1 - NodeInstance::bloom`, so 0 is the
+    /// full bloom.
     /// The first three are levels the same node
     /// draws at, read together by the layers that draw it.
     params: [f32; 4],
