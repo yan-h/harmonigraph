@@ -181,7 +181,7 @@ fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
     );
 }
 
-/// The Glow section draws the same falloff `ViewConfig` hands to the scene.
+/// The Glow block draws the same falloff `ViewConfig` hands to the scene.
 /// The bar is the setting's readout, so a line drifting from the renderer
 /// is a false value just as surely as a bar printing the wrong number.
 #[test]
@@ -1500,8 +1500,8 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
         .1
 }
 
-/// The spectrogram keeps its time axis when MIDI is hidden; ribbon-only
-/// controls go with the ribbons, so no live bar silently does nothing.
+/// The history keeps its bar when MIDI is hidden; ribbon-only controls go with
+/// the ribbons, so no live bar silently does nothing.
 #[test]
 fn history_stays_editable_without_midi_ribbons() {
     let shapes = |show_roll| {
@@ -1512,11 +1512,8 @@ fn history_stays_editable_without_midi_ribbons() {
         tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes
     };
     let (shown, hidden) = (shapes(true), shapes(false));
-    assert_eq!(
-        track_color(&shown, one_text_y(&shown, "History duration")),
-        track_color(&hidden, one_text_y(&hidden, "History duration")),
-        "the spectrogram lost its history control",
-    );
+    // Under View, which has no switch, so drawn at all is the whole claim.
+    assert_eq!(text_ys(&hidden, "History duration").len(), 1, "history went with the ribbons");
     for ribbon in ["Ribbon width", "Ribbon opacity", "Ribbon bloom"] {
         assert_eq!(text_ys(&shown, ribbon).len(), 1, "{ribbon} missing with ribbons on");
         assert!(text_ys(&hidden, ribbon).is_empty(), "{ribbon} stayed without ribbons");
@@ -1906,6 +1903,14 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     assert!(
         state.workspace.interaction.folded_sections.is_empty(),
         "the switch folded a section: {:?}",
+        state.workspace.interaction.folded_sections,
+    );
+    // Off, the heading has nothing to fold, so a click on its name records none.
+    click_at(&mut h, &mut state, heading.center());
+    h.frame(&mut state, vec![]);
+    assert!(
+        state.workspace.interaction.folded_sections.is_empty(),
+        "a click on an off heading folded it: {:?}",
         state.workspace.interaction.folded_sections,
     );
 

@@ -18,13 +18,13 @@ use harmonigraph_scene::{
 pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
     super::block(ui, "Octave layout");
     // Octaves, Center and the fringe are the axis; how thick the ring they are
-    // drawn on is, and where it sits, is the Layers bar up in Note — the
+    // drawn on is, and where it sits, is the Layers bar at the top of Notes — the
     // middle of its three handles, named MIDI there. The bar names layers by where each
     // one's reading comes FROM, which is what tells the two middle rings apart:
     // the analyzer's spectrum on the inner one, the played notes on this one.
     // This heading names the pitch axis drawn on it instead, that being what
     // the rows below set. How wide the cut between two indicators is belongs to
-    // neither: it is the shared Gap, up in Note layers.
+    // neither: it is the shared Gap, at the top of Notes.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -93,7 +93,7 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
             );
     });
     // The padding between one indicator and the next is NOT here: it is the
-    // shared Gap up in Note layers. What this section keeps is the axis alone:
+    // shared Gap at the top of Notes. What this block keeps is the axis alone:
     // how the turn is shared out, rather than how wide the cut between two
     // shares is.
     //
@@ -172,7 +172,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 ],
             );
         });
-    // WHICH NODES wear the ring, where the Layers bar up in Note is how thick
+    // WHICH NODES wear the ring, where the Layers bar at the top of Notes is how thick
     // it is: a node whose loudest wedge does not reach this level draws no ring
     // at all. Both readings, so it sits above the pair of bars that are each one
     // reading's own — it is a question about the layer rather than about a

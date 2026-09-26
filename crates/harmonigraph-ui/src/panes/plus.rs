@@ -35,7 +35,7 @@
 //!
 //! A NAMED position draws no marker
 //! ([`is_named`](harmonigraph_scene::NodeInstance::is_named)), which is why
-//! the Show row on the Labels section reaches this picture: both a marker and
+//! the Show row in the Note labels block reaches this picture: both a marker and
 //! a name say "a position is here" and the name says which one, so under
 //! `All` the field is gone entirely and the bars below go quiet. That is not a
 //! setting to add here — it is one picture with two readings of it, and the
