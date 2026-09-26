@@ -320,10 +320,9 @@ struct StarSlice {
     fringe: f32,
     fringe_reach: f32,
     reach: f32,
-    unseen: f32,
-    spread: vec2<f32>,
     life: f32,
-    _pad: f32,
+    spread: vec2<f32>,
+    _pad: vec2<f32>,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -1437,8 +1436,17 @@ const STAR_WANDER_PERIOD: f32 = 400.0;
 // of two, so masking the life index by it wraps with the clock and no life is
 // cut short where the clock wraps.
 const STAR_LIFE_PERIOD: u32 = 4096u;
-// The share of a life a star spends fading in, and again fading out
-// (`STAR_FADE` in atmosphere.rs, which says why one star a cell and not two).
+// The share of its life a star spends fading in, and again fading out, each
+// as a smoothstep.
+//
+// ONE star a cell, and so a dip while it turns over, rather than two half a
+// life apart fading as `sin²` — which sum to exactly one and never dip, and
+// were built and measured: the field's frame-mean brightness held just as
+// still either way over a flat input (a standard deviation of 0.08% of it
+// against 0.11% here), because the cells turn over at hashed times, and the
+// second star cost 70% more starfield at 4K (88 ms against 52). One star
+// fading as `sin²` over its whole life left the field a fifth darker than
+// two; with the fade kept to its ends it is 5% darker.
 const STAR_FADE: f32 = 0.2;
 // The glow's exposure over the floor.
 const STAR_EXPOSURE: f32 = 1.5;
@@ -1599,7 +1607,6 @@ fn star_over_ground(colour: vec3<f32>, ground: vec2<f32>) -> f32 {
 // compiler did not unroll them, where the nine calls cost the ring nothing.
 fn star_color(pt: vec2<f32>) -> vec3<f32> {
     let uv = pt / cloud.size;
-    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
     let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
     let floor_colour = palette_color(0.0);
     var out = floor_colour;
@@ -1624,15 +1631,6 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
         var slice = vec4<f32>(0.0);
         for (var n = 0; n < 9; n += 1) {
             slice += star_cell(s, r, o + vec2<i32>(n % 3 - 1, n / 3 - 1), salt, cut, ground);
-        }
-        // What of the stars' profiles lies past the ring's window, as the
-        // average star here (`star_unseen` in atmosphere.rs). Over silence no
-        // star is drawn, so neither is this.
-        let level = clamp(mix(close, wide, s.blur), 0.0, 1.0);
-        if s.unseen > 0.0 && level > 0.0 {
-            let colour = star_paint(level, 1.0);
-            let cover = s.unseen * star_over_ground(colour, ground);
-            slice += vec4<f32>(colour * cover, cover);
         }
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
