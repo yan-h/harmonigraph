@@ -1143,6 +1143,154 @@ fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The notes one take file draws for key `key`, replayed as the renderer does.
+fn drawn(take: &harmonigraph_take::Take, key: u8) -> Vec<(f64, Option<f64>)> {
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    tracker.roll().notes().filter(|n| n.note == key).map(|n| (n.start, n.end)).collect()
+}
+
+fn records_an_on(take: &harmonigraph_take::Take, key: u8) -> bool {
+    take.events.iter().any(|record| {
+        matches!(record.note(), Some(n) if n.note == key
+            && matches!(n.kind, harmonigraph_take::NoteKind::On { .. }))
+    })
+}
+
+/// #1129 inside one pass: the transport pauses, a note is struck while
+/// nothing records, and playback resumes from where it stopped — the same
+/// pass, no split. The onset's input and its scheduled sample both fall in
+/// the pause, so only the resume opening with what is sounding reaches it.
+#[test]
+fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-resume-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let block = 64.0 / 48000.0;
+    let parked = || {
+        let mut parked = transport(block, 0);
+        parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        parked
+    };
+    device.run_transport(0, vec![], false, None, Some(transport(0.0, 0)));
+    device.run_transport(64, vec![], false, None, Some(transport(block, 0)));
+    // Parked where it stopped: no forward motion, so none of these records.
+    // The strike waits a block, past the Stop's own session cut.
+    device.run_transport(128, vec![], false, None, Some(parked()));
+    let struck = vec![note(10, 60, 10, CLAP_EVENT_NOTE_ON)];
+    device.run_transport(192, struck, false, None, Some(parked()));
+    device.run_transport(256, vec![], false, None, Some(parked()));
+    writer.drain(&mut capture);
+    device.run_transport(320, vec![], false, None, Some(transport(block, 0)));
+    let released = vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)];
+    device.run_transport(384, released, false, None, Some(transport(2.0 * block, 0)));
+    for (raw, blocks) in [(448, 3.0), (512, 4.0)] {
+        device.run_transport(raw, vec![], false, None, Some(transport(blocks * block, 0)));
+    }
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    assert!(!dir.join("record-2.take").exists(), "a resume is not a split");
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(!records_an_on(&take, 60), "the fixture must strike where nothing records");
+    let notes = drawn(&take, 60);
+    assert_eq!(notes.len(), 1, "the take draws the note struck in the pause: {notes:?}");
+    assert!(notes[0].1.is_some(), "through the release it recorded");
+    drop(writer);
+    device.finish_notes(576, &[]);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #1129 for every pass, not only the first: a note held across a loop wrap
+/// begins before the second pass does, so that pass holds nothing of it but
+/// its release unless the split opens it again.
+#[test]
+fn a_pass_split_by_a_loop_opens_with_the_note_held_across_it() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-held-split-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let block = 64.0 / 48000.0;
+    let struck = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
+    device.run_transport(0, struck, false, None, Some(transport(9.0, 0)));
+    device.run_transport(64, vec![], false, None, Some(transport(9.0 + block, 0)));
+    // Back to the start while playing: the loop wraps and the take splits.
+    device.run_transport(128, vec![], false, None, Some(transport(0.0, 0)));
+    device.run_transport(192, vec![], false, None, Some(transport(block, 0)));
+    let released = vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)];
+    device.run_transport(256, released, false, None, Some(transport(2.0 * block, 0)));
+    for (raw, blocks) in [(320, 3.0), (384, 4.0)] {
+        device.run_transport(raw, vec![], false, None, Some(transport(blocks * block, 0)));
+    }
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let first = harmonigraph_take::Take::read(&path).unwrap();
+    assert!(records_an_on(&first, 60), "the first pass saw the note begin");
+    let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
+    assert!(!records_an_on(&second, 60), "the fixture must hold the note across the wrap");
+    let notes = drawn(&second, 60);
+    assert_eq!(notes.len(), 1, "the second pass draws the held note: {notes:?}");
+    assert!(notes[0].1.is_some(), "through the release it recorded");
+    drop(writer);
+    device.finish_notes(448, &[]);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The same wrap arriving as a transport event mid-callback. The pass opens in
+/// that callback's second sub-block, and its snapshot has to be cut there: cut
+/// a callback later, it follows the next callback's sequencing, which has
+/// already applied the release below, and the pass is left an Off for a voice
+/// it never held.
+#[test]
+fn a_pass_opened_mid_callback_is_opened_in_that_callback() {
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    device.activate();
+    capture.arm();
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-config-mid-wrap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let block = 64.0 / 48000.0;
+    let struck = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
+    device.run_transport(0, struck, false, None, Some(transport(9.0, 0)));
+    let wrap = vec![Input::Transport(transport(0.0, 32))];
+    device.run_transport(64, wrap, false, None, Some(transport(9.0 + block, 0)));
+    let released = vec![note(10, 60, 0, CLAP_EVENT_NOTE_OFF)];
+    let resumed = 32.0 / 48000.0;
+    device.run_transport(128, released, false, None, Some(transport(resumed, 0)));
+    for (raw, blocks) in [(192, 1.0), (256, 2.0)] {
+        let at = transport(resumed + blocks * block, 0);
+        device.run_transport(raw, vec![], false, None, Some(at));
+    }
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let second = harmonigraph_take::Take::read(dir.join("record-2.take")).unwrap();
+    assert!(!records_an_on(&second, 60), "the fixture must hold the note across the wrap");
+    let notes = drawn(&second, 60);
+    assert_eq!(notes.len(), 1, "the second pass draws the held note: {notes:?}");
+    assert!(notes[0].1.is_some(), "through the release it recorded");
+    drop(writer);
+    device.finish_notes(320, &[]);
+    drop(device);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Armed with the transport stopped, then sent back to the start before
 /// anything played — Bitwig's stop-returns-to-start, or a jump to bar 1 for an
 /// AtBar take. That move owed a split, and paying it from a pass that never

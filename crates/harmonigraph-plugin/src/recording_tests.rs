@@ -5,10 +5,11 @@ use parking_lot::Mutex;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use vst3::Steinberg::Vst::Event_::EventTypes_;
+use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_;
 use vst3::Steinberg::Vst::{
     AudioBusBuffers, AudioBusBuffers__type0, Event, IAudioProcessor, IAudioProcessorTrait,
     IComponent, IComponentTrait, IEventList, IEventListTrait, NoteOffEvent, NoteOnEvent,
-    ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
+    ProcessContext, ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
 };
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult, IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait,
@@ -20,6 +21,8 @@ use vst3::{Class, ComPtr, ComWrapper, Interface};
 const SAMPLE_32: i32 = SymbolicSampleSizes_::kSample32 as i32;
 #[allow(clippy::unnecessary_cast)]
 const REALTIME: i32 = ProcessModes_::kRealtime as i32;
+#[allow(clippy::unnecessary_cast)]
+const PLAYING: u32 = StatesAndFlags_::kPlaying as u32;
 
 struct Device {
     component: ComPtr<IComponent>,
@@ -63,6 +66,22 @@ impl Device {
     /// built by the caller BEFORE the callback, so the fixture itself allocates
     /// nothing inside the guarded `process`.
     fn block_with(&self, input_events: *mut IEventList, output_events: *mut IEventList) {
+        self.block_in(input_events, output_events, ptr::null_mut());
+    }
+    /// One callback with the transport playing at `position` samples.
+    fn block_at(&self, input_events: *mut IEventList, position: i64) {
+        let mut context: ProcessContext = unsafe { std::mem::zeroed() };
+        context.state = PLAYING;
+        context.sampleRate = 48000.0;
+        context.projectTimeSamples = position;
+        self.block_in(input_events, ptr::null_mut(), &mut context);
+    }
+    fn block_in(
+        &self,
+        input_events: *mut IEventList,
+        output_events: *mut IEventList,
+        process_context: *mut ProcessContext,
+    ) {
         let mut input = [[0.25, 0.5, 0.75, 1.0], [-0.25, -0.5, -0.75, -1.0]];
         let mut output = [[0.0; 4]; 2];
         let mut inputs = input.each_mut().map(|c| c.as_mut_ptr());
@@ -81,7 +100,7 @@ impl Device {
             outputParameterChanges: ptr::null_mut(),
             inputEvents: input_events,
             outputEvents: output_events,
-            processContext: ptr::null_mut(),
+            processContext: process_context,
         };
         // The dev-enabled assert_process_allocs guards the exported wrapper,
         // including this plugin's actual callback, on every test run.
@@ -278,6 +297,51 @@ fn vst3_take_armed_mid_note_opens_with_the_held_note() {
         vec![
             (4.0 / 48000.0, 60, harmonigraph_take::NoteKind::On { velocity: 0.75 }),
             (8.0 / 48000.0 + 2.0 / 48000.0, 60, harmonigraph_take::NoteKind::Off),
+        ]
+    );
+
+    drop(control);
+    wait(|| probe.finished());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// #1129, every pass rather than the first: a loop wraps while a note is
+/// held, so the second pass begins with the note already sounding and holds
+/// nothing of it but its release unless the split opens it again.
+#[test]
+fn vst3_a_pass_split_by_a_loop_opens_with_the_note_held_across_it() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-vst3-split-{}", std::process::id()));
+    let (recorder, control) = harmonigraph_record::channel();
+    let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    control.start(48000.0, String::new(), false);
+    crate::configuration::inject_recorder(recorder);
+    let device = Device::new();
+    let struck = Events::queued(vec![note_on(60, 1)]);
+    device.block_at(event_list(&struck), 48000);
+    device.block_at(ptr::null_mut(), 48004);
+    // Back a second while playing — past the 50 ms a playing host may jitter
+    // backwards — so the loop wraps and the take splits.
+    device.block_at(ptr::null_mut(), 0);
+    let released = Events::queued(vec![note_off(60, 2)]);
+    device.block_at(event_list(&released), 4);
+    control.stop(None);
+    drop(device);
+    wait(|| control.last_take().is_some());
+    assert!(!probe.failed());
+
+    let second = control.last_take().unwrap();
+    assert!(
+        second.to_string_lossy().ends_with("-2.take"),
+        "the second pass is voiced, so it is the take: {second:?}"
+    );
+    let take = harmonigraph_take::Take::read(&second).unwrap();
+    let notes: Vec<_> = take.notes().map(|note| (note.t, note.note, note.kind)).collect();
+    assert_eq!(
+        notes,
+        vec![
+            (0.0, 60, harmonigraph_take::NoteKind::On { velocity: 0.75 }),
+            (4.0 / 48000.0 + 2.0 / 48000.0, 60, harmonigraph_take::NoteKind::Off),
         ]
     );
 

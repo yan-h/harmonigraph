@@ -272,9 +272,12 @@ pub struct Recorder {
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
     audio_started: bool,
-    /// Whether this pass has already been handed the notes sounding at its
-    /// start. See [`Recorder::open_notes`].
-    notes_opened: bool,
+    /// Which unbroken run of recorded blocks the take is in. See
+    /// [`Recorder::recording_run`].
+    run: u64,
+    /// Whether the last transport observation recorded, so the next one that
+    /// does after one that did not starts a new run.
+    run_live: bool,
     /// Set by the GUI for every trigger whose take is over the moment the
     /// transport goes backwards — a loop wrapping under
     /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd), and the host
@@ -457,7 +460,10 @@ impl Recorder {
         if action == Action::Arm {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
-            self.notes_opened = false;
+            // A take armed with no transport position records from here on
+            // without a transport observation to start its run.
+            self.run = self.run.wrapping_add(1);
+            self.run_live = false;
             self.latches.clear();
         }
         armed
@@ -479,16 +485,20 @@ impl Recorder {
         self.latches.captured.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Whether the caller still owes this pass the notes already sounding at
-    /// its start — true once per pass, on the first recording block that asks.
+    /// Which unbroken run of recorded blocks the take is in. It changes when
+    /// the take is armed, when it records again after any block it did not
+    /// (a transport paused and resumed), and at every split.
     ///
-    /// The note half of what `last_params` does for parameters: a pass armed
-    /// mid-note, or split from the one before by a loop, would otherwise hold
-    /// only the releases of notes it never saw begin, and replay draws nothing
-    /// for them (#1129). Only the plain-MIDI arm asks; the configured route
-    /// opens each pass with the Hub's own snapshot instead.
-    pub fn open_notes(&mut self) -> bool {
-        !std::mem::replace(&mut self.notes_opened, true)
+    /// Each change owes the take the notes already sounding, the way
+    /// `last_params` owes it a full parameter set: whatever began while
+    /// nothing recorded — before arming, in a pause, in the pass before a
+    /// loop wrapped — would otherwise reach it only as releases, and replay
+    /// draws nothing for those (#1129). A caller remembers the run it last
+    /// opened and opens again when this differs, so the debt is paid once per
+    /// run however many blocks ask. The plain-MIDI arm pays it with its held
+    /// notes; the configured route with the Hub's snapshot.
+    pub fn recording_run(&self) -> u64 {
+        self.run
     }
 
     pub fn wants_audio(&self) -> bool {
@@ -585,9 +595,12 @@ impl Recorder {
             self.push(Entry::NewPass);
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
-            self.notes_opened = false;
         }
         let rolling = matches!(action, Action::Record | Action::SplitAndRecord);
+        if rolling && (!self.run_live || action == Action::SplitAndRecord) {
+            self.run = self.run.wrapping_add(1);
+        }
+        self.run_live = rolling;
         if rolling {
             self.latches.rolled.store(true, Ordering::Relaxed);
         }

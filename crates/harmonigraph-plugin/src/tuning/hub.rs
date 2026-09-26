@@ -285,9 +285,9 @@ pub struct Hub {
     clock: ClockId,
     /// Host seconds against elapsed samples, for loop and seek detection.
     seconds: Option<f64>,
-    /// The last recording pass every row was told to open with a take-lane
-    /// snapshot. See [`Hub::publish`].
-    opened: Option<harmonigraph_record::configuration::RecordAddress>,
+    /// The last recording pass and run every row was told to open with a
+    /// take-lane snapshot. See [`Hub::publish`].
+    opened: Option<(harmonigraph_record::configuration::RecordAddress, u64)>,
     status: u32,
     /// Which row the next collection starts from.
     rotation: usize,
@@ -1040,25 +1040,33 @@ impl Hub {
         }
         let Some(callback) = self.callback else { return };
         let sample = callback.steady_time;
-        let time = self.presentation(sample);
+        // Snapshots route from the sub-block being processed, not the
+        // callback's start: a pass a mid-callback transport event opens or
+        // resumes is this sub-block's, and routing from the start would put
+        // its opening snapshot a whole callback late.
+        let block = owner.recording.block_start;
+        let time = self.presentation(block);
         let timing = EventTiming {
             clock: self.clock,
-            input: sample,
+            input: block,
             planned: None,
-            sample,
+            sample: block,
             sample_rate: self.rate,
         };
         let route = owner.recording_route(timing, time).unwrap_or_default();
-        // Every recording pass opens with a take-lane snapshot of every row
-        // (#1129). A delta routes by the sample its INPUT arrived at, so a
-        // voice whose input fell before the pass's first block — armed
-        // mid-note, or struck in the D samples before the transport rolled —
-        // has its onset in no pass, and the take would otherwise play its
-        // release and expressions against nothing.
-        if route.address.is_some() && route.address != self.opened {
-            self.opened = route.address;
-            for row in self.rows.iter_mut() {
-                row.repair.take = true;
+        // Every recording run — each pass, and each resume inside one — opens
+        // with a take-lane snapshot of every row (#1129). A delta routes by
+        // the sample its INPUT arrived at, so a voice whose input fell where
+        // nothing recorded — before arming, in a pause, in the D samples
+        // before the transport rolled — has its onset in no pass, and the take
+        // would otherwise play its release and expressions against nothing.
+        if let Some(address) = route.address {
+            let run = (address, recorder.recording_run());
+            if self.opened != Some(run) {
+                self.opened = Some(run);
+                for row in self.rows.iter_mut() {
+                    row.repair.take = true;
+                }
             }
         }
         for index in 0..=TUNERS {
@@ -1067,7 +1075,8 @@ impl Hub {
             }
             // A snapshot cuts at every delta this row applied, and has to
             // FOLLOW all of them. On the lane, so none may still wait in
-            // `pending` for a later sub-block's segment. And in time, which is
+            // `pending` — for a later sub-block's segment, or for `end`'s
+            // forced flush. And in time, which is
             // what a take is sorted by on read: a delta the cut covers that
             // sorts after its snapshot is refused as late history, and the
             // whole file with it. Those deltas sound up to D after this
