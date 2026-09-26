@@ -21,11 +21,9 @@ Contours follows accumulated coverage independently of the color overlap control
 
 ## Trying them
 
-Select a material and click **Try material preset**.
-This sets texture depth to 85%, texture size to 1×, texture speed to 1×, and breathing depth to zero.
-It preserves glow reach and gain, which must both be above zero.
-The same settings make comparisons between materials easy;
-the existing sliders remain available for tuning.
+Select a material and adjust texture depth, size, speed and breathing with the sliders.
+Glow reach and gain must both be above zero.
+Changing the material preserves the current slider values.
 
 Texture depth at zero restores smooth halos.
 Texture speed at zero freezes the material, while changing notes still changes its illumination.

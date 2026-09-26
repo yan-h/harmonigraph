@@ -41,16 +41,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         (LatticeMaterial::Contours, "Contours", "Nested bands following the combined note light"),
         (LatticeMaterial::Interference, "Interference", "Curved wave fringes illuminated by the notes"),
     ]);
-    crate::widgets::button_row(ui, |ui| {
-        if ui.button("Try material preset").on_hover_text(
-            "Set texture depth to 85%, size to 1× and speed to 1×, with breathing off. Keeps the selected material and your glow reach and gain."
-        ).clicked() {
-            settings.nebula_depth = 0.85;
-            settings.nebula_scale = 1.0;
-            settings.nebula_speed = 1.0;
-            settings.breath_amount = 0.0;
-        }
-    });
     ValueBar::new(&mut settings.nebula_depth, 0.0..=1.0, "Texture depth")
         .percent().show(ui).on_hover_text("Material contrast in the combined background glow. 0% restores smooth halos. Colors come from the notes.");
     multiplier(ui, &mut settings.nebula_scale, "Texture size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
