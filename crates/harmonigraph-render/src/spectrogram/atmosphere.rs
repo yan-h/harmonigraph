@@ -76,11 +76,6 @@ fn cloud_drift(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f
 /// nearest. The shader's `STAR_SLICES`, held to this by
 /// `the_star_ring_holds_every_star_that_reaches_a_pixel`.
 const STAR_SLICES: usize = 5;
-/// How far a star's hashed centre may sit from its cell's middle, as a whole
-/// width: `STAR_JITTER / 2` either way. The shader's own constant, mirrored for
-/// the ring's reach and checked against the shipped text.
-#[cfg(test)]
-const STAR_JITTER: f32 = 0.6;
 /// The period the star hash wraps at, in cells of each slice, and the modulus
 /// each slice's drift is reduced by here in f64 before it is narrowed to f32.
 ///
@@ -141,7 +136,7 @@ struct StarSlice {
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
-    /// [`STAR_REACH_CELLS`]: `Fringe`, alike at every depth.
+    /// the shader's `STAR_REACH`: `Fringe`, alike at every depth.
     fringe: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
@@ -293,20 +288,6 @@ pub(super) fn star_atlas_size(needed: [u32; 2], held: Option<[u32; 2]>) -> [u32;
     held.filter(|held| held[0] == needed[0] && needed[1] <= held[1] && held[1] <= rows * 2)
         .unwrap_or([needed[0], rows])
 }
-
-/// How far the ring's reach is from a pixel, in cells: a centre strays
-/// `STAR_JITTER / 2` from its own cell's middle, so the nearest a star from a
-/// cell outside the 3x3 walk can come is this, and the shader's `STAR_REACH`
-/// fades every star to zero by then. The Mosaic's `DOME_RADIUS` proof in one
-/// line.
-///
-/// Every star keeps the whole of it. A `Speed spread` dial once let each
-/// star's own speed stray from its depth's, and paid for the stray out of this
-/// reach, down to half a cell: at full spread every star's soft edge and
-/// fringe were cut off near its core, and the field read visibly blunter than
-/// at none. Yan preferred the whole reach to the spread, and it was removed.
-#[cfg(test)]
-const STAR_REACH_CELLS: f32 = 1.5 - STAR_JITTER / 2.0;
 
 /// The life clock every slice shares: seconds over `Star lifetime`, reduced
 /// modulo [`STAR_LIFE_PERIOD`] in f64. A cell's lives start at this plus its
@@ -561,8 +542,8 @@ pub(super) fn tile_key(
 ) -> Option<TileKey> {
     let settings = atmosphere.settings.sanitized();
     // The starfield walks its own ring per pixel and reads no tile: what it
-    // walks MOVES — every slice at its own speed, every star at its own and
-    // on its own life — so there is no one fixed field to bake.
+    // walks MOVES — every slice at its own speed, every star on its own
+    // life — so there is no one fixed field to bake.
     if !settings.effects().cloud || settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
         return None;
     }
@@ -664,10 +645,13 @@ const _: () = assert!(
 /// WGSL puts an array in the uniform address space on a 16-byte boundary and a
 /// `StarSlice` on a 16-byte stride, where `repr(C)` would pack both to four. So
 /// both are held here rather than trusted: a scalar added before the array would
-/// otherwise shift every slice by a word on the Rust side only.
+/// otherwise shift every slice by a word on the Rust side only. Likewise the
+/// `vec2<i32>` a slice ends with, which WGSL aligns to eight where Rust's
+/// `[i32; 2]` aligns to four.
 const _: () = assert!(
     std::mem::offset_of!(Uniforms, star_slices).is_multiple_of(16)
-        && std::mem::size_of::<StarSlice>().is_multiple_of(16),
+        && std::mem::size_of::<StarSlice>().is_multiple_of(16)
+        && std::mem::offset_of!(StarSlice, origin).is_multiple_of(8),
     "the star slices are not where the shader's 16-byte uniform layout reads them",
 );
 
@@ -1393,8 +1377,7 @@ mod tests {
     use super::{
         cloud_drift, retained_size, source_size, star_layout, star_slices, tile_key, tone_size,
         SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
-        STAR_JITTER, STAR_LIFE_PERIOD, STAR_PANE, STAR_REACH_CELLS, STAR_SLICES, TILE_MAX,
-        TILE_STEP, WASH_CELLS,
+        STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -1417,10 +1400,9 @@ mod tests {
     /// the pixel.
     ///
     /// A centre strays `STAR_JITTER / 2` from its cell's middle, so the nearest
-    /// a star from a cell OUTSIDE the ring can come to a pixel is
-    /// [`STAR_REACH_CELLS`] — and the shader fades every star to zero by then.
-    /// That makes the walk exact rather than
-    /// "close enough": the prototype's reach was 0.85 of a cell at its V3, and
+    /// a star from a cell OUTSIDE the ring can come to a pixel is the shader's
+    /// `STAR_REACH` — and the shader fades every star to zero by then. That
+    /// makes the walk exact rather than "close enough": the prototype's reach was 0.85 of a cell at its V3, and
     /// its own defocus multiplies past the cell cap, so at the fourth depth the
     /// biggest cores are 0.39 of a cell wide and would have left a tenth of
     /// their peak on the far side of a cell edge without the fade.
@@ -1431,16 +1413,16 @@ mod tests {
     /// scan covers every setting.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
-        assert_eq!(STAR_JITTER, shader_number("STAR_JITTER") as f32);
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        assert!((STAR_REACH_CELLS - shader_number("STAR_REACH") as f32).abs() < 1e-6);
-        let nearest = nearest_outside_the_ring(STAR_JITTER / 2.0);
+        let (jitter, reach) = (shader_number("STAR_JITTER"), shader_number("STAR_REACH"));
+        assert!((reach - (1.5 - jitter / 2.0)).abs() < 1e-6, "{reach} is not the ring's reach");
+        let nearest = nearest_outside_the_ring(jitter as f32 / 2.0);
         assert!(
-            nearest >= STAR_REACH_CELLS - 1e-5,
+            nearest >= reach as f32 - 1e-5,
             "a star outside the ring comes {nearest} cells from the pixel, inside the \
-             {STAR_REACH_CELLS} it is windowed to zero at"
+             {reach} it is windowed to zero at"
         );
     }
 

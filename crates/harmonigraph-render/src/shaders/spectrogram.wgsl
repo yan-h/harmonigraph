@@ -1392,7 +1392,7 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // (`star_slices`); this walks the 3x3 cells round the pixel in each.
 //
 // **Each star is worked out once a frame, not once per pixel.** Everything about
-// a star but its coverage — its life, jitter, speed, the light under it, its
+// a star but its coverage — its life, jitter, the light under it, its
 // colour and size — depends on the star alone, and nine cells a slice round
 // every pixel took it again at every pixel in reach: about 500 times a frame for
 // a far star at 4K and 6000 for a near one. So `fs_star_bake` draws every
@@ -1433,8 +1433,8 @@ const STAR_PANE: f32 = 540.0;
 // How far a centre is hashed off its cell's middle, as a whole width.
 const STAR_JITTER: f32 = 0.6;
 // The ring's reach, in cells: the nearest a star from a cell outside the 3x3
-// walk can come to a pixel, 1.5 less half the jitter (`STAR_REACH_CELLS` in
-// atmosphere.rs). Every star's coverage is windowed to zero by it.
+// walk can come to a pixel, 1.5 less half the jitter. Every star's coverage is
+// windowed to zero by it (`the_star_ring_holds_every_star_that_reaches_a_pixel`).
 const STAR_REACH: f32 = 1.2;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // atmosphere.rs), and its log.
@@ -1476,7 +1476,7 @@ fn star_level_at(pt: vec2<f32>) -> f32 {
 
 // `wash_hash`'s mixer cut into four eight-bit draws, each centred in its
 // step so none is 0 or 1: fine enough for anything about a star, and a star's
-// six draws take two hashes.
+// four draws take two hashes.
 fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
     var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
     n = n ^ (salt * 0x27d4eb2du);
