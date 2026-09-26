@@ -27,11 +27,12 @@ shared settings name their scope in the help text.
 ## Note intensity
 
 On **Mappings → Note intensity**,
+below **Audio level colors**,
 the **Opacity**, **Thickness**, and **Bloom** groups each hold their base and incoming mappings.
 Use **Add mapping** to assign a source;
-choosing one already used elsewhere moves it to this group.
-Each source still has one target and a weight.
-The **×** beside a weight removes that mapping without resetting its weight.
+each source can affect several targets with an independent weight in each group.
+The **Delete** button removes only that mapping;
+adding it again starts at weight 1.
 Every target starts at its base and adds the weighted contributions routed to it.
 **Opacity base** and **Bloom base** apply even with every mapping off.
 **Thickness base** applies too,
@@ -59,10 +60,9 @@ lower it to see velocity or pressure brighten the note.
 Note-release fading still applies,
 and the lattice's separate background node glow does not follow these mappings.
 
-The bands above each base bar share its value scale.
-Their colors match the source rows:
-each colored band shows that source's possible reach from the base,
-and the neutral band shows their combined range.
+The rounded bands touch the top of each base bar and share its value scale.
+Their colors match the weight slider fills;
+each band shows that source's possible reach from the base.
 Hover a band or edit its weight to highlight it.
 Striped ends mark clipping at zero or the target ceiling.
 Gain's solid band ends at unity gain;
@@ -71,7 +71,10 @@ These indicators show configured possibilities,
 not a live note reading.
 Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 
-Existing saved routes and weights now use these additions:
+Old one-target-per-source routes and weights are ignored on load,
+so those mappings must be added again.
+Base values are retained.
+New mappings use these additions:
 velocity no longer subtracts,
 gain no longer uses a signed dB offset,
 and timbre has twice its former range.

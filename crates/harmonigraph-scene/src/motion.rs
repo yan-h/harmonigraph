@@ -900,9 +900,9 @@ mod tests {
     /// release. The glow, with nothing routed to it, stays in full.
     #[test]
     fn intensity_fades_the_ink_but_not_the_note() {
-        use crate::{IntensitySource, IntensityTarget};
+        use crate::IntensitySource;
         let intensity = crate::IntensitySettings {
-            pressure: IntensitySource { target: IntensityTarget::Opacity, weight: 1.0 },
+            pressure: IntensitySource { opacity: Some(1.0), ..Default::default() },
             opacity_rest: 0.0,
             ..Default::default()
         };
@@ -945,7 +945,7 @@ mod tests {
         // touched by it.
         let view = ViewConfig {
             intensity: crate::IntensitySettings {
-                pressure: IntensitySource { target: IntensityTarget::Glow, weight: 0.5 },
+                pressure: IntensitySource { glow: Some(0.5), ..Default::default() },
                 glow_base: 0.5,
                 ..Default::default()
             },
@@ -974,9 +974,9 @@ mod tests {
     /// under pressure routed to opacity over a base of 0 is nothing at all.
     #[test]
     fn a_late_off_releases_from_the_reading_at_the_off() {
-        use crate::{IntensitySource, IntensityTarget};
+        use crate::IntensitySource;
         let intensity = crate::IntensitySettings {
-            pressure: IntensitySource { target: IntensityTarget::Opacity, weight: 1.0 },
+            pressure: IntensitySource { opacity: Some(1.0), ..Default::default() },
             opacity_rest: 0.0,
             ..Default::default()
         };
@@ -1013,9 +1013,9 @@ mod tests {
     /// reads full width again though it keeps its last reading.
     #[test]
     fn thickness_reshapes_a_lit_slot_only() {
-        use crate::{IntensitySource, IntensityTarget};
+        use crate::IntensitySource;
         let intensity = crate::IntensitySettings {
-            pressure: IntensitySource { target: IntensityTarget::Thickness, weight: 1.0 },
+            pressure: IntensitySource { thickness: Some(1.0), ..Default::default() },
             ..Default::default()
         };
         let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };

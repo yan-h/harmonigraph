@@ -12,8 +12,7 @@ use crate::widgets::{BendPlot, GradientPreview, RangeBar, SpectrumBar, SpreadBar
 use crate::AppearanceDocument;
 use harmonigraph_scene::ViewConfig;
 
-/// MIDI colors and their pitch range, then how a note's playing draws it, then
-/// audio colors and their level range.
+/// MIDI and audio colors, followed by how a note's playing draws it.
 pub(super) fn color_pane(
     ui: &mut egui::Ui,
     appearance: &mut AppearanceDocument,
@@ -41,11 +40,11 @@ pub(super) fn color_pane(
                      Drag an end to resize, or the middle to shift both.",
         );
     });
-    section(ui, "Note intensity", |ui| intensity::show(ui, &mut appearance.view.intensity));
     section(ui, "Audio level colors", |ui| {
         crate::widgets::weak(ui, "Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
         spectrogram_gradient_group(ui, &mut appearance.spectrum);
     });
+    section(ui, "Note intensity", |ui| intensity::show(ui, &mut appearance.view.intensity));
 }
 
 /// The tooltip both groups' curve plots carry.

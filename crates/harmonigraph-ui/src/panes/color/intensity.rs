@@ -65,7 +65,7 @@ impl Source {
         let mut single = *settings;
         for source in Self::ALL {
             if source != self {
-                source.setting(&mut single).target = IntensityTarget::Off;
+                *source.setting(&mut single).weight_mut(target) = None;
             }
         }
         single.reach(target)
@@ -74,7 +74,6 @@ impl Source {
 
 fn target_name(target: IntensityTarget) -> &'static str {
     match target {
-        IntensityTarget::Off => "Off",
         IntensityTarget::Opacity => "Opacity",
         IntensityTarget::Glow => "Bloom",
         IntensityTarget::Thickness => "Thickness",
@@ -86,22 +85,20 @@ fn limits(settings: &IntensitySettings, target: IntensityTarget) -> (f32, f32) {
         IntensityTarget::Opacity => (settings.opacity_rest, 1.0),
         IntensityTarget::Glow => (settings.glow_base, BLOOM_MAX),
         IntensityTarget::Thickness => (settings.thickness_base, settings.thickness_max),
-        IntensityTarget::Off => unreachable!(),
     }
 }
 
 pub(super) fn show(ui: &mut Ui, settings: &mut IntensitySettings) {
     widgets::weak(ui, "Bands show possible reach. Stripes mark clipping; dashes mark gain boosts.");
-    // Defer moves until every group is drawn, so a source cannot appear twice
-    // or disappear mid-frame depending on which group its menu belongs to.
+    // Apply additions/removals after drawing so rows keep stable geometry this frame.
     let mut route = None;
     for target in [IntensityTarget::Opacity, IntensityTarget::Thickness, IntensityTarget::Glow] {
         ui.push_id(target_name(target), |ui| {
             group(ui, settings, target, &mut route);
         });
     }
-    if let Some((source, target)) = route {
-        source.setting(settings).target = target;
+    if let Some((source, target, weight)) = route {
+        *source.setting(settings).weight_mut(target) = weight;
         ui.ctx().request_repaint();
     }
 }
@@ -110,7 +107,7 @@ fn group(
     ui: &mut Ui,
     settings: &mut IntensitySettings,
     target: IntensityTarget,
-    route: &mut Option<(Source, IntensityTarget)>,
+    route: &mut Option<(Source, IntensityTarget, Option<f32>)>,
 ) {
     let scale = theme::ui_scale(ui.ctx());
     ui.horizontal_wrapped(|ui| {
@@ -119,14 +116,9 @@ fn group(
             .config(egui::containers::menu::MenuConfig::new().style(widgets::menu_style(ui.ctx())))
             .ui(ui, |ui| {
                 for source in Source::ALL {
-                    let current = source.setting(settings).target;
-                    let label = if current != IntensityTarget::Off && current != target {
-                        format!("{} — move from {}", source.name(), target_name(current))
-                    } else {
-                        source.name().to_owned()
-                    };
-                    if ui.add_enabled(current != target, egui::Button::new(label)).clicked() {
-                        *route = Some((source, target));
+                    let enabled = source.setting(settings).weight(target).is_some();
+                    if ui.add_enabled(!enabled, egui::Button::new(source.name())).clicked() {
+                        *route = Some((source, target, Some(1.0)));
                         ui.close();
                     }
                 }
@@ -141,17 +133,17 @@ fn group(
     }
     let sources: Vec<_> = Source::ALL
         .into_iter()
-        .filter(|source| source.setting(settings).target == target)
+        .filter(|source| source.setting(settings).weight(target).is_some())
         .collect();
     // Reserve only the height. The base bar's actual rect supplies the common
     // horizontal scale (including the settings column's own width clamp).
     let preview = (!sources.is_empty()).then(|| {
-        ui.allocate_exact_size(
-            Vec2::new(0.0, (sources.len() as f32 + 1.0) * 6.0 * scale),
-            Sense::hover(),
-        )
-        .0
+        ui.allocate_exact_size(Vec2::new(0.0, sources.len() as f32 * 4.0 * scale), Sense::hover()).0
     });
+    if preview.is_some() {
+        // allocate_exact_size adds item spacing; remove it to attach the bands.
+        ui.add_space(-ui.spacing().item_spacing.y);
+    }
     let base = match target {
         IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, 0.0..=1.0, "Opacity base")
             .show(ui).on_hover_text("Starting opacity, even with no mappings. Only timbre can reduce it. A base of 1 leaves no room for positive additions."),
@@ -159,23 +151,14 @@ fn group(
             .unit(1.0, "×").show(ui).on_hover_text("Starting note bloom, even with no mappings. Mappings can add bloom from base 0. The separate lattice background glow is unchanged."),
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
             .unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
-        IntensityTarget::Off => unreachable!(),
     };
     let mut highlighted = None;
     for &source in &sources {
         let response = ui
             .push_id(source.name(), |ui| {
                 ui.horizontal(|ui| {
-                    let (swatch, _) = ui.allocate_exact_size(
-                        Vec2::new(8.0 * scale, theme::row_height(scale)),
-                        Sense::hover(),
-                    );
-                    ui.painter().rect_filled(
-                        Rect::from_center_size(swatch.center(), Vec2::new(8.0, 4.0) * scale),
-                        0.0,
-                        source.color(),
-                    );
-                    let width = (ui.available_width() - 24.0 * scale - ui.spacing().item_spacing.x)
+                    let delete_width = 52.0 * scale;
+                    let width = (ui.available_width() - delete_width - ui.spacing().item_spacing.x)
                         .max(0.0);
                     let label = format!("{} weight", source.name());
                     let response = ui
@@ -184,10 +167,11 @@ fn group(
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 let mut bar = ValueBar::new(
-                                    &mut source.setting(settings).weight,
+                                    source.setting(settings).weight_mut(target).as_mut().unwrap(),
                                     0.0..=INTENSITY_WEIGHT_MAX,
                                     &label,
-                                );
+                                )
+                                .color(source.color());
                                 if source == Source::Timbre {
                                     bar = bar.display(|v| format!("±{v:.2}"));
                                 }
@@ -197,8 +181,8 @@ fn group(
                         .inner;
                     if ui
                         .add_sized(
-                            Vec2::new(24.0 * scale, theme::row_height(scale)),
-                            egui::Button::new("×"),
+                            Vec2::new(delete_width, theme::row_height(scale)),
+                            egui::Button::new("Delete"),
                         )
                         .on_hover_text(format!(
                             "Remove {} from {}",
@@ -207,7 +191,7 @@ fn group(
                         ))
                         .clicked()
                     {
-                        *route = Some((source, IntensityTarget::Off));
+                        *route = Some((source, target, None));
                     }
                     response
                 })
@@ -219,15 +203,13 @@ fn group(
         }
     }
     if let Some(preview) = preview {
-        let reach = settings.reach(target);
-        let (value, ceiling) = limits(settings, target);
         let rect = Rect::from_min_max(
             Pos2::new(base.rect.left(), preview.top()),
             Pos2::new(base.rect.right(), preview.bottom()),
         );
         let hover = ui.interact(rect, ui.id().with("reach"), Sense::hover());
         if let Some(pointer) = hover.hover_pos() {
-            highlighted = sources.get(((pointer.y - rect.top()) / (6.0 * scale)) as usize).copied();
+            highlighted = sources.get(((pointer.y - rect.top()) / (4.0 * scale)) as usize).copied();
         }
         paint_reach(
             ui.painter(),
@@ -239,17 +221,7 @@ fn group(
             highlighted,
             scale,
         );
-        let suffix = if target == IntensityTarget::Opacity { "" } else { "×" };
-        let boosts = if reach.gain_boosts { " (unity gain)" } else { "" };
-        widgets::weak(
-            ui,
-            format!(
-                "Together {:.2}–{:.2}{suffix}{boosts}",
-                reach.min.clamp(0.0, ceiling),
-                reach.max.clamp(0.0, ceiling)
-            ),
-        );
-        hover.on_hover_text(format!("Possible reach from base {value:.2}. Colored bands show each source alone; the neutral band shows their sum. Striped ends are clipped. Dashed extensions show gain above unity. These are configured ranges, not live notes."));
+        hover.on_hover_text("Each colored band shows its source's possible reach from the base. Striped ends are clipped. Dashed extensions show gain above unity. These are configured ranges, not live notes.");
     } else {
         widgets::weak(ui, "No mappings");
     }
@@ -277,16 +249,11 @@ fn paint_reach(
             source.color()
         };
         let lane = Rect::from_min_size(
-            rect.min + Vec2::new(0.0, i as f32 * 6.0 * scale),
+            rect.min + Vec2::new(0.0, i as f32 * 4.0 * scale),
             Vec2::new(rect.width(), 4.0 * scale),
         );
         paint_band(painter, lane, source.reach(settings, target), ceiling, color, scale);
     }
-    let total = Rect::from_min_size(
-        rect.min + Vec2::new(0.0, sources.len() as f32 * 6.0 * scale),
-        Vec2::new(rect.width(), 3.0 * scale),
-    );
-    paint_band(painter, total, settings.reach(target), ceiling, theme::text_dim(), scale);
     let x = rect.left() + rect.width() * (base / ceiling).clamp(0.0, 1.0);
     painter.line_segment(
         [Pos2::new(x, rect.top()), Pos2::new(x, base_top)],
@@ -303,13 +270,13 @@ fn paint_band(
     scale: f32,
 ) {
     let x = |value: f32| rect.left() + rect.width() * (value / ceiling).clamp(0.0, 1.0);
-    painter.rect_filled(rect, 0.0, theme::well());
+    painter.rect_filled(rect, theme::control_radius(scale), theme::well());
     let span = Rect::from_min_max(
         Pos2::new(x(reach.min), rect.top()),
         Pos2::new(x(reach.max), rect.bottom()),
     );
     if span.width() > 0.0 {
-        painter.rect_filled(span, 0.0, color);
+        painter.rect_filled(span, theme::control_radius(scale), color);
     }
     if reach.gain_boosts {
         let mut start = x(reach.max);
@@ -333,7 +300,7 @@ fn paint_band(
                 Vec2::new(5.0 * scale, rect.height()),
             )
             .intersect(rect);
-            painter.rect_filled(end, 0.0, color);
+            painter.rect_filled(end, theme::control_radius(scale), color);
             let clip = painter.with_clip_rect(painter.clip_rect().intersect(end));
             for i in 0..4 {
                 let x = at + i as f32 * 3.0 * scale;
@@ -403,10 +370,10 @@ mod tests {
     }
 
     #[test]
-    fn target_menus_move_and_remove_a_source_without_changing_its_weight() {
+    fn target_menus_add_independent_weights_and_delete_only_that_mapping() {
         let ctx = crate::tests::probe::themed();
         let mut settings = IntensitySettings {
-            velocity: IntensitySource { target: IntensityTarget::Opacity, weight: 0.4 },
+            velocity: IntensitySource { opacity: Some(0.4), ..Default::default() },
             ..Default::default()
         };
         let out = frame(&ctx, &mut settings, vec![]);
@@ -414,19 +381,19 @@ mod tests {
         assert_eq!(add.len(), 3);
         click(&ctx, &mut settings, add[1].center());
         let menu = frame(&ctx, &mut settings, vec![]);
-        let item = texts(&menu, "Velocity — move from Opacity")[0];
+        let item = texts(&menu, "Velocity")[0];
         click(&ctx, &mut settings, item.center());
-        assert_eq!(settings.velocity.target, IntensityTarget::Thickness);
-        assert_eq!(settings.velocity.weight, 0.4);
+        assert_eq!(settings.velocity.opacity, Some(0.4));
+        assert_eq!(settings.velocity.thickness, Some(1.0));
+        let out = frame(&ctx, &mut settings, vec![]);
+        assert_eq!(texts(&out, "Velocity weight").len(), 2);
+        let remove = texts(&out, "Delete");
+        assert_eq!(remove.len(), 2);
+        click(&ctx, &mut settings, remove[0].center());
+        assert_eq!(settings.velocity.opacity, None);
+        assert_eq!(settings.velocity.thickness, Some(1.0));
         let out = frame(&ctx, &mut settings, vec![]);
         assert_eq!(texts(&out, "Velocity weight").len(), 1);
-        let remove = texts(&out, "×");
-        assert_eq!(remove.len(), 1);
-        click(&ctx, &mut settings, remove[0].center());
-        assert_eq!(settings.velocity.target, IntensityTarget::Off);
-        assert_eq!(settings.velocity.weight, 0.4);
-        let out = frame(&ctx, &mut settings, vec![]);
-        assert!(texts(&out, "Velocity weight").is_empty());
     }
 
     #[test]
@@ -434,10 +401,10 @@ mod tests {
         let ctx = crate::tests::probe::themed();
         let mut settings = IntensitySettings {
             opacity_rest: 0.25,
-            velocity: IntensitySource { target: IntensityTarget::Opacity, weight: 0.5 },
-            pressure: IntensitySource { target: IntensityTarget::Opacity, weight: 0.25 },
-            timbre: IntensitySource { target: IntensityTarget::Opacity, weight: 0.5 },
-            gain: IntensitySource { target: IntensityTarget::Opacity, weight: 0.25 },
+            velocity: IntensitySource { opacity: Some(0.5), ..Default::default() },
+            pressure: IntensitySource { opacity: Some(0.25), ..Default::default() },
+            timbre: IntensitySource { opacity: Some(0.5), ..Default::default() },
+            gain: IntensitySource { opacity: Some(1.25), ..Default::default() },
             ..Default::default()
         };
         let out = frame(&ctx, &mut settings, vec![]);
@@ -475,19 +442,30 @@ mod tests {
         assert!((velocity.width() - base.width() * 0.5).abs() < 0.1);
         assert!((timbre.left() - base.left()).abs() < 0.1);
         assert!((timbre.right() - velocity.right()).abs() < 0.1);
-        assert!(!texts(&out, "Together 0.00–1.00 (unity gain)").is_empty());
-        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
-            egui::Shape::LineSegment { points, stroke }
-                if stroke.color == Source::Gain.color()
-                    && points[0].x >= base.left() + base.width() * 0.5
-                    && points[1].x > points[0].x)));
-        // This fixture clips timbre at zero and the total at both ends; the
+        assert!(!out.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(t) if t.galley.text().starts_with("Together"))));
+        let gain = band(&out, Source::Gain.color());
+        assert!((gain.bottom() - base.top()).abs() < 0.1);
+        for source in Source::ALL {
+            assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Path(p) if p.fill == theme::well().lerp_to_gamma(source.color(), 0.35))));
+        }
+        assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(r) if r.fill == Source::Velocity.color() && r.corner_radius.nw > 0)));
+        // This fixture clips timbre at zero and gain at the upper end; the
         // hatch strokes must actually be drawn through narrow edge clips.
         for x in [base.left(), base.right() - 5.0] {
             assert!(out.shapes.iter().any(|s| (s.clip_rect.left() - x).abs() < 0.1
                 && (s.clip_rect.width() - 5.0).abs() < 0.1
                 && matches!(s.shape, egui::Shape::LineSegment { .. })));
         }
+        settings.gain.opacity = Some(0.25);
+        let out = frame(&ctx, &mut settings, vec![]);
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::LineSegment { points, stroke }
+                if stroke.color == Source::Gain.color()
+                    && points[0].x >= base.left() + base.width() * 0.5
+                    && points[1].x > points[0].x)));
         frame(&ctx, &mut settings, vec![egui::Event::PointerMoved(velocity.center())]);
         let out = frame(&ctx, &mut settings, vec![]);
         assert_eq!(band(&out, Source::Velocity.color()), velocity);

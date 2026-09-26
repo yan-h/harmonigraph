@@ -1,12 +1,6 @@
-//! How a note is drawn from how it is played: each of its sources — velocity
-//! and the host's per-note gain, pressure and timbre — is ROUTED to one
-//! display with a weight of its own, and each display adds up what is routed
-//! to it.
-//!
-//! One target per source rather than a matrix of every source against every
-//! display, so the picture says plainly what each source does. The sources on
-//! one display ADD rather than multiply; the cap is on the sum, never on one
-//! contribution.
+//! How a note is drawn from how it is played. Velocity, gain, pressure and
+//! timbre each have independent weights for opacity, bloom and thickness.
+//! Contributions add before each display's final cap.
 //!
 //! Velocity, pressure and linear gain contribute nonnegative amounts above
 //! each display's base. Timbre is the signed exception: 0.5 adds nothing,
@@ -37,51 +31,46 @@ pub const BLOOM_MAX: f32 = 2.0;
 pub const BLOOM_REFERENCE_FLOOR: f32 = 0.05;
 
 /// Which display a source drives.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntensityTarget {
-    /// Drives nothing.
-    #[default]
-    Off,
-    /// The note's opacity: the lattice's octave slices and the roll's ribbons.
+    /// The lattice's octave slices and the roll's ribbons.
     Opacity,
-    /// How much the note blooms, added to the Bloom base: the halo round its
-    /// lattice slices and round its roll ribbon. The lattice's node glow does
-    /// not read it.
+    /// Note halos in both panes, independent of the lattice's node glow.
     Glow,
-    /// How thick it is drawn, as a multiple of its pane's note width: the
-    /// roll's ribbons, across pitch about their center line, and the lattice's
-    /// lit slices, out from the band's inner edge.
+    /// Width in multiples of each pane's reference note width.
     Thickness,
 }
 
 impl IntensityTarget {
-    /// Every target, for the settings picker. Guarded exhaustively so a new
-    /// display cannot miss it.
-    pub const ALL: [Self; 4] = {
-        const fn covered(target: IntensityTarget) {
-            use IntensityTarget::*;
-            match target {
-                Off | Opacity | Glow | Thickness => (),
-            }
-        }
-        covered(IntensityTarget::Off);
-        [Self::Off, Self::Opacity, Self::Glow, Self::Thickness]
-    };
+    pub const ALL: [Self; 3] = [Self::Opacity, Self::Glow, Self::Thickness];
 }
 
-/// One source's route: which display it drives, and how hard.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+/// A source's independent target weights. None disables that mapping;
+/// Some(0) keeps it enabled at zero strength. Weights range from 0 to
+/// [`INTENSITY_WEIGHT_MAX`]; only timbre can contribute a negative amount.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct IntensitySource {
-    pub target: IntensityTarget,
-    /// What the source's amount is multiplied by before its display adds it,
-    /// 0 to [`INTENSITY_WEIGHT_MAX`]. Timbre's amount spans -1 to 1.
-    pub weight: f32,
+    pub opacity: Option<f32>,
+    pub glow: Option<f32>,
+    pub thickness: Option<f32>,
 }
 
-impl Default for IntensitySource {
-    fn default() -> Self {
-        Self { target: IntensityTarget::Off, weight: 1.0 }
+impl IntensitySource {
+    pub fn weight(&self, target: IntensityTarget) -> Option<f32> {
+        match target {
+            IntensityTarget::Opacity => self.opacity,
+            IntensityTarget::Glow => self.glow,
+            IntensityTarget::Thickness => self.thickness,
+        }
+    }
+
+    pub fn weight_mut(&mut self, target: IntensityTarget) -> &mut Option<f32> {
+        match target {
+            IntensityTarget::Opacity => &mut self.opacity,
+            IntensityTarget::Glow => &mut self.glow,
+            IntensityTarget::Thickness => &mut self.thickness,
+        }
     }
 }
 
@@ -114,7 +103,6 @@ pub struct IntensitySettings {
     /// Weighted contributions use the same units. Bounded by `thickness_max`.
     pub thickness_base: f32,
     /// The widest a note can be drawn, as a multiple of its pane's note width.
-    /// Read only while something is routed to Thickness.
     pub thickness_max: f32,
 }
 
@@ -183,7 +171,11 @@ impl IntensitySettings {
         let bar =
             |value: f32, fallback: f32| finite_or(value, fallback).clamp(0.0, INTENSITY_WEIGHT_MAX);
         for source in [&mut self.velocity, &mut self.gain, &mut self.pressure, &mut self.timbre] {
-            source.weight = bar(source.weight, fresh.velocity.weight);
+            for target in IntensityTarget::ALL {
+                if let Some(weight) = source.weight_mut(target) {
+                    *weight = bar(*weight, 1.0);
+                }
+            }
         }
         self.glow_base = finite_or(self.glow_base, fresh.glow_base).clamp(0.0, BLOOM_MAX);
         self.opacity_rest = finite_or(self.opacity_rest, fresh.opacity_rest).clamp(0.0, 1.0);
@@ -196,10 +188,9 @@ impl IntensitySettings {
 
     /// Whether any source is routed to `target`.
     pub fn routes_to(&self, target: IntensityTarget) -> bool {
-        target != IntensityTarget::Off
-            && [self.velocity, self.gain, self.pressure, self.timbre]
-                .iter()
-                .any(|source| source.target == target)
+        [self.velocity, self.gain, self.pressure, self.timbre]
+            .iter()
+            .any(|source| source.weight(target).is_some())
     }
 
     /// The Bloom base, whatever a shell hands over: finite and on its bar.
@@ -255,7 +246,6 @@ impl IntensitySettings {
     /// needs the uncapped values to distinguish clipping from reaching an end.
     pub fn reach(&self, target: IntensityTarget) -> IntensityReach {
         let value = |reading: IntensityReading| match target {
-            IntensityTarget::Off => 0.0,
             IntensityTarget::Opacity => reading.opacity,
             IntensityTarget::Glow => self.glow_at_rest() + reading.glow,
             IntensityTarget::Thickness => reading.thickness,
@@ -263,9 +253,7 @@ impl IntensitySettings {
         IntensityReach {
             min: value(self.unclamped(0.0, Expressions { pressure: 0.0, gain: 0.0, timbre: 0.0 })),
             max: value(self.unclamped(1.0, Expressions { pressure: 1.0, gain: 1.0, timbre: 1.0 })),
-            gain_boosts: target != IntensityTarget::Off
-                && self.gain.target == target
-                && self.gain.weight > 0.0,
+            gain_boosts: self.gain.weight(target).is_some_and(|weight| weight > 0.0),
         }
     }
 
@@ -282,8 +270,9 @@ impl IntensitySettings {
         let sum = |target: IntensityTarget| {
             sources
                 .iter()
-                .filter(|(source, _)| source.target == target && source.weight != 0.0)
-                .map(|(source, value)| source.weight * value)
+                .filter_map(|(source, value)| source.weight(target).map(|weight| (weight, value)))
+                .filter(|(weight, _)| *weight != 0.0)
+                .map(|(weight, value)| weight * value)
                 .sum::<f32>()
                 .clamp(-f32::MAX, f32::MAX)
         };
@@ -304,7 +293,9 @@ mod tests {
     }
 
     fn to(target: IntensityTarget, weight: f32) -> IntensitySource {
-        IntensitySource { target, weight }
+        let mut source = IntensitySource::default();
+        *source.weight_mut(target) = Some(weight);
+        source
     }
 
     /// Fresh, every display is at rest whatever a note carries, so a project
@@ -332,8 +323,29 @@ mod tests {
         }
     }
 
-    /// Each source drives only its target, adding above the base except for
-    /// timbre, whose lower half can subtract.
+    #[test]
+    fn one_source_drives_multiple_targets_with_independent_weights() {
+        let mut settings = IntensitySettings {
+            pressure: IntensitySource { opacity: Some(0.4), glow: Some(0.8), thickness: Some(1.2) },
+            opacity_rest: 0.1,
+            glow_base: 0.2,
+            thickness_base: 0.5,
+            ..Default::default()
+        };
+        let expression = Expressions { pressure: 0.5, ..Expressions::NEUTRAL };
+        let reading = settings.read(0.0, expression);
+        assert!((reading.opacity - 0.3).abs() < 1e-6);
+        assert!((settings.bloom(reading) - 0.6).abs() < 1e-6);
+        assert!((reading.thickness - 1.1).abs() < 1e-6);
+        settings.pressure.glow = None;
+        let removed = settings.read(0.0, expression);
+        assert_eq!(removed.opacity, reading.opacity);
+        assert_eq!(removed.thickness, reading.thickness);
+        assert_eq!(settings.bloom(removed), settings.glow_base);
+    }
+
+    /// A source affects only its enabled targets, adding above the base except
+    /// for timbre, whose lower half can subtract.
     #[test]
     fn a_source_drives_only_its_own_display_from_base() {
         let settings = IntensitySettings {
@@ -425,7 +437,6 @@ mod tests {
                     IntensityTarget::Opacity => assert_eq!(reading.opacity, expected.min(1.0)),
                     IntensityTarget::Glow => assert_eq!(settings.bloom(reading), expected),
                     IntensityTarget::Thickness => assert_eq!(reading.thickness, expected),
-                    IntensityTarget::Off => unreachable!(),
                 }
             }
             // Opacity needs a lower base to leave room for the full +1.
@@ -435,7 +446,7 @@ mod tests {
                     settings.read(1.0, Expressions { timbre: 1.0, ..Expressions::NEUTRAL }).opacity,
                     1.0
                 );
-                settings.timbre.weight = 0.5;
+                *settings.timbre.weight_mut(target) = Some(0.5);
                 assert_eq!(
                     settings.read(1.0, Expressions { timbre: 1.0, ..Expressions::NEUTRAL }).opacity,
                     0.5
@@ -450,7 +461,11 @@ mod tests {
     #[test]
     fn a_notes_bloom_share_is_whole_at_rest_and_past_whole_over_the_base() {
         let base = |glow_base, routed: bool| IntensitySettings {
-            pressure: to(if routed { IntensityTarget::Glow } else { IntensityTarget::Off }, 1.0),
+            pressure: if routed {
+                to(IntensityTarget::Glow, 1.0)
+            } else {
+                IntensitySource::default()
+            },
             glow_base,
             ..Default::default()
         };

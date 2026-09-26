@@ -55,10 +55,16 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
     poison!(a.view.intensity; glow_base, opacity_rest, thickness_base, thickness_max);
-    poison!(a.view.intensity.velocity; weight);
-    poison!(a.view.intensity.gain; weight);
-    poison!(a.view.intensity.pressure; weight);
-    poison!(a.view.intensity.timbre; weight);
+    for source in [
+        &mut a.view.intensity.velocity,
+        &mut a.view.intensity.gain,
+        &mut a.view.intensity.pressure,
+        &mut a.view.intensity.timbre,
+    ] {
+        for target in harmonigraph_scene::IntensityTarget::ALL {
+            *source.weight_mut(target) = Some(v);
+        }
+    }
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
@@ -264,7 +270,7 @@ fn scenarios() -> Vec<Scenario> {
         // backdrop, glow and Contour shadow falloff (one bar in each of a
         // page's two groups).
         let visits = match pane {
-            panes::Tab::Colors => visits + 4,
+            panes::Tab::Colors => visits + 12,
             panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
             // ...the spectrogram's twelve, the ribbons' five, and the
             // backdrop's height and stripe spacing.
@@ -327,12 +333,18 @@ fn check(edge: Edge) {
         a.spectrum.show_roll = scenario.enabled;
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
-        if scenario.enabled && scenario.pane == panes::Tab::Colors {
-            use harmonigraph_scene::IntensityTarget;
-            a.view.intensity.velocity.target = IntensityTarget::Opacity;
-            a.view.intensity.pressure.target = IntensityTarget::Opacity;
-            a.view.intensity.timbre.target = IntensityTarget::Thickness;
-            a.view.intensity.gain.target = IntensityTarget::Glow;
+        if scenario.pane == panes::Tab::Colors {
+            for source in [
+                &mut a.view.intensity.velocity,
+                &mut a.view.intensity.gain,
+                &mut a.view.intensity.pressure,
+                &mut a.view.intensity.timbre,
+            ] {
+                for target in harmonigraph_scene::IntensityTarget::ALL {
+                    let weight = source.weight_mut(target);
+                    *weight = scenario.enabled.then_some(weight.unwrap_or(1.0));
+                }
+            }
         }
         // Strength 0 is the backdrop's off. On, a strength the load clamped up
         // to the bar's top stays there for the bar to be held to.
@@ -542,10 +554,15 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
     let sources = |i: &harmonigraph_scene::IntensitySettings| {
         [("velocity", i.velocity), ("gain", i.gain), ("pressure", i.pressure), ("timbre", i.timbre)]
     };
-    for ((name, before), (_, after)) in
-        sources(&old.view.intensity).into_iter().zip(sources(&new.view.intensity))
-    {
-        assert_poisoned_float_fields(&format!("view.intensity.{name}"), &before, &after);
+    for (name, source) in sources(&new.view.intensity) {
+        let serialized = ron::to_string(&source).unwrap();
+        for (target, value) in top_level(&serialized) {
+            assert_eq!(
+                ron::from_str::<Option<f32>>(value).unwrap(),
+                Some(1.0e6),
+                "the loaded-state guard never poisons {name}.{target}"
+            );
+        }
     }
     assert_poisoned_float_fields("view.glow_curve", &old.view.glow_curve, &new.view.glow_curve);
     assert_poisoned_float_fields("view.atmosphere", &old.view.atmosphere, &new.view.atmosphere);
