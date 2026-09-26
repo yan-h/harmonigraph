@@ -1,0 +1,25 @@
+Audited b26fa162; release build; macOS arm64; Rust 1.92.0.
+before invalid: complete=true confirmed=67
+after invalid: state.complete=false confirmed.complete=true confirmed=3 infer=Ok(Some(LearnedTuning { c_offset: Some(0.0), three: None, five: None, seven: Some(1000.0) }))
+confirm sources=1 voices/source=0 deltas=0: 6.52 us/callback
+cpu 5.56 us/callback
+confirm sources=1 voices/source=8 deltas=0: 21.10 us/callback
+cpu 7.92 us/callback
+confirm sources=1 voices/source=8 deltas=8: 148.54 us/callback
+cpu 28.53 us/callback
+confirm sources=1 voices/source=10 deltas=8: 63.87 us/callback
+cpu 30.84 us/callback
+confirm sources=1 voices/source=10 deltas=32: 324.68 us/callback
+cpu 102.10 us/callback
+confirm sources=1 voices/source=16 deltas=8: 62.72 us/callback
+cpu 44.93 us/callback
+confirm sources=1 voices/source=16 deltas=32: 539.72 us/callback
+cpu 159.16 us/callback
+confirm sources=4 voices/source=16 deltas=64: 1261.36 us/callback
+cpu 373.35 us/callback
+confirm sources=4 voices/source=64 deltas=0: 286.83 us/callback
+cpu 145.40 us/callback
+confirm sources=4 voices/source=64 deltas=256: 27013.98 us/callback
+cpu 8065.60 us/callback
+confirm sources=4 voices/source=64 deltas=2048: 260599.57 us/callback
+cpu 64100.33 us/callback
