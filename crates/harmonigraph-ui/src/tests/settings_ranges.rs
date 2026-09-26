@@ -54,7 +54,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; gain_range, glow_base, opacity_rest, thickness_max);
+    poison!(a.view.intensity; glow_base, opacity_rest, thickness_max);
     poison!(a.view.intensity.velocity; weight);
     poison!(a.view.intensity.gain; weight);
     poison!(a.view.intensity.pressure; weight);
@@ -244,9 +244,9 @@ fn scenarios() -> Vec<Scenario> {
     for &pane in SETTINGS_PANES {
         let visits = match pane {
             panes::Tab::Tuning => 7,
-            // The pitch colors, then Note intensity: four weights, Gain range,
+            // The pitch colors, then Note intensity: four weights,
             // Bloom base, Opacity base and Thickness max.
-            panes::Tab::Colors => 2 + 8,
+            panes::Tab::Colors => 2 + 7,
             // The picture, then the background glow (8) with its texture
             // switched off, then two shadow groups of two bars each.
             panes::Tab::LatticeSettings => 16 + 8 + 4,

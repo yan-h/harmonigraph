@@ -100,7 +100,6 @@ fn poisoned_view() -> ViewConfig {
                 gain: source(crate::IntensityTarget::Glow),
                 pressure: source(crate::IntensityTarget::Thickness),
                 timbre: source(crate::IntensityTarget::Opacity),
-                gain_range: nan,
                 glow_base: nan,
                 opacity_rest: nan,
                 thickness_max: nan,

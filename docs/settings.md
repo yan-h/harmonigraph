@@ -10,9 +10,9 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 
 | Tab | What you will find |
 | --- | --- |
-| Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, note intensity, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and background glow, background glow texture and breathing, and shadows for lattice shapes and text. |
+| Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and background glow, background glow texture and breathing, and shadows for lattice shapes and text. |
 | Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
-| Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
+| Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **Note intensity** maps velocity, gain, pressure and timbre to opacity, bloom or thickness. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, skin and skin lightness, tab-bar visibility and layout reset. |
 
 Settings opens on Tuning in a fresh workspace.
@@ -23,6 +23,42 @@ off, the section is its heading alone, dimmed and with no fold arrow.
 Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
 Each tab keeps a single owner for its controls;
 shared settings name their scope in the help text.
+
+## Note intensity
+
+On **Colors → Note intensity**,
+each source has one target and a weight.
+Every target starts at its base and adds the weighted contributions routed to it.
+**Opacity base** and **Bloom base** apply even with every mapping off.
+Thickness starts at the pane's own width:
+**Ribbon width** in the Analyzer and the MIDI layer width in the Lattice.
+A thickness contribution of 1 adds one such width;
+a zero-width layer remains hidden.
+
+| Source | Contribution before multiplying by its weight |
+| --- | --- |
+| Velocity | 0 to 1; full velocity adds one whole weight. |
+| Pressure | 0 to 1; unpressed adds nothing and full pressure adds one whole weight. |
+| Gain | Linear gain: silence adds nothing, unity (0 dB) adds one whole weight, and gain 2 (about +6 dB) adds twice the weight. Cuts add less but never subtract. |
+| Timbre | −1 to +1: minimum subtracts one whole weight, center (0.5) adds nothing, and maximum adds one whole weight. |
+
+Only timbre can reduce a target below its base.
+The contributions are summed before the final limits:
+opacity stays between 0 and 1,
+bloom between 0 and 2,
+and thickness between zero and **Thickness max** times its base width.
+An opacity base of 1 leaves no room for positive additions;
+lower it to see velocity or pressure brighten the note.
+Note-release fading still applies,
+and the lattice's separate background node glow does not follow these mappings.
+
+Existing saved routes and weights now use these additions:
+velocity no longer subtracts,
+gain no longer uses a signed dB offset,
+and timbre has twice its former range.
+The retired **Gain range** setting is ignored on load.
+Saved opacity bases above 1 are clamped to 1,
+and saved bases now apply even when opacity has no route.
 
 ## Layout and folding
 

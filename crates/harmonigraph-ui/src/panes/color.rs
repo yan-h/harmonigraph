@@ -11,8 +11,8 @@ use crate::widgets::{
 };
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    IntensitySource, IntensityTarget, ViewConfig, BLOOM_MAX, GAIN_RANGE_MAX, GAIN_RANGE_MIN,
-    INTENSITY_WEIGHT_MAX, THICKNESS_MAX_RANGE,
+    IntensitySource, IntensityTarget, ViewConfig, BLOOM_MAX, INTENSITY_WEIGHT_MAX,
+    THICKNESS_MAX_RANGE,
 };
 
 /// MIDI colors and their pitch range, then how a note's playing draws it, then
@@ -180,8 +180,8 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
 }
 
 /// How each note is drawn from how it is played: each of its velocity and
-/// expressions routed to one display with a weight of its own, measured from
-/// where it rests, over the bloom both panes share. The lattice and the roll
+/// expressions routed to one display with a weight of its own, added above
+/// its base (with timbre signed). The lattice and the roll
 /// read the same routes, which is why it sits here rather than on either
 /// picture's page.
 fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
@@ -198,19 +198,19 @@ fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
             IntensityTarget::Glow => (
                 target,
                 "Bloom",
-                "Adds to how much the note blooms over Bloom base: the halo round its lattice slices and round its roll ribbon.",
+                "Drives the bloom halo round lattice slices and roll ribbons, starting from Bloom base. Timbre can also reduce it.",
             ),
             IntensityTarget::Thickness => (
                 target,
                 "Thickness",
-                "Drives how thick the note is drawn, as a multiple of its pane's note width: the roll's ribbons about their center line (Ribbon width), and the lattice's octave slices out from the MIDI layer's inner edge (the Layers bar). A note at rest is drawn at that width.",
+                "Adds thickness in multiples of the base width: Ribbon width for the roll, and the MIDI Layers bar for lattice slices. Weight 1 at full velocity or pressure adds one base width. Only timbre can thin a note below its base.",
             ),
         });
     let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {
         choice_row(ui, name, &mut source.target, &targets);
         ui.add_enabled_ui(source.target != IntensityTarget::Off, |ui| {
             weight(&mut source.weight, &format!("{name} weight")).show(ui).on_hover_text(format!(
-                "{hover} Its distance from rest is multiplied by this before its display adds it."
+                "{hover} Multiply this amount by the weight, then add it to the target's base with the other mapped sources. The final result stops at the target's limits."
             ));
         });
     };
@@ -219,36 +219,26 @@ fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
         ui,
         &mut intensity.velocity,
         "Velocity",
-        "The note-on velocity. It rests at full, so a softer note is taken away from its display.",
+        "The note-on velocity, from 0 to 1. Full velocity adds one whole weight; softer notes add less and never subtract.",
     );
     route(
         ui,
         &mut intensity.gain,
         "Gain",
-        "The note's gain expression, in dB off unity divided by Gain range. \
-             It rests at unity, so a boost adds to its display and a cut takes away.",
+        "The note's linear gain: silence adds nothing, unity (0 dB) adds one whole weight, \
+             and a gain of 2 (about +6 dB) adds twice the weight. A cut adds less and never subtracts.",
     );
-    ui.add_enabled_ui(intensity.gain.target != IntensityTarget::Off, |ui| {
-        ValueBar::new(&mut intensity.gain_range, GAIN_RANGE_MIN..=GAIN_RANGE_MAX, "Gain range")
-            .unit(1.0, " dB")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "How many dB of gain make one Gain weight's worth. \
-                     At 24 dB, +12 dB adds half of it and -24 dB takes all of it away.",
-            );
-    });
     route(
         ui,
         &mut intensity.pressure,
         "Pressure",
-        "The note's pressure (aftertouch), from 0 unpressed to 1. It rests unpressed.",
+        "The note's pressure (aftertouch), from 0 unpressed to 1. Full pressure adds one whole weight; unpressed adds nothing.",
     );
     route(
         ui,
         &mut intensity.timbre,
         "Timbre",
-        "The note's timbre expression. It rests at 0.5, where an untouched timbre lane sits.",
+        "Timbre is centered at 0.5, which adds nothing. Minimum timbre subtracts one whole weight; maximum timbre adds one whole weight. It can reduce a target below its base.",
     );
     // The whole of the lattice's and the roll's bloom, so it is live
     // whether or not anything is routed to Glow.
@@ -257,24 +247,18 @@ fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .show(ui)
         .on_hover_text(
             "Soft halos around MIDI notes in the Lattice and the spectrogram's ribbons: \
-                 how much a note at rest blooms, before the sources routed to Bloom add in. \
-                 0 turns bloom off; 1× is the reference strength.",
+                 the starting bloom, even with no mappings. Only timbre can reduce it. \
+                 At base 0, mapped sources can still add bloom; 1× is the reference strength.",
         );
-    // The other two only count while something is routed to their display,
-    // so each is greyed out otherwise, as a source's weight is while it is
-    // Off.
+    ValueBar::new(&mut intensity.opacity_rest, 0.0..=1.0, "Opacity base").show(ui).on_hover_text(
+        "The starting opacity, even with no mappings. Velocity, pressure and gain add above it; \
+                 only timbre can reduce it. The final opacity is held between 0 and 1.",
+    );
+    // The ceiling matters only while a source can change the thickness.
     let disabled = "Route a source to it above to use this.";
-    ui.add_enabled_ui(intensity.routes_to(IntensityTarget::Opacity), |ui| {
-        let hover = "The opacity of a note at rest, before the sources routed to it add in; \
-                         the sum is held between 0 and 1.";
-        weight(&mut intensity.opacity_rest, "Opacity base")
-            .show(ui)
-            .on_hover_text(hover)
-            .on_disabled_hover_text(format!("{hover} {disabled}"));
-    });
     ui.add_enabled_ui(intensity.routes_to(IntensityTarget::Thickness), |ui| {
         let hover = "The widest a note can be drawn, as a multiple of its pane's note width. \
-                         1× lets a source only thin it. \
+                         1× leaves no room to thicken; timbre can still thin it. \
                          On the lattice a slice also stops at the node's edge.";
         ValueBar::new(&mut intensity.thickness_max, THICKNESS_MAX_RANGE, "Thickness max")
             .unit(1.0, "×")
