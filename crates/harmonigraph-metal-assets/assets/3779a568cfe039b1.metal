@@ -4,6 +4,21 @@
 
 using metal::uint;
 
+struct StarSlice {
+    metal::float2 offset;
+    metal::float2 spread;
+    float cell;
+    float sigma;
+    float cap;
+    float defocus;
+    float occupancy;
+    float fringe;
+    float reach;
+    float _pad;
+};
+struct type_5 {
+    StarSlice inner[5];
+};
 struct Cloud {
     metal::float2 origin;
     metal::float2 size;
@@ -27,7 +42,9 @@ struct Cloud {
     float wash_layers;
     uint tile_cells;
     uint pitch_vertical;
-    metal::uint2 _pad;
+    float star_randomness;
+    float star_life;
+    type_5 star_slices;
 };
 struct Pile {
     metal::float2 face;
@@ -89,6 +106,14 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
+constant uint STAR_SLICES = 5u;
+constant float STAR_PANE = 540.0;
+constant float STAR_JITTER = 0.6;
+constant int STAR_HASH_PERIOD = 65536;
+constant uint STAR_LIFE_PERIOD = 4096u;
+constant float STAR_FADE = 0.2;
+constant float STAR_LIFT = 0.18;
+constant float STAR_RING_FADE = 0.7;
 
 metal::int2 naga_mod(metal::int2 lhs, metal::int2 rhs) {
     metal::int2 divisor = metal::select(rhs, 1, (lhs == (-2147483647 - 1) & rhs == -1) | (rhs == 0));

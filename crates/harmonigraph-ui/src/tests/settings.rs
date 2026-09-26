@@ -1354,12 +1354,14 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
 /// The other half of [`theme::reserve_scroll_gutter`], and the half no pane
 /// margin can cover: this area scrolls HORIZONTALLY, so its bar runs under the
 /// table rather than down a side, and a row of cells has no gutter along its
-/// bottom for one to float in. Unreserved, the lane lands 5.5pt up inside the
-/// bottom row.
+/// bottom for one to float in. Unreserved, the lane lands inside the bottom
+/// row.
 ///
-/// Its own test because the table only overflows in a column dragged under
-/// about 135pt (see `comma_controls`), and at every width that fits the table
-/// there is no sideways bar for the sweep above to find.
+/// Its own test because the table only overflows in a column dragged narrower
+/// than the table (see `comma_controls`), and at every width that fits the
+/// table there is no sideways bar for the sweep above to find. The column is
+/// sized off the table's own headings rather than quoted, so a change of type
+/// or padding cannot quietly give the table room to fit.
 ///
 /// The pointer is parked on the Temper heading — inside the area, so the bar is
 /// awake and in the shapes at all, and on a plain label rather than a switch,
@@ -1367,27 +1369,35 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
 /// instead of the cell.
 #[test]
 fn the_comma_tables_sideways_bar_runs_under_its_cells() {
-    let mut state = fresh();
-    state.workspace.layout = workspace::Layout::solo(panes::Tab::Tuning);
-    // Narrower than the two columns need, and tall enough that the pane does
-    // not also scroll — one bar in the picture is one bar to find.
-    let rails = 2.0 * (crate::theme::tab_bar_height(1.0) + 3.0);
-    let mut h = DockHarness::at(egui::vec2(120.0 + rails, 900.0));
-    h.settle(&mut state);
-    let screen = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    let heading_rect = |out: &egui::FullOutput| {
+    let heading_rect = |out: &egui::FullOutput, name: &str| {
         out.shapes.iter().find_map(|cs| match &cs.shape {
-            egui::Shape::Text(text) if text.galley.text() == "Temper" => {
+            egui::Shape::Text(text) if text.galley.text() == name => {
                 Some(cs.shape.visual_bounding_rect())
             }
             _ => None,
         })
     };
+    // The table spans at least its two headings, so a whole settings leaf
+    // narrower than that span — pane margins included — cannot fit it.
+    let table = {
+        let out = tab_body(&mut fresh(), panes::Tab::Tuning, 400.0, PANE_HEIGHT);
+        let (temper, auto) = (heading_rect(&out, "Temper"), heading_rect(&out, "Auto"));
+        let (temper, auto) = temper.zip(auto).expect("the Tuning pane drew no comma headings");
+        auto.right() - temper.left()
+    };
+    let mut state = fresh();
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Tuning);
+    // Narrower than the two columns need, and tall enough that the pane does
+    // not also scroll — one bar in the picture is one bar to find.
+    let rails = 2.0 * (crate::theme::tab_bar_height(1.0) + 3.0);
+    let mut h = DockHarness::at(egui::vec2(table * 0.9 + rails, 900.0));
+    h.settle(&mut state);
+    let screen = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
     // Where the table is has to be read off a frame before the pointer can be
     // put in it: the Commas section sits wherever the sections above it end.
     let out = frame(&mut state, vec![]);
-    let heading = heading_rect(&out).expect("the Tuning pane drew no Temper heading");
+    let heading = heading_rect(&out, "Temper").expect("the Tuning pane drew no Temper heading");
     let mut out = frame(&mut state, vec![egui::Event::PointerMoved(heading.center())]);
     for _ in 0..20 {
         out = frame(&mut state, vec![]);

@@ -2,11 +2,17 @@
 //! node costs to draw, for the number each PR of #498 states against main.
 //! `#[ignore]`d — it prints a figure and asserts nothing.
 //!
-//! Timestamps bracket the whole of `prepare`'s encoder rather than the plugin
-//! overlay's asynchronous readback. Both now cover the atlas, ink, light,
-//! scene and bloom preparation; the final egui composite is excluded. Two
-//! empty passes carry the stamps, because a stamp written straight into the
-//! encoder never signals on Metal.
+//! The GPU interval runs from the BEGINNING of an empty 1x1 pass encoded ahead
+//! of `prepare` to the END of the pass `paint` composites the scene into, all
+//! in one command buffer. It covers the atlas, ink, light, scene and bloom
+//! preparation, plus the one full-pane composite draw. The closing stamp has
+//! to sit on a pass that READS the scene target: on a tile-based GPU a later
+//! pass's work overlaps an earlier pass's fragments, so a stamp on an
+//! independent pass — the tail this probe used to close on with its
+//! beginning-of-pass write — lands before the scene's fragment work and leaves
+//! it out (#1113, and the spectrogram probe's own history in
+//! `docs/spectrogram-cloud-performance.md`). Every "prepare's encoder" figure
+//! printed before that fix undercounts the scene passes.
 //!
 //! Two settings, because the Shadow bar's two ends cost differently: a
 //! caster's shadow is its group's width in node radii, so the top of the bar is
@@ -319,64 +325,75 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         .collect();
     let named = runs.len();
 
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    // Slot 0 opens the bracket and slot 1 closes it.
+    const STAMPS: u32 = 2;
     let set = device.create_query_set(&wgpu::QuerySetDescriptor {
         label: Some("timing_probe"),
         ty: wgpu::QueryType::Timestamp,
-        count: 2,
+        count: STAMPS,
     });
-    let resolve = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("timing_resolve"),
-        size: 16,
-        usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
-    let staging = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("timing_staging"),
-        size: 16,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    // The two empty passes' target.
-    let stamp_view = device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("timing_stamp"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
+    let buffer = |label, usage| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: u64::from(STAMPS) * 8,
+            usage,
+            mapped_at_creation: false,
         })
-        .create_view(&Default::default());
-    let stamp = |encoder: &mut wgpu::CommandEncoder, index: u32| {
-        let writes = wgpu::RenderPassTimestampWrites {
-            query_set: &set,
-            beginning_of_pass_write_index: Some(index),
-            end_of_pass_write_index: None,
-        };
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("timing_stamp_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &stamp_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Discard,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: Some(writes),
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
     };
-    let period = queue.get_timestamp_period();
+    let resolve =
+        buffer("timing_resolve", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC);
+    let staging =
+        buffer("timing_staging", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
+    let target = |label, size: [u32; 2]| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    };
+    // The opening pass's target, and the pane `paint` composites into — held
+    // across frames, as a swapchain's is.
+    let stamp_view = target("timing_stamp", [1, 1]);
+    let pane_view = target("timing_pane", size);
+    let stamped_pass = |encoder: &mut wgpu::CommandEncoder,
+                        view: &wgpu::TextureView,
+                        begin: Option<u32>,
+                        end: Option<u32>| {
+        encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("timing_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
+                    query_set: &set,
+                    beginning_of_pass_write_index: begin,
+                    end_of_pass_write_index: end,
+                }),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime()
+    };
+    let period = f64::from(queue.get_timestamp_period());
     let mut resources = CallbackResources::default();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pane.x, pane.y));
     let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
-    let format = wgpu::TextureFormat::Rgba8Unorm;
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
     let mut samples = Vec::with_capacity(frames);
@@ -405,37 +422,32 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         }
         cb.uniforms.geometry_shadow.occlusion = occlusion;
         let mut encoder = device.create_command_encoder(&Default::default());
-        stamp(&mut encoder, 0);
+        drop(stamped_pass(&mut encoder, &stamp_view, Some(0), None));
         let cpu_start = std::time::Instant::now();
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
         if frame == 0 {
             eprintln!("{what}: cold prepare CPU {cpu_ms:.3} ms (includes pipeline/target creation), bloom {}", scene.bloom_strength);
         }
-        stamp(&mut encoder, 1);
-        encoder.resolve_query_set(&set, 0..2, &resolve, 0);
-        encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
+        {
+            // The closing stamp: this pass samples the scene target, so its
+            // end is ordered after every pass that wrote it.
+            let mut pass = stamped_pass(&mut encoder, &pane_view, None, Some(1));
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: size,
+                },
+                &mut pass,
+                &resources,
+            );
+        }
+        encoder.resolve_query_set(&set, 0..STAMPS, &resolve, 0);
+        encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, u64::from(STAMPS) * 8);
         let completion_start = std::time::Instant::now();
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        let _ = crate::gpu_harness::render_to_texture(
-            &device,
-            &queue,
-            size,
-            format,
-            wgpu::Color::BLACK,
-            |pass| {
-                cb.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: rect,
-                        clip_rect: rect,
-                        pixels_per_point: 1.0,
-                        screen_size_px: size,
-                    },
-                    pass,
-                    &resources,
-                );
-            },
-        );
         let slice = staging.slice(..);
         slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
         device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
@@ -446,7 +458,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         };
         staging.unmap();
         assert!(ticks[0] > 0 && ticks[1] >= ticks[0], "unsupported timestamp pair: {ticks:?}");
-        let ms = (ticks[1] - ticks[0]) as f64 * f64::from(period) / 1.0e6;
+        let ms = (ticks[1] - ticks[0]) as f64 * period / 1.0e6;
         if frame >= 10 {
             samples.push(ms);
             completion_samples.push(completion_ms);
@@ -455,7 +467,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         }
     }
     completion_samples.sort_by(f64::total_cmp);
-    eprintln!("{what}: submit through completion {:.3} ms median (p10 {:.3}, p90 {:.3}); includes final paint, host encoding and waiting",
+    eprintln!("{what}: submit through completion {:.3} ms median (p10 {:.3}, p90 {:.3}); includes host submission and waiting",
         completion_samples[frames / 2], completion_samples[frames / 10], completion_samples[frames * 9 / 10]);
     samples.sort_by(|a, b| a.total_cmp(b));
     cpu_samples.sort_by(f64::total_cmp);
@@ -465,7 +477,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let median = samples[samples.len() / 2];
     let (lo, hi) = (samples[samples.len() / 10], samples[samples.len() * 9 / 10]);
     eprintln!(
-        "{what}: {named} names on {} lit nodes at {}x{}: prepare's encoder \
+        "{what}: {named} names on {} lit nodes at {}x{}: prepare + composite GPU \
          {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames); prepare CPU {cpu_median:.3} ms median",
         scene.nodes.iter().filter(|n| n.activation > 0.0).count(),
         size[0],

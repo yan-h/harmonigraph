@@ -1039,7 +1039,21 @@ impl Hub {
             }
         }
         let Some(callback) = self.callback else { return };
-        let sample = callback.steady_time;
+        self.snapshots(owner, recorder);
+        // Every record collected this callback has been published, and nothing
+        // still to come is scheduled before this callback began, so this is a
+        // sound and monotone frontier without a coverage protocol behind it.
+        if owner.recording.source_frontier(self.clock, callback.steady_time).is_err() {
+            recorder.fail_configuration();
+        }
+    }
+
+    /// Pay every snapshot a row owes and can state now, one lane at a time.
+    ///
+    /// Both callers reach the run latch below, and `end` never re-opens what
+    /// `publish` opened: it reads the same sub-block's route and the same
+    /// run, which `opened` already holds.
+    fn snapshots(&mut self, owner: &Owner, recorder: &mut Recorder) {
         // Snapshots route from the sub-block being processed, not the
         // callback's start: a pass a mid-callback transport event opens or
         // resumes is this sub-block's, and routing from the start would put
@@ -1074,22 +1088,27 @@ impl Hub {
                 continue;
             }
             // A snapshot cuts at every delta this row applied, and has to
-            // FOLLOW all of them. On the lane, so none may still wait in
-            // `pending` — for a later sub-block's segment, or for `end`'s
-            // forced flush. And in time, which is
-            // what a take is sorted by on read: a delta the cut covers that
-            // sorts after its snapshot is refused as late history, and the
-            // whole file with it. Those deltas sound up to D after this
-            // callback, so the frame is stamped at the latest of them rather
-            // than at the callback's start — which also leaves no voice whose
-            // onset lies after the frame that claims it is sounding. Stamped
-            // there, it also takes that delta's own translation when both land
-            // in the same pass: two routes into one pass agree only to within
-            // rounding, which is enough to sort the frame a hair before the
-            // very delta it is level with.
+            // FOLLOW all of them. On the lane: the cut is `applied`, which
+            // counts every delta this row has scheduled, so one still waiting
+            // in `pending` — for a later sub-block's segment, or for `end`'s
+            // forced flush — would reach the lane AFTER a snapshot that
+            // already covers it, and the display and the take writer both
+            // refuse history at or below a cut they have adopted (#1127). The
+            // repair stays owed, and `end` pays it at the latest, after its
+            // forced flush has put the history out.
             if self.pending.iter().any(|item| usize::from(item.source) == index) {
                 continue;
             }
+            // And in time, which is what a take is sorted by on read: a delta
+            // the cut covers that sorts after its snapshot is refused as late
+            // history, and the whole file with it. Those deltas sound up to D
+            // after this callback, so the frame is stamped at the latest of
+            // them rather than at the block's start — which also leaves no
+            // voice whose onset lies after the frame that claims it is
+            // sounding. Stamped there, it also takes that delta's own
+            // translation when both land in the same pass: two routes into
+            // one pass agree only to within rounding, which is enough to sort
+            // the frame a hair before the very delta it is level with.
             let (at, route) = match self.rows[index].latest {
                 Some((latest, own)) if latest >= time => {
                     (latest, if own.address == route.address { own } else { route })
@@ -1117,12 +1136,6 @@ impl Hub {
                 }
             }
         }
-        // Every record collected this callback has been published, and nothing
-        // still to come is scheduled before this callback began, so this is a
-        // sound and monotone frontier without a coverage protocol behind it.
-        if owner.recording.source_frontier(self.clock, sample).is_err() {
-            recorder.fail_configuration();
-        }
     }
 
     /// Whether any source this Hub sequences, its own included, has Retune on,
@@ -1141,6 +1154,11 @@ impl Hub {
         // Whatever no sub-block reached is published against whatever segment
         // the recorder does have, and says so if there is none.
         self.flush(owner, recorder, true);
+        // A snapshot `publish` held back behind that history is owed now, not
+        // a callback later that may never come.
+        if self.callback.is_some() {
+            self.snapshots(owner, recorder);
+        }
         self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);

@@ -47,7 +47,10 @@ pub use atmosphere::{
     CLOUD_SIZE_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX, CONTOURS_MIN,
     CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN,
     NEBULA_SPEED_MAX, NEBULA_SPEED_MIN, PITCH_SOFTNESS_MAX, PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX,
-    SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    SCALE_REFRACT_MIN, STAR_BALANCE_THIN, STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN,
+    STAR_FRINGE_MAX, STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX,
+    STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
+    TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 pub use camera::{Camera, Projection, Projector, VisibleSheet};
 pub use color::{
@@ -357,6 +360,20 @@ pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
 /// 1.0 rides the boundary itself, corners and all, rather than half way in —
 /// which is the case for leaving headroom here rather than trimming to what
 /// the default alone needs.
+///
+/// What that costs is measured (#1111), on UNBENT gradients swept in `t` steps
+/// of 2.5e-4. The default LEVEL gradient's chroma fraction reaches exactly 1.0
+/// at its top, where the boundary near `L*` 94 at hues about 120-130 has a
+/// sharp corner: green saturates while blue turns steep within 0.2 `L*`. The
+/// table misses it by 5.8/255 on the default, and by 30.9/255 at worst with
+/// hue start swept over 290-310 and lightness over 45-55 (worst at 296 / 48,
+/// at `t` 0.996). A brightness bend puts the corner where the table samples
+/// more coarsely, and on #1110's branch that read 36.7/255. Accepted: the miss
+/// sits in the loudest half-percent of the ramp at non-default dials. What
+/// would remove it is a table entry pinned on the corner — a second warp beside
+/// the bend's in [`LutSpacing`] and in every shader's `lut_position`, catching
+/// only the one corner the arc crosses — or a chroma fraction held under 1.0,
+/// which moves the look.
 ///
 /// Do NOT read that error as a mismatch between shapes. It is the difference
 /// between the table and an ideal nothing draws.

@@ -57,7 +57,7 @@ impl Section {
 
 /// Picture sizes along the arrangement's axis, its shared cross-axis size,
 /// and the settings column width. These include the section's own header.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Sizes {
     pub lattice: f32,
@@ -81,6 +81,8 @@ pub(crate) struct Layout {
     pub right: Sizes,
     pub below: Sizes,
     /// Width removed by each internal analyzer fold in the Right arrangement.
+    /// Only the Spectral tab has those regions, so another analyzer tab is
+    /// laid out with it paid back (see [`Layout::repaid`]).
     pub region_widths: [f32; 2],
     pub analyzer_tab: Tab,
     pub settings_tab: Tab,
@@ -114,6 +116,47 @@ impl Layout {
             Position::Right => &mut self.right,
             Position::Below => &mut self.below,
         }
+    }
+
+    /// Width the Spectral tab's folded regions took from the Analyzer, lent
+    /// back while another analyzer tab shows: that tab has no region rail to
+    /// unfold them from. Derived rather than stored, so a tab switch edits no
+    /// saved width and returning to Spectral lands on exactly its old layout.
+    ///
+    /// Never more than the shown sections' own stored widths. A fixed lend
+    /// would let a window shrunk below it fit the stored sizes into nothing,
+    /// and write those zeros into the saved layout; capped, a narrow enough
+    /// window shrinks the lend along with everything else (see [`Self::fit`]).
+    /// Dividers edit only the stored sizes, so while this is lent the Analyzer
+    /// cannot be dragged narrower than it plus the minimum pane.
+    fn repaid(&self) -> f32 {
+        let right = self.right;
+        let shown: f32 = [right.lattice, right.analyzer, right.settings]
+            .into_iter()
+            .zip(self.folded)
+            .filter(|(_, folded)| !folded)
+            .map(|(size, _)| size)
+            .sum();
+        self.lent().min(shown)
+    }
+
+    /// The whole folded-region width, when another analyzer tab shows.
+    fn lent(&self) -> f32 {
+        let lent = self.position == Position::Right
+            && !self.folded[Section::Analyzer as usize]
+            && self.analyzer_tab != Tab::Spectral;
+        if lent {
+            self.region_widths.iter().sum()
+        } else {
+            0.0
+        }
+    }
+
+    /// The sizes the sections are drawn at: the stored ones plus [`Self::repaid`].
+    fn laid_out(&self) -> Sizes {
+        let mut sizes = self.sizes();
+        sizes.analyzer += self.repaid();
+        sizes
     }
 
     pub(crate) fn sanitize(&mut self) {
@@ -185,7 +228,7 @@ impl Layout {
     }
 
     fn natural_size(&self, rail: f32, gap: f32) -> Vec2 {
-        let sizes = self.sizes();
+        let sizes = self.laid_out();
         let extent = |index, size| if self.folded[index] { rail } else { size };
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
@@ -205,6 +248,7 @@ impl Layout {
         let folded = self.folded;
         let compact = self.compact();
         let position = self.position;
+        let lent = self.lent();
         let sizes = self.sizes_mut();
         if compact {
             if !folded[2] {
@@ -214,10 +258,17 @@ impl Layout {
         }
         match position {
             Position::Right => {
+                // The stored widths fill `free` beside what `repaid` lends
+                // them, which is `lent` capped at their own total: all of it
+                // while that leaves them at least as much, and otherwise an
+                // equal share, so a lend never squeezes the stored sizes out.
+                let rails = folded.iter().filter(|&&fold| fold).count() as f32 * rail;
+                let free = area.x - 2.0 * gap - rails;
+                let repaid = lent.min((free * 0.5).max(0.0));
                 let widths = fit_axis(
                     [sizes.lattice, sizes.analyzer, sizes.settings],
                     folded,
-                    area.x - 2.0 * gap,
+                    area.x - 2.0 * gap - repaid,
                     rail,
                 );
                 [sizes.lattice, sizes.analyzer, sizes.settings] = widths;
@@ -239,7 +290,7 @@ impl Layout {
     }
 
     fn rects(&self, area: Rect, rail: f32, gap: f32) -> [Rect; 3] {
-        let sizes = self.sizes();
+        let sizes = self.laid_out();
         let extent = |index, size| if self.folded[index] { rail } else { size };
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
@@ -403,9 +454,12 @@ pub(crate) fn show(
         viewer.interaction.analyzer_regions = Default::default();
         *layout = Layout { sized: true, ..Layout::default() };
     }
+    // A switch between analyzer tabs lends or takes back the region width,
+    // and asks the window for it the same way a fold does.
     if reset
         || region_request.is_some()
-        || (before.position, before.folded) != (layout.position, layout.folded)
+        || (before.position, before.folded, before.repaid())
+            != (layout.position, layout.folded, layout.repaid())
     {
         runtime.grip = None;
         runtime.requested = Some(frame);
@@ -622,7 +676,8 @@ fn dividers(ui: &egui::Ui, layout: &mut Layout, runtime: &mut Runtime, drawn: &L
             pos2(settings.left(), settings.bottom()),
         ),
     ];
-    let unchanged = layout.position == drawn.position && layout.folded == drawn.folded;
+    let unchanged = (layout.position, layout.folded, layout.repaid())
+        == (drawn.position, drawn.folded, drawn.repaid());
     let enabled = [
         unchanged && !drawn.folded[0] && !drawn.folded[1],
         unchanged && !drawn.folded[2] && (!drawn.folded[0] || !drawn.folded[1]),

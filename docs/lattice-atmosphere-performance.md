@@ -34,6 +34,8 @@ the output reports lit lattice nodes separately from MIDI notes.
 It compares all atmosphere, atmosphere off, each component disabled independently, half scene render scale, and all node glow disabled.
 GPU timestamps bracket the rendering commands encoded by `prepare`, including shadows, ink history, glow, scene, and bloom.
 They exclude the final egui composite, scene derivation, audio processing, and DAW contention.
+Issue #1113 later found that this bracket, closed by a beginning-of-pass stamp on an independent 1x1 pass, does not contain the scene passes' fragment work on this tile-based GPU, so every timestamp figure below undercounts;
+the completion-time figures stand.
 CPU callback construction and CPU preparation are reported separately.
 A wall-clock cross-check measures submission through final paint and device completion;
 it includes host encoding, allocation of the final output texture each frame, readback scheduling, and waiting rather than isolating GPU execution.

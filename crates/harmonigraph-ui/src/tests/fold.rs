@@ -707,33 +707,43 @@ fn section_and_region_chevrons_share_visible_hover_feedback() {
     let section_cell =
         egui::Rect::from_min_size(section.min, egui::Vec2::splat(theme::tab_bar_height(1.0)));
     let region_cell = h.ctx.read_response(egui::Id::new(("analyzer region fold", 0))).unwrap().rect;
-    for cell in [section_cell, region_cell] {
+    // What each hovered control paints: its hover fill, and its chevron strokes.
+    // Compared with each other rather than restated from the theme, so a
+    // restyle of the shared paint moves both and the test with them.
+    let hovered = [section_cell, region_cell].map(|cell| {
         let out = h.frame(&mut state, vec![egui::Event::PointerMoved(cell.center())]);
-        assert!(
-            out.shapes.iter().any(|cs| matches!(&cs.shape,
-                egui::Shape::Rect(r) if r.rect.contains(cell.center()) && (r.rect.height() - theme::row_height(1.0)).abs() < 0.5
-                    && (r.rect.center().y - cell.center().y).abs() < 0.5
-                    && r.corner_radius == egui::CornerRadius::same(theme::control_radius(1.0))
-                    && r.fill == theme::widget_hover()
-                    && r.stroke.width == 0.0
-            )),
-            "no unoutlined hover fill at {cell:?}"
-        );
-        // Two: a pane's fold is a double chevron, where a settings heading's
-        // single one says something else (see `paint_fold`).
-        let bright = out
+        let fill = out
             .shapes
             .iter()
-            .filter(|cs| {
-                matches!(&cs.shape,
-                    egui::Shape::Path(p) if p.points.len() == 3
-                        && cell.contains_rect(egui::Rect::from_points(&p.points))
-                        && p.stroke.color == egui::epaint::ColorMode::Solid(theme::text())
-                )
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r)
+                    if r.rect.contains(cell.center()) && r.fill == theme::widget_hover() =>
+                {
+                    Some((r.rect.size(), r.corner_radius, r.stroke))
+                }
+                _ => None,
             })
-            .count();
-        assert_eq!(bright, 2, "not a bright double chevron at {cell:?}");
-    }
+            .unwrap_or_else(|| panic!("no hover fill at {cell:?}"));
+        let strokes: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Path(p)
+                    if p.points.len() == 3
+                        && cell.contains_rect(egui::Rect::from_points(&p.points)) =>
+                {
+                    Some(p.stroke.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        // Two: a pane's fold is a double chevron, where a settings heading's
+        // single one says something else (see `paint_fold`).
+        assert_eq!(strokes.len(), 2, "not a double chevron at {cell:?}");
+        (fill, strokes)
+    });
+    assert_eq!(hovered[0].0, hovered[1].0, "the section and region chevrons hover differently");
+    assert_eq!(hovered[0].1, hovered[1].1, "the section and region chevrons draw differently");
 }
 
 #[test]
@@ -772,6 +782,118 @@ fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
         click_at(&mut h, &mut state, spiral);
         assert_eq!(state.workspace.layout.analyzer_tab, panes::Tab::Spiral);
     }
+}
+
+/// Choose an analyzer tab by its header label, through the strip's dropdown
+/// when the section is too narrow to list it.
+fn pick_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::Tab) {
+    let label = |out: &egui::FullOutput, state: &SharedState, name: &str| {
+        let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
+        out.shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t)
+                if t.galley.text() == name
+                    && t.pos.x >= section.left()
+                    && t.pos.x < section.right() =>
+            {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()).center())
+            }
+            _ => None,
+        })
+    };
+    let name = panes::tab_title(&tab);
+    let out = h.frame(state, vec![]);
+    let at = match label(&out, state, name) {
+        Some(at) => at,
+        None => {
+            let current = panes::tab_title(&state.workspace.layout.analyzer_tab);
+            let picker = label(&out, state, current).expect("current view dropdown");
+            click_at(h, state, picker);
+            let menu = h.frame(state, vec![]);
+            label(&menu, state, name).expect("tab in dropdown")
+        }
+    };
+    click_at(h, state, at);
+    assert_eq!(state.workspace.layout.analyzer_tab, tab);
+    h.settle_folds(state);
+}
+
+/// Only the Spectral tab can unfold its regions, so another analyzer tab is
+/// drawn with their width lent back, and Spectral takes it again on return
+/// without any saved width having moved (#1124).
+#[test]
+fn another_analyzer_tab_borrows_back_the_width_of_folded_regions() {
+    for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.orientation = orientation;
+        let mut h = DockHarness::new();
+        h.settle(&mut state);
+        let window = h.screen.size();
+        let open = state.workspace.layout_runtime.rects;
+        region_click(&mut h, &mut state, 1);
+        h.settle_folds(&mut state);
+        assert!(h.screen.width() < window.x - 10.0, "{orientation:?}: the fold took no width");
+        let folded = state.workspace.layout_runtime.rects;
+        let folded_window = h.screen.size();
+        let saved = (state.workspace.layout.right, state.workspace.layout.region_widths);
+
+        pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
+        near(h.screen.size(), window);
+        for (now, was) in state.workspace.layout_runtime.rects.iter().zip(open) {
+            near(now.size(), was.size());
+        }
+        let spiral = pane_body(&state, &panes::Tab::Spiral).expect("Spiral is showing");
+        assert!((spiral.width() - open[Section::Analyzer as usize].width()).abs() < 0.1);
+        assert_eq!((state.workspace.layout.right, state.workspace.layout.region_widths), saved);
+
+        pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
+        near(h.screen.size(), folded_window);
+        for (now, was) in state.workspace.layout_runtime.rects.iter().zip(folded) {
+            near(now.min.to_vec2(), was.min.to_vec2());
+            near(now.size(), was.size());
+        }
+        assert_eq!((state.workspace.layout.right, state.workspace.layout.region_widths), saved);
+        assert_eq!(state.workspace.interaction.analyzer_regions.collapsed, [false, true]);
+    }
+}
+
+/// A window shrunk below the lent width while Spiral shows shrinks the lend
+/// with it rather than squeezing the saved sizes to nothing, so Spectral comes
+/// back with the same proportions.
+#[test]
+fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
+    let floor = 400.0;
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.workspace.min_window_size.x = floor;
+    state.workspace.layout.right =
+        workspace::Sizes { lattice: 300.0, analyzer: 900.0, cross: 800.0, settings: 280.0 };
+    state.workspace.layout.sized = true;
+    let mut h = DockHarness::at(egui::vec2(1486.0, 800.0));
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    let lent: f32 = state.workspace.layout.region_widths.iter().sum();
+    assert!(lent > floor, "the fold ({lent}) must outgrow the whole narrowed window");
+    let folded = state.workspace.layout.right;
+    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
+
+    h.screen.max.x = h.screen.min.x + floor;
+    h.settle(&mut state);
+    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
+
+    let saved = state.workspace.layout.right;
+    for (now, was) in [
+        (saved.lattice, folded.lattice),
+        (saved.analyzer, folded.analyzer),
+        (saved.settings, folded.settings),
+    ] {
+        assert!(now > 20.0, "a saved width collapsed: {saved:?}");
+        assert!((now / saved.lattice - was / folded.lattice).abs() < 0.01, "{saved:?}");
+    }
+    let rects = state.workspace.layout_runtime.rects;
+    let drawn: f32 = rects.iter().map(|rect| rect.width()).sum();
+    assert!(rects.iter().all(|rect| rect.width() > 20.0), "{rects:?}");
+    assert!((drawn + 2.0 * 3.0 - h.screen.width()).abs() < 1.0, "{rects:?}");
 }
 
 /// Where a region's outer edge survives its fold, Expand appears exactly where

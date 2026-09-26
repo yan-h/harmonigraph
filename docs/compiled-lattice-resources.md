@@ -52,6 +52,7 @@ Gaussian/Distance shadows at the live-view and maximum shadow widths, with 30 na
 It discards ten warmup frames and records 120 frames per workload.
 CPU scope is the complete callback `prepare`, including staging and encoding;
 GPU timestamps bracket that preparation encoder, excluding the final egui composite.
+Issue #1113 later found that this bracket's closing beginning-of-pass stamp does not contain the scene passes' fragment work on this GPU, so the GPU figures below undercount.
 
 Baseline and candidate test executables are preserved separately, so accepted paired runs need no intervening compilation.
 They use the repository's optimized test profile and the same Metal adapter.

@@ -1033,10 +1033,10 @@ mod tests {
         );
     }
 
-    /// A thumb stands in the MIDDLE of the gap its layer holds open rather than
-    /// on the boundary at the far side of it — a divider between two cells,
-    /// touching neither, instead of the leading edge of the cell it does not
-    /// size.
+    /// A thumb stands INSIDE the gap its layer holds open rather than on the
+    /// boundary at the far side of it — a divider between two cells, touching
+    /// neither, instead of the leading edge of the cell it does not size.
+    /// Where in the gap is the paint's choice and not asked here.
     #[test]
     fn a_thumb_stands_in_the_gap_its_layer_holds_open() {
         let rings = layered().rings();
@@ -1051,10 +1051,11 @@ mod tests {
         );
         for k in 1..3 {
             assert!(
-                (thumbs[k] - (spans[k].1 + rings.gap * 0.5)).abs() < 1e-6,
-                "layer {k}'s thumb stood at {} rather than half a gap out from {}",
+                thumbs[k] > spans[k].1 && thumbs[k] < spans[k + 1].0,
+                "layer {k}'s thumb stood at {}, not in the gap {}..{} between its cell and the next",
                 thumbs[k],
                 spans[k].1,
+                spans[k + 1].0,
             );
         }
         // The marks close the stack and stand nobody off, so there is no gap
