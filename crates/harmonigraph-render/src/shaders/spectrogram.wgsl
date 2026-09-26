@@ -1517,8 +1517,8 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
     let through = fract(age);
     let spread = s.spread * ((2.0 * a.w - 1.0) * (through - 0.5));
     let centre = 0.5 + STAR_JITTER * (a.xy - 0.5) + spread;
-    let at = (vec2<f32>(cell) + centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE)
-        + cloud.size * 0.5;
+    let at = (vec2<f32>(cell) + 0.5 + STAR_JITTER * (a.xy - 0.5) + spread + s.offset) * s.cell
+        * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at);
     // Over silence a star is not drawn at all, so a quiet pane is the floor
     // exactly rather than the floor with stars of the floor's colour on it.
@@ -1562,16 +1562,12 @@ fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
     return vec4<u32>(0u);
 }
 
-// One cell's star, if it has one, at `r` — this slice's cell coordinate for the
-// pixel — as its coverage there in `w` and its one colour times that coverage in
-// `rgb`, read out of what `star_bake` left for it. `cut` is where nothing of a
-// star here is left: five sigmas of the widest core, or with a fringe the ring's
-// reach, and never past that.
-fn star_texel(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, cut: f32) -> vec4<f32> {
-    // The CPU sizes each slice's grid a cell past anything the walk reaches,
-    // so the clamp decides nothing; it only keeps a read inside the slice.
-    let local = clamp(cell - s.origin, vec2<i32>(0), s.grid - 1);
-    let index = s.base + local.y * s.grid.x + local.x;
+// The star baked at atlas texel `index`, counted along the rows, if it has one,
+// as its coverage at `f` — the pixel, in cells from the corner of the cell the
+// star is in — in `w` and its one colour times that coverage in `rgb`. `cut` is
+// where nothing of a star here is left: five sigmas of the widest core, or with
+// a fringe the ring's reach, and never past that.
+fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, cut: f32) -> vec4<f32> {
     let t = textureLoad(
         star_atlas,
         vec2<i32>(index & (STAR_ATLAS_WIDTH - 1), index >> STAR_ATLAS_SHIFT),
@@ -1580,8 +1576,7 @@ fn star_texel(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, cut: f32) -> vec4<f32
     if t.w == 0u {
         return vec4<f32>(0.0);
     }
-    let centre = vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y));
-    let dist = length(r - vec2<f32>(cell) - centre) * s.cell;
+    let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
     if dist >= cut {
         return vec4<f32>(0.0);
     }
@@ -1624,10 +1619,10 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
 // it, a cell's stagger at the second.
 //
-// The 3x3 walk is one flat loop of nine. Both alternatives measured slower on an
-// M1 Pro at 4K when every cell was hashed here: two nested loops, which the
-// compiler did not unroll (EMPTY, they cost about 14 ms a frame), and the nine
-// calls written out by hand (57 ms a frame against the flat loop's 44).
+// The 3x3 walk is three rows of three reads. When every cell was hashed here, a
+// flat loop of nine measured fastest on an M1 Pro at 4K (44 ms, against 57 for
+// the nine written out and about 14 more for two nested loops); with the stars
+// baked, the flat loop's per-cell index arithmetic was most of what was left.
 fn star_color(pt: vec2<f32>) -> vec3<f32> {
     var out = palette_color(0.0);
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
@@ -1640,10 +1635,22 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
             cut = min(s.reach, 5.0 * s.cap * s.defocus);
         }
         let r = sp / s.cell - s.offset;
-        let o = vec2<i32>(floor(r));
+        let o = floor(r);
+        // The pixel from its own cell's corner, so every distance below is
+        // taken between numbers of order one rather than of the hash period.
+        let f = r - o;
+        // The walk's first cell, the pixel's up and left, in the slice's
+        // grid; the CPU sizes the grid a cell past anything this reaches, so
+        // the rows below never leave it. A row's cells are consecutive texels.
+        let local = vec2<i32>(o) - 1 - s.origin;
+        var index = s.base + local.y * s.grid.x + local.x;
         var slice = vec4<f32>(0.0);
-        for (var n = 0; n < 9; n += 1) {
-            slice += star_texel(s, r, o + vec2<i32>(n % 3 - 1, n / 3 - 1), cut);
+        for (var row = -1; row <= 1; row += 1) {
+            let g = f - vec2<f32>(0.0, f32(row));
+            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
+            slice += star_texel(s, g, index + 1, cut);
+            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
+            index += s.grid.x;
         }
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));

@@ -1277,6 +1277,7 @@ impl Targets {
         self.source_group = source_group(device, layout, &self.source_uniform, grid, lut);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &self,
         queue: &wgpu::Queue,
@@ -1575,8 +1576,9 @@ mod tests {
         nearest
     }
 
-    /// The shader clamps a cell into its slice's grid rather than trusting it,
-    /// so a grid one cell short would draw a neighbour's star silently. This
+    /// The shader reads a cell by its index in its slice's grid with no bounds
+    /// check, so a grid one cell short would draw a star from another row, or
+    /// another slice, silently. This
     /// replays the shader's own f32 arithmetic at the pane's four corners — the
     /// walk's extremes — over drifts that put the edge on a cell boundary and
     /// at the hash period's wrap, on a plain pane and a very wide one.
