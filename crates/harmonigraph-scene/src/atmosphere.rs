@@ -443,20 +443,18 @@ impl Default for SpectralAtmosphere {
             wash_lobe: 0.55,
             wash_refract: 0.85,
             wash_layers: 0.5,
-            // Yan's Stars look as dialled in the DAW on 2026-09-25, from the
-            // prototype's V3 motion and round 8's YB3 colouring: dense, sizes
-            // 3.3 to 11.5 with most depths small, and the farthest dust still.
-            star_density: 6.0,
-            star_randomness: 0.214_038_73,
-            star_size_min: 3.333_390_2,
-            star_size_max: 11.502_775,
-            star_size_curve: 3.392_461_8,
-            star_speed_min: 0.0,
-            star_speed_max: 1.0,
-            star_speed_curve: 1.031_25,
-            star_lifetime: 6.0,
-            star_fringe: 0.25,
-            star_defocus: 0.6,
+            // Yan's Stars controls captured from the DAW on 2026-09-26.
+            star_density: 10.0,
+            star_randomness: 0.080912866,
+            star_size_min: 1.0045346,
+            star_size_max: 11.529175,
+            star_size_curve: 1.462137,
+            star_speed_min: 0.08931082,
+            star_speed_max: 0.16860056,
+            star_speed_curve: 3.179647,
+            star_lifetime: 0.8390586,
+            star_fringe: 0.13554634,
+            star_defocus: 0.6669314,
         }
     }
 }

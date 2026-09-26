@@ -517,6 +517,9 @@ impl CallbackTrait for SpectrogramCallback {
             || self.vertices.is_empty()
         {
             pane.count = 0;
+            if let Some(target) = pane.cloud.as_mut() {
+                target.invalidate_memory();
+            }
             return Vec::new();
         }
         debug_assert!(self.grid.run.iter().all(|slab| slab.len() == bins));

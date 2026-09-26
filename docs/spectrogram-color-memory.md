@@ -58,18 +58,20 @@ all five moving star slices and life turnover,
 pickup at 1 fps and 120 fps,
 paused redraws, palette edits, seeks and the disabled allocation path.
 The established renderer fixtures and offline goldens pin both response times to zero;
-they continue to check the unchanged immediate rendering path without blessing new images.
+they continue to check the immediate rendering path.
+The Stars reference was refreshed after the eleven star-specific defaults were captured from the DAW on 2026-09-26;
+shared memory, drift and spectrogram defaults were not part of that capture.
 
 ## Measured cost
 
 Apple M1 Pro, Metal, optimized test build, two pixels per point, full-pane coverage,
 1024 slabs over ten seconds, paired and interleaved off/B cases through the existing GPU timing harness.
-These are GPU full-frame medians rather than end-to-end DAW frame times.
+These are GPU full-frame medians rather than end-to-end DAW frame times, using the star defaults before the 2026-09-26 capture.
 The 1080p run used 40 measured frames per case; the 4K run used 100.
 
 | Style | 1080p off | 1080p B | 4K off | 4K B |
 | --- | ---: | ---: | ---: | ---: |
-| Stars | 7.95 ms | 7.92 ms | 29.21 ms | 29.04 ms |
+| Stars | 9.16 ms | 8.96 ms | 31.32 ms | 31.45 ms |
 | Mosaic | 1.22 ms | 1.67 ms | 2.55 ms | 4.42 ms |
 | Watercolor | 1.33 ms | 1.71 ms | 3.20 ms | 4.79 ms |
 

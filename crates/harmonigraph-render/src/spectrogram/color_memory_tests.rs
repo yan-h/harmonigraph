@@ -282,6 +282,19 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         cb.atmosphere.as_mut().unwrap().now = 139.0;
         prepare_once(&device, &queue, &mut resources, &cb);
         close(pixels(&device, &queue, memory(&resources))[5000], floor(&cb));
+        // A degenerate callback must end the old history before drawing resumes.
+        cb.grid.fill(255);
+        cb.atmosphere.as_mut().unwrap().now = 180.0;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        assert_eq!(pixels(&device, &queue, memory(&resources))[5000][3], 1.0);
+        let rows = cb.read.rows;
+        cb.read.rows = 0;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        cb.read.rows = rows;
+        cb.grid.fill(0);
+        cb.atmosphere.as_mut().unwrap().now = 180.1;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        close(pixels(&device, &queue, memory(&resources))[5000], floor(&cb));
         // Both zero releases the buffers and uses the old rendering path.
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         s.color_pickup = 0.0;
