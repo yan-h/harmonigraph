@@ -272,6 +272,9 @@ pub struct Recorder {
     rolling: Arc<AtomicBool>,
     /// Whether this pass has already declared its audio start.
     audio_started: bool,
+    /// Whether this pass has already been handed the notes sounding at its
+    /// start. See [`Recorder::open_notes`].
+    notes_opened: bool,
     /// Set by the GUI for every trigger whose take is over the moment the
     /// transport goes backwards — a loop wrapping under
     /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd), and the host
@@ -454,6 +457,7 @@ impl Recorder {
         if action == Action::Arm {
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
+            self.notes_opened = false;
             self.latches.clear();
         }
         armed
@@ -473,6 +477,18 @@ impl Recorder {
     pub fn note(&mut self, t: f64, source: SourceId, channel: u8, note: u8, kind: NoteEventKind) {
         self.push(Entry::Note { t, source, channel, note, kind });
         self.latches.captured.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Whether the caller still owes this pass the notes already sounding at
+    /// its start — true once per pass, on the first recording block that asks.
+    ///
+    /// The note half of what `last_params` does for parameters: a pass armed
+    /// mid-note, or split from the one before by a loop, would otherwise hold
+    /// only the releases of notes it never saw begin, and replay draws nothing
+    /// for them (#1129). Only the plain-MIDI arm asks; the configured route
+    /// opens each pass with the Hub's own snapshot instead.
+    pub fn open_notes(&mut self) -> bool {
+        !std::mem::replace(&mut self.notes_opened, true)
     }
 
     pub fn wants_audio(&self) -> bool {
@@ -569,6 +585,7 @@ impl Recorder {
             self.push(Entry::NewPass);
             self.last_params = [f32::NAN; ParamKey::ALL.len()];
             self.audio_started = false;
+            self.notes_opened = false;
         }
         let rolling = matches!(action, Action::Record | Action::SplitAndRecord);
         if rolling {

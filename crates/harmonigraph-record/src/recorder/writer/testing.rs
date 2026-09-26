@@ -216,6 +216,7 @@ pub fn channel() -> (Recorder, Capture) {
         history: History::default(),
         rolling,
         audio_started: false,
+        notes_opened: false,
         end_at_rewind,
         latches: Arc::new(TakeLatches::default()),
     };

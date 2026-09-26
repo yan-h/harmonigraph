@@ -163,6 +163,7 @@ pub fn channel() -> (Recorder, Control) {
             history: History::default(),
             rolling: rolling.clone(),
             audio_started: false,
+            notes_opened: false,
             audio: audio_producer,
             with_audio: with_audio.clone(),
             end_at_rewind: end_at_rewind.clone(),

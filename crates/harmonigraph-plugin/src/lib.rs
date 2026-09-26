@@ -115,6 +115,11 @@ pub struct Harmonigraph {
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: RecorderSlot,
+    /// What the plain-MIDI arm has sounding: the velocity each channel's key
+    /// was struck at. Kept on every block, armed or not, so each take pass can
+    /// open with the notes already held (#1129). The configured route has no
+    /// use for it — the Hub's rows are its authority on what is sounding.
+    plain_held: Box<[[Option<f32>; 128]; 16]>,
 }
 
 impl Drop for Harmonigraph {
@@ -676,6 +681,7 @@ impl Default for Harmonigraph {
             samples_processed: 0,
             presentation_seconds: 0.0,
             take: RecorderSlot(Some(take)),
+            plain_held: Box::new([[None; 128]; 16]),
             _background,
         }
     }
@@ -773,6 +779,7 @@ impl Plugin for Harmonigraph {
             mailbox.published.publish(owner.snapshot);
         }
         self.samples_processed = 0;
+        *self.plain_held = [[None; 128]; 16];
         self.audio_producer.reset();
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
@@ -836,10 +843,36 @@ impl Plugin for Harmonigraph {
         if let Some(owner) = self.configuration.as_mut() {
             owner.record(&mut self.take, take_origin, self.presentation_seconds);
         }
+        // A pass opens with the notes already held, at its first sample: armed
+        // mid-note, or split from the last pass by a loop, it would otherwise
+        // hold only releases and draw nothing for them (#1129).
+        if let Some(origin) = take_origin.filter(|_| self.configuration.is_none()) {
+            if self.take.open_notes() {
+                for (channel, keys) in self.plain_held.iter().enumerate() {
+                    for (note, velocity) in keys.iter().enumerate() {
+                        if let Some(velocity) = *velocity {
+                            let on = NoteEventKind::On { velocity };
+                            self.take.note(origin, SourceId::DIRECT, channel as u8, note as u8, on);
+                        }
+                    }
+                }
+            }
+        }
         while let Some(event) = context.next_event() {
             if let Some(MappedNote { timing, channel, note, kind }) =
                 mapped_note(event).filter(|_| self.configuration.is_none())
             {
+                if let Some(held) = self
+                    .plain_held
+                    .get_mut(usize::from(channel))
+                    .and_then(|keys| keys.get_mut(usize::from(note)))
+                {
+                    match kind {
+                        NoteEventKind::On { velocity } => *held = Some(velocity),
+                        NoteEventKind::Off => *held = None,
+                        _ => {}
+                    }
+                }
                 let time = ring_time(self.presentation_seconds, timing, self.sample_rate);
                 let event = CoreNoteEvent { source: SourceId::DIRECT, time, channel, note, kind };
                 let delta: harmonigraph_core::canonical::NoteDelta = event.into();

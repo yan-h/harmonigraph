@@ -247,6 +247,45 @@ fn vst3_notes_reach_the_take_and_the_host_through_the_guarded_callback() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// #1129 on the plain route: a take armed while a note is held. The note-on
+/// arrives in a callback no take owns, so the only way the take learns of it
+/// is the pass opening with what is already sounding.
+#[test]
+fn vst3_take_armed_mid_note_opens_with_the_held_note() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-vst3-held-{}", std::process::id()));
+    let (recorder, control) = harmonigraph_record::channel();
+    let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    crate::configuration::inject_recorder(recorder);
+    let device = Device::new();
+    let struck = Events::queued(vec![note_on(60, 1)]);
+    device.block_with(event_list(&struck), ptr::null_mut());
+    control.start(48000.0, String::new(), false);
+    device.block();
+    let released = Events::queued(vec![note_off(60, 2)]);
+    device.block_with(event_list(&released), ptr::null_mut());
+    control.stop(None);
+    drop(device);
+    wait(|| control.last_take().is_some());
+    assert!(!probe.failed());
+
+    let take = harmonigraph_take::Take::read(control.last_take().unwrap()).unwrap();
+    let notes: Vec<_> = take.notes().map(|note| (note.t, note.note, note.kind)).collect();
+    // The first recorded callback is the second, 4 samples in: the held note
+    // opens the pass at its first sample, and its release keeps its own time.
+    assert_eq!(
+        notes,
+        vec![
+            (4.0 / 48000.0, 60, harmonigraph_take::NoteKind::On { velocity: 0.75 }),
+            (8.0 / 48000.0 + 2.0 / 48000.0, 60, harmonigraph_take::NoteKind::Off),
+        ]
+    );
+
+    drop(control);
+    wait(|| probe.finished());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn vst3_stop_during_callback_keeps_the_observed_audio_without_another_callback() {
     // Ordinary Harmonigraph has no configuration owner and does not split a

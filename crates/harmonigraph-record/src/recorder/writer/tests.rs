@@ -127,6 +127,7 @@ impl Bench {
                 history: History::default(),
                 rolling: Arc::new(AtomicBool::new(false)),
                 audio_started: false,
+                notes_opened: false,
                 end_at_rewind: end_at_rewind.clone(),
                 latches: latches.clone(),
             },
