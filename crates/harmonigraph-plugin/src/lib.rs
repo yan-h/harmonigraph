@@ -119,10 +119,22 @@ pub struct Harmonigraph {
     /// was struck at. Kept on every block, armed or not, so each recording run
     /// can open with the notes already held (#1129). The configured route has
     /// no use for it — the Hub's rows are its authority on what is sounding.
-    plain_held: Box<[[Option<f32>; 128]; 16]>,
+    plain_held: Box<[[Option<PlainHeld>; 128]; 16]>,
     /// The [`recording_run`](harmonigraph_record::Recorder::recording_run)
     /// the plain arm last opened with `plain_held`.
     plain_opened: u64,
+    /// The pass that run was in: a new one has seen none of the held notes
+    /// begin, whatever their `recorded` marks say.
+    plain_pass: Option<harmonigraph_record::configuration::RecordAddress>,
+}
+
+/// One key the plain-MIDI arm holds.
+#[derive(Clone, Copy)]
+struct PlainHeld {
+    velocity: f32,
+    /// Whether the current pass already holds an On for it — the key was
+    /// struck while it recorded, or a run of it opened with the key held.
+    recorded: bool,
 }
 
 impl Drop for Harmonigraph {
@@ -686,6 +698,7 @@ impl Default for Harmonigraph {
             take: RecorderSlot(Some(take)),
             plain_held: Box::new([[None; 128]; 16]),
             plain_opened: 0,
+            plain_pass: None,
             _background,
         }
     }
@@ -847,19 +860,29 @@ impl Plugin for Harmonigraph {
         if let Some(owner) = self.configuration.as_mut() {
             owner.record(&mut self.take, take_origin, self.presentation_seconds);
         }
-        // Each recording run opens with the notes already held, at its first
-        // sample: armed mid-note, resumed from a pause, or split from the last
-        // pass by a loop, it would otherwise hold only releases and draw
-        // nothing for them (#1129).
+        // Each recording run opens with the notes already held that this pass
+        // has not seen begin, at the run's first sample: armed mid-note,
+        // resumed from a pause, or split from the last pass by a loop, it
+        // would otherwise hold only releases and draw nothing for them
+        // (#1129). A note whose On this pass already holds is left alone — a
+        // second On is a retrigger on replay, which would cut its row in two
+        // at every resume.
         if let Some(origin) = take_origin.filter(|_| self.configuration.is_none()) {
             let run = self.take.recording_run();
             if run != self.plain_opened {
                 self.plain_opened = run;
-                for (channel, keys) in self.plain_held.iter().enumerate() {
-                    for (note, velocity) in keys.iter().enumerate() {
-                        if let Some(velocity) = *velocity {
-                            let on = NoteEventKind::On { velocity };
+                // Named for the configured route, but it is simply the pass
+                // this block records into, on either route.
+                let pass = self.take.configuration_address();
+                let new_pass = pass != self.plain_pass;
+                self.plain_pass = pass;
+                for (channel, keys) in self.plain_held.iter_mut().enumerate() {
+                    for (note, held) in keys.iter_mut().enumerate() {
+                        let Some(held) = held else { continue };
+                        if new_pass || !held.recorded {
+                            let on = NoteEventKind::On { velocity: held.velocity };
                             self.take.note(origin, SourceId::DIRECT, channel as u8, note as u8, on);
+                            held.recorded = true;
                         }
                     }
                 }
@@ -882,7 +905,10 @@ impl Plugin for Harmonigraph {
                     .and_then(|keys| keys.get_mut(usize::from(note)))
                 {
                     match kind {
-                        NoteEventKind::On { velocity } => *held = Some(velocity),
+                        NoteEventKind::On { velocity } => {
+                            let recorded = take_origin.is_some();
+                            *held = Some(PlainHeld { velocity, recorded });
+                        }
                         NoteEventKind::Off => *held = None,
                         _ => {}
                     }
