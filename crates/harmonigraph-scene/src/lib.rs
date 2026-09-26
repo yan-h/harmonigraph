@@ -279,7 +279,7 @@ pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
 /// What the node glow scales its own skirt by
 /// (see [`ViewConfig::glow_strength`]).
 ///
-/// Its own ceiling rather than [`ViewConfig::bloom_strength`]'s, because it is
+/// Its own ceiling rather than the bloom's ([`IntensitySettings::glow_base`]), because it is
 /// a different light: the bloom's chain thresholds, so its strength acts on the
 /// bright end alone, where this one scales one node's own skirt. Two is where
 /// the travel stops being about the light and starts being about the clamp —
