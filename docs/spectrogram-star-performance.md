@@ -164,3 +164,12 @@ The full-resolution split matched the two aligned control frames within one 8-bi
 but fractional pane placement and the wider control range remain unvalidated.
 The reduced-resolution motion comparison awaits Yan's visual choice.
 These are preserved prototypes rather than enabled rendering changes.
+
+A [longer eight-run follow-up](evidence/spectrogram-stars/round3/confidence/README.md) uses duplicate baselines,
+balanced randomized execution orders and both synthetic and recording-derived input.
+The native split saves 14.6–17.3% at 4K across four runs,
+well above the observed A/A differences of up to 1.9%.
+At 1080p it has no dependable gain;
+a 5.1% slowdown in one recording run shrank to 0.9% in its repeat.
+These results support a 4K candidate rather than a universal replacement,
+and leave the resolution crossover and live DAW behavior unmeasured.

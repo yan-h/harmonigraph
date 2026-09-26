@@ -31,6 +31,11 @@ compiler scheduling and resource use are possibilities rather than measured expl
 These are synchronous offscreen GPU intervals,
 not full DAW frame times.
 
+The [longer randomized follow-up](confidence/README.md) adds duplicate A/A controls,
+raw per-round data and recording-derived scrolling input.
+Its eight runs confirm a 14.6–17.3% native-split saving at 4K,
+while finding no dependable native-split gain at 1080p.
+
 ## Implementation
 
 `base` uses the existing shader plus an unused fragment entry point needed by the scratch pipeline builder.

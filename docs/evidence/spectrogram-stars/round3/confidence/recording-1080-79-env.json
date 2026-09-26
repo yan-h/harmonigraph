@@ -1,0 +1,14 @@
+{
+  "HARMONIGRAPH_SHADER_ASSETS": "source",
+  "PROBE_COMPARE": "base_a,base_b,dust100,dust075",
+  "PROBE_CASE": "stars",
+  "PROBE_FILLS": "1",
+  "PROBE_FRAMES": "600",
+  "PROBE_WARMUP": "120",
+  "PROBE_SIZE": "1920x1080",
+  "PROBE_SEED": "79",
+  "PROBE_RAW": "/private/tmp/stars-confidence/recording-1080-79.csv",
+  "PROBE_TAKE": "/private/tmp/stars-round3/take-levels.u8",
+  "PROBE_HISTORY_SECONDS": "20",
+  "PROBE_PPP": "1"
+}

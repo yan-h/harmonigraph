@@ -1,0 +1,25 @@
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 1920x1080 px at 2 px/pt, 1024 slabs of 3828 buckets
+confidence probe: seed=41, warmup=120, frames=600, recording=false
+first old-bracket reversal dust100 10s: [772525596068958, 772525596121666, 772525596398375, 772525596591625, 772525596537500, 772525609481125, 772525596525791, 772525596631166]
+first old-bracket reversal dust075 10s: [772525646230166, 772525646647500, 772525646481000, 772525646650416, 772525647047583, 772525658428583, 772525646581958, 772525646661458]
+first old-bracket reversal base_a 10s: [772525676450708, 772525676463583, 772525676805958, 772525677003291, 772525676938791, 772525689080583, 772525676926500, 772525677042208]
+first old-bracket reversal base_b 10s: [772525720470125, 772525720571333, 772525720833541, 772525721126541, 772525721061875, 772525732065666, 772525720961458, 772525721162000]
+base_a full history uploads=1
+base_b full history uploads=1
+dust100 full history uploads=1
+dust075 full history uploads=1
+case                                    fill   span s    light med/min    paint med/min     wall med/min    end/full  begin/full     old med  rev new/old    CPU prep  source px
+base_a                                  1.00     10.0     0.56/   0.00    12.45/   0.00    15.42/  12.24      13.173      13.255       0.000     0/375        0.144  Some([167, 549])
+  base_a 10.0s GPU min/p10/med/p90/max begin/full=10.787/11.817/13.255/15.270/32.355 end/full=10.737/11.718/13.152/15.051/32.320 old=0.000/0.000/0.000/0.092/7.378
+base_b                                  1.00     10.0     0.54/   0.00    12.39/   0.00    15.46/  12.06      13.136      13.225       0.000     0/374        0.138  Some([167, 549])
+  base_b 10.0s GPU min/p10/med/p90/max begin/full=10.798/11.753/13.219/15.304/31.887 end/full=10.749/11.616/13.128/15.133/27.628 old=0.000/0.000/0.000/0.090/0.996
+dust100                                 1.00     10.0     0.53/   0.00    12.32/   0.00    15.16/  12.45      12.978      13.088       0.000     0/361        0.143  Some([167, 549])
+  dust100 10.0s GPU min/p10/med/p90/max begin/full=11.152/11.880/13.080/15.325/40.172 end/full=11.111/11.793/12.977/14.901/38.801 old=0.000/0.000/0.000/0.074/0.879
+dust075                                 1.00     10.0     0.54/   0.00    11.97/   0.00    14.67/  12.05      12.689      12.757       0.000     0/346        0.141  Some([167, 549])
+  dust075 10.0s GPU min/p10/med/p90/max begin/full=10.891/11.545/12.752/14.656/57.755 end/full=10.839/11.459/12.684/14.454/57.736 old=0.000/0.000/0.000/0.106/3.055
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 350 filtered out; finished in 47.49s
