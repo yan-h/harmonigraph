@@ -159,7 +159,7 @@ fn level_label_into(joined: bool) -> f32 {
 /// audio spectrum as a curve (FFT of the selected input, every partial at its
 /// actual pitch), the sounding MIDI voices as bars, and the piano roll of
 /// what has been played. All are optional; the settings live in
-/// [`spectrum_settings_pane`].
+/// [`view_section`] and the sections beside it on the Analyzer page.
 ///
 /// The depth axis is shared out between the roll (the far end) and the
 /// spectrum (the baseline end) at `split`, which is also where the voice
