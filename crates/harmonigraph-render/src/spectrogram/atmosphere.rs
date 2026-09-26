@@ -190,8 +190,11 @@ const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// cell's index splits into a texel with a mask and a shift.
 const STAR_ATLAS_WIDTH: u32 = 2048;
 /// Cells a slice's grid holds past the ones the walk can reach from the pane
-/// on each side, so the shader's f32 floor of a pixel's cell and the CPU's
-/// f64 one of the pane's edge may disagree by one without a read leaving it.
+/// on each side. On correctly rounded arithmetic it is not needed: the CPU
+/// takes the pane's leading edge exactly in f64 from the same f32 inputs, and
+/// the shader's rounded f32 can only floor at or above that. It is for the GPU,
+/// whose `sp / cell` is not correctly rounded and which no CPU replay
+/// reproduces — see `the_star_atlas_holds_every_cell_the_walk_reads`.
 const STAR_GRID_MARGIN: u32 = 1;
 /// The atlas is allocated in whole multiples of this many rows, so a drag of a
 /// dial that sizes cells reallocates at steps rather than every frame.
@@ -386,10 +389,8 @@ fn star_slices(
         let grid = layout.grids[k];
         // The cell a pixel at the pane's top left edge is in, as the shader
         // works it out, less the one the walk steps back and the margin.
-        let origin: [i32; 2] = std::array::from_fn(|axis| {
-            let edge = -f64::from(layout.pane[axis] / 2.0 / cell) - f64::from(offset[axis]);
-            edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
-        });
+        let origin: [i32; 2] =
+            std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
         StarSlice {
             offset,
             spread: [swing * cos as f32, swing * sin as f32],
@@ -411,6 +412,15 @@ fn star_slices(
             grid: grid.map(|side| side as i32),
         }
     })
+}
+
+/// The cell at the start of a slice's grid on one axis: the one a pixel at
+/// the pane's leading edge is in, as the shader works it out, less the one the
+/// walk steps back and the margin. `span` is the pane along the axis in star
+/// pixels.
+fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
+    let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
+    edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows,
@@ -1578,10 +1588,16 @@ mod tests {
 
     /// The shader reads a cell by its index in its slice's grid with no bounds
     /// check, so a grid one cell short would draw a star from another row, or
-    /// another slice, silently. This
-    /// replays the shader's own f32 arithmetic at the pane's four corners — the
-    /// walk's extremes — over drifts that put the edge on a cell boundary and
-    /// at the hash period's wrap, on a plain pane and a very wide one.
+    /// another slice, silently. This replays the shader's f32 arithmetic at
+    /// both edges of the pane on each axis — the walk's extremes — with drifts
+    /// up to 4096 f32 steps either side of the ones that put an edge exactly on
+    /// a cell boundary, near zero and near the hash period's wrap, on real pixel
+    /// sizes at real display scales, the floored fine layout and a strip.
+    ///
+    /// It holds the grid's own sizing and NOT `STAR_GRID_MARGIN`: it passes at
+    /// a margin of 0 too, because a correctly rounded replay cannot floor below
+    /// the CPU's exact edge. The margin is for the GPU's division, which this
+    /// cannot reach.
     #[test]
     fn the_star_atlas_holds_every_cell_the_walk_reads() {
         assert_eq!(f64::from(STAR_PANE), shader_number("STAR_PANE"));
@@ -1593,34 +1609,47 @@ mod tests {
             star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
             ..fresh
         };
-        for (settings, aspect) in [(fresh, 16.0 / 9.0), (fine, 16.0 / 9.0), (fresh, 16.0)] {
+        let panes = [
+            (fresh, [3840u32, 2160u32], 2.0f32),
+            (fresh, [1531, 877], 1.5),
+            (fine, [2559, 1439], 2.0),
+            (fresh, [3001, 187], 1.0),
+        ];
+        for (settings, pixels, ppp) in panes {
+            let aspect = pixels[0] as f32 / pixels[1] as f32;
             let layout = star_layout(settings, aspect);
-            let size = [STAR_PANE * aspect, STAR_PANE];
-            for now in [0.0, 0.37, 1.0e3, 7.3e4, 3.0e5] {
-                let drifting = harmonigraph_scene::SpectralAtmosphere {
-                    cloud_speed: harmonigraph_scene::CLOUD_SPEED_MAX,
-                    cloud_direction: 200.0,
-                    ..settings
-                };
-                for slice in star_slices(drifting, now, &layout) {
-                    for corner in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
-                        for axis in 0..2 {
-                            let pt = corner[axis] * size[axis];
-                            let sp = (pt - size[axis] * 0.5) * (STAR_PANE / size[1]);
-                            let cell = (sp / slice.cell - slice.offset[axis]).floor() as i32;
-                            for step in [-1, 1] {
-                                let local = cell + step - slice.origin[axis];
-                                assert!(
-                                    (0..slice.grid[axis]).contains(&local),
-                                    "{aspect} at {now} s: cell {local} of {:?}",
-                                    slice.grid
-                                );
+            assert!(layout.fits(), "{layout:?}");
+            let size = pixels.map(|side| side as f32 / ppp);
+            for (k, slice) in star_slices(settings, 0.0, &layout).iter().enumerate() {
+                for axis in 0..2 {
+                    let half = f64::from(layout.pane[axis] / 2.0 / slice.cell);
+                    // Drifts that put the leading edge, then the trailing one, on
+                    // a whole cell: `-half - offset` and `half - offset` integers.
+                    let exact = [0.0, 1000.0, STAR_HASH_PERIOD - 2.0 * half - 8.0]
+                        .into_iter()
+                        .flat_map(|m| [half.ceil() + m - half, half - (half.floor() - m)]);
+                    for exact in exact {
+                        let exact = exact as f32;
+                        for ulps in -4096i32..=4096 {
+                            let offset = f32::from_bits((exact.to_bits() as i32 + ulps) as u32);
+                            let origin = super::star_origin(layout.pane[axis], slice.cell, offset);
+                            for pt in [0.0, size[axis]] {
+                                let sp = (pt - size[axis] * 0.5) * (STAR_PANE / size[1]);
+                                let cell = (sp / slice.cell - offset).floor() as i32;
+                                for step in [-1, 1] {
+                                    let local = cell + step - origin;
+                                    assert!(
+                                        (0..slice.grid[axis]).contains(&local),
+                                        "{aspect}, slice {k}, axis {axis}, offset {offset}: \
+                                         cell {local} of {:?}",
+                                        slice.grid
+                                    );
+                                }
                             }
                         }
                     }
                 }
             }
-            assert!(layout.fits(), "{layout:?}");
         }
     }
 
