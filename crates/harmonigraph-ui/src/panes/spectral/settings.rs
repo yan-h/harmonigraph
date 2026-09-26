@@ -131,10 +131,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     &mut atmosphere.cloud_style,
                     &[
                         (
-                            CloudStyle::Mosaic,
-                            "Mosaic",
-                            "A pile of soft domes refracting the sound through their faces, \
-                             then colored by the shared Contour levels and palette controls",
+                            CloudStyle::Stars,
+                            "Stars",
+                            "Pinpoint stars at several depths, each taking the color and brightness \
+                             of the sound under it as it drifts. Nearer stars are fewer, bigger, \
+                             brighter and faster. Contour levels do not apply to it",
                         ),
                         (
                             CloudStyle::Watercolor,
@@ -143,11 +144,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
                         (
-                            CloudStyle::Stars,
-                            "Stars",
-                            "Pinpoint stars at several depths, each taking the color and brightness \
-                             of the sound under it as it drifts. Nearer stars are fewer, bigger, \
-                             brighter and faster. Contour levels do not apply to it",
+                            CloudStyle::Mosaic,
+                            "Mosaic",
+                            "A pile of soft domes refracting the sound through their faces, \
+                             then colored by the shared Contour levels and palette controls",
                         ),
                     ],
                 );
