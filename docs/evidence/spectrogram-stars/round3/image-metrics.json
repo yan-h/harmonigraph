@@ -1,0 +1,32 @@
+{
+  "take-base": {
+    "mean": 0.0,
+    "max": 0.0,
+    "changed_pixels": 0.0
+  },
+  "take-dust100": {
+    "mean": 0.003309220679012346,
+    "max": 1.0,
+    "changed_pixels": 0.009802276234567902
+  },
+  "take-dust075": {
+    "mean": 1.0556814236111112,
+    "max": 100.0,
+    "changed_pixels": 0.4423042052469136
+  },
+  "flat-base": {
+    "mean": 0.0,
+    "max": 0.0,
+    "changed_pixels": 0.0
+  },
+  "flat-dust100": {
+    "mean": 0.0038588284465020575,
+    "max": 1.0,
+    "changed_pixels": 0.01142554012345679
+  },
+  "flat-dust075": {
+    "mean": 1.0872726980452674,
+    "max": 75.0,
+    "changed_pixels": 0.4510469714506173
+  }
+}

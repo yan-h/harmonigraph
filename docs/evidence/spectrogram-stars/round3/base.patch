@@ -1,0 +1,11 @@
+--- a/spectrogram.wgsl
++++ b/spectrogram.wgsl
+@@ -1849,3 +1849,8 @@
+     let color = cloud_color(in);
+     return vec4<f32>(linear_from_gamma_rgb(color.rgb), color.a);
+ }
++
++@fragment
++fn fs_star_dust(in: TileVertex) -> @location(0) vec4<f32> {
++    return vec4<f32>(star_color(in.fraction * cloud.size), 1.0);
++}

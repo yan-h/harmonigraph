@@ -136,8 +136,8 @@ They are visual prototypes rather than a replay of a saved Bitwig appearance.
 B keeps all five depth layers and their irregular placement while taking about half the remaining GPU time,
 so it is the first candidate to evaluate visually.
 D offers more savings at the cost of a more substantial change in density and depth.
-Reduced-resolution RGB compositing remains an unmeasured alternative;
-it would need another target and would soften the finest pinpoints.
+Reduced-resolution RGB compositing was subsequently measured at the denser defaults in the third round below;
+it needs another target and softens the finest pinpoints.
 
 ## Preserving the nine-neighbor look at the denser defaults
 
@@ -149,3 +149,18 @@ with the longer 4K run nearly tied.
 Neither change is enabled.
 The retained probes implicate the final walk as the dominant remaining cost,
 and preserve patches and measurements so these experiments need not be repeated without a new reason.
+
+## Split-layer compositing at the denser defaults
+
+The [third optimization round](evidence/spectrogram-stars/round3/README.md) renders the two farthest layers into an RGB intermediate,
+then draws the three nearer layers over it.
+All five layers retain their nine-neighbor halos.
+At 4K on M1 Pro,
+a full-resolution intermediate reduced GPU time by approximately 16% in both paired runs;
+75% width and height saved 23–25%,
+with softer fine grain.
+Neither established a useful saving at 1080p.
+The full-resolution split matched the two aligned control frames within one 8-bit color step,
+but fractional pane placement and the wider control range remain unvalidated.
+The reduced-resolution motion comparison awaits Yan's visual choice.
+These are preserved prototypes rather than enabled rendering changes.

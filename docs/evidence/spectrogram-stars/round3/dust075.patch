@@ -1,0 +1,32 @@
+--- a/spectrogram.wgsl
++++ b/spectrogram.wgsl
+@@ -1645,10 +1645,10 @@
+ // inverse sigma saves the repeated divisions too, for 16–20% together.
+ // Keep the depth loop: unrolling both loops measured slower than either.
+ // See docs/spectrogram-star-performance.md for the paired measurements.
+-fn star_color(pt: vec2<f32>) -> vec3<f32> {
+-    var out = palette_color(0.0);
++fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
++    var out = under;
+     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
+-    for (var k = 0u; k < STAR_SLICES; k += 1u) {
++    for (var k = first; k < last; k += 1u) {
+         let s = cloud.star_slices[k];
+         // A fringe has no window of its own, so with one on only the ring's
+         // fade bounds a star.
+@@ -1694,6 +1694,15 @@
+     return out;
+ }
+
++fn star_color(pt: vec2<f32>) -> vec3<f32> {
++    let dust = textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).rgb;
++    return star_layers(pt, 2u, STAR_SLICES, dust);
++}
++@fragment
++fn fs_star_dust(in: TileVertex) -> @location(0) vec4<f32> {
++    return vec4<f32>(star_layers(in.fraction * cloud.size, 0u, 2u, palette_color(0.0)), 1.0);
++}
++
+ fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {
+     let bounded = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
+     return select(1.055 * pow(bounded, vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * bounded, bounded <= vec3<f32>(0.0031308));
