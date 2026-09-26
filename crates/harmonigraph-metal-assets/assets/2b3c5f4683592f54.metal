@@ -58,6 +58,14 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
+constant uint STAR_SLICES = 5u;
+constant float STAR_PANE = 540.0;
+constant float STAR_JITTER = 0.6;
+constant int STAR_HASH_PERIOD = 65536;
+constant uint STAR_LIFE_PERIOD = 4096u;
+constant float STAR_FADE = 0.2;
+constant float STAR_LIFT = 0.18;
+constant float STAR_RING_FADE = 0.7;
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
     return metal::float2(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }

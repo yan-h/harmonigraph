@@ -26,11 +26,17 @@ use harmonigraph_core::LatticePos;
 /// layout and camera included -- because `UI_PERSIST_VERSION` is a floor and a
 /// floor cannot guard a variant. #913 renamed these two and said so in its PR
 /// body with the measured refusal, which is the bar for doing it again.
+///
+/// [`CloudStyle::Stars`] is the odd one out: it does not displace the picture's
+/// levels at all but REPLACES the picture — pinpoint stars in depth, each one
+/// palette colour picked by the sound under it — so Contours do not reach it and
+/// every `star_` setting belongs to it alone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
     #[default]
     Mosaic,
     Watercolor,
+    Stars,
 }
 
 /// The band both cloud size dials run over — [`SpectralAtmosphere::scale_size`]
@@ -118,6 +124,42 @@ pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
 pub const SCALE_REFRACT_MIN: f32 = -1.0;
 /// See [`SCALE_REFRACT_MIN`].
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::star_density`] control and
+/// sanitizer, as a multiplier on stars per area. Past about 3x the farthest
+/// dust is finer than a pixel of a 540-point pane and merges into texture.
+pub const STAR_DENSITY_MIN: f32 = 0.5;
+/// See [`STAR_DENSITY_MIN`].
+pub const STAR_DENSITY_MAX: f32 = 10.0;
+/// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
+/// dense slice add up to a flat wash of its average colour.
+pub const STAR_FRINGE_MAX: f32 = 0.5;
+/// The share of its cells the thinned end of the depth keeps at a full
+/// [`SpectralAtmosphere::star_balance`] lean, as one over this.
+pub const STAR_BALANCE_THIN: f32 = 16.0;
+/// The top of [`SpectralAtmosphere::star_defocus`].
+pub const STAR_DEFOCUS_MAX: f32 = 1.5;
+/// Bounds shared by the two ends of the `Star size` control
+/// ([`SpectralAtmosphere::star_size_min`], [`SpectralAtmosphere::star_size_max`])
+/// and their sanitizer, in star pixels of spacing at density 2.
+pub const STAR_SIZE_MIN: f32 = 0.5;
+/// See [`STAR_SIZE_MIN`].
+pub const STAR_SIZE_MAX: f32 = 64.0;
+/// Bounds shared by the [`SpectralAtmosphere::star_size_curve`] control and
+/// sanitizer.
+pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
+/// See [`STAR_SIZE_CURVE_MIN`].
+pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
+/// Bounds shared by the [`SpectralAtmosphere::star_speed_curve`] control and
+/// sanitizer.
+pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;
+/// See [`STAR_SPEED_CURVE_MIN`].
+pub const STAR_SPEED_CURVE_MAX: f32 = 4.0;
+/// Bounds shared by the [`SpectralAtmosphere::star_lifetime`] control and
+/// sanitizer, in seconds.
+pub const STAR_LIFETIME_MIN: f32 = 0.5;
+/// See [`STAR_LIFETIME_MIN`].
+pub const STAR_LIFETIME_MAX: f32 = 20.0;
 
 /// Bounds shared by the [`AtmosphereSettings::nebula_scale`] control and sanitizer.
 pub const NEBULA_SCALE_MIN: f32 = 0.25;
@@ -245,7 +287,7 @@ pub struct SpectralAtmosphere {
     pub scale_refract: f32,
     /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
-    /// belongs to it alone.
+    /// belongs to it alone; `Stars` is the starfield, and so is every `star_`.
     pub cloud_style: CloudStyle,
     /// How big one glob is, as a multiplier on that size: how many of them
     /// cross the cloud frame moves the other way, because the count is divided
@@ -264,6 +306,71 @@ pub struct SpectralAtmosphere {
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
+    /// Stars per area at every depth, as a multiplier: the cells each depth's
+    /// stars are hashed into shrink by its square root. Runs over
+    /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
+    ///
+    /// Every `star_` setting below belongs to [`CloudStyle::Stars`] alone, and
+    /// each fresh value is the prototype's pick — V3 of round 4 for the motion,
+    /// YB3 of round 8 for the colour and shape — so the page opens on the look
+    /// Yan chose, with its levers on bars.
+    pub star_density: f32,
+    /// How far the stars differ from each other in brightness, spent as a
+    /// position on the palette: the steepness of the brightness rank, how far
+    /// it spreads each star above and below the colour behind it, and the
+    /// spread of core sizes, all together. At 0 every star is the colour
+    /// behind it, lifted a little.
+    pub star_randomness: f32,
+    /// Which end of the depth keeps all its stars, from -1 (the far dust) to 1
+    /// (the nearest stars): the favoured end fills every cell and the share
+    /// falls off exponentially toward the other, to [`STAR_BALANCE_THIN`] of
+    /// them at a full lean. 0 fills every depth, so the count follows `Star
+    /// size` alone. It replaced two dials, Far dust and Near stars, which
+    /// set the two ends' shares separately; the fresh -0.5 keeps both of their
+    /// fresh ends (1 and a quarter), and the depths between sit a little
+    /// fuller than their quadratic fade did.
+    pub star_balance: f32,
+    /// The farthest depth's star size, as its spacing in star pixels at
+    /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
+    /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
+    /// each star's core and its cap with that spacing's ratio to the fresh
+    /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
+    /// the old fixed curve did. Runs over [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`],
+    /// never above [`Self::star_size_max`].
+    pub star_size_min: f32,
+    /// The nearest depth's star size: the biggest stars in the field. See
+    /// [`Self::star_size_min`].
+    pub star_size_max: f32,
+    /// The exponent on depth in the star size's spacing: 1 spreads
+    /// the sizes evenly over the depths, higher puts most depths in the fine
+    /// dust. The prototype's 2. Runs over
+    /// [`STAR_SIZE_CURVE_MIN`]..=[`STAR_SIZE_CURVE_MAX`].
+    pub star_size_curve: f32,
+    /// The exponent on depth in the parallax: a depth moves at
+    /// `far + (1 - far) d^curve` of the nearest's speed. 1 steps the speeds
+    /// evenly. Runs over [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
+    pub star_speed_curve: f32,
+    /// How far each star's own speed is drawn round its depth's, as a share of
+    /// the widest spread the depth can hold: half the gap to the neighbouring
+    /// depths' speeds (at which the parallax is a continuum rather than steps),
+    /// or, if less, the speed that carries a star to the edge of the shader's
+    /// 3x3 ring over its [`Self::star_lifetime`]. So the finest dust strays
+    /// least, and every setting of the dial does something.
+    pub star_speed_spread: f32,
+    /// How long one star lives, in seconds, before its cell draws a new one,
+    /// alike at every depth. Each fades in and out over its life. Runs over
+    /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
+    pub star_lifetime: f32,
+    /// A wider, fainter fringe of each star's own colour round its core, at
+    /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
+    /// Runs to [`STAR_FRINGE_MAX`].
+    pub star_fringe: f32,
+    /// The farthest depth's speed as a share of the nearest's: the parallax.
+    /// 1 moves every depth together.
+    pub star_far_speed: f32,
+    /// How much the nearest stars are softened, growing with depth squared.
+    /// Runs to [`STAR_DEFOCUS_MAX`].
+    pub star_defocus: f32,
 }
 
 /// Which of the three spectrogram effects a setting actually draws — what the
@@ -328,6 +435,23 @@ impl Default for SpectralAtmosphere {
             wash_lobe: 0.55,
             wash_refract: 0.85,
             wash_layers: 0.5,
+            // Yan's Stars look as dialled in the DAW on 2026-09-25, from the
+            // prototype's V3 motion and round 8's YB3 colouring: dense, near
+            // stars full and the dust a little thinned (the Far dust 0.81 and
+            // Near stars 1 he saved, as a balance), sizes 3.3 to 11.5 with most
+            // depths small, and the farthest dust still.
+            star_density: 6.0,
+            star_randomness: 0.214_038_73,
+            star_balance: 0.078,
+            star_size_min: 3.333_390_2,
+            star_size_max: 11.502_775,
+            star_size_curve: 3.392_461_8,
+            star_speed_curve: 1.031_25,
+            star_speed_spread: 0.5,
+            star_lifetime: 6.0,
+            star_fringe: 0.25,
+            star_far_speed: 0.0,
+            star_defocus: 0.6,
         }
     }
 }
@@ -382,6 +506,37 @@ impl SpectralAtmosphere {
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
+        self.star_density =
+            clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
+        self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_balance = clamp(self.star_balance, fresh.star_balance, -1.0, 1.0);
+        self.star_size_min =
+            clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        self.star_size_max =
+            clamp(self.star_size_max, fresh.star_size_max, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        // One control with two handles, so its ends cannot cross on screen;
+        // a blob that holds them crossed is drawn, and kept, as the one pair.
+        if self.star_size_min > self.star_size_max {
+            std::mem::swap(&mut self.star_size_min, &mut self.star_size_max);
+        }
+        self.star_size_curve = clamp(
+            self.star_size_curve,
+            fresh.star_size_curve,
+            STAR_SIZE_CURVE_MIN,
+            STAR_SIZE_CURVE_MAX,
+        );
+        self.star_speed_curve = clamp(
+            self.star_speed_curve,
+            fresh.star_speed_curve,
+            STAR_SPEED_CURVE_MIN,
+            STAR_SPEED_CURVE_MAX,
+        );
+        self.star_speed_spread = clamp(self.star_speed_spread, fresh.star_speed_spread, 0.0, 1.0);
+        self.star_lifetime =
+            clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
+        self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
+        self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
+        self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
         self
     }
 
@@ -398,6 +553,10 @@ impl SpectralAtmosphere {
                 && match self.cloud_style {
                     CloudStyle::Mosaic => self.scale_refract != 0.0,
                     CloudStyle::Watercolor => self.wash_refract != 0.0,
+                    // Light rather than a displacement, so it has no dial at
+                    // which it draws the ordinary picture: `Cloud depth` alone
+                    // switches it off.
+                    CloudStyle::Stars => true,
                 },
         }
     }
