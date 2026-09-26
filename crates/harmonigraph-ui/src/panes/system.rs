@@ -4,6 +4,7 @@
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::AppearanceDocument;
+use harmonigraph_scene::skin;
 
 /// Render quality/cost, then the workspace layout.
 pub(super) fn system_pane(
@@ -104,28 +105,32 @@ pub(super) fn system_pane(
                 "Size of interface text, controls and tab bars. 100% is the reference size. Picture scale and exported videos are unaffected.",
             );
         // Colors the panel and nothing in the picture, which keeps fixed colors
-        // of its own (`harmonigraph_scene::skin::PICTURE`), so this cannot
-        // change what an export looks like either.
-        let skins = harmonigraph_scene::skin::skins();
-        let options: Vec<(usize, &str, &str)> =
-            skins.iter().enumerate().map(|(i, entry)| (i, entry.name, "")).collect();
-        let mut chosen = harmonigraph_scene::skin::skin_index(&interaction.skin).unwrap_or(0);
-        choice_row(ui, "Skin", &mut chosen, &options);
-        if skins[chosen].id != interaction.skin {
-            interaction.skin = skins[chosen].id.to_owned();
-        }
-        // The skin lends hue, text and accent; this lays out its backgrounds
-        // (`Skin::stepped`).
-        ValueBar::new(
-            &mut interaction.skin_lightness,
-            harmonigraph_scene::skin::LIGHTNESS_RANGE,
-            "Skin lightness",
-        )
-        .decimals(3)
-        .show(ui)
-        .on_hover_text(
-            "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
+        // of its own (`harmonigraph_scene::skin::PICTURE`), so these cannot
+        // change what an export looks like either (`Skin::from_dials`).
+        let dials = &mut interaction.skin_dials;
+        ValueBar::new(&mut dials.lightness, skin::LIGHTNESS_RANGE, "Interface lightness")
+            .decimals(3)
+            .show(ui)
+            .on_hover_text(
+                "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
+            );
+        ValueBar::new(&mut dials.tint_hue, skin::HUE_RANGE, "Tint hue")
+            .unit(1.0, "°")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text("The hue the interface's greys and text lean toward.");
+        ValueBar::new(&mut dials.tint, 0.0..=1.0, "Tint amount").percent().show(ui).on_hover_text(
+            "How far the greys lean toward the tint hue. 0% is neutral grey; 100% is still only a slight tint.",
         );
+        ValueBar::new(&mut dials.accent_hue, skin::HUE_RANGE, "Accent hue")
+            .unit(1.0, "°")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text("The hue of slider fills, selections and other highlights.");
+        ValueBar::new(&mut dials.accent_saturation, 0.0..=1.0, "Accent saturation")
+            .percent()
+            .show(ui)
+            .on_hover_text("How colourful the highlights are. 0% is a grey accent.");
         crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );

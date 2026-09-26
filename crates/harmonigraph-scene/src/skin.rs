@@ -8,18 +8,18 @@
 //! renderer is never told which skin the editor wears, so a skinnable picture
 //! color would make a video disagree with the editor it was set up in.
 //!
-//! The selectable skins are [`skins`]: [`DEFAULT_SKIN`] first, then the
-//! original dark look, then the other base16 schemes run through
-//! [`Skin::from_base16`]. Which one is in force is
-//! PER THREAD ([`set_active_skin`]) rather than process-wide, because a host
-//! can load several plugin instances into one process and each editor wears
-//! its own; each sets its skin at the top of its frame, and frames do not
-//! interleave on a thread. It also keeps parallel tests from reskinning one
-//! another.
+//! A skin is made from five [`SkinDials`] rather than chosen from a list:
+//! every background and both text colours are one grey with one slight tint,
+//! and every highlight is one accent colour mixed into those greys. Status
+//! colours (learn mode, warnings) are fixed, so no accent can be mistaken
+//! for them. Which dials are in force is PER THREAD ([`set_active_skin`])
+//! rather than process-wide, because a host can load several plugin
+//! instances into one process and each editor wears its own; each sets its
+//! skin at the top of its frame, and frames do not interleave on a thread.
+//! It also keeps parallel tests from reskinning one another.
 
 use std::cell::Cell;
 use std::ops::RangeInclusive;
-use std::sync::OnceLock;
 
 use glam::Vec4;
 
@@ -68,79 +68,26 @@ pub struct Skin {
     pub warning_bg: [u8; 3],
 }
 
-impl Skin {
-    /// The original dark look, the default before Tinta. Backgrounds (`panel`/`well`) stay at the original deep
-    /// values — the instrument reads as dark on purpose — but the whole
-    /// foreground/structure band above them was collapsed into a near-
-    /// invisible cluster (widget vs panel 1.24, hairline 1.22, slider fill
-    /// vs track 2.01, surface_faint 1.07). This pass lifts that band so the
-    /// chrome is legible: dividers, resting buttons, hovered surfaces, and
-    /// slider fills now separate clearly from the background, and secondary
-    /// text (labels, inactive tabs, console, disclosure arrows — all routed
-    /// through `text_dim`) rises from ~5.5:1 to ~8:1. Idle nodes and the
-    /// resting markers brighten to match. See git history for the pre-pass
-    /// values.
-    pub fn original() -> Self {
-        Skin {
-            panel: [24, 25, 29],
-            header: [24, 25, 29],
-            well: [15, 16, 19],
-            surface_faint: [46, 48, 57],
-            hairline: [64, 67, 77],
-            widget: [62, 66, 77],
-            widget_hover: [84, 88, 102],
-            accent: [124, 156, 216],
-            text: [228, 230, 234],
-            text_dim: [172, 177, 188],
-            accent_fill: [76, 95, 132],
-            accent_fill_hover: [98, 122, 168],
-            accent_fill_drag: [120, 150, 206],
-            accent_active: [100, 124, 172],
-            accent_edge: [130, 160, 216],
-            armed: [238, 178, 92],
-            warning_text: [236, 142, 132],
-            warning_bg: [64, 33, 31],
-        }
-    }
-}
-
-impl Skin {
-    /// A skin from a base16 scheme's sixteen slots (`0xRRGGBB`, `base00`
-    /// first), mapped the way the scheme's own roles suggest: `base00` the
-    /// pane, `base01` the tracks and wells, `base02` buttons, rules and
-    /// hovered rows, `base04`/`base05` secondary and primary text, `base0D`
-    /// the accent, `base0A` learn, `base08` warnings. The accent fills are
-    /// mixes of the accent into the surface they sit on, so they stay opaque
-    /// (see `theme::accent_fill`).
-    ///
-    /// The neutral slots are the scheme's own here; [`Skin::stepped`]
-    /// replaces them, keeping only `base00`'s hue and tint.
-    pub fn from_base16(slots: [u32; 16]) -> Skin {
-        let b = slots.map(|v| [(v >> 16) as u8, (v >> 8) as u8, v as u8]);
-        let track = b[1];
-        let widget = b[2];
-        let accent = b[13];
-        Skin {
-            panel: b[0],
-            header: b[0],
-            well: track,
-            surface_faint: b[2],
-            hairline: b[2],
-            widget,
-            widget_hover: mix(b[2], b[3], 0.35),
-            accent,
-            text: b[5],
-            text_dim: b[4],
-            accent_fill: mix(track, accent, 0.42),
-            accent_fill_hover: mix(track, accent, 0.58),
-            accent_fill_drag: mix(track, accent, 0.78),
-            accent_active: mix(widget, accent, 0.55),
-            accent_edge: mix(accent, [255, 255, 255], 0.06),
-            armed: b[10],
-            warning_text: b[8],
-            warning_bg: mix(b[0], b[8], 0.2),
-        }
-    }
+/// What a skin is made of. Persisted in the editor's workspace, never in the
+/// picture's appearance: it colours the panel and nothing an export draws.
+///
+/// Hues are degrees on the OKLab hue circle; `tint` and `accent_saturation`
+/// are fractions of [`TINT_MAX`] and [`ACCENT_MAX`], so a bar can read them as
+/// a percentage.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct SkinDials {
+    /// The OKLab lightness of the page, which every other background layer
+    /// stands a whole number of [`STEP`]s above.
+    pub lightness: f32,
+    /// The hue the greys lean toward.
+    pub tint_hue: f32,
+    /// How far they lean: 0 is neutral grey.
+    pub tint: f32,
+    /// The hue of every highlight.
+    pub accent_hue: f32,
+    /// How colourful the highlights are: 0 is a grey accent.
+    pub accent_saturation: f32,
 }
 
 /// The contrast dim text keeps against the page at every page lightness.
@@ -152,28 +99,79 @@ pub const LABEL_FLOOR: f32 = 4.0;
 pub const STEP: f32 = 0.07;
 
 /// Where the page's lightness can be dialled. The top is where the lightest
-/// track, 0.16 + 2 × [`STEP`], still leaves every skin's slider fill reading
-/// against it; below 0.08 the page is within a byte or two of black, where
-/// OKLab lightness moves in steps too coarse to lay a ladder on.
+/// track, 0.16 + 2 × [`STEP`], still leaves the slider fill reading against
+/// it; below 0.08 the page is within a byte or two of black, where OKLab
+/// lightness moves in steps too coarse to lay a ladder on.
 pub const LIGHTNESS_RANGE: RangeInclusive<f32> = 0.08..=0.16;
 
-/// The page lightness a fresh install opens at.
-pub const DEFAULT_LIGHTNESS: f32 = 0.15;
+/// Either hue dial: once round the circle.
+pub const HUE_RANGE: RangeInclusive<f32> = 0.0..=360.0;
 
-/// `lightness` inside [`LIGHTNESS_RANGE`], a non-finite value going back to
-/// the default, so a hand-edited blob cannot put the dial somewhere the chrome
-/// is not.
-pub fn sane_lightness(lightness: f32) -> f32 {
-    if lightness.is_finite() {
-        lightness.clamp(*LIGHTNESS_RANGE.start(), *LIGHTNESS_RANGE.end())
-    } else {
-        DEFAULT_LIGHTNESS
+/// The OKLab chroma a full `tint` gives the greys: enough to read as a warm
+/// or cool grey, not enough to read as a colour.
+pub const TINT_MAX: f32 = 0.04;
+
+/// The OKLab chroma a full `accent_saturation` asks for, about the most any
+/// hue holds at [`ACCENT_LIGHTNESS`]; hues that hold less are pulled in to
+/// the gamut by [`srgb`].
+pub const ACCENT_MAX: f32 = 0.16;
+
+/// Fixed lightnesses, so no dial can take text or a highlight into the page.
+/// Primary text, and where dim text starts before [`LABEL_FLOOR`] lifts it.
+const TEXT_LIGHTNESS: f32 = 0.90;
+const TEXT_DIM_LIGHTNESS: f32 = 0.72;
+/// Where the base16 schemes' accents sat, 0.68 to 0.74.
+pub const ACCENT_LIGHTNESS: f32 = 0.70;
+
+/// Status colours, the same under every skin.
+const ARMED: [u8; 3] = [238, 178, 92];
+const WARNING: [u8; 3] = [236, 142, 132];
+
+impl Default for SkinDials {
+    /// Tinta's page and accent as measured, the default before the dials: a
+    /// barely cool grey and a muted slate blue.
+    fn default() -> Self {
+        SkinDials {
+            lightness: 0.15,
+            tint_hue: 285.0,
+            tint: 0.125,
+            accent_hue: 255.0,
+            accent_saturation: 0.25,
+        }
     }
 }
 
+impl SkinDials {
+    /// Every dial inside the range its bar offers, a non-finite one going
+    /// back to its default, so a hand-edited blob cannot put a bar somewhere
+    /// the chrome is not.
+    pub fn sanitize(&mut self) {
+        let fresh = SkinDials::default();
+        let sane = |v: f32, range: RangeInclusive<f32>, fresh: f32| {
+            if v.is_finite() {
+                v.clamp(*range.start(), *range.end())
+            } else {
+                fresh
+            }
+        };
+        self.lightness = sane(self.lightness, LIGHTNESS_RANGE, fresh.lightness);
+        self.tint_hue = sane(self.tint_hue, HUE_RANGE, fresh.tint_hue);
+        self.tint = sane(self.tint, 0.0..=1.0, fresh.tint);
+        self.accent_hue = sane(self.accent_hue, HUE_RANGE, fresh.accent_hue);
+        self.accent_saturation = sane(self.accent_saturation, 0.0..=1.0, fresh.accent_saturation);
+    }
+}
+
+/// The OKLab `[a, b]` of `chroma` at `hue` degrees.
+fn polar(hue: f32, chroma: f32) -> [f32; 2] {
+    let (sin, cos) = hue.to_radians().sin_cos();
+    [chroma * cos, chroma * sin]
+}
+
 impl Skin {
-    /// This skin with its page at `lightness` and its other neutral layers a
-    /// whole number of [`STEP`]s above it, in the page colour's hue and tint.
+    /// The skin the dials make. The neutral layers stand a whole number of
+    /// [`STEP`]s above the page, in OKLab lightness, where equal steps look
+    /// equal:
     ///
     /// | layer | steps |
     /// |---|---|
@@ -183,47 +181,47 @@ impl Skin {
     /// | `widget`, `hairline`, `surface_faint` | 3 |
     /// | `widget_hover` | 4 |
     ///
-    /// Stepped in OKLab lightness, where equal steps look equal, rather than
-    /// taken from the scheme's own backgrounds: base16 has no slot darker than
-    /// its page, and the ones it has are ordered by convention only, so a
-    /// scheme could put its tracks under its page or its header on a button.
-    /// The ladder makes that order a property rather than a hope. The accent
-    /// fills are remixed from the stepped surfaces they sit on.
-    ///
-    /// Dim text is the scheme's, lifted only as far as it takes to keep
-    /// [`LABEL_FLOOR`] against the page: a lighter page would otherwise take a
-    /// scheme's darker greys under it (Berlin's `base04` sits at 3.97:1 on
-    /// the default page).
-    pub fn stepped(&self, lightness: f32) -> Skin {
-        let [_, a, b] = oklab(self.panel);
-        let layer = |steps: f32| srgb(lightness + steps * STEP, a, b);
+    /// Text is the same tinted grey at a fixed lightness; dim text is lifted
+    /// only as far as it takes to keep [`LABEL_FLOOR`] against the page. The
+    /// accent fills are mixes of the accent into the surface they sit on, so
+    /// they stay opaque (see `theme::accent_fill`).
+    pub fn from_dials(dials: SkinDials) -> Skin {
+        let [a, b] = polar(dials.tint_hue, dials.tint * TINT_MAX);
+        let layer = |steps: f32| srgb(dials.lightness + steps * STEP, a, b);
         let (panel, header, well, widget) = (layer(0.0), layer(1.0), layer(2.0), layer(3.0));
-        let [mut dim, dim_a, dim_b] = oklab(self.text_dim);
-        let mut text_dim = self.text_dim;
+        let [accent_a, accent_b] = polar(dials.accent_hue, dials.accent_saturation * ACCENT_MAX);
+        let accent = srgb(ACCENT_LIGHTNESS, accent_a, accent_b);
+        let mut dim = TEXT_DIM_LIGHTNESS;
+        let mut text_dim = srgb(dim, a, b);
         while contrast(text_dim, panel) < LABEL_FLOOR && dim < 1.0 {
             dim += 0.005;
-            text_dim = srgb(dim, dim_a, dim_b);
+            text_dim = srgb(dim, a, b);
         }
         Skin {
-            text_dim,
             panel,
             header,
             well,
-            widget,
-            hairline: widget,
             surface_faint: widget,
+            hairline: widget,
+            widget,
             widget_hover: layer(4.0),
-            accent_fill: mix(well, self.accent, 0.42),
-            accent_fill_hover: mix(well, self.accent, 0.58),
-            accent_fill_drag: mix(well, self.accent, 0.78),
-            accent_active: mix(widget, self.accent, 0.55),
-            warning_bg: mix(panel, self.warning_text, 0.2),
-            ..*self
+            accent,
+            text: srgb(TEXT_LIGHTNESS, a, b),
+            text_dim,
+            accent_fill: mix(well, accent, 0.42),
+            accent_fill_hover: mix(well, accent, 0.58),
+            accent_fill_drag: mix(well, accent, 0.78),
+            accent_active: mix(widget, accent, 0.55),
+            accent_edge: mix(accent, [255, 255, 255], 0.06),
+            armed: ARMED,
+            warning_text: WARNING,
+            warning_bg: mix(panel, WARNING, 0.2),
         }
     }
 }
 
 /// An sRGB byte triple in OKLab, `[L, a, b]`.
+#[cfg(test)]
 pub(crate) fn oklab(c: [u8; 3]) -> [f32; 3] {
     let lin = |v: u8| {
         let v = f32::from(v) / 255.0;
@@ -297,116 +295,11 @@ pub fn contrast(a: [u8; 3], b: [u8; 3]) -> f32 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-/// One entry in the picker.
-#[derive(Debug)]
-pub struct SkinEntry {
-    /// What a saved editor state names it by. Stable: renaming one sends
-    /// every blob that chose it back to the default.
-    pub id: &'static str,
-    /// What the picker shows.
-    pub name: &'static str,
-    /// The scheme as mapped. Its neutral layers only lend the page colour's
-    /// hue and tint: what the chrome wears is this [`Skin::stepped`].
-    pub skin: Skin,
-}
-
-/// The id of the skin a fresh install opens in, first in [`skins`].
-pub const DEFAULT_SKIN: &str = "tinta";
-
-/// Base16 schemes, [`DEFAULT_SKIN`] among them: id, name, `base00`..`base0F`.
-/// Values from tinted-theming/schemes (`base16/<id>.yaml`); the eight were
-/// picked from the whole dark set drawn on a mock of the settings pane.
-const BASE16: [(&str, &str, [u32; 16]); 8] = [
-    (
-        "berlin",
-        "Berlin",
-        [
-            0x000000, 0x0e0e0e, 0x181818, 0x333333, 0x707070, 0xcccccc, 0xd6d6d6, 0xffffff,
-            0x999999, 0xbbbbbb, 0xdddddd, 0xbbbbbb, 0xcccccc, 0x888888, 0xaaaaaa, 0x7a7a7a,
-        ],
-    ),
-    (
-        "corduroy-dark",
-        "Corduroy Dark",
-        [
-            0x141016, 0x1b151e, 0x221a26, 0x7d7082, 0x9a8d9e, 0xddd8df, 0xddd8df, 0x5a5160,
-            0xe8758a, 0xf0a89b, 0xf0bd9c, 0x55a0a0, 0xf0a89b, 0xdc92a3, 0xcf98c4, 0x9a8d9e,
-        ],
-    ),
-    (
-        "kissa-macchiato",
-        "Kissa Macchiato",
-        [
-            0x1f1c16, 0x35322d, 0x47443f, 0xb8a48c, 0xd4c4a8, 0xfaf0e6, 0xe8d5b7, 0xfef4e4,
-            0xe87777, 0xda9050, 0xeac67a, 0x8cb870, 0x6ab8b0, 0x7fa8d4, 0xb094cc, 0xcc88aa,
-        ],
-    ),
-    (
-        "outrun-dark",
-        "Outrun Dark",
-        [
-            0x00002a, 0x20204a, 0x30305a, 0x50507a, 0xb0b0da, 0xd0d0fa, 0xe0e0ff, 0xf5f5ff,
-            0xff4242, 0xfc8d28, 0xf3e877, 0x59f176, 0x0ef0f0, 0x66b0ff, 0xf10596, 0xf003ef,
-        ],
-    ),
-    (
-        "soft-server",
-        "Soft Server",
-        [
-            0x211e2a, 0x2c2737, 0x3f3951, 0x6e6780, 0x8a829e, 0xe4dee9, 0xf2e8f0, 0xffffff,
-            0xe965a5, 0xf4b870, 0xebde76, 0xb1f2a7, 0xb3f4f3, 0x95a6f4, 0xff79c6, 0xbd93f9,
-        ],
-    ),
-    (
-        "spaceduck",
-        "Spaceduck",
-        [
-            0x16172d, 0x1b1c36, 0x30365f, 0x686f9a, 0x818596, 0xecf0c1, 0xc1c3cc, 0xffffff,
-            0xe33400, 0xe39400, 0xf2ce00, 0x5ccc96, 0x00a3cc, 0x7a5ccc, 0xb3a1e6, 0xce6f8f,
-        ],
-    ),
-    (
-        "tinta",
-        "Tinta",
-        [
-            0x101012, 0x202023, 0x2c2c30, 0x62626a, 0x9d9c9d, 0xd8d6d0, 0xe3e1db, 0xeeece6,
-            0xd0726a, 0xe8843a, 0xc8b86a, 0x9aa890, 0x80b8b4, 0x8a9ab0, 0xb0a0b8, 0x4a4a50,
-        ],
-    ),
-    (
-        "tokyo-city-dark",
-        "Tokyo City Dark",
-        [
-            0x171d23, 0x1d252c, 0x28323a, 0x526270, 0xb7c5d3, 0xd8e2ec, 0xf6f6f8, 0xfbfbfd,
-            0xf7768e, 0xff9e64, 0xb7c5d3, 0x9ece6a, 0x89ddff, 0x7aa2f7, 0xbb9af7, 0xbb9af7,
-        ],
-    ),
-];
-
-/// Every selectable skin, [`DEFAULT_SKIN`] first.
-pub fn skins() -> &'static [SkinEntry] {
-    static SKINS: OnceLock<Vec<SkinEntry>> = OnceLock::new();
-    SKINS.get_or_init(|| {
-        let (default, rest): (Vec<_>, Vec<_>) = BASE16
-            .iter()
-            .map(|&(id, name, slots)| SkinEntry { id, name, skin: Skin::from_base16(slots) })
-            .partition(|entry| entry.id == DEFAULT_SKIN);
-        let original = SkinEntry { id: "original", name: "Original", skin: Skin::original() };
-        default.into_iter().chain([original]).chain(rest).collect()
-    })
-}
-
-/// Where the skin saved as `id` sits in [`skins`], if it is one.
-pub fn skin_index(id: &str) -> Option<usize> {
-    skins().iter().position(|entry| entry.id == id)
-}
-
-/// The skin in force: which of [`skins`], at which page lightness, and the
-/// stepped result, kept so a colour lookup is a copy rather than a remix.
+/// The skin in force: the dials, and the skin they make, kept so a colour
+/// lookup is a copy rather than a remix.
 #[derive(Clone, Copy)]
 struct Active {
-    index: usize,
-    lightness: f32,
+    dials: SkinDials,
     skin: Skin,
 }
 
@@ -415,36 +308,32 @@ thread_local! {
 }
 
 fn active() -> Active {
-    ACTIVE.get().unwrap_or_else(|| Active {
-        index: 0,
-        lightness: DEFAULT_LIGHTNESS,
-        skin: skins()[0].skin.stepped(DEFAULT_LIGHTNESS),
+    ACTIVE.get().unwrap_or_else(|| {
+        let dials = SkinDials::default();
+        Active { dials, skin: Skin::from_dials(dials) }
     })
 }
 
-/// Put `skins()[index]` in force on this thread, its page at `lightness`; an
-/// index past the end is the default. See the module doc for why this is per
-/// thread. Restepped only when the index or the lightness moved, the two
-/// things the stepped skin is made of.
-pub fn set_active_skin(index: usize, lightness: f32) {
-    let index = if index < skins().len() { index } else { 0 };
+/// Put the skin `dials` make in force on this thread. See the module doc for
+/// why this is per thread. Remade only when a dial moved, the dials being
+/// everything the skin is made of.
+pub fn set_active_skin(dials: SkinDials) {
     let current = active();
-    if (current.index, current.lightness) == (index, lightness) {
-        ACTIVE.set(Some(current));
-        return;
-    }
-    ACTIVE.set(Some(Active { index, lightness, skin: skins()[index].skin.stepped(lightness) }));
+    let next = if current.dials == dials {
+        current
+    } else {
+        Active { dials, skin: Skin::from_dials(dials) }
+    };
+    ACTIVE.set(Some(next));
 }
 
-/// The index and page lightness [`active_skin`] was stepped from, for a
-/// context to remember which skin its style was built in.
-pub fn active_skin_key() -> (usize, f32) {
-    let active = active();
-    (active.index, active.lightness)
+/// The dials [`active_skin`] was made from, for a context to remember which
+/// skin its style was built in.
+pub fn active_skin_key() -> SkinDials {
+    active().dials
 }
 
-/// The skin in force on this thread; [`DEFAULT_SKIN`]'s at
-/// [`DEFAULT_LIGHTNESS`] until one is set.
+/// The skin in force on this thread; the default dials' until one is set.
 pub fn active_skin() -> Skin {
     active().skin
 }

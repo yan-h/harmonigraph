@@ -1072,8 +1072,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "camera_presets",
         "fps_cap",
         "ui_scale",
-        "skin",
-        "skin_lightness",
+        "skin_dials",
         "perf_pos",
     ];
 
