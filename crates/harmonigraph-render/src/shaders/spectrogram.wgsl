@@ -306,6 +306,17 @@ struct Cloud {
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
+    memory_enabled: u32,
+    memory_valid: u32,
+    pickup_alpha: f32,
+    release_alpha: f32,
+    memory_shift: vec2<i32>,
+    memory_fraction: vec2<f32>,
+    previous_life: f32,
+    memory_pad_a: f32,
+    memory_pad_b: f32,
+    memory_pad_c: f32,
+    previous_slices: array<StarSlice, 5>,
 };
 struct StarSlice {
     offset: vec2<f32>,
@@ -320,6 +331,7 @@ struct StarSlice {
     origin: vec2<i32>,
     grid: vec2<i32>,
 };
+@group(1) @binding(9) var color_memory: texture_2d<f32>;
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
@@ -1497,7 +1509,7 @@ fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
 // and the life's fade as two half floats. The reciprocal is baked once per
 // star rather than divided out at every pixel in reach. It is never zero,
 // so w is zero exactly where there is no star.
-fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
+fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> {
     // The period is a power of two, so a mask IS the Euclidean wrap, negative
     // cells included, without `wrap_cell`'s integer divisions.
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
@@ -1518,7 +1530,11 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
     let level = star_level_at(at);
     // Over silence a star is not drawn at all, so a quiet pane is the floor
     // exactly rather than the floor with stars of the floor's colour on it.
-    if level <= 0.0 {
+    var held = vec4<f32>(0.0);
+    if cloud.memory_enabled != 0u {
+        held = textureLoad(color_memory, atlas_texel(index), 0);
+    }
+    if select(level, held.a, cloud.memory_enabled != 0u) <= 0.0 {
         return vec4<u32>(0u);
     }
     // Brightness rank and size. The rank's mean is `1 / (2 + 6 r)`; dividing
@@ -1526,12 +1542,17 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
     // spreads stars around the light rather than darkening the field.
     let c = star_hash(hashed, key + 1u);
     let randomness = cloud.star_randomness;
+    // Keep the immediate path's arithmetic intact through packing: moving
+    // these expressions into a memory branch changes Metal rounding by a byte.
     let colour = star_paint(level, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
     let size = exp((0.3 + 0.9 * randomness) * (c.y - 0.5) * 2.0);
     let sigma = min(s.sigma * size, s.cap) * s.defocus;
     // It fades in over the start of its life and out over the end.
     let fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
-    let tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
+    var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
+    if cloud.memory_enabled != 0u {
+        tens = vec3<u32>(round(gamma_from_linear_rgb(held.rgb) * 1023.0));
+    }
     return vec4<u32>(
         bitcast<u32>(centre.x),
         bitcast<u32>(centre.y),
@@ -1552,7 +1573,7 @@ fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
         let at = index - s.base;
         if at >= 0 && at < s.grid.x * s.grid.y {
             let local = vec2<i32>(at % s.grid.x, at / s.grid.x);
-            return star_bake(s, s.origin + local, 1000u + 3u * k);
+            return star_bake(s, s.origin + local, 1000u + 3u * k, index);
         }
     }
     return vec4<u32>(0u);
@@ -1673,6 +1694,86 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
     return out;
 }
 
+fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {
+    let bounded = clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0));
+    return select(1.055 * pow(bounded, vec3<f32>(1.0 / 2.4)) - 0.055, 12.92 * bounded, bounded <= vec3<f32>(0.0031308));
+}
+
+fn atlas_texel(index: i32) -> vec2<i32> {
+    return vec2<i32>(index & (STAR_ATLAS_WIDTH - 1), index >> STAR_ATLAS_SHIFT);
+}
+
+// RGB and scalar source level share one response coefficient. Releasing toward
+// silence interpolates recent RGB toward the palette floor, never along the ramp.
+fn remembered(current: vec4<f32>, previous: vec4<f32>) -> vec4<f32> {
+    let alpha = select(cloud.release_alpha, cloud.pickup_alpha, current.a > previous.a);
+    return mix(previous, current, alpha);
+}
+
+fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
+    let s = cloud.star_slices[k];
+    let salt = 1000u + 3u * k;
+    let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
+    let stagger = star_hash(hashed, salt + 2u).x;
+    let life = u32(floor(cloud.star_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
+    let key = salt + ((life + 1u) << 16u);
+    let a = star_hash(hashed, key);
+    let centre = 0.5 + STAR_JITTER * (a.xy - 0.5);
+    let at = (vec2<f32>(cell) + centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
+    let level = star_level_at(at);
+    let rank_draw = star_hash(hashed, key + 1u).x;
+    let rank = pow(rank_draw, 1.0 + 6.0 * cloud.star_randomness) * (2.0 + 6.0 * cloud.star_randomness);
+    let current = vec4<f32>(linear_from_gamma_rgb(star_paint(level, rank)), level);
+    if cloud.memory_valid == 0u { return current; }
+    let old_life = u32(floor(cloud.previous_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
+    let previous = cloud.previous_slices[k];
+    // Signed nearest periodic cell difference carries identity across drift's wrap.
+    let local = ((cell - previous.origin + STAR_HASH_PERIOD / 2) & vec2<i32>(STAR_HASH_PERIOD - 1)) - STAR_HASH_PERIOD / 2;
+    if old_life != life || any(local < vec2<i32>(0)) || any(local >= previous.grid) { return current; }
+    let index = previous.base + local.y * previous.grid.x + local.x;
+    return remembered(current, textureLoad(color_memory, atlas_texel(index), 0));
+}
+
+@fragment
+fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
+    let texel = vec2<i32>(floor(in.position.xy));
+    if cloud.cloud_style == 2u {
+        let index = texel.y * STAR_ATLAS_WIDTH + texel.x;
+        for (var k = 0u; k < STAR_SLICES; k += 1u) {
+            let s = cloud.star_slices[k];
+            let at = index - s.base;
+            if at >= 0 && at < s.grid.x * s.grid.y {
+                return star_memory(k, s.origin + vec2<i32>(at % s.grid.x, at / s.grid.x));
+            }
+        }
+        return vec4<f32>(0.0);
+    }
+    // The lattice is fixed in material coordinates. Only integer textureLoad
+    // copies enter feedback; drift never repeatedly bilinear-blurs held color.
+    let dimensions = vec2<i32>(textureDimensions(color_memory));
+    let grid = vec2<f32>(dimensions - 2);
+    let pt = (vec2<f32>(texel) + 0.5 - 1.0 - cloud.memory_fraction) / grid * cloud.size;
+    let level = cloud_tone_at(pt);
+    let current = vec4<f32>(linear_from_gamma_rgb(density_color(level).rgb), level);
+    let previous = texel + cloud.memory_shift;
+    if cloud.memory_valid == 0u || any(previous < vec2<i32>(0)) || any(previous >= dimensions) { return current; }
+    return remembered(current, textureLoad(color_memory, previous, 0));
+}
+
+// RGBA32F history requires no optional float-filtering device feature. Only
+// the final display resamples it; feedback always copies exact lattice texels.
+fn memory_color(uv: vec2<f32>) -> vec3<f32> {
+    let size = vec2<i32>(textureDimensions(color_memory));
+    let p = uv * vec2<f32>(size) - 0.5;
+    let lo = vec2<i32>(floor(p));
+    let f = fract(p);
+    let a = textureLoad(color_memory, clamp(lo, vec2<i32>(0), size - 1), 0).rgb;
+    let b = textureLoad(color_memory, clamp(lo + vec2<i32>(1, 0), vec2<i32>(0), size - 1), 0).rgb;
+    let c = textureLoad(color_memory, clamp(lo + vec2<i32>(0, 1), vec2<i32>(0), size - 1), 0).rgb;
+    let d = textureLoad(color_memory, clamp(lo + vec2<i32>(1, 1), vec2<i32>(0), size - 1), 0).rgb;
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     // There is no gate on the blur here, and there used to be: the light field
     // was only built when a softness was above zero, so the cloud quietly
@@ -1686,6 +1787,15 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
         return vec4<f32>(mix(density_color(level).rgb, star_color(pt), cloud.cloud_depth), 1.0);
+    }
+    if cloud.memory_enabled != 0u {
+        let dimensions = vec2<f32>(textureDimensions(color_memory));
+        let uv = (pt / cloud.size * (dimensions - 2.0) + 1.0 + cloud.memory_fraction) / dimensions;
+        let held = memory_color(uv);
+        // Memory is RGB, so its partial Texture mix is a bounded linear-light
+        // blend. Both response times zero retain the original scalar mix below.
+        let base = linear_from_gamma_rgb(density_color(level).rgb);
+        return vec4<f32>(gamma_from_linear_rgb(mix(base, held, cloud.cloud_depth)), 1.0);
     }
     // Either the walk under this pixel, or one bilinear tap into what
     // `fs_cloud_tone` already walked. The palette lookup and the mix stay HERE

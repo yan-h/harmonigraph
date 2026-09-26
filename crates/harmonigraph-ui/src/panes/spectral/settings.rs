@@ -115,11 +115,21 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 .on_hover_text(
                     "How strongly the texture replaces the original picture. 0% removes the \
                      texture; 100% uses only the texture. Mosaic and Watercolor displace levels, \
-                     then Contours and the palette apply; Stars replaces the picture with a \
+                     then Contours and the palette apply. With Color memory, their recent colors blend in linear light; Stars replaces the picture with a \
                      starfield colored from the palette. Reads whatever the softness above \
                      leaves: with none, the measured picture itself.",
                 );
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+                for (value, label) in [
+                    (&mut atmosphere.color_pickup, "Color pickup"),
+                    (&mut atmosphere.color_release, "Color release"),
+                ] {
+                    ValueBar::new(value, 0.0..=harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX, label)
+                        .eased(true)
+                        .unit(1.0, " s")
+                        .show(ui)
+                        .on_hover_text("Color memory time in seconds. Pickup follows brighter sound; Release retains recent color as sound fades. After one time constant, 37% remains. Both zero restores immediate color. Shared by all textures.");
+                }
                 // Two constructions rather than two presets of one, so the dials below
                 // the shared three are per style: nothing a wash carries means anything
                 // to a refracting scale, and the page would otherwise be a list of controls

@@ -48,6 +48,7 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "vs_cloud_tile",
     "fs_cloud_tile",
     "fs_star_bake",
+    "fs_color_memory",
 ];
 
 /// The stored-dB grid the shader reads: `capacity` slots of `bins` bytes, slab
@@ -720,29 +721,31 @@ impl CallbackTrait for SpectrogramCallback {
                         pane.cloud.as_ref().and_then(atmosphere::Targets::star_size),
                     )
                 });
-                // Any of the three sizes rebuilds the whole set, and that is
-                // deliberate: nothing here is retained across frames — every
-                // target is refilled every frame — so a rebuild costs an
-                // allocation and no picture. The tone size moves on a pane
-                // resize or a change of display scale and on nothing else,
-                // where the LIGHT size follows the musical radius and would
-                // otherwise be reallocated through every zoom and Span drag,
-                // which is what `retained_size` is here to stop.
-                //
-                // The TILE is the exception to "refilled every frame": filling
-                // it is a whole cell walk, tens of milliseconds. So it is
-                // carried across a rebuild whenever its texels are unchanged —
-                // a zoom reallocates the light around a tile that keeps its
-                // bake — and `tile_owes` decides separately whether the walk in
-                // it is still the one this frame wants.
+                // Light, reduced tone, tile and history have separate sizing
+                // rules. Rebuild bind groups when any allocation changes, but
+                // carry the tile bake and color history when their own sizes
+                // still fit. A scalar-field resize must not erase color memory.
+                let memory_size = (settings.settings.effects().cloud
+                    && (settings.settings.color_pickup > 0.0
+                        || settings.settings.color_release > 0.0))
+                    .then(|| {
+                        star_size.unwrap_or_else(|| {
+                            tone_size
+                                .unwrap_or(pixels)
+                                .map(|n| (n + 2).min(device.limits().max_texture_dimension_2d))
+                        })
+                    });
                 let texels = tile.map(atmosphere::TileKey::texels);
                 let resize = pane.cloud.as_ref().is_none_or(|c| {
                     c.size != size
                         || c.tone_size() != tone_size
                         || c.tile_texels() != texels
                         || c.star_size() != star_size
+                        || c.memory_size() != memory_size
                 });
                 if resize {
+                    let carried_memory =
+                        pane.cloud.as_mut().and_then(atmosphere::Targets::take_memory);
                     let carried = pane
                         .cloud
                         .take()
@@ -754,12 +757,24 @@ impl CallbackTrait for SpectrogramCallback {
                         tile,
                         carried,
                         stars: star_size,
+                        memory: memory_size,
+                        carried_memory,
                     };
                     pane.cloud =
                         Some(atmosphere::Targets::new(device, cloud, wanted, layout, grid, lut));
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
-                target.update(queue, uniforms, rect, ppp, settings, tile, stars);
+                target.update(
+                    queue,
+                    uniforms,
+                    rect,
+                    ppp,
+                    settings,
+                    tile,
+                    stars,
+                    self.shades.lut.clone(),
+                    self.grid.first_key + self.grid.run.len() as i64,
+                );
                 // Terraces alone still need their transfer/composite, but the
                 // one-pixel source would integrate the whole history only for
                 // the composite to discard that expensive result. A cloud is
@@ -859,6 +874,7 @@ impl CallbackTrait for SpectrogramCallback {
                             target.tile_baked(key);
                         }
                     }
+                    target.remember(egui_encoder, cloud);
                     // Every star on screen this frame, after the material
                     // pass because each reads the finished light under it.
                     if let Some((view, group)) = target.star_pass() {
@@ -889,8 +905,11 @@ impl CallbackTrait for SpectrogramCallback {
                     // same coverage quad, and only when display scale calls for a
                     // reduction — at the fresh size there is no target and the
                     // composite reads the tile under each pixel itself.
-                    if let Some(((tone_view, _), tone_group)) =
-                        target.tone.as_ref().zip(target.tone_group.as_ref())
+                    if let Some(((tone_view, _), tone_group)) = target
+                        .tone
+                        .as_ref()
+                        .filter(|_| target.memory_size().is_none())
+                        .zip(target.tone_group.as_ref())
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
@@ -923,6 +942,11 @@ impl CallbackTrait for SpectrogramCallback {
             }
         }
 
+        if !pane.cloud_ready {
+            if let Some(target) = pane.cloud.as_mut() {
+                target.invalidate_memory();
+            }
+        }
         Vec::new()
     }
 
@@ -967,7 +991,7 @@ impl CallbackTrait for SpectrogramCallback {
             // replaces its own pixels with the unified core and soft field.
             render_pass.set_pipeline(&pipelines.backdrop);
             render_pass.set_bind_group(0, bind_group, &[]);
-            render_pass.set_bind_group(1, &cloud.composite_group, &[]);
+            render_pass.set_bind_group(1, cloud.composite_group(), &[]);
             render_pass.set_vertex_buffer(0, cloud.coverage_vertices.slice(..));
             render_pass.draw(0..6, 0..1);
             render_pass.set_pipeline(&pipelines.composite);
@@ -1174,7 +1198,7 @@ mod tests {
         }
 
         /// Every stored byte set to `value`, over the same extent.
-        fn fill(&mut self, value: u8) {
+        pub(super) fn fill(&mut self, value: u8) {
             self.set_bytes(&vec![value; self.run.len() * self.bins as usize]);
         }
     }
@@ -1388,7 +1412,7 @@ mod tests {
 
     /// One `prepare` of `cb` against `resources`, submitted — the unit a
     /// pane's age is measured in.
-    fn prepare_once(
+    pub(super) fn prepare_once(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         resources: &mut CallbackResources,
@@ -1440,7 +1464,7 @@ mod tests {
 
     /// Broad bands give both displacement fields detail to move, on both axes.
     /// Per-bucket noise alone averages almost flat under the fixture's footprint.
-    fn refracted_fixture() -> SpectrogramCallback {
+    pub(super) fn refracted_fixture() -> SpectrogramCallback {
         let mut cb = cloud_fixture();
         let bytes: Vec<u8> = (0..cb.grid.bytes().len())
             .map(|i| [20, 80, 150, 230][(i / BINS as usize + (i % BINS as usize) / 96) % 4])
@@ -1482,6 +1506,8 @@ mod tests {
                 {
                     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                     s.cloud_style = style;
+                    s.color_pickup = 0.0;
+                    s.color_release = 0.0;
                     s.contour_strength = 1.0;
                 }
                 for (soft, contours) in [(false, 0.0), (false, 1.0), (true, 1.0)] {
@@ -1734,6 +1760,8 @@ mod tests {
                 // they measure.
                 contour_strength: 0.0,
                 cloud_depth: 0.0,
+                color_pickup: 0.0,
+                color_release: 0.0,
                 ..Default::default()
             },
             region: cb.rect,
