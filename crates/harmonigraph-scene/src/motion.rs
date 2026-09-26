@@ -232,6 +232,11 @@ impl Motion {
         self.bass.advance(dt, env);
     }
 }
+/// The octave slot a held pitch lights on the node at `cents`, inside the
+/// node's `(lo, hi)` slots.
+fn slot_of(lo: i32, hi: i32, cents: f32, pitch: f32) -> usize {
+    (((pitch - cents / 100.0) / 12.0).round() as i32).clamp(lo, hi).clamp(0, 10) as usize
+}
 fn delays(
     layout: &OctaveLayout,
     cents: f32,
@@ -263,7 +268,6 @@ impl NodeMotion {
             let motion = self.nodes.entry(node.lattice_pos).or_default();
             let (lo, hi) = scene.octave_layout.slots(node.cents);
             motion.targets = [0.0; 11];
-            let mut readings = [None::<IntensityReading>; 11];
             let mut melody = None;
             let mut bass = None;
             let mut preexisting = false;
@@ -272,22 +276,15 @@ impl NodeMotion {
                     continue;
                 }
                 preexisting |= self.at.is_some_and(|at| f64::from_bits(id.1) < at);
-                let slot = (((held.pitch - node.cents / 100.0) / 12.0).round() as i32)
-                    .clamp(lo, hi)
-                    .clamp(0, 10) as usize;
-                // Activation measures occupancy; intensity rides beside it.
+                let slot = slot_of(lo, hi, node.cents, held.pitch);
+                // Activation measures occupancy; intensity rides beside it,
+                // in `read_slots`.
                 motion.targets[slot] = 1.0;
-                readings[slot] = Some(readings[slot].map_or(held.reading, |r| r.max(held.reading)));
                 if Some(held.pitch) == high {
                     melody = Some(slot);
                 }
                 if Some(held.pitch) == low {
                     bass = Some(slot);
-                }
-            }
-            for (slot, reading) in readings.into_iter().enumerate() {
-                if let Some(reading) = reading {
-                    motion.readings[slot] = reading;
                 }
             }
             motion.melody.target(melody, mark_delay(view));
@@ -368,6 +365,30 @@ impl NodeMotion {
                 motion.levels = motion.targets;
                 motion.melody.advance(f64::from(duration + mark_delay(view)), env);
                 motion.bass.advance(f64::from(duration + mark_delay(view)), env);
+            }
+        }
+        self.read_slots(scene, tuning);
+    }
+    /// Each slot's reading from the held notes lighting it: the largest each
+    /// display gets. A slot none lights keeps its last, so a release fades from
+    /// where its note left off. Touches nothing else, so a replay can bring a
+    /// note to its reading at the off without moving any gate.
+    fn read_slots(&mut self, scene: &Scene, tuning: &Tuning) {
+        for node in &scene.nodes {
+            let Some(motion) = self.nodes.get_mut(&node.lattice_pos) else {
+                continue;
+            };
+            let node_class = PitchClass::from_cents(node.cents);
+            let (lo, hi) = scene.octave_layout.slots(node.cents);
+            let mut readings = [None::<IntensityReading>; 11];
+            for held in self.held.values().filter(|held| tuning.matches(held.class, node_class)) {
+                let slot = slot_of(lo, hi, node.cents, held.pitch);
+                readings[slot] = Some(readings[slot].map_or(held.reading, |r| r.max(held.reading)));
+            }
+            for (slot, reading) in readings.into_iter().enumerate() {
+                if let Some(reading) = reading {
+                    motion.readings[slot] = reading;
+                }
             }
         }
     }
@@ -522,7 +543,6 @@ impl NodeMotion {
             self.advance(time - at, env);
             // Bring each note ending here to its reading at the off while it is
             // still held, so its slot keeps that one once the off removes it.
-            // The held set is unchanged, so this gate pass moves no gate.
             let mut ending = false;
             for edge in edges[index..].iter().take_while(|e| e.at == time) {
                 if let (None, Some(held), Some(&reading)) =
@@ -533,7 +553,7 @@ impl NodeMotion {
                 }
             }
             if ending {
-                self.gates(scene, tuning, view, env, fade, tracker, now, false);
+                self.read_slots(scene, tuning);
             }
             // Equal-time off/on edges form one gate update, so a replacement
             // key cannot falsely end an otherwise continuous node presence.
