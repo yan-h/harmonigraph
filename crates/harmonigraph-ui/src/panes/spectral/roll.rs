@@ -409,7 +409,7 @@ fn roll_instances_with_floor(
     let widest = if intensity.routes_to(IntensityTarget::Thickness) {
         intensity.thickness_max.max(1.0)
     } else {
-        1.0
+        intensity.thickness_base.max(1.0)
     };
 
     // Cull to the visible window BEFORE sorting: the roll can remember
@@ -1251,8 +1251,8 @@ mod tests {
         // From an opacity of 0 at rest, so the fade IS the pressure.
         let fade = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
-                target: harmonigraph_scene::IntensityTarget::Opacity,
-                weight: 1.0,
+                opacity: Some(1.0),
+                ..Default::default()
             },
             opacity_rest: 0.0,
             ..Default::default()
@@ -1286,11 +1286,11 @@ mod tests {
         // stand under the most a note blooms.
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
-                target: harmonigraph_scene::IntensityTarget::Glow,
-                ..fade.pressure
+                glow: fade.pressure.opacity,
+                ..Default::default()
             },
             glow_base: 0.5,
-            ..fade
+            ..Default::default()
         };
         let bar = state.appearance.view.intensity.glow_base;
         let share = |[a, b]: [f32; 2]| [(bar + a) / bar, (bar + b) / bar];
@@ -1305,10 +1305,10 @@ mod tests {
         // the piece beside it and held at its own end past the note's two.
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
-                target: harmonigraph_scene::IntensityTarget::Thickness,
-                ..fade.pressure
+                thickness: fade.pressure.opacity,
+                ..Default::default()
             },
-            ..fade
+            ..Default::default()
         };
         let thick = instances(&state, 1.0);
         assert_eq!(thick.len(), 2);
@@ -1335,8 +1335,8 @@ mod tests {
         state.appearance.spectrum.roll_thickness = 2.0;
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
-                target: harmonigraph_scene::IntensityTarget::Thickness,
-                weight: 2.0,
+                thickness: Some(2.0),
+                ..Default::default()
             },
             thickness_max: 3.0,
             ..Default::default()
@@ -1360,6 +1360,12 @@ mod tests {
         // swelled to three times that it reaches back onto it.
         press(&mut state, 81);
         assert!(!instances(&state, 1.0).is_empty(), "a note swelled onto the zoom was culled");
+        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
+            thickness_base: 3.0,
+            thickness_max: 3.0,
+            ..Default::default()
+        };
+        assert!(!instances(&state, 1.0).is_empty(), "an unrouted base reaches onto the zoom too");
         state.appearance.view.intensity = Default::default();
         assert!(instances(&state, 1.0).is_empty(), "the fixture's note reaches the zoom at rest");
     }

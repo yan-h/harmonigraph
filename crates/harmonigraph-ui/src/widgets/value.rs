@@ -77,6 +77,8 @@ fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
 
 pub struct ValueBar<'a> {
     value: &'a mut f32,
+    color: Option<Color32>,
+    overlay_slot: Option<&'a mut Option<egui::layers::ShapeIdx>>,
     range: RangeInclusive<f32>,
     label: &'a str,
     /// Ease the low end of the range (geometric when min > 0, cubic
@@ -113,6 +115,8 @@ impl<'a> ValueBar<'a> {
     pub fn new(value: &'a mut f32, range: RangeInclusive<f32>, label: &'a str) -> Self {
         ValueBar {
             value,
+            color: None,
+            overlay_slot: None,
             range,
             label,
             eased: false,
@@ -126,6 +130,21 @@ impl<'a> ValueBar<'a> {
             curve: None,
             swatch: None,
         }
+    }
+
+    /// Tint the value fill while retaining the normal well and interaction states.
+    pub fn color(mut self, color: Color32) -> Self {
+        self.color = Some(color);
+        self
+    }
+
+    /// Reserve paint between the fill and text for a caller that needs values
+    /// edited by later controls in this frame. Text entry and off-screen bars
+    /// leave no slot; callers must keep their shapes within the returned rect.
+    pub(crate) fn overlay_slot(mut self, slot: &'a mut Option<egui::layers::ShapeIdx>) -> Self {
+        *slot = None;
+        self.overlay_slot = Some(slot);
+        self
     }
 
     pub fn eased(mut self, on: bool) -> Self {
@@ -324,7 +343,7 @@ impl<'a> ValueBar<'a> {
         }
     }
 
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(mut self, ui: &mut Ui) -> Response {
         #[cfg(test)]
         super::range_probe::record(self.label, &[*self.value], &self.range);
         let scale = theme::ui_scale(ui.ctx());
@@ -412,11 +431,27 @@ impl<'a> ValueBar<'a> {
                 colour_of(self.value_at((x - travel.left()) / travel.width().max(1.0)))
             });
         } else {
-            let fill_color = track_fill(&response);
+            let fill_color = self.color.map_or_else(
+                || track_fill(&response),
+                |color| {
+                    let strength = if response.dragged() {
+                        0.7
+                    } else if response.hovered() {
+                        0.6
+                    } else {
+                        0.5
+                    };
+                    theme::well().lerp_to_gamma(color, strength)
+                },
+            );
             let fill = filled_part(rect, rect.left() + rect.width() * t, bar_radius(scale));
             if !fill.is_empty() {
                 painter.add(egui::Shape::convex_polygon(fill, fill_color, egui::Stroke::NONE));
             }
+        }
+
+        if let Some(slot) = self.overlay_slot.as_deref_mut() {
+            *slot = Some(painter.add(egui::Shape::Noop));
         }
 
         // Over the fill and under the text: the fill is what the curve is
