@@ -1789,8 +1789,12 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     use harmonigraph_scene::AtmosphereSettings;
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.atmosphere =
-        AtmosphereSettings { nebula_depth: 0.45, breath_speed: 2.2, ..Default::default() };
+    state.picture.appearance.view.atmosphere = AtmosphereSettings {
+        material: harmonigraph_scene::LatticeMaterial::Fibres,
+        nebula_depth: 0.45,
+        breath_speed: 2.2,
+        ..Default::default()
+    };
     let saved = state.save_persist();
     let full = ron::to_string(&state.picture.appearance.view.atmosphere).unwrap();
     let retired = format!("(wide_strength:0.9,wide_spread:6.0,{}", &full[1..]);

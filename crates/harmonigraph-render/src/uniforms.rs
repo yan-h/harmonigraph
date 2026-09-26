@@ -122,7 +122,8 @@ uniform_group! {
         scale: f32,
         drift: Float2,
         target_size: Float2,
-        padding: Float2,
+        material: u32,
+        padding: f32,
     }
 }
 uniform_group! {

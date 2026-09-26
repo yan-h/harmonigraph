@@ -563,10 +563,24 @@ impl SpectralAtmosphere {
     }
 }
 
+/// A material in the combined lattice light, independent of note ink and history.
+/// Discriminants are the shader's material selector; Clouds keeps the existing look.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[repr(u32)]
+pub enum LatticeMaterial {
+    #[default]
+    Clouds = 0,
+    Fibres = 1,
+    Liquid = 2,
+    Contours = 3,
+    Interference = 4,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
     pub enabled: bool,
+    pub material: LatticeMaterial,
     pub nebula_depth: f32,
     pub nebula_scale: f32,
     pub nebula_speed: f32,
@@ -578,6 +592,7 @@ impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
             enabled: true,
+            material: LatticeMaterial::Clouds,
             nebula_depth: 0.139_642_13,
             nebula_scale: 0.581_716_2,
             nebula_speed: 1.0,

@@ -100,6 +100,11 @@ impl GpuLayout for f32 {
         Layout::of::<Self>(Kind::Scalar(naga::Scalar::F32))
     }
 }
+impl GpuLayout for u32 {
+    fn layout() -> Layout {
+        Layout::of::<Self>(Kind::Scalar(naga::Scalar::U32))
+    }
+}
 impl GpuLayout for Float2 {
     fn layout() -> Layout {
         Layout::of::<Self>(Kind::Vector(naga::Scalar::F32, naga::VectorSize::Bi))
