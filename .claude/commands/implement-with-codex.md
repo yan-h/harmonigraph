@@ -125,5 +125,5 @@ What a review finds here is fixed here —
 do not send the finding back as a second task unless the fix is genuinely another implementation job.
 
 Finish the change the way every change finishes:
-committed, pushed, and open as a **draft** PR that says what Codex wrote,
-then merged by this session at `CLEAN` the way `AGENTS.md` says.
+committed, pushed, and open as a **draft** PR that says what Codex wrote.
+Yan merges, nothing else does.

@@ -1,6 +1,6 @@
 ---
 name: pr-hygiene
-description: How review, squashing, self-merging and agent definitions work in this repo. Use when opening or merging a PR, deciding squash vs merge commit, or considering adding an agent to .claude/agents/.
+description: How review, squashing, and agent definitions work in this repo. Use when opening or merging a PR, deciding squash vs merge commit, or considering adding an agent to .claude/agents/.
 ---
 
 # Review happens at the merge boundary, not on the branch
@@ -68,14 +68,11 @@ The shared skill reads the combined diff and keeps a `last-merge-audit` tag so c
 
 ## Squash by default; merge-commit the exception
 
-**A session merges its own PR, without asking,** once `mergeStateStatus` is `CLEAN` (Yan's call, 2026-09-25, picture changes included).
-That makes the merge boundary above the session's rather than his:
-`AGENTS.md` holds the line for which diffs owe `code-review` before merging, and the examples above say where it earns its cost.
-The session waits out CI itself rather than handing Yan a green PR to press a button on.
+**When Yan says "merge it", he can say it while CI is still running:** the session waits and merges once `mergeStateStatus` is clean, so he is not coming back at green to press a button.
 Not `gh pr merge --auto --squash` — `main` carries no branch protection and no rulesets, so no check is *required*, and GitHub's auto-merge waits on required checks alone; it would merge a mergeable PR at once rather than at green (#943 holds the measurement and why that was rejected).
 `mergeStateStatus` is the better gate regardless, because it accounts for every check including `Metal shader assets`, whose `paths:` filter keeps it off most PRs and therefore out of any required-checks scheme — the `UNSTABLE`-while-`Full CI`-is-green case CLAUDE.md warns about.
-What holds a merge is a word from Yan, an unmerged base PR, or a state that will not reach `CLEAN` —
-never the merge itself.
+The rule is unchanged:
+nothing merges unless he asks.
 
 **Squash a PR unless its commits are separable.** The question is not how many there are —
 #97 had eight and was squashed, #95 had about seven and took a merge commit.
