@@ -1,0 +1,26 @@
+   Compiling harmonigraph-render v0.4.0 (/Users/yan/.codex/worktrees/stars-shader-perf/harmonigraph/crates/harmonigraph-render)
+    Finished `release` profile [optimized] target(s) in 11.80s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-964614a034f398d1)
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 3840x2160 px at 2 px/pt, 1024 slabs of 3828 buckets
+first old-bracket reversal implemented 10s: [755346861200333, 755346861216291, 755346861559875, 755346861909625, 755346861741708, 755346878132166, 755346861668875, 755346861970916]
+first old-bracket reversal two_by_two 10s: [755346879908791, 755346879936166, 755346880335250, 755346880604250, 755346880525000, 755346888930625, 755346880505708, 755346880626583]
+first old-bracket reversal three_layers 10s: [755346891307916, 755346891407958, 755346891686333, 755346893111291, 755346891886791, 755346903018875, 755346891806083, 755346893183041]
+first old-bracket reversal two_by_two_three 10s: [755346967583083, 755346967632083, 755346967976416, 755346969199708, 755346968119208, 755346973785916, 755346968097166, 755346969285041]
+first old-bracket reversal two_by_two_less_jitter 10s: [755347034245166, 755347034274958, 755347034603666, 755347034975250, 755347034784708, 755347044558500, 755347034710666, 755347035070041]
+case                                    fill   span s    light med/min    paint med/min     wall med/min    end/full  begin/full     old med  rev new/old    CPU prep  source px
+implemented                             1.00     10.0     0.57/   0.00    16.29/   6.77    19.19/  14.45      17.167      17.344       0.000     0/80         0.118  Some([167, 549])
+  implemented 10.0s GPU min/p10/med/p90/max begin/full=13.341/14.316/17.298/19.828/21.569 end/full=13.278/13.979/17.107/19.652/21.542 old=0.000/0.000/0.000/0.093/0.200
+two_by_two                              1.00     10.0     0.54/   0.00     8.62/   0.02    10.96/   8.81       9.202       9.352       0.000     0/88         0.122  Some([167, 549])
+  two_by_two 10.0s GPU min/p10/med/p90/max begin/full=7.477/7.759/9.297/10.519/12.030 end/full=7.465/7.728/9.177/10.479/11.978 old=0.000/0.000/0.000/0.059/0.168
+three_layers                            1.00     10.0     0.58/   0.00     9.90/   0.01    12.55/   9.37      10.592      10.637       0.000     0/83         0.118  Some([167, 549])
+  three_layers 10.0s GPU min/p10/med/p90/max begin/full=8.328/8.898/10.635/12.134/14.771 end/full=8.168/8.702/10.591/11.912/14.751 old=0.000/0.000/0.000/0.088/0.195
+two_by_two_three                        1.00     10.0     0.64/   0.00     5.53/   0.00     7.99/   6.28       6.312       6.391       0.000     0/83         0.119  Some([167, 549])
+  two_by_two_three 10.0s GPU min/p10/med/p90/max begin/full=4.832/5.211/6.380/7.195/8.913 end/full=4.781/5.115/6.307/7.151/8.868 old=0.000/0.000/0.000/0.078/0.205
+two_by_two_less_jitter                  1.00     10.0     0.65/   0.00     8.55/   0.00    11.07/   8.97       9.386       9.498       0.000     0/81         0.115  Some([167, 549])
+  two_by_two_less_jitter 10.0s GPU min/p10/med/p90/max begin/full=7.627/8.060/9.455/11.033/11.985 end/full=7.584/7.996/9.364/10.974/11.955 old=0.000/0.000/0.000/0.090/0.555
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 342 filtered out; finished in 14.12s

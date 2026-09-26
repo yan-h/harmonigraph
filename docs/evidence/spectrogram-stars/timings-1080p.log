@@ -1,0 +1,23 @@
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 1920x1080 px at 2 px/pt, 1024 slabs of 3828 buckets
+first old-bracket reversal two_by_two_less_jitter 10s: [755401924675416, 755401924728875, 755401924948583, 755401925263625, 755401925133416, 755401927322958, 755401925006333, 755401925298833]
+first old-bracket reversal three_layers 10s: [755401933293125, 755401933346375, 755401933566208, 755401933815666, 755401933737500, 755401937318875, 755401933680750, 755401933857833]
+first old-bracket reversal two_by_two 10s: [755401938392666, 755401938426708, 755401938844166, 755401939207916, 755401939064958, 755401941269458, 755401938951291, 755401939329041]
+first old-bracket reversal implemented 10s: [755401943696916, 755401943725250, 755401944077333, 755401944397833, 755401944311458, 755401947851416, 755401944183041, 755401944419083]
+first old-bracket reversal two_by_two_three 10s: [755401955044166, 755401955072791, 755401955830500, 755401957343916, 755401956049375, 755401958703083, 755401955942375, 755401957419875]
+case                                    fill   span s    light med/min    paint med/min     wall med/min    end/full  begin/full     old med  rev new/old    CPU prep  source px
+two_by_two_less_jitter                  1.00     10.0     0.52/   0.00     2.19/   0.00     4.96/   3.40       2.766       2.917       0.000     0/72         0.114  Some([167, 549])
+  two_by_two_less_jitter 10.0s GPU min/p10/med/p90/max begin/full=2.473/2.520/2.899/3.988/4.891 end/full=1.998/2.481/2.763/3.911/4.215 old=0.000/0.000/0.000/0.108/0.277
+two_by_two_three                        1.00     10.0     0.57/   0.00     1.40/   0.00     3.46/   3.00       2.010       2.077       0.000     0/71         0.115  Some([167, 549])
+  two_by_two_three 10.0s GPU min/p10/med/p90/max begin/full=1.829/1.848/2.075/3.287/3.659 end/full=1.782/1.790/2.007/3.259/3.630 old=0.000/0.000/0.000/0.100/0.152
+three_layers                            1.00     10.0     0.55/   0.00     2.43/   0.00     4.98/   4.09       2.999       3.169       0.000     0/82         0.107  Some([167, 549])
+  three_layers 10.0s GPU min/p10/med/p90/max begin/full=2.714/2.845/3.163/4.248/4.681 end/full=2.671/2.728/2.998/4.233/4.654 old=0.000/0.000/0.000/0.091/0.398
+two_by_two                              1.00     10.0     0.59/   0.00     2.17/   0.01     4.94/   3.34       2.795       2.850       0.000     0/82         0.116  Some([167, 549])
+  two_by_two 10.0s GPU min/p10/med/p90/max begin/full=2.463/2.494/2.849/4.002/4.365 end/full=2.053/2.446/2.772/3.973/4.335 old=0.000/0.000/0.000/0.075/0.569
+implemented                             1.00     10.0     0.55/   0.00     3.86/   0.00     6.52/   4.86       4.521       4.612       0.000     0/69         0.110  Some([167, 549])
+  implemented 10.0s GPU min/p10/med/p90/max begin/full=3.981/4.182/4.607/5.643/5.952 end/full=3.935/4.126/4.501/5.611/5.906 old=0.000/0.000/0.000/0.071/0.484
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 342 filtered out; finished in 8.66s
