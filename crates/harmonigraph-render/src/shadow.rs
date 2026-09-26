@@ -257,7 +257,7 @@ impl ShadowBox {
         ],
     };
 
-    /// After a roll instance's ten attributes, for rasterizing its box SDF
+    /// After a roll instance's eleven attributes, for rasterizing its box SDF
     /// into a Gaussian cell.
     pub(crate) const BESIDE_ROLL: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,

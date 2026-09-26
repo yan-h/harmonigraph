@@ -168,13 +168,16 @@ pub struct RollInstance {
     /// [`center`](Self::center) in points: [`WHOLE`](Self::WHOLE) for the
     /// whole box, or one PIECE of it.
     ///
-    /// Pieces are how a note's opacity and glow follow its playing along a segment:
-    /// the caller hands over the segment's box once per piece, each with the
-    /// same geometry and a span of its own, and the spans tile the box. So the
-    /// outline, the lead and the cap are the segment's exactly, and no piece
-    /// has an end of its own for an outline to wrap. `vs_note` cuts the quad at
-    /// the span, so two pieces meet on one shared edge and every pixel is
-    /// drawn by one of them.
+    /// Pieces are how a note's opacity, glow and thickness follow its playing
+    /// along a segment: the caller hands over the segment's box once per
+    /// piece, each with the same geometry and a span of its own, and the spans
+    /// tile the box. So the outline, the lead and the cap are the segment's,
+    /// and no piece has an end of its own for an outline to wrap — exactly,
+    /// while the width holds still, and near a cut to within what a piece can
+    /// see of its neighbours when it does not (see
+    /// [`taper_depth`](Self::taper_depth)). `vs_note` cuts the quad at the
+    /// span, so two pieces meet on one shared edge and every pixel is drawn by
+    /// one of them.
     pub span: [f32; 2],
     /// The two depth offsets [`fade`](Self::fade) and [`glow`](Self::glow)
     /// are given at; each is a straight line between them, held past either
@@ -193,15 +196,17 @@ pub struct RollInstance {
     /// The middle two are this piece's own ends and the outer two its
     /// neighbouring pieces' far ends, or a step's other side where one stands
     /// at a cut, so the outline near a cut is measured against the shape the
-    /// piece beside it draws. [`UNTAPERED`](Self::UNTAPERED) for a ribbon
-    /// whose width holds still.
+    /// piece beside it draws. Beyond them a piece cannot see, so a neighbour
+    /// shorter than the outline's reach can leave the outline a step at the
+    /// cut. Read only while [`taper`](Self::taper) moves.
     pub taper_depth: [f32; 4],
     /// The ribbon's width at each of the four [`taper_depth`](Self::taper_depth)
     /// depths, as a share of its full [`half_extent`](Self::half_extent)
     /// across pitch: straight lines between them, held past both ends, and
     /// growing about the center line. The body, the outline standing off it,
     /// the shadow and the bloom all follow the tapered shape, and its distance
-    /// is still the true one.
+    /// is still the true one. [`UNTAPERED`](Self::UNTAPERED) for a ribbon
+    /// at full width all along.
     pub taper: [f32; 4],
 }
 
