@@ -1362,9 +1362,11 @@ mod tests {
     /// the offsets themselves are in each slice's own cells.
     #[test]
     fn stars_drift_with_parallax_at_the_prototypes_pace() {
+        // Held at the prototype's parallax, which is what the pace below is
+        // stated against, whatever the fresh far speed is.
         let fresh = harmonigraph_scene::SpectralAtmosphere {
             cloud_direction: 0.0,
-            cloud_speed: 1.0,
+            star_far_speed: 0.15,
             ..Default::default()
         };
         let travelled = |settings, now| {
@@ -1425,6 +1427,10 @@ mod tests {
         };
         close(second, first);
         close(at(220.0, 0.0, 10_000.0), phase);
+        close(
+            travelled(harmonigraph_scene::SpectralAtmosphere::default().cloud_direction),
+            [1.0, -0.625],
+        );
     }
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
@@ -1496,10 +1502,8 @@ mod tests {
                 [1920, 1081],
                 ppp,
                 SpectrogramAtmosphere {
-                    // A reducible style: Stars is always native.
                     settings: harmonigraph_scene::SpectralAtmosphere {
                         cloud_depth,
-                        cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
                         ..Default::default()
                     },
                     region: egui::Rect::ZERO,

@@ -813,10 +813,9 @@ impl Default for ShadowSettings {
     /// a group PRESENT with one field missing fills that field from
     /// [`ShadowStyle::default`] instead, which is written out there.
     ///
-    /// The picture captured from the DAW on 2026-09-13, with the spectral
-    /// groups turned Gaussian and the geometry widened on 2026-09-25: Gaussian
-    /// shadows for every group. Falloff uses an early normalized exponential
-    /// since the signed-curve redesign.
+    /// The picture captured from the DAW on 2026-09-13: Gaussian shadows for
+    /// lattice ink and distance shadows for the spectral pictures. Falloff
+    /// uses an early normalized exponential since the signed-curve redesign.
     fn default() -> ShadowSettings {
         ShadowSettings {
             // Broad and shallow: the node's rings and marks stand in a soft
@@ -837,14 +836,14 @@ impl Default for ShadowSettings {
             // Nine tenths deep under the roll's ribbons and the spiral's dots,
             // and wide enough to lift them off the heatmap.
             spectral_geometry: ShadowStyle {
-                kernel: ShadowKernel::Gaussian,
-                width: 1.192_405_8,
+                kernel: ShadowKernel::Distance,
+                width: 0.917_033_8,
                 depth: 0.912_995_6,
                 falloff: -4.0,
             },
             // Nearly full depth under the spectral pane's names and axis labels.
             spectral_text: ShadowStyle {
-                kernel: ShadowKernel::Gaussian,
+                kernel: ShadowKernel::Distance,
                 width: 0.642_857_13,
                 depth: 0.962_187_95,
                 falloff: -4.0,

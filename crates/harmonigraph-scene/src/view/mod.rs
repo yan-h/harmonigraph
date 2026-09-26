@@ -1716,11 +1716,10 @@ impl Default for ViewConfig {
             // drag away.
             fade_shape: 0.313_509_55,
             note_animation: NoteAnimationConfig::default(),
-            // A shallow step past the band — about an eighth of the band's own
-            // width, as captured from the DAW on 2026-09-25, so a mark reads as
-            // its slice carrying on rather than as a second ring around
-            // everything.
-            mark_thickness: 0.024_035_156,
+            // A shallow step past the band — about a third of the band's own
+            // width, so a mark reads as its slice carrying on rather than as a
+            // second ring around everything.
+            mark_thickness: 0.067_234_814,
             // Just past a passing sixteenth (125ms at 120bpm), and well off
             // the bar's 0 floor: a mark outlives its key (see
             // `mark_delay`), and at 0 every momentary crowning fades its way

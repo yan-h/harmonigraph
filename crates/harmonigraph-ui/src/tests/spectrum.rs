@@ -7,9 +7,7 @@ use crate::*;
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
     let mut spectrum = AudioSpectrum::default();
-    // An 8192 window, which resolves 440 Hz to its own bucket: Fast's 4096
-    // puts the peak about a fifth of a semitone off, its stated tradeoff.
-    let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..SpectrumConfig::default() };
+    let config = SpectrumConfig::default();
     assert!(spectrum.display(0.0).is_none(), "no audio yet");
 
     // A 440 Hz sine, long enough to fill the analysis window.
@@ -348,7 +346,7 @@ fn stereo_analysis_preserves_an_antiphase_partial() {
 /// A spectrum is measured over a WINDOW, not at an instant, so where it lands
 /// on the time axis is a choice — and the only defensible one is the middle of
 /// what it measured. Stamping it when the FFT ran (the end of that window) drew
-/// every sound half a window late: at Balanced's 8192 that is 85 ms, so a note
+/// every sound half a window late: at the default 8192 that is 85 ms, so a note
 /// ribbon sat 85 ms further from the now-line than the energy it made, and
 /// reached the far edge — and vanished — that much before its own audio did.
 ///

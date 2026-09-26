@@ -629,9 +629,6 @@ mod tests {
             // hops the fixture happened to push.
             state.appearance.spectrum.attack = 0.0;
             state.appearance.spectrum.release = 0.0;
-            // The 8192-point window every bin width and level below is stated
-            // against, whatever the fresh look's window is.
-            state.appearance.spectrum.window = crate::SpectrumWindow::Balanced;
             let cfg = state.appearance.spectrum;
             state.runtime.spectrum.push_samples(samples, 1, SR, 1.0, &cfg);
             let levels = *state.runtime.spectrum.display(1.0).expect("a second of audio is enough");

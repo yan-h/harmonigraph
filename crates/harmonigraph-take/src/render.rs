@@ -216,9 +216,9 @@ impl Default for RenderConfig {
             stop_bar: 65.0,
             spectrogram: SpectrogramRender::WholeVideo,
             frame: RenderFrame::default(),
-            // 720 on the short edge — 1280x720 at the default 16:9 frame,
-            // as captured from the DAW on 2026-09-25.
-            short_edge: 720,
+            // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
+            // as captured from the DAW on 2026-09-10.
+            short_edge: 1440,
         }
     }
 }

@@ -1625,22 +1625,6 @@ mod tests {
                 // they measure.
                 contour_strength: 0.0,
                 cloud_depth: 0.0,
-                // The blur, terraces and textures the probes and the style
-                // goldens were measured at, held here rather than inherited
-                // from a fresh look that is retuned whenever one is captured:
-                // a Mosaic at its unit size with a positive bend, and the
-                // Watercolor's globs at theirs.
-                pitch_softness: 35.0,
-                time_softness: 120.0,
-                spread: 0.25,
-                contours: 7.0,
-                contour_softness: 0.15,
-                cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
-                scale_size: 1.0,
-                scale_refract: 0.30,
-                wash_size: 1.0,
-                wash_fuzz: 1.0,
-                wash_lobe: 0.55,
                 ..Default::default()
             },
             region: cb.rect,
@@ -4079,10 +4063,8 @@ fn cs_rotation_probe() {
     fn the_tile_is_rebaked_only_when_the_walk_moves() {
         let key_at =
             |turn: fn(&mut harmonigraph_scene::SpectralAtmosphere), now, pitch_vertical| {
-                // A lobe off zero, so turning it to zero below is a change.
                 let mut settings = harmonigraph_scene::SpectralAtmosphere {
                     cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
-                    wash_lobe: 0.55,
                     ..Default::default()
                 };
                 turn(&mut settings);

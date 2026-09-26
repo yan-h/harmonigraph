@@ -192,7 +192,7 @@ fn analysis_settings(
         }
         let windows = [
             (SpectrumWindow::Fast, "Fast", "snappy response, coarse bass pitch"),
-            (SpectrumWindow::Balanced, "Balanced", "the middle tradeoff"),
+            (SpectrumWindow::Balanced, "Balanced", "the default tradeoff"),
             (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
         ];
         let hints: Vec<_> = windows
