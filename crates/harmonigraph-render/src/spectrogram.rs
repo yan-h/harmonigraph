@@ -1657,7 +1657,7 @@ mod tests {
     fn the_starfield_moves_by_the_drift() {
         const PANE: u32 = 540;
         const SHIFT: usize = 6;
-        const SPEED: f32 = 4.0;
+        const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = refracted_fixture();
         cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));

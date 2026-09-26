@@ -1544,7 +1544,7 @@ mod tests {
         }
         // ...and the excursion is real: at the widest spread the small cells
         // take the whole budget, where with none they take nothing.
-        let widest = slices(extremes[2], 0.0);
+        let widest = slices(extremes[1], 0.0);
         let swing = widest[0].spread[0].hypot(widest[0].spread[1]);
         assert!((swing - 2.0 * STAR_SPREAD_REACH).abs() < 1e-5, "{swing}");
         let still = slices(

@@ -149,11 +149,13 @@ pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
 pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
 /// Bounds shared by the two ends of the `Star speed` control
 /// ([`SpectralAtmosphere::star_speed_min`], [`SpectralAtmosphere::star_speed_max`])
-/// and their sanitizer, as a multiplier on the prototype's pace: at 1 a depth
-/// crosses the pane's height in about nine seconds, at the top in under two.
+/// and their sanitizer, as a share of the prototype's pace: at the top a depth
+/// crosses the pane's height in about nine seconds. The top was once 5, and
+/// everything past 1 was too fast to use while it crowded the useful range
+/// into a fifth of the track.
 pub const STAR_SPEED_MIN: f32 = 0.0;
 /// See [`STAR_SPEED_MIN`].
-pub const STAR_SPEED_MAX: f32 = 5.0;
+pub const STAR_SPEED_MAX: f32 = 1.0;
 /// Bounds shared by the [`SpectralAtmosphere::star_speed_curve`] control and
 /// sanitizer.
 pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;

@@ -656,10 +656,10 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         "Star speed",
     )
-    .display(|speed| format!("{speed:.2}\u{d7}"))
+    .display(|speed| format!("{:.0}%", speed * 100.0))
     .show(ui)
     .on_hover_text(
-        "How fast the farthest stars drift at the low end and the nearest at the high end, with Speed curve deciding how the depths between share it out. 1\u{d7} carries a star a pane-height in about nine seconds; 0 holds it still. A wider range deepens the parallax; equal ends move every depth together.",
+        "How fast the farthest stars drift at the low end and the nearest at the high end, with Speed curve deciding how the depths between share it out. 100% carries a star a pane-height in about nine seconds; 0% holds it still. A wider range deepens the parallax; equal ends move every depth together.",
     );
     ValueBar::new(
         &mut atmosphere.star_speed_curve,
