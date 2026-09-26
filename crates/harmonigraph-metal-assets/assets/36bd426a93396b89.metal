@@ -37,18 +37,19 @@ struct VertexOut {
 };
 struct StarSlice {
     metal::float2 offset;
+    metal::float2 spread;
     float cell;
     float sigma;
     float cap;
     float defocus;
     float occupancy;
-    float blur;
     float fringe;
     float fringe_reach;
     float reach;
     float life;
-    metal::float2 spread;
-    metal::float2 _pad;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct type_9 {
     StarSlice inner[5];
@@ -187,8 +188,8 @@ float bucket_level(
     float _e18 = locals.level0_;
     float _e21 = locals.level_per_step;
     float _e26 = locals.level_per_midi;
-    float level_8 = (_e18 + (_e21 * v_2)) + (_e26 * midi_1);
-    float mapped = metal::clamp(level_8, 0.0, 1.0);
+    float level_7 = (_e18 + (_e21 * v_2)) + (_e26 * midi_1);
+    float mapped = metal::clamp(level_7, 0.0, 1.0);
     if (density) {
         float _e32 = density_encode(mapped);
         return _e32;
@@ -566,25 +567,14 @@ float star_brightest(
 
 float star_level_at(
     metal::float2 pt_5,
-    float blur,
     metal::texture2d<float, metal::access::sample> close_light,
-    metal::texture2d<float, metal::access::sample> wide_light,
     metal::sampler cloud_sampler,
     constant Cloud& cloud
 ) {
-    float level_4 = {};
-    metal::float2 _e4 = cloud.size;
-    metal::float2 uv_1 = pt_5 / _e4;
-    metal::float4 _e9 = close_light.sample(cloud_sampler, uv_1, metal::level(0.0));
-    level_4 = _e9.x;
-    if (blur > 0.0) {
-        metal::float4 _e17 = wide_light.sample(cloud_sampler, uv_1, metal::level(0.0));
-        float _e19 = density_decode(_e17.x);
-        float _e20 = level_4;
-        level_4 = metal::mix(_e20, _e19, blur);
-    }
-    float _e22 = level_4;
-    return metal::clamp(_e22, 0.0, 1.0);
+    metal::float2 _e3 = cloud.size;
+    metal::float2 uv_1 = pt_5 / _e3;
+    metal::float4 _e8 = close_light.sample(cloud_sampler, uv_1, metal::level(0.0));
+    return metal::clamp(_e8.x, 0.0, 1.0);
 }
 
 metal::float4 star_hash(
@@ -613,15 +603,15 @@ metal::float4 star_hash(
 }
 
 metal::float3 star_paint(
-    float level_5,
+    float level_4,
     float rank,
     metal::texture2d<float, metal::access::sample> lut,
     constant Cloud& cloud
 ) {
     float randomness = cloud.star_randomness;
     float spread = (1.0 - randomness) + (randomness * (0.35 + (0.65 * rank)));
-    float lift = (0.09 * rank) * metal::smoothstep(0.0, 0.15, level_5);
-    metal::float3 _e24 = palette_color(metal::clamp((level_5 * spread) + lift, 0.0, 1.0), lut);
+    float lift = (0.09 * rank) * metal::smoothstep(0.0, 0.15, level_4);
+    metal::float3 _e24 = palette_color(metal::clamp((level_4 * spread) + lift, 0.0, 1.0), lut);
     return _e24;
 }
 
@@ -642,7 +632,6 @@ metal::float4 star_cell(
     metal::float2 ground_1,
     metal::texture2d<float, metal::access::sample> lut,
     metal::texture2d<float, metal::access::sample> close_light,
-    metal::texture2d<float, metal::access::sample> wide_light,
     metal::sampler cloud_sampler,
     constant Cloud& cloud
 ) {
@@ -678,30 +667,30 @@ metal::float4 star_cell(
     float _e111 = cloud.size.y;
     metal::float2 _e117 = cloud.size;
     metal::float2 at = (((centre + s.offset) * s.cell) * (_e111 / STAR_PANE)) + (_e117 * 0.5);
-    float _e122 = star_level_at(at, s.blur, close_light, wide_light, cloud_sampler, cloud);
-    if (_e122 <= 0.0) {
+    float _e121 = star_level_at(at, close_light, cloud_sampler, cloud);
+    if (_e121 <= 0.0) {
         return metal::float4(0.0);
     }
-    metal::float4 _e129 = star_hash(hashed, key + 2u);
+    metal::float4 _e128 = star_hash(hashed, key + 2u);
     float randomness_1 = cloud.star_randomness;
-    metal::float3 _e144 = star_paint(_e122, metal::pow(_e129.x, 1.0 + (6.0 * randomness_1)) * (2.0 + (6.0 * randomness_1)), lut, cloud);
-    float size = metal::exp(((0.3 + (0.9 * randomness_1)) * (_e129.y - 0.5)) * 2.0);
+    metal::float3 _e143 = star_paint(_e121, metal::pow(_e128.x, 1.0 + (6.0 * randomness_1)) * (2.0 + (6.0 * randomness_1)), lut, cloud);
+    float size = metal::exp(((0.3 + (0.9 * randomness_1)) * (_e128.y - 0.5)) * 2.0);
     float sigma = metal::min(s.sigma * size, s.cap) * s.defocus;
     cover = metal::exp((-(dist) * dist) / ((2.0 * sigma) * sigma));
     if (s.fringe > 0.0) {
         float window = metal::max(1.0 - (dist / s.fringe_reach), 0.0);
-        float _e179 = cover;
-        cover = _e179 + (((s.fringe * metal::exp(-(dist) / (2.5 * sigma))) * window) * window);
+        float _e178 = cover;
+        cover = _e178 + (((s.fringe * metal::exp(-(dist) / (2.5 * sigma))) * window) * window);
     }
-    float _e190 = cover;
-    cover = metal::min(_e190, 1.0) * (1.0 - metal::smoothstep(STAR_RING_FADE * s.reach, s.reach, dist));
+    float _e189 = cover;
+    cover = metal::min(_e189, 1.0) * (1.0 - metal::smoothstep(STAR_RING_FADE * s.reach, s.reach, dist));
     float fade = metal::smoothstep(0.0, STAR_FADE, through) * metal::smoothstep(0.0, STAR_FADE, 1.0 - through);
-    float _e210 = cover;
-    float _e211 = star_over_ground(_e144, ground_1);
-    cover = _e210 * (_e211 * fade);
-    float _e214 = cover;
-    float _e216 = cover;
-    return metal::float4(_e144 * _e214, _e216);
+    float _e209 = cover;
+    float _e210 = star_over_ground(_e143, ground_1);
+    cover = _e209 * (_e210 * fade);
+    float _e213 = cover;
+    float _e215 = cover;
+    return metal::float4(_e143 * _e213, _e215);
 }
 
 metal::int2 naga_f2i32(metal::float2 value) {
@@ -796,7 +785,7 @@ metal::float3 star_color(
                     int _e108 = n_1;
                     int _e113 = n_1;
                     metal::float2 _e120 = ground_2;
-                    metal::float4 _e121 = star_cell(s_1, r_6, as_type<metal::int2>(as_type<metal::uint2>(o) + as_type<metal::uint2>(metal::int2(as_type<int>(as_type<uint>(naga_mod(_e108, 3)) - as_type<uint>(1)), as_type<int>(as_type<uint>(naga_div(_e113, 3)) - as_type<uint>(1))))), salt_2, cut_1, _e120, lut, close_light, wide_light, cloud_sampler, cloud);
+                    metal::float4 _e121 = star_cell(s_1, r_6, as_type<metal::int2>(as_type<metal::uint2>(o) + as_type<metal::uint2>(metal::int2(as_type<int>(as_type<uint>(naga_mod(_e108, 3)) - as_type<uint>(1)), as_type<int>(as_type<uint>(naga_div(_e113, 3)) - as_type<uint>(1))))), salt_2, cut_1, _e120, lut, close_light, cloud_sampler, cloud);
                     slice = _e107 + _e121;
                 }
             }
@@ -815,7 +804,7 @@ metal::float3 star_color(
 }
 
 metal::float4 clouded(
-    float level_6,
+    float level_5,
     metal::float2 position_1,
     metal::texture2d<float, metal::access::sample> lut,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -830,7 +819,7 @@ metal::float4 clouded(
     float tone = {};
     float _e4 = cloud.cloud_depth;
     if (_e4 <= 0.0) {
-        metal::float4 _e7 = density_color(level_6, lut, cloud);
+        metal::float4 _e7 = density_color(level_5, lut, cloud);
         return _e7;
     }
     float _e10 = cloud.ppp;
@@ -838,7 +827,7 @@ metal::float4 clouded(
     metal::float2 pt_7 = (position_1 / metal::float2(_e10)) - _e15;
     uint _e19 = cloud.cloud_style;
     if (_e19 == 2u) {
-        metal::float4 _e22 = density_color(level_6, lut, cloud);
+        metal::float4 _e22 = density_color(level_5, lut, cloud);
         metal::float3 _e24 = star_color(pt_7, lut, close_light, wide_light, cloud_sampler, cloud);
         float _e27 = cloud.cloud_depth;
         return metal::float4(metal::mix(_e22.xyz, _e24, _e27), 1.0);
@@ -854,7 +843,7 @@ metal::float4 clouded(
     }
     float _e47 = tone;
     float _e50 = cloud.cloud_depth;
-    metal::float4 _e52 = density_color(metal::mix(level_6, _e47, _e50), lut, cloud);
+    metal::float4 _e52 = density_color(metal::mix(level_5, _e47, _e50), lut, cloud);
     return _e52;
 }
 
@@ -873,16 +862,16 @@ metal::float4 cloud_color(
     metal::sampler tile_sampler,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    float level_7 = {};
+    float level_6 = {};
     bool _e2 = softened(cloud);
     if (_e2) {
         float _e5 = baked_density(in_3.position.xy, close_light, cloud_sampler, cloud);
-        level_7 = _e5;
+        level_6 = _e5;
     } else {
         float _e6 = heatmap_level(in_3, locals, grid, _buffer_sizes);
-        level_7 = _e6;
+        level_6 = _e6;
     }
-    float _e7 = level_7;
+    float _e7 = level_6;
     metal::float4 _e10 = clouded(_e7, in_3.position.xy, lut, close_light, wide_light, cloud_sampler, cloud, cloud_tone, cloud_tile_a, cloud_tile_b, tile_sampler);
     return _e10;
 }

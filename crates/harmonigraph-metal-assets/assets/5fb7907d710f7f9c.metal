@@ -6,18 +6,19 @@ using metal::uint;
 
 struct StarSlice {
     metal::float2 offset;
+    metal::float2 spread;
     float cell;
     float sigma;
     float cap;
     float defocus;
     float occupancy;
-    float blur;
     float fringe;
     float fringe_reach;
     float reach;
     float life;
-    metal::float2 spread;
-    metal::float2 _pad;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct type_5 {
     StarSlice inner[5];
