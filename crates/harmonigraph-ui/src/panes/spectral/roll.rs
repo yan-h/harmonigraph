@@ -1290,7 +1290,7 @@ mod tests {
                 ..fade.pressure
             },
             glow_base: 0.5,
-            ..fade
+            ..Default::default()
         };
         let bar = state.appearance.view.intensity.glow_base;
         let share = |[a, b]: [f32; 2]| [(bar + a) / bar, (bar + b) / bar];
@@ -1308,7 +1308,7 @@ mod tests {
                 target: harmonigraph_scene::IntensityTarget::Thickness,
                 ..fade.pressure
             },
-            ..fade
+            ..Default::default()
         };
         let thick = instances(&state, 1.0);
         assert_eq!(thick.len(), 2);
