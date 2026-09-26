@@ -93,7 +93,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
     saved.workspace.interaction.ui_scale = v;
-    saved.workspace.interaction.skin_lightness = v;
+    poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
     // that its text/choice/divider controls are not range-guard coverage.
@@ -249,7 +249,7 @@ fn scenarios() -> Vec<Scenario> {
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
             panes::Tab::AnalyzerSettings => 5 + 3 + 1 + 4,
-            panes::Tab::System => 4,
+            panes::Tab::System => 8,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
         };

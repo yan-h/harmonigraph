@@ -64,6 +64,22 @@ const TRACK_LIGHTNESS: f32 = 60.0;
 /// ceiling, and a track drawn low on that axis reads as washed out.
 const TRACK_CHROMA: f32 = 0.85;
 
+/// The colour at `hue` degrees on `circle`, a [`hue_circle`], interpolated
+/// between its two nearest samples.
+fn circle_at(circle: &[glam::Vec4; HUE_CIRCLE_N], hue: f32) -> glam::Vec4 {
+    let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
+    let i0 = f.floor() as usize % HUE_CIRCLE_N;
+    circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor())
+}
+
+/// The fixed hue circle a [`SpectrumBar`] turns, as a colour per hue in
+/// degrees, for any other bar picking a hue: one rainbow, so every hue bar in
+/// the panel reads alike, and one memoized table between them.
+pub(crate) fn track_hue() -> impl Fn(f32) -> Color32 {
+    let circle = hue_circle(TRACK_LIGHTNESS, TRACK_CHROMA);
+    move |hue| scene_color(circle_at(&circle, hue), 1.0)
+}
+
 /// Height of a [`GradientPreview`]. Shorter than a row, because it is a
 /// picture and not a control: nothing on it can be dragged, and a band standing
 /// as tall as the bars under it would read as a fourth bar that has lost its
@@ -590,11 +606,8 @@ impl<'a> SpectrumBar<'a> {
             SPECTRUM_SEGMENTS,
             (corner as f32, corner as f32),
             |p| {
-                let hue = g.hue_start + p * FULL_TURN * winding;
-                let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
-                let i0 = f.floor() as usize % HUE_CIRCLE_N;
                 let alpha = if claimed > 0.0 && p <= claimed { 1.0 } else { UNCLAIMED_ALPHA };
-                scene_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), alpha)
+                scene_color(circle_at(&circle, g.hue_start + p * FULL_TURN * winding), alpha)
             },
         );
         let centered = |galley: &egui::Galley, x: f32| {
