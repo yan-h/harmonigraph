@@ -5,10 +5,11 @@ use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, OctaveStrip, StackBar, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    AnimationOrder, SpectralReading, ViewConfig, GAIN_RANGE_MAX, GAIN_RANGE_MIN, GAP_MAX,
-    INTENSITY_WEIGHT_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL, PITCH_FLOOR,
-    SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN, SPECTRAL_HYSTERESIS_MAX,
-    SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
+    AnimationOrder, IntensitySource, IntensityTarget, SpectralReading, ViewConfig, GAIN_RANGE_MAX,
+    GAIN_RANGE_MIN, GAP_MAX, INTENSITY_WEIGHT_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
+    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
+    SPECTRAL_WIDTH_MIN,
 };
 
 /// Layer geometry, shared octave layout, the two readings, then note motion.
@@ -24,60 +25,89 @@ pub(super) fn nodes_pane(
     intensity_section(ui, &mut appearance.view);
 }
 
-/// How loud each note is drawn: one intensity summed from the note's velocity
-/// and expressions, then read by each display through its own floor. Here on
-/// the lattice page, though the roll reads the same one.
+/// How each note is drawn from how it is played: each of its velocity and
+/// expressions routed to one display with a weight of its own, over a base per
+/// display. Here on the lattice page, though the roll reads the same routes.
 fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
     section(ui, "Note intensity", |ui| {
         fn weight<'a>(value: &'a mut f32, label: &'a str) -> ValueBar<'a> {
             ValueBar::new(value, -INTENSITY_WEIGHT_MAX..=INTENSITY_WEIGHT_MAX, label)
                 .magnet(0.0, 0.03)
         }
+        let targets = IntensityTarget::ALL.map(|target| match target {
+            IntensityTarget::Off => (target, "Off", "Drives nothing."),
+            IntensityTarget::Opacity => (
+                target,
+                "Opacity",
+                "Drives how opaque the note is: the lattice's octave slices and the roll's ribbons.",
+            ),
+            IntensityTarget::Glow => (
+                target,
+                "Glow",
+                "Drives the light the note gives off: the lattice's node glow and the roll's ribbon bloom.",
+            ),
+            IntensityTarget::Thickness => (
+                target,
+                "Thickness",
+                "Drives how thick the note is drawn. Nothing draws it yet.",
+            ),
+        });
+        let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {
+            choice_row(ui, name, &mut source.target, &targets);
+            ui.add_enabled_ui(source.target != IntensityTarget::Off, |ui| {
+                weight(&mut source.weight, &format!("{name} weight")).show(ui).on_hover_text(
+                    format!(
+                        "{hover} Multiplied by this before its display adds it; \
+                         negative turns it around."
+                    ),
+                );
+            });
+        };
         let intensity = &mut view.intensity;
-        weight(&mut intensity.offset, "Offset").show(ui).on_hover_text(
-            "Intensity before any source adds to it. \
-             The sources below add to this, and the sum is held between 0 and 1. \
-             At 1 with every weight at 0, every note draws at full.",
+        route(ui, &mut intensity.velocity, "Velocity", "The note-on velocity, 0 to 1.");
+        route(
+            ui,
+            &mut intensity.gain,
+            "Gain",
+            "The note's gain expression, in dB off unity divided by Gain range: 0 at unity. \
+             Routed alone, it needs its display's base at 1 so that unity draws in full.",
         );
-        weight(&mut intensity.velocity, "Velocity").show(ui).on_hover_text(
-            "How much the note-on velocity adds. \
-             Try Offset 0 and Velocity 1 to draw each note as hard as it was played.",
-        );
-        weight(&mut intensity.gain, "Gain").show(ui).on_hover_text(
-            "How much the note's gain expression adds, in dB off unity divided by Gain range. \
-             Negative weights turn a boost into a cut.",
-        );
-        ui.add_enabled_ui(intensity.gain != 0.0, |ui| {
+        ui.add_enabled_ui(intensity.gain.target != IntensityTarget::Off, |ui| {
             ValueBar::new(&mut intensity.gain_range, GAIN_RANGE_MIN..=GAIN_RANGE_MAX, "Gain range")
                 .unit(1.0, " dB")
                 .decimals(0)
                 .show(ui)
                 .on_hover_text(
-                    "How many dB of gain move the intensity by the whole Gain weight. \
+                    "How many dB of gain make one Gain weight's worth. \
                      At 24 dB, +12 dB adds half of it and -24 dB takes all of it away.",
                 );
         });
-        weight(&mut intensity.pressure, "Pressure").show(ui).on_hover_text(
-            "How much the note's pressure (aftertouch) adds, from 0 unpressed to 1.",
+        route(
+            ui,
+            &mut intensity.pressure,
+            "Pressure",
+            "The note's pressure (aftertouch), from 0 unpressed to 1.",
         );
-        weight(&mut intensity.timbre, "Timbre").show(ui).on_hover_text(
-            "How much the note's timbre expression adds, from 0 to 1. \
-             An untouched timbre lane sits at 0.5.",
+        route(
+            ui,
+            &mut intensity.timbre,
+            "Timbre",
+            "The note's timbre expression, from 0 to 1. An untouched timbre lane sits at 0.5.",
         );
-        ValueBar::new(&mut intensity.fade_floor, 0.0..=1.0, "Fade floor")
-            .percent()
+        let base_hover = |display: &str| {
+            format!(
+                "Where the {display} starts before the sources routed to it add in; \
+                 the sum is held between 0 and 1. \
+                 A display nothing is routed to draws in full and ignores this."
+            )
+        };
+        weight(&mut intensity.opacity_base, "Opacity base")
             .show(ui)
-            .on_hover_text(
-                "Opacity of a note at zero intensity, on the lattice's octave slices and the roll's ribbons. \
-                 100% draws every note fully opaque whatever its intensity.",
-            );
-        ValueBar::new(&mut intensity.glow_floor, 0.0..=1.0, "Glow floor")
-            .percent()
+            .on_hover_text(base_hover("opacity"));
+        weight(&mut intensity.glow_base, "Glow base").show(ui).on_hover_text(base_hover("glow"));
+        weight(&mut intensity.thickness_base, "Thickness base")
             .show(ui)
-            .on_hover_text(
-                "Light a note gives off at zero intensity, as a share of its full glow: the lattice's node glow and the roll's ribbon bloom. \
-                 100% gives every note its full glow whatever its intensity.",
-            );
+            .on_hover_text(format!("{} Nothing draws thickness yet.", base_hover("thickness")));
     });
 }
 

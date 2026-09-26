@@ -93,15 +93,18 @@ fn poisoned_view() -> ViewConfig {
             stagger_spread: nan,
             radial_start: nan,
         },
-        intensity: crate::IntensitySettings {
-            offset: nan,
-            velocity: nan,
-            gain: nan,
-            pressure: nan,
-            timbre: nan,
-            gain_range: nan,
-            fade_floor: nan,
-            glow_floor: nan,
+        intensity: {
+            let source = |target| crate::IntensitySource { target, weight: nan };
+            crate::IntensitySettings {
+                velocity: source(crate::IntensityTarget::Opacity),
+                gain: source(crate::IntensityTarget::Glow),
+                pressure: source(crate::IntensityTarget::Thickness),
+                timbre: source(crate::IntensityTarget::Opacity),
+                gain_range: nan,
+                opacity_base: nan,
+                glow_base: nan,
+                thickness_base: nan,
+            }
         },
         mark_thickness: nan,
         mark_delay: nan,

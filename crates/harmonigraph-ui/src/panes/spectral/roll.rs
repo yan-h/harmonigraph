@@ -19,7 +19,7 @@
 use egui::Color32;
 use harmonigraph_core::RollNote;
 use harmonigraph_render::{RollAxes, RollInstance};
-use harmonigraph_scene::pitch_lut_color;
+use harmonigraph_scene::{pitch_lut_color, IntensityReading};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::panes::scene_color;
@@ -393,7 +393,7 @@ fn roll_instances_with_floor(
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
     let feather_px = 1.0 / ppp.max(1e-3);
-    // How opaque each note's intensity lets it be, shared with the lattice.
+    // How each note's playing reads on every display, shared with the lattice.
     let intensity = state.appearance.view.intensity.sanitized();
 
     // Cull to the visible window BEFORE sorting: the roll can remember
@@ -552,8 +552,7 @@ fn roll_instances_with_floor(
                 let center = axes.at(t, split) - axes.dir_depth() * half;
                 // The lead reads the note as it ended.
                 let (_, last) = note.expressions()[note.expressions().len() - 1];
-                let (fade, glow) =
-                    read_through(&intensity, intensity.intensity(note.velocity, last));
+                let (fade, glow) = read_through(intensity.read(note.velocity, last));
                 detached.push(RollInstance {
                     center: [center.x, center.y],
                     half_extent: [half_pitch, half],
@@ -837,21 +836,21 @@ fn roll_instances_with_floor(
                 (d - centre) * axes.depth_len() + lead_half
             };
             let points = intensity_points(note, &intensity, t0, t1);
-            push_pieces(&mut instances, segment, &intensity, &points, offset);
+            push_pieces(&mut instances, segment, &points, offset);
         }
     }
     (instances, detached)
 }
 
-/// The largest error in intensity a note may be drawn with, which decides how
-/// many pieces a segment is cut into (see [`intensity_points`]). Every display
-/// reads intensity along a straight line, so none of them is further off.
+/// The largest error on any display a note may be drawn with, which decides
+/// how many pieces a segment is cut into (see [`intensity_points`]).
 const INTENSITY_TOLERANCE: f32 = 1.0 / 256.0;
 
-/// A note's intensity from `t0` to `t1`, as breakpoints `(time, intensity)`
-/// oldest first to be read as straight lines: its expression breakpoints
-/// between the two, with the fewest kept that stay within
-/// [`INTENSITY_TOLERANCE`] of the rest. Two sharing a time are a step.
+/// A note's reading on every display from `t0` to `t1`, as breakpoints
+/// `(time, reading)` oldest first to be read as straight lines: its expression
+/// breakpoints between the two, with the fewest kept that stay within
+/// [`INTENSITY_TOLERANCE`] of the rest on every display. Two sharing a time are
+/// a step.
 ///
 /// A note whose intensity never moves is its two ends at one value, and is
 /// drawn as the one segment it always was.
@@ -860,8 +859,8 @@ fn intensity_points(
     intensity: &harmonigraph_scene::IntensitySettings,
     t0: f64,
     t1: f64,
-) -> Vec<(f64, f32)> {
-    let loud = |values| intensity.intensity(note.velocity, values);
+) -> Vec<(f64, IntensityReading)> {
+    let loud = |values| intensity.read(note.velocity, values);
     let mut points = vec![(t0, loud(note.expressions_at(t0)))];
     points.extend(
         note.expressions().iter().filter(|(t, _)| *t > t0 && *t < t1).map(|&(t, e)| (t, loud(e))),
@@ -876,19 +875,20 @@ fn intensity_points(
 
 /// Douglas–Peucker over `points[first..=last]`, marking in `keep` each point
 /// the line between the kept ones would miss by more than
-/// [`INTENSITY_TOLERANCE`].
-fn simplify(points: &[(f64, f32)], keep: &mut [bool], first: usize, last: usize) {
-    let ((ta, fa), (tb, fb)) = (points[first], points[last]);
-    let line = |t: f64| {
-        if tb > ta {
-            fa + (fb - fa) * ((t - ta) / (tb - ta)) as f32
-        } else {
-            fa
-        }
+/// [`INTENSITY_TOLERANCE`] on any display.
+fn simplify(points: &[(f64, IntensityReading)], keep: &mut [bool], first: usize, last: usize) {
+    let ((ta, a), (tb, b)) = (points[first], points[last]);
+    let along = |t: f64| if tb > ta { ((t - ta) / (tb - ta)) as f32 } else { 0.0 };
+    let error = |(t, at): (f64, IntensityReading)| {
+        let s = along(t);
+        let off = |value: f32, from: f32, to: f32| (value - (from + (to - from) * s)).abs();
+        off(at.opacity, a.opacity, b.opacity).max(off(at.glow, a.glow, b.glow)).max(off(
+            at.thickness,
+            a.thickness,
+            b.thickness,
+        ))
     };
-    let worst = (first + 1..last)
-        .map(|i| (i, (points[i].1 - line(points[i].0)).abs()))
-        .max_by(|a, b| a.1.total_cmp(&b.1));
+    let worst = (first + 1..last).map(|i| (i, error(points[i]))).max_by(|a, b| a.1.total_cmp(&b.1));
     if let Some((i, _)) = worst.filter(|&(_, error)| error > INTENSITY_TOLERANCE) {
         keep[i] = true;
         simplify(points, keep, first, i);
@@ -897,13 +897,9 @@ fn simplify(points: &[(f64, f32)], keep: &mut [bool], first: usize, last: usize)
 }
 
 /// An instance's [`fade`](RollInstance::fade) and
-/// [`glow`](RollInstance::glow), held at one `loud`ness all along it.
-fn read_through(
-    intensity: &harmonigraph_scene::IntensitySettings,
-    loud: f32,
-) -> ([f32; 2], [f32; 2]) {
-    let (fade, glow) = (intensity.fade(loud), intensity.glow(loud));
-    ([fade, fade], [glow, glow])
+/// [`glow`](RollInstance::glow), held at one `reading` all along it.
+fn read_through(reading: IntensityReading) -> ([f32; 2], [f32; 2]) {
+    ([reading.opacity; 2], [reading.glow; 2])
 }
 
 /// `segment` cut into one piece per stretch between two of its intensity
@@ -915,8 +911,7 @@ fn read_through(
 fn push_pieces(
     instances: &mut Vec<RollInstance>,
     segment: RollInstance,
-    intensity: &harmonigraph_scene::IntensitySettings,
-    points: &[(f64, f32)],
+    points: &[(f64, IntensityReading)],
     offset: impl Fn(f64) -> f32,
 ) {
     let (oldest, newest) = (points[0].0, points[points.len() - 1].0);
@@ -924,7 +919,7 @@ fn push_pieces(
     // No length to cut (a note pressed this frame), or nothing to read along
     // it: the segment whole, at its newest intensity.
     if pieces.is_empty() || (pieces.len() == 1 && pieces[0][0].1 == pieces[0][1].1) {
-        let (fade, glow) = read_through(intensity, points[points.len() - 1].1);
+        let (fade, glow) = read_through(points[points.len() - 1].1);
         instances.push(RollInstance { fade, glow, ..segment });
         return;
     }
@@ -937,8 +932,8 @@ fn push_pieces(
                 if older == oldest { f32::MAX } else { high },
             ],
             ramp: [low, high],
-            fade: [intensity.fade(at_newer), intensity.fade(at_older)],
-            glow: [intensity.glow(at_newer), intensity.glow(at_older)],
+            fade: [at_newer.opacity, at_older.opacity],
+            glow: [at_newer.glow, at_older.glow],
             ..segment
         });
     }
@@ -1150,12 +1145,14 @@ mod tests {
         let whole = *one(&instances(&state, 1.0));
         assert_eq!((whole.span, whole.fade), (RollInstance::WHOLE, [1.0, 1.0]));
 
-        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
-            offset: 0.0,
-            pressure: 1.0,
-            fade_floor: 0.0,
+        let fade = harmonigraph_scene::IntensitySettings {
+            pressure: harmonigraph_scene::IntensitySource {
+                target: harmonigraph_scene::IntensityTarget::Opacity,
+                weight: 1.0,
+            },
             ..Default::default()
         };
+        state.appearance.view.intensity = fade;
         let pieces = instances(&state, 1.0);
         assert_eq!(pieces.len(), 2, "a swell with one apex is two lines: {pieces:?}");
         let (older, newer) = (pieces[0], pieces[1]);
@@ -1174,9 +1171,21 @@ mod tests {
         let [end, apex_again] = newer.fade;
         assert!(start < 0.02 && end < 0.02 && apex > 0.98, "{older:?} {newer:?}");
         assert_eq!(apex, apex_again);
-        // The glow's floor is 0 fresh, so it reads the same intensity as the
-        // fade here, at the same ends.
-        assert_eq!((older.glow, newer.glow), ([apex, start], [end, apex]));
+        assert_eq!((older.glow, newer.glow), ([1.0; 2], [1.0; 2]), "nothing routed to the glow");
+
+        // The same pressure routed to the glow instead: the glow takes the
+        // fade's ends and the fade stays in full.
+        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
+            pressure: harmonigraph_scene::IntensitySource {
+                target: harmonigraph_scene::IntensityTarget::Glow,
+                ..fade.pressure
+            },
+            ..fade
+        };
+        let glowing = instances(&state, 1.0);
+        assert_eq!(glowing.len(), 2);
+        assert_eq!((glowing[0].glow, glowing[1].glow), (older.fade, newer.fade));
+        assert_eq!((glowing[0].fade, glowing[1].fade), ([1.0; 2], [1.0; 2]));
     }
 
     /// The outline stands the same distance off at every zoom and every note

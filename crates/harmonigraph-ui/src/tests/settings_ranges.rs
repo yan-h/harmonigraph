@@ -54,8 +54,11 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; offset, velocity, gain, pressure, timbre, gain_range, fade_floor,
-        glow_floor);
+    poison!(a.view.intensity; gain_range, opacity_base, glow_base, thickness_base);
+    poison!(a.view.intensity.velocity; weight);
+    poison!(a.view.intensity.gain; weight);
+    poison!(a.view.intensity.pressure; weight);
+    poison!(a.view.intensity.timbre; weight);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
@@ -509,6 +512,14 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
         &new.view.note_animation,
     );
     assert_poisoned_float_fields("view.intensity", &old.view.intensity, &new.view.intensity);
+    let sources = |i: &harmonigraph_scene::IntensitySettings| {
+        [("velocity", i.velocity), ("gain", i.gain), ("pressure", i.pressure), ("timbre", i.timbre)]
+    };
+    for ((name, before), (_, after)) in
+        sources(&old.view.intensity).into_iter().zip(sources(&new.view.intensity))
+    {
+        assert_poisoned_float_fields(&format!("view.intensity.{name}"), &before, &after);
+    }
     assert_poisoned_float_fields("view.glow_curve", &old.view.glow_curve, &new.view.glow_curve);
     assert_poisoned_float_fields("view.atmosphere", &old.view.atmosphere, &new.view.atmosphere);
     assert_poisoned_float_fields(

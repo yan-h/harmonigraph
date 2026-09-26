@@ -487,7 +487,7 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
 /// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
     // On screen the body wears its fade; in the bloom's pass, its glow, so
-    // the light a note gives off reads intensity through its own floor.
+    // the light a note gives off follows its own display.
     let ends = select(in.reads.xy, in.reads.zw, locals.light > 0.5);
     return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, ends);
 }

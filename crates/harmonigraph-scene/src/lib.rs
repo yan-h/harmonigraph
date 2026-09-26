@@ -55,7 +55,10 @@ pub use color::{
     HUE_CIRCLE_N,
 };
 pub use derive::derive_scene;
-pub use intensity::{IntensitySettings, GAIN_RANGE_MAX, GAIN_RANGE_MIN, INTENSITY_WEIGHT_MAX};
+pub use intensity::{
+    IntensityReading, IntensitySettings, IntensitySource, IntensityTarget, GAIN_RANGE_MAX,
+    GAIN_RANGE_MIN, INTENSITY_WEIGHT_MAX,
+};
 pub use motion::NodeMotion;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,

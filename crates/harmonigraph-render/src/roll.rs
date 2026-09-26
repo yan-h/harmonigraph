@@ -168,7 +168,7 @@ pub struct RollInstance {
     /// [`center`](Self::center) in points: [`WHOLE`](Self::WHOLE) for the
     /// whole box, or one PIECE of it.
     ///
-    /// Pieces are how a note's opacity follows its intensity along a segment:
+    /// Pieces are how a note's opacity and glow follow its playing along a segment:
     /// the caller hands over the segment's box once per piece, each with the
     /// same geometry and a span of its own, and the spans tile the box. So the
     /// outline, the lead and the cap are the segment's exactly, and no piece
@@ -185,8 +185,8 @@ pub struct RollInstance {
     pub fade: [f32; 2],
     /// How much light the body gives the bloom at the two
     /// [`ramp`](Self::ramp) depths, in place of its fade: the bloom's pass
-    /// draws the body at this, so the two read intensity through floors of
-    /// their own. `[1.0, 1.0]` is the full bloom.
+    /// draws the body at this, so the note's opacity and its light are two
+    /// displays. `[1.0, 1.0]` is the full bloom.
     pub glow: [f32; 2],
 }
 
