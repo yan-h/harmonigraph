@@ -53,7 +53,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
         (
             &mut cfg.show_spectrogram,
             "Show audio levels as a frequency-versus-time heatmap. \
-             Uses the shared History duration under View and the Audio level colors on Colors.",
+             Uses the shared History duration under View and the Audio level colors on Mappings.",
         ),
         |ui| {
             block(ui, "Softness");
@@ -113,10 +113,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 .percent()
                 .show(ui)
                 .on_hover_text(
-                    "How strongly the refracted levels replace the original picture. 0% removes \
-                     the texture; 100% uses only the displaced readings. Contours and the palette \
-                     apply afterward, without extra lighting or pigment. Reads whatever the \
-                     softness above leaves: with none, the measured picture itself.",
+                    "How strongly the texture replaces the original picture. 0% removes the \
+                     texture; 100% uses only the texture. Mosaic and Watercolor displace levels, \
+                     then Contours and the palette apply; Stars replaces the picture with a \
+                     starfield colored from the palette. Reads whatever the softness above \
+                     leaves: with none, the measured picture itself.",
                 );
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
                 // Two constructions rather than two presets of one, so the dials below
@@ -141,6 +142,13 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                             "A field of overlapping globs, each reading the sound near its own \
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
+                        (
+                            CloudStyle::Stars,
+                            "Stars",
+                            "Pinpoint stars at several depths, each taking the color and brightness \
+                             of the sound under it as it drifts. Nearer stars are fewer, bigger, \
+                             brighter and faster. Contour levels do not apply to it",
+                        ),
                     ],
                 );
                 ValueBar::new(
@@ -151,8 +159,8 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 .unit(1.0, "\u{d7}")
                 .show(ui)
                 .on_hover_text(
-                    "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
-                         it still.",
+                    "1\u{d7} carries the texture about a pane-height every four minutes, and the \
+                         nearest stars a pane-height in about nine seconds. 0 holds it still.",
                 );
                 ValueBar::new(
                     &mut atmosphere.cloud_direction,
@@ -168,7 +176,9 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 // Two constructions, so two sets of dials: nothing a wash carries means
                 // anything to a refracting scale, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
-                if atmosphere.cloud_style == CloudStyle::Watercolor {
+                if atmosphere.cloud_style == CloudStyle::Stars {
+                    star_bars(ui, atmosphere);
+                } else if atmosphere.cloud_style == CloudStyle::Watercolor {
                     wash_bars(ui, atmosphere);
                 } else {
                     ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
@@ -209,7 +219,7 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         (
             &mut cfg.show_roll,
             "Show played MIDI notes as ribbons over the shared time axis. \
-             Their colors come from MIDI note colors on Colors.",
+             Their colors come from MIDI note colors on Mappings.",
         ),
         |ui| {
             ValueBar::new(
@@ -501,7 +511,7 @@ pub(crate) fn analysis_section(
         .on_hover_text(
             "Levels mapped to zero and full height in the Analyzer and Spiral, also used by lattice audio rings. \
                      Lower the upper end to enlarge quiet signals. \
-                     Audio colors have their own Level color range on Colors.",
+                     Audio colors have their own Level color range on Mappings.",
         );
         let labels: Vec<_> = crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
         let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
@@ -575,6 +585,111 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
         );
+}
+
+/// The starfield: pinpoints in depth drifting with parallax, and the one texture
+/// that is light rather than a displaced reading of it.
+///
+/// Every quality that differed between the prototype's four motion variants is
+/// a bar here rather than a choice made in the shader, as is the lever on how
+/// heavy the field reads (`Depth balance`), because Yan's pick was a starting
+/// point "with sliders exposed". The fresh values are that pick, V3, with round
+/// 8's YB3 for how a star is coloured and shaped.
+fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
+    use harmonigraph_scene::{
+        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_LIFETIME_MAX,
+        STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
+        STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
+    };
+    ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
+        .unit(1.0, "\u{d7}")
+        .show(ui)
+        .on_hover_text(
+            "How many stars at every depth. Higher values pack them closer; past about 3\u{d7} the faintest dust is finer than a pixel and merges into texture.",
+        );
+    // Dragged in octaves, so the small end has room on the track: the sizes run
+    // over two orders of magnitude and a linear track would crush 0.5 to 4
+    // into its first few percent.
+    let (mut small, mut big) = (atmosphere.star_size_min.log2(), atmosphere.star_size_max.log2());
+    let response =
+        RangeBar::new(&mut small, &mut big, STAR_SIZE_MIN.log2()..=STAR_SIZE_MAX.log2(), "Star size")
+            .display(|octaves| format!("{:.1} px", octaves.exp2()))
+            .show(ui)
+            .on_hover_text(
+                "The smallest and biggest stars: the farthest dust at the low end, the nearest stars at the high end, with Size curve deciding how the depths between share it out. Bigger stars are also farther apart.",
+            );
+    // Only on a change: the round trip through octaves is not exact, and
+    // writing it back every frame would move the stored sizes by an ulp at a
+    // time — and every star with them, since each depth's cells and its drift
+    // in them key on them.
+    if response.changed() {
+        atmosphere.star_size_min = small.exp2();
+        atmosphere.star_size_max = big.exp2();
+    }
+    ValueBar::new(
+        &mut atmosphere.star_size_curve,
+        STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
+        "Size curve",
+    )
+    .curve(|curve, p| p.powf(curve))
+    .show(ui)
+    .on_hover_text(
+        "How the star spacing grows from the farthest depth to the nearest. 1 grows it evenly; higher values keep most depths fine dust and save the big stars for the nearest. The line previews it.",
+    );
+    ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Randomness")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones. The field's average brightness stays the same at every setting.",
+        );
+    ValueBar::new(&mut atmosphere.star_balance, -1.0..=1.0, "Depth balance")
+        .show(ui)
+        .on_hover_text(
+            "Which depths keep all their stars. Left keeps all the far dust and thins the near stars; right keeps all the near stars and thins the dust; the middle keeps every depth full, so how many stars a depth has follows Star size alone.",
+        );
+    ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "A faint, wider fringe around every star in the star's own color. 0% draws bare soft points.",
+        );
+    ValueBar::new(&mut atmosphere.star_far_speed, 0.0..=1.0, "Far star speed")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How fast the farthest stars drift, as a share of the nearest stars' speed. Lower values deepen the parallax; 100% moves every depth together.",
+        );
+    ValueBar::new(
+        &mut atmosphere.star_speed_curve,
+        STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
+        "Speed curve",
+    )
+    .curve(|curve, p| p.powf(curve))
+    .show(ui)
+    .on_hover_text(
+        "How the drift speed grows from the farthest depth to the nearest. 1 steps it evenly; higher values keep most depths slow and the nearest fast, lower ones the reverse. The line previews it.",
+    );
+    ValueBar::new(&mut atmosphere.star_speed_spread, 0.0..=1.0, "Speed spread")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How much each star's speed differs from the others at its depth. 0% moves each depth as one sheet; 100% is the most each depth can take: enough to fill the gaps between the depths' speeds where the stars have room, and less for the smallest stars, which must stay near their places over a whole Star lifetime. Shorter lifetimes leave room for more.",
+        );
+    ValueBar::new(
+        &mut atmosphere.star_lifetime,
+        STAR_LIFETIME_MIN..=STAR_LIFETIME_MAX,
+        "Star lifetime",
+    )
+    .eased(true)
+    .unit(1.0, " s")
+    .show(ui)
+    .on_hover_text(
+        "How long each star lives before a new one takes its place, fading in and out, alike at every depth. Longer lives leave the smallest stars less Speed spread.",
+    );
+    ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
+        .percent()
+        .show(ui)
+        .on_hover_text("How much the nearest stars are softened, as if out of focus. 0% keeps every star sharp.");
 }
 
 #[cfg(test)]

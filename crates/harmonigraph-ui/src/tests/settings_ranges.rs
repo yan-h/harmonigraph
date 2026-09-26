@@ -91,7 +91,10 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
-        wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
+        wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
+        star_density, star_randomness, star_balance, star_fringe,
+        star_far_speed, star_defocus, star_size_min, star_size_max,
+        star_size_curve, star_speed_curve, star_speed_spread, star_lifetime);
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their
@@ -219,10 +222,10 @@ struct Scenario {
     enabled: bool,
     meantone: bool,
     marvel: bool,
-    /// Draw the Spectrogram page's cloud dials for the watercolour wash rather
-    /// than for the refracting scales. Two constructions sharing three bars, so
-    /// the page has two inventories and only one of them is the fresh state's.
-    wash: bool,
+    /// Which texture's dials the Spectrogram page draws. Three constructions
+    /// sharing three bars, so the page has three inventories and only one of
+    /// them is the fresh state's.
+    style: harmonigraph_scene::CloudStyle,
     visits: usize,
 }
 
@@ -234,7 +237,7 @@ fn scenarios() -> Vec<Scenario> {
         enabled: false,
         meantone: false,
         marvel: false,
-        wash: false,
+        style: harmonigraph_scene::CloudStyle::Mosaic,
         visits: 0,
     };
     let mut cases = Vec::new();
@@ -276,9 +279,18 @@ fn scenarios() -> Vec<Scenario> {
     // here at all.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
-        wash: true,
+        style: harmonigraph_scene::CloudStyle::Watercolor,
         enabled: true,
         visits: 13 + 12 + 5 + 2 + 2 - 3 + 5,
+        ..base
+    });
+    // The starfield's, on the same terms: the three scale bars off, eleven of
+    // its own on.
+    cases.push(Scenario {
+        pane: panes::Tab::AnalyzerSettings,
+        style: harmonigraph_scene::CloudStyle::Stars,
+        enabled: true,
+        visits: 13 + 12 + 5 + 2 + 2 - 3 + 11,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -318,11 +330,7 @@ fn check(edge: Edge) {
         // to the bar's top stays there for the bar to be held to.
         a.spectrum.backdrop_strength =
             if scenario.enabled { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
-        a.spectrum.atmosphere.cloud_style = if scenario.wash {
-            harmonigraph_scene::CloudStyle::Watercolor
-        } else {
-            harmonigraph_scene::CloudStyle::Mosaic
-        };
+        a.spectrum.atmosphere.cloud_style = scenario.style;
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.enabled = scenario.enabled;
         for style in a.view.shadow.groups_mut() {
