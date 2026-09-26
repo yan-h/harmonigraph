@@ -21,10 +21,9 @@ struct StarSlice {
     float fringe;
     float fringe_reach;
     float reach;
-    float unseen;
-    metal::float2 spread;
     float life;
-    float _pad;
+    metal::float2 spread;
+    metal::float2 _pad;
 };
 struct type_8 {
     StarSlice inner[5];
@@ -114,6 +113,15 @@ float density_decode(
 ) {
     float y = metal::max(value, 0.0);
     return (2.0 * y) / (0.1 + metal::sqrt(0.01 + (3.6 * y)));
+}
+
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
 }
 
 float baked_density(
@@ -531,53 +539,50 @@ metal::float3 star_color(
     uint k = 0u;
     metal::float4 slice = {};
     int n_1 = {};
-    bool local = {};
     metal::float2 _e3 = cloud.size;
     metal::float2 uv_2 = pt_6 / _e3;
-    metal::float4 _e8 = close_light.sample(cloud_sampler, uv_2, metal::level(0.0));
-    float close = _e8.x;
-    metal::float4 _e13 = wide_light.sample(cloud_sampler, uv_2, metal::level(0.0));
-    float _e15 = density_decode(_e13.x);
-    metal::float3 _e17 = palette_color(0.0, lut);
-    out_1 = _e17;
-    float _e25 = cloud.star_glow;
-    if (_e25 > 0.0) {
-        float under = metal::clamp(_e15, 0.0, 1.0);
-        float _e33 = cloud.star_glow;
-        metal::float3 _e34 = palette_color(under, lut);
-        metal::float3 glow = (_e33 * _e34) * metal::sqrt(under);
-        out_1 = _e17 + ((metal::float3(1.0) - _e17) * (metal::float3(1.0) - metal::exp(-1.5 * glow)));
-        metal::float3 _e49 = out_1;
-        float _e50 = star_brightest(_e49);
-        float _e51 = star_brightest(_e17);
-        ground_2 = metal::float2(_e50, 1.0 - metal::min((_e50 - _e51) * STAR_OVER_GROUND, 1.0));
+    metal::float4 _e8 = wide_light.sample(cloud_sampler, uv_2, metal::level(0.0));
+    float _e10 = density_decode(_e8.x);
+    metal::float3 _e12 = palette_color(0.0, lut);
+    out_1 = _e12;
+    float _e20 = cloud.star_glow;
+    if (_e20 > 0.0) {
+        float under = metal::clamp(_e10, 0.0, 1.0);
+        float _e28 = cloud.star_glow;
+        metal::float3 _e29 = palette_color(under, lut);
+        metal::float3 glow = (_e28 * _e29) * metal::sqrt(under);
+        out_1 = _e12 + ((metal::float3(1.0) - _e12) * (metal::float3(1.0) - metal::exp(-1.5 * glow)));
+        metal::float3 _e44 = out_1;
+        float _e45 = star_brightest(_e44);
+        float _e46 = star_brightest(_e12);
+        ground_2 = metal::float2(_e45, 1.0 - metal::min((_e45 - _e46) * STAR_OVER_GROUND, 1.0));
     }
-    metal::float2 _e62 = cloud.size;
-    float _e70 = cloud.size.y;
-    metal::float2 sp = (pt_6 - (_e62 * 0.5)) * (STAR_PANE / _e70);
+    metal::float2 _e57 = cloud.size;
+    float _e65 = cloud.size.y;
+    metal::float2 sp = (pt_6 - (_e57 * 0.5)) * (STAR_PANE / _e65);
     uint2 loop_bound = uint2(4294967295u);
     bool loop_init = true;
     while(true) {
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            uint _e171 = k;
-            k = _e171 + 1u;
+            uint _e142 = k;
+            k = _e142 + 1u;
         }
         loop_init = false;
-        uint _e75 = k;
-        if (_e75 < STAR_SLICES) {
+        uint _e70 = k;
+        if (_e70 < STAR_SLICES) {
         } else {
             break;
         }
         {
-            uint _e80 = k;
-            StarSlice s_1 = cloud.star_slices.inner[metal::min(unsigned(_e80), 4u)];
+            uint _e75 = k;
+            StarSlice s_1 = cloud.star_slices.inner[metal::min(unsigned(_e75), 4u)];
             float cut_1 = metal::min(s_1.reach, metal::max((5.0 * s_1.cap) * s_1.defocus, s_1.fringe_reach));
             metal::float2 r_6 = (sp / metal::float2(s_1.cell)) - s_1.offset;
             metal::int2 o = naga_f2i32(metal::floor(r_6));
-            uint _e101 = k;
-            uint salt_2 = 1000u + (4u * _e101);
+            uint _e96 = k;
+            uint salt_2 = 1000u + (4u * _e96);
             slice = metal::float4(0.0);
             n_1 = 0;
             uint2 loop_bound_1 = uint2(4294967295u);
@@ -586,51 +591,36 @@ metal::float3 star_color(
                 if (metal::all(loop_bound_1 == uint2(0u))) { break; }
                 loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
                 if (!loop_init_1) {
-                    int _e128 = n_1;
-                    n_1 = as_type<int>(as_type<uint>(_e128) + as_type<uint>(1));
+                    int _e123 = n_1;
+                    n_1 = as_type<int>(as_type<uint>(_e123) + as_type<uint>(1));
                 }
                 loop_init_1 = false;
-                int _e109 = n_1;
-                if (_e109 < 9) {
+                int _e104 = n_1;
+                if (_e104 < 9) {
                 } else {
                     break;
                 }
                 {
-                    metal::float4 _e112 = slice;
+                    metal::float4 _e107 = slice;
+                    int _e108 = n_1;
                     int _e113 = n_1;
-                    int _e118 = n_1;
-                    metal::float2 _e125 = ground_2;
-                    metal::float4 _e126 = star_cell(s_1, r_6, as_type<metal::int2>(as_type<metal::uint2>(o) + as_type<metal::uint2>(metal::int2(as_type<int>(as_type<uint>(naga_mod(_e113, 3)) - as_type<uint>(1)), as_type<int>(as_type<uint>(naga_div(_e118, 3)) - as_type<uint>(1))))), salt_2, cut_1, _e125, lut, close_light, wide_light, cloud_sampler, cloud);
-                    slice = _e112 + _e126;
+                    metal::float2 _e120 = ground_2;
+                    metal::float4 _e121 = star_cell(s_1, r_6, as_type<metal::int2>(as_type<metal::uint2>(o) + as_type<metal::uint2>(metal::int2(as_type<int>(as_type<uint>(naga_mod(_e108, 3)) - as_type<uint>(1)), as_type<int>(as_type<uint>(naga_div(_e113, 3)) - as_type<uint>(1))))), salt_2, cut_1, _e120, lut, close_light, wide_light, cloud_sampler, cloud);
+                    slice = _e107 + _e121;
                 }
             }
-            float level_7 = metal::clamp(metal::mix(close, _e15, s_1.blur), 0.0, 1.0);
-            if (s_1.unseen > 0.0) {
-                local = level_7 > 0.0;
-            } else {
-                local = false;
-            }
-            bool _e144 = local;
-            if (_e144) {
-                metal::float3 _e146 = star_paint(level_7, 1.0, lut, cloud);
-                metal::float2 _e148 = ground_2;
-                float _e149 = star_over_ground(_e146, _e148);
-                float cover_1 = s_1.unseen * _e149;
-                metal::float4 _e151 = slice;
-                slice = _e151 + metal::float4(_e146 * cover_1, cover_1);
-            }
-            float _e156 = slice.w;
-            if (_e156 > 0.0) {
-                metal::float3 _e159 = out_1;
-                metal::float4 _e160 = slice;
-                float _e163 = slice.w;
-                float _e167 = slice.w;
-                out_1 = metal::mix(_e159, _e160.xyz / metal::float3(_e163), metal::min(_e167, 1.0));
+            float _e127 = slice.w;
+            if (_e127 > 0.0) {
+                metal::float3 _e130 = out_1;
+                metal::float4 _e131 = slice;
+                float _e134 = slice.w;
+                float _e138 = slice.w;
+                out_1 = metal::mix(_e130, _e131.xyz / metal::float3(_e134), metal::min(_e138, 1.0));
             }
         }
     }
-    metal::float3 _e174 = out_1;
-    return _e174;
+    metal::float3 _e145 = out_1;
+    return _e145;
 }
 
 metal::float4 clouded(
@@ -700,15 +690,15 @@ metal::float4 backdrop_color(
     return _e6;
 }
 
-struct fs_cloud_backdrop_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
-  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
 , metal::float4 position_3 [[position]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -722,5 +712,6 @@ fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
 ) {
     const VertexOut in = { position_3, varyings.slab, varyings.t };
     metal::float4 _e3 = backdrop_color(in.position.xy, lut, close_light, wide_light, cloud_sampler, cloud, cloud_tone, cloud_tile_a, cloud_tile_b, tile_sampler);
-    return fs_cloud_backdrop_gammaOutput { _e3 };
+    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

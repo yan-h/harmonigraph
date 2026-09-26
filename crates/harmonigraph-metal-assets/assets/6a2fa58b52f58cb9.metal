@@ -21,10 +21,9 @@ struct StarSlice {
     float fringe;
     float fringe_reach;
     float reach;
-    float unseen;
-    metal::float2 spread;
     float life;
-    float _pad;
+    metal::float2 spread;
+    metal::float2 _pad;
 };
 struct type_5 {
     StarSlice inner[5];
