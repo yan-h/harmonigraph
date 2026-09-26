@@ -463,8 +463,10 @@ struct Instance {
     // ring eases in over the scene layer's attack when its note takes that
     // end, and drops to 0 the frame the key comes up. w: how much of the
     // bloom's copy of this node's ink is taken away (the Glow display), 0 for
-    // the full bloom and never past 1, so a draw into a cell may overwrite it
-    // with the kinds above 1 that `layer_distance` reads.
+    // the full bloom and NEGATIVE for a note blooming over its pane's bar
+    // (`1 - share`, the share reaching `BLOOM_MAX / BLOOM_REFERENCE_FLOOR`).
+    // Never past 1, so a draw into a cell may overwrite it with the kinds
+    // above 1 that `layer_distance` reads.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
@@ -473,8 +475,9 @@ struct Instance {
     // node — so
     // this is the MIDI picture whole and is painted off pitch_lut throughout.
     @location(3) octaves: vec3<u32>,
-    // How far each octave's LIT slice reaches across the band, packed as
-    // `octaves` is. See [`slice_reach`].
+    // How thick each octave's LIT slice is drawn, as a multiple of the band's
+    // width, a byte per slot as `octaves` is but on a scale of its own
+    // ([`slice_thickness`]). See [`slice_reach`].
     @location(1) thickness: vec3<u32>,
     @location(15) motion: vec4<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
@@ -559,9 +562,14 @@ struct VsOut {
     @location(6) @interpolate(flat) marks: vec2<u32>,
     @location(7) @interpolate(flat) melody_color: vec4<f32>,
     @location(8) @interpolate(flat) bass_color: vec4<f32>,
-    // The circle the node fits inside (`node_rim`), in this node's uv —
-    // computed once in the vertex shader because the billboard is sized on it.
+    // The circle the node fits inside (`node_rim`, or a swelled slice's reach
+    // past it — `slices_outer`), in this node's uv — computed once in the
+    // vertex shader because the billboard is sized on it.
     @location(11) @interpolate(flat) rim: f32,
+    // The farthest the node's slices reach ([`slices_outer`]): `band_outer`
+    // unless a lit slice swells past it. Per node, so taken once here rather
+    // than walked over the slots again at every fragment.
+    @location(13) @interpolate(flat) swell: f32,
     // How much of the audio ring this node wears (see Instance::ring), which
     // multiplies the ring's coverage and nothing else on the node.
     @location(14) @interpolate(flat) ring: f32,
@@ -697,7 +705,18 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // one uv in world units, which `Scene::marker_unit` is the CPU's copy of —
     // and QUAD_MARGIN is the outer glyphs' soft edge on top of it.)
     let scale = max(inst.scale, 0.05);
-    let rim = node_rim((inst.marks.x | inst.marks.y) != 0u);
+    // A lit slice swelled past the band reaches past the stack's own edge, and
+    // carries its mark out with it (`mark_radii`).
+    let marked = (inst.marks.x | inst.marks.y) != 0u;
+    var rim = node_rim(marked);
+    let swell = slices_outer(inst.thickness);
+    if swell > u.node.band_outer {
+        rim = max(rim, swell);
+        if marked && u.node.mark_thickness > 0.0 {
+            let mark_out = u.node.mark_inner + u.node.mark_thickness;
+            rim = max(rim, mark_out + (swell - u.node.band_outer));
+        }
+    }
     // ...which can want more room than the standard billboard has, on the
     // smallest sheets. Only then does the quad grow: uv 1.0 still maps to
     // the same world distance either way, so nothing about the node's own
@@ -729,6 +748,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     out.melody_color = inst.melody_color;
     out.bass_color = inst.bass_color;
     out.rim = rim;
+    out.swell = swell;
     out.ring = inst.ring;
     // Neither end of the atlas, which is the answer for every draw but the two
     // that cast a shadow ([`vs_main`], [`vs_node_cell`]) — the ink strip's pass
@@ -817,8 +837,24 @@ fn aa_width(coord_fwidth: f32, surface_scale: f32) -> f32 {
 // Each octave carries its OWN envelope so indicators fade independently
 // (a released C5 decays even while C4 holds the node fully lit).
 fn octave_level(octaves: vec3<u32>, i: u32) -> f32 {
-    let word = octaves[i / 4u];
-    return f32((word >> ((i % 4u) * 8u)) & 0xFFu) / 255.0;
+    return f32(slot_byte(octaves, i)) / 255.0;
+}
+
+// Slot `i`'s byte of a per-octave word triple, little-endian.
+fn slot_byte(words: vec3<u32>, i: u32) -> u32 {
+    return (words[i / 4u] >> ((i % 4u) * 8u)) & 0xFFu;
+}
+
+// How many codes of a thickness byte make one band width
+// (`THICKNESS_STEPS` in lib.rs, which packs it). 1 lands on a code of its
+// own, so a slice at rest unpacks to exactly 1 and takes the full-slice path;
+// the byte's top is a hair short of 4, the widest the Thickness max bar
+// reaches.
+const THICKNESS_STEPS: f32 = 64.0;
+
+// Slot `i`'s thickness, as a multiple of the band's width.
+fn slice_thickness(thickness: vec3<u32>, i: u32) -> f32 {
+    return f32(slot_byte(thickness, i)) / THICKNESS_STEPS;
 }
 
 // ---- Where the octave indicators sit ---------------------------------------
@@ -1126,50 +1162,158 @@ fn oct_slot_lit(in: VsOut, slot: i32) -> vec4<f32> {
     return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(in.octaves, slot));
 }
 
-// How far out slot `s`'s LIT slice reaches across the band from `inner` to
-// `outer`: its inner edge plus its thickness's share of the width, pushing
-// outward as the note does, and exactly `outer` at thickness 1 so a full
-// slice takes the path it always did. What the rest of the band shows is the
-// ghost an unlit slot draws there, which keeps the ring whole
-// ([`slice_zones`]).
+// How far out slot `s`'s LIT slice reaches from the band's inner edge: its
+// thickness times the band's width, hugging `inner` and pushing outward as
+// the note does. Thinner than the band leaves a notch in the ring
+// ([`slice_zones`]); thicker swells past `outer` into the marks' room, as far
+// as [`swell_cap`]. Exactly `outer` at thickness 1, so a slice at rest takes
+// the path it always did.
 fn slice_reach(in: VsOut, s: i32, inner: f32, outer: f32) -> f32 {
     if s < 0 || s >= i32(OCTAVE_SLOTS) {
         return outer;
     }
-    let t = octave_level(in.thickness, u32(s));
-    return select(inner + (outer - inner) * t, outer, t >= 1.0);
+    return reach_at(slice_thickness(in.thickness, u32(s)), inner, outer);
 }
 
-// A slice drawn short of the band's outer edge, as two zones of one wedge:
-// its lit ink out to `reach` ([`slice_reach`]), and the ghost at the node's
-// presence over the rest of the band. `full` is the whole slice's layer and
-// `ink` its [`oct_slot_ink`].
+fn reach_at(t: f32, inner: f32, outer: f32) -> f32 {
+    if t == 1.0 {
+        return outer;
+    }
+    let reach = inner + (outer - inner) * t;
+    if t < 1.0 {
+        return reach;
+    }
+    return max(outer, min(reach, swell_cap(outer)));
+}
+
+// The farthest a swelled slice reaches: the cap the mark strip keeps inside
+// the billboard, less the room a mark stands in past its slice
+// ([`mark_radii`]), so the mark after ANY slice still fits and no mark is
+// clipped for its slice's sake. One cap for every slice, marked or not, so a
+// mark arriving on a swelled slot does not move the slot. At the fresh layout
+// that room is a gap and a strip, 0.12 of a uv against a band reaching 0.89,
+// which leaves a 4× swell (1.46) just inside it.
+fn swell_cap(outer: f32) -> f32 {
+    let mark_w = max(u.node.mark_thickness, 0.0);
+    let room = select(0.0, max(u.node.mark_inner - outer, 0.0) + mark_w, mark_w > 0.0);
+    return QUAD_MARGIN - 0.02 - room;
+}
+
+// Where the mark on slot `s` stands, given the shared strip's `inner` and
+// `outer`: as far past that slot's own slice ([`slice_reach`]) as the strip
+// stands past the band, so a thinned note's mark follows it in toward the ring
+// and a swelled one's out with it, and a slice never draws over its own mark.
+// Exactly the shared strip wherever the slice is the band, which is every
+// slot at thickness 1 and every slot while the band is off.
+fn mark_radii(in: VsOut, s: i32, inner: f32, outer: f32) -> vec2<f32> {
+    let band_in = u.node.band_inner;
+    let band_out = u.node.band_outer;
+    let reach = slice_reach(in, s, band_in, band_out);
+    if band_out <= band_in || reach == band_out {
+        return vec2<f32>(inner, outer);
+    }
+    let lim = QUAD_MARGIN - 0.02;
+    let start = min(u.node.mark_inner + (reach - band_out), lim);
+    return vec2<f32>(start, min(start + max(u.node.mark_thickness, 0.0), lim));
+}
+
+// The farthest any of the node's slices reaches: `band_outer` unless a lit
+// slice swells past it. What sizes the billboard (`node_vertex`) and, carried
+// as `VsOut::swell`, keeps the band's loop running out there
+// (`base_node_ink`) and picks the layer's taper. Over every slot the packing
+// carries rather than the ring's, so a bound and never short: an unlit slot
+// reads 1 (`NodeMotion`).
+fn slices_outer(thickness: vec3<u32>) -> f32 {
+    let inner = u.node.band_inner;
+    let outer = u.node.band_outer;
+    if outer <= inner {
+        return outer;
+    }
+    var t = 1.0;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        t = max(t, slice_thickness(thickness, i));
+    }
+    return reach_at(t, inner, outer);
+}
+
+// Ease the octave layer off across the billboard's margin instead of letting
+// the quad boundary clip it flat. The fade starts at uv 1.0 — the outer band's
+// own limit — so it touches nothing but what reaches past the band: the aa
+// fringe of a band dialed right out to the edge, eased to zero by
+// GLYPH_FADE_LIMIT. On a node with a slice swelled past the band (`swells`)
+// the layer lives in the marks' room instead, and takes their safety taper at
+// the billboard's edge.
+fn glyph_taper(d: f32, swells: bool) -> f32 {
+    if swells {
+        return 1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d);
+    }
+    return 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
+}
+
+// A lit slice whose reach is not the band's outer edge, as two zones of one
+// wedge. The NEAR zone runs from the band's inner edge to whichever of the two
+// edges comes first, and is drawn as a full slice draws, `ink` being its
+// [`oct_slot_ink`]; `band` is the whole band's sector.
+//
+//  - Thinner than the band, the zone past the slice is the NOTCH: the ghost at
+//    only what the node's presence leaves over this slot's level (the
+//    `ghost_rest` of `oct_slot_ink`). Nothing while the note is fully lit, and
+//    the idle ring filling back in as its level falls, to the ordinary
+//    full-width ghost once the slot goes out (and reads 1 again).
+//  - Thicker, the zone past the band is the swell: lit ink alone, at the
+//    slot's own level, so a released note's swell fades with it rather than
+//    turning to ghost where no ghost is ever drawn.
 //
 // The two PARTITION the wedge's coverage rather than compositing one over the
-// other, so the antialiased edge at `reach` is a crossfade and the band's own
-// edges are counted once, the same bargain the full slice makes. `xyz` is the
-// colour, `w` the coverage, and the lit zone's own layer comes back beside
-// them for the shadow and the wash.
+// other, so the antialiased edge between them is a crossfade and the outer
+// edges are counted once, the same bargain the full slice makes. `ink` is the
+// colour and coverage together; `lit` the geometric coverage of the lit
+// slice, for the wash; `near` and `far` the zones' layers at their own
+// opacities (`far` the whole wedge out to its outer edge, which the Distance
+// union takes as the outer zone), and `rest` the outer zone's geometric
+// coverage, for the shadow's footprint.
 struct SliceZones {
     ink: vec4<f32>,
-    lit: NodeLayer,
+    lit: f32,
+    near: NodeLayer,
+    far: NodeLayer,
+    rest: f32,
 }
 
 fn slice_zones(
     in: VsOut, s: i32, ring: OctRing, uv: vec2<f32>, d: f32,
-    full: NodeLayer, ink: vec4<f32>, inner: f32, reach: f32, aa: f32,
+    band: NodeLayer, ink: vec4<f32>, inner: f32, outer: f32, reach: f32, aa: f32,
 ) -> SliceZones {
     // A collapsed annulus is not a coverage of zero (`glyph_band`), so a slice
     // with no thickness at all has no lit zone rather than a quarter of one.
-    var lit = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+    var slice = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
     if reach > inner {
-        lit = outer_glyph(s, ring, uv, glyph_band(d, inner, reach, 1.0, aa), inner, reach, aa);
+        slice = outer_glyph(s, ring, uv, glyph_band(d, inner, reach, 1.0, aa), inner, reach, aa);
     }
-    let lit_cov = layer_coverage(lit) * ink.w;
-    let ghost_cov = max(layer_coverage(full) - layer_coverage(lit), 0.0) * in.params.x;
-    let cov = lit_cov + ghost_cov;
-    let rgb = (ink.xyz * lit_cov + u.lattice_ground.rgb * ghost_cov) / max(cov, 1e-4);
-    return SliceZones(vec4<f32>(rgb, cov), lit);
+    let level = oct_slot_level(in.octaves, s);
+    var near = band;
+    var far = slice;
+    var far_rgb = oct_slot_lit(in, s).xyz;
+    var far_level = level;
+    if reach < outer {
+        near = slice;
+        far = band;
+        far_rgb = u.lattice_ground.rgb;
+        far_level = max(in.params.x - level, 0.0);
+    }
+    let near_cov = layer_coverage(near);
+    let rest = max(layer_coverage(far) - near_cov, 0.0);
+    let near_ink = near_cov * ink.w;
+    let far_ink = rest * far_level;
+    let cov = near_ink + far_ink;
+    let rgb = (ink.xyz * near_ink + far_rgb * far_ink) / max(cov, 1e-4);
+    return SliceZones(
+        vec4<f32>(rgb, cov),
+        layer_coverage(slice),
+        NodeLayer(near.sd, ink.w, near.coverage),
+        NodeLayer(far.sd, far_level, far.coverage),
+        rest,
+    );
 }
 
 // The signed field and level of one annular sector. The radial field arrives
@@ -1608,6 +1752,51 @@ fn mark_extension(
     return NodeLayer(sd, strip.level, coverage);
 }
 
+// The marks in `slots` as the node DRAWS them: each on its own slot's strip
+// ([`mark_radii`]), `d` being the fragment's radius and `strip` the shared
+// strip's layer between `inner` and `outer`. A slot whose slice is the band
+// reads the shared strip itself, so where every marked slice is, this is
+// [`mark_extension`]'s answer; the light's own reading (`ink_at`) takes the
+// marks angularly and keeps that.
+fn drawn_marks(
+    in: VsOut,
+    slots: u32,
+    ring: OctRing,
+    uv: vec2<f32>,
+    d: f32,
+    strip: NodeLayer,
+    inner: f32,
+    outer: f32,
+    aa: f32,
+    analytic: bool,
+) -> NodeLayer {
+    let top = ring.base + i32(oct_span()) - 1;
+    var sd = EMPTY_DISTANCE;
+    var coverage = 0.0;
+    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
+        let s = i32(i);
+        if (slots & (1u << i)) == 0u || s < ring.base || s > top {
+            continue;
+        }
+        let r = mark_radii(in, s, inner, outer);
+        var own = strip;
+        if r.x != inner || r.y != outer {
+            if r.y <= r.x {
+                continue;
+            }
+            own = glyph_band(d, r.x, r.y, 1.0, aa);
+        }
+        // Off this slot's strip is `mark_extension`'s own early-out, per slot.
+        if EARLY_OUT && !analytic && layer_coverage(own) <= 0.0 {
+            continue;
+        }
+        let layer = outer_glyph(s, ring, uv, own, r.x, r.y, aa);
+        sd = min(sd, layer.sd);
+        coverage = max(coverage, layer.coverage);
+    }
+    return NodeLayer(sd, strip.level, coverage);
+}
+
 // Distance from `uv` to the filled wedge between `edges` (`oct_sector`'s pair,
 // counter-clockwise edge first) out to radius `r`: negative inside it, and
 // outside it the distance to the nearest point of it.
@@ -1951,8 +2140,14 @@ fn base_node_ink(
     if band_out > band_in {
         band = glyph_band(d, band_in, band_out, 1.0, aa);
     }
+    // ...except where a lit slice swells past the band (`slice_reach`), out
+    // to here: the band's own coverage is zero past its edge, and the swell is
+    // still there to draw.
+    let swell_out = in.swell;
+    let swells = swell_out > band_out;
+    let in_swell = swells && d < swell_out + aa;
     for (var i = 0u;
-        i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0);
+        i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0 || in_swell);
         i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
@@ -1961,7 +2156,6 @@ fn base_node_ink(
         }
         let shape_layer = outer_glyph(slot, oct, in.uv, band, band_in, band_out, aa);
         let shape = layer_coverage(shape_layer);
-        glyph_mask = max(glyph_mask, shape_layer.coverage);
         // Ghosts carry the ring's shape in the rings' own ground, and a lit
         // slot is that ghost with its pitch painted OVER it — never one in
         // place of the other.
@@ -1976,27 +2170,27 @@ fn base_node_ink(
         // How much of the wedge the lit ink covers, for the wash below.
         var lit_shape = shape;
         let reach = slice_reach(in, slot, band_in, band_out);
-        if reach >= band_out {
+        if reach == band_out {
+            glyph_mask = max(glyph_mask, shape_layer.coverage);
             node_sd = layer_distance(
                 node_sd,
                 NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
                 in,
             );
         } else {
-            let zones = slice_zones(in, slot, oct, in.uv, d, shape_layer, ink, band_in, reach, aa);
+            let zones =
+                slice_zones(in, slot, oct, in.uv, d, shape_layer, ink, band_in, band_out, reach, aa);
             slot_rgb = zones.ink.xyz;
             cov = zones.ink.w;
-            lit_shape = layer_coverage(zones.lit);
-            node_sd = layer_distance(
-                node_sd,
-                NodeLayer(zones.lit.sd, opacity, zones.lit.coverage),
-                in,
+            lit_shape = zones.lit;
+            // The footprint is where ink is drawn: the notch past a thin
+            // slice masks nothing while the note is fully lit.
+            glyph_mask = max(
+                glyph_mask,
+                zones.near.coverage + zones.rest * mask_level(zones.far.level),
             );
-            node_sd = layer_distance(
-                node_sd,
-                NodeLayer(shape_layer.sd, presence, shape_layer.coverage),
-                in,
-            );
+            node_sd = layer_distance(node_sd, zones.near, in);
+            node_sd = layer_distance(node_sd, zones.far, in);
         }
         if cov > glyph {
             glyph = cov;
@@ -2015,12 +2209,7 @@ fn base_node_ink(
             glyph_lit = lit_shape * level;
         }
     }
-    // Ease the glyph layer off across the billboard's margin instead of
-    // letting the quad boundary clip it flat. The fade starts at uv 1.0 —
-    // the outer band's own limit — so it touches nothing but what reaches
-    // past the band: the aa fringe of a band dialed right out to the edge,
-    // eased to zero by GLYPH_FADE_LIMIT.
-    let glyph_taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
+    let glyph_taper = glyph_taper(d, swells);
     glyph = glyph * glyph_taper;
     glyph_lit = glyph_lit * glyph_taper;
     glyph_mask = glyph_mask * glyph_taper;
@@ -2071,20 +2260,24 @@ fn base_node_ink(
     if mark_out > mark_in {
         mark_strip = glyph_band(d, mark_in, mark_out, 1.0, aa);
     }
-    let melody_layer = mark_extension(
+    let melody_layer = drawn_marks(
+        in,
         in.marks.x,
         oct,
         in.uv,
+        d,
         NodeLayer(mark_strip.sd, in.params.y, mark_strip.coverage),
         mark_in,
         mark_out,
         aa,
         analytic,
     );
-    let bass_layer = mark_extension(
+    let bass_layer = drawn_marks(
+        in,
         in.marks.y,
         oct,
         in.uv,
+        d,
         NodeLayer(mark_strip.sd, in.params.z, mark_strip.coverage),
         mark_in,
         mark_out,
@@ -2155,6 +2348,8 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
     let mark_in = min(u.node.mark_inner, QUAD_MARGIN - 0.02);
     let mark_out = min(mark_in + max(u.node.mark_thickness, 0.0), QUAD_MARGIN - 0.02);
     let anchor_radius = select(0.5 * (mark_in + mark_out), 0.5 * (band_in + band_out), band_out > band_in);
+    // The settled path's taper, whole-node as there (`glyph_taper`).
+    let swells = in.swell > band_out;
     for (var i = 0u; i < oct_span(); i += 1u) {
         let slot = oct.base + i32(i);
         let p = slice_progress(in, i);
@@ -2174,36 +2369,44 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
         if band_out > band_in {
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, band_in, band_out, 1.0, soft), band_in, band_out, soft);
             let ink = oct_slot_ink(in, slot);
-            let taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
+            let taper = glyph_taper(d, swells);
             let level = oct_slot_level(in.octaves, slot);
             var coverage = shape.coverage * taper * ink.w * opacity;
             var rgb = ink.rgb;
             var lit = level / max(ink.w, 1e-4);
             let reach = slice_reach(in, slot, band_in, band_out);
-            if reach >= band_out {
+            if reach == band_out {
                 result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
+                result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
             } else {
-                let zones = slice_zones(in, slot, oct, uv, d, shape, ink, band_in, reach, soft);
+                let zones = slice_zones(in, slot, oct, uv, d, shape, ink, band_in, band_out, reach, soft);
                 rgb = zones.ink.xyz;
                 coverage = zones.ink.w * taper * opacity;
-                lit = level * zones.lit.coverage / max(zones.ink.w, 1e-4);
-                result.sd = layer_distance(result.sd, NodeLayer(zones.lit.sd * scale, ink.w * opacity, zones.lit.coverage), in);
-                result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, in.params.x * opacity, shape.coverage), in);
+                lit = level * zones.lit / max(zones.ink.w, 1e-4);
+                let near = zones.near;
+                let far = zones.far;
+                result.sd = layer_distance(result.sd, NodeLayer(near.sd * scale, near.level * opacity, near.coverage), in);
+                result.sd = layer_distance(result.sd, NodeLayer(far.sd * scale, far.level * opacity, far.coverage), in);
+                let footprint = near.coverage * mask_level(near.level * opacity)
+                    + zones.rest * mask_level(far.level * opacity);
+                result.mask = max(result.mask, footprint * taper);
             }
             if coverage > result.alpha {
                 result.rgb = rgb * coverage;
                 result.alpha = coverage;
                 result.lit = lit;
             }
-            result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
         }
-        if slot >= 0 && slot < i32(OCTAVE_SLOTS) && mark_out > mark_in {
+        // Each slot's mark on its own strip (`mark_radii`), which is the shared
+        // one at thickness 1.
+        let strip = mark_radii(in, slot, mark_in, mark_out);
+        if slot >= 0 && slot < i32(OCTAVE_SLOTS) && strip.y > strip.x {
             let bit = 1u << u32(slot);
             let melody = select(0.0, in.params.y, (in.marks.x & bit) != 0u);
             let bass = select(0.0, in.params.z, (in.marks.y & bit) != 0u);
             let level = max(melody, bass) * opacity;
             let color = select(in.bass_color.rgb, in.melody_color.rgb, melody > bass);
-            let shape = outer_glyph(slot, oct, uv, glyph_band(d, mark_in, mark_out, level, soft), mark_in, mark_out, soft);
+            let shape = outer_glyph(slot, oct, uv, glyph_band(d, strip.x, strip.y, level, soft), strip.x, strip.y, soft);
             let taper = 1.0 - smoothstep(QUAD_MARGIN - 0.04, QUAD_MARGIN, d);
             let coverage = layer_coverage(shape) * taper;
             if coverage > marks.alpha {
@@ -2661,7 +2864,14 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
     // display, `Instance::params.w` as what is taken away), so a note's halo
     // follows how it is played while the ink on screen stays as it is. The
     // shadow the copy carries is left whole.
-    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink * (1.0 - in.params.w));
+    //
+    // A share past 1 — a note blooming over its pane's bar — brightens the
+    // copy and does not cover more of what is under it: an alpha past 1 would
+    // SUBTRACT the nodes behind it from the copy through the premultiplied
+    // blend. Under 1 the two scale together, a fainter copy of the ink.
+    let share = 1.0 - in.params.w;
+    let bloom_ink = vec4<f32>(bloom.ink.rgb * share, bloom.ink.a * min(share, 1.0));
+    return SceneOut(seen.other, seen.ink, bloom.other, bloom_ink);
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -2815,8 +3025,10 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
             // [`oct_slot_lit`] and not the drawn ink: what a slice is lit at is
             // its own level, where the ink's opacity is the node's PRESENCE —
             // the ghost included, which is the backdrop and weighs nothing.
+            // Over the width the lit slice is DRAWN, thinned or swelled
+            // (`slice_reach`), which is the band's at rest.
             let ink = oct_slot_lit(in, owner);
-            let w = cov * ink.w * (band_out - band_in);
+            let w = cov * ink.w * (slice_reach(in, owner, band_in, band_out) - band_in);
             rgb = rgb + ink.xyz * w;
             wsum = wsum + w;
         }

@@ -128,8 +128,23 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         }
         scene
     };
+    // Lit slices thinned and swelled (`slice_reach`), which the band's
+    // early-out has to let run past the band's edge and the marks' per-slot
+    // strips skip on radii of their own (`drawn_marks`); on both rows.
+    let shaped = |mut scene: Scene| {
+        for (i, node) in scene.nodes.iter_mut().enumerate() {
+            for (slot, thickness) in node.thickness.iter_mut().enumerate() {
+                if node.octaves[slot] > 0.0 {
+                    *thickness = [1.75, 0.3, 2.5, 0.0, 1.2][(i + slot) % 5];
+                }
+            }
+        }
+        scene
+    };
     for (name, scene) in [
         ("lit", parity_scene()),
+        ("shaped slices", shaped(wide_shadow())),
+        ("shaped slices on a distance row", shaped(distance())),
         ("ringing", ringing()),
         ("folded", folded()),
         ("a wide shadow", wide_shadow()),

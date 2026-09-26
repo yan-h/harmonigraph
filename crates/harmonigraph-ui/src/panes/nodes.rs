@@ -4,127 +4,14 @@ use super::param_bar;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, OctaveStrip, StackBar, ValueBar};
 use harmonigraph_scene::{
-    AnimationOrder, IntensitySource, IntensityTarget, SpectralReading, ViewConfig, GAIN_RANGE_MAX,
-    GAIN_RANGE_MIN, GAP_MAX, INTENSITY_WEIGHT_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE, PITCH_CEIL,
-    PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
+    AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
+    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
     SPECTRAL_WIDTH_MIN,
 };
 
-// The Lattice page's Notes section ([`super::pages`]): layer geometry, note
-// motion and intensity, then the shared octave layout and the audio ring's
-// readings.
-
-/// How each note is drawn from how it is played: each of its velocity and
-/// expressions routed to one display with a weight of its own, over a base per
-/// display. A block of the Lattice page's Notes, though the roll reads the same routes.
-pub(super) fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    super::block(ui, "Note intensity");
-    {
-        fn weight<'a>(value: &'a mut f32, label: &'a str) -> ValueBar<'a> {
-            ValueBar::new(value, -INTENSITY_WEIGHT_MAX..=INTENSITY_WEIGHT_MAX, label)
-                .magnet(0.0, 0.03)
-        }
-        let targets = IntensityTarget::ALL.map(|target| match target {
-            IntensityTarget::Off => (target, "Off", "Drives nothing."),
-            IntensityTarget::Opacity => (
-                target,
-                "Opacity",
-                "Drives how opaque the note is: the lattice's octave slices and the roll's ribbons.",
-            ),
-            IntensityTarget::Glow => (
-                target,
-                "Bloom",
-                "Drives how much the note blooms: the halo round its lattice slices (the Bloom bar) and round its roll ribbon (the Ribbon bloom bar). Each needs its bloom above 0.",
-            ),
-            IntensityTarget::Thickness => (
-                target,
-                "Thickness",
-                "Drives how thick the note is drawn: the roll's ribbons about their center line, and the lattice's octave slices out from the band's inner edge.",
-            ),
-        });
-        let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {
-            choice_row(ui, name, &mut source.target, &targets);
-            ui.add_enabled_ui(source.target != IntensityTarget::Off, |ui| {
-                weight(&mut source.weight, &format!("{name} weight")).show(ui).on_hover_text(
-                    format!(
-                        "{hover} Multiplied by this before its display adds it; \
-                         negative turns it around."
-                    ),
-                );
-            });
-        };
-        let intensity = &mut view.intensity;
-        route(ui, &mut intensity.velocity, "Velocity", "The note-on velocity, 0 to 1.");
-        route(
-            ui,
-            &mut intensity.gain,
-            "Gain",
-            "The note's gain expression, in dB off unity divided by Gain range: 0 at unity. \
-             Routed alone, it needs its display's base at 1 so that unity draws in full.",
-        );
-        ui.add_enabled_ui(intensity.gain.target != IntensityTarget::Off, |ui| {
-            ValueBar::new(&mut intensity.gain_range, GAIN_RANGE_MIN..=GAIN_RANGE_MAX, "Gain range")
-                .unit(1.0, " dB")
-                .decimals(0)
-                .show(ui)
-                .on_hover_text(
-                    "How many dB of gain make one Gain weight's worth. \
-                     At 24 dB, +12 dB adds half of it and -24 dB takes all of it away.",
-                );
-        });
-        route(
-            ui,
-            &mut intensity.pressure,
-            "Pressure",
-            "The note's pressure (aftertouch), from 0 unpressed to 1.",
-        );
-        route(
-            ui,
-            &mut intensity.timbre,
-            "Timbre",
-            "The note's timbre expression, from 0 to 1. An untouched timbre lane sits at 0.5.",
-        );
-        let base_hover = |display: &str| {
-            format!(
-                "Where the {display} starts before the sources routed to it add in; \
-                 the sum is held between 0 and 1. \
-                 A display nothing is routed to draws in full and ignores this."
-            )
-        };
-        // Each base only counts while something is routed to its display, so
-        // it is greyed out otherwise, as a source's weight is while it is Off.
-        let routed = IntensityTarget::ALL.map(|target| intensity.routes_to(target));
-        let base = |ui: &mut egui::Ui, value: &mut f32, label: &str, target, hover: String| {
-            ui.add_enabled_ui(routed[target as usize], |ui| {
-                weight(value, label).show(ui).on_hover_text(&hover).on_disabled_hover_text(
-                    format!("{hover} Route a source to it above to use this."),
-                );
-            });
-        };
-        base(
-            ui,
-            &mut intensity.opacity_base,
-            "Opacity base",
-            IntensityTarget::Opacity,
-            base_hover("opacity"),
-        );
-        base(
-            ui,
-            &mut intensity.glow_base,
-            "Bloom base",
-            IntensityTarget::Glow,
-            base_hover("bloom"),
-        );
-        base(
-            ui,
-            &mut intensity.thickness_base,
-            "Thickness base",
-            IntensityTarget::Thickness,
-            base_hover("thickness"),
-        );
-    }
-}
+// The Lattice page's Notes section ([`super::pages`]): layer geometry and note
+// motion, then the shared octave layout and the audio ring's readings.
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
 /// pitch axis shared by the MIDI ring, audio ring and melody/bass marks.

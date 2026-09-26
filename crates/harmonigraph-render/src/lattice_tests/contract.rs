@@ -165,4 +165,16 @@ fn octave_packing_matches_the_documented_layout() {
     // Out-of-range levels clamp instead of corrupting neighbors.
     let words = pack_octaves(&[2.0; harmonigraph_scene::OCTAVE_SLOTS]);
     assert_eq!(words[0], 0xFFFF_FFFF);
+    // Thickness takes the same layout on its own scale, which the shader
+    // divides back out: 1 unpacks EXACTLY, so a slice at rest takes the
+    // full-slice path, and the top of the Thickness max bar rounds to the byte.
+    let steps = crate::shadow::tests::shader_const(SHADER_SRC, "THICKNESS_STEPS");
+    assert_eq!(steps.parse::<f32>().expect("a number"), THICKNESS_STEPS);
+    let mut thickness = [1.0f32; harmonigraph_scene::OCTAVE_SLOTS];
+    thickness[5] = *harmonigraph_scene::THICKNESS_MAX_RANGE.end();
+    thickness[6] = 0.5;
+    let words = pack_thickness(&thickness);
+    assert_eq!(unpack_thickness(&words, 0), 1.0);
+    assert_eq!(unpack_thickness(&words, 6), 0.5);
+    assert!((unpack_thickness(&words, 5) - 4.0).abs() < 0.02, "{}", unpack_thickness(&words, 5));
 }
