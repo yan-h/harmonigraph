@@ -242,9 +242,9 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Tuning => 7,
             panes::Tab::Colors => 2,
-            // The picture, Note intensity (8), then bloom and glow (9) with its
+            // The picture, Note intensity (7), then bloom and glow (9) with its
             // texture switched off, then two shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 17 + 8 + 9 + 4,
+            panes::Tab::LatticeSettings => 17 + 7 + 9 + 4,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -284,7 +284,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 23 + 8 + 14 + 6,
+            visits: 23 + 7 + 14 + 6,
             ..base
         });
     }

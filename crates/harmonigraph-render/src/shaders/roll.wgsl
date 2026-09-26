@@ -592,10 +592,20 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
 /// its contribution through
 /// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
-    // On screen the body wears its fade; in the bloom's pass, its glow, so
-    // the light a note gives off follows its own display.
-    let ends = select(in.reads.xy, in.reads.zw, locals.light > 0.5);
-    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, ends);
+    let body = in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in);
+    if (locals.light < 0.5) {
+        return body * along(in, in.reads.xy);
+    }
+    // In the bloom's pass the body wears its glow instead, so the light a note
+    // gives off follows its own display. A glow past 1 is a note blooming over
+    // the pass's strength: its colour takes the whole of it, into a float
+    // target, and its alpha stops at 1. Past 1 an alpha would take more than
+    // everything under it away in the blend, and the chain's threshold reads
+    // colour over alpha, so the note's colour reads that much brighter there
+    // too: past the knee a share of 2 is twice the light, and a dim note is
+    // lifted through it.
+    let glow = along(in, in.reads.zw);
+    return vec4<f32>(body.rgb * glow, body.a * min(glow, 1.0));
 }
 
 // One of the note's intensity readings at this depth: `ends` is its value at

@@ -528,10 +528,11 @@ impl NodeMotion {
             let motion = &self.nodes[&node.lattice_pos];
             node.slice_progress = motion.progress;
             // Opacity fades each slot's ink, and the node's presence with it,
-            // while the envelope under it runs untouched. Thickness narrows a
+            // while the envelope under it runs untouched. Thickness reshapes a
             // LIT slot only: a slot keeps its last reading once released, and
             // an unlit one draws the ghost at full width whatever it read, so
-            // it goes as 1 and the shader keeps its full-slice path there.
+            // it goes as 1 and the shader keeps its full-slice path there —
+            // and its mark goes back to standing off the band.
             let fades = motion.readings.map(|reading| reading.opacity);
             node.octaves = std::array::from_fn(|i| motion.levels[i] * fades[i]);
             node.thickness = std::array::from_fn(|i| {
@@ -902,11 +903,11 @@ mod tests {
         assert_eq!(slot(&held), (1.0, Some(1.0), false, 1.0));
         assert_eq!(origin(&held).bloom, 1.5);
     }
-    /// Pressure routed to thickness narrows the lit slot and nothing else:
-    /// its ink and light stay full, and once the note is gone the slot reads
-    /// full width again though it keeps its last reading.
+    /// Pressure routed to thickness swells the lit slot from rest and nothing
+    /// else: its ink and light stay full, and once the note is gone the slot
+    /// reads full width again though it keeps its last reading.
     #[test]
-    fn thickness_narrows_a_lit_slot_only() {
+    fn thickness_reshapes_a_lit_slot_only() {
         use crate::{IntensitySource, IntensityTarget};
         let intensity = crate::IntensitySettings {
             pressure: IntensitySource { target: IntensityTarget::Thickness, weight: 1.0 },

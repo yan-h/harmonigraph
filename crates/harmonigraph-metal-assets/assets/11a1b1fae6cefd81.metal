@@ -136,6 +136,7 @@ constant uint INK_STRIP_N = 64u;
 constant bool EARLY_OUT = true;
 constant float INK_FLOOR = 0.01;
 constant uint OCTAVE_SLOTS = 11u;
+constant float THICKNESS_STEPS = 64.0;
 constant uint MAX_SPAN = 11u;
 constant uint PITCH_LUT_N = 64u;
 constant float BEND_ROUNDING = 0.4;

@@ -444,12 +444,14 @@ pub struct NodeInstance {
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
-    /// How far each octave's LIT slice reaches across the band, 0..1 by the
-    /// same slots as [`octaves`](Self::octaves): it fills from the band's inner
-    /// edge out to this share of the band's width, and the rest of the band
-    /// keeps the ghost an unlit slot draws, so the ring stays whole. 1 is the
-    /// full slice, which is what every slot reads that is not lit or that
-    /// nothing drives (see [`crate::intensity`]).
+    /// How thick each octave's LIT slice is drawn, as a multiple of the band's
+    /// width, by the same slots as [`octaves`](Self::octaves): the slice runs
+    /// from the band's inner edge out this far. Thinner leaves a notch in the
+    /// ring that the ghost fills back in only as the note releases; thicker
+    /// swells past the band toward the marks, and a slot's mark stands off its
+    /// slice rather than off the band. 1 is the full slice, which is what every
+    /// slot reads that is not lit or that nothing drives (see
+    /// [`crate::intensity`]).
     pub thickness: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
@@ -577,9 +579,11 @@ pub struct NodeInstance {
     /// level carried on the Glow attack and release, a row that holds still
     /// while the node keeps glowing, and the coefficient that carried it.
     pub glow: GlowStep,
-    /// How much of this node's ink the lattice's BLOOM takes, 0..1: the Glow
-    /// display's reading (see [`crate::intensity`]) of the loudest note
-    /// lighting it, and 1 where nothing is routed to Glow or nothing is lit.
+    /// How much of this node's ink the lattice's BLOOM takes, against
+    /// [`Scene::bloom_strength`]: the Glow display's reading (see
+    /// [`crate::intensity`]) of the loudest note lighting it, past 1 for a note
+    /// blooming over its pane's bar, and 1 where nothing is routed to Glow or
+    /// nothing is lit.
     /// The ink on screen is untouched; only the bright pass's copy of it is
     /// scaled, so a note's halo follows its playing. The node glow above does
     /// not read it.

@@ -80,8 +80,14 @@ impl LatticeCallback {
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
             // `w` is how much of the bloom this node GIVES UP, so the zero it
-            // always was is the full bloom.
-            params: [n.activation, n.melody_level, n.bass_level, 1.0 - n.bloom.clamp(0.0, 1.0)],
+            // always was is the full bloom, and a note blooming over its bar
+            // gives up a negative amount. Bounded by the most a share can be.
+            params: [
+                n.activation,
+                n.melody_level,
+                n.bass_level,
+                1.0 - n.bloom.clamp(0.0, BLOOM_SHARE_MAX),
+            ],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -103,7 +109,7 @@ impl LatticeCallback {
             // Untimed snapshots seed current ink. Encoded timed frames replace
             // the third value with the renderer's own history coefficient.
             glow: [n.glow.level, n.glow.row as f32, 1.0, 1.0],
-            thickness: pack_octaves(&n.thickness),
+            thickness: pack_thickness(&n.thickness),
         };
 
         // A node that can paint nothing is not shipped at all. The shader
@@ -227,17 +233,21 @@ impl LatticeCallback {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
             // radii of its own and may stand outside the ring stack.
+            // A lit slice swelled past the band reaches past it, and carries
+            // its mark out by as much (`slices_outer`, `mark_radii`).
+            let swell = swelled_past_band(scene, &g.thickness);
             let mut rim = scene.rings_outer.max(0.0);
-            if (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0 {
-                rim = rim.max(scene.mark_inner + scene.mark_thickness);
+            if swell > 0.0 {
+                rim = rim.max(scene.outer_outer + swell);
+            }
+            let marked = (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0;
+            let mark_rim = scene.mark_inner + scene.mark_thickness + swell;
+            if marked {
+                rim = rim.max(mark_rim);
             }
             let midi_rim =
-                if scene.outer_outer > scene.outer_inner { scene.outer_outer } else { 0.0 };
-            let midi_rim = if (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0 {
-                midi_rim.max(scene.mark_inner + scene.mark_thickness)
-            } else {
-                midi_rim
-            };
+                if scene.outer_outer > scene.outer_inner { scene.outer_outer + swell } else { 0.0 };
+            let midi_rim = if marked { midi_rim.max(mark_rim) } else { midi_rim };
             rim = rim.max(scene.note_animation.reach(midi_rim));
             if ringing && g.ring > 0.0 {
                 rim = rim.max(scene.spectral.outer);

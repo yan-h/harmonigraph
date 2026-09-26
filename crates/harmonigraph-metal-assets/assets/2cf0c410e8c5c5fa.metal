@@ -130,9 +130,9 @@ struct VsOut {
     metal::float4 melody_color;
     metal::float4 bass_color;
     float rim;
+    float swell;
     float ring;
     float ink_carry;
-    char _pad14[4];
     metal::float4 shadow_box;
     metal::float4 shadow_at;
 };
@@ -178,6 +178,7 @@ constant uint INK_STRIP_N = 64u;
 constant bool EARLY_OUT = true;
 constant float INK_FLOOR = 0.01;
 constant uint OCTAVE_SLOTS = 11u;
+constant float THICKNESS_STEPS = 64.0;
 constant uint MAX_SPAN = 11u;
 constant uint PITCH_LUT_N = 64u;
 constant float BEND_ROUNDING = 0.4;
@@ -318,48 +319,165 @@ metal::float2 spectral_radii(
     return metal::float2(_e3, _e7);
 }
 
+uint naga_div(uint lhs, uint rhs) {
+    return lhs / metal::select(rhs, 1u, rhs == 0u);
+}
+
+uint naga_mod(uint lhs, uint rhs) {
+    return lhs % metal::select(rhs, 1u, rhs == 0u);
+}
+
+uint slot_byte(
+    metal::uint3 words,
+    uint i
+) {
+    return (words[metal::min(unsigned(naga_div(i, 4u)), 2u)] >> (naga_mod(i, 4u) * 8u)) & 255u;
+}
+
+float slice_thickness(
+    metal::uint3 thickness,
+    uint i_1
+) {
+    uint _e2 = slot_byte(thickness, i_1);
+    return static_cast<float>(_e2) / THICKNESS_STEPS;
+}
+
+float swell_cap(
+    float outer,
+    constant Uniforms& u
+) {
+    float _e4 = u.node.mark_thickness;
+    float mark_w = metal::max(_e4, 0.0);
+    float _e10 = u.node.mark_inner;
+    float room = (mark_w > 0.0) ? (metal::max(_e10 - outer, 0.0) + mark_w) : 0.0;
+    return 1.58 - room;
+}
+
+float reach_at(
+    float t,
+    float inner,
+    float outer_1,
+    constant Uniforms& u
+) {
+    if (t == 1.0) {
+        return outer_1;
+    }
+    float reach = inner + ((outer_1 - inner) * t);
+    if (t < 1.0) {
+        return reach;
+    }
+    float _e10 = swell_cap(outer_1, u);
+    return metal::max(outer_1, metal::min(reach, _e10));
+}
+
+float slices_outer(
+    metal::uint3 thickness_1,
+    constant Uniforms& u
+) {
+    float t_1 = 1.0;
+    uint i_2 = 0u;
+    float inner_1 = u.node.band_inner;
+    float outer_2 = u.node.band_outer;
+    if (outer_2 <= inner_1) {
+        return outer_2;
+    }
+    uint2 loop_bound = uint2(4294967295u);
+    bool loop_init = true;
+    while(true) {
+        if (metal::all(loop_bound == uint2(0u))) { break; }
+        loop_bound -= uint2(loop_bound.y == 0u, 1u);
+        if (!loop_init) {
+            uint _e21 = i_2;
+            i_2 = _e21 + 1u;
+        }
+        loop_init = false;
+        uint _e14 = i_2;
+        if (_e14 < OCTAVE_SLOTS) {
+        } else {
+            break;
+        }
+        {
+            float _e17 = t_1;
+            uint _e18 = i_2;
+            float _e19 = slice_thickness(thickness_1, _e18);
+            t_1 = metal::max(_e17, _e19);
+        }
+    }
+    float _e24 = t_1;
+    float _e25 = reach_at(_e24, inner_1, outer_2, u);
+    return _e25;
+}
+
 VsOut node_vertex(
     uint vertex_index_1,
     Instance inst_1,
     constant Uniforms& u
 ) {
     type_14 corners = type_14 {{metal::float2(-1.0, -1.0), metal::float2(1.0, -1.0), metal::float2(-1.0, 1.0), metal::float2(1.0, 1.0)}};
+    float rim_2 = {};
     bool local_2 = {};
     bool local_3 = {};
+    bool local_4 = {};
     VsOut out_1 = {};
     metal::float2 corner = corners.inner[metal::min(unsigned(vertex_index_1), 3u)];
     float scale_1 = metal::max(inst_1.scale, 0.05);
-    float _e28 = node_rim((inst_1.marks.x | inst_1.marks.y) != 0u, u);
-    float _e32 = u.node.band_outer;
-    float _e36 = u.node.band_inner;
-    if (!((_e32 > _e36))) {
-        if ((inst_1.marks.x | inst_1.marks.y) != 0u) {
-            float _e53 = u.node.mark_thickness;
-            local_3 = _e53 > 0.0;
+    bool marked_1 = (inst_1.marks.x | inst_1.marks.y) != 0u;
+    float _e28 = node_rim(marked_1, u);
+    rim_2 = _e28;
+    float _e31 = slices_outer(inst_1.thickness, u);
+    float _e35 = u.node.band_outer;
+    if (_e31 > _e35) {
+        float _e37 = rim_2;
+        rim_2 = metal::max(_e37, _e31);
+        if (marked_1) {
+            float _e44 = u.node.mark_thickness;
+            local_2 = _e44 > 0.0;
         } else {
-            local_3 = false;
+            local_2 = false;
         }
-        bool _e57 = local_3;
-        local_2 = _e57;
-    } else {
-        local_2 = true;
+        bool _e48 = local_2;
+        if (_e48) {
+            float _e52 = u.node.mark_inner;
+            float _e56 = u.node.mark_thickness;
+            float mark_out = _e52 + _e56;
+            float _e58 = rim_2;
+            float _e62 = u.node.band_outer;
+            rim_2 = metal::max(_e58, mark_out + (_e31 - _e62));
+        }
     }
-    bool _e59 = local_2;
-    float midi_rim = _e59 ? _e28 : 0.0;
-    float _e66 = u.node.pose.z;
-    metal::float2 _e68 = spectral_radii(u);
-    float _e75 = u.node.animation;
-    float bounds = (_e75 != 0.0) ? metal::max(_e28, metal::max(midi_rim * _e66, _e68.y)) : _e28;
-    float _e79 = shadow_reach_uv(scale_1, u);
-    float _e80 = quad_margin(bounds, _e79);
-    float _e84 = u.node.radius;
-    float radius = (((_e84 * 0.9) * 2.0) * _e80) * scale_1;
-    metal::float4 _e95 = u.camera.right;
-    metal::float4 _e102 = u.camera.up;
-    metal::float3 world = inst_1.world_pos + (((_e95.xyz * corner.x) + (_e102.xyz * corner.y)) * radius);
-    metal::float4x4 _e114 = u.camera.view_proj;
-    out_1.clip_pos = _e114 * metal::float4(world, 1.0);
-    out_1.uv = corner * _e80;
+    float _e66 = rim_2;
+    float _e70 = u.node.band_outer;
+    float _e74 = u.node.band_inner;
+    if (!((_e70 > _e74))) {
+        if ((inst_1.marks.x | inst_1.marks.y) != 0u) {
+            float _e91 = u.node.mark_thickness;
+            local_4 = _e91 > 0.0;
+        } else {
+            local_4 = false;
+        }
+        bool _e95 = local_4;
+        local_3 = _e95;
+    } else {
+        local_3 = true;
+    }
+    bool _e97 = local_3;
+    float midi_rim = _e97 ? _e66 : 0.0;
+    float _e100 = rim_2;
+    float _e101 = rim_2;
+    float _e106 = u.node.pose.z;
+    metal::float2 _e108 = spectral_radii(u);
+    float _e115 = u.node.animation;
+    float bounds = (_e115 != 0.0) ? metal::max(_e101, metal::max(midi_rim * _e106, _e108.y)) : _e100;
+    float _e119 = shadow_reach_uv(scale_1, u);
+    float _e120 = quad_margin(bounds, _e119);
+    float _e124 = u.node.radius;
+    float radius = (((_e124 * 0.9) * 2.0) * _e120) * scale_1;
+    metal::float4 _e135 = u.camera.right;
+    metal::float4 _e142 = u.camera.up;
+    metal::float3 world = inst_1.world_pos + (((_e135.xyz * corner.x) + (_e142.xyz * corner.y)) * radius);
+    metal::float4x4 _e154 = u.camera.view_proj;
+    out_1.clip_pos = _e154 * metal::float4(world, 1.0);
+    out_1.uv = corner * _e120;
     out_1.params = inst_1.params;
     out_1.octaves = inst_1.octaves;
     out_1.thickness = inst_1.thickness;
@@ -370,12 +488,14 @@ VsOut node_vertex(
     out_1.marks = inst_1.marks;
     out_1.melody_color = inst_1.melody_color;
     out_1.bass_color = inst_1.bass_color;
-    out_1.rim = _e28;
+    float _e183 = rim_2;
+    out_1.rim = _e183;
+    out_1.swell = _e31;
     out_1.ring = inst_1.ring;
     out_1.shadow_box = metal::float4(0.0);
     out_1.shadow_at = metal::float4(0.0, 0.0, 0.0, 1.0);
-    VsOut _e154 = out_1;
-    return _e154;
+    VsOut _e196 = out_1;
+    return _e196;
 }
 
 struct vs_node_cellOutput {
@@ -391,6 +511,7 @@ struct vs_node_cellOutput {
     metal::float4 melody_color [[user(loc7), flat]];
     metal::float4 bass_color [[user(loc8), flat]];
     float rim [[user(loc11), flat]];
+    float swell [[user(loc13), flat]];
     float ring [[user(loc14), flat]];
     float ink_carry [[user(loc15), flat]];
     metal::float4 shadow_box [[user(loc10), flat]];
@@ -417,7 +538,7 @@ vertex vs_node_cellOutput vs_node_cell(
     float scale_2 = {};
     float ring = {};
     metal::float4 glow = {};
-    metal::uint3 thickness = {};
+    metal::uint3 thickness_2 = {};
     if (i_id < (_buffer_sizes.buffer_size15 / 136)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         world_pos = unpackFloat32x3_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7], vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11]);
@@ -431,7 +552,7 @@ vertex vs_node_cellOutput vs_node_cell(
         scale_2 = unpackFloat32_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
         ring = unpackFloat32_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107]);
         glow = unpackFloat32x4_(vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115], vb_15_elem.data[116], vb_15_elem.data[117], vb_15_elem.data[118], vb_15_elem.data[119], vb_15_elem.data[120], vb_15_elem.data[121], vb_15_elem.data[122], vb_15_elem.data[123]);
-        thickness = unpackUint32x3_(vb_15_elem.data[124], vb_15_elem.data[125], vb_15_elem.data[126], vb_15_elem.data[127], vb_15_elem.data[128], vb_15_elem.data[129], vb_15_elem.data[130], vb_15_elem.data[131], vb_15_elem.data[132], vb_15_elem.data[133], vb_15_elem.data[134], vb_15_elem.data[135]);
+        thickness_2 = unpackUint32x3_(vb_15_elem.data[124], vb_15_elem.data[125], vb_15_elem.data[126], vb_15_elem.data[127], vb_15_elem.data[128], vb_15_elem.data[129], vb_15_elem.data[130], vb_15_elem.data[131], vb_15_elem.data[132], vb_15_elem.data[133], vb_15_elem.data[134], vb_15_elem.data[135]);
     }
     metal::float4 rect_1 = {};
     metal::float4 cell_2 = {};
@@ -444,7 +565,7 @@ vertex vs_node_cellOutput vs_node_cell(
         cell_map = unpackFloat32x4_(vb_14_elem.data[32], vb_14_elem.data[33], vb_14_elem.data[34], vb_14_elem.data[35], vb_14_elem.data[36], vb_14_elem.data[37], vb_14_elem.data[38], vb_14_elem.data[39], vb_14_elem.data[40], vb_14_elem.data[41], vb_14_elem.data[42], vb_14_elem.data[43], vb_14_elem.data[44], vb_14_elem.data[45], vb_14_elem.data[46], vb_14_elem.data[47]);
         who = unpackFloat32x4_(vb_14_elem.data[48], vb_14_elem.data[49], vb_14_elem.data[50], vb_14_elem.data[51], vb_14_elem.data[52], vb_14_elem.data[53], vb_14_elem.data[54], vb_14_elem.data[55], vb_14_elem.data[56], vb_14_elem.data[57], vb_14_elem.data[58], vb_14_elem.data[59], vb_14_elem.data[60], vb_14_elem.data[61], vb_14_elem.data[62], vb_14_elem.data[63]);
     }
-    const Instance inst = { world_pos, params, octaves, thickness, motion, cents, {}, marks, melody_color, bass_color, scale_2, ring, {}, glow };
+    const Instance inst = { world_pos, params, octaves, thickness_2, motion, cents, {}, marks, melody_color, bass_color, scale_2, ring, {}, glow };
     const ShadowCell box = { rect_1, cell_2, cell_map, who };
     VsOut out = {};
     VsOut _e3 = node_vertex(vertex_index, inst, u);
@@ -474,7 +595,7 @@ vertex vs_node_cellOutput vs_node_cell(
         out.shadow_at = metal::float4(_e55, uv_points, box.cell_map.w);
         VsOut _e75 = out;
         const auto _tmp = _e75;
-        return vs_node_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.params, _tmp.octaves, _tmp.thickness, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
+        return vs_node_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.params, _tmp.octaves, _tmp.thickness, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.swell, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
     }
     metal::float2 corner_1 = metal::float2(((vertex_index & 1u) == 1u) ? 1.0 : 0.0, ((vertex_index & 2u) == 2u) ? 1.0 : 0.0);
     metal::float2 texel_1 = box.cell.xy + (corner_1 * box.cell.zw);
@@ -500,5 +621,5 @@ vertex vs_node_cellOutput vs_node_cell(
     out.ink_carry = box.who.w;
     VsOut _e192 = out;
     const auto _tmp = _e192;
-    return vs_node_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.params, _tmp.octaves, _tmp.thickness, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
+    return vs_node_cellOutput { _tmp.clip_pos, _tmp.uv, _tmp.params, _tmp.octaves, _tmp.thickness, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.swell, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
 }

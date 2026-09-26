@@ -567,7 +567,8 @@ struct GpuInstance {
     /// lattice.wgsl). The mark levels ride with the activation rather than in
     /// a vertex attribute of their own. w: how much of the bloom's copy of
     /// this node's ink is taken away, `1 - NodeInstance::bloom`, so 0 is the
-    /// full bloom.
+    /// full bloom and a note blooming over its pane's bar is negative. Never
+    /// past 1, which is what lets the cell draw reuse it for kinds above that.
     /// The first three are levels the same node
     /// draws at, read together by the layers that draw it.
     params: [f32; 4],
@@ -612,8 +613,9 @@ struct GpuInstance {
     /// coefficient, followed by display-only breathing. Untimed snapshots
     /// seed current ink with coefficient 1 and no breathing modulation.
     glow: [f32; 4],
-    /// How far each octave's lit slice reaches across the band
-    /// (`NodeInstance::thickness`), packed as [`octaves`](Self::octaves) is.
+    /// How thick each octave's lit slice is drawn (`NodeInstance::thickness`),
+    /// laid out as [`octaves`](Self::octaves) is on a scale of its own
+    /// ([`pack_thickness`]).
     thickness: [u32; 3],
 }
 
@@ -657,16 +659,61 @@ fn pack_spectrum(levels: &harmonigraph_scene::SpectralLevels) -> [[u32; 4]; SPEC
     rows
 }
 
-/// Pack per-octave values in 0..1 — the activation levels, and the slices'
-/// thickness — into the bit layout `octave_level()` in lattice.wgsl unpacks:
-/// 8 bits per slot, little-endian (slot 0 = lowest byte of the first word).
+/// Pack the per-octave activation levels, 0..1, into the bit layout
+/// `octave_level()` in lattice.wgsl unpacks: 8 bits per slot, little-endian
+/// (slot 0 = lowest byte of the first word).
 fn pack_octaves(levels: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
-    let mut octaves = [0u32; 3];
-    for (slot, &level) in levels.iter().enumerate() {
-        let byte = (level.clamp(0.0, 1.0) * 255.0).round() as u32;
-        octaves[slot / 4] |= byte << ((slot % 4) * 8);
+    pack_slot_bytes(levels, 255.0)
+}
+
+/// How many codes of a thickness byte make one band width, which
+/// `slice_thickness()` in lattice.wgsl divides back out. 1 lands on a code of
+/// its own, so a slice at rest unpacks to exactly 1 and the shader takes its
+/// full-slice path there; the byte's top, 255, is a hair short of the 4 that
+/// `THICKNESS_MAX_RANGE` ends on, the one value it rounds.
+const THICKNESS_STEPS: f32 = 64.0;
+
+/// Pack the slices' thickness, as multiples of the band's width, in the
+/// layout [`pack_octaves`] uses and on [`THICKNESS_STEPS`]' scale.
+fn pack_thickness(thickness: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
+    pack_slot_bytes(thickness, THICKNESS_STEPS)
+}
+
+/// Unpack one slot of [`pack_thickness`], as the shader does.
+fn unpack_thickness(words: &[u32; 3], slot: usize) -> f32 {
+    ((words[slot / 4] >> ((slot % 4) * 8)) & 0xFF) as f32 / THICKNESS_STEPS
+}
+
+/// A byte a slot, `steps` codes to the unit, clamped to the byte.
+fn pack_slot_bytes(values: &[f32; harmonigraph_scene::OCTAVE_SLOTS], steps: f32) -> [u32; 3] {
+    let mut words = [0u32; 3];
+    for (slot, &value) in values.iter().enumerate() {
+        let byte = (value * steps).round().clamp(0.0, 255.0) as u32;
+        words[slot / 4] |= byte << ((slot % 4) * 8);
     }
-    octaves
+    words
+}
+
+/// The most of its ink a node's bloom can take (`NodeInstance::bloom`): the
+/// top of the bloom bar over the floor the pass never runs below while a note
+/// can bloom over it (`IntensitySettings::bloom_share`).
+const BLOOM_SHARE_MAX: f32 =
+    harmonigraph_scene::BLOOM_MAX / harmonigraph_scene::BLOOM_REFERENCE_FLOOR;
+
+/// How far past the band's outer edge a node's farthest lit slice swells, in
+/// uv, off the packed `thickness` the shader reads: 0 where none does. A
+/// bound for sizing and culling, `slices_outer` in lattice.wgsl without the cap
+/// it keeps inside the billboard.
+fn swelled_past_band(scene: &Scene, thickness: &[u32; 3]) -> f32 {
+    let width = scene.outer_outer - scene.outer_inner;
+    let t = (0..harmonigraph_scene::OCTAVE_SLOTS)
+        .map(|slot| unpack_thickness(thickness, slot))
+        .fold(1.0, f32::max);
+    if width > 0.0 && t > 1.0 {
+        width * (t - 1.0)
+    } else {
+        0.0
+    }
 }
 
 /// One marker-pipeline instance: the marker standing at one home-sheet

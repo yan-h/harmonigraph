@@ -412,6 +412,65 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     );
 }
 
+/// A mark stands off its OWN slot's slice rather than off the band: a thinned
+/// slice's mark follows it in toward the ring and a swelled one's out with it,
+/// by what the slice gave up or took, so a slice never draws over its mark.
+#[test]
+fn a_mark_follows_its_slices_thickness() {
+    // Twice the neighbours' frame, so the move is several times the tolerance.
+    const SIZE: [u32; 2] = [512, 512];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let rings = harmonigraph_scene::ViewConfig {
+        ring_inner: PROBE_INNER,
+        ring_gap: PROBE_GAP,
+        spectral_ring_width: 0.0,
+        band_width: PROBE_BAND_WIDTH,
+        ..Default::default()
+    }
+    .rings();
+    let staged = |thickness: f32, marked: bool| -> Scene {
+        let mut scene = single_marked_node(if marked { MIDDLE_C } else { 0 }, 0);
+        // No light, no bloom and no audio ring: the mark alone is what the
+        // two shots part on.
+        scene.glow_reach = 0.0;
+        scene.bloom_strength = 0.0;
+        scene.spectral = harmonigraph_scene::SpectralPaint::silent();
+        scene.octave_gap = PROBE_GAP;
+        scene.mark_thickness = rings.mark_thickness;
+        (scene.outer_inner, scene.outer_outer) = rings.band;
+        scene.rings_outer = rings.band.1;
+        scene.mark_inner = rings.mark_inner;
+        scene.nodes[0].thickness[harmonigraph_scene::MIDDLE_C_SLOT] = thickness;
+        scene
+    };
+    let mut mark_at = |thickness: f32| -> Light {
+        let bare = gpu.shot(&staged(thickness, false));
+        light_about_center(&light_over(&gpu.shot(&staged(thickness, true)), &bare), SIZE)
+    };
+    let rest = mark_at(1.0);
+    let thin = mark_at(0.25);
+    let thick = mark_at(1.75);
+    assert!(rest.weight > 0.0 && thin.weight > 0.0 && thick.weight > 0.0, "a mark drew nothing");
+    eprintln!(
+        "mark from {:.1} px at rest, {:.1} thinned, {:.1} swelled",
+        rest.near, thin.near, thick.near
+    );
+    let scale = rest.far / (rings.mark_inner + rings.mark_thickness) as f64;
+    let want = 0.75 * (rings.band.1 - rings.band.0) as f64 * scale;
+    assert!(
+        (rest.near - thin.near - want).abs() < 4.0,
+        "a quarter-thick slice moved its mark in {:.1} px, not {want:.1}",
+        rest.near - thin.near,
+    );
+    assert!(
+        (thick.near - rest.near - want).abs() < 4.0,
+        "a swelled slice moved its mark out {:.1} px, not {want:.1}",
+        thick.near - rest.near,
+    );
+}
+
 /// With the core, the audio ring and the octave band ALL dialled off, the
 /// melody/bass mark is the only layer the node has left — and it reaches the
 /// node's CENTRE, rather than standing a padding off nothing.
