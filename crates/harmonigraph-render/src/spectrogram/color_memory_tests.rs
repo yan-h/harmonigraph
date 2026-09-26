@@ -71,7 +71,10 @@ fn fixture(style: CloudStyle) -> SpectrogramCallback {
     a.settings.cloud_speed = 20.0;
     a.settings.cloud_direction = 37.0;
     a.settings.star_lifetime = 0.5;
+    // Explicit motion ensures every slice crosses a cell regardless of look defaults.
     a.settings.star_speed_min = 0.2;
+    a.settings.star_speed_max = 1.0;
+    a.settings.star_speed_curve = 1.0;
     // Start away from zero to exercise initialization at an export's crop.
     a.now = 100.0;
     cb

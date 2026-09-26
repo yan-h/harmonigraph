@@ -1800,19 +1800,25 @@ mod tests {
     }
 
     /// The atlas takes the dials' own cells wherever it can hold them — the
-    /// fresh starfield on a plain and a very wide pane — and otherwise raises
+    /// coarse starfield on a plain and a very wide pane — and otherwise raises
     /// only the finest cells, to the least that fits.
     #[test]
     fn the_star_atlas_floors_only_the_finest_cells_and_only_past_its_budget() {
-        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        // Exercise the below-budget path independently of the current look defaults.
+        let coarse = harmonigraph_scene::SpectralAtmosphere {
+            star_density: 1.0,
+            star_size_min: 3.0,
+            star_size_curve: 1.0,
+            ..Default::default()
+        };
         for aspect in [16.0 / 9.0, 8.0] {
-            let layout = star_layout(fresh, aspect);
-            assert_eq!(layout.cells, super::star_cells(fresh), "{aspect}");
+            let layout = star_layout(coarse, aspect);
+            assert_eq!(layout.cells, super::star_cells(coarse), "{aspect}");
         }
         let fine = harmonigraph_scene::SpectralAtmosphere {
             star_density: harmonigraph_scene::STAR_DENSITY_MAX,
             star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
-            ..fresh
+            ..coarse
         };
         let wanted = super::star_cells(fine);
         let layout = star_layout(fine, 16.0 / 9.0);
