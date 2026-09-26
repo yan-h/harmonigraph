@@ -145,6 +145,23 @@ impl Event {
         Some((expression, expression.accept(value as f32)?))
     }
 
+    /// This expression stated for one voice alone, at that voice's address.
+    /// Anything that is not an expression is returned as it was.
+    pub fn addressed(self, id: i32, channel: u8, key: u8) -> Self {
+        match self {
+            Self::Expression { kind, value, flags, .. } => Self::Expression {
+                kind,
+                id,
+                port: 0,
+                channel: i16::from(channel),
+                key: i16::from(key),
+                value,
+                flags,
+            },
+            other => other,
+        }
+    }
+
     pub fn matches(self, id: i32, channel: u8, key: u8) -> bool {
         match self {
             Self::Note { id: i, port, channel: c, key: k, .. }

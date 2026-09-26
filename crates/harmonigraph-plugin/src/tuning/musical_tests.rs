@@ -437,6 +437,94 @@ fn production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correcti
     phrase.release_all();
 }
 
+/// #1073. A later tuning expression addressing several held voices reaches
+/// each one with its own frozen correction, on the wire and in the schedule,
+/// and nothing outside its source. One that addresses a single voice still
+/// goes out under the address the player wrote.
+///
+/// The notes are A and D in just intonation, which is what gives them two
+/// different nonzero corrections; with equal ones there is nothing to fan out.
+#[test]
+fn a_wildcard_tuning_expression_reaches_every_held_voice_with_its_own_correction() {
+    let _scope = crate::test_scope::enter();
+    let mut phrase = Phrase::new();
+    phrase.step(
+        [
+            vec![note(7, 0, 57, 0, true), note(8, 0, 62, 0, true)],
+            vec![note(9, 0, 60, 0, true)],
+            vec![],
+        ],
+        [0, 1, 2],
+    );
+    phrase.idle();
+    let keys = [(7, 57u8), (8, 62u8)];
+    let corrections = keys.map(|(_, key)| phrase.voice(0, key, 0).frozen_offset_microcents);
+    assert!(corrections.iter().all(|c| *c != 0), "{corrections:?}");
+    assert_ne!(corrections[0], corrections[1], "the two voices must be told apart");
+    let other = phrase.voice(1, 60, 0);
+    phrase.step([vec![expression(-1, 0.5, 0)], vec![], vec![]], [0, 1, 2]);
+    let output = phrase.idle();
+    assert!(output[1].is_empty() && output[2].is_empty(), "{output:?}");
+    assert_eq!(output[0].len(), 2, "one addressed expression per held voice: {output:?}");
+    for ((id, key), correction) in keys.into_iter().zip(corrections) {
+        let expected = 0.5 + correction as f64 / 1e8;
+        assert!(
+            output[0].iter().any(|(_, event)| matches!(
+                *event,
+                Event::Expression { kind: 2, id: i, port: 0, channel: 0, key: k, value, .. }
+                    if i == id && k == i16::from(key) && (value - expected).abs() < 1e-9
+            )),
+            "key {key} carries its own correction: {output:?}"
+        );
+        let voice = phrase.voice(0, key, 0);
+        assert_eq!(voice.player_tuning, 0.5);
+        assert_eq!(voice.frozen_offset_microcents, correction);
+        assert_eq!(
+            voice.pitch_microcents,
+            i64::from(key) * 100_000_000 + 50_000_000 + correction,
+            "the schedule moved key {key} too"
+        );
+    }
+    let untouched = phrase.voice(1, 60, 0);
+    assert_eq!(untouched.pitch_microcents, other.pitch_microcents, "another source's voice");
+    assert_eq!(untouched.player_tuning, other.player_tuning);
+    // Once its first copy is on the wire the entry is spent: a copy the host
+    // refuses costs that voice's update and says so, and is not replayed.
+    phrase.step([vec![expression(-1, 0.75, 0)], vec![], vec![]], [0, 1, 2]);
+    let sink = phrase.sources[0].run_format(phrase.raw, vec![], None, Some(2), 512);
+    phrase.sources[1].run_format(phrase.raw, vec![], None, None, 512);
+    phrase.sources[2].run_format(phrase.raw, vec![], None, None, 512);
+    phrase.hub.run_format(phrase.raw, vec![], None, None, 512);
+    phrase.raw += 512;
+    let keys = |events: &[(u32, Event)]| -> Vec<i16> {
+        events.iter().map(|(_, event)| key_of(*event)).collect()
+    };
+    assert_eq!((keys(&sink.values), keys(&sink.rejected)), (vec![57], vec![62]));
+    assert_ne!(phrase.sources[0].shared().status() & session::DROPPED, 0);
+    assert!(phrase.idle()[0].is_empty(), "the refused copy is not replayed");
+    // With one voice left, the wildcard is forwarded as written.
+    phrase.step([vec![note(8, 0, 62, 0, false)], vec![], vec![]], [0, 1, 2]);
+    phrase.idle();
+    phrase.step([vec![expression(-1, 0.25, 0)], vec![], vec![]], [0, 1, 2]);
+    let output = phrase.idle();
+    assert_eq!(output[0].len(), 1, "{output:?}");
+    assert!(matches!(
+        output[0][0].1,
+        Event::Expression { kind: 2, id: -1, port: -1, channel: -1, key: -1, value, .. }
+            if (value - (0.25 + corrections[0] as f64 / 1e8)).abs() < 1e-9
+    ));
+    assert_eq!(phrase.voice(0, 57, 0).pitch_microcents, 5_725_000_000 + corrections[0]);
+    assert_eq!(phrase.misses(), 0);
+    phrase.release_all();
+}
+
+fn key_of(event: Event) -> i16 {
+    match event {
+        Event::Expression { kind: 2, key, .. } => key,
+        _ => panic!("not a tuning expression: {event:?}"),
+    }
+}
+
 /// Identical note ids in different rows still belong to independent sources.
 #[test]
 fn initial_expressions_stay_with_their_source_before_musical_sorting() {

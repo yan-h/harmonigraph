@@ -678,7 +678,8 @@ impl Hub {
         if record.event.channel_termination().is_some() {
             let channel = record.event.channel().unwrap_or(0);
             let mut ended = [(0i32, 0u8, 0u8); HELD_PER_SOURCE];
-            let count = self.rows[source].state.on_channel(channel, &mut ended);
+            let count =
+                self.rows[source].state.select(|voice| voice.channel == channel, &mut ended);
             for (id, channel, key) in ended.into_iter().take(count) {
                 self.release_addressed(record, channel, key);
                 let off = Event::note_off(id, channel, key, false);
@@ -686,6 +687,26 @@ impl Hub {
             }
         } else if !record.onset() && record.event.release() {
             self.release_matching(record);
+        } else if matches!(record.event, Event::Expression { kind: 2, .. }) {
+            // A tuning expression reaching several voices moves every one of
+            // them, each by its own frozen correction, so it is one delta per
+            // voice here. That holds whether the Tune fanned it out or, the
+            // corrections being equal, forwarded the one wildcard
+            // (`Tune::fans_out`): either way each voice sounds the value plus
+            // its own correction. One reaching a single voice, or none, stays
+            // the one event it was.
+            let mut tuned = [(0i32, 0u8, 0u8); HELD_PER_SOURCE];
+            let count = self.rows[source].state.select(
+                |voice| record.event.matches(voice.host_note_id, voice.channel, voice.note),
+                &mut tuned,
+            );
+            if count > 1 {
+                for (id, channel, key) in tuned.into_iter().take(count) {
+                    let event = record.event.addressed(id, channel, key);
+                    self.schedule_delta(event, record, scheduled, None);
+                }
+                return;
+            }
         }
         self.schedule_delta(record.event, record, scheduled, assignment);
     }

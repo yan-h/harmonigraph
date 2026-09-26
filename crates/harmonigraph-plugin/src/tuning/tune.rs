@@ -516,6 +516,7 @@ impl Tune {
             if !self.emit(output, time, event, tuning, correction) {
                 break;
             }
+            self.fan_out(output, time, pending.event);
             if let Some((_, _, key, _)) = event.attack() {
                 let input = ((f64::from(key) + pending.player) * 100_000_000.0).round() as i64;
                 self.shared.last_input.store(input, Ordering::Relaxed);
@@ -547,19 +548,73 @@ impl Tune {
             });
             return (pending.event, tuning, pending.correction.unwrap_or(0));
         }
-        // The same addressing rule the Hub applies to the same event, so the
-        // pitch this composes and the pitch the Hub draws are one voice's.
-        let correction = self
-            .held
-            .iter()
+        // A fan-out states the first voice's own copy here and `fan_out`
+        // states the rest; anything else keeps the address the player wrote.
+        let Some(first) = Self::tuned(&self.held, pending.event).next() else {
+            return (pending.event, None, 0);
+        };
+        let event = if Self::fans_out(&self.held, pending.event) {
+            pending.event.addressed(first.id, first.channel, first.key)
+        } else {
+            pending.event
+        };
+        (composed(event, first.correction), None, 0)
+    }
+
+    /// A tuning expression reaching voices whose frozen corrections differ
+    /// cannot state them in one value, so it goes out as one copy per voice.
+    /// Reaching one voice, or several that share a correction (every voice
+    /// under Retune off), the one value is already right for each, and it
+    /// keeps the player's address: that is the passthrough Retune off
+    /// promises, and it still reaches the instrument's releasing voices,
+    /// which this Tune no longer holds and a per-voice copy would miss.
+    fn fans_out(held: &[Option<Voice>; HELD_PER_SOURCE], event: Event) -> bool {
+        let mut voices = Self::tuned(held, event);
+        voices.next().is_some_and(|first| voices.any(|voice| voice.correction != first.correction))
+    }
+
+    /// The held voices a per-note tuning expression reaches, in held order.
+    /// It is the same addressing rule the Hub applies to the same event, so
+    /// the pitch this composes and the pitch the Hub draws are one voice's.
+    /// Nothing but a tuning expression carries a correction, so every other
+    /// event, a wildcard pressure included, reaches none and goes out as is.
+    fn tuned(
+        held: &[Option<Voice>; HELD_PER_SOURCE],
+        event: Event,
+    ) -> impl Iterator<Item = Voice> + '_ {
+        let tuning = matches!(event, Event::Expression { kind: 2, .. });
+        held.iter()
             .flatten()
-            .find(|voice| pending.event.matches(voice.id, voice.channel, voice.key))
-            .map_or(0, |voice| voice.correction);
-        let mut event = pending.event;
-        if let Event::Expression { kind: 2, value, .. } = &mut event {
-            *value += correction as f64 / 100_000_000.0;
+            .copied()
+            .filter(move |voice| tuning && event.matches(voice.id, voice.channel, voice.key))
+    }
+
+    /// The second and later voices of a tuning expression that fans out: each
+    /// gets its own copy, at its own address and with its own frozen
+    /// correction, at the time `resolve`'s first copy went out.
+    ///
+    /// Capacity follows the onset's tuning companion in `emit`. The line entry
+    /// is committed once its first copy is on the wire, so the per-callback
+    /// budget is checked per entry and a fan-out may finish past it by at most
+    /// `HELD_PER_SOURCE - 1`. A copy the host refuses costs that one voice's
+    /// update and raises `DROPPED`; it is not retried, because the entry is
+    /// already gone and a retry would restate every voice that did take it.
+    fn fan_out(&mut self, output: &mut api::Output<'_>, time: u32, expression: Event) {
+        if !Self::fans_out(&self.held, expression) {
+            return;
         }
-        (event, None, 0)
+        let held = self.held;
+        for voice in Self::tuned(&held, expression).skip(1) {
+            let event = composed(
+                expression.addressed(voice.id, voice.channel, voice.key),
+                voice.correction,
+            );
+            if event.emittable() && output.push(event.input(), time) {
+                self.emitted += 1;
+            } else {
+                self.status |= session::DROPPED;
+            }
+        }
     }
 
     fn emit(
@@ -701,4 +756,13 @@ impl Tune {
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
+}
+
+/// A tuning expression composed with one voice's frozen correction, because a
+/// CLAP note expression is the current value rather than a delta.
+fn composed(mut event: Event, correction: i64) -> Event {
+    if let Event::Expression { kind: 2, value, .. } = &mut event {
+        *value += correction as f64 / 100_000_000.0;
+    }
+    event
 }

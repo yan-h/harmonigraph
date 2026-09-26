@@ -77,11 +77,16 @@ impl State {
         self.pitch = [Default::default(); 16];
         self.complete = true;
     }
-    /// Every voice a channel termination ends, so the caller can turn one
-    /// controller into the note-offs the instrument is about to perform.
-    pub fn on_channel(&self, channel: u8, out: &mut [(i32, u8, u8); HELD_PER_SOURCE]) -> usize {
+    /// Every voice one event reaches, so the caller can turn it into one event
+    /// per voice: a channel termination into the note-offs the instrument is
+    /// about to perform, a tuning expression into each voice's own copy.
+    pub fn select(
+        &self,
+        pick: impl Fn(&VoiceBaseline) -> bool,
+        out: &mut [(i32, u8, u8); HELD_PER_SOURCE],
+    ) -> usize {
         let mut count = 0;
-        for voice in self.voices().filter(|voice| voice.channel == channel) {
+        for voice in self.voices().filter(|voice| pick(voice)) {
             out[count] = (voice.host_note_id, voice.channel, voice.note);
             count += 1;
         }
@@ -180,7 +185,9 @@ impl State {
 
     /// Apply one sequenced input at the time it is scheduled to sound. A
     /// release and a per-note expression find their voice by what the event
-    /// addresses, which is the same rule the Tune's held set uses.
+    /// addresses, which is the same rule the Tune's held set uses. A tuning
+    /// expression reaching several voices arrives here once per voice, already
+    /// addressed to it by the Hub, as the Tune emits it.
     pub fn apply(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
         self.pitch_changed = false;
         let mut result = None;
