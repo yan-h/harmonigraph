@@ -98,6 +98,7 @@ All 16 probe processes completed with working timestamps and no adapter skips.
 
 Each table cell lists the GPU median in milliseconds for round 1 / round 2.
 Both sides measure the complete preparation encoder, excluding the final egui composite.
+Issue #1113 later found that the probe's closing beginning-of-pass stamp does not contain the scene passes' fragment work on this GPU, so these GPU medians undercount and cannot price a change.
 
 | Fixture | Bloom | Baseline GPU | Candidate GPU |
 |---|---:|---:|---:|

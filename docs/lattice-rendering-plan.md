@@ -138,7 +138,7 @@ The audit used release-mode headless probes on the local machine, not end-to-end
 | Fixture | Observed result |
 |---|---|
 | Existing UI-only picture probe, 1000 × 900 points, six held voices | Lattice median 0.039 ms; excludes GPU callback preparation and execution |
-| Existing full-GPU-prepare probe, 768 × 768 pixels, 355 lit nodes and 30 synthetic names | Medians 1.244–2.483 ms across shadow kernels/widths, with substantial sample variation; details in #642 |
+| Existing full-GPU-prepare probe, 768 × 768 pixels, 355 lit nodes and 30 synthetic names | Medians 1.244–2.483 ms across shadow kernels/widths, with substantial sample variation; details in #642; undercounts the scene passes (#1113) |
 | Scratch CPU fixture, 273 nodes / 10 voices | Derivation 0.017 ms; callback construction without labels 0.036 ms |
 | Scratch CPU fixture, 14,877 nodes / 64 voices | Derivation 2.034 ms; callback construction without labels 0.625 ms |
 | Scratch blur cull, 225 shipped audio-ring nodes with zero or one MIDI glow | Zero differences in each final 768 × 768 RGBA frame; timing gains were small/noisy; details and reproduction in #641 |

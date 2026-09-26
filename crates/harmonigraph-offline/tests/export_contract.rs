@@ -46,7 +46,7 @@ fn render(take: &Path, out: &Path, extra: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn cli_preserves_default_tail_explicit_end_late_start_and_loop_tail() {
+fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     // The same policy as `sink::tests::real_ffmpeg`, which this test target
     // cannot import: CI requires ffprobe rather than passing without it.
     if let Err(error) = Command::new("ffprobe").arg("-version").output() {
@@ -64,7 +64,11 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_tail() {
         ("default-tail", 0.25, RenderTrigger::OnDisarm, vec![], 85),
         ("explicit-end", 10.0, RenderTrigger::OnDisarm, vec!["--end", "1"], 20),
         ("late-start", 0.25, RenderTrigger::OnDisarm, vec!["--start", "3", "--end", "4"], 20),
-        ("loop-tail", 0.25, RenderTrigger::AtLoopEnd, vec![], 85),
+        // A loop-end take ends where its recording, and so its loop, does:
+        // at 1 s, past the last note at 0.25 s but with no tail (#1125).
+        ("loop-end", 1.0, RenderTrigger::AtLoopEnd, vec![], 20),
+        // A typed --tail still runs past it.
+        ("loop-explicit-tail", 1.0, RenderTrigger::AtLoopEnd, vec!["--tail", "4"], 85),
     ] {
         let path = dir.join(format!("{name}.take"));
         take(&path, seconds, trigger);

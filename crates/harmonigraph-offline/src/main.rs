@@ -20,7 +20,7 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_take::RenderProgress;
+use harmonigraph_take::{RenderProgress, RenderTrigger};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::{Layout, PRESETS};
 use render::Settings;
@@ -68,7 +68,8 @@ OPTIONS:
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear; short audio pads with silence.
-                           [default: 4]
+                           [default: 4; 0 for a take recorded under the
+                           Loop end trigger, which ends with its loop]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
                            720p; at 4K, lower it to get there.  [default: 10]
@@ -118,7 +119,9 @@ struct Args {
     /// was captured.
     lead: Option<f64>,
     end: Option<f64>,
-    tail: f64,
+    /// `None` means "the take's own default" — see `tail_of_render`. An
+    /// explicit `--tail 4` on a loop-end take is NOT the same thing.
+    tail: Option<f64>,
     crf: u32,
     appearance: Option<String>,
     ffmpeg: Option<String>,
@@ -139,7 +142,7 @@ impl Default for Args {
             start: None,
             lead: None,
             end: None,
-            tail: 4.0,
+            tail: None,
             // Sized against YouTube's recommended bitrates: 7.4 Mbps on a
             // 720p60 take, where YouTube asks for 7.5. It re-encodes whatever
             // it is given, so a leaner source is a second generation of loss.
@@ -187,7 +190,7 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--start" => args.start = Some(parse_number("--start", &value("--start")?)?),
             "--lead" => args.lead = Some(parse_number("--lead", &value("--lead")?)?),
             "--end" => args.end = Some(parse_number("--end", &value("--end")?)?),
-            "--tail" => args.tail = parse_number("--tail", &value("--tail")?)?,
+            "--tail" => args.tail = Some(parse_number("--tail", &value("--tail")?)?),
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
@@ -280,12 +283,47 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
     }
 }
 
+/// How long the picture runs past the last event when `--tail` does not say.
+///
+/// Four seconds, so releases finish fading and the roll clears — except for a
+/// take recorded [`AtLoopEnd`](RenderTrigger::AtLoopEnd), which ends exactly
+/// where its loop does (#1125). That take is one pass of a loop meant to be
+/// seen as a loop, so a fade past its end is not the performance; its
+/// recording runs to the wrap, and [`end_of_render`] still waits for it, so
+/// the file ends at the loop's end rather than at the last note. An explicit
+/// `--tail` still applies to every kind of take.
+///
+/// `trigger` is the one the take was RECORDED under, not the one a Re-render's
+/// `--appearance` carries: how the take ended is fixed when it was captured,
+/// and a trigger changed since then says nothing about this file.
+fn tail_of_render(explicit: Option<f64>, trigger: RenderTrigger) -> f64 {
+    explicit.unwrap_or(match trigger {
+        RenderTrigger::AtLoopEnd => 0.0,
+        RenderTrigger::OnDisarm | RenderTrigger::OnTransportStop | RenderTrigger::AtBar => 4.0,
+    })
+}
+
+/// The trigger a take was recorded under, read from its own appearance.
+///
+/// Silent on a blob that does not parse: [`render::appearance_for`] has already
+/// said so when that blob is the one being drawn, and a take that cannot say
+/// how it ended keeps the ordinary tail.
+fn recorded_trigger(take: &harmonigraph_take::Take) -> RenderTrigger {
+    take.header
+        .appearance
+        .as_deref()
+        .and_then(|blob| harmonigraph_ui::AppearanceDocument::parse(blob).ok())
+        .map(|appearance| appearance.render.trigger)
+        .unwrap_or_default()
+}
+
 /// Where the render stops when `--end` does not say.
 ///
-/// The last event plus `--tail`, so releases finish fading and the roll clears
-/// instead of the video cutting mid-decay — and never before the soundtrack
-/// runs out, because a video that stops while the music is still playing is a
-/// bug, where one that holds a second of settled picture is a fade.
+/// The last event plus the tail ([`tail_of_render`]), so releases finish
+/// fading and the roll clears instead of the video cutting mid-decay — and
+/// never before the soundtrack runs out, because a video that stops while the
+/// music is still playing is a bug, where one that holds a second of settled
+/// picture is a fade.
 ///
 /// Beside [`start_of_render`] rather than inline in `export`, and for the same
 /// reason: it is a policy with four ways through it, and a policy that only
@@ -429,7 +467,7 @@ fn export(args: Args) -> Result<(), String> {
     let end = end_of_render(
         args.end,
         take.duration(),
-        args.tail,
+        tail_of_render(args.tail, recorded_trigger(&take)),
         audio.as_ref().map(|a| audio_start + a.seconds()),
     );
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
@@ -778,6 +816,20 @@ mod tests {
         // ...and including 0, which `frame_count() == 0` then refuses by name
         // rather than quietly falling back to the whole take.
         assert_eq!(end_of_render(Some(0.0), 30.0, 2.0, None), 0.0);
+    }
+
+    /// A loop-end take ends at its loop's end unless `--tail` was typed (#1125);
+    /// every other take keeps the fade.
+    #[test]
+    fn only_an_unasked_tail_on_a_loop_end_take_is_zero() {
+        assert_eq!(tail_of_render(None, RenderTrigger::AtLoopEnd), 0.0);
+        assert_eq!(tail_of_render(Some(4.0), RenderTrigger::AtLoopEnd), 4.0);
+        for trigger in
+            [RenderTrigger::OnDisarm, RenderTrigger::OnTransportStop, RenderTrigger::AtBar]
+        {
+            assert_eq!(tail_of_render(None, trigger), 4.0);
+            assert_eq!(tail_of_render(Some(0.5), trigger), 0.5);
+        }
     }
 
     /// `--start 0` has to survive parsing as a REQUEST, not as the absence of

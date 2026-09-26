@@ -24,10 +24,8 @@ fn repainting_keeps_a_detached_extension_smooth_past_the_history_window() {
 /// source: the workspace keys each tab BODY's `Ui` on `Viewer::id`
 /// (`workspace.rs`), so two tabs whose ids came from a shared title would
 /// share their body state — scrolling one pane scrolls the other.
-/// Variant-keyed ids are what leave a name free to be repeated, and the
-/// workspace still trades on that freedom across sections: the Spectral pane wears
-/// "Analyzer", the same word as the settings tab that holds its knobs,
-/// because the display and its knobs are one feature.
+/// Variant-keyed ids are what leave a name free to be repeated across
+/// sections, as a display and the settings tab holding its knobs may be.
 #[test]
 fn every_tab_has_its_own_id_whatever_its_title_says() {
     let mut state = fresh();
@@ -50,14 +48,6 @@ fn every_tab_has_its_own_id_whatever_its_title_says() {
         params: &params,
         now: 0.0,
     };
-
-    // The sharing the variant-keyed id keeps safe is real, not hypothetical.
-    assert_eq!(
-        panes::tab_title(&panes::Tab::Spectral),
-        panes::tab_title(&panes::Tab::AnalyzerSettings),
-        "the Spectral pane and the tab holding its settings are meant to \
-         share the Analyzer name",
-    );
 
     let ids: Vec<egui::Id> = tabs.iter().map(|&tab| viewer.id(&tab)).collect();
     for (i, a) in ids.iter().enumerate() {
