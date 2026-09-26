@@ -1,0 +1,13 @@
+Camera-derived repeat; release build; macOS arm64; Rust 1.92.0.
+default actual_nodes=345 voices=10 stabs_per_frame=0 motion_cpu_ms p50=0.091 p95=0.113
+default actual_nodes=345 voices=10 stabs_per_frame=1 motion_cpu_ms p50=0.186 p95=0.241
+default actual_nodes=345 voices=10 stabs_per_frame=8 motion_cpu_ms p50=1.003 p95=1.076
+default actual_nodes=345 voices=64 stabs_per_frame=0 motion_cpu_ms p50=0.168 p95=0.175
+zoomed out actual_nodes=975 voices=10 stabs_per_frame=0 motion_cpu_ms p50=0.251 p95=0.327
+zoomed out actual_nodes=975 voices=10 stabs_per_frame=1 motion_cpu_ms p50=0.601 p95=1.200
+zoomed out actual_nodes=975 voices=10 stabs_per_frame=8 motion_cpu_ms p50=3.142 p95=3.922
+zoomed out actual_nodes=975 voices=64 stabs_per_frame=0 motion_cpu_ms p50=0.510 p95=0.962
+zoomed out nine sheets actual_nodes=12555 voices=10 stabs_per_frame=0 motion_cpu_ms p50=7.100 p95=9.373
+zoomed out nine sheets actual_nodes=12555 voices=10 stabs_per_frame=1 motion_cpu_ms p50=15.604 p95=18.126
+zoomed out nine sheets actual_nodes=12555 voices=10 stabs_per_frame=8 motion_cpu_ms p50=74.119 p95=80.568
+zoomed out nine sheets actual_nodes=12555 voices=64 stabs_per_frame=0 motion_cpu_ms p50=13.116 p95=15.144
