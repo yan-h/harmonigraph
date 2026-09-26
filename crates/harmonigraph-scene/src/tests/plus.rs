@@ -227,8 +227,8 @@ fn a_marker_radius_that_is_not_a_number_takes_the_field_away() {
 }
 
 /// A cross's thickness follows the label scale, as a letter's stroke does: the
-/// half-width the shader reads is proportional to it, and at the default scale
-/// it is exactly what the retired width bar's captured default drew.
+/// half-width the shader reads is proportional to it, at a letter's bar weight
+/// ([`PLUS_WIDTH_PER_LABEL_SCALE`]) per unit of scale.
 #[test]
 fn the_label_scale_sets_the_cross_width() {
     let arm = ViewConfig::default().plus_arm;

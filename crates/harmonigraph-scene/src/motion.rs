@@ -71,10 +71,12 @@ struct Motion {
     bass: MarkMotion,
     order_delay: [f32; 11],
     order_seed: u32,
-    /// Time the node's presence holds before an ordered departure starts it
+    /// Time each slot's presence holds before an ordered departure starts it
     /// falling: the last slice's delay, so the ink outlasts every retraction
-    /// rather than dimming the whole wheel at the off. 0 otherwise.
-    level_wait: f32,
+    /// rather than dimming the whole wheel at the off. Only for slots still
+    /// full at the off -- one released earlier keeps fading, rather than
+    /// freezing mid-fade until the rest catch up. 0 otherwise.
+    level_wait: [f32; 11],
     audio_waiting: bool,
 }
 impl Default for Motion {
@@ -90,7 +92,7 @@ impl Default for Motion {
             bass: MarkMotion::default(),
             order_delay: [0.0; 11],
             order_seed: 0,
-            level_wait: 0.0,
+            level_wait: [0.0; 11],
             audio_waiting: false,
         }
     }
@@ -183,8 +185,6 @@ impl Motion {
         // duration handed in beside it: `ViewConfig::envelope` puts one time on
         // both ends, so the two were always the same number and a parameter
         // for each is a pair that can be made to disagree.
-        let level_dt = (dt - f64::from(self.level_wait)).max(0.0);
-        self.level_wait = (self.level_wait - dt as f32).max(0.0);
         for i in 0..11 {
             let moving = (dt as f32 - self.delay[i]).max(0.0);
             self.delay[i] = (self.delay[i] - dt as f32).max(0.0);
@@ -208,7 +208,9 @@ impl Motion {
             // ones had begun to retract, so the stagger barely showed and the
             // exit ran one fade where the entrance ran `1 + stagger_spread`. So
             // an ordered departure holds it for the LAST slice's delay, one wait
-            // for the whole node (`level_wait`), and both ends span the same.
+            // for every slot still full (`level_wait`), and both ends span the same.
+            let level_dt = (dt - f64::from(self.level_wait[i])).max(0.0);
+            self.level_wait[i] = (self.level_wait[i] - dt as f32).max(0.0);
             self.levels[i] = approach(self.levels[i], self.targets[i], level_dt, env);
         }
         // A departure that has run out of ink is over, whatever its slices are
@@ -333,7 +335,7 @@ impl NodeMotion {
                     duration,
                 );
                 motion.delay = motion.order_delay;
-                motion.level_wait = 0.0;
+                motion.level_wait = [0.0; 11];
                 // Ordered departure needs a COMPLETE arrival, and an arrival now
                 // takes `1 + stagger_spread` fades rather than one, so the hold
                 // that earns this has got longer by the same factor. At a high
@@ -350,18 +352,19 @@ impl NodeMotion {
                     duration,
                 );
                 motion.delay = motion.order_delay;
-                motion.level_wait = motion.order_delay.into_iter().fold(0.0, f32::max);
+                let last = motion.order_delay.into_iter().fold(0.0, f32::max);
+                motion.level_wait = motion.levels.map(|l| if l >= 1.0 { last } else { 0.0 });
             } else if gate != motion.gate {
                 // A reversal never schedules new waiting: pending pieces cancel
                 // on off and every piece reverses its current pose immediately.
                 motion.delay = [0.0; 11];
-                motion.level_wait = 0.0;
+                motion.level_wait = [0.0; 11];
             }
             motion.gate = gate;
             if (seed_settled || (newly_visible && preexisting)) && gate {
                 motion.progress = [1.0; 11];
                 motion.delay = [0.0; 11];
-                motion.level_wait = 0.0;
+                motion.level_wait = [0.0; 11];
                 motion.levels = motion.targets;
                 motion.melody.advance(f64::from(duration + mark_delay(view)), env);
                 motion.bass.advance(f64::from(duration + mark_delay(view)), env);
