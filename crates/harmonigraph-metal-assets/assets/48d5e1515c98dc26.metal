@@ -44,11 +44,10 @@ struct Cloud {
     uint tile_cells;
     uint pitch_vertical;
     float star_randomness;
-    float star_volume;
     float star_glow;
-    float star_tint;
     float star_wander;
     float star_time;
+    metal::float2 _star_pad;
     type_5 star_slices;
 };
 struct Pile {
