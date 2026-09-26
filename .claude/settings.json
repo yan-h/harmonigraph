@@ -23,6 +23,8 @@
       "Bash(cargo fmt *)",
       "Bash(cargo test *)",
       "Bash(gh issue create *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh pr ready *)",
       "Bash(gh pr view *)",
       "Bash(gh run download *)",
       "Bash(gh run view *)",

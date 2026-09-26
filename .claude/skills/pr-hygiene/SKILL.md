@@ -69,6 +69,10 @@ The shared skill reads the combined diff and keeps a `last-merge-audit` tag so c
 ## Squash by default; merge-commit the exception
 
 **When Yan says "merge it", he can say it while CI is still running:** the session waits and merges once `mergeStateStatus` is clean, so he is not coming back at green to press a button.
+`/review-and-merge` in Claude, or `$review-and-merge` in Codex, is the same ask with a review in front of it, for when he wants the session to judge whether the diff needs one.
+It is a shared skill from agent-config, and this file is the project contract it reads:
+its review tool here is `code-review` through the Skill tool against `origin/main...HEAD`, its merge method is this section's, and its checks are `mergeStateStatus` `CLEAN` with `Full CI` actually reported.
+Codex has no `code-review`, so there the review is a fresh subagent briefed with the diff and `AGENTS.md`.
 Not `gh pr merge --auto --squash` — `main` carries no branch protection and no rulesets, so no check is *required*, and GitHub's auto-merge waits on required checks alone; it would merge a mergeable PR at once rather than at green (#943 holds the measurement and why that was rejected).
 `mergeStateStatus` is the better gate regardless, because it accounts for every check including `Metal shader assets`, whose `paths:` filter keeps it off most PRs and therefore out of any required-checks scheme — the `UNSTABLE`-while-`Full CI`-is-green case CLAUDE.md warns about.
 The rule is unchanged:
