@@ -1768,12 +1768,17 @@ mod tests {
     /// which is the very thing the monospace readout buys for the digits. The
     /// budget has to come from the widest readout the bar's RANGE can produce.
     ///
-    /// Swept across the band where it bites. Iosevka is 6pt per glyph and epaint
-    /// rounds `wrap.max_width` only to whole points, so a digit is twelve times
-    /// the rounding granularity and there is nothing to absorb it.
+    /// Swept point by point rather than sampled across the band where it bites
+    /// today, since that band moves with every change of padding or font: a
+    /// digit is a whole glyph wide and epaint rounds `wrap.max_width` only to
+    /// whole points, so nothing absorbs it at any width the name is elided at.
+    /// The sweep has to reach such a width, or it passes having asked nothing.
     #[test]
     fn a_bars_name_holds_still_while_its_number_changes_width() {
-        for width in [174.0f32, 180.0, 184.0, 187.0, 200.0, 260.0] {
+        let widths = (100u16..=400).map(f32::from);
+        let whole = painted_name_width(400.0, 1000.00);
+        let mut elided = 0;
+        for width in widths {
             let narrow = painted_name_width(width, 999.99);
             let wide = painted_name_width(width, 1000.00);
             assert!(
@@ -1781,6 +1786,10 @@ mod tests {
                 "a {width}pt bar draws its name {narrow}pt wide at 999.99 and {wide}pt at \
                  1000.00 — the name re-elides when the number gains a digit"
             );
+            if wide < whole - 0.01 {
+                elided += 1;
+            }
         }
+        assert!(elided > 0, "the name was drawn whole at every swept width, so nothing was asked");
     }
 }
