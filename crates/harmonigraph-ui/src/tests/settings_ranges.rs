@@ -96,7 +96,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
-        cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
+        cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
         star_density, star_randomness, star_fringe,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
@@ -272,9 +272,9 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Colors => visits + 8,
             panes::Tab::LatticeSettings => visits + 5 + 6,
-            // ...the spectrogram's twelve, the ribbons' six, and the
+            // ...the spectrogram's fourteen, the ribbons' six, and the
             // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2,
+            panes::Tab::AnalyzerSettings => visits + 14 + 6 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -288,7 +288,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Watercolor,
         enabled: true,
-        visits: 13 + 12 + 6 + 2 + 2 - 3 + 5,
+        visits: 13 + 14 + 6 + 2 + 2 - 3 + 5,
         ..base
     });
     // The starfield's, on the same terms: the three scale bars and the shared
@@ -297,7 +297,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
         enabled: true,
-        visits: 13 + 12 + 6 + 2 + 2 - 3 - 1 + 9,
+        visits: 13 + 14 + 6 + 2 + 2 - 3 - 1 + 9,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {

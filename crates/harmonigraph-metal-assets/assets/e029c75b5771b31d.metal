@@ -50,6 +50,17 @@ struct Cloud {
     float star_randomness;
     float star_life;
     type_7 star_slices;
+    uint memory_enabled;
+    uint memory_valid;
+    float pickup_alpha;
+    float release_alpha;
+    metal::int2 memory_shift;
+    metal::float2 memory_fraction;
+    float previous_life;
+    float memory_pad_a;
+    float memory_pad_b;
+    float memory_pad_c;
+    type_7 previous_slices;
 };
 constant float CLOUD_UNITS = 10.0;
 constant float CLOUD_TILE_ROT_COS = 0.8;

@@ -44,6 +44,17 @@ struct Cloud {
     float star_randomness;
     float star_life;
     type_10 star_slices;
+    uint memory_enabled;
+    uint memory_valid;
+    float pickup_alpha;
+    float release_alpha;
+    metal::int2 memory_shift;
+    metal::float2 memory_fraction;
+    float previous_life;
+    float memory_pad_a;
+    float memory_pad_b;
+    float memory_pad_c;
+    type_10 previous_slices;
 };
 struct TileVertex {
     metal::float4 position;
@@ -143,6 +154,12 @@ metal::float4 star_hash(
     return (static_cast<metal::float4>(bytes) + metal::float4(0.5)) / metal::float4(256.0);
 }
 
+metal::int2 atlas_texel(
+    int index
+) {
+    return metal::int2(index & 2047, index >> STAR_ATLAS_SHIFT);
+}
+
 metal::float3 star_paint(
     float level_1,
     float rank,
@@ -156,6 +173,13 @@ metal::float3 star_paint(
     return _e24;
 }
 
+metal::float3 gamma_from_linear_rgb(
+    metal::float3 linear
+) {
+    metal::float3 bounded = metal::clamp(linear, metal::float3(0.0), metal::float3(1.0));
+    return metal::select((1.055 * metal::pow(bounded, metal::float3(0.41666666))) - metal::float3(0.055), 12.92 * bounded, bounded <= metal::float3(0.0031308));
+}
+
 metal::uint3 naga_f2u32(metal::float3 value) {
     return static_cast<metal::uint3>(metal::clamp(value, 0.0, 4294967000.0));
 }
@@ -164,35 +188,57 @@ metal::uint4 star_bake(
     StarSlice s,
     metal::int2 cell_1,
     uint salt_1,
+    int index_1,
     metal::texture2d<float, metal::access::sample> lut,
+    metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> close_light,
     metal::sampler cloud_sampler,
     constant Cloud& cloud
 ) {
+    metal::float4 held = metal::float4(0.0);
+    metal::uint3 tens = {};
     metal::int2 hashed = cell_1 & metal::int2(65535);
-    float _e8 = cloud.star_life;
-    metal::float4 _e11 = star_hash(hashed, salt_1 + 2u);
-    float age = _e8 + _e11.x;
+    float _e9 = cloud.star_life;
+    metal::float4 _e12 = star_hash(hashed, salt_1 + 2u);
+    float age = _e9 + _e12.x;
     uint life = naga_f2u32(metal::floor(age)) & 4095u;
     uint key = salt_1 + ((life + 1u) << 16u);
-    metal::float4 _e23 = star_hash(hashed, key);
+    metal::float4 _e24 = star_hash(hashed, key);
     float through = metal::fract(age);
-    metal::float2 centre = metal::float2(0.5) + (STAR_JITTER * (_e23.xy - metal::float2(0.5)));
-    float _e43 = cloud.size.y;
-    metal::float2 _e49 = cloud.size;
-    metal::float2 at = ((((static_cast<metal::float2>(cell_1) + centre) + s.offset) * s.cell) * (_e43 / STAR_PANE)) + (_e49 * 0.5);
-    float _e53 = star_level_at(at, close_light, cloud_sampler, cloud);
-    if (_e53 <= 0.0) {
+    metal::float2 centre = metal::float2(0.5) + (STAR_JITTER * (_e24.xy - metal::float2(0.5)));
+    float _e44 = cloud.size.y;
+    metal::float2 _e50 = cloud.size;
+    metal::float2 at = ((((static_cast<metal::float2>(cell_1) + centre) + s.offset) * s.cell) * (_e44 / STAR_PANE)) + (_e50 * 0.5);
+    float _e54 = star_level_at(at, close_light, cloud_sampler, cloud);
+    uint _e60 = cloud.memory_enabled;
+    if (_e60 != 0u) {
+        metal::int2 _e64 = atlas_texel(index_1);
+        uint clamped_lod_e66 = metal::min(uint(0), color_memory.get_num_mip_levels() - 1);
+        metal::float4 _e66 = color_memory.read(metal::min(metal::uint2(_e64), metal::uint2(color_memory.get_width(clamped_lod_e66), color_memory.get_height(clamped_lod_e66)) - 1), clamped_lod_e66);
+        held = _e66;
+    }
+    float _e68 = held.w;
+    uint _e71 = cloud.memory_enabled;
+    if (((_e71 != 0u) ? _e68 : _e54) <= 0.0) {
         return metal::uint4(0u);
     }
-    metal::float4 _e60 = star_hash(hashed, key + 1u);
+    metal::float4 _e81 = star_hash(hashed, key + 1u);
     float randomness_1 = cloud.star_randomness;
-    metal::float3 _e75 = star_paint(_e53, metal::pow(_e60.x, 1.0 + (6.0 * randomness_1)) * (2.0 + (6.0 * randomness_1)), lut, cloud);
-    float size = metal::exp(((0.3 + (0.9 * randomness_1)) * (_e60.y - 0.5)) * 2.0);
+    metal::float3 _e96 = star_paint(_e54, metal::pow(_e81.x, 1.0 + (6.0 * randomness_1)) * (2.0 + (6.0 * randomness_1)), lut, cloud);
+    float size = metal::exp(((0.3 + (0.9 * randomness_1)) * (_e81.y - 0.5)) * 2.0);
     float sigma = metal::min(s.sigma * size, s.cap) * s.defocus;
     float fade = metal::smoothstep(0.0, STAR_FADE, through) * metal::smoothstep(0.0, STAR_FADE, 1.0 - through);
-    metal::uint3 tens = naga_f2u32(metal::rint(metal::clamp(_e75, metal::float3(0.0), metal::float3(1.0)) * 1023.0));
-    return metal::uint4(as_type<uint>(centre.x), as_type<uint>(centre.y), ((tens.x << 20u) | (tens.y << 10u)) | tens.z, as_type<uint>(half2(metal::float2(1.0 / sigma, fade))));
+    tens = naga_f2u32(metal::rint(metal::clamp(_e96, metal::float3(0.0), metal::float3(1.0)) * 1023.0));
+    uint _e135 = cloud.memory_enabled;
+    if (_e135 != 0u) {
+        metal::float4 _e138 = held;
+        metal::float3 _e140 = gamma_from_linear_rgb(_e138.xyz);
+        tens = naga_f2u32(metal::rint(_e140 * 1023.0));
+    }
+    uint _e150 = tens.x;
+    uint _e154 = tens.y;
+    uint _e159 = tens.z;
+    return metal::uint4(as_type<uint>(centre.x), as_type<uint>(centre.y), ((_e150 << 20u) | (_e154 << 10u)) | _e159, as_type<uint>(half2(metal::float2(1.0 / sigma, fade))));
 }
 metal::int2 naga_f2i32(metal::float2 value) {
     return static_cast<metal::int2>(metal::clamp(value, -2147483600.0, 2147483500.0));
@@ -218,6 +264,7 @@ fragment fs_star_bakeOutput fs_star_bake(
   fs_star_bakeInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
+, metal::texture2d<float, metal::access::sample> color_memory [[texture(7)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
 , metal::sampler cloud_sampler [[sampler(0)]]
 , constant Cloud& cloud [[buffer(2)]]
@@ -226,7 +273,7 @@ fragment fs_star_bakeOutput fs_star_bake(
     uint k = 0u;
     bool local = {};
     metal::int2 texel = naga_f2i32(metal::floor(in.position.xy));
-    int index = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(texel.y) * as_type<uint>(STAR_ATLAS_WIDTH))) + as_type<uint>(texel.x));
+    int index_2 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(texel.y) * as_type<uint>(STAR_ATLAS_WIDTH))) + as_type<uint>(texel.x));
     uint2 loop_bound = uint2(4294967295u);
     bool loop_init = true;
     while(true) {
@@ -245,7 +292,7 @@ fragment fs_star_bakeOutput fs_star_bake(
         {
             uint _e17 = k;
             StarSlice s_1 = cloud.star_slices.inner[metal::min(unsigned(_e17), 4u)];
-            int at_1 = as_type<int>(as_type<uint>(index) - as_type<uint>(s_1.base));
+            int at_1 = as_type<int>(as_type<uint>(index_2) - as_type<uint>(s_1.base));
             if (at_1 >= 0) {
                 local = at_1 < as_type<int>(as_type<uint>(s_1.grid.x) * as_type<uint>(s_1.grid.y));
             } else {
@@ -255,7 +302,7 @@ fragment fs_star_bakeOutput fs_star_bake(
             if (_e33) {
                 metal::int2 local_1 = metal::int2(naga_mod(at_1, s_1.grid.x), naga_div(at_1, s_1.grid.x));
                 uint _e45 = k;
-                metal::uint4 _e48 = star_bake(s_1, as_type<metal::int2>(as_type<metal::uint2>(s_1.origin) + as_type<metal::uint2>(local_1)), 1000u + (3u * _e45), lut, close_light, cloud_sampler, cloud);
+                metal::uint4 _e48 = star_bake(s_1, as_type<metal::int2>(as_type<metal::uint2>(s_1.origin) + as_type<metal::uint2>(local_1)), 1000u + (3u * _e45), index_2, lut, color_memory, close_light, cloud_sampler, cloud);
                 return fs_star_bakeOutput { _e48 };
             }
         }

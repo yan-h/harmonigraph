@@ -262,6 +262,9 @@ impl Shot {
     fn dialled(&self, tune: impl FnOnce(&mut harmonigraph_ui::AppearanceDocument)) -> Take {
         let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
         let cfg = &mut state.appearance.spectrum;
+        // These established goldens pin the immediate texture response.
+        cfg.atmosphere.color_pickup = 0.0;
+        cfg.atmosphere.color_release = 0.0;
         cfg.show_roll = false;
         // The whole depth to the spectrogram's region, which also drops the
         // live curve and its axis rulings through their own `split > 0`
@@ -399,6 +402,8 @@ fn the_starfield_draws_the_frame_on_record() {
 fn mixed_spectral_shadows_draw_the_frame_on_record() {
     let shot = Shot { size: [320, 200], range: (48.0, 84.0) };
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+    state.appearance.spectrum.atmosphere.color_pickup = 0.0;
+    state.appearance.spectrum.atmosphere.color_release = 0.0;
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
     state.appearance.spectrum.roll_seconds = WINDOW;
@@ -569,6 +574,8 @@ fn spectral_shadow_frame_ms(
     text: harmonigraph_scene::ShadowKernel,
 ) -> Option<(f64, u64)> {
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
+    state.appearance.spectrum.atmosphere.color_pickup = 0.0;
+    state.appearance.spectrum.atmosphere.color_release = 0.0;
     state.appearance.spectrum.show_roll = true;
     state.appearance.spectrum.roll_fraction = 0.65;
     state.appearance.spectrum.roll_seconds = WINDOW;

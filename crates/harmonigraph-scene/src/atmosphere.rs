@@ -161,6 +161,9 @@ pub const STAR_SPEED_MAX: f32 = 1.0;
 pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;
 /// See [`STAR_SPEED_CURVE_MIN`].
 pub const STAR_SPEED_CURVE_MAX: f32 = 4.0;
+/// Longest color-memory time constant in seconds.
+pub const COLOR_MEMORY_MAX: f32 = 5.0;
+
 /// Bounds shared by the [`SpectralAtmosphere::star_lifetime`] control and
 /// sanitizer, in seconds.
 pub const STAR_LIFETIME_MIN: f32 = 0.5;
@@ -258,9 +261,13 @@ pub struct SpectralAtmosphere {
     pub contour_strength: f32,
     pub contours: f32,
     pub contour_softness: f32,
-    /// Blend from original to displaced levels before Contours and the palette.
-    /// Zero disables the texture; zero refraction is also exactly neutral.
+    /// Texture strength. Without memory, displaced levels mix before Contours
+    /// and the palette. With memory, held RGB mixes in linear light.
+    /// Zero disables the texture; zero refraction disables displacement alone.
     pub cloud_depth: f32,
+    /// Linear-light color response times in seconds. Both zero bypass history.
+    pub color_pickup: f32,
+    pub color_release: f32,
     /// Drift speed, as a multiplier on a slow crossing like the lattice
     /// nebula's. The cloud FRAME it drifts in is fixed in the shader
     /// (`CLOUD_UNITS`): it used to be a dial, and it was a second copy of
@@ -416,6 +423,8 @@ impl Default for SpectralAtmosphere {
             contours: 7.0,
             contour_softness: 0.15,
             cloud_depth: 1.0,
+            color_pickup: 0.08,
+            color_release: 0.6,
             cloud_speed: 1.0,
             // The visible direction of the former drift's steady component.
             cloud_direction: 147.994_61,
@@ -434,20 +443,18 @@ impl Default for SpectralAtmosphere {
             wash_lobe: 0.55,
             wash_refract: 0.85,
             wash_layers: 0.5,
-            // Yan's Stars look as dialled in the DAW on 2026-09-25, from the
-            // prototype's V3 motion and round 8's YB3 colouring: dense, sizes
-            // 3.3 to 11.5 with most depths small, and the farthest dust still.
-            star_density: 6.0,
-            star_randomness: 0.214_038_73,
-            star_size_min: 3.333_390_2,
-            star_size_max: 11.502_775,
-            star_size_curve: 3.392_461_8,
-            star_speed_min: 0.0,
-            star_speed_max: 1.0,
-            star_speed_curve: 1.031_25,
-            star_lifetime: 6.0,
-            star_fringe: 0.25,
-            star_defocus: 0.6,
+            // Yan's Stars controls captured from the DAW on 2026-09-26.
+            star_density: 10.0,
+            star_randomness: 0.080912866,
+            star_size_min: 1.0045346,
+            star_size_max: 11.529175,
+            star_size_curve: 1.462137,
+            star_speed_min: 0.08931082,
+            star_speed_max: 0.16860056,
+            star_speed_curve: 3.179647,
+            star_lifetime: 0.8390586,
+            star_fringe: 0.13554634,
+            star_defocus: 0.6669314,
         }
     }
 }
@@ -486,6 +493,8 @@ impl SpectralAtmosphere {
             CONTOUR_SOFTNESS_MAX,
         );
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
+        self.color_pickup = clamp(self.color_pickup, fresh.color_pickup, 0.0, COLOR_MEMORY_MAX);
+        self.color_release = clamp(self.color_release, fresh.color_release, 0.0, COLOR_MEMORY_MAX);
         self.cloud_speed =
             clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.cloud_direction = if self.cloud_direction.is_finite() {
@@ -548,12 +557,20 @@ impl SpectralAtmosphere {
         SpectralEffects {
             soft: self.pitch_softness > 0.0 || self.time_softness > 0.0,
             contours: self.contour_strength > 0.0,
-            // Zero refraction takes the ordinary picture path, including its
-            // exact palette lookup, and spends nothing building a texture.
+            // With memory disabled, zero refraction also bypasses the texture.
+            // Otherwise a stationary sample still has a temporal color response.
             cloud: self.cloud_depth > 0.0
                 && match self.cloud_style {
-                    CloudStyle::Mosaic => self.scale_refract != 0.0,
-                    CloudStyle::Watercolor => self.wash_refract != 0.0,
+                    CloudStyle::Mosaic => {
+                        self.scale_refract != 0.0
+                            || self.color_pickup > 0.0
+                            || self.color_release > 0.0
+                    }
+                    CloudStyle::Watercolor => {
+                        self.wash_refract != 0.0
+                            || self.color_pickup > 0.0
+                            || self.color_release > 0.0
+                    }
                     // Light rather than a displacement, so it has no dial at
                     // which it draws the ordinary picture: `Cloud depth` alone
                     // switches it off.
