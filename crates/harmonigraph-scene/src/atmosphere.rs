@@ -134,9 +134,6 @@ pub const STAR_DENSITY_MAX: f32 = 10.0;
 /// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
 /// dense slice add up to a flat wash of its average colour.
 pub const STAR_FRINGE_MAX: f32 = 0.5;
-/// The share of its cells the thinned end of the depth keeps at a full
-/// [`SpectralAtmosphere::star_balance`] lean, as one over this.
-pub const STAR_BALANCE_THIN: f32 = 16.0;
 /// The top of [`SpectralAtmosphere::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// Bounds shared by the two ends of the `Star size` control
@@ -321,22 +318,15 @@ pub struct SpectralAtmosphere {
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
     pub star_randomness: f32,
-    /// Which end of the depth keeps all its stars, from -1 (the far dust) to 1
-    /// (the nearest stars): the favoured end fills every cell and the share
-    /// falls off exponentially toward the other, to [`STAR_BALANCE_THIN`] of
-    /// them at a full lean. 0 fills every depth, so the count follows `Star
-    /// size` alone. It replaced two dials, Far dust and Near stars, which
-    /// set the two ends' shares separately; the fresh -0.5 keeps both of their
-    /// fresh ends (1 and a quarter), and the depths between sit a little
-    /// fuller than their quadratic fade did.
-    pub star_balance: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
     /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
     /// each star's core and its cap with that spacing's ratio to the fresh
     /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
-    /// the old fixed curve did. Runs over [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`],
-    /// never above [`Self::star_size_max`].
+    /// the old fixed curve did. Every cell holds a star, so how many a depth
+    /// has follows its spacing alone. Runs over
+    /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], never above
+    /// [`Self::star_size_max`].
     pub star_size_min: f32,
     /// The nearest depth's star size: the biggest stars in the field. See
     /// [`Self::star_size_min`].
@@ -436,13 +426,10 @@ impl Default for SpectralAtmosphere {
             wash_refract: 0.85,
             wash_layers: 0.5,
             // Yan's Stars look as dialled in the DAW on 2026-09-25, from the
-            // prototype's V3 motion and round 8's YB3 colouring: dense, near
-            // stars full and the dust a little thinned (the Far dust 0.81 and
-            // Near stars 1 he saved, as a balance), sizes 3.3 to 11.5 with most
-            // depths small, and the farthest dust still.
+            // prototype's V3 motion and round 8's YB3 colouring: dense, sizes
+            // 3.3 to 11.5 with most depths small, and the farthest dust still.
             star_density: 6.0,
             star_randomness: 0.214_038_73,
-            star_balance: 0.078,
             star_size_min: 3.333_390_2,
             star_size_max: 11.502_775,
             star_size_curve: 3.392_461_8,
@@ -509,7 +496,6 @@ impl SpectralAtmosphere {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
-        self.star_balance = clamp(self.star_balance, fresh.star_balance, -1.0, 1.0);
         self.star_size_min =
             clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
         self.star_size_max =

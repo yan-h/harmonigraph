@@ -314,10 +314,9 @@ struct StarSlice {
     sigma: f32,
     cap: f32,
     defocus: f32,
-    occupancy: f32,
     fringe: f32,
     reach: f32,
-    _pad: f32,
+    _pad: vec2<f32>,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -1466,7 +1465,7 @@ fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
     return (vec4<f32>(bytes) + 0.5) / 256.0;
 }
 
-// One cell's star, if it has one, at `r` — this slice's cell coordinate for the
+// One cell's star at `r` — this slice's cell coordinate for the
 // pixel — as its coverage there in `w` and its one colour times that coverage in
 // `rgb`. `cut` is where nothing of a star here is left: five sigmas of the
 // widest core, or with a fringe the ring's reach, and never past that.
@@ -1481,12 +1480,9 @@ fn star_cell(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, salt: u32, cut: f32) -
     let age = cloud.star_life + star_hash(hashed, salt + 2u).x;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
-    // Jitter, whether this life holds a star at all, and its speed. At most
-    // depths most lives hold none, so that is answered before anything else.
+    // Jitter and speed. Every life holds a star, so a depth's count is its
+    // cell size alone.
     let a = star_hash(hashed, key);
-    if a.z >= s.occupancy {
-        return vec4<f32>(0.0);
-    }
     // Through its life a star slides off the drift at its own speed, level
     // with it at mid-life.
     let through = fract(age);

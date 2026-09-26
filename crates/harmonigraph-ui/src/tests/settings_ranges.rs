@@ -92,7 +92,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
-        star_density, star_randomness, star_balance, star_fringe,
+        star_density, star_randomness, star_fringe,
         star_far_speed, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_speed_spread, star_lifetime);
     saved.workspace.interaction.ui_scale = v;
@@ -284,13 +284,13 @@ fn scenarios() -> Vec<Scenario> {
         visits: 13 + 12 + 5 + 2 + 2 - 3 + 5,
         ..base
     });
-    // The starfield's, on the same terms: the three scale bars off, eleven of
+    // The starfield's, on the same terms: the three scale bars off, ten of
     // its own on.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
         enabled: true,
-        visits: 13 + 12 + 5 + 2 + 2 - 3 + 11,
+        visits: 13 + 12 + 5 + 2 + 2 - 3 + 10,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {

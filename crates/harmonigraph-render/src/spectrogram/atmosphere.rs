@@ -154,8 +154,6 @@ struct StarSlice {
     cap: f32,
     /// How much the core is widened after the cap: 1 at the far end.
     defocus: f32,
-    /// The share of cells that hold a star.
-    occupancy: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
     /// `reach`: `Fringe`, alike at every depth.
@@ -166,7 +164,7 @@ struct StarSlice {
     reach: f32,
     /// Keeps the stride the 16-byte multiple WGSL gives an array element in
     /// the uniform address space.
-    _pad: f32,
+    _pad: [f32; 2],
 }
 
 /// The slice's depth, 0 for the farthest and 1 for the nearest.
@@ -250,16 +248,9 @@ fn star_slices(
             sigma,
             cap,
             defocus,
-            occupancy: {
-                // Full at the end `Depth balance` leans to, thinning
-                // exponentially with the distance in depth from it.
-                let from_favoured = if settings.star_balance < 0.0 { d } else { 1.0 - d };
-                harmonigraph_scene::STAR_BALANCE_THIN
-                    .powf(-settings.star_balance.abs() * from_favoured)
-            },
             fringe: settings.star_fringe,
             reach: (STAR_REACH_CELLS - swing / 2.0) * cell,
-            _pad: 0.0,
+            _pad: [0.0; 2],
         }
     })
 }

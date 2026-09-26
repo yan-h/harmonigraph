@@ -591,9 +591,8 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
 /// that is light rather than a displaced reading of it.
 ///
 /// Every quality that differed between the prototype's four motion variants is
-/// a bar here rather than a choice made in the shader, as is the lever on how
-/// heavy the field reads (`Depth balance`), because Yan's pick was a starting
-/// point "with sliders exposed". The fresh values are that pick, V3, with round
+/// a bar here rather than a choice made in the shader, because Yan's pick was a
+/// starting point "with sliders exposed". The fresh values are that pick, V3, with round
 /// 8's YB3 for how a star is coloured and shaped.
 fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
     use harmonigraph_scene::{
@@ -641,11 +640,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .show(ui)
         .on_hover_text(
             "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones. The field's average brightness stays the same at every setting.",
-        );
-    ValueBar::new(&mut atmosphere.star_balance, -1.0..=1.0, "Depth balance")
-        .show(ui)
-        .on_hover_text(
-            "Which depths keep all their stars. Left keeps all the far dust and thins the near stars; right keeps all the near stars and thins the dust; the middle keeps every depth full, so how many stars a depth has follows Star size alone.",
         );
     ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
         .percent()
