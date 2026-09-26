@@ -64,7 +64,8 @@ constant float STAR_JITTER = 0.6;
 constant int STAR_HASH_PERIOD = 4096;
 constant float STAR_WANDER_PERIOD = 400.0;
 constant float STAR_EXPOSURE = 1.5;
-constant float STAR_HUE_FLOOR = 0.18;
+constant float STAR_LIFT = 0.18;
+constant float STAR_OVER_GROUND = 6.0;
 constant float STAR_RING_FADE = 0.7;
 constant float STAR_TAU = 6.2831855;
 metal::float2 unpackFloat32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7) {
