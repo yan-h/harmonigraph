@@ -164,14 +164,152 @@ struct StarSlice {
     /// walk can be to the pixel — where every star's coverage is windowed to
     /// zero.
     reach: f32,
-    /// Keeps the stride the 16-byte multiple WGSL gives an array element in
-    /// the uniform address space.
-    _pad: f32,
+    /// Where this slice sits in the star atlas: the texel its first cell
+    /// takes, counted along the rows, the cell that first one is, and how
+    /// many cells it holds across and down. See [`StarLayout`].
+    base: i32,
+    origin: [i32; 2],
+    grid: [i32; 2],
 }
 
 /// The slice's depth, 0 for the farthest and 1 for the nearest.
 fn star_depth(k: usize) -> f32 {
     k as f32 / (STAR_SLICES - 1) as f32
+}
+
+/// The shader's `STAR_PANE`: star pixels across the pane's height.
+const STAR_PANE: f32 = 540.0;
+/// The star atlas's texel, one cell's star as the shader's `star_bake` packs it.
+const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
+/// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
+/// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
+/// million; only the finest `Star size` at a high `Star density`, or a
+/// still wider pane, asks for more (see [`star_layout`]).
+const STAR_ATLAS_TEXELS: u64 = 1 << 22;
+/// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
+/// cell's index splits into a texel with a mask and a shift.
+const STAR_ATLAS_WIDTH: u32 = 2048;
+/// Cells a slice's grid holds past the ones the walk can reach from the pane
+/// on each side, so the shader's f32 floor of a pixel's cell and the CPU's
+/// f64 one of the pane's edge may disagree by one without a read leaving it.
+const STAR_GRID_MARGIN: u32 = 1;
+/// The atlas is allocated in whole multiples of this many rows, so a drag of a
+/// dial that sizes cells reallocates at steps rather than every frame.
+const STAR_ATLAS_STEP: u32 = 64;
+
+/// Each slice's cell as the dials ask for it, in star pixels: `Star size`'s
+/// low end at the far end over the square root of half the density, times the
+/// ratio of its ends raised to `d^Size curve`.
+fn star_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> [f32; STAR_SLICES] {
+    let packing = (settings.star_density / 2.0).sqrt();
+    let (small, big) = (settings.star_size_min, settings.star_size_max);
+    std::array::from_fn(|k| {
+        small * (big / small).powf(star_depth(k).powf(settings.star_size_curve)) / packing
+    })
+}
+
+/// Where every slice's cells sit in the star atlas the shader's
+/// `fs_star_bake` fills each frame: a texel a cell, each slice's grid — the
+/// pane's cells and a margin — laid row after row along the atlas's rows, one
+/// slice straight after the other.
+///
+/// A function of the dials and the pane's SHAPE alone — a pane has the same
+/// number of cells at any resolution, because a star pixel is a fraction of
+/// its height — so an export draws the same stars at every size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct StarLayout {
+    /// Each slice's cell in star pixels: the dials' own, unless the atlas
+    /// could not hold the finest of them.
+    cells: [f32; STAR_SLICES],
+    /// Cells across and down in each slice, and the atlas texel its first
+    /// cell is, counted along the rows.
+    grids: [[u32; 2]; STAR_SLICES],
+    bases: [u32; STAR_SLICES],
+    /// The pane in star pixels, across and down.
+    pane: [f32; 2],
+    /// The texels all of it takes.
+    texels: u64,
+}
+
+impl StarLayout {
+    fn at(cells: [f32; STAR_SLICES], floor: f32, aspect: f32) -> Self {
+        let cells = cells.map(|cell| cell.max(floor));
+        let pane = [STAR_PANE * aspect, STAR_PANE];
+        // The walk reaches from `floor(r) - 1` at the pane's one edge to
+        // `floor(r) + 1` at the other, which is at most `ceil(span) + 3` cells.
+        let grids = cells.map(|cell| {
+            pane.map(|span| ((span / cell).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN))
+        });
+        // Each slice's cells row after row, straight after the last slice's,
+        // so no slice pays for another's width.
+        let mut bases = [0; STAR_SLICES];
+        let mut texels = 0u64;
+        for (base, grid) in bases.iter_mut().zip(&grids) {
+            *base = texels.min(u64::from(u32::MAX)) as u32;
+            texels += u64::from(grid[0]) * u64::from(grid[1]);
+        }
+        Self { cells, grids, bases, pane, texels }
+    }
+
+    fn fits(&self) -> bool {
+        self.texels <= STAR_ATLAS_TEXELS
+    }
+
+    /// The atlas this needs: [`STAR_ATLAS_WIDTH`] across and as many rows as
+    /// the cells fill.
+    pub fn size(&self) -> [u32; 2] {
+        [STAR_ATLAS_WIDTH, self.texels.div_ceil(u64::from(STAR_ATLAS_WIDTH)).max(1) as u32]
+    }
+}
+
+/// The starfield's layout for a pane `aspect` wide per unit of height.
+///
+/// Where the dials' cells would take more atlas than [`STAR_ATLAS_TEXELS`] —
+/// the finest `Star size` at a high `Star density`, where a far cell is a
+/// fraction of a pixel on any real pane — the finest cells are raised to the
+/// smallest floor that fits, so those slices hold fewer, sparser stars and
+/// every other slice is untouched.
+pub(super) fn star_layout(
+    settings: harmonigraph_scene::SpectralAtmosphere,
+    aspect: f32,
+) -> StarLayout {
+    let wanted = star_cells(settings);
+    let whole = StarLayout::at(wanted, 0.0, aspect);
+    if whole.fits() {
+        return whole;
+    }
+    let mut high = wanted[0].max(1e-3);
+    while !StarLayout::at(wanted, high, aspect).fits() {
+        high *= 2.0;
+    }
+    let mut low = 0.0;
+    for _ in 0..24 {
+        let mid = (low + high) / 2.0;
+        if StarLayout::at(wanted, mid, aspect).fits() {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    StarLayout::at(wanted, high, aspect)
+}
+
+/// The starfield's layout for a pane of `pixels`, or `None` where no starfield
+/// is drawn and no atlas is allocated.
+pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Option<StarLayout> {
+    let settings = atmosphere.settings.sanitized();
+    let drawn =
+        settings.effects().cloud && settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
+    drawn.then(|| star_layout(settings, pixels[0] as f32 / pixels[1] as f32))
+}
+
+/// The atlas to allocate for `needed` texels, keeping the one `held` while it
+/// still holds them and has not more than twice the rows, so a dial drag steps
+/// through a handful of sizes rather than one per frame.
+pub(super) fn star_atlas_size(needed: [u32; 2], held: Option<[u32; 2]>) -> [u32; 2] {
+    let rows = needed[1].next_multiple_of(STAR_ATLAS_STEP);
+    held.filter(|held| held[0] == needed[0] && needed[1] <= held[1] && held[1] <= rows * 2)
+        .unwrap_or([needed[0], rows])
 }
 
 /// How far the ring's reach is from a pixel, in cells, before the spread: a
@@ -206,17 +344,18 @@ fn star_speed(settings: harmonigraph_scene::SpectralAtmosphere, k: usize) -> f32
 fn star_slices(
     settings: harmonigraph_scene::SpectralAtmosphere,
     now: f64,
+    layout: &StarLayout,
 ) -> [StarSlice; STAR_SLICES] {
     // Star pixels a second at a speed share of one.
     let rate = f64::from(settings.cloud_speed) * star_px_per_second();
     let travel = now * rate;
     let (sin, cos) = f64::from(settings.cloud_direction).to_radians().sin_cos();
-    let packing = (settings.star_density / 2.0).sqrt();
-    let (small, big) = (settings.star_size_min, settings.star_size_max);
+    let small = settings.star_size_min;
+    let big = settings.star_size_max;
     std::array::from_fn(|k| {
         let d = star_depth(k);
         let along = d.powf(settings.star_size_curve);
-        let cell = small * (big / small).powf(along) / packing;
+        let cell = layout.cells[k];
         // The core and its cap grow with this depth's spacing over the fresh
         // 2-to-32 one at the same depth, so a bigger `Star size` is bigger
         // stars and not only sparser ones, and the fresh ends are 1 here.
@@ -243,8 +382,16 @@ fn star_slices(
         // The whole swing over a life, in cells: at most twice the budget,
         // clamped so rounding cannot put it a hair past.
         let swing = (widest * lifetime / cell).min(2.0 * STAR_SPREAD_REACH);
+        let offset = [shift(cos), shift(sin)];
+        let grid = layout.grids[k];
+        // The cell a pixel at the pane's top left edge is in, as the shader
+        // works it out, less the one the walk steps back and the margin.
+        let origin: [i32; 2] = std::array::from_fn(|axis| {
+            let edge = -f64::from(layout.pane[axis] / 2.0 / cell) - f64::from(offset[axis]);
+            edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
+        });
         StarSlice {
-            offset: [shift(cos), shift(sin)],
+            offset,
             spread: [swing * cos as f32, swing * sin as f32],
             cell,
             sigma,
@@ -259,7 +406,9 @@ fn star_slices(
             },
             fringe: settings.star_fringe,
             reach: (STAR_REACH_CELLS - swing / 2.0) * cell,
-            _pad: 0.0,
+            base: layout.bases[k] as i32,
+            origin,
+            grid: grid.map(|side| side as i32),
         }
     })
 }
@@ -578,6 +727,9 @@ pub(super) struct Pipelines {
     /// One period of the cell walk into the two tile targets, for both of the
     /// above to read instead of walking the ring at all.
     pub tile: wgpu::RenderPipeline,
+    /// Every star on screen into the star atlas, once a frame, for the
+    /// composite's walk to read instead of working each star out per pixel.
+    pub stars: wgpu::RenderPipeline,
     pub composite: wgpu::RenderPipeline,
     pub backdrop: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
@@ -636,6 +788,16 @@ impl Pipelines {
                 texture(5),
                 texture(6),
                 sampler_entry(7),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -696,7 +858,20 @@ impl Pipelines {
                 Some(&composite_layout),
                 "fs_cloud_tone",
             ),
-            tile: tile_pipeline(device, source_layout, &composite_layout),
+            tile: tile_pipeline(
+                device,
+                source_layout,
+                &composite_layout,
+                "fs_cloud_tile",
+                &[Some(TILE_FORMAT), Some(TILE_FORMAT)],
+            ),
+            stars: tile_pipeline(
+                device,
+                source_layout,
+                &composite_layout,
+                "fs_star_bake",
+                &[Some(STAR_FORMAT)],
+            ),
             composite: create_spectrogram_pipeline(
                 device,
                 format,
@@ -740,16 +915,19 @@ impl Pipelines {
     }
 }
 
-/// The tile bake: a full-screen triangle over the tile's own target, with two
-/// colour attachments and no vertex buffer.
+/// A bake: a full-screen triangle over its own targets, with no vertex buffer —
+/// the tile's two, or the star atlas.
 ///
-/// It declares the source layout at group 0 that it never reads, so the pass can
-/// bind the same group every other cloud pass does; what it does read is the
-/// cloud uniform at group 1, for the period and the style.
+/// The tile declares the source layout at group 0 that it never reads, so the
+/// pass can bind the same group every other cloud pass does; what it does read
+/// is the cloud uniform at group 1, for the period and the style. The star
+/// bake reads the palette there, and the light and the uniform at group 1.
 fn tile_pipeline(
     device: &wgpu::Device,
     source_layout: &wgpu::BindGroupLayout,
     composite_layout: &wgpu::BindGroupLayout,
+    entry: &str,
+    formats: &[Option<wgpu::TextureFormat>],
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("spectrogram_shader"),
@@ -760,13 +938,18 @@ fn tile_pipeline(
         bind_group_layouts: &[Some(source_layout), Some(composite_layout)],
         ..Default::default()
     });
-    let target = Some(wgpu::ColorTargetState {
-        format: TILE_FORMAT,
-        blend: None,
-        write_mask: wgpu::ColorWrites::ALL,
-    });
+    let targets = formats
+        .iter()
+        .map(|format| {
+            format.map(|format| wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })
+        })
+        .collect::<Vec<_>>();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("spectral_cloud_tile"),
+        label: Some(entry),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -776,9 +959,9 @@ fn tile_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_cloud_tile"),
+            entry_point: Some(entry),
             compilation_options: Default::default(),
-            targets: &[target.clone(), target],
+            targets: &targets,
         }),
         primitive: Default::default(),
         depth_stencil: None,
@@ -819,6 +1002,9 @@ pub(super) struct Targets {
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
     tile: Option<Tile>,
+    /// The star atlas and its size, `None` unless the starfield is drawn. Part
+    /// of the allocation key, sized by [`star_atlas_size`].
+    stars: Option<(wgpu::TextureView, [u32; 2])>,
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
@@ -830,6 +1016,8 @@ pub(super) struct Targets {
     /// Writes both tile targets, so those are the two views it stands scratch
     /// in for.
     tile_group: Option<wgpu::BindGroup>,
+    /// Writes the star atlas, so that is the view it stands a scratch in for.
+    star_group: Option<wgpu::BindGroup>,
     pub composite_group: wgpu::BindGroup,
 }
 
@@ -846,6 +1034,7 @@ pub(super) struct Allocation {
     pub tone: Option<[u32; 2]>,
     pub tile: Option<TileKey>,
     pub carried: Option<Tile>,
+    pub stars: Option<[u32; 2]>,
 }
 
 impl Targets {
@@ -857,7 +1046,8 @@ impl Targets {
         grid: &wgpu::Buffer,
         lut: &wgpu::TextureView,
     ) -> Self {
-        let Allocation { size, tone: tone_size, tile: tile_key, carried } = wanted;
+        let Allocation { size, tone: tone_size, tile: tile_key, carried, stars: star_size } =
+            wanted;
         let formatted = |label, size: [u32; 2], format| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -886,6 +1076,11 @@ impl Targets {
             view("spectral_cloud_wide"),
         ];
         let tone = tone_size.map(|size| (sized("spectral_cloud_tone", size), size));
+        let stars =
+            star_size.map(|size| (formatted("spectral_star_atlas", size, STAR_FORMAT), size));
+        // What every group that does not read the atlas binds in its place, and
+        // what the star pass, which writes it, must.
+        let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
         // Reused whenever it is already the right shape, key and all, so a
         // rebuild the LIGHT's size forced costs no walk at all.
         let tile = tile_key.map(|key| match carried {
@@ -933,7 +1128,7 @@ impl Targets {
         // tone target would be, and the tile pass binds one at each tile. The
         // scratch is the harmless choice — neither `fs_cloud_tone` nor
         // `fs_cloud_tile` reads any of those three bindings.
-        let cloud_group = |front, tone, tile: [&wgpu::TextureView; 2]| {
+        let cloud_group = |front, tone, tile: [&wgpu::TextureView; 2], stars| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spectral_cloud_composite_group"),
                 layout: &pipelines.composite_layout,
@@ -967,21 +1162,32 @@ impl Targets {
                         binding: 7,
                         resource: wgpu::BindingResource::Sampler(&pipelines.tile_sampler),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(stars),
+                    },
                 ],
             })
         };
         let scratch_tile = [&views[0], &views[0]];
         let tile_views =
             tile.as_ref().map_or(scratch_tile, |tile| [&tile.views[0], &tile.views[1]]);
-        let bake_group = cloud_group(&views[1], &views[0], tile_views);
+        let star_view = stars.as_ref().map_or(&star_scratch, |(view, _)| view);
+        let bake_group = cloud_group(&views[1], &views[0], tile_views, star_view);
         // Reads the baked material the light passes just wrote, and writes the
         // tone target — so that is the one view it stands a scratch in for.
-        let tone_group = tone.as_ref().map(|_| cloud_group(&source_view, &views[0], tile_views));
-        let tile_group = tile.as_ref().map(|_| cloud_group(&source_view, &views[0], scratch_tile));
+        let tone_group =
+            tone.as_ref().map(|_| cloud_group(&source_view, &views[0], tile_views, star_view));
+        let tile_group =
+            tile.as_ref().map(|_| cloud_group(&source_view, &views[0], scratch_tile, star_view));
+        // Reads the finished light as the stars' level, like the tone pass.
+        let star_group =
+            stars.as_ref().map(|_| cloud_group(&source_view, &views[0], tile_views, &star_scratch));
         let composite_group = cloud_group(
             &source_view,
             tone.as_ref().map_or(&views[0], |(view, _)| view),
             tile_views,
+            star_view,
         );
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
@@ -1002,6 +1208,7 @@ impl Targets {
             views,
             tone,
             tile,
+            stars,
             source_uniform,
             source_group,
             uniform,
@@ -1009,6 +1216,7 @@ impl Targets {
             bake_group,
             tone_group,
             tile_group,
+            star_group,
             composite_group,
         }
     }
@@ -1017,6 +1225,16 @@ impl Targets {
     /// against what this frame's settings ask for.
     pub fn tone_size(&self) -> Option<[u32; 2]> {
         self.tone.as_ref().map(|&(_, size)| size)
+    }
+
+    /// The star atlas's size, for the allocation key.
+    pub fn star_size(&self) -> Option<[u32; 2]> {
+        self.stars.as_ref().map(|&(_, size)| size)
+    }
+
+    /// The star atlas and the group the pass that fills it binds.
+    pub fn star_pass(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
+        Some((&self.stars.as_ref()?.0, self.star_group.as_ref()?))
     }
 
     /// The held tile's texel size, which is the whole of what it was ALLOCATED
@@ -1067,6 +1285,7 @@ impl Targets {
         ppp: f32,
         atmosphere: SpectrogramAtmosphere,
         tile: Option<TileKey>,
+        stars: Option<StarLayout>,
     ) {
         // The source mesh records only measured history. Its already-blurred
         // light can occupy the whole spectrogram region, without crossing the
@@ -1149,7 +1368,11 @@ impl Targets {
             pitch_vertical: u32::from(pitch_vertical),
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, atmosphere.now),
-            star_slices: star_slices(settings, atmosphere.now),
+            // Zeroes where the starfield is not drawn, which the shader never
+            // reads then.
+            star_slices: stars
+                .map(|layout| star_slices(settings, atmosphere.now, &layout))
+                .unwrap_or_default(),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -1202,11 +1425,19 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, retained_size, source_size, star_slices, tile_key, tone_size,
-        SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_HASH_PERIOD, STAR_JITTER,
-        STAR_LIFE_PERIOD, STAR_REACH_CELLS, STAR_SLICES, STAR_SPREAD_REACH, TILE_MAX, TILE_STEP,
-        WASH_CELLS,
+        cloud_drift, retained_size, source_size, star_layout, star_slices, tile_key, tone_size,
+        SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
+        STAR_JITTER, STAR_LIFE_PERIOD, STAR_PANE, STAR_REACH_CELLS, STAR_SLICES, STAR_SPREAD_REACH,
+        TILE_MAX, TILE_STEP, WASH_CELLS,
     };
+
+    /// Every slice at `now` over a 16:9 pane.
+    fn slices(
+        settings: harmonigraph_scene::SpectralAtmosphere,
+        now: f64,
+    ) -> [super::StarSlice; STAR_SLICES] {
+        star_slices(settings, now, &star_layout(settings, 16.0 / 9.0))
+    }
 
     fn shader_number(name: &str) -> f64 {
         crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, name)
@@ -1284,7 +1515,7 @@ mod tests {
             },
         ];
         for settings in extremes {
-            for slice in star_slices(settings, 0.0) {
+            for slice in slices(settings, 0.0) {
                 let excursion = slice.spread[0].hypot(slice.spread[1]) / 2.0;
                 assert!(excursion <= STAR_SPREAD_REACH + 1e-6, "{settings:?}: {slice:?}");
                 // The scan: a pixel anywhere in cell (0, 0), a star in every
@@ -1307,10 +1538,10 @@ mod tests {
         }
         // ...and the excursion is real: at the widest spread the small cells
         // take the whole budget, where with none they take nothing.
-        let widest = star_slices(extremes[2], 0.0);
+        let widest = slices(extremes[2], 0.0);
         let swing = widest[0].spread[0].hypot(widest[0].spread[1]);
         assert!((swing - 2.0 * STAR_SPREAD_REACH).abs() < 1e-5, "{swing}");
-        let still = star_slices(
+        let still = slices(
             harmonigraph_scene::SpectralAtmosphere { star_speed_spread: 0.0, ..spread },
             0.0,
         );
@@ -1344,6 +1575,79 @@ mod tests {
         nearest
     }
 
+    /// The shader clamps a cell into its slice's grid rather than trusting it,
+    /// so a grid one cell short would draw a neighbour's star silently. This
+    /// replays the shader's own f32 arithmetic at the pane's four corners — the
+    /// walk's extremes — over drifts that put the edge on a cell boundary and
+    /// at the hash period's wrap, on a plain pane and a very wide one.
+    #[test]
+    fn the_star_atlas_holds_every_cell_the_walk_reads() {
+        assert_eq!(f64::from(STAR_PANE), shader_number("STAR_PANE"));
+        assert_eq!(f64::from(STAR_ATLAS_WIDTH), shader_number("STAR_ATLAS_WIDTH"));
+        assert_eq!(STAR_ATLAS_WIDTH, 1 << shader_number("STAR_ATLAS_SHIFT") as u32);
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        let fine = harmonigraph_scene::SpectralAtmosphere {
+            star_density: harmonigraph_scene::STAR_DENSITY_MAX,
+            star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+            ..fresh
+        };
+        for (settings, aspect) in [(fresh, 16.0 / 9.0), (fine, 16.0 / 9.0), (fresh, 16.0)] {
+            let layout = star_layout(settings, aspect);
+            let size = [STAR_PANE * aspect, STAR_PANE];
+            for now in [0.0, 0.37, 1.0e3, 7.3e4, 3.0e5] {
+                let drifting = harmonigraph_scene::SpectralAtmosphere {
+                    cloud_speed: harmonigraph_scene::CLOUD_SPEED_MAX,
+                    cloud_direction: 200.0,
+                    ..settings
+                };
+                for slice in star_slices(drifting, now, &layout) {
+                    for corner in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
+                        for axis in 0..2 {
+                            let pt = corner[axis] * size[axis];
+                            let sp = (pt - size[axis] * 0.5) * (STAR_PANE / size[1]);
+                            let cell = (sp / slice.cell - slice.offset[axis]).floor() as i32;
+                            for step in [-1, 1] {
+                                let local = cell + step - slice.origin[axis];
+                                assert!(
+                                    (0..slice.grid[axis]).contains(&local),
+                                    "{aspect} at {now} s: cell {local} of {:?}",
+                                    slice.grid
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(layout.fits(), "{layout:?}");
+        }
+    }
+
+    /// The atlas takes the dials' own cells wherever it can hold them — the
+    /// fresh starfield on a plain and a very wide pane — and otherwise raises
+    /// only the finest cells, to the least that fits.
+    #[test]
+    fn the_star_atlas_floors_only_the_finest_cells_and_only_past_its_budget() {
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        for aspect in [16.0 / 9.0, 8.0] {
+            let layout = star_layout(fresh, aspect);
+            assert_eq!(layout.cells, super::star_cells(fresh), "{aspect}");
+        }
+        let fine = harmonigraph_scene::SpectralAtmosphere {
+            star_density: harmonigraph_scene::STAR_DENSITY_MAX,
+            star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+            ..fresh
+        };
+        let wanted = super::star_cells(fine);
+        let layout = star_layout(fine, 16.0 / 9.0);
+        let floor = layout.cells[0];
+        assert!(floor > wanted[0], "{layout:?}");
+        assert!(!super::StarLayout::at(wanted, floor * 0.99, 16.0 / 9.0).fits());
+        for (got, want) in layout.cells.iter().zip(wanted) {
+            assert_eq!(*got, want.max(floor));
+        }
+        assert_eq!(layout.cells[STAR_SLICES - 1], wanted[STAR_SLICES - 1]);
+    }
+
     /// Every depth drifts along `Drift direction` at its own share of the
     /// nearest's speed, and the nearest at the prototype's pace: about a ninth
     /// of the pane's height a second at `Drift speed` 1. `Far star speed` 1 is
@@ -1361,7 +1665,7 @@ mod tests {
             ..Default::default()
         };
         let travelled = |settings, now| {
-            star_slices(settings, now)
+            slices(settings, now)
                 .map(|slice| [slice.offset[0] * slice.cell, slice.offset[1] * slice.cell])
         };
         let near = super::star_px_per_second() as f32 * 10.0;
@@ -1378,7 +1682,7 @@ mod tests {
         assert!(together.iter().all(|m| (m[0] - near).abs() < 0.01), "{together:?}");
         // A session left running for days still hands the shader an offset
         // inside one hash period rather than millions of pixels.
-        for slice in star_slices(fresh, 3.0e5) {
+        for slice in slices(fresh, 3.0e5) {
             assert!(slice.offset.iter().all(|&o| (0.0..=STAR_HASH_PERIOD as f32).contains(&o)));
         }
     }
