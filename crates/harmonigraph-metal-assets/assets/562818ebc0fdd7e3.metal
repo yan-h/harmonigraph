@@ -12,15 +12,12 @@ struct VertexOut {
 };
 struct StarSlice {
     metal::float2 offset;
-    metal::float2 spread;
     float cell;
     float sigma;
     float cap;
     float defocus;
     float fringe;
-    float reach;
     int base;
-    int _pad;
     metal::int2 origin;
     metal::int2 grid;
 };
@@ -94,6 +91,7 @@ constant float WASH_FBM_FINE_TILED = 2.0;
 constant uint STAR_SLICES = 5u;
 constant float STAR_PANE = 540.0;
 constant float STAR_JITTER = 0.6;
+constant float STAR_REACH = 1.2;
 constant int STAR_ATLAS_WIDTH = 2048;
 constant uint STAR_ATLAS_SHIFT = 11u;
 constant int STAR_HASH_PERIOD = 65536;
