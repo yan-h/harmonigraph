@@ -15,13 +15,11 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
     use crate::widgets::ValueBar;
 
     crate::widgets::group_space(ui);
+    // Dimmed while off, as a switched section's heading is.
+    let name = egui::RichText::new("Glow texture and breathing").strong();
+    let name = if settings.enabled { name } else { name.color(crate::theme::text_dim()) };
     ui.add_enabled_ui(glow_enabled, |ui| {
-        crate::widgets::checkbox(
-            ui,
-            &mut settings.enabled,
-            egui::RichText::new("Glow texture and breathing").strong(),
-        )
-        .on_hover_text(
+        crate::widgets::checkbox(ui, &mut settings.enabled, name).on_hover_text(
             "Cloud texture and slow breathing in the lattice glow. \
              Turning this off preserves both effects' settings.",
         );

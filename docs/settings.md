@@ -18,8 +18,8 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 Settings opens on Tuning in a fresh workspace.
 Tabs that do not fit the column move, from the right, into a trailing overflow menu.
 Every section heading folds its section, and folds are remembered.
-A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries the switch at the right of its heading;
-off, the section is its heading alone.
+A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries the switch in front of its name;
+off, the section is its heading alone, dimmed and with no fold arrow.
 Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
 Each tab keeps a single owner for its controls;
 shared settings name their scope in the help text.

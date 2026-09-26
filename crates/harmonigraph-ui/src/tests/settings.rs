@@ -1853,9 +1853,22 @@ fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
     h.frame(state, vec![press(at, false)]);
 }
 
-/// A feature's switch in its section heading turns the feature off and takes
-/// its rows with it, but leaves the section unfolded: the switch is the
-/// picture's and the fold is the reader's.
+/// The colour a section heading's name was painted in.
+fn heading_color(out: &egui::FullOutput, leaf: egui::Rect, heading: &str) -> egui::Color32 {
+    out.shapes
+        .iter()
+        .find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == heading && leaf.contains(t.pos) => {
+                Some(t.galley.job.sections[0].format.color)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no {heading} heading"))
+}
+
+/// A feature's switch in its section heading, in front of the name, turns the
+/// feature off and takes its rows with it, dimming the name, but leaves the
+/// section unfolded: the switch is the picture's and the fold is the reader's.
 #[test]
 fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     let mut state = fresh();
@@ -1865,15 +1878,16 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let out = h.frame(&mut state, vec![]);
     let heading = painted_in(&out, leaf, "MIDI RIBBONS").expect("no MIDI ribbons heading");
+    let lit = heading_color(&out, leaf, "MIDI RIBBONS");
     assert!(painted_in(&out, leaf, "Ribbon width").is_some(), "the ribbons open without rows");
-    // The switch is the rightmost box painted across the heading's row.
+    // The switch is the box painted on the heading's row ahead of its name.
     let switch = out
         .shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
             egui::Shape::Rect(r)
                 if leaf.contains(r.rect.center())
-                    && r.rect.left() > heading.right()
+                    && r.rect.right() <= heading.left()
                     && (r.rect.center().y - heading.center().y).abs() < 4.0 =>
             {
                 Some(r.rect.center())
@@ -1881,12 +1895,13 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
             _ => None,
         })
         .max_by(|a, b| a.x.total_cmp(&b.x))
-        .expect("the MIDI ribbons heading drew no switch");
+        .expect("the MIDI ribbons heading drew no switch ahead of its name");
 
     click_at(&mut h, &mut state, switch);
     let out = h.frame(&mut state, vec![]);
     assert!(!state.picture.appearance.spectrum.show_roll, "the switch did not turn ribbons off");
     assert!(painted_in(&out, leaf, "MIDI RIBBONS").is_some(), "the heading went with them");
+    assert_ne!(heading_color(&out, leaf, "MIDI RIBBONS"), lit, "an off heading reads as on");
     assert!(painted_in(&out, leaf, "Ribbon width").is_none(), "a ribbon row outlived the ribbons");
     assert!(
         state.workspace.interaction.folded_sections.is_empty(),
@@ -1897,5 +1912,6 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     click_at(&mut h, &mut state, switch);
     let out = h.frame(&mut state, vec![]);
     assert!(state.picture.appearance.spectrum.show_roll, "the switch did not turn ribbons on");
+    assert_eq!(heading_color(&out, leaf, "MIDI RIBBONS"), lit, "the heading stayed dim");
     assert!(painted_in(&out, leaf, "Ribbon width").is_some(), "the rows did not come back");
 }
