@@ -42,10 +42,10 @@ struct StarSlice {
     float sigma;
     float cap;
     float defocus;
-    float occupancy;
     float fringe;
     float reach;
     int base;
+    int _pad;
     metal::int2 origin;
     metal::int2 grid;
 };
