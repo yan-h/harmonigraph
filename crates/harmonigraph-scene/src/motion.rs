@@ -576,7 +576,7 @@ impl NodeMotion {
             let loudest = (0..11).max_by(|&a, &b| motion.levels[a].total_cmp(&motion.levels[b]));
             node.bloom = match loudest {
                 Some(slot) if motion.levels[slot] > 0.0 => {
-                    view.intensity.bloom_share(motion.readings[slot], view.bloom_strength)
+                    view.intensity.bloom_share(motion.readings[slot])
                 }
                 _ => 1.0,
             };
@@ -874,14 +874,14 @@ mod tests {
         assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
         assert!((glow - 0.5).abs() < 1e-5, "the glow departs on the envelope alone: {glow}");
 
-        // Pressure routed to the glow instead, at half weight over a Bloom of
-        // half: a note at half pressure blooms at three quarters, half again
-        // the bar's own, and neither the slice ink nor the node glow is
+        // Pressure routed to the glow instead, at half weight over a Glow base
+        // of half: a note at half pressure blooms at three quarters, half again
+        // the base's own, and neither the slice ink nor the node glow is
         // touched by it.
         let view = ViewConfig {
-            bloom_strength: 0.5,
             intensity: crate::IntensitySettings {
                 pressure: IntensitySource { target: IntensityTarget::Glow, weight: 0.5 },
+                glow_base: 0.5,
                 ..Default::default()
             },
             ..view

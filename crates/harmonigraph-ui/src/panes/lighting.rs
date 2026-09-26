@@ -58,18 +58,10 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// Bloom and the glow, first in the Light section: its reach, strength and
+/// The node glow, first in the Light section: its reach, strength and
 /// colour, what it does to the lit ink, and its clock.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     super::block(ui, "Glow");
-    ValueBar::new(&mut view.bloom_strength, 0.0..=2.0, "Bloom")
-        .unit(1.0, "×")
-        .show(ui)
-        .on_hover_text(
-            "Soft halos around bright MIDI notes in the Lattice. \
-                     0 turns bloom off; \
-                     1× is the reference strength.",
-        );
     // A share of the node's radius, the unit the shared gap and the Clearance in
     // Note read in, and measured from the same place: the reach is a distance
     // out from the node's edge exactly as the Clearance is. Eased, because the

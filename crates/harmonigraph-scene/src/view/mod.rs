@@ -807,13 +807,11 @@ pub struct ViewConfig {
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
     pub render_scale: f32,
-    /// Lattice bloom: how much blurred brightness gets added back as a halo
-    /// around bright notes. The Spiral uses [`spiral_bloom`](Self::spiral_bloom)
-    /// and the spectrogram's MIDI ribbons
-    /// [`crate::SpectralAtmosphere::note_glow`] instead. 0 disables this bloom chain.
-    pub bloom_strength: f32,
-    /// The same halo around the Spiral's note dots. Its own value so that it
-    /// sits with the Spiral's other settings on the Analyzer tab.
+    /// The bloom's halo around the Spiral's note dots. The lattice and the
+    /// spectrogram's MIDI ribbons share
+    /// [`IntensitySettings::glow_base`](crate::IntensitySettings::glow_base)
+    /// instead, which the notes' playing adds to. Its own value so that it sits
+    /// with the Spiral's other settings on the Analyzer tab.
     pub spiral_bloom: f32,
     /// The node halo: how far past a node's outermost drawn edge its light
     /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
@@ -846,10 +844,10 @@ pub struct ViewConfig {
     /// is unlit, and on [`glow_wash`](Self::glow_wash)'s share where it is a
     /// sounding slice.
     ///
-    /// Distinct from [`bloom_strength`](Self::bloom_strength) in what it
-    /// measures: bloom thresholds a finished picture, so only its bright end
-    /// blooms. This strength belongs to the lattice; the Spiral and the MIDI
-    /// ribbons have their own bloom. Glow is a layer of the lattice's nodes, drawn from the
+    /// Distinct from the bloom
+    /// ([`IntensitySettings::glow_base`](crate::IntensitySettings::glow_base))
+    /// in what it measures: bloom thresholds a finished picture, so only its
+    /// bright end blooms. This strength belongs to the lattice. Glow is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
     /// Experimental glow texture and breathing, shared by editor and exports.
@@ -1506,7 +1504,6 @@ impl ViewConfig {
         // clamps remain wider defensive boundaries for callers that do not
         // load an AppearanceDocument through this sanitizer.
         self.render_scale = finite_or(self.render_scale, fresh.render_scale).clamp(0.5, 2.0);
-        self.bloom_strength = finite_or(self.bloom_strength, fresh.bloom_strength).clamp(0.0, 2.0);
         self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom).clamp(0.0, 2.0);
 
         // The resting marker's three lengths. The arm and its taper are a
@@ -1754,12 +1751,8 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // A halo at not quite two thirds strength, down from the four
-            // fifths the view opened on: a node's rings are quiet shapes and
-            // the bloom is what gives them presence, while the glow beside it
-            // shares that job — see `glow_blend` and `glow_wash` below.
-            bloom_strength: 0.633_927_7,
-            // The Lattice's strength, which the Spiral shared until it had its own.
+            // The lattice's bloom strength (`IntensitySettings::glow_base`),
+            // which the Spiral shared until it had its own.
             spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, at just over half strength as captured

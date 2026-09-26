@@ -45,7 +45,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, bloom_strength, spiral_bloom, sevens_size, label_scale,
+    poison!(a.view; render_scale, spiral_bloom, sevens_size, label_scale,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
@@ -54,7 +54,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; gain_range, opacity_rest, thickness_max);
+    poison!(a.view.intensity; gain_range, glow_base, opacity_rest, thickness_max);
     poison!(a.view.intensity.velocity; weight);
     poison!(a.view.intensity.gain; weight);
     poison!(a.view.intensity.pressure; weight);
@@ -89,7 +89,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // reach them. #933's contract is that a size the bar can offer is a size
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness, note_glow,
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
     saved.workspace.interaction.ui_scale = v;
@@ -241,10 +241,12 @@ fn scenarios() -> Vec<Scenario> {
     for &pane in SETTINGS_PANES {
         let visits = match pane {
             panes::Tab::Tuning => 7,
-            panes::Tab::Colors => 2,
-            // The picture, Note intensity (7), then bloom and glow (9) with its
-            // texture switched off, then two shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 17 + 7 + 9 + 4,
+            // The pitch colors, then Note intensity: four weights, Gain range,
+            // Glow base, Opacity base and Thickness max.
+            panes::Tab::Colors => 2 + 8,
+            // The picture, then the glow (8) with its texture switched off,
+            // then two shadow groups of two bars each.
+            panes::Tab::LatticeSettings => 17 + 8 + 4,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -260,9 +262,9 @@ fn scenarios() -> Vec<Scenario> {
         // page's two groups).
         let visits = match pane {
             panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
-            // ...the spectrogram's twelve, the ribbons' six, and the
+            // ...the spectrogram's twelve, the ribbons' five, and the
             // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2 + 2,
+            panes::Tab::AnalyzerSettings => visits + 12 + 5 + 2 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -276,7 +278,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         wash: true,
         enabled: true,
-        visits: 13 + 12 + 6 + 2 + 2 - 3 + 5,
+        visits: 13 + 12 + 5 + 2 + 2 - 3 + 5,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -284,7 +286,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 23 + 7 + 14 + 6,
+            visits: 23 + 13 + 6,
             ..base
         });
     }
@@ -373,17 +375,17 @@ fn check(edge: Edge) {
             assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
+        // The lattice and the ribbons share one bloom on the Mapping page; the
+        // Spiral keeps its own.
         let blooms: &[&str] = match scenario.pane {
-            panes::Tab::LatticeSettings => &["Bloom"],
-            // The ribbons' bloom is theirs, switched off with them.
-            panes::Tab::AnalyzerSettings if scenario.enabled => &["Ribbon bloom", "Spiral bloom"],
+            panes::Tab::Colors => &["Glow base"],
             panes::Tab::AnalyzerSettings => &["Spiral bloom"],
             _ => &[],
         };
         for &label in blooms {
             assert!(saw(label), "{scenario:?} drew no {label:?} bar");
-            assert!(!saw("Bloom amount") && !saw("Ribbon glow"));
         }
+        assert!(!saw("Bloom") && !saw("Ribbon bloom"), "{scenario:?} drew a retired bloom bar");
         for visit in visits {
             if visit.label == "Contour levels" {
                 assert_eq!(

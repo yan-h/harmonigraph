@@ -11,9 +11,9 @@
 //! Every source is measured from where it RESTS — full velocity, no pressure,
 //! timbre at 0.5, gain at unity — so a note at rest draws exactly as its pane's
 //! own controls say, and a source pushes it one way or the other from there.
-//! What a display starts from is therefore the pane's own control wherever the
-//! pane has one: the Bloom bar for the glow, the note width for the thickness.
-//! Opacity has no such control on the lattice, so it keeps a base of its own.
+//! The thickness therefore starts from each pane's own note width. The glow
+//! starts from [`IntensitySettings::glow_base`], which is the only bloom the
+//! lattice and the roll have, and the opacity from a base of its own.
 //!
 //! A display nothing is routed to stays at rest, so fresh settings draw every
 //! project as it was before these existed. The trail never reads any of this;
@@ -22,7 +22,9 @@
 use crate::view::finite_or;
 use harmonigraph_core::Expressions;
 
-/// The ends of every weight's bar and of the opacity base's.
+/// The top of every weight's bar and of the opacity base's, which run up from
+/// 0. No weight is negative: a source only ever pushes its display the way it
+/// moves from rest.
 pub const INTENSITY_WEIGHT_MAX: f32 = 2.0;
 /// The narrowest and widest the gain range can be set to, in dB.
 pub const GAIN_RANGE_MIN: f32 = 3.0;
@@ -31,12 +33,11 @@ pub const GAIN_RANGE_MAX: f32 = 60.0;
 /// The ends of the Thickness max bar, as multiples of a pane's note width. 1
 /// lets a source only thin a note.
 pub const THICKNESS_MAX_RANGE: std::ops::RangeInclusive<f32> = 1.0..=4.0;
-/// The top of the Bloom and Ribbon bloom bars, and the most a routed note
-/// blooms.
+/// The top of the Glow base bar, and the most a routed note blooms.
 pub const BLOOM_MAX: f32 = 2.0;
 /// The least a pane's bloom pass runs at while something is routed to Glow, so
-/// a note can bloom over a bar set to 0. Below it a note at rest blooms a
-/// little less than the bar alone would draw, which is too faint to see.
+/// a note can bloom over a Glow base of 0. Below it a note at rest blooms a
+/// little less than the base alone would draw, which is too faint to see.
 pub const BLOOM_REFERENCE_FLOOR: f32 = 0.05;
 
 /// Which display a source drives.
@@ -47,9 +48,9 @@ pub enum IntensityTarget {
     Off,
     /// The note's opacity: the lattice's octave slices and the roll's ribbons.
     Opacity,
-    /// How much the note blooms, added to its pane's bloom bar: the halo round
-    /// its lattice slices (Bloom) and round its roll ribbon (Ribbon bloom).
-    /// The lattice's node glow does not read it.
+    /// How much the note blooms, added to the Glow base: the halo round its
+    /// lattice slices and round its roll ribbon. The lattice's node glow does
+    /// not read it.
     Glow,
     /// How thick it is drawn, as a multiple of its pane's note width: the
     /// roll's ribbons, across pitch about their center line, and the lattice's
@@ -78,7 +79,7 @@ impl IntensityTarget {
 pub struct IntensitySource {
     pub target: IntensityTarget,
     /// What the source's distance from rest is multiplied by before its
-    /// display adds it; negative turns it around.
+    /// display adds it, 0 to [`INTENSITY_WEIGHT_MAX`].
     pub weight: f32,
 }
 
@@ -88,7 +89,8 @@ impl Default for IntensitySource {
     }
 }
 
-/// Every source's route, the opacity's base and the thickness's ceiling.
+/// Every source's route, the bloom and opacity at rest, and the thickness's
+/// ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct IntensitySettings {
@@ -106,6 +108,14 @@ pub struct IntensitySettings {
     /// How many dB of gain make one weight's worth: at 24, +12 dB adds half
     /// the gain's weight and -24 dB takes a whole one away.
     pub gain_range: f32,
+    /// How much a note at rest blooms, in × of the reference halo: the whole
+    /// of the lattice's and the roll's bloom, 0 for none. The sources routed
+    /// to Glow add to it.
+    ///
+    /// One value for both panes, where each used to have a bar of its own
+    /// (the lattice's `bloom_strength` and the roll's `note_glow`). The fresh
+    /// value is the lattice's.
+    pub glow_base: f32,
     /// Where a note at rest sits on the opacity display, before the sources
     /// routed to it add in. Read only while something is routed there.
     ///
@@ -126,6 +136,7 @@ impl Default for IntensitySettings {
             pressure: IntensitySource::default(),
             timbre: IntensitySource::default(),
             gain_range: 24.0,
+            glow_base: 0.633_927_7,
             opacity_rest: 1.0,
             thickness_max: 2.0,
         }
@@ -137,9 +148,9 @@ impl Default for IntensitySettings {
 pub struct IntensityReading {
     /// 0 to 1, with 1 as the note drawn in full.
     pub opacity: f32,
-    /// How far the note's bloom stands off its pane's bloom bar, in the bar's
-    /// own × units: 0 at rest. Unbounded here, because the bar it is added to
-    /// is the pane's; [`bloom`](Self::bloom) adds the two and bounds them.
+    /// How far the note's bloom stands off the Glow base, in its × units: 0 at
+    /// rest. Unbounded here; [`IntensitySettings::bloom`] adds the base and
+    /// bounds the two.
     pub glow: f32,
     /// The note's width as a multiple of its pane's note width, from 0 to
     /// [`IntensitySettings::thickness_max`]: 1 at rest.
@@ -158,14 +169,6 @@ impl IntensityReading {
             thickness: self.thickness.max(other.thickness),
         }
     }
-
-    /// The note's bloom on a pane whose bloom bar stands at `bar`, in the
-    /// bar's × units: the bar itself at rest, and never below 0 nor past
-    /// [`BLOOM_MAX`] (or the bar, where a shell hands over more).
-    pub fn bloom(self, bar: f32) -> f32 {
-        let bar = finite_or(bar, 0.0).max(0.0);
-        (bar + self.glow).clamp(0.0, BLOOM_MAX.max(bar))
-    }
 }
 
 impl Default for IntensityReading {
@@ -178,14 +181,14 @@ impl IntensitySettings {
     /// Every value finite and on its bar, falling back to the fresh value.
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
-        let bar = |value: f32, fallback: f32| {
-            finite_or(value, fallback).clamp(-INTENSITY_WEIGHT_MAX, INTENSITY_WEIGHT_MAX)
-        };
+        let bar =
+            |value: f32, fallback: f32| finite_or(value, fallback).clamp(0.0, INTENSITY_WEIGHT_MAX);
         for source in [&mut self.velocity, &mut self.gain, &mut self.pressure, &mut self.timbre] {
             source.weight = bar(source.weight, fresh.velocity.weight);
         }
         self.gain_range =
             finite_or(self.gain_range, fresh.gain_range).clamp(GAIN_RANGE_MIN, GAIN_RANGE_MAX);
+        self.glow_base = finite_or(self.glow_base, fresh.glow_base).clamp(0.0, BLOOM_MAX);
         self.opacity_rest = bar(self.opacity_rest, fresh.opacity_rest);
         self.thickness_max = finite_or(self.thickness_max, fresh.thickness_max)
             .clamp(*THICKNESS_MAX_RANGE.start(), *THICKNESS_MAX_RANGE.end());
@@ -200,27 +203,40 @@ impl IntensitySettings {
                 .any(|source| source.target == target)
     }
 
-    /// The strength a pane's bloom pass runs at, out of its bloom bar: the bar
-    /// itself, except that while something is routed to Glow it never drops
-    /// below [`BLOOM_REFERENCE_FLOOR`], so a note can bloom over a bar at 0.
-    /// Each note's share of it is [`bloom_share`](Self::bloom_share).
-    pub fn bloom_reference(&self, bar: f32) -> f32 {
-        let bar = finite_or(bar, 0.0).max(0.0);
+    /// The Glow base, whatever a shell hands over: finite and never below 0.
+    fn glow_at_rest(&self) -> f32 {
+        finite_or(self.glow_base, 0.0).max(0.0)
+    }
+
+    /// How much a note reading `reading` blooms, in the Glow base's × units:
+    /// the base itself at rest, and never below 0 nor past [`BLOOM_MAX`] (or
+    /// the base, where a shell hands over more).
+    pub fn bloom(&self, reading: IntensityReading) -> f32 {
+        let base = self.glow_at_rest();
+        (base + reading.glow).clamp(0.0, BLOOM_MAX.max(base))
+    }
+
+    /// The strength both panes' bloom passes run at: the Glow base, except
+    /// that while something is routed to Glow it never drops below
+    /// [`BLOOM_REFERENCE_FLOOR`], so a note can bloom over a base of 0. Each
+    /// note's share of it is [`bloom_share`](Self::bloom_share).
+    pub fn bloom_reference(&self) -> f32 {
+        let base = self.glow_at_rest();
         if self.routes_to(IntensityTarget::Glow) {
-            bar.max(BLOOM_REFERENCE_FLOOR)
+            base.max(BLOOM_REFERENCE_FLOOR)
         } else {
-            bar
+            base
         }
     }
 
     /// How much of a note's ink its pane's bloom pass takes, against
-    /// [`bloom_reference`](Self::bloom_reference): 1 at rest wherever the bar
-    /// is at or above the floor, and past 1 for a note blooming over the bar.
+    /// [`bloom_reference`](Self::bloom_reference): 1 at rest wherever the base
+    /// is at or above the floor, and past 1 for a note blooming over the base.
     /// 1 where there is no bloom at all, since nothing reads it then.
-    pub fn bloom_share(&self, reading: IntensityReading, bar: f32) -> f32 {
-        let reference = self.bloom_reference(bar);
+    pub fn bloom_share(&self, reading: IntensityReading) -> f32 {
+        let reference = self.bloom_reference();
         if reference > 0.0 {
-            reading.bloom(bar) / reference
+            self.bloom(reading) / reference
         } else {
             1.0
         }
@@ -291,20 +307,21 @@ mod tests {
 
     /// Each source drives the display it is routed to and no other, at its own
     /// weight, measured from where it rests: a soft note is dimmer than one
-    /// played in full, and pressure adds bloom over the bar.
+    /// played in full, and pressure adds bloom over the base.
     #[test]
     fn a_source_drives_only_its_own_display_from_rest() {
         let settings = IntensitySettings {
             velocity: to(IntensityTarget::Opacity, 1.0),
             pressure: to(IntensityTarget::Glow, 0.5),
             timbre: to(IntensityTarget::Thickness, 1.0),
+            glow_base: 0.25,
             ..Default::default()
         };
         let pressed = Expressions { pressure: 1.0, timbre: 0.25, ..Expressions::NEUTRAL };
         let reading = settings.read(0.4, pressed);
         assert!((reading.opacity - 0.4).abs() < 1e-6, "{reading:?}");
         assert_eq!((reading.glow, reading.thickness), (0.5, 0.75));
-        assert_eq!(reading.bloom(0.25), 0.75);
+        assert_eq!(settings.bloom(reading), 0.75);
         let at_rest = settings.read(1.0, Expressions::NEUTRAL);
         assert_eq!(at_rest, IntensityReading::REST, "a note at rest draws as the panes say");
     }
@@ -329,30 +346,34 @@ mod tests {
         assert_eq!(thickness(0.2, -24.0), 0.0);
     }
 
-    /// The bloom pass runs at the bar, so a note at rest takes the whole of
+    /// The bloom pass runs at the base, so a note at rest takes the whole of
     /// its ink whether or not anything is routed to Glow; a routed note blooms
-    /// over a bar at 0 against the floor instead.
+    /// over a base of 0 against the floor instead.
     #[test]
-    fn a_notes_bloom_share_is_whole_at_rest_and_past_whole_over_the_bar() {
-        let routed =
-            IntensitySettings { pressure: to(IntensityTarget::Glow, 1.0), ..Default::default() };
+    fn a_notes_bloom_share_is_whole_at_rest_and_past_whole_over_the_base() {
+        let base = |glow_base, routed: bool| IntensitySettings {
+            pressure: to(if routed { IntensityTarget::Glow } else { IntensityTarget::Off }, 1.0),
+            glow_base,
+            ..Default::default()
+        };
         let rest = IntensityReading::REST;
-        for settings in [IntensitySettings::default(), routed] {
-            assert_eq!(settings.bloom_reference(0.8), 0.8);
-            assert_eq!(settings.bloom_share(rest, 0.8), 1.0);
+        for settings in [base(0.8, false), base(0.8, true)] {
+            assert_eq!(settings.bloom_reference(), 0.8);
+            assert_eq!(settings.bloom_share(rest), 1.0);
         }
-        let pressed = routed.read(1.0, Expressions { pressure: 0.4, ..Expressions::NEUTRAL });
-        assert!((routed.bloom_share(pressed, 0.8) - 1.5).abs() < 1e-6);
-        assert_eq!(routed.bloom_reference(0.0), BLOOM_REFERENCE_FLOOR);
-        assert!((routed.bloom_share(pressed, 0.0) - 0.4 / BLOOM_REFERENCE_FLOOR).abs() < 1e-4);
-        assert_eq!(IntensitySettings::default().bloom_reference(0.0), 0.0, "no pass");
-        let far = IntensityReading { glow: 5.0, ..rest };
-        assert_eq!(far.bloom(0.8), BLOOM_MAX);
+        let pressed = Expressions { pressure: 0.4, ..Expressions::NEUTRAL };
+        let routed = base(0.8, true);
+        assert!((routed.bloom_share(routed.read(1.0, pressed)) - 1.5).abs() < 1e-6);
+        let dark = base(0.0, true);
+        assert_eq!(dark.bloom_reference(), BLOOM_REFERENCE_FLOOR);
+        let share = dark.bloom_share(dark.read(1.0, pressed));
+        assert!((share - 0.4 / BLOOM_REFERENCE_FLOOR).abs() < 1e-4);
+        assert_eq!(base(0.0, false).bloom_reference(), 0.0, "no pass");
+        assert_eq!(routed.bloom(IntensityReading { glow: 5.0, ..rest }), BLOOM_MAX);
     }
 
-    /// Silence is -inf dB. It takes a positively weighted display to its
-    /// floor, a negatively weighted one to its ceiling, and at weight 0 it is
-    /// no NaN; nor is a value that is not a number.
+    /// Silence is -inf dB. It takes a weighted display to its floor, and at
+    /// weight 0 it is no NaN; nor is a value that is not a number.
     #[test]
     fn silence_is_bounded_whatever_the_weight() {
         let silent = gain(0.0);
@@ -361,11 +382,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(weighted(0.5).read(1.0, silent).opacity, 0.0);
-        assert_eq!(weighted(-0.5).read(1.0, silent).opacity, 1.0);
         assert_eq!(weighted(0.0).read(1.0, silent).opacity, 1.0);
-        let glowing =
-            IntensitySettings { gain: to(IntensityTarget::Glow, 0.5), ..Default::default() };
-        assert_eq!(glowing.read(1.0, silent).bloom(1.0), 0.0);
+        let glowing = IntensitySettings {
+            gain: to(IntensityTarget::Glow, 0.5),
+            glow_base: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(glowing.bloom(glowing.read(1.0, silent)), 0.0);
         let nan = Expressions { pressure: f32::NAN, ..Expressions::NEUTRAL };
         let pressed = IntensitySettings {
             pressure: to(IntensityTarget::Thickness, 1.0),

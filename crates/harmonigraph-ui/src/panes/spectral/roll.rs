@@ -295,11 +295,10 @@ pub(super) fn draw_roll(
     let dir = |v: egui::Vec2| [v.x, v.y];
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
     // The pass runs at the reference and each piece carries its share of it
-    // (see `IntensitySettings::bloom_share`): the Ribbon bloom bar itself
-    // while nothing is routed to Glow, so the halo is the bar's alone.
-    let intensity = state.appearance.view.intensity.sanitized();
+    // (see `IntensitySettings::bloom_share`): the Glow base itself while
+    // nothing is routed to Glow, so the halo is the base's alone.
     let bloom = harmonigraph_render::bloom_strength(
-        intensity.bloom_reference(state.appearance.spectrum.atmosphere.note_glow),
+        state.appearance.view.intensity.sanitized().bloom_reference(),
     );
     let pane = crate::panes::lattice::pane_id(options.surface);
     let shadow_surface = crate::text::spectral_shadow_surface(options.surface);
@@ -401,10 +400,7 @@ fn roll_instances_with_floor(
     let feather_px = 1.0 / ppp.max(1e-3);
     // How each note's playing reads on every display, shared with the lattice,
     // and what that comes to on this roll.
-    let drawing = Drawing {
-        intensity: state.appearance.view.intensity.sanitized(),
-        bar: cfg.atmosphere.note_glow,
-    };
+    let drawing = Drawing { intensity: state.appearance.view.intensity.sanitized() };
     // The widest any note can swell to, as a multiple of `half_pitch`: what the
     // pitch culls below reach by, so a swelled note is kept while any of it can
     // be on screen. Each segment's box grows to its own widest point alone (see
@@ -878,11 +874,9 @@ fn roll_instances_with_floor(
 const INTENSITY_TOLERANCE: f32 = 1.0 / 256.0;
 
 /// What turns a note's playing into what the roll draws: the intensity
-/// settings the lattice shares, and the Ribbon bloom bar a note's glow stands
-/// off.
+/// settings the lattice shares.
 struct Drawing {
     intensity: harmonigraph_scene::IntensitySettings,
-    bar: f32,
 }
 
 /// One reading as the roll draws it.
@@ -890,9 +884,9 @@ struct Drawing {
 struct Look {
     /// The body's opacity, 0..1.
     fade: f32,
-    /// The body's share of the bloom pass, which runs at the bar's
+    /// The body's share of the bloom pass, which runs at the Glow base's
     /// [`bloom_reference`](harmonigraph_scene::IntensitySettings::bloom_reference):
-    /// 1 at rest, past 1 for a note blooming over the bar.
+    /// 1 at rest, past 1 for a note blooming over the base.
     glow: f32,
     /// The ribbon's width as a multiple of the Ribbon width.
     width: f32,
@@ -911,7 +905,7 @@ impl Drawing {
         let reading = self.intensity.read(velocity, expressions);
         Look {
             fade: reading.opacity,
-            glow: self.intensity.bloom_share(reading, self.bar),
+            glow: self.intensity.bloom_share(reading),
             width: reading.thickness,
         }
     }
@@ -923,7 +917,7 @@ impl Drawing {
     /// forty times the reference thins at the grain a whole bloom does, and a
     /// swell to 4x no finer than one to 1x did.
     fn ranges(&self) -> [f32; 3] {
-        let reference = self.intensity.bloom_reference(self.bar);
+        let reference = self.intensity.bloom_reference();
         let glow = if reference > 0.0 { harmonigraph_scene::BLOOM_MAX / reference } else { 1.0 };
         [1.0, glow, self.intensity.thickness_max.max(1.0)]
     }
@@ -1297,18 +1291,18 @@ mod tests {
         assert_eq!((older.glow, newer.glow), ([1.0; 2], [1.0; 2]), "nothing routed to the glow");
 
         // The same pressure routed to the glow instead: it blooms that much
-        // over the Ribbon bloom bar, as a share of the bar the pass runs at,
-        // and the fade stays in full. The bar is low enough for the whole
-        // swell to stand under the most a note blooms.
-        state.appearance.spectrum.atmosphere.note_glow = 0.5;
+        // over the Glow base, as a share of the base the pass runs at, and the
+        // fade stays in full. The base is low enough for the whole swell to
+        // stand under the most a note blooms.
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
                 target: harmonigraph_scene::IntensityTarget::Glow,
                 ..fade.pressure
             },
+            glow_base: 0.5,
             ..fade
         };
-        let bar = state.appearance.spectrum.atmosphere.note_glow;
+        let bar = state.appearance.view.intensity.glow_base;
         let share = |[a, b]: [f32; 2]| [(bar + a) / bar, (bar + b) / bar];
         let glowing = instances(&state, 1.0);
         assert_eq!(glowing.len(), 2);

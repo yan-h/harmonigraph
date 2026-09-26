@@ -101,6 +101,7 @@ fn poisoned_view() -> ViewConfig {
                 pressure: source(crate::IntensityTarget::Thickness),
                 timbre: source(crate::IntensityTarget::Opacity),
                 gain_range: nan,
+                glow_base: nan,
                 opacity_rest: nan,
                 thickness_max: nan,
             }
@@ -118,7 +119,6 @@ fn poisoned_view() -> ViewConfig {
         show_perf: base.show_perf,
         show_perf_detail: base.show_perf_detail,
         render_scale: nan,
-        bloom_strength: nan,
         spiral_bloom: nan,
         glow_reach: nan,
         atmosphere: AtmosphereSettings {
