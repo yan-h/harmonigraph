@@ -44,6 +44,10 @@ pub struct IntensitySettings {
     /// The note's opacity at zero intensity, on the lattice's octave slices and
     /// the roll's ribbons alike; 1 is a fade that ignores intensity.
     pub fade_floor: f32,
+    /// How much light a note gives off at zero intensity, as a share of the
+    /// global glow: the lattice's halo and the roll's bloom alike; 1 is a glow
+    /// that ignores intensity.
+    pub glow_floor: f32,
 }
 
 impl Default for IntensitySettings {
@@ -56,6 +60,7 @@ impl Default for IntensitySettings {
             timbre: 0.0,
             gain_range: 24.0,
             fade_floor: 0.2,
+            glow_floor: 0.0,
         }
     }
 }
@@ -75,6 +80,7 @@ impl IntensitySettings {
         self.gain_range =
             finite_or(self.gain_range, fresh.gain_range).clamp(GAIN_RANGE_MIN, GAIN_RANGE_MAX);
         self.fade_floor = finite_or(self.fade_floor, fresh.fade_floor).clamp(0.0, 1.0);
+        self.glow_floor = finite_or(self.glow_floor, fresh.glow_floor).clamp(0.0, 1.0);
         self
     }
 
@@ -103,6 +109,12 @@ impl IntensitySettings {
     /// The opacity a note of this `intensity` draws at.
     pub fn fade(&self, intensity: f32) -> f32 {
         read_through(self.fade_floor, intensity)
+    }
+
+    /// How much light a note of this `intensity` gives off, as a share of the
+    /// glow it would give at full.
+    pub fn glow(&self, intensity: f32) -> f32 {
+        read_through(self.glow_floor, intensity)
     }
 
     /// [`fade`](Self::fade) of [`intensity`](Self::intensity).

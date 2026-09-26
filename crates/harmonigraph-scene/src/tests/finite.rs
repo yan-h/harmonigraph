@@ -101,6 +101,7 @@ fn poisoned_view() -> ViewConfig {
             timbre: nan,
             gain_range: nan,
             fade_floor: nan,
+            glow_floor: nan,
         },
         mark_thickness: nan,
         mark_delay: nan,

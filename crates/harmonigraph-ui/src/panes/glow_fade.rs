@@ -187,11 +187,11 @@ impl GlowFade {
             // which leaves the ring's annulus out of the walk), so the two
             // halves of one light cannot come to disagree about what lit it.
             //
-            // The MIDI layers' level is the one `NodeMotion::step` seeded
-            // `glow.level` with rather than `activation`: the light reads no
-            // note intensity until it has a floor of its own (#1130).
-            let target =
-                node.glow.level.max(node.melody_level).max(node.bass_level).clamp(0.0, 1.0);
+            // `NodeMotion::step` has already answered that into `glow.level`,
+            // marks included, each layer read through the glow's own intensity
+            // floor rather than the fade that `activation` and the mark levels
+            // carry.
+            let target = node.glow.level.clamp(0.0, 1.0);
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
                     lit.seen = self.frame;

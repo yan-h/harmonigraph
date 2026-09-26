@@ -19,7 +19,7 @@ struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
-    float _pad;
+    float light;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
     metal::float2 _axis_pad;
@@ -44,7 +44,9 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
-    metal::float4 fade;
+    metal::float2 ramp;
+    char _pad15[8];
+    metal::float4 reads;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -275,12 +277,13 @@ float cap_coverage(
     return _e17 * (1.0 - _e19);
 }
 
-float fade_at(
-    VertexOut in_7
+float along(
+    VertexOut in_7,
+    metal::float2 ends
 ) {
-    float run = in_7.fade.y - in_7.fade.x;
-    float t = (metal::abs(run) > 0.000001) ? metal::clamp((in_7.local.y - in_7.fade.x) / run, 0.0, 1.0) : 0.0;
-    return metal::mix(in_7.fade.z, in_7.fade.w, t);
+    float run = in_7.ramp.y - in_7.ramp.x;
+    float t = (metal::abs(run) > 0.000001) ? metal::clamp((in_7.local.y - in_7.ramp.x) / run, 0.0, 1.0) : 0.0;
+    return metal::mix(ends.x, ends.y, t);
 }
 
 metal::float4 outline_color(
@@ -297,8 +300,8 @@ metal::float4 outline_color(
     float _e9 = lead_coverage(in_8);
     float wrap = (_e3 * (1.0 - _e5)) * _e9;
     float _e12 = cap_coverage(in_8, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
-    float _e15 = fade_at(in_8);
-    return (in_8.outline * metal::max(wrap, _e12)) * _e15;
+    float _e17 = along(in_8, in_8.reads.xy);
+    return (in_8.outline * metal::max(wrap, _e12)) * _e17;
 }
 
 metal::float3 linear_from_gamma_rgb(
@@ -324,7 +327,8 @@ struct fs_outline_linearInput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
-    metal::float4 fade [[user(loc13), flat]];
+    metal::float2 ramp [[user(loc13), flat]];
+    metal::float4 reads [[user(loc14), flat]];
 };
 struct fs_outline_linearOutput {
     metal::float4 member [[color(0)]];
@@ -338,7 +342,7 @@ fragment fs_outline_linearOutput fs_outline_linear(
 , constant Locals& locals [[buffer(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.fade };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, {}, varyings.reads };
     metal::float4 _e1 = outline_color(in, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
     metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
     return fs_outline_linearOutput { metal::float4(_e3, _e1.w) };

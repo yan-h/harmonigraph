@@ -71,6 +71,13 @@ fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 "Opacity of a note at zero intensity, on the lattice's octave slices and the roll's ribbons. \
                  100% draws every note fully opaque whatever its intensity.",
             );
+        ValueBar::new(&mut intensity.glow_floor, 0.0..=1.0, "Glow floor")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Light a note gives off at zero intensity, as a share of its full glow: the lattice's node glow and the roll's ribbon bloom. \
+                 100% gives every note its full glow whatever its intensity.",
+            );
     });
 }
 

@@ -6,14 +6,13 @@ using metal::uint;
 
 struct _mslBufferSizes {
     uint buffer_size15;
-    uint buffer_size14;
 };
 
 struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
-    float _pad;
+    float light;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
     metal::float2 _axis_pad;
@@ -38,7 +37,9 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
-    metal::float4 fade;
+    metal::float2 ramp;
+    char _pad15[8];
+    metal::float4 reads;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -61,47 +62,7 @@ metal::float4 unpackFloat32x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint
     return metal::float4(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4), as_type<float>(b11 << 24 | b10 << 16 | b9 << 8 | b8), as_type<float>(b15 << 24 | b14 << 16 | b13 << 8 | b12));
 }
 
-bool cell_packed(
-    metal::float4 cell
-) {
-    bool local_1 = {};
-    if (cell.z > 0.0) {
-        local_1 = cell.w > 0.0;
-    } else {
-        local_1 = false;
-    }
-    bool _e10 = local_1;
-    return _e10;
-}
-
-metal::float2 cell_texel(
-    metal::float2 points,
-    metal::float4 rect,
-    metal::float4 cell_1,
-    float k
-) {
-    return cell_1.xy + ((points - rect.xy) * k);
-}
-
-metal::float4 no_quad(
-) {
-    return metal::float4(2.0, 2.0, 0.0, 1.0);
-}
-
-metal::float4 cell_clip(
-    metal::float2 texel,
-    metal::float2 size,
-    float w
-) {
-    metal::float2 extent = metal::max(size, metal::float2(1.0));
-    return metal::float4((((2.0 * texel.x) / extent.x) - 1.0) * w, (1.0 - ((2.0 * texel.y) / extent.y)) * w, 0.0, w);
-}
-uint naga_f2u32(float value) {
-    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
-}
-
-
-struct vs_shadow_cellOutput {
+struct vs_noteOutput {
     metal::float4 position [[position]];
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
@@ -116,16 +77,15 @@ struct vs_shadow_cellOutput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
-    metal::float4 fade [[user(loc13), flat]];
+    metal::float2 ramp [[user(loc13), flat]];
+    metal::float4 reads [[user(loc14), flat]];
 };
-struct vb_15_type { metal::uchar data[72]; };
-struct vb_14_type { metal::uchar data[64]; };
-vertex vs_shadow_cellOutput vs_shadow_cell(
+struct vb_15_type { metal::uchar data[80]; };
+vertex vs_noteOutput vs_note(
   uint vertex_ [[vertex_id]]
+, uint who [[instance_id]]
 , constant Locals& locals [[buffer(0)]]
-, uint i_id [[instance_id]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
-, const device vb_14_type* vb_14_in [[buffer(14)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(1)]]
 ) {
     metal::float2 center = {};
@@ -138,8 +98,10 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     float cap_reach = {};
     metal::float4 core = {};
     metal::float4 outline = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 72)) {
-        const vb_15_type vb_15_elem = vb_15_in[i_id];
+    metal::float4 span_ramp = {};
+    metal::float4 reads = {};
+    if (who < (_buffer_sizes.buffer_size15 / 80)) {
+        const vb_15_type vb_15_elem = vb_15_in[who];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
         shear = unpackFloat32_(vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19]);
@@ -150,53 +112,50 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
         cap_reach = unpackFloat32_(vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
         core = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         outline = unpackUnorm8x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47]);
+        span_ramp = unpackFloat32x4_(vb_15_elem.data[48], vb_15_elem.data[49], vb_15_elem.data[50], vb_15_elem.data[51], vb_15_elem.data[52], vb_15_elem.data[53], vb_15_elem.data[54], vb_15_elem.data[55], vb_15_elem.data[56], vb_15_elem.data[57], vb_15_elem.data[58], vb_15_elem.data[59], vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63]);
+        reads = unpackFloat32x4_(vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67], vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79]);
     }
-    metal::float4 box_rect = {};
-    metal::float4 box_cell = {};
-    metal::float4 box_meta = {};
-    metal::float4 box_who = {};
-    if (i_id < (_buffer_sizes.buffer_size14 / 64)) {
-        const vb_14_type vb_14_elem = vb_14_in[i_id];
-        box_rect = unpackFloat32x4_(vb_14_elem.data[0], vb_14_elem.data[1], vb_14_elem.data[2], vb_14_elem.data[3], vb_14_elem.data[4], vb_14_elem.data[5], vb_14_elem.data[6], vb_14_elem.data[7], vb_14_elem.data[8], vb_14_elem.data[9], vb_14_elem.data[10], vb_14_elem.data[11], vb_14_elem.data[12], vb_14_elem.data[13], vb_14_elem.data[14], vb_14_elem.data[15]);
-        box_cell = unpackFloat32x4_(vb_14_elem.data[16], vb_14_elem.data[17], vb_14_elem.data[18], vb_14_elem.data[19], vb_14_elem.data[20], vb_14_elem.data[21], vb_14_elem.data[22], vb_14_elem.data[23], vb_14_elem.data[24], vb_14_elem.data[25], vb_14_elem.data[26], vb_14_elem.data[27], vb_14_elem.data[28], vb_14_elem.data[29], vb_14_elem.data[30], vb_14_elem.data[31]);
-        box_meta = unpackFloat32x4_(vb_14_elem.data[32], vb_14_elem.data[33], vb_14_elem.data[34], vb_14_elem.data[35], vb_14_elem.data[36], vb_14_elem.data[37], vb_14_elem.data[38], vb_14_elem.data[39], vb_14_elem.data[40], vb_14_elem.data[41], vb_14_elem.data[42], vb_14_elem.data[43], vb_14_elem.data[44], vb_14_elem.data[45], vb_14_elem.data[46], vb_14_elem.data[47]);
-        box_who = unpackFloat32x4_(vb_14_elem.data[48], vb_14_elem.data[49], vb_14_elem.data[50], vb_14_elem.data[51], vb_14_elem.data[52], vb_14_elem.data[53], vb_14_elem.data[54], vb_14_elem.data[55], vb_14_elem.data[56], vb_14_elem.data[57], vb_14_elem.data[58], vb_14_elem.data[59], vb_14_elem.data[60], vb_14_elem.data[61], vb_14_elem.data[62], vb_14_elem.data[63]);
-    }
+    metal::float2 local = {};
     VertexOut out = {};
-    bool local = {};
-    metal::float2 corner = metal::float2(((vertex_ & 1u) == 1u) ? 1.0 : 0.0, ((vertex_ & 2u) == 2u) ? 1.0 : 0.0);
-    metal::float2 point = box_rect.xy + (corner * box_rect.zw);
-    metal::float2 delta = point - center;
-    metal::float2 _e37 = cell_texel(point, box_rect, box_cell, box_meta.x);
-    metal::float4 _e39 = no_quad();
-    metal::float2 _e42 = locals.shadow_atlas_size;
-    metal::float4 _e44 = cell_clip(_e37, _e42, 1.0);
-    bool _e45 = cell_packed(box_cell);
-    if (_e45) {
-        local = box_who.y < 0.5;
-    } else {
-        local = false;
-    }
-    bool _e52 = local;
-    out.position = _e52 ? _e44 : _e39;
-    metal::float2 _e57 = locals.pitch_dir;
-    metal::float2 _e61 = locals.depth_dir;
-    out.local = metal::float2(metal::dot(delta, _e57), metal::dot(delta, _e61));
+    metal::float2 corner = metal::float2(((vertex_ & 1u) == 1u) ? 1.0 : -1.0, ((vertex_ & 2u) == 2u) ? 1.0 : -1.0);
+    float _e32 = locals.shadow.w;
+    float _e35 = locals.feather;
+    float reach = _e32 + (0.5 * _e35);
+    float _e41 = locals.feather;
+    float margin = reach + (0.5 * _e41);
+    metal::float2 extent = metal::float2((half_extent.x + (metal::abs(shear) * half_extent.y)) + margin, half_extent.y + margin);
+    local = corner * extent;
+    metal::float2 span = span_ramp.xy;
+    local.y = (corner.y > 0.0) ? metal::min(extent.y, span.y) : metal::max(-(extent.y), span.x);
+    metal::float2 _e71 = locals.pitch_dir;
+    float _e73 = local.x;
+    metal::float2 _e78 = locals.depth_dir;
+    float _e80 = local.y;
+    metal::float2 pos = (center + (_e71 * _e73)) + (_e78 * _e80);
+    metal::float2 _e85 = locals.origin_points;
+    metal::float2 in_viewport = pos - _e85;
+    float _e95 = locals.viewport_points.x;
+    float _e105 = locals.viewport_points.y;
+    out.position = metal::float4(((2.0 * in_viewport.x) / _e95) - 1.0, 1.0 - ((2.0 * in_viewport.y) / _e105), 0.0, 1.0);
+    metal::float2 _e113 = local;
+    out.local = _e113;
     out.half_extent = half_extent;
     out.shear = shear;
-    float _e70 = locals.shadow.w;
-    out.outline_reach = _e70;
+    float _e120 = locals.shadow.w;
+    out.outline_reach = _e120;
     out.lead = lead;
     out.lead_fade = lead_fade;
     out.lead_alpha = lead_alpha;
     out.cap_reach = cap_reach;
     out.core = core;
     out.outline = outline;
-    out.at = point;
-    out.who = naga_f2u32(box_who.x + 0.5);
-    out.feather = 1.0 / metal::max(box_meta.x, 0.000001);
-    out.fade = metal::float4(0.0, 0.0, 1.0, 1.0);
-    VertexOut _e95 = out;
-    const auto _tmp = _e95;
-    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.fade };
+    out.at = pos;
+    out.who = who;
+    float _e132 = locals.feather;
+    out.feather = _e132;
+    out.ramp = span_ramp.zw;
+    out.reads = reads;
+    VertexOut _e136 = out;
+    const auto _tmp = _e136;
+    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.reads };
 }

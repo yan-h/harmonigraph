@@ -4,6 +4,19 @@
 
 using metal::uint;
 
+struct Locals {
+    metal::float2 origin_points;
+    metal::float2 viewport_points;
+    float feather;
+    float light;
+    metal::float2 pitch_dir;
+    metal::float2 depth_dir;
+    metal::float2 _axis_pad;
+    metal::float4 shadow;
+    metal::float2 shadow_atlas_size;
+    float shadow_falloff;
+    float _shadow_pad;
+};
 struct VertexOut {
     metal::float4 position;
     metal::float2 local;
@@ -20,7 +33,9 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
-    metal::float4 fade;
+    metal::float2 ramp;
+    char _pad15[8];
+    metal::float4 reads;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -116,7 +131,38 @@ float lead_coverage(
     return metal::mix(_e36, 1.0, note);
 }
 
-struct fs_shadow_coverageInput {
+float along(
+    VertexOut in_5,
+    metal::float2 ends
+) {
+    float run = in_5.ramp.y - in_5.ramp.x;
+    float t = (metal::abs(run) > 0.000001) ? metal::clamp((in_5.local.y - in_5.ramp.x) / run, 0.0, 1.0) : 0.0;
+    return metal::mix(ends.x, ends.y, t);
+}
+
+metal::float4 core_color(
+    VertexOut in_6,
+    constant Locals& locals
+) {
+    float _e7 = locals.light;
+    metal::float2 ends_1 = (_e7 > 0.5) ? in_6.reads.zw : in_6.reads.xy;
+    float _e12 = box_distance(in_6);
+    float _e14 = inside(in_6, _e12, 0.0);
+    float _e16 = lead_coverage(in_6);
+    float _e18 = along(in_6, ends_1);
+    return ((in_6.core * _e14) * _e16) * _e18;
+}
+
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
+struct fs_core_linearInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -130,19 +176,19 @@ struct fs_shadow_coverageInput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
-    metal::float4 fade [[user(loc13), flat]];
+    metal::float2 ramp [[user(loc13), flat]];
+    metal::float4 reads [[user(loc14), flat]];
 };
-struct fs_shadow_coverageOutput {
+struct fs_core_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_shadow_coverageOutput fs_shadow_coverage(
-  fs_shadow_coverageInput varyings [[stage_in]]
+fragment fs_core_linearOutput fs_core_linear(
+  fs_core_linearInput varyings [[stage_in]]
 , metal::float4 position [[position]]
+, constant Locals& locals [[buffer(0)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.fade };
-    float _e1 = box_distance(in);
-    float _e3 = inside(in, _e1, 0.0);
-    float _e4 = lead_coverage(in);
-    float coverage = _e3 * _e4;
-    return fs_shadow_coverageOutput { metal::float4(coverage, 0.0, 0.0, 1.0) };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, {}, varyings.reads };
+    metal::float4 _e1 = core_color(in, locals);
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_core_linearOutput { metal::float4(_e3, _e1.w) };
 }

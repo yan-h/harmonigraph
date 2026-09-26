@@ -49,7 +49,9 @@ struct Locals {
     /// Width of the antialiasing ramp in points — one pixel of whatever is
     /// being drawn into, which is not the display's pixel in the bloom's pass.
     feather: f32,
-    _pad: f32,
+    /// 1 in the bloom's pass, which draws each body at its glow rather than its
+    /// fade (see [`core_color`]); 0 on screen.
+    light: f32,
     /// Unit screen vectors of the pane's two axes. Pitch runs across the
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
@@ -99,9 +101,11 @@ struct VertexOut {
     /// Width of one coverage sample in points. A visible note uses one display
     /// pixel; a Gaussian cell uses one of its own deliberately coarser texels.
     @location(12) @interpolate(flat) feather: f32,
-    /// Opacity along depth: at depth offsets `x` and `y`, the opacities `z` and
-    /// `w`, a line between. See [`fade_at`].
-    @location(13) @interpolate(flat) fade: vec4<f32>,
+    /// The two depth offsets the readings below are given at. See [`along`].
+    @location(13) @interpolate(flat) ramp: vec2<f32>,
+    /// Opacity at those two depths (`xy`), and the body's light for the bloom
+    /// (`zw`).
+    @location(14) @interpolate(flat) reads: vec4<f32>,
 };
 
 @vertex
@@ -118,8 +122,10 @@ fn vs_note(
     @location(7) cap_reach: f32,
     @location(8) core: vec4<f32>,
     @location(9) outline: vec4<f32>,
-    @location(14) span: vec2<f32>,
-    @location(15) fade: vec4<f32>,
+    // Span then ramp, and fade then glow: two to a slot, since a vertex takes
+    // sixteen at most.
+    @location(14) span_ramp: vec4<f32>,
+    @location(15) reads: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -153,6 +159,7 @@ fn vs_note(
     // cut, so each pixel is drawn once. A whole box's span reaches past both
     // ends and cuts nothing.
     var local = corner * extent;
+    let span = span_ramp.xy;
     local.y = select(max(-extent.y, span.x), min(extent.y, span.y), corner.y > 0.0);
     let pos = center + locals.pitch_dir * local.x + locals.depth_dir * local.y;
 
@@ -177,7 +184,8 @@ fn vs_note(
     out.at = pos;
     out.who = who;
     out.feather = locals.feather;
-    out.fade = fade;
+    out.ramp = span_ramp.zw;
+    out.reads = reads;
     return out;
 }
 
@@ -230,7 +238,8 @@ fn vs_shadow_cell(
     out.feather = 1.0 / max(box_meta.x, 1e-6);
     // The cell holds the segment's whole coverage whatever piece it is for,
     // so a piece's shadow runs on across the cut; fading is the outline's.
-    out.fade = vec4<f32>(0.0, 0.0, 1.0, 1.0);
+    out.ramp = vec2<f32>(0.0);
+    out.reads = vec4<f32>(1.0);
     return out;
 }
 
@@ -470,25 +479,29 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
     let wrap =
         outline_coverage(in, d, in.outline_reach) * (1.0 - inside(in, d, 0.0)) * lead_coverage(in);
-    return in.outline * max(wrap, cap_coverage(in)) * fade_at(in);
+    return in.outline * max(wrap, cap_coverage(in)) * along(in, in.reads.xy);
 }
 
 /// Flat premultiplied gamma-space body color. A leading tip set to fade loses
 /// its contribution through
 /// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
-    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * fade_at(in);
+    // On screen the body wears its fade; in the bloom's pass, its glow, so
+    // the light a note gives off reads intensity through its own floor.
+    let ends = select(in.reads.xy, in.reads.zw, locals.light > 0.5);
+    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, ends);
 }
 
-// How opaque the note is at this depth: the note's intensity read through the
-// fade floor, which the caller sampled at the two ends of this piece. The body
-// and its outline fade together, so a note faded to nothing leaves no dark
-// silhouette behind. Held past both ends, which is what carries the newest
-// value into a lead.
-fn fade_at(in: VertexOut) -> f32 {
-    let run = in.fade.y - in.fade.x;
-    let t = select(0.0, clamp((in.local.y - in.fade.x) / run, 0.0, 1.0), abs(run) > 1e-6);
-    return mix(in.fade.z, in.fade.w, t);
+// One of the note's intensity readings at this depth: `ends` is its value at
+// the two depths `ramp` names, which the caller sampled at the ends of this
+// piece, and between them a straight line. The fade multiplies the body and
+// its outline together, so a note faded to nothing leaves no dark silhouette
+// behind. Held past both ends, which is what carries the newest value into a
+// lead.
+fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
+    let run = in.ramp.y - in.ramp.x;
+    let t = select(0.0, clamp((in.local.y - in.ramp.x) / run, 0.0, 1.0), abs(run) > 1e-6);
+    return mix(ends.x, ends.y, t);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used

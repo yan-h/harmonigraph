@@ -54,7 +54,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; offset, velocity, gain, pressure, timbre, gain_range, fade_floor);
+    poison!(a.view.intensity; offset, velocity, gain, pressure, timbre, gain_range, fade_floor,
+        glow_floor);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
@@ -238,9 +239,9 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Tuning => 7,
             panes::Tab::Colors => 2,
-            // The picture, Note intensity (7), then bloom, glow and its
+            // The picture, Note intensity (8), then bloom, glow and its
             // texture (14), then two shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 17 + 7 + 14 + 4,
+            panes::Tab::LatticeSettings => 17 + 8 + 14 + 4,
             // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
             // two shadow groups.
             panes::Tab::AnalyzerSettings => 6 + 18 + 1 + 1 + 4,
@@ -276,7 +277,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 23 + 7 + 14 + 6,
+            visits: 23 + 8 + 14 + 6,
             ..base
         });
     }

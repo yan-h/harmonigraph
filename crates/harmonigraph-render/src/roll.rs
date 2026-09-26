@@ -176,19 +176,23 @@ pub struct RollInstance {
     /// the span, so two pieces meet on one shared edge and every pixel is
     /// drawn by one of them.
     pub span: [f32; 2],
-    /// Opacity along depth: `[a, b, at_a, at_b]`, the opacity at depth offsets
-    /// `a` and `b`, a straight line between them and held past either end.
-    /// Multiplies the body and the outline together. [`UNFADED`](Self::UNFADED)
-    /// is 1 throughout.
-    pub fade: [f32; 4],
+    /// The two depth offsets [`fade`](Self::fade) and [`glow`](Self::glow)
+    /// are given at; each is a straight line between them, held past either
+    /// end.
+    pub ramp: [f32; 2],
+    /// Opacity at the two [`ramp`](Self::ramp) depths, multiplying the body
+    /// and the outline together. `[1.0, 1.0]` is unfaded.
+    pub fade: [f32; 2],
+    /// How much light the body gives the bloom at the two
+    /// [`ramp`](Self::ramp) depths, in place of its fade: the bloom's pass
+    /// draws the body at this, so the two read intensity through floors of
+    /// their own. `[1.0, 1.0]` is the full bloom.
+    pub glow: [f32; 2],
 }
 
 impl RollInstance {
     /// A [`span`](Self::span) that draws the whole box.
     pub const WHOLE: [f32; 2] = [f32::MIN, f32::MAX];
-    /// A [`fade`](Self::fade) of 1 everywhere.
-    pub const UNFADED: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
-
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<RollInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -205,8 +209,9 @@ impl RollInstance {
             9 => Unorm8x4, // outline
             // Past `vs_shadow_cell`'s own 10..=13, which come from its second
             // buffer.
-            14 => Float32x2, // span
-            15 => Float32x4, // fade
+            // Two to a slot, since a vertex takes sixteen at most.
+            14 => Float32x4, // span, ramp
+            15 => Float32x4, // fade, glow
         ],
     };
 }
@@ -322,7 +327,9 @@ struct RollUniforms {
     origin_points: [f32; 2],
     viewport_points: [f32; 2],
     feather: f32,
-    _pad: f32,
+    /// 1 in the bloom's pass, where the body is drawn at its
+    /// [`RollInstance::glow`] rather than its fade; 0 on screen.
+    light: f32,
     pitch_dir: [f32; 2],
     depth_dir: [f32; 2],
     _axis_pad: [f32; 2],
@@ -876,7 +883,7 @@ impl CallbackTrait for RollCallback {
             // which is what the offline render's byte-for-byte determinism
             // test rests on.
             feather: 1.0 / ppp,
-            _pad: 0.0,
+            light: 0.0,
             pitch_dir: self.axes.pitch_dir,
             depth_dir: self.axes.depth_dir,
             _axis_pad: [0.0; 2],
@@ -921,6 +928,7 @@ impl CallbackTrait for RollCallback {
                 origin_points: [viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp],
                 viewport_points: [bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp],
                 feather: 1.0 / half_ppp,
+                light: 1.0,
                 ..uniforms
             }
         });
@@ -1419,7 +1427,9 @@ mod tests {
             core: [255, 0, 0, 255],
             outline: [0, 0, 0, 255],
             span: RollInstance::WHOLE,
-            fade: RollInstance::UNFADED,
+            ramp: [0.0, 0.0],
+            fade: [1.0, 1.0],
+            glow: [1.0, 1.0],
         }
     }
 
@@ -1697,7 +1707,9 @@ mod tests {
                     core: [255, 0, 0, 255],
                     outline: [0, 0, 0, 255],
                     span: RollInstance::WHOLE,
-                    fade: RollInstance::UNFADED,
+                    ramp: [0.0, 0.0],
+                    fade: [1.0, 1.0],
+                    glow: [1.0, 1.0],
                 };
                 let cb = RollCallback {
                     rect,
@@ -2361,6 +2373,11 @@ mod tests {
             at(&lit, 128, 128),
             at(&plain, 128, 128),
         );
+        // The bloom's pass reads the note's glow, not its fade: a note whose
+        // glow is out gives off no light, and draws its body as it would.
+        let dark = RollInstance { glow: [0.0, 0.0], ..note };
+        let unlit = draw_bloomed(&device, &queue, vec![dark], TOP, 1.5, wgpu::Color::BLACK);
+        assert_eq!(unlit, plain, "a note whose glow is out still bloomed");
         // Light, not a shape: the halo may never take alpha away from what is
         // under it, and over an opaque frame that means the alpha channel is
         // untouched everywhere.
@@ -2757,14 +2774,14 @@ mod tests {
 
         // Depth runs down y under `TOP`: transparent at the note's top end
         // (y 68), opaque at its bottom (y 188).
-        let faded = RollInstance { fade: [-60.0, 60.0, 0.0, 1.0], ..whole };
+        let faded = RollInstance { ramp: [-60.0, 60.0], fade: [0.0, 1.0], ..whole };
         let frame = draw(&device, &queue, vec![faded], bg_color());
         let red = |y| pixel(&frame, 128, y)[0];
         assert!(near(pixel(&frame, 128, 69), BG), "top: {:?}", pixel(&frame, 128, 69));
         assert!(near(pixel(&frame, 128, 187), [255, 0, 0, 255]), "{:?}", pixel(&frame, 128, 187));
         assert!(red(100) < red(128) && red(128) < red(160), "the fade is not a ramp");
         assert!(!shadowed(pixel(&frame, 128, 66)), "a faded-out end kept its outline");
-        let reversed = RollInstance { fade: [-60.0, 60.0, 1.0, 0.0], ..whole };
+        let reversed = RollInstance { ramp: [-60.0, 60.0], fade: [1.0, 0.0], ..whole };
         let frame = draw(&device, &queue, vec![reversed], bg_color());
         assert!(shadowed(pixel(&frame, 128, 66)), "an opaque end lost its outline");
     }

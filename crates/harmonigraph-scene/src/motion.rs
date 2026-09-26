@@ -23,12 +23,12 @@ struct Held {
     pitch: f32,
     /// `pitch`'s class, converted once rather than per visible node.
     class: PitchClass,
-    /// The opacity the note's intensity asks for (see [`crate::intensity`]).
-    fade: f32,
+    /// How loud the note is drawn (see [`crate::intensity`]).
+    intensity: f32,
 }
 impl Held {
-    fn new(pitch: f32, fade: f32) -> Self {
-        Self { pitch, class: PitchClass::from_cents(pitch * 100.0), fade }
+    fn new(pitch: f32, intensity: f32) -> Self {
+        Self { pitch, class: PitchClass::from_cents(pitch * 100.0), intensity }
     }
 }
 #[derive(Clone, Copy)]
@@ -59,12 +59,12 @@ struct Motion {
     delay: [f32; 11],
     levels: [f32; 11],
     targets: [f32; 11],
-    /// Each slot's opacity from the intensity of the notes lighting it: the
-    /// loudest held one's, and once none is held, the last one's, so a
-    /// release fades from where its note left off. Separate from `levels`,
-    /// which it multiplies only on the way out, so nothing that reads the
+    /// Each slot's intensity from the notes lighting it: the loudest held
+    /// one's, and once none is held, the last one's, so a release fades from
+    /// where its note left off. Separate from `levels`, which each display
+    /// reads it against only on the way out, so nothing that reads the
     /// envelope — the gate, the release, the trail — can see it.
-    fades: [f32; 11],
+    intensities: [f32; 11],
     gate: bool,
     melody: MarkMotion,
     bass: MarkMotion,
@@ -79,7 +79,7 @@ impl Default for Motion {
             delay: [0.0; 11],
             levels: [0.0; 11],
             targets: [0.0; 11],
-            fades: [1.0; 11],
+            intensities: [1.0; 11],
             gate: false,
             melody: MarkMotion::default(),
             bass: MarkMotion::default(),
@@ -246,7 +246,7 @@ impl NodeMotion {
             let motion = self.nodes.entry(node.lattice_pos).or_default();
             let (lo, hi) = scene.octave_layout.slots(node.cents);
             motion.targets = [0.0; 11];
-            let mut fades = [0.0f32; 11];
+            let mut intensities = [0.0f32; 11];
             let mut melody = None;
             let mut bass = None;
             let mut preexisting = false;
@@ -260,7 +260,7 @@ impl NodeMotion {
                     .clamp(0, 10) as usize;
                 // Activation measures occupancy; intensity rides beside it.
                 motion.targets[slot] = 1.0;
-                fades[slot] = fades[slot].max(held.fade);
+                intensities[slot] = intensities[slot].max(held.intensity);
                 if Some(held.pitch) == high {
                     melody = Some(slot);
                 }
@@ -268,9 +268,9 @@ impl NodeMotion {
                     bass = Some(slot);
                 }
             }
-            for (slot, fade) in fades.into_iter().enumerate() {
+            for (slot, intensity) in intensities.into_iter().enumerate() {
                 if motion.targets[slot] > 0.0 {
-                    motion.fades[slot] = fade;
+                    motion.intensities[slot] = intensity;
                 }
             }
             motion.melody.target(melody, mark_delay(view));
@@ -445,11 +445,11 @@ impl NodeMotion {
                     .map(|((_, pitch), _)| pitch)
                     .last()
                     .unwrap_or(note.start_pitch());
-                let fade = intensity.note_fade(note.velocity, note.expressions_at(begin));
-                self.held.insert(id, Held::new(pitch, fade));
+                let loud = intensity.intensity(note.velocity, note.expressions_at(begin));
+                self.held.insert(id, Held::new(pitch, loud));
             }
             let held = |at, pitch| {
-                Held::new(pitch, intensity.note_fade(note.velocity, note.expressions_at(at)))
+                Held::new(pitch, intensity.intensity(note.velocity, note.expressions_at(at)))
             };
             let mut add = |at, value| {
                 let edge = Edge { at, id, value };
@@ -514,8 +514,8 @@ impl NodeMotion {
         // whose missing history must not be treated as fabricated note-offs.
         self.held.clear();
         for voice in tracker.voices().filter(|v| matches!(v.state, VoiceState::Held)) {
-            let fade = intensity.note_fade(voice.velocity, voice.expressions);
-            self.held.insert((voice.key(), voice.on_time.to_bits()), Held::new(voice.pitch, fade));
+            let loud = intensity.intensity(voice.velocity, voice.expressions);
+            self.held.insert((voice.key(), voice.on_time.to_bits()), Held::new(voice.pitch, loud));
         }
         self.gates(scene, tuning, view, env, fade, tracker, now, false);
         self.advance(0.0, env);
@@ -527,15 +527,17 @@ impl NodeMotion {
             node.slice_progress = motion.progress;
             // Intensity fades each slot's ink, and the node's presence with
             // it, while the envelope under it runs untouched.
-            node.octaves = std::array::from_fn(|i| motion.levels[i] * motion.fades[i]);
+            let fades = motion.intensities.map(|loud| intensity.fade(loud));
+            let glows = motion.intensities.map(|loud| intensity.glow(loud));
+            node.octaves = std::array::from_fn(|i| motion.levels[i] * fades[i]);
             node.activation = node.octaves.iter().copied().fold(0.0, f32::max);
             node.departing = !motion.gate;
             let (melody_slots, melody_level, melody_slot) = motion.melody.strongest();
             let (bass_slots, bass_level, bass_slot) = motion.bass.strongest();
             node.melody_slots = melody_slots;
-            node.melody_level = melody_level * motion.fades[melody_slot];
+            node.melody_level = melody_level * fades[melody_slot];
             node.bass_slots = bass_slots;
-            node.bass_level = bass_level * motion.fades[bass_slot];
+            node.bass_level = bass_level * fades[bass_slot];
             let color = |slot| {
                 crate::pitch_lut_color(
                     scene.octave_layout.slot_pitch(slot as i32, node.cents),
@@ -549,10 +551,14 @@ impl NodeMotion {
             if scene.spectral.ring_draws() {
                 node.audio_ring = fade.level(&scene.octave_layout, node.cents).max(node.activation);
             }
-            // Stateless snapshots draw current light. The shell's glow pass
-            // carries this as its target afterwards. Unfaded: the glow reads
-            // no intensity until it has a floor of its own.
-            node.glow.level = motion.levels.iter().copied().fold(0.0, f32::max);
+            // The light each MIDI layer gives off, each read through the glow's
+            // own floor rather than the fade's: the loudest slot or mark is the
+            // node's. Stateless snapshots draw it as it stands; the shell's
+            // glow pass carries it as its target.
+            node.glow.level = (0..11)
+                .map(|i| motion.levels[i] * glows[i])
+                .chain([melody_level * glows[melody_slot], bass_level * glows[bass_slot]])
+                .fold(0.0, f32::max);
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -804,13 +810,15 @@ mod tests {
     }
     /// Intensity fades a slot's ink and the node's presence, straight away as
     /// the pressure moves, and nothing else: a note faded to nothing is still
-    /// held, still lights the glow, and still departs on its own release.
+    /// held, and still departs on its own release. The glow reads it through
+    /// its own floor, which at 1 ignores it.
     #[test]
     fn intensity_fades_the_ink_but_not_the_note() {
         let intensity = crate::IntensitySettings {
             offset: 0.0,
             pressure: 1.0,
             fade_floor: 0.0,
+            glow_floor: 1.0,
             ..Default::default()
         };
         let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
@@ -844,6 +852,28 @@ mod tests {
         assert!(departing, "released");
         assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
         assert!((glow - 0.5).abs() < 1e-5, "the glow departs on the envelope alone: {glow}");
+
+        // Half the glow's floor: a note at half intensity gives off three
+        // quarters of its light, and the slice ink is untouched by it.
+        let view = ViewConfig {
+            intensity: crate::IntensitySettings { glow_floor: 0.5, ..intensity },
+            ..view
+        };
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: harmonigraph_core::NoteEventKind::Expression {
+                expression: harmonigraph_core::Expression::Pressure,
+                value: 0.5,
+            },
+        });
+        let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
+        assert_eq!(slot(&held), (0.5, Some(0.5), false, 0.75));
     }
     #[test]
     fn octaves_and_same_time_replacements_do_not_replay_but_true_disappearance_does() {

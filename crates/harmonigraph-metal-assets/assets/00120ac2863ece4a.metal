@@ -12,7 +12,7 @@ struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
-    float _pad;
+    float light;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
     metal::float2 _axis_pad;
@@ -37,7 +37,9 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
-    metal::float4 fade;
+    metal::float2 ramp;
+    char _pad15[8];
+    metal::float4 reads;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -75,9 +77,10 @@ struct vs_noteOutput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
-    metal::float4 fade [[user(loc13), flat]];
+    metal::float2 ramp [[user(loc13), flat]];
+    metal::float4 reads [[user(loc14), flat]];
 };
-struct vb_15_type { metal::uchar data[72]; };
+struct vb_15_type { metal::uchar data[80]; };
 vertex vs_noteOutput vs_note(
   uint vertex_ [[vertex_id]]
 , uint who [[instance_id]]
@@ -95,9 +98,9 @@ vertex vs_noteOutput vs_note(
     float cap_reach = {};
     metal::float4 core = {};
     metal::float4 outline = {};
-    metal::float2 span = {};
-    metal::float4 fade = {};
-    if (who < (_buffer_sizes.buffer_size15 / 72)) {
+    metal::float4 span_ramp = {};
+    metal::float4 reads = {};
+    if (who < (_buffer_sizes.buffer_size15 / 80)) {
         const vb_15_type vb_15_elem = vb_15_in[who];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
@@ -109,8 +112,8 @@ vertex vs_noteOutput vs_note(
         cap_reach = unpackFloat32_(vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
         core = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         outline = unpackUnorm8x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47]);
-        span = unpackFloat32x2_(vb_15_elem.data[48], vb_15_elem.data[49], vb_15_elem.data[50], vb_15_elem.data[51], vb_15_elem.data[52], vb_15_elem.data[53], vb_15_elem.data[54], vb_15_elem.data[55]);
-        fade = unpackFloat32x4_(vb_15_elem.data[56], vb_15_elem.data[57], vb_15_elem.data[58], vb_15_elem.data[59], vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63], vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67], vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71]);
+        span_ramp = unpackFloat32x4_(vb_15_elem.data[48], vb_15_elem.data[49], vb_15_elem.data[50], vb_15_elem.data[51], vb_15_elem.data[52], vb_15_elem.data[53], vb_15_elem.data[54], vb_15_elem.data[55], vb_15_elem.data[56], vb_15_elem.data[57], vb_15_elem.data[58], vb_15_elem.data[59], vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63]);
+        reads = unpackFloat32x4_(vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67], vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79]);
     }
     metal::float2 local = {};
     VertexOut out = {};
@@ -122,23 +125,24 @@ vertex vs_noteOutput vs_note(
     float margin = reach + (0.5 * _e41);
     metal::float2 extent = metal::float2((half_extent.x + (metal::abs(shear) * half_extent.y)) + margin, half_extent.y + margin);
     local = corner * extent;
+    metal::float2 span = span_ramp.xy;
     local.y = (corner.y > 0.0) ? metal::min(extent.y, span.y) : metal::max(-(extent.y), span.x);
-    metal::float2 _e70 = locals.pitch_dir;
-    float _e72 = local.x;
-    metal::float2 _e77 = locals.depth_dir;
-    float _e79 = local.y;
-    metal::float2 pos = (center + (_e70 * _e72)) + (_e77 * _e79);
-    metal::float2 _e84 = locals.origin_points;
-    metal::float2 in_viewport = pos - _e84;
-    float _e94 = locals.viewport_points.x;
-    float _e104 = locals.viewport_points.y;
-    out.position = metal::float4(((2.0 * in_viewport.x) / _e94) - 1.0, 1.0 - ((2.0 * in_viewport.y) / _e104), 0.0, 1.0);
-    metal::float2 _e112 = local;
-    out.local = _e112;
+    metal::float2 _e71 = locals.pitch_dir;
+    float _e73 = local.x;
+    metal::float2 _e78 = locals.depth_dir;
+    float _e80 = local.y;
+    metal::float2 pos = (center + (_e71 * _e73)) + (_e78 * _e80);
+    metal::float2 _e85 = locals.origin_points;
+    metal::float2 in_viewport = pos - _e85;
+    float _e95 = locals.viewport_points.x;
+    float _e105 = locals.viewport_points.y;
+    out.position = metal::float4(((2.0 * in_viewport.x) / _e95) - 1.0, 1.0 - ((2.0 * in_viewport.y) / _e105), 0.0, 1.0);
+    metal::float2 _e113 = local;
+    out.local = _e113;
     out.half_extent = half_extent;
     out.shear = shear;
-    float _e119 = locals.shadow.w;
-    out.outline_reach = _e119;
+    float _e120 = locals.shadow.w;
+    out.outline_reach = _e120;
     out.lead = lead;
     out.lead_fade = lead_fade;
     out.lead_alpha = lead_alpha;
@@ -147,10 +151,11 @@ vertex vs_noteOutput vs_note(
     out.outline = outline;
     out.at = pos;
     out.who = who;
-    float _e131 = locals.feather;
-    out.feather = _e131;
-    out.fade = fade;
-    VertexOut _e133 = out;
-    const auto _tmp = _e133;
-    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.fade };
+    float _e132 = locals.feather;
+    out.feather = _e132;
+    out.ramp = span_ramp.zw;
+    out.reads = reads;
+    VertexOut _e136 = out;
+    const auto _tmp = _e136;
+    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.lead_fade, _tmp.lead_alpha, _tmp.cap_reach, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.reads };
 }

@@ -4,6 +4,19 @@
 
 using metal::uint;
 
+struct Locals {
+    metal::float2 origin_points;
+    metal::float2 viewport_points;
+    float feather;
+    float light;
+    metal::float2 pitch_dir;
+    metal::float2 depth_dir;
+    metal::float2 _axis_pad;
+    metal::float4 shadow;
+    metal::float2 shadow_atlas_size;
+    float shadow_falloff;
+    float _shadow_pad;
+};
 struct VertexOut {
     metal::float4 position;
     metal::float2 local;
@@ -20,7 +33,9 @@ struct VertexOut {
     metal::float2 at;
     uint who;
     float feather;
-    metal::float4 fade;
+    metal::float2 ramp;
+    char _pad15[8];
+    metal::float4 reads;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -116,22 +131,26 @@ float lead_coverage(
     return metal::mix(_e36, 1.0, note);
 }
 
-float fade_at(
-    VertexOut in_5
+float along(
+    VertexOut in_5,
+    metal::float2 ends
 ) {
-    float run = in_5.fade.y - in_5.fade.x;
-    float t = (metal::abs(run) > 0.000001) ? metal::clamp((in_5.local.y - in_5.fade.x) / run, 0.0, 1.0) : 0.0;
-    return metal::mix(in_5.fade.z, in_5.fade.w, t);
+    float run = in_5.ramp.y - in_5.ramp.x;
+    float t = (metal::abs(run) > 0.000001) ? metal::clamp((in_5.local.y - in_5.ramp.x) / run, 0.0, 1.0) : 0.0;
+    return metal::mix(ends.x, ends.y, t);
 }
 
 metal::float4 core_color(
-    VertexOut in_6
+    VertexOut in_6,
+    constant Locals& locals
 ) {
-    float _e2 = box_distance(in_6);
-    float _e4 = inside(in_6, _e2, 0.0);
-    float _e6 = lead_coverage(in_6);
-    float _e8 = fade_at(in_6);
-    return ((in_6.core * _e4) * _e6) * _e8;
+    float _e7 = locals.light;
+    metal::float2 ends_1 = (_e7 > 0.5) ? in_6.reads.zw : in_6.reads.xy;
+    float _e12 = box_distance(in_6);
+    float _e14 = inside(in_6, _e12, 0.0);
+    float _e16 = lead_coverage(in_6);
+    float _e18 = along(in_6, ends_1);
+    return ((in_6.core * _e14) * _e16) * _e18;
 }
 
 struct fs_core_gammaInput {
@@ -148,7 +167,8 @@ struct fs_core_gammaInput {
     metal::float2 at [[user(loc10), center_perspective]];
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
-    metal::float4 fade [[user(loc13), flat]];
+    metal::float2 ramp [[user(loc13), flat]];
+    metal::float4 reads [[user(loc14), flat]];
 };
 struct fs_core_gammaOutput {
     metal::float4 member [[color(0)]];
@@ -156,8 +176,9 @@ struct fs_core_gammaOutput {
 fragment fs_core_gammaOutput fs_core_gamma(
   fs_core_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
+, constant Locals& locals [[buffer(0)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.fade };
-    metal::float4 _e1 = core_color(in);
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, varyings.lead, varyings.lead_fade, varyings.lead_alpha, varyings.cap_reach, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, {}, varyings.reads };
+    metal::float4 _e1 = core_color(in, locals);
     return fs_core_gammaOutput { _e1 };
 }
