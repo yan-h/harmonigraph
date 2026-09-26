@@ -316,12 +316,12 @@ struct StarSlice {
     sigma: f32,
     cap: f32,
     defocus: f32,
-    gain: f32,
     occupancy: f32,
-    halo: f32,
     blur: f32,
-    halo_reach: f32,
+    fringe: f32,
+    fringe_reach: f32,
     reach: f32,
+    unseen: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -1395,11 +1395,21 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // drifts it takes on the colour of what it crosses. Far stars read partly the
 // wide light, so the dust follows the picture more loosely than the near stars.
 //
-// **Light, not levels.** Each star adds its own colour — the palette's hue at its
-// level, at full value, mixed with a hashed star temperature — as radiance, the
-// glow adds the palette under the wide light, and the sum is exposed with
-// `1 - exp(-1.5 x)` over the scheme's floor. Contours never reach it. Silence
-// is exactly the floor: every term carries the level to a positive power.
+// **Paint, not light.** Yan: *"star color should change over time but each star
+// should only have one color at any given moment"*. Summed light could not do
+// that — a bright core tonemapped per channel went white while its rim kept the
+// hue. So a star is ONE palette colour, and its brightness is spent as a
+// POSITION on the palette rather than a multiply, which would turn an orange
+// into brown mud: a dim star is the scheme's own lower colour and sinks into the
+// sky, a bright one sits above what is behind it. Its shape is only coverage — a
+// soft Gaussian point with an optional same-colour fringe — and the slices are
+// laid far to near, each OVER what is under it, so no core can whiten and no rim
+// can turn another colour. Round 8 of the prototype (`round8.py`, Yan's YB3).
+//
+// The ground under them is the scheme's floor, or with `Glow` the palette under
+// the wide light exposed with `1 - exp(-1.5 x)` over it. Contours never reach
+// any of it. Silence is exactly the floor: a star over silence is not drawn and
+// the glow carries the level to a positive power.
 //
 // Every length is in STAR PIXELS, a 540th of the pane's height, because the
 // prototype's pane was 540 pixels; the stars keep their size relative to the
@@ -1413,10 +1423,14 @@ const STAR_HASH_PERIOD: i32 = 4096;
 // Every wander frequency is a whole number of cycles in this many seconds, so
 // the clock can be reduced by it with no jump: 20 to 80 cycles, 0.05-0.2 Hz.
 const STAR_WANDER_PERIOD: f32 = 400.0;
+// The glow's exposure over the floor.
 const STAR_EXPOSURE: f32 = 1.5;
-// The palette position below which a star's hue stops following the level: the
-// ramp's darkest end is near black, and a hue of black is no colour at all.
-const STAR_HUE_FLOOR: f32 = 0.18;
+// How far up the palette the brightest-ranked star is lifted past its level.
+const STAR_LIFT: f32 = 0.18;
+// How steeply a star brighter than the glow under it comes in, per unit of
+// brightest channel: the prototype's round 7 rule, so a star dimmer than the
+// ground is not drawn and cannot darken it.
+const STAR_OVER_GROUND: f32 = 6.0;
 // Where, as a share of the ring's reach, a star's light starts fading to the
 // zero it must reach there. See `StarSlice::reach` and the test that holds it.
 const STAR_RING_FADE: f32 = 0.7;
@@ -1433,11 +1447,8 @@ fn star_temperature(u: f32) -> vec3<f32> {
     return mix(c, vec3<f32>(0.55, 0.68, 1.00), clamp(x - 3.0, 0.0, 1.0));
 }
 
-// The palette's colour at this level raised to full value: its hue alone, so a
-// star's brightness is its own and the scheme only names its colour.
-fn star_hue(level: f32) -> vec3<f32> {
-    let c = palette_color(max(level, STAR_HUE_FLOOR));
-    return c / max(max(c.r, max(c.g, c.b)), 1.0e-4);
+fn star_brightest(c: vec3<f32>) -> f32 {
+    return max(c.r, max(c.g, c.b));
 }
 
 // The level a star sees at pane point `pt`: the Spread-combined light, mixed
@@ -1452,11 +1463,20 @@ fn star_level_at(pt: vec2<f32>, blur: f32) -> f32 {
     return clamp(level, 0.0, 1.0);
 }
 
-// One cell's star, if it has one, as the radiance it adds at `r` — this
-// slice's cell coordinate for the pixel. `cut` is where nothing of a star here
-// is left: five sigmas of the widest core, the halo's own window, and never
-// past the ring's reach, where every star is windowed to zero.
-fn star_cell(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, salt: u32, cut: f32) -> vec3<f32> {
+// One cell's star, if it has one, at `r` — this slice's cell coordinate for the
+// pixel — as its coverage there in `w` and its one colour times that coverage in
+// `rgb`. `ground` is the brightest channel of the glow under the pixel and the
+// bias that lets a star over the bare floor through (`star_color`). `cut` is
+// where nothing of a star here is left: five sigmas of the widest core, the
+// fringe's own window, and never past the ring's reach.
+fn star_cell(
+    s: StarSlice,
+    r: vec2<f32>,
+    cell: vec2<i32>,
+    salt: u32,
+    cut: f32,
+    ground: vec2<f32>,
+) -> vec4<f32> {
     // The period is a power of two, so a mask IS the Euclidean wrap, negative
     // cells included, without `wrap_cell`'s integer divisions.
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
@@ -1464,7 +1484,7 @@ fn star_cell(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, salt: u32, cut: f32) -
     // is answered before anything else is hashed.
     let a = wash_hash(hashed, salt);
     if a.z >= s.occupancy {
-        return vec3<f32>(0.0);
+        return vec4<f32>(0.0);
     }
     // Wander rates and phases, then brightness rank and size.
     let b = wash_hash(hashed, salt + 1u);
@@ -1475,69 +1495,112 @@ fn star_cell(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, salt: u32, cut: f32) -
     let centre = vec2<f32>(cell) + 0.5 + STAR_JITTER * (a.xy - 0.5) + wander;
     let dist = length(r - centre) * s.cell;
     if dist >= cut {
-        return vec3<f32>(0.0);
+        return vec4<f32>(0.0);
     }
     let at = (centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at, s.blur);
+    // Over silence a star is not drawn at all, so a quiet pane is the floor
+    // exactly rather than the floor with stars of the floor's colour on it.
     if level <= 0.0 {
-        return vec3<f32>(0.0);
+        return vec4<f32>(0.0);
     }
     // `Loudness shapes stars`: louder places keep more of their stars and grow
     // them. At 0 presence is the occupancy draw alone.
     let volume = cloud.star_volume;
     if volume > 0.0 && a.z >= s.occupancy * pow(level, 1.5 * volume) {
-        return vec3<f32>(0.0);
+        return vec4<f32>(0.0);
     }
     let randomness = cloud.star_randomness;
-    let rank = pow(c.y, 2.0 + 5.0 * randomness);
-    let amp = s.gain * (0.1 + rank) * level * sqrt(level);
+    var colour = star_paint(level, pow(c.y, 1.0 + 6.0 * randomness));
+    if cloud.star_tint > 0.0 {
+        // Toward a hashed star temperature at the colour's own brightness, so
+        // the tint turns the hue and leaves the palette position alone.
+        let d = wash_hash(hashed, salt + 3u);
+        colour = mix(colour, star_temperature(d.y) * star_brightest(colour), cloud.star_tint);
+    }
+    // The shape is coverage only: a soft point and a same-colour fringe.
     let size = exp((0.3 + 0.9 * randomness) * (c.z - 0.5) * 2.0);
     let sigma = min(s.sigma * size * (1.0 + volume * level), s.cap) * s.defocus;
-    var profile = exp(-dist * dist / (2.0 * sigma * sigma));
-    if s.halo > 0.0 {
-        let spread_to = 3.0 * sigma * (1.0 + 1.5 * volume * level);
-        let window = clamp(1.0 - dist / s.halo_reach, 0.0, 1.0);
-        profile += s.halo * (0.3 + rank) * exp(-dist / spread_to) * window * window;
+    var cover = exp(-dist * dist / (2.0 * sigma * sigma));
+    if s.fringe > 0.0 {
+        let window = max(1.0 - dist / s.fringe_reach, 0.0);
+        cover += s.fringe * exp(-dist / (2.5 * sigma)) * window * window;
     }
     // Zero at the ring's reach, so a star the walk cannot see from this pixel
     // draws nothing here either and no cell edge shows.
-    profile *= 1.0 - smoothstep(STAR_RING_FADE * s.reach, s.reach, dist);
-    let d = wash_hash(hashed, salt + 3u);
-    let hue = star_hue(clamp(level + 0.25 * randomness * (d.x - 0.5) * 2.0, 0.0, 1.0));
-    return amp * profile * mix(hue, star_temperature(d.y), cloud.star_tint);
+    cover = min(cover, 1.0) * (1.0 - smoothstep(STAR_RING_FADE * s.reach, s.reach, dist));
+    cover *= star_over_ground(colour, ground);
+    return vec4<f32>(colour * cover, cover);
 }
 
-// Every slice's stars and the glow under them, as unexposed radiance.
+// A star's one colour, its brightness spent as a palette position: `rank` 0
+// for most stars and 1 for a rare bright one, steeper with `Randomness`; at 0
+// every star is the colour behind it lifted by its rank. The lift fades in with
+// the level, so a star over near-silence cannot climb the palette on its rank
+// alone. Linear in `rank`, so the mean rank paints the mean star.
+fn star_paint(level: f32, rank: f32) -> vec3<f32> {
+    let randomness = cloud.star_randomness;
+    let spread = (1.0 - randomness) + randomness * (0.35 + 1.15 * rank);
+    let lift = STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
+    return palette_color(clamp(level * spread + lift, 0.0, 1.0));
+}
+
+// How much of a star's coverage survives over the glow: a star no brighter than
+// the ground under it would only darken it. `ground` is `star_color`'s.
+fn star_over_ground(colour: vec3<f32>, ground: vec2<f32>) -> f32 {
+    return clamp((star_brightest(colour) - ground.x) * STAR_OVER_GROUND + ground.y, 0.0, 1.0);
+}
+
+// The ground, then every slice laid over it far to near: within a slice the
+// stars' coverages add and their colours average by coverage, and the slice
+// covers what is under it by its summed coverage, capped at one.
 //
 // The 3x3 walk is written out as nine calls rather than two nested loops: the
 // loops, EMPTY, cost about 14 ms a 4K frame on an M1 Pro, which is to say the
 // compiler did not unroll them, where the nine calls cost the ring nothing.
-fn star_radiance(pt: vec2<f32>) -> vec3<f32> {
+fn star_color(pt: vec2<f32>) -> vec3<f32> {
+    let uv = pt / cloud.size;
+    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+    let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
+    let floor_colour = palette_color(0.0);
+    var out = floor_colour;
+    // (brightest channel of the ground, bias): no star is held back over the
+    // bare floor, and as the glow rises past a sixth the bias reaches round
+    // 7's rule, where a star must outshine the ground to be drawn at all.
+    var ground = vec2<f32>(0.0, 1.0e4);
+    if cloud.star_glow > 0.0 {
+        let under = clamp(wide, 0.0, 1.0);
+        let glow = cloud.star_glow * palette_color(under) * sqrt(under);
+        out = floor_colour + (1.0 - floor_colour) * (1.0 - exp(-STAR_EXPOSURE * glow));
+        let top = star_brightest(out);
+        ground = vec2<f32>(top, 1.0 - min((top - star_brightest(floor_colour)) * STAR_OVER_GROUND, 1.0));
+    }
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
-    var rad = vec3<f32>(0.0);
+    let mean_rank = 1.0 / (2.0 + 6.0 * cloud.star_randomness);
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
         let s = cloud.star_slices[k];
-        let cut = min(s.reach, max(5.0 * s.cap * s.defocus, s.halo_reach));
+        let cut = min(s.reach, max(5.0 * s.cap * s.defocus, s.fringe_reach));
         let r = sp / s.cell - s.offset;
         let o = vec2<i32>(floor(r));
         let salt = 1000u + 4u * k;
+        var slice = vec4<f32>(0.0);
         for (var n = 0; n < 9; n += 1) {
-            rad += star_cell(s, r, o + vec2<i32>(n % 3 - 1, n / 3 - 1), salt, cut);
+            slice += star_cell(s, r, o + vec2<i32>(n % 3 - 1, n / 3 - 1), salt, cut, ground);
+        }
+        // What of the stars' profiles lies past the ring's window, as the
+        // average star here (`star_unseen` in atmosphere.rs). Over silence no
+        // star is drawn, so neither is this.
+        let level = clamp(mix(close, wide, s.blur), 0.0, 1.0);
+        if s.unseen > 0.0 && level > 0.0 {
+            let colour = star_paint(level, mean_rank);
+            let cover = s.unseen * star_over_ground(colour, ground);
+            slice += vec4<f32>(colour * cover, cover);
+        }
+        if slice.w > 0.0 {
+            out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
         }
     }
-    let wide = clamp(
-        density_decode(textureSampleLevel(wide_light, cloud_sampler, pt / cloud.size, 0.0).r),
-        0.0,
-        1.0,
-    );
-    return rad + cloud.star_glow * palette_color(wide) * sqrt(wide);
-}
-
-// The starfield exposed over the scheme's floor, in the palette's gamma space
-// where the prototype summed it. Zero radiance is the floor exactly.
-fn star_color(pt: vec2<f32>) -> vec3<f32> {
-    let floor_colour = palette_color(0.0);
-    return floor_colour + (1.0 - floor_colour) * (1.0 - exp(-STAR_EXPOSURE * star_radiance(pt)));
+    return out;
 }
 
 fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {

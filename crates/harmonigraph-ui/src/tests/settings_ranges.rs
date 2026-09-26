@@ -87,7 +87,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness, note_glow,
         cloud_depth, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
-        star_density, star_randomness, star_volume, star_glow, star_dust, star_halo,
+        star_density, star_randomness, star_volume, star_glow, star_dust, star_fringe,
         star_wander, star_far_speed, star_far_blur, star_defocus, star_tint);
     saved.workspace.interaction.ui_scale = v;
     saved.workspace.interaction.skin_lightness = v;

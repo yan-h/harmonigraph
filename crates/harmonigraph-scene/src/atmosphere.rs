@@ -28,8 +28,8 @@ use harmonigraph_core::LatticePos;
 /// body with the measured refusal, which is the bar for doing it again.
 ///
 /// [`CloudStyle::Stars`] is the odd one out: it does not displace the picture's
-/// levels at all but REPLACES the picture with light — pinpoint stars in depth,
-/// each coloured and lit by the sound under it — so Contours do not reach it and
+/// levels at all but REPLACES the picture — pinpoint stars in depth, each one
+/// palette colour picked by the sound under it — so Contours do not reach it and
 /// every `star_` setting belongs to it alone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
@@ -133,8 +133,9 @@ pub const STAR_DENSITY_MIN: f32 = 0.5;
 pub const STAR_DENSITY_MAX: f32 = 6.0;
 /// The top of [`SpectralAtmosphere::star_glow`].
 pub const STAR_GLOW_MAX: f32 = 1.5;
-/// The top of [`SpectralAtmosphere::star_halo`].
-pub const STAR_HALO_MAX: f32 = 0.5;
+/// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
+/// dense slice add up to a flat wash of its average colour.
+pub const STAR_FRINGE_MAX: f32 = 0.5;
 /// The top of [`SpectralAtmosphere::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// The top of [`SpectralAtmosphere::star_wander`], in cells of the star's own
@@ -303,27 +304,32 @@ pub struct SpectralAtmosphere {
     /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
     ///
     /// Every `star_` setting below belongs to [`CloudStyle::Stars`] alone, and
-    /// each fresh value is the prototype's V3 — the variant Yan's pick named —
-    /// so the page opens on the look he chose, with its levers on bars.
+    /// each fresh value is the prototype's pick — V3 of round 4 for the motion,
+    /// YB3 of round 8 for the colour and shape — so the page opens on the look
+    /// Yan chose, with its levers on bars.
     pub star_density: f32,
-    /// How far the stars differ from each other: the steepness of the
-    /// brightness rank, the spread of core sizes and the palette-position
-    /// jitter, all together.
+    /// How far the stars differ from each other in brightness, spent as a
+    /// position on the palette: the steepness of the brightness rank, how far
+    /// it spreads each star above and below the colour behind it, and the
+    /// spread of core sizes, all together. At 0 every star is the colour
+    /// behind it, lifted a little.
     pub star_randomness: f32,
-    /// How far loudness also grows a star's core and halo and adds stars. At 0
-    /// loudness sets brightness only, and size and presence stay random.
+    /// How far loudness also grows a star's core and adds stars. At 0
+    /// loudness sets colour only, and size and presence stay random.
     pub star_volume: f32,
-    /// The wide light of the sound under the stars. Round 5 found this, not
-    /// the dust, to be what read as a heavy "cloud texture". Runs to
-    /// [`STAR_GLOW_MAX`].
+    /// The wide light of the sound under the stars, as the ground they are
+    /// laid over; a star no brighter than it is not drawn. Round 5 found this,
+    /// not the dust, to be what read as a heavy "cloud texture", and round 8
+    /// was picked without it. Runs to [`STAR_GLOW_MAX`].
     pub star_glow: f32,
     /// How many cells of the FARTHEST depth hold a star — the prototype's
     /// `occ_far`, the other lever on how heavy the field reads. Nearer depths
     /// fade from it to a fixed quarter.
     pub star_dust: f32,
-    /// Halo strength around the nearer stars, growing with depth squared. Runs
-    /// to [`STAR_HALO_MAX`].
-    pub star_halo: f32,
+    /// A wider, fainter fringe of each star's own colour round its core, at
+    /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
+    /// Runs to [`STAR_FRINGE_MAX`].
+    pub star_fringe: f32,
     /// How far each star strays from the shared drift on a slow path of its
     /// own, in cells of its own depth. Capped at [`STAR_WANDER_MAX`] by the
     /// shader's ring, which is why the bar stops there.
@@ -337,8 +343,8 @@ pub struct SpectralAtmosphere {
     /// How much the nearest stars are softened, growing with depth squared.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
-    /// How far each star's palette hue is mixed toward a hashed star
-    /// temperature, red through white to blue.
+    /// How far each star's palette colour is mixed toward a hashed star
+    /// temperature, red through white to blue, at the colour's own brightness.
     pub star_tint: f32,
 }
 
@@ -406,19 +412,20 @@ impl Default for SpectralAtmosphere {
             wash_refract: 0.85,
             wash_layers: 0.5,
             // V3 of the prototype's round 4 (`drift.py`), dialled denser in the
-            // DAW: three times the stars, a wider glow, the far dust at full,
-            // and a little more wander.
+            // DAW: three times the stars, the far dust at full, and a little
+            // more wander. The glow, fringe, softness and tint are round 8's
+            // YB3 (`round8.py`), which was picked with no glow and no tint.
             star_density: 6.0,
             star_randomness: 0.6,
             star_volume: 0.0,
-            star_glow: 0.877_804_76,
+            star_glow: 0.0,
             star_dust: 1.0,
-            star_halo: 0.12,
+            star_fringe: 0.25,
             star_wander: 0.45,
             star_far_speed: 0.15,
             star_far_blur: 0.7,
-            star_defocus: 0.6,
-            star_tint: 0.2,
+            star_defocus: 0.3,
+            star_tint: 0.0,
         }
     }
 }
@@ -480,7 +487,7 @@ impl SpectralAtmosphere {
         self.star_volume = clamp(self.star_volume, fresh.star_volume, 0.0, 1.0);
         self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
         self.star_dust = clamp(self.star_dust, fresh.star_dust, 0.0, 1.0);
-        self.star_halo = clamp(self.star_halo, fresh.star_halo, 0.0, STAR_HALO_MAX);
+        self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
         self.star_wander = clamp(self.star_wander, fresh.star_wander, 0.0, STAR_WANDER_MAX);
         self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
         self.star_far_blur = clamp(self.star_far_blur, fresh.star_far_blur, 0.0, 1.0);

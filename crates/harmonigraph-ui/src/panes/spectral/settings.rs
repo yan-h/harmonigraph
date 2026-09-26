@@ -589,10 +589,11 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
 /// Every quality that differed between the prototype's four motion variants is
 /// a bar here rather than a choice made in the shader, as are the two levers on
 /// how heavy the field reads (`Glow` and `Far dust`), because Yan's pick was a
-/// starting point "with sliders exposed". The fresh values are that pick, V3.
+/// starting point "with sliders exposed". The fresh values are that pick, V3,
+/// with round 8's YB3 for how a star is coloured and shaped.
 fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
     use harmonigraph_scene::{
-        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_GLOW_MAX, STAR_HALO_MAX,
+        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_GLOW_MAX,
         STAR_WANDER_MAX,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
@@ -605,13 +606,13 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "How much stars differ from each other in brightness, size and color. 0% makes an even field; 100% makes a few bright stars among many faint ones.",
+            "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones.",
         );
     ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
         .percent()
         .show(ui)
         .on_hover_text(
-            "A wide, soft light of the sound behind the stars. 0% leaves black between them; higher values fill the gaps between harmonics.",
+            "A wide, soft light of the sound behind the stars. 0% leaves the palette's darkest color between them; higher values fill the gaps between harmonics, and stars dimmer than the glow disappear into it.",
         );
     ValueBar::new(&mut atmosphere.star_dust, 0.0..=1.0, "Far dust")
         .percent()
@@ -619,10 +620,12 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How many of the farthest, finest stars there are. Lower values thin the dust that fills the field between the brighter stars.",
         );
-    ValueBar::new(&mut atmosphere.star_halo, 0.0..=STAR_HALO_MAX, "Halo")
+    ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
         .percent()
         .show(ui)
-        .on_hover_text("A soft halo around the nearer stars. 0% draws bare pinpoints.");
+        .on_hover_text(
+            "A faint, wider fringe around every star in the star's own color. 0% draws bare soft points.",
+        );
     ValueBar::new(&mut atmosphere.star_wander, 0.0..=STAR_WANDER_MAX, "Wander")
         .percent()
         .show(ui)
@@ -649,13 +652,13 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "Mix each star's palette color toward a star-like color of its own, from red to white to blue. 0% colors stars from the palette alone.",
+            "Mix each star's palette color toward a star-like color of its own, from red to white to blue, at the same brightness. 0% colors stars from the palette alone.",
         );
     ValueBar::new(&mut atmosphere.star_volume, 0.0..=1.0, "Loudness shapes stars")
         .percent()
         .show(ui)
         .on_hover_text(
-            "How far loudness also makes stars bigger, widens their halos and adds more of them. 0% leaves every star's size and presence random; loudness always sets brightness.",
+            "How far loudness also makes stars bigger and adds more of them. 0% leaves every star's size and presence random; loudness always sets color.",
         );
 }
 

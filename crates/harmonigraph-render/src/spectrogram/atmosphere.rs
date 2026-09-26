@@ -129,19 +129,67 @@ struct StarSlice {
     cap: f32,
     /// How much the core is widened after the cap: 1 at the far end.
     defocus: f32,
-    gain: f32,
     /// The share of cells that hold a star.
     occupancy: f32,
-    /// Halo strength.
-    halo: f32,
     /// The share of the WIDE light a star here reads instead of the close one.
     blur: f32,
-    /// Where the halo is windowed to zero, in star pixels: the prototype's own
-    /// splat radius, or the ring's reach where that is nearer. 0 with no halo.
-    halo_reach: f32,
+    /// The same-colour fringe's coverage at the star's centre, falling off as
+    /// `exp(-d / 2.5 sigma)`: `Fringe`, alike at every depth.
+    fringe: f32,
+    /// Where the fringe is windowed to zero, as `(1 - d / fringe_reach)²`, in
+    /// star pixels: the prototype's own splat radius, which is what shaped the
+    /// fringe Yan picked. 0 with no fringe.
+    fringe_reach: f32,
     /// The ring's reach in star pixels — the nearest a star outside the 3x3
-    /// walk can be to the pixel — where every star's light is windowed to zero.
+    /// walk can be to the pixel — where every star's coverage is windowed to
+    /// zero.
     reach: f32,
+    /// The coverage a pixel is owed on average by the stars' profiles past
+    /// the ring's window: see [`star_unseen`].
+    unseen: f32,
+}
+
+/// The mirror of the shader's `STAR_RING_FADE`: where, as a share of the
+/// reach, every star's coverage starts fading to zero.
+const STAR_RING_FADE: f32 = 0.7;
+
+/// The coverage the ring's window takes away from a slice, on average per
+/// pixel: the slice's stars per square star pixel times what one typical star's
+/// profile has left past the window.
+///
+/// The shader lays it over the pixel in the colour of the average star there.
+/// Without it the finest depths lose most of their fringe — a far star's
+/// fringe runs about six star pixels while the ring holds under one — and the
+/// floor shows through the dust in specks where Yan's pick (the prototype's
+/// round 8 YB3, drawn by splatting with no ring) had none. The stars the ring
+/// does hold keep their own colours, so this is the one approximation in the
+/// field, and it is only as wide as the part of a profile no walk reaches.
+///
+/// The typical star is the median size draw, one base sigma under the cap.
+/// Integrated here, per frame, because it is a function of the dials alone:
+/// eight slices of 256 steps.
+fn star_unseen(slice: &StarSlice) -> f32 {
+    let sigma = slice.sigma.min(slice.cap) * slice.defocus;
+    let start = STAR_RING_FADE * slice.reach;
+    let end = (5.0 * sigma).max(slice.fringe_reach);
+    if end <= start {
+        return 0.0;
+    }
+    const STEPS: usize = 256;
+    let step = (end - start) / STEPS as f32;
+    let lost: f32 = (0..STEPS)
+        .map(|i| {
+            let r = start + (i as f32 + 0.5) * step;
+            let mut profile = (-r * r / (2.0 * sigma * sigma)).exp();
+            if slice.fringe > 0.0 {
+                let window = (1.0 - r / slice.fringe_reach).max(0.0);
+                profile += slice.fringe * (-r / (2.5 * sigma)).exp() * window * window;
+            }
+            let t = ((r - start) / (slice.reach - start)).clamp(0.0, 1.0);
+            profile.min(1.0) * t * t * (3.0 - 2.0 * t) * std::f32::consts::TAU * r * step
+        })
+        .sum();
+    slice.occupancy / (slice.cell * slice.cell) * lost
 }
 
 /// The slice's depth, 0 for the farthest and 1 for the nearest.
@@ -168,28 +216,30 @@ fn star_slices(
         let d = star_depth(k);
         let cell = 2.0 * 16f32.powf(d * d) / (settings.star_density / 2.0).sqrt();
         let sigma = 0.5 + 0.8 * d;
+        let cap = (0.33 * cell).min(1.8);
         let defocus = 1.0 + settings.star_defocus * d * d;
-        let halo = settings.star_halo * d * d;
         let reach = reach_cells * cell;
-        // The prototype's splat radius, whose window the halo falls to zero at.
-        let splat = (3.0 * (sigma * defocus * 1.3).max(0.6) + 36.0 * halo).min(0.9 * cell + 4.0);
+        let fringe = settings.star_fringe;
+        // The prototype's splat radius for a fringe of 2.5 sigmas.
+        let splat = (11.2 * (sigma * defocus).max(0.6)).min(0.9 * cell + 4.0).ceil() + 0.5;
         let speed = f64::from(settings.star_far_speed + (1.0 - settings.star_far_speed) * d);
         let shift = |axis: f64| {
             (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
         };
-        StarSlice {
+        let slice = StarSlice {
             offset: [shift(cos), shift(sin)],
             cell,
             sigma,
-            cap: (0.33 * cell).min(1.8),
+            cap,
             defocus,
-            gain: 0.78 * (2.5 + 2.5 * d),
             occupancy: settings.star_dust * (1.0 - d) * (1.0 - d) + 0.25 * d * d,
-            halo,
             blur: settings.star_far_blur * (1.0 - d),
-            halo_reach: if halo > 0.0 { (splat.ceil() + 0.5).min(reach) } else { 0.0 },
+            fringe,
+            fringe_reach: if fringe > 0.0 { splat } else { 0.0 },
             reach,
-        }
+            unseen: 0.0,
+        };
+        StarSlice { unseen: star_unseen(&slice), ..slice }
     })
 }
 
@@ -1141,7 +1191,7 @@ mod tests {
     use super::{
         cloud_drift, retained_size, source_size, star_reach_cells, star_slices, tile_key,
         tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_HASH_PERIOD, STAR_JITTER,
-        STAR_SLICES, STAR_WANDER_PERIOD, TILE_MAX, TILE_STEP, WASH_CELLS,
+        STAR_RING_FADE, STAR_SLICES, STAR_WANDER_PERIOD, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
     fn shader_number(name: &str) -> f64 {
@@ -1170,6 +1220,7 @@ mod tests {
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         assert_eq!(STAR_JITTER, shader_number("STAR_JITTER") as f32);
+        assert_eq!(STAR_RING_FADE, shader_number("STAR_RING_FADE") as f32);
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_WANDER_PERIOD, shader_number("STAR_WANDER_PERIOD"));
@@ -1179,7 +1230,7 @@ mod tests {
             harmonigraph_scene::SpectralAtmosphere {
                 star_wander: harmonigraph_scene::STAR_WANDER_MAX,
                 star_defocus: harmonigraph_scene::STAR_DEFOCUS_MAX,
-                star_halo: harmonigraph_scene::STAR_HALO_MAX,
+                star_fringe: harmonigraph_scene::STAR_FRINGE_MAX,
                 star_density: harmonigraph_scene::STAR_DENSITY_MAX,
                 ..fresh
             },
@@ -1223,7 +1274,6 @@ mod tests {
             );
             for slice in star_slices(settings, 0.0) {
                 assert!((slice.reach - reach * slice.cell).abs() < 1e-4);
-                assert!(slice.halo_reach <= slice.reach, "{slice:?}");
             }
         }
     }

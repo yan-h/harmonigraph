@@ -1553,22 +1553,24 @@ mod tests {
     /// The starfield draws stars over sound and the scheme's floor over
     /// silence, and needs neither the tile nor the reduced tone target.
     ///
-    /// Silence is the claim the look is most likely to break: every star and
-    /// the glow are scaled by the level to a positive power, so a quiet pane
-    /// must be the floor EXACTLY — on a palette whose floor is not black, so an
-    /// invented black would show — rather than a field of faint noise. Held at
-    /// a reduced cloud sample spacing too, which is where the other textures
-    /// take the tone target this one must not.
+    /// Silence is the claim the look is most likely to break: no star is drawn
+    /// over silence, the fill past the ring is gated the same way, and the glow
+    /// carries the level to a positive power, so a quiet pane must be the floor
+    /// EXACTLY — on a palette whose floor is not black, so an invented black
+    /// would show — rather than a field of faint noise. Held with the glow on
+    /// too, and at a reduced cloud sample spacing, which is where the other
+    /// textures take the tone target this one must not.
     #[test]
     fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
         let Some((device, queue)) = headless_device() else { return };
-        for pixel in [0.5, 2.0] {
+        for (pixel, glow) in [(0.5, 0.0), (2.0, 0.8)] {
             let mut cb = refracted_fixture();
             let mut resources = CallbackResources::default();
             resources
                 .insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+            s.star_glow = glow;
             s.cloud_depth = 0.0;
             let bare = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
