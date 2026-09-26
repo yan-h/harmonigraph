@@ -114,7 +114,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
             |v| format!("{:.1}%", v * 100.0),
         )
         .on_hover_text(
-            "Cross-arm length from the center, as a percentage of the node radius. \
+            "Cross-arm length from the center, as a percentage of the node radius: the full length of the Layers bar in Notes. \
                      Solid to the inner handle, faded out by the outer handle. \
                      0% hides crosses; named nodes draw none. \
                      Double-click resets.",
