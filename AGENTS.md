@@ -20,7 +20,7 @@ Procedure that only one kind of task needs goes in a skill rather than here, bec
 Every session already carries each skill's description, so reach for the skill itself;
 a summary of one in this file is a second copy to maintain.
 
-## Every change runs in an owner-managed worktree and ends in a draft PR
+## Every change runs in an owner-managed worktree and merges itself at green
 
 A session that may change tracked files works in its own worktree, never in the main checkout:
 Claude in `.claude/worktrees/<branch>/` through `EnterWorktree`;
@@ -28,8 +28,17 @@ Codex in its app-managed worktree, creating its `codex/<slug>` branch before the
 A write-capable session that finds itself in main leaves whatever is there alone.
 The `worktrees` skill has ownership, the Codex handoff and parallel-session planning.
 
-A completed change is committed, pushed and opened as a **draft** PR with `gh pr create --draft`, documentation and configuration included;
-the handoff says it is open, draft and **not merged**, and nothing merges unless Yan asks.
+A completed change is committed, pushed and opened as a **draft** PR with `gh pr create --draft`, documentation and configuration included.
+The session then merges it without asking —
+`gh pr ready` and `gh pr merge --squash` once `mergeStateStatus` is `CLEAN` —
+picture changes included, which Yan looks at after they land.
+**The merge waits on a review whenever the diff could hide a bug:** any code change beyond a rename or a one-line fix gets `code-review` through the Skill tool against `origin/main...HEAD`,
+and every CONFIRMED finding is fixed or answered in the PR body before merging.
+Docs, backlog notes, config and pure-test edits merge unreviewed.
+Codex has no `code-review` skill, so a Codex session leaves a PR that owes one open and says so.
+It leaves the PR open only when Yan said to hold it, when its base PR has not merged, or when it cannot get to `CLEAN`,
+and the handoff then says open and **not merged**, and why.
+The `pr-hygiene` skill has the review the merge leans on and squash versus merge commit.
 A change that touches the picture also owes the build below, and satisfying one of the two is not satisfying both.
 
 **Never run `git worktree lock`.** Every releaser recognizes only the harness's own reason format, so a hand-written lock stands until a human clears it (#369).
