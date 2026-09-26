@@ -443,6 +443,13 @@ pub struct NodeInstance {
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
+    /// How far each octave's LIT slice reaches across the band, 0..1 by the
+    /// same slots as [`octaves`](Self::octaves): it fills from the band's inner
+    /// edge out to this share of the band's width, and the rest of the band
+    /// keeps the ghost an unlit slot draws, so the ring stays whole. 1 is the
+    /// full slice, which is what every slot reads that is not lit or that
+    /// nothing drives (see [`crate::intensity`]).
+    pub thickness: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
     /// wherever it sits; what marks a home position is the MARKER standing

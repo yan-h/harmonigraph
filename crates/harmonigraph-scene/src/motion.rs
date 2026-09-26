@@ -528,11 +528,20 @@ impl NodeMotion {
             let motion = &self.nodes[&node.lattice_pos];
             node.slice_progress = motion.progress;
             // Opacity fades each slot's ink, and the node's presence with it,
-            // while the envelope under it runs untouched. Thickness is not
-            // drawn on the lattice yet (#1130 step 5).
+            // while the envelope under it runs untouched. Thickness narrows a
+            // LIT slot only: a slot keeps its last reading once released, and
+            // an unlit one draws the ghost at full width whatever it read, so
+            // it goes as 1 and the shader keeps its full-slice path there.
             let fades = motion.readings.map(|reading| reading.opacity);
             let glows = motion.readings.map(|reading| reading.glow);
             node.octaves = std::array::from_fn(|i| motion.levels[i] * fades[i]);
+            node.thickness = std::array::from_fn(|i| {
+                if node.octaves[i] > 0.0 {
+                    motion.readings[i].thickness
+                } else {
+                    1.0
+                }
+            });
             node.activation = node.octaves.iter().copied().fold(0.0, f32::max);
             node.departing = !motion.gate;
             let (melody_slots, melody_level, melody_slot) = motion.melody.strongest();
@@ -888,6 +897,48 @@ mod tests {
         let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
         assert_eq!(slot(&held), (1.0, Some(1.0), false, 1.0));
         assert_eq!(origin(&held).bloom, 0.75);
+    }
+    /// Pressure routed to thickness narrows the lit slot and nothing else:
+    /// its ink and light stay full, and once the note is gone the slot reads
+    /// full width again though it keeps its last reading.
+    #[test]
+    fn thickness_narrows_a_lit_slot_only() {
+        use crate::{IntensitySource, IntensityTarget};
+        let intensity = crate::IntensitySettings {
+            pressure: IntensitySource { target: IntensityTarget::Thickness, weight: 1.0 },
+            ..Default::default()
+        };
+        let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
+        let mut tracker = NoteTracker::new();
+        let mut motion = NodeMotion::default();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 0.0,
+            channel: 0,
+            note: 60,
+            kind: harmonigraph_core::NoteEventKind::Expression {
+                expression: harmonigraph_core::Expression::Pressure,
+                value: 0.25,
+            },
+        });
+        let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
+        let node = origin(&held);
+        let lit = node.octaves.iter().position(|&l| l > 0.0).expect("a lit slot");
+        assert_eq!((node.octaves[lit], node.glow.level), (1.0, 1.0), "ink and light stay full");
+        assert_eq!(node.thickness[lit], 0.25);
+        assert!(
+            node.thickness.iter().enumerate().all(|(i, &t)| i == lit || t == 1.0),
+            "{:?}",
+            node.thickness,
+        );
+        tracker.handle_event(off(1.2, 60));
+        let releasing = *origin(&draw(&mut motion, &mut tracker, &view, 1.7, false));
+        assert!(releasing.octaves[lit] > 0.0 && releasing.octaves[lit] < 1.0);
+        assert_eq!(releasing.thickness[lit], 0.25, "a release keeps the note's width");
+        let gone = *origin(&draw(&mut motion, &mut tracker, &view, 3.0, false));
+        assert_eq!(gone.octaves[lit], 0.0);
+        assert_eq!(gone.thickness, [1.0; 11], "a spent slot reads full");
     }
     #[test]
     fn octaves_and_same_time_replacements_do_not_replay_but_true_disappearance_does() {

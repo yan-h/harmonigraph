@@ -117,6 +117,7 @@ struct VsOut {
     char _pad2[8];
     metal::float4 params;
     metal::uint3 octaves;
+    metal::uint3 thickness;
     metal::uint4 motion;
     float cents;
     float strip_row;
@@ -126,7 +127,7 @@ struct VsOut {
     float rim;
     float ring;
     float ink_carry;
-    char _pad13[4];
+    char _pad14[4];
     metal::float4 shadow_box;
     metal::float4 shadow_at;
 };
@@ -722,6 +723,7 @@ struct fs_ink_stripInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 params [[user(loc2), center_perspective]];
     metal::uint3 octaves [[user(loc3), flat]];
+    metal::uint3 thickness [[user(loc1), flat]];
     metal::uint4 motion [[user(loc9), flat]];
     float cents [[user(loc4), flat]];
     float strip_row [[user(loc5), flat]];
@@ -743,7 +745,7 @@ fragment fs_ink_stripOutput fs_ink_strip(
 , constant Uniforms& u [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> ink_strip [[texture(0)]]
 ) {
-    const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
+    const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.thickness, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.ring, varyings.ink_carry, {}, varyings.shadow_box, varyings.shadow_at };
     OctRing _e2 = oct_ring(in.cents, u);
     metal::float4 _e7 = ink_at(in, _e2, in.uv.x * TAU, u);
     float carry = metal::clamp(in.ink_carry, 0.0, 1.0);

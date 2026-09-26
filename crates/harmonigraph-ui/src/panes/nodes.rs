@@ -49,7 +49,7 @@ fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             IntensityTarget::Thickness => (
                 target,
                 "Thickness",
-                "Drives how thick the note is drawn: the roll's ribbons, about their center line.",
+                "Drives how thick the note is drawn: the roll's ribbons about their center line, and the lattice's octave slices out from the band's inner edge.",
             ),
         });
         let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {

@@ -1035,6 +1035,7 @@ mod tests {
             activation,
             departing: true,
             slice_progress: [1.0; 11],
+            thickness: [1.0; 11],
             octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
             hovered: false,
             on_home,

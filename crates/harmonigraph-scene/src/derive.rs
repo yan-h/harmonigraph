@@ -95,6 +95,7 @@ pub fn derive_scene(
             activation: 0.0,
             departing: false,
             slice_progress: [1.0; OCTAVE_SLOTS],
+            thickness: [1.0; OCTAVE_SLOTS],
             octaves: [0.0; OCTAVE_SLOTS],
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,

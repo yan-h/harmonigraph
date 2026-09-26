@@ -115,42 +115,26 @@ struct Uniforms {
     type_10 spectrum_color;
     type_11 ink_kernel;
 };
-struct VsOut {
-    metal::float4 clip_pos;
-    metal::float2 uv;
-    char _pad2[8];
-    metal::float4 params;
-    metal::uint3 octaves;
-    metal::uint4 motion;
-    float cents;
-    float strip_row;
-    metal::uint2 marks;
-    metal::float4 melody_color;
-    metal::float4 bass_color;
-    float rim;
-    float ring;
-    float ink_carry;
-    char _pad13[4];
-    metal::float4 shadow_box;
-    metal::float4 shadow_at;
-};
 struct Instance {
     metal::float3 world_pos;
     metal::float4 params;
     metal::uint3 octaves;
+    metal::uint3 thickness;
     metal::uint4 motion;
     float cents;
-    char _pad5[4];
+    char _pad6[4];
     metal::uint2 marks;
     metal::float4 melody_color;
     metal::float4 bass_color;
     float scale;
     float ring;
-    char _pad10[8];
+    char _pad11[8];
     metal::float4 glow;
 };
-struct type_14 {
-    metal::float2 inner[4];
+struct GlowSplatOut {
+    metal::float4 position;
+    metal::float2 uv;
+    metal::float2 light;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -200,29 +184,6 @@ uint2 unpackUint32x2_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint
     return uint2((b3 << 24 | b2 << 16 | b1 << 8 | b0), (b7 << 24 | b6 << 16 | b5 << 8 | b4));
 }
 
-float glow_shadow(
-    constant Uniforms& u
-) {
-    float _e3 = u.geometry_shadow.width;
-    return metal::max(_e3, 0.0);
-}
-
-float glow_shadow_reach(
-    constant Uniforms& u
-) {
-    float _e3 = u.geometry_shadow.reach_sigmas;
-    return metal::max(_e3, SHADOW_REACH_SIGMAS);
-}
-
-float shadow_reach_uv(
-    float scale,
-    constant Uniforms& u
-) {
-    float _e1 = glow_shadow(u);
-    float _e4 = glow_shadow_reach(u);
-    return ((0.5 * _e1) * _e4) / (1.8 * metal::max(scale, 0.05));
-}
-
 float node_rim(
     bool marked,
     constant Uniforms& u
@@ -248,100 +209,21 @@ float node_rim(
     return _e29;
 }
 
-float quad_margin(
-    float rim_1,
-    float g
-) {
-    return metal::max(QUAD_MARGIN, (rim_1 + g) + 0.05);
-}
-
-metal::float2 spectral_radii(
+float glow_rim(
     constant Uniforms& u
 ) {
-    float _e3 = u.spectral.inner;
-    float _e7 = u.spectral.outer;
-    return metal::float2(_e3, _e7);
+    float _e1 = node_rim(true, u);
+    return _e1;
 }
 
-VsOut node_vertex(
-    uint vertex_index_1,
-    Instance inst_1,
-    constant Uniforms& u
-) {
-    type_14 corners = type_14 {{metal::float2(-1.0, -1.0), metal::float2(1.0, -1.0), metal::float2(-1.0, 1.0), metal::float2(1.0, 1.0)}};
-    bool local_1 = {};
-    bool local_2 = {};
-    VsOut out_1 = {};
-    metal::float2 corner = corners.inner[metal::min(unsigned(vertex_index_1), 3u)];
-    float scale_1 = metal::max(inst_1.scale, 0.05);
-    float _e28 = node_rim((inst_1.marks.x | inst_1.marks.y) != 0u, u);
-    float _e32 = u.node.band_outer;
-    float _e36 = u.node.band_inner;
-    if (!((_e32 > _e36))) {
-        if ((inst_1.marks.x | inst_1.marks.y) != 0u) {
-            float _e53 = u.node.mark_thickness;
-            local_2 = _e53 > 0.0;
-        } else {
-            local_2 = false;
-        }
-        bool _e57 = local_2;
-        local_1 = _e57;
-    } else {
-        local_1 = true;
-    }
-    bool _e59 = local_1;
-    float midi_rim = _e59 ? _e28 : 0.0;
-    float _e66 = u.node.pose.z;
-    metal::float2 _e68 = spectral_radii(u);
-    float _e75 = u.node.animation;
-    float bounds = (_e75 != 0.0) ? metal::max(_e28, metal::max(midi_rim * _e66, _e68.y)) : _e28;
-    float _e79 = shadow_reach_uv(scale_1, u);
-    float _e80 = quad_margin(bounds, _e79);
-    float _e84 = u.node.radius;
-    float radius = (((_e84 * 0.9) * 2.0) * _e80) * scale_1;
-    metal::float4 _e95 = u.camera.right;
-    metal::float4 _e102 = u.camera.up;
-    metal::float3 world = inst_1.world_pos + (((_e95.xyz * corner.x) + (_e102.xyz * corner.y)) * radius);
-    metal::float4x4 _e114 = u.camera.view_proj;
-    out_1.clip_pos = _e114 * metal::float4(world, 1.0);
-    out_1.uv = corner * _e80;
-    out_1.params = inst_1.params;
-    out_1.octaves = inst_1.octaves;
-    out_1.motion = inst_1.motion;
-    out_1.cents = inst_1.cents;
-    out_1.strip_row = inst_1.glow.y;
-    out_1.ink_carry = inst_1.glow.z;
-    out_1.marks = inst_1.marks;
-    out_1.melody_color = inst_1.melody_color;
-    out_1.bass_color = inst_1.bass_color;
-    out_1.rim = _e28;
-    out_1.ring = inst_1.ring;
-    out_1.shadow_box = metal::float4(0.0);
-    out_1.shadow_at = metal::float4(0.0, 0.0, 0.0, 1.0);
-    VsOut _e152 = out_1;
-    return _e152;
-}
-
-struct vs_ink_stripOutput {
-    metal::float4 clip_pos [[position]];
+struct vs_glow_splatOutput {
+    metal::float4 position [[position]];
     metal::float2 uv [[user(loc0), center_perspective]];
-    metal::float4 params [[user(loc2), center_perspective]];
-    metal::uint3 octaves [[user(loc3), flat]];
-    metal::uint4 motion [[user(loc9), flat]];
-    float cents [[user(loc4), flat]];
-    float strip_row [[user(loc5), flat]];
-    metal::uint2 marks [[user(loc6), flat]];
-    metal::float4 melody_color [[user(loc7), flat]];
-    metal::float4 bass_color [[user(loc8), flat]];
-    float rim [[user(loc11), flat]];
-    float ring [[user(loc14), flat]];
-    float ink_carry [[user(loc15), flat]];
-    metal::float4 shadow_box [[user(loc10), flat]];
-    metal::float4 shadow_at [[user(loc12), center_no_perspective]];
+    metal::float2 light [[user(loc1), flat]];
 };
-struct vb_15_type { metal::uchar data[124]; };
-vertex vs_ink_stripOutput vs_ink_strip(
-  uint vertex_index [[vertex_id]]
+struct vb_15_type { metal::uchar data[136]; };
+vertex vs_glow_splatOutput vs_glow_splat(
+  uint vertex_ [[vertex_id]]
 , constant Uniforms& u [[buffer(0)]]
 , uint i_id [[instance_id]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
@@ -355,10 +237,11 @@ vertex vs_ink_stripOutput vs_ink_strip(
     metal::uint2 marks = {};
     metal::float4 melody_color = {};
     metal::float4 bass_color = {};
-    float scale_2 = {};
+    float scale = {};
     float ring = {};
     metal::float4 glow = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 124)) {
+    metal::uint3 thickness = {};
+    if (i_id < (_buffer_sizes.buffer_size15 / 136)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         world_pos = unpackFloat32x3_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7], vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11]);
         params = unpackFloat32x4_(vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15], vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19], vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27]);
@@ -368,25 +251,36 @@ vertex vs_ink_stripOutput vs_ink_strip(
         marks = unpackUint32x2_(vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63], vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67]);
         melody_color = unpackFloat32x4_(vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83]);
         bass_color = unpackFloat32x4_(vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99]);
-        scale_2 = unpackFloat32_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
+        scale = unpackFloat32_(vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
         ring = unpackFloat32_(vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107]);
         glow = unpackFloat32x4_(vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111], vb_15_elem.data[112], vb_15_elem.data[113], vb_15_elem.data[114], vb_15_elem.data[115], vb_15_elem.data[116], vb_15_elem.data[117], vb_15_elem.data[118], vb_15_elem.data[119], vb_15_elem.data[120], vb_15_elem.data[121], vb_15_elem.data[122], vb_15_elem.data[123]);
+        thickness = unpackUint32x3_(vb_15_elem.data[124], vb_15_elem.data[125], vb_15_elem.data[126], vb_15_elem.data[127], vb_15_elem.data[128], vb_15_elem.data[129], vb_15_elem.data[130], vb_15_elem.data[131], vb_15_elem.data[132], vb_15_elem.data[133], vb_15_elem.data[134], vb_15_elem.data[135]);
     }
-    const Instance inst = { world_pos, params, octaves, motion, cents, {}, marks, melody_color, bass_color, scale_2, ring, {}, glow };
-    VsOut out = {};
-    VsOut _e2 = node_vertex(vertex_index, inst, u);
-    out = _e2;
-    metal::float2 corner_1 = metal::float2(static_cast<float>(vertex_index & 1u), static_cast<float>(vertex_index >> 1u));
-    float _e14 = u.glow.row_capacity;
-    float rows = metal::max(_e14, 1.0);
-    float _e18 = out.strip_row;
-    float v = (_e18 + corner_1.y) / rows;
-    out.clip_pos = metal::float4((corner_1.x * 2.0) - 1.0, 1.0 - (2.0 * v), 0.0, 1.0);
-    out.uv = metal::float2(corner_1.x, 0.0);
+    const Instance inst = { world_pos, params, octaves, thickness, motion, cents, {}, marks, melody_color, bass_color, scale, ring, {}, glow };
+    GlowSplatOut out = {};
+    out.position = metal::float4(2.0, 2.0, 0.0, 1.0);
+    out.uv = metal::float2(0.0);
+    out.light = metal::float2(inst.glow.x * inst.glow.w, inst.glow.y);
     if (inst.glow.x <= 0.0) {
-        out.clip_pos = metal::float4(0.0, 0.0, 0.0, 1.0);
+        GlowSplatOut _e25 = out;
+        const auto _tmp = _e25;
+        return vs_glow_splatOutput { _tmp.position, _tmp.uv, _tmp.light };
     }
-    VsOut _e49 = out;
-    const auto _tmp = _e49;
-    return vs_ink_stripOutput { _tmp.clip_pos, _tmp.uv, _tmp.params, _tmp.octaves, _tmp.motion, _tmp.cents, _tmp.strip_row, _tmp.marks, _tmp.melody_color, _tmp.bass_color, _tmp.rim, _tmp.ring, _tmp.ink_carry, _tmp.shadow_box, _tmp.shadow_at };
+    metal::float2 corner = (metal::float2(static_cast<float>(vertex_ & 1u), static_cast<float>(vertex_ >> 1u)) * 2.0) - metal::float2(1.0);
+    float _e38 = glow_rim(u);
+    float _e42 = u.glow.reach;
+    float span = metal::max(_e38 + metal::max(_e42, 0.0), 0.1);
+    out.uv = corner * span;
+    float _e53 = u.node.radius;
+    float radius = (_e53 * 1.8) * metal::max(inst.scale, 0.05);
+    metal::float4 _e64 = u.camera.right;
+    float _e68 = out.uv.x;
+    metal::float4 _e73 = u.camera.up;
+    float _e77 = out.uv.y;
+    metal::float3 world = inst.world_pos + (((_e64.xyz * _e68) + (_e73.xyz * _e77)) * radius);
+    metal::float4x4 _e86 = u.camera.view_proj;
+    out.position = _e86 * metal::float4(world, 1.0);
+    GlowSplatOut _e90 = out;
+    const auto _tmp = _e90;
+    return vs_glow_splatOutput { _tmp.position, _tmp.uv, _tmp.light };
 }

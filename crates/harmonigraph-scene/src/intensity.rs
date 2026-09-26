@@ -35,7 +35,8 @@ pub enum IntensityTarget {
     /// read it.
     Glow,
     /// How thick it is drawn: the roll's ribbons, across pitch about their
-    /// center line. The lattice's slices do not follow it yet (#1130 step 5).
+    /// center line, and the lattice's lit slices, out from the band's inner
+    /// edge.
     Thickness,
 }
 

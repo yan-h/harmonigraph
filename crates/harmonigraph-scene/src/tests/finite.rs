@@ -239,6 +239,7 @@ fn scene_floats(scene: &Scene) -> Floats {
             departing: _,
             slice_progress,
             octaves,
+            thickness,
             hovered: _,
             on_home: _,
             scale,
@@ -260,6 +261,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);
         f.one(format!("nodes[{i}].bloom"), *bloom);
+        f.many(&format!("nodes[{i}].thickness"), *thickness);
         f.one(format!("nodes[{i}].scale"), *scale);
         f.one(format!("nodes[{i}].comma"), *comma);
         f.one(format!("nodes[{i}].cents"), *cents);

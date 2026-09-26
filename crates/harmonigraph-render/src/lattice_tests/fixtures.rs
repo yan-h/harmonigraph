@@ -78,6 +78,7 @@ pub(super) fn standalone_marker(
         activation: 0.0,
         departing: false,
         slice_progress: [1.0; 11],
+        thickness: [1.0; 11],
         octaves: [0.0; 11],
         hovered: false,
         on_home: true,
@@ -133,6 +134,7 @@ pub(super) fn parity_scene() -> Scene {
             // and labels are the UI crate's text pass, not the lattice pass.
             departing: false,
             slice_progress: [1.0; 11],
+            thickness: [1.0; 11],
             octaves,
             hovered: i == 1,
             on_home: i % 2 == 0,
@@ -516,6 +518,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // Held at full, so neither end of the envelope is running.
         departing: false,
         slice_progress: [1.0; 11],
+        thickness: [1.0; 11],
         octaves,
         hovered: false,
         on_home: true,

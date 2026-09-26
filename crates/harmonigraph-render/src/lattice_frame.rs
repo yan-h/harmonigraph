@@ -103,6 +103,7 @@ impl LatticeCallback {
             // Untimed snapshots seed current ink. Encoded timed frames replace
             // the third value with the renderer's own history coefficient.
             glow: [n.glow.level, n.glow.row as f32, 1.0, 1.0],
+            thickness: pack_octaves(&n.thickness),
         };
 
         // A node that can paint nothing is not shipped at all. The shader
