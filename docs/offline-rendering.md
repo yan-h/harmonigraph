@@ -255,7 +255,7 @@ The flags worth knowing (`--help` lists them all):
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
-| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note |
+| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — 4 s, or none for a *Loop end* take, which ends with its loop |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts
