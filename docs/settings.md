@@ -27,11 +27,18 @@ shared settings name their scope in the help text.
 ## Note intensity
 
 On **Colors → Note intensity**,
-each source has one target and a weight.
+the **Opacity**, **Thickness**, and **Bloom** groups each hold their base and incoming mappings.
+Use **Add mapping** to assign a source;
+choosing one already used elsewhere moves it to this group.
+Each source still has one target and a weight.
+The **×** beside a weight removes that mapping without resetting its weight.
 Every target starts at its base and adds the weighted contributions routed to it.
 **Opacity base** and **Bloom base** apply even with every mapping off.
-Thickness starts at the pane's own width:
+**Thickness base** applies too,
+in multiples of the pane's reference width:
 **Ribbon width** in the Analyzer and the MIDI layer width in the Lattice.
+Its default of 1× starts at that reference width;
+0.5× starts at half of it.
 A thickness contribution of 1 adds one such width;
 a zero-width layer remains hidden.
 
@@ -46,11 +53,23 @@ Only timbre can reduce a target below its base.
 The contributions are summed before the final limits:
 opacity stays between 0 and 1,
 bloom between 0 and 2,
-and thickness between zero and **Thickness max** times its base width.
+and thickness between zero and **Thickness max** times its reference width.
 An opacity base of 1 leaves no room for positive additions;
 lower it to see velocity or pressure brighten the note.
 Note-release fading still applies,
 and the lattice's separate background node glow does not follow these mappings.
+
+The bands above each base bar share its value scale.
+Their colors match the source rows:
+each colored band shows that source's possible reach from the base,
+and the neutral band shows their combined range.
+Hover a band or edit its weight to highlight it.
+Striped ends mark clipping at zero or the target ceiling.
+Gain's solid band ends at unity gain;
+the dashed continuation shows that boosts can extend it farther.
+These indicators show configured possibilities,
+not a live note reading.
+Lowering **Thickness max** also clamps **Thickness base** to that ceiling.
 
 Existing saved routes and weights now use these additions:
 velocity no longer subtracts,
@@ -59,6 +78,8 @@ and timbre has twice its former range.
 The retired **Gain range** setting is ignored on load.
 Saved opacity bases above 1 are clamped to 1,
 and saved bases now apply even when opacity has no route.
+Saved projects without **Thickness base** load it at 1×,
+preserving their pane widths.
 
 ## Layout and folding
 

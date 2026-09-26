@@ -10,8 +10,8 @@
 //!
 //! Velocity, pressure and linear gain contribute nonnegative amounts above
 //! each display's base. Timbre is the signed exception: 0.5 adds nothing,
-//! and its endpoints subtract or add one whole weight. Thickness starts from
-//! each pane's own note width. Glow starts from [`IntensitySettings::glow_base`],
+//! and its endpoints subtract or add one whole weight. Thickness is measured
+//! in multiples of each pane's reference note width. Glow starts from [`IntensitySettings::glow_base`],
 //! which is the only bloom the lattice and the roll have, and opacity from a
 //! base of its own. Bases apply even with no routes enabled.
 //!
@@ -25,7 +25,7 @@ use harmonigraph_core::Expressions;
 /// contribute a negative amount.
 pub const INTENSITY_WEIGHT_MAX: f32 = 2.0;
 /// The ends of the Thickness max bar, as multiples of a pane's note width.
-/// At 1 there is no room to thicken; timbre can still thin a note.
+/// The base can be anywhere between zero and this ceiling.
 pub const THICKNESS_MAX_RANGE: std::ops::RangeInclusive<f32> = 1.0..=4.0;
 /// The top of the Bloom base bar, and the most a routed note blooms.
 pub const BLOOM_MAX: f32 = 2.0;
@@ -110,6 +110,9 @@ pub struct IntensitySettings {
     /// The opacity base, 0..1, before weighted contributions. Applies with or
     /// without routes; only timbre can take it below this base.
     pub opacity_rest: f32,
+    /// Starting thickness, as a multiple of each pane's reference note width.
+    /// Weighted contributions use the same units. Bounded by `thickness_max`.
+    pub thickness_base: f32,
     /// The widest a note can be drawn, as a multiple of its pane's note width.
     /// Read only while something is routed to Thickness.
     pub thickness_max: f32,
@@ -124,6 +127,7 @@ impl Default for IntensitySettings {
             timbre: IntensitySource::default(),
             glow_base: 0.633_927_7,
             opacity_rest: 1.0,
+            thickness_base: 1.0,
             thickness_max: 2.0,
         }
     }
@@ -139,8 +143,17 @@ pub struct IntensityReading {
     /// bounds the two.
     pub glow: f32,
     /// The note's width as a multiple of its pane's note width, from 0 to
-    /// [`IntensitySettings::thickness_max`]: 1 before contributions.
+    /// [`IntensitySettings::thickness_max`]: `thickness_base` before contributions.
     pub thickness: f32,
+}
+
+/// Possible target values before clipping. Gain is sampled at unity for the
+/// upper end; `gain_boosts` says higher host gain can extend it farther.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IntensityReach {
+    pub min: f32,
+    pub max: f32,
+    pub gain_boosts: bool,
 }
 
 impl IntensityReading {
@@ -176,6 +189,8 @@ impl IntensitySettings {
         self.opacity_rest = finite_or(self.opacity_rest, fresh.opacity_rest).clamp(0.0, 1.0);
         self.thickness_max = finite_or(self.thickness_max, fresh.thickness_max)
             .clamp(*THICKNESS_MAX_RANGE.start(), *THICKNESS_MAX_RANGE.end());
+        self.thickness_base =
+            finite_or(self.thickness_base, fresh.thickness_base).clamp(0.0, self.thickness_max);
         self
     }
 
@@ -228,6 +243,33 @@ impl IntensitySettings {
     /// What one note, played at `velocity` with its expressions standing at
     /// `expressions`, comes to on every display.
     pub fn read(&self, velocity: f32, expressions: Expressions) -> IntensityReading {
+        let raw = self.unclamped(velocity, expressions);
+        IntensityReading {
+            opacity: raw.opacity.clamp(0.0, 1.0),
+            glow: raw.glow,
+            thickness: raw.thickness.clamp(0.0, self.thickness_max.max(1.0)),
+        }
+    }
+
+    /// The same calculation the picture uses, before its target caps. The UI
+    /// needs the uncapped values to distinguish clipping from reaching an end.
+    pub fn reach(&self, target: IntensityTarget) -> IntensityReach {
+        let value = |reading: IntensityReading| match target {
+            IntensityTarget::Off => 0.0,
+            IntensityTarget::Opacity => reading.opacity,
+            IntensityTarget::Glow => self.glow_at_rest() + reading.glow,
+            IntensityTarget::Thickness => reading.thickness,
+        };
+        IntensityReach {
+            min: value(self.unclamped(0.0, Expressions { pressure: 0.0, gain: 0.0, timbre: 0.0 })),
+            max: value(self.unclamped(1.0, Expressions { pressure: 1.0, gain: 1.0, timbre: 1.0 })),
+            gain_boosts: target != IntensityTarget::Off
+                && self.gain.target == target
+                && self.gain.weight > 0.0,
+        }
+    }
+
+    fn unclamped(&self, velocity: f32, expressions: Expressions) -> IntensityReading {
         let sources = [
             (self.velocity, finite_or(velocity, 0.0).clamp(0.0, 1.0)),
             (self.gain, finite_or(expressions.gain, 0.0).max(0.0)),
@@ -246,10 +288,9 @@ impl IntensitySettings {
                 .clamp(-f32::MAX, f32::MAX)
         };
         IntensityReading {
-            opacity: (self.opacity_rest + sum(IntensityTarget::Opacity)).clamp(0.0, 1.0),
+            opacity: self.opacity_rest + sum(IntensityTarget::Opacity),
             glow: sum(IntensityTarget::Glow),
-            thickness: (1.0 + sum(IntensityTarget::Thickness))
-                .clamp(0.0, self.thickness_max.max(1.0)),
+            thickness: self.thickness_base + sum(IntensityTarget::Thickness),
         }
     }
 }
@@ -276,14 +317,18 @@ mod tests {
 
     #[test]
     fn bases_apply_without_routes_and_with_zero_weights() {
-        let mut settings =
-            IntensitySettings { opacity_rest: 0.3, glow_base: 0.25, ..Default::default() };
+        let mut settings = IntensitySettings {
+            opacity_rest: 0.3,
+            glow_base: 0.25,
+            thickness_base: 0.4,
+            ..Default::default()
+        };
         for target in IntensityTarget::ALL {
             settings.velocity = to(target, 0.0);
             let reading = settings.read(1.0, Expressions::NEUTRAL);
             assert_eq!(reading.opacity, 0.3);
             assert_eq!(settings.bloom(reading), 0.25);
-            assert_eq!(reading.thickness, 1.0);
+            assert_eq!(reading.thickness, 0.4);
         }
     }
 
@@ -308,6 +353,42 @@ mod tests {
             settings.read(0.0, Expressions::NEUTRAL),
             IntensityReading { opacity: 0.2, glow: 0.0, thickness: 1.0 },
         );
+    }
+
+    #[test]
+    fn reach_keeps_clipping_and_gain_headroom_visible() {
+        let settings = IntensitySettings {
+            opacity_rest: 0.25,
+            velocity: to(IntensityTarget::Opacity, 0.5),
+            pressure: to(IntensityTarget::Opacity, 0.25),
+            timbre: to(IntensityTarget::Opacity, 0.5),
+            gain: to(IntensityTarget::Glow, 0.25),
+            glow_base: 0.5,
+            thickness_base: 0.5,
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.reach(IntensityTarget::Opacity),
+            IntensityReach { min: -0.25, max: 1.5, gain_boosts: false }
+        );
+        assert_eq!(
+            settings
+                .read(1.0, Expressions { pressure: 1.0, timbre: 1.0, ..Expressions::NEUTRAL })
+                .opacity,
+            1.0
+        );
+        assert_eq!(
+            settings.reach(IntensityTarget::Glow),
+            IntensityReach { min: 0.5, max: 0.75, gain_boosts: true }
+        );
+        assert_eq!(settings.bloom(settings.read(1.0, gain(2.0))), 1.0);
+        assert_eq!(
+            settings.reach(IntensityTarget::Thickness),
+            IntensityReach { min: 0.5, max: 0.5, gain_boosts: false }
+        );
+        let repaired =
+            IntensitySettings { thickness_base: 3.0, thickness_max: 1.5, ..settings }.sanitized();
+        assert_eq!(repaired.thickness_base, 1.5);
     }
 
     /// The cap is on the sum: negative timbre can offset additions even when

@@ -409,7 +409,7 @@ fn roll_instances_with_floor(
     let widest = if intensity.routes_to(IntensityTarget::Thickness) {
         intensity.thickness_max.max(1.0)
     } else {
-        1.0
+        intensity.thickness_base.max(1.0)
     };
 
     // Cull to the visible window BEFORE sorting: the roll can remember
@@ -1360,6 +1360,12 @@ mod tests {
         // swelled to three times that it reaches back onto it.
         press(&mut state, 81);
         assert!(!instances(&state, 1.0).is_empty(), "a note swelled onto the zoom was culled");
+        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
+            thickness_base: 3.0,
+            thickness_max: 3.0,
+            ..Default::default()
+        };
+        assert!(!instances(&state, 1.0).is_empty(), "an unrouted base reaches onto the zoom too");
         state.appearance.view.intensity = Default::default();
         assert!(instances(&state, 1.0).is_empty(), "the fixture's note reaches the zoom at rest");
     }

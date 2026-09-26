@@ -102,6 +102,7 @@ fn poisoned_view() -> ViewConfig {
                 timbre: source(crate::IntensityTarget::Opacity),
                 glow_base: nan,
                 opacity_rest: nan,
+                thickness_base: nan,
                 thickness_max: nan,
             }
         },

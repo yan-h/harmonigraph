@@ -54,7 +54,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; glow_base, opacity_rest, thickness_max);
+    poison!(a.view.intensity; glow_base, opacity_rest, thickness_base, thickness_max);
     poison!(a.view.intensity.velocity; weight);
     poison!(a.view.intensity.gain; weight);
     poison!(a.view.intensity.pressure; weight);
@@ -244,9 +244,9 @@ fn scenarios() -> Vec<Scenario> {
     for &pane in SETTINGS_PANES {
         let visits = match pane {
             panes::Tab::Tuning => 7,
-            // The pitch colors, then Note intensity: four weights,
-            // Bloom base, Opacity base and Thickness max.
-            panes::Tab::Colors => 2 + 7,
+            // The pitch colors, then three bases and Thickness max.
+            // Mapped source weights are exercised in the enabled scenario.
+            panes::Tab::Colors => 2 + 4,
             // The picture, then the background glow (8) with its texture
             // switched off, then two shadow groups of two bars each.
             panes::Tab::LatticeSettings => 16 + 8 + 4,
@@ -264,6 +264,7 @@ fn scenarios() -> Vec<Scenario> {
         // backdrop, glow and Contour shadow falloff (one bar in each of a
         // page's two groups).
         let visits = match pane {
+            panes::Tab::Colors => visits + 4,
             panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
             // ...the spectrogram's twelve, the ribbons' five, and the
             // backdrop's height and stripe spacing.
@@ -326,6 +327,13 @@ fn check(edge: Edge) {
         a.spectrum.show_roll = scenario.enabled;
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
+        if scenario.enabled && scenario.pane == panes::Tab::Colors {
+            use harmonigraph_scene::IntensityTarget;
+            a.view.intensity.velocity.target = IntensityTarget::Opacity;
+            a.view.intensity.pressure.target = IntensityTarget::Opacity;
+            a.view.intensity.timbre.target = IntensityTarget::Thickness;
+            a.view.intensity.gain.target = IntensityTarget::Glow;
+        }
         // Strength 0 is the backdrop's off. On, a strength the load clamped up
         // to the bar's top stays there for the bar to be held to.
         a.spectrum.backdrop_strength =
