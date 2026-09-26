@@ -215,8 +215,8 @@ impl DockHarness {
 
 /// The projections a settings sweep has to cover, default first.
 ///
-/// Only the Camera section's content turns on this, and it turns on it hard:
-/// `view_pane` hides the whole camera-angle half — Camera yaw and pitch, the
+/// Only the Camera block's content turns on this, and it turns on it hard:
+/// `view::camera` hides the whole camera-angle half — Camera yaw and pitch, the
 /// Angle presets, the Save-angle row — under Cabinet, which has a fixed
 /// viewpoint and no angle to set, and hides the two cabinet knobs under the
 /// others. `Camera::default()` IS Cabinet, so a fixture that takes the default
@@ -329,7 +329,7 @@ pub(super) fn tab_body_on(
 }
 
 /// The projections worth drawing `pane` at: all of them for the Lattice page,
-/// whose Camera section depends on it (see [`PROJECTIONS`]), and the default
+/// whose Camera block depends on it (see [`PROJECTIONS`]), and the default
 /// alone for the panes that draw the same thing either way.
 pub(super) fn projections_for(pane: panes::Tab) -> &'static [harmonigraph_scene::Projection] {
     if pane == panes::Tab::LatticeSettings {

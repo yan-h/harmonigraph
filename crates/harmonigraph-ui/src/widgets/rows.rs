@@ -10,7 +10,7 @@ use crate::theme;
 const SWITCH_SIZE: Vec2 = Vec2::new(26.0, 15.0);
 
 /// Side of a [`checkbox`]'s box, and of the check mark inside it.
-const CHECKBOX_BOX: f32 = 16.0;
+pub(crate) const CHECKBOX_BOX: f32 = 16.0;
 const CHECKBOX_CHECK: f32 = 9.0;
 
 /// A settings checkbox: egui's, in a row as tall as its line of text rather
@@ -36,6 +36,20 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, label: impl Into<egui::WidgetTe
         spacing.icon_width = CHECKBOX_BOX * scale;
         spacing.icon_width_inner = CHECKBOX_CHECK * scale;
         ui.checkbox(checked, label)
+    })
+    .inner
+}
+
+/// A [`checkbox`] with no text of its own, for a switch whose name is drawn
+/// beside it by something else: a section heading.
+pub(crate) fn checkbox_box(ui: &mut Ui, checked: &mut bool) -> Response {
+    let scale = theme::ui_scale(ui.ctx());
+    ui.scope(|ui| {
+        let spacing = ui.spacing_mut();
+        spacing.interact_size.y = 0.0;
+        spacing.icon_width = CHECKBOX_BOX * scale;
+        spacing.icon_width_inner = CHECKBOX_CHECK * scale;
+        ui.add(egui::Checkbox::without_text(checked))
     })
     .inner
 }

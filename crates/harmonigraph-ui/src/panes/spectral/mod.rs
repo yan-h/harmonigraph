@@ -35,7 +35,7 @@ pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
 /// things with it.
 pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
-pub(super) use settings::{spectrogram_settings_pane, spectrum_settings_pane};
+pub(super) use settings::{analysis_section, ribbons_section, spectrogram_section, view_section};
 
 use crate::panes::window_shows_node;
 use crate::{theme, PictureState};
@@ -159,7 +159,7 @@ fn level_label_into(joined: bool) -> f32 {
 /// audio spectrum as a curve (FFT of the selected input, every partial at its
 /// actual pitch), the sounding MIDI voices as bars, and the piano roll of
 /// what has been played. All are optional; the settings live in
-/// [`spectrum_settings_pane`].
+/// [`view_section`] and the sections beside it on the Analyzer page.
 ///
 /// The depth axis is shared out between the roll (the far end) and the
 /// spectrum (the baseline end) at `split`, which is also where the voice

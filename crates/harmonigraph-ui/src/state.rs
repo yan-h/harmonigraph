@@ -196,7 +196,7 @@ pub struct SurfaceState {
 pub struct Interaction {
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
-    /// presets (persisted; see the Lattice page's Camera section).
+    /// presets (persisted; see Camera in the Lattice page's View section).
     pub camera_presets: Vec<CameraPreset>,
     /// Entry buffer for naming a new preset. Runtime-only.
     pub preset_name: String,

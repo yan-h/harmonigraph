@@ -1902,7 +1902,7 @@ fn a_folded_section_survives_an_editor_reopen() {
     window.settle(&mut state);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let out = window.frame(&mut state, vec![]);
-    assert!(drawn(&out, leaf, "Show spectrogram"), "the section opens unfolded");
+    assert!(drawn(&out, leaf, "Softness"), "the section opens unfolded");
 
     // The Spectrogram heading, found where it was painted and clicked for real.
     let header = out
@@ -1924,7 +1924,7 @@ fn a_folded_section_survives_an_editor_reopen() {
         "the click did not reach the persisted field: {:?}",
         state.workspace.interaction.folded_sections,
     );
-    assert!(!drawn(&out, leaf, "Show spectrogram"), "the click did not fold the section");
+    assert!(!drawn(&out, leaf, "Softness"), "the click did not fold the section");
     let saved = state.save_persist();
 
     // The window closes and reopens: a FRESH `Context`, and the state the
@@ -1937,20 +1937,23 @@ fn a_folded_section_survives_an_editor_reopen() {
     let leaf = reopened.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     assert!(drawn(&out, leaf, "SPECTROGRAM"), "the folded section keeps its heading");
     assert!(
-        !drawn(&out, leaf, "Show spectrogram"),
+        !drawn(&out, leaf, "Softness"),
         "the fold sprang open across the reopen — is its state in egui memory?",
     );
-    // A fold is per section: the one above it is still open.
-    assert!(drawn(&out, leaf, "LIVE RESPONSE"), "folding one section folded another");
+    // A fold is per section: the one below it is still open.
+    assert!(drawn(&out, leaf, "Ribbon width"), "folding one section folded another");
 }
 
-/// Folding View, the Analyzer page's first section, folds View alone. The
-/// analysis sections once drew inside its body, so they vanished with it.
+/// Folding View folds View alone. The analysis sections once drew inside its
+/// body, so they vanished with it. The two sections over it are folded too,
+/// so the ones under it are inside the window to be seen.
 #[test]
 fn folding_the_analyzer_view_leaves_the_sections_below_it() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
-    state.workspace.interaction.folded_sections.insert("Analyzer/View".to_owned());
+    for section in ["Analyzer/Spectrogram", "Analyzer/MIDI ribbons", "Analyzer/View"] {
+        state.workspace.interaction.folded_sections.insert(section.to_owned());
+    }
     let mut window = super::harness::DockHarness::new();
     window.settle(&mut state);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
@@ -1962,8 +1965,8 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
         })
     };
     assert!(!drawn("Spectrum outline intensity"), "the View section did not fold");
-    for heading in ["AUDIO ANALYSIS", "LEVEL MAPPING", "LIVE RESPONSE"] {
-        assert!(drawn(heading), "folding View took {heading} with it");
+    for name in ["ANALYSIS", "Level mapping", "Live response"] {
+        assert!(drawn(name), "folding View took {name} with it");
     }
 }
 

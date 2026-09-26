@@ -561,6 +561,34 @@ pub(super) fn section<R>(
     title: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
+    folding_section(ui, title, None, body)
+}
+
+/// A [`section`] for a feature that can be switched off, with its switch
+/// between the chevron and the name, where the eye already is and where every
+/// other checkbox's box stands against its label. Off, the section is its
+/// heading alone, in the dim label colour and with no chevron: every row under
+/// it would set a thing that is not drawn, so there is nothing to unfold, and
+/// the dimming is what tells an off section from a folded one at a glance.
+///
+/// On, the switch is the feature's own and the fold is the reader's, so the
+/// two are free of each other — a folded section can be switched on without
+/// opening it.
+pub(super) fn switched_section<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    (on, hint): (&mut bool, &str),
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    folding_section(ui, title, Some((on, hint)), body)
+}
+
+fn folding_section<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    mut switch: Option<(&mut bool, &str)>,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
     section_separator(ui);
     let (key, folded) = SectionFolds::with(ui, |folds| {
         let key = format!("{}/{title}", folds.page);
@@ -569,7 +597,19 @@ pub(super) fn section<R>(
     })
     .unzip();
     let open = !folded.unwrap_or(false);
-    let clicked = section_header(ui, title, open).clicked();
+    let lead = if switch.is_some() {
+        crate::widgets::CHECKBOX_BOX * crate::theme::ui_scale(ui.ctx())
+            + ui.spacing().item_spacing.x
+    } else {
+        0.0
+    };
+    let live = switch.as_ref().is_none_or(|(on, _)| **on);
+    let header = section_header(ui, title, open, lead, live);
+    // Off, there is no chevron and nothing under the heading to fold.
+    let clicked = header.clicked() && live;
+    if let Some((on, hint)) = switch.as_mut() {
+        heading_switch(ui, header.rect, on, title).on_hover_text(*hint);
+    }
     crate::widgets::mark_spaced(ui);
     // Outside a [`Viewer`] body there is nowhere to keep a fold, so the header
     // stays put rather than hiding its body for the one frame of the click.
@@ -586,6 +626,7 @@ pub(super) fn section<R>(
         }
         _ => open,
     };
+    let open = open && switch.is_none_or(|(on, _)| *on);
     let out = open.then(|| body(ui));
     // An open body's last row stands off the rule under it as the heading's
     // capitals stand off the rule over them, so the rule sits between two
@@ -609,14 +650,22 @@ const HEADING_GAP: f32 = crate::widgets::GROUP_GAP;
 /// The heading row of a [`section`]: its name in spaced capitals at the full
 /// text size, in the primary text colour — told from the dim labels under it
 /// by case, height and brightness at once.
-fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response {
+/// `lead` is room left between the chevron and the name for a switch, and a
+/// heading that is not `live` is dimmed and drops its chevron.
+fn section_header(
+    ui: &mut egui::Ui,
+    title: &str,
+    open: bool,
+    lead: f32,
+    live: bool,
+) -> egui::Response {
     let scale = crate::theme::ui_scale(ui.ctx());
     let job = egui::text::LayoutJob::single_section(
         title.to_uppercase(),
         egui::TextFormat {
             font_id: egui::TextStyle::Heading.resolve(ui.style()),
             extra_letter_spacing: HEADING_TRACKING * scale,
-            color: crate::theme::text(),
+            color: if live { crate::theme::text() } else { crate::theme::text_dim() },
             ..Default::default()
         },
     );
@@ -625,7 +674,32 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
     // counted: its line is drawn across the middle of it, so its ink is that
     // far from either edge anyway.
     let pad = HEADING_GAP * scale - ui.spacing().item_spacing.y;
-    fold_header(ui, job, title, open, pad)
+    fold_header(ui, job, title, live.then_some(open), pad, lead)
+}
+
+/// A [`switched_section`]'s switch, a bare checkbox in the room its heading
+/// `row` leaves between the chevron and the name. Drawn after the heading, so
+/// it is on top of the row's fold target and takes its own clicks. Named for
+/// the section, the name the heading beside it draws.
+fn heading_switch(
+    ui: &mut egui::Ui,
+    row: egui::Rect,
+    on: &mut bool,
+    title: &str,
+) -> egui::Response {
+    let side = crate::widgets::CHECKBOX_BOX * crate::theme::ui_scale(ui.ctx());
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(row.left() + ui.spacing().indent + side / 2.0, row.center().y),
+        egui::vec2(side, side),
+    );
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    let response = crate::widgets::checkbox_box(&mut child, on);
+    let enabled = child.is_enabled();
+    let checked = *on;
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, checked, title)
+    });
+    response
 }
 
 /// A fold's header row: a chevron that points at the name while folded and
@@ -636,16 +710,21 @@ fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> egui::Response 
 /// [`widgets::label`](crate::widgets::label) is, plus `pad` above and below.
 /// Its target reaches half a row gap further each way, so a subsection with no
 /// pad is still a comfortable click.
+///
+/// `open` is `None` for a header with nothing to fold, which draws no chevron,
+/// and `lead` is room between the chevron and the name (for a switch).
 fn fold_header(
     ui: &mut egui::Ui,
     mut job: egui::text::LayoutJob,
     title: &str,
-    open: bool,
+    open: Option<bool>,
     pad: f32,
+    lead: f32,
 ) -> egui::Response {
     let indent = ui.spacing().indent;
-    job.wrap =
-        egui::text::TextWrapping::truncate_at_width((ui.available_width() - indent).max(0.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width(
+        (ui.available_width() - indent - lead).max(0.0),
+    );
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let (top, bottom) = crate::widgets::cap_trim(ui, &galley);
     let (rect, row) = ui.allocate_exact_size(
@@ -655,18 +734,25 @@ fn fold_header(
     let target = rect.expand2(egui::vec2(0.0, ui.spacing().item_spacing.y / 2.0));
     let response = ui.interact(target, row.id.with("fold"), egui::Sense::click());
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, ui.is_enabled(), open, title)
+        egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            ui.is_enabled(),
+            open.unwrap_or(false),
+            title,
+        )
     });
     let hot = response.hovered() || response.has_focus();
-    let text = egui::pos2(rect.left() + indent, rect.top() + pad - top);
+    let text = egui::pos2(rect.left() + indent + lead, rect.top() + pad - top);
     ui.painter().galley(text, galley, crate::theme::text());
-    crate::widgets::paint_chevron(
-        ui.painter(),
-        egui::pos2(rect.left() + indent / 2.0, rect.center().y),
-        if open { egui::Vec2::Y } else { egui::Vec2::X },
-        hot,
-        crate::theme::ui_scale(ui.ctx()),
-    );
+    if let Some(open) = open {
+        crate::widgets::paint_chevron(
+            ui.painter(),
+            egui::pos2(rect.left() + indent / 2.0, rect.center().y),
+            if open { egui::Vec2::Y } else { egui::Vec2::X },
+            hot,
+            crate::theme::ui_scale(ui.ctx()),
+        );
+    }
     response
 }
 
@@ -694,7 +780,7 @@ pub(super) fn subsection<R>(
         title.to_owned(),
         egui::TextFormat::simple(egui::TextStyle::Button.resolve(ui.style()), crate::theme::text()),
     );
-    let header = fold_header(ui, job, title, fold.is_open(), 0.0);
+    let header = fold_header(ui, job, title, Some(fold.is_open()), 0.0, 0.0);
     if header.clicked() {
         fold.toggle(ui);
     }
@@ -702,4 +788,15 @@ pub(super) fn subsection<R>(
     // The fold, header and body both, is one group.
     crate::widgets::group_end(ui);
     header
+}
+
+/// A labelled run of rows inside a section: its name in the strong body face,
+/// then the rows under it at the section's own indent. Not a fold — a section
+/// is the thing that folds, and a block is only the name of a few of its rows,
+/// so a section reads as its blocks without a click on each.
+///
+/// Loose rows in a section come before its blocks, so that a row after a
+/// block is never read as the block's.
+pub(super) fn block(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    crate::widgets::label(ui, egui::RichText::new(title).strong())
 }
