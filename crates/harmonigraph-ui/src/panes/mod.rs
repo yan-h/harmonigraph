@@ -749,45 +749,8 @@ pub(super) fn subsection<R>(
     title: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::Response {
-    let id = ui.make_persistent_id(title);
-    fold(ui, id, title, body)
-}
-
-/// The [`subsection`] at the foot of a section that holds the settings of it
-/// nobody has needed: the ones no saved project had moved off their defaults
-/// when the pages were last sorted. They are kept rather than retired, one
-/// click away, so that the section above the fold is what gets dialled.
-///
-/// Last in its section, so that nothing drawn after it reads as belonging to
-/// it. `section` names the section it is in, because every section has one
-/// and a fold's memory is keyed on its id.
-pub(super) fn more<R>(
-    ui: &mut egui::Ui,
-    section: &str,
-    body: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::Response {
-    let id = ui.make_persistent_id(("more", section));
-    fold(ui, id, "More", body)
-}
-
-/// A labelled run of rows inside a section: its name in the strong body face,
-/// then the rows under it at the section's own indent. Not a fold — a section
-/// is the thing that folds, and a block is only the name of a few of its rows,
-/// so a section reads as its blocks without a click on each.
-///
-/// Loose rows in a section come before its blocks, so that a row after a
-/// block is never read as the block's.
-pub(super) fn block(ui: &mut egui::Ui, title: &str) -> egui::Response {
-    crate::widgets::label(ui, egui::RichText::new(title).strong())
-}
-
-fn fold<R>(
-    ui: &mut egui::Ui,
-    id: egui::Id,
-    title: &str,
-    body: impl FnOnce(&mut egui::Ui) -> R,
-) -> egui::Response {
     crate::widgets::group_space(ui);
+    let id = ui.make_persistent_id(title);
     let mut fold =
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
     let job = egui::text::LayoutJob::single_section(
@@ -802,4 +765,15 @@ fn fold<R>(
     // The fold, header and body both, is one group.
     crate::widgets::group_end(ui);
     header
+}
+
+/// A labelled run of rows inside a section: its name in the strong body face,
+/// then the rows under it at the section's own indent. Not a fold — a section
+/// is the thing that folds, and a block is only the name of a few of its rows,
+/// so a section reads as its blocks without a click on each.
+///
+/// Loose rows in a section come before its blocks, so that a row after a
+/// block is never read as the block's.
+pub(super) fn block(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    crate::widgets::label(ui, egui::RichText::new(title).strong())
 }

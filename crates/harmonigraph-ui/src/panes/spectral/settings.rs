@@ -9,7 +9,7 @@ use harmonigraph_scene::{
 };
 
 use crate::config::BALLISTICS_MAX;
-use crate::panes::{block, edge_bar, more, section, switched_section};
+use crate::panes::{block, edge_bar, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::PictureState;
@@ -201,8 +201,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
 }
 
 /// Played MIDI notes as ribbons over the history, and their names. Their
-/// switch is in the heading, and what no saved project had moved — how a held
-/// note reaches into the spectrum, and the names — waits in the More fold.
+/// switch is in the heading.
 pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     switched_section(
         ui,
@@ -231,32 +230,23 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
                     "Opacity of MIDI ribbon colors over the spectrogram. \
                      Their dark surrounds keep their full strength.",
                 );
-            ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
-                .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(
-                    "Soft halos around MIDI ribbons in the spectrogram. \
-                     0 turns bloom off; \
-                     1× is the reference strength.",
-                );
-            more(ui, "MIDI ribbons", |ui| {
-                edge_bar(
-                    ui,
-                    (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
-                    crate::ROLL_LEAD_MAX,
-                    "Held-note extension",
-                    {
-                        let fresh = crate::SpectrumConfig::default();
-                        (fresh.roll_lead, fresh.roll_lead_fade)
-                    },
-                    |v| format!("{:.1}%", v * 100.0),
-                )
-                .on_hover_text(
-                    "Distance held notes extend into the spectrum, as a percentage of its depth. \
+            edge_bar(
+                ui,
+                (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
+                crate::ROLL_LEAD_MAX,
+                "Held-note extension",
+                {
+                    let fresh = crate::SpectrumConfig::default();
+                    (fresh.roll_lead, fresh.roll_lead_fade)
+                },
+                |v| format!("{:.1}%", v * 100.0),
+            )
+            .on_hover_text(
+                "Distance held notes extend into the spectrum, as a percentage of its depth. \
                  Solid to the inner handle, faded out by the outer. \
                  0% stops notes at the history boundary.",
-                );
-                ValueBar::new(
+            );
+            ValueBar::new(
                 &mut cfg.roll_lead_release,
                 0.0..=crate::ROLL_LEAD_RELEASE_MAX,
                 "Extension release",
@@ -267,10 +257,10 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
             .on_hover_text(
                 "Time for a released extension to fade where it detached from the history boundary. 0 ms removes it immediately.",
             );
-                crate::widgets::checkbox(ui, &mut cfg.note_names, "Show note names").on_hover_text(
+            crate::widgets::checkbox(ui, &mut cfg.note_names, "Show note names").on_hover_text(
                 "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
             );
-                ui.add_enabled_ui(cfg.note_names, |ui| {
+            ui.add_enabled_ui(cfg.note_names, |ui| {
                 // The box moves a name to its ribbon's other END, which is the
                 // onset only where time runs the screen's way (`Anchor::of`).
                 let (label, hover) = if cfg.orientation.is_time_reversed() {
@@ -295,7 +285,14 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
                          1× is the reference size; labels also grow when you zoom in on frequency.",
                     );
             });
-            });
+            ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
+                .unit(1.0, "×")
+                .show(ui)
+                .on_hover_text(
+                    "Soft halos around MIDI ribbons in the spectrogram. \
+                     0 turns bloom off; \
+                     1× is the reference strength.",
+                );
         },
     );
 }
@@ -370,6 +367,18 @@ pub(crate) fn view_section(
                      Each octave has equal width. \
                      Drag the ends or the middle; double-click shows the full range.",
         );
+        // No choice of what the markings say. They are the analyzer-standard
+        // 1-2-5 frequency series, and were switchable to one at every C with
+        // Bitwig octave numbers — which is what the note NAMES on the ribbons
+        // already say, in the lattice's own spelling, at the pitch they are
+        // sounding rather than at the nearest C below it.
+        ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Axis label scale")
+            .unit(1.0, "×")
+            .show(ui)
+            .on_hover_text(
+                "Size of frequency labels and the pointer readout. \
+                     1× is the reference size; labels stay the same size when you zoom.",
+            );
         ValueBar::new(
             &mut cfg.roll_seconds,
             crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX,
@@ -423,20 +432,6 @@ pub(crate) fn view_section(
                          0 is a smooth gradient: softer, but a fill as bright as the glow at its own height blends into it.",
                 );
         }
-        more(ui, "View", |ui| {
-            // No choice of what the markings say. They are the analyzer-standard
-            // 1-2-5 frequency series, and were switchable to one at every C with
-            // Bitwig octave numbers — which is what the note NAMES on the ribbons
-            // already say, in the lattice's own spelling, at the pitch they are
-            // sounding rather than at the nearest C below it.
-            ValueBar::new(&mut cfg.marking_scale, crate::SCALE_BAR_RANGE, "Axis label scale")
-                .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(
-                    "Size of frequency labels and the pointer readout. \
-                     1× is the reference size; labels stay the same size when you zoom.",
-                );
-        });
     });
 }
 

@@ -58,8 +58,8 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// Bloom and the glow's reach, strength and colour, first in the Light
-/// section.
+/// Bloom and the glow, first in the Light section: its reach, strength and
+/// colour, what it does to the lit ink, and its clock.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     super::block(ui, "Glow");
     ValueBar::new(&mut view.bloom_strength, 0.0..=2.0, "Bloom")
@@ -134,11 +134,6 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Audio-ring colors do not feed the glow.",
                 );
         });
-}
-
-/// What the glow does to the lit ink, and its clock: in the Light section's
-/// More fold, where no saved project had moved any of the three.
-pub(super) fn glow_more(ui: &mut egui::Ui, view: &mut ViewConfig) {
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
             // The INK's own share of the light, where a Shadow depth says the
             // ground's: one question asked twice, and the answers are free of each

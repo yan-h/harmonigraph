@@ -234,9 +234,6 @@ fn scenarios() -> Vec<Scenario> {
     };
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
-        // The picture pages hold a More fold in each section, so they are
-        // measured with every fold open: a fold shut would count its bars out.
-        let expanded = matches!(pane, panes::Tab::LatticeSettings | panes::Tab::AnalyzerSettings);
         let visits = match pane {
             panes::Tab::Tuning => 7,
             panes::Tab::Colors => 2,
@@ -251,7 +248,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
-        cases.push(Scenario { pane, visits, expanded, ..base });
+        cases.push(Scenario { pane, visits, ..base });
         // Exercise the conditional groups too: labels, fringe, marks, audio
         // reading, sevens, the glow texture, roll/note names, the spectrogram,
         // backdrop, glow and Contour shadow falloff (one bar in each of a
@@ -263,7 +260,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2 + 2,
             _ => visits,
         };
-        cases.push(Scenario { pane, visits, expanded, enabled: true, ..base });
+        cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
     // section and puts five of its own there, and nothing else on the page moves.
@@ -273,7 +270,6 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         wash: true,
-        expanded: true,
         enabled: true,
         visits: 13 + 12 + 6 + 2 + 2 - 3 + 5,
         ..base
@@ -282,7 +278,6 @@ fn scenarios() -> Vec<Scenario> {
         cases.push(Scenario {
             pane: panes::Tab::LatticeSettings,
             projection,
-            expanded: true,
             enabled: true,
             visits: 23 + 14 + 6,
             ..base

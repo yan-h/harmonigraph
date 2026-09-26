@@ -10,8 +10,8 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 
 | Tab | What you will find |
 | --- | --- |
-| Lattice | **View**: seventh layers. **Notes**: note-layer sizes and gap, note animation, label scale. **Idle lattice**: idle brightness and crosses. **Light**: glow, glow texture and breathing, and shadows for lattice shapes and text. Each section's **More** holds camera and projection, how off-home layers draw, mark delay, label visibility and cents, shared octave layout, the audio ring, and the glow's ink share and response. |
-| Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic or Watercolor texture. **MIDI ribbons**: width, opacity and bloom, with held-note extension and note names under More. **View**: dock, spectrum edge, shared frequency range and history, spectrum outline and backdrop, with axis label scale under More. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
+| Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and glow, glow texture and breathing, and shadows for lattice shapes and text. |
+| Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic or Watercolor texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
 | Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, skin and skin lightness, tab-bar visibility and layout reset. |
 
@@ -20,9 +20,6 @@ Tabs that do not fit the column move, from the right, into a trailing overflow m
 Every section heading folds its section, and folds are remembered.
 A section whose feature can be switched off (Spectrogram, MIDI ribbons) carries the switch at the right of its heading;
 off, the section is its heading alone.
-Most sections end in a **More** fold, closed each time the editor opens,
-holding the settings no saved project had moved off their defaults when the pages were sorted (September 2026).
-Settings that only read together move into More together or not at all.
 Right-clicking the Lattice or Analyzer picture offers a link to its settings tab.
 Each tab keeps a single owner for its controls;
 shared settings name their scope in the help text.
@@ -108,10 +105,9 @@ The preview arranges the two pictures directly.
 
 ## Specialist controls to reconsider
 
-This is a code-based assessment of complexity and overlapping concepts.
-Evidence of use is what sorted the **More** folds above:
-a setting there was at its default in every saved project.
-No creative control was removed in either pass.
+This is a code-based assessment of complexity and overlapping concepts,
+not evidence of how often a setting is used.
+No creative control was removed in this pass.
 
 | Candidate | Recommendation and tradeoff |
 | --- | --- |

@@ -1445,8 +1445,7 @@ fn the_comma_tables_sideways_bar_runs_under_its_cells() {
 }
 
 /// The Lattice page drawn with the audio ring `width` thick and carrying
-/// `reading`, as the shapes it emitted. Every More fold is open, the audio
-/// ring's settings being in the Notes section's.
+/// `reading`, as the shapes it emitted.
 fn audio_section_shapes(
     reading: harmonigraph_scene::SpectralReading,
     width: f32,
@@ -1459,9 +1458,7 @@ fn audio_section_shapes(
     // sizes it, which reads here as a gate that never opens.
     state.picture.appearance.view.ring_inner = 0.3;
     let tab = panes::Tab::LatticeSettings;
-    let ctx = crate::tests::probe::themed();
-    ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
-    tab_body_on(&ctx, &mut state, tab, 320.0, PANE_HEIGHT, 0.0).shapes
+    tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
 }
 
 /// The y every run of `needle` in `shapes` was painted at.
@@ -1901,24 +1898,4 @@ fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     let out = h.frame(&mut state, vec![]);
     assert!(state.picture.appearance.spectrum.show_roll, "the switch did not turn ribbons on");
     assert!(painted_in(&out, leaf, "Ribbon width").is_some(), "the rows did not come back");
-}
-
-/// A section's More fold starts shut, holding its settings out of the page,
-/// and a click on it opens them.
-#[test]
-fn a_more_fold_starts_shut_and_opens_on_a_click() {
-    let mut state = fresh();
-    state.workspace.layout.select(panes::Tab::LatticeSettings);
-    let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
-    h.settle(&mut state);
-    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
-    let out = h.frame(&mut state, vec![]);
-    assert!(painted_in(&out, leaf, "Glow attack").is_none(), "the Light section's More is open");
-    // The Light section is the page's last, so its More is the lowest.
-    let more = painted_in(&out, leaf, "More").expect("the Lattice page drew no More fold");
-
-    click_at(&mut h, &mut state, more.center());
-    // The fold opens over egui's animation, a few frames at the harness's clock.
-    let out = (0..30).map(|_| h.frame(&mut state, vec![])).last().expect("a frame");
-    assert!(painted_in(&out, leaf, "Glow attack").is_some(), "the click did not open the fold");
 }

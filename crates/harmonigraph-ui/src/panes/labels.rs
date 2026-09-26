@@ -17,23 +17,18 @@ use crate::PictureState;
 use harmonigraph_core::NoteTracker;
 use harmonigraph_scene::{NoteNames, ViewConfig};
 
-/// How big a label draws: the one setting of this subject that leads the
-/// Lattice page's Notes section.
-pub(super) fn label_scale(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    ValueBar::new(&mut view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
+/// What a label says, which nodes carry one and how big it draws.
+pub(super) fn labels(ui: &mut egui::Ui, state: &mut PictureState) {
+    super::block(ui, "Note labels");
+    names_row(ui, &mut state.appearance.view);
+    crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
+        .on_hover_text("Each node's pitch class in cents, under its name.");
+    ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
             "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
         );
-}
-
-/// What a label says and which nodes carry one, in the Notes section's More
-/// fold: no saved project had moved either.
-pub(super) fn label_options(ui: &mut egui::Ui, state: &mut PictureState) {
-    names_row(ui, &mut state.appearance.view);
-    crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
-        .on_hover_text("Each node's pitch class in cents, under its name.");
     clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
 }
 

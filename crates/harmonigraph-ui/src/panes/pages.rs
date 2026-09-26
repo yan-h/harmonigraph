@@ -9,7 +9,7 @@
 use super::lighting::analyzer_lighting;
 use super::plus::plus_pane;
 use super::spectral::{analysis_section, ribbons_section, spectrogram_section, view_section};
-use super::{block, labels, lattice_atmosphere, lighting, more, nodes, section, view};
+use super::{labels, lattice_atmosphere, lighting, nodes, section, view};
 use crate::params::ParamBackend;
 use crate::PictureState;
 
@@ -17,11 +17,6 @@ use crate::PictureState;
 /// of it inward. What is framed (View), how a sounding note draws and moves
 /// (Notes), what is there when nothing sounds at all ([`plus_pane`]), and last
 /// the light over all of it.
-///
-/// Each section leads with what gets dialled and ends in a [`more`] fold
-/// holding the rest: the settings no saved project had moved off their
-/// defaults when the page was last sorted. A run of settings that only reads
-/// as a whole moves into the fold whole or not at all.
 pub(super) fn lattice_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
@@ -29,29 +24,15 @@ pub(super) fn lattice_settings_pane(
     params: &dyn ParamBackend,
 ) {
     section(ui, "View", |ui| {
-        // Named, because the strip itself says only "Layers", and under View
-        // that could as well be the note's.
-        block(ui, "Seventh layers");
-        view::sevens_strip(ui, &mut state.appearance);
-        more(ui, "View", |ui| {
-            view::sevens_depth(ui, &mut state.appearance);
-            view::camera(ui, &mut state.appearance, interaction);
-        });
+        view::sevens(ui, &mut state.appearance);
+        view::camera(ui, &mut state.appearance, interaction);
     });
     section(ui, "Notes", |ui| {
-        let view = &mut state.appearance.view;
-        nodes::layers(ui, view);
-        nodes::motion(ui, view, params);
-        block(ui, "Note labels");
-        labels::label_scale(ui, view);
-        more(ui, "Notes", |ui| {
-            block(ui, "Note animation");
-            nodes::mark_delay(ui, &mut state.appearance.view);
-            block(ui, "Note labels");
-            labels::label_options(ui, state);
-            nodes::octaves(ui, &mut state.appearance.view);
-            nodes::audio_ring(ui, &mut state.appearance.view);
-        });
+        nodes::layers(ui, &mut state.appearance.view);
+        nodes::motion(ui, &mut state.appearance.view, params);
+        labels::labels(ui, state);
+        nodes::octaves(ui, &mut state.appearance.view);
+        nodes::audio_ring(ui, &mut state.appearance.view);
     });
     plus_pane(ui, &mut state.appearance);
     section(ui, "Light", |ui| {
@@ -59,10 +40,6 @@ pub(super) fn lattice_settings_pane(
         lighting::glow(ui, view);
         lattice_atmosphere::settings(ui, view);
         lighting::lattice_shadows(ui, view);
-        more(ui, "Light", |ui| {
-            block(ui, "Glow");
-            lighting::glow_more(ui, view);
-        });
     });
 }
 

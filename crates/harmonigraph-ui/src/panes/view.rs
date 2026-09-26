@@ -18,8 +18,8 @@
 //!
 //! Two parts: the Camera (where you stand and what the lens does) and the
 //! Sevenths (how many sheets there are, which is home, and how the ones behind
-//! it draw). The Lattice page's View section leads with the sevenths strip and
-//! keeps the rest in its More fold ([`super::pages`]). The angle presets live
+//! it draw), the two blocks of the Lattice page's View section
+//! ([`super::pages`]). The angle presets live
 //! inside Camera rather than under a name of their own, because Cabinet hides
 //! that whole block — a name of its own would stand over nothing.
 
@@ -229,10 +229,10 @@ pub(super) fn camera(
 /// sheet), so they disable themselves rather than pretending otherwise; the
 /// strip is what turns depth on, and is live whatever it is set to.
 ///
-/// Two functions, because the strip leads the View section and the two rows
-/// that shape the other sheets sit in its More fold: no saved project had moved
-/// either. Still one subject — what the strip sets is which SHEETS there are,
-/// and the rows are how those sheets draw.
+/// One block rather than an Extents name over the strip: what it sets is which
+/// SHEETS there are, so it is the same subject as how those sheets draw, and a
+/// name over one control would spend a word on the distinction between a
+/// count and a size.
 ///
 /// The other two axes have no extent to set, which is why this one is not a
 /// heading promising three. The fifths and thirds sheet is unbounded, and what
@@ -252,7 +252,10 @@ pub(super) fn camera(
 /// The Clearance bar itself is with the node settings, not here. It is cut by
 /// every sounding node on every sheet, so it is a property of the node rather
 /// than of this layer, whatever its field names say.
-pub(super) fn sevens_strip(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
+pub(super) fn sevens(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
+    // Named, because the strip itself says only "Layers", and under View that
+    // could as well be the note's.
+    super::block(ui, "Seventh layers");
     // Which sheets, and which of them is home, in lattice steps from C (v1's
     // Grid Z). One control because the three are one answer: an end means
     // nothing without knowing where home is, and home means nothing outside
@@ -271,10 +274,7 @@ pub(super) fn sevens_strip(ui: &mut egui::Ui, appearance: &mut AppearanceDocumen
              between them to slide the whole stack. Double-click for the home \
              layer alone.",
     );
-}
 
-/// How the sheets off home draw, inert while the strip holds one sheet.
-pub(super) fn sevens_depth(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     let has_depth = appearance.view.max_sevens != appearance.view.min_sevens;
     ui.add_enabled_ui(has_depth, |ui| {
             ValueBar::new(&mut appearance.view.sevens_size, 0.15..=1.0, "Layer size falloff")

@@ -10,9 +10,8 @@ use harmonigraph_scene::{
     SPECTRAL_WIDTH_MIN,
 };
 
-// Layer geometry and note motion lead the Lattice page's Notes section; the
-// shared octave layout, the audio ring's readings and the mark delay are in its
-// More fold ([`super::pages`]), where no saved project had moved them.
+// The Lattice page's Notes section ([`super::pages`]): layer geometry, note
+// motion, then the shared octave layout and the audio ring's readings.
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
 /// pitch axis shared by the MIDI ring, audio ring and melody/bass marks.
@@ -357,6 +356,17 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
                      0% is linear; higher values change quickly at first and settle slowly. \
                      The line previews the fade-in.",
         );
+    ui.add_enabled_ui(view.marks_draw(), |ui| {
+        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
+            .unit(1000.0, " ms")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "Time the highest or lowest note must stay in place before its mark appears. \
+                     Increase to avoid flicker during fast passages. \
+                     0 ms marks immediately.",
+            );
+    });
     // Built off `ALL` with an exhaustive match rather than written out, the
     // way `SpectralOrientation`'s row is and for its reason: a fifth order
     // cannot reach this pane without a name and a hint of its own.
@@ -394,20 +404,4 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset")
             .unit(100.0, "%").show(ui)
             .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
-}
-
-/// The melody and bass marks' own settle time, apart from the rest of the
-/// note's motion because it is the one part of it no saved project had moved.
-pub(super) fn mark_delay(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    ui.add_enabled_ui(view.marks_draw(), |ui| {
-        ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
-            .unit(1000.0, " ms")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Time the highest or lowest note must stay in place before its mark appears. \
-                     Increase to avoid flicker during fast passages. \
-                     0 ms marks immediately.",
-            );
-    });
 }
