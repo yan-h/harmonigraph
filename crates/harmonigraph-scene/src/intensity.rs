@@ -38,6 +38,8 @@ pub const BLOOM_MAX: f32 = 2.0;
 /// The least a pane's bloom pass runs at while something is routed to Glow, so
 /// a note can bloom over a Glow base of 0. Below it a note at rest blooms a
 /// little less than the base alone would draw, which is too faint to see.
+/// Whatever else lights the bloom's input without a share of its own (the
+/// markers, the roll's lead) blooms at this floor too.
 pub const BLOOM_REFERENCE_FLOOR: f32 = 0.05;
 
 /// Which display a source drives.
@@ -203,17 +205,15 @@ impl IntensitySettings {
                 .any(|source| source.target == target)
     }
 
-    /// The Glow base, whatever a shell hands over: finite and never below 0.
+    /// The Glow base, whatever a shell hands over: finite and on its bar.
     fn glow_at_rest(&self) -> f32 {
-        finite_or(self.glow_base, 0.0).max(0.0)
+        finite_or(self.glow_base, 0.0).clamp(0.0, BLOOM_MAX)
     }
 
     /// How much a note reading `reading` blooms, in the Glow base's × units:
-    /// the base itself at rest, and never below 0 nor past [`BLOOM_MAX`] (or
-    /// the base, where a shell hands over more).
+    /// the base itself at rest, and never below 0 nor past [`BLOOM_MAX`].
     pub fn bloom(&self, reading: IntensityReading) -> f32 {
-        let base = self.glow_at_rest();
-        (base + reading.glow).clamp(0.0, BLOOM_MAX.max(base))
+        (self.glow_at_rest() + reading.glow).clamp(0.0, BLOOM_MAX)
     }
 
     /// The strength both panes' bloom passes run at: the Glow base, except
@@ -230,13 +230,14 @@ impl IntensitySettings {
     }
 
     /// How much of a note's ink its pane's bloom pass takes, against
-    /// [`bloom_reference`](Self::bloom_reference): 1 at rest wherever the base
-    /// is at or above the floor, and past 1 for a note blooming over the base.
-    /// 1 where there is no bloom at all, since nothing reads it then.
-    pub fn bloom_share(&self, reading: IntensityReading) -> f32 {
+    /// [`bloom_reference`](Self::bloom_reference), for a note blooming at
+    /// `bloom` ([`bloom`](Self::bloom)): 1 at rest wherever the base is at or
+    /// above the floor, and past 1 for a note blooming over the base. 1 where
+    /// there is no bloom at all, since nothing reads it then.
+    pub fn bloom_share(&self, bloom: f32) -> f32 {
         let reference = self.bloom_reference();
         if reference > 0.0 {
-            self.bloom(reading) / reference
+            bloom / reference
         } else {
             1.0
         }
@@ -359,14 +360,14 @@ mod tests {
         let rest = IntensityReading::REST;
         for settings in [base(0.8, false), base(0.8, true)] {
             assert_eq!(settings.bloom_reference(), 0.8);
-            assert_eq!(settings.bloom_share(rest), 1.0);
+            assert_eq!(settings.bloom_share(settings.bloom(rest)), 1.0);
         }
         let pressed = Expressions { pressure: 0.4, ..Expressions::NEUTRAL };
         let routed = base(0.8, true);
-        assert!((routed.bloom_share(routed.read(1.0, pressed)) - 1.5).abs() < 1e-6);
+        assert!((routed.bloom_share(routed.bloom(routed.read(1.0, pressed))) - 1.5).abs() < 1e-6);
         let dark = base(0.0, true);
         assert_eq!(dark.bloom_reference(), BLOOM_REFERENCE_FLOOR);
-        let share = dark.bloom_share(dark.read(1.0, pressed));
+        let share = dark.bloom_share(dark.bloom(dark.read(1.0, pressed)));
         assert!((share - 0.4 / BLOOM_REFERENCE_FLOOR).abs() < 1e-4);
         assert_eq!(base(0.0, false).bloom_reference(), 0.0, "no pass");
         assert_eq!(routed.bloom(IntensityReading { glow: 5.0, ..rest }), BLOOM_MAX);

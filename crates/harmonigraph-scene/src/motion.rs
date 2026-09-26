@@ -572,14 +572,15 @@ impl NodeMotion {
                 .fold(0.0, f32::max);
             // The Glow display drives the BLOOM instead, per node: the reading
             // of its loudest lit slot, as its share of the pass's strength
-            // (`scene.bloom_strength`, the same reference).
+            // (`scene.bloom_strength`, the same reference). An unlit node
+            // blooms at rest, which is the base's own share of the reference:
+            // nothing at a base of 0, though the pass runs at its floor.
             let loudest = (0..11).max_by(|&a, &b| motion.levels[a].total_cmp(&motion.levels[b]));
-            node.bloom = match loudest {
-                Some(slot) if motion.levels[slot] > 0.0 => {
-                    view.intensity.bloom_share(motion.readings[slot])
-                }
-                _ => 1.0,
+            let reading = match loudest {
+                Some(slot) if motion.levels[slot] > 0.0 => motion.readings[slot],
+                _ => IntensityReading::REST,
             };
+            node.bloom = view.intensity.bloom_share(view.intensity.bloom(reading));
         }
         scene.pluses = crate::derive::derive_pluses(
             view,

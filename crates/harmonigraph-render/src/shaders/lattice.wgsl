@@ -1217,20 +1217,6 @@ fn mark_radii(in: VsOut, s: i32, inner: f32, outer: f32) -> vec2<f32> {
     return vec2<f32>(start, min(start + max(u.node.mark_thickness, 0.0), lim));
 }
 
-// Whether any mark in `slots` stands off a slice other than the band, and so
-// off a strip other than the shared one ([`mark_radii`]).
-fn marks_move(in: VsOut, slots: u32) -> bool {
-    if u.node.band_outer <= u.node.band_inner {
-        return false;
-    }
-    for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
-        if (slots & (1u << i)) != 0u && slice_thickness(in.thickness, i) != 1.0 {
-            return true;
-        }
-    }
-    return false;
-}
-
 // The farthest any of the node's slices reaches: `band_outer` unless a lit
 // slice swells past it. What sizes the billboard (`node_vertex`) and, carried
 // as `VsOut::swell`, keeps the band's loop running out there
@@ -1768,9 +1754,10 @@ fn mark_extension(
 
 // The marks in `slots` as the node DRAWS them: each on its own slot's strip
 // ([`mark_radii`]), `d` being the fragment's radius and `strip` the shared
-// strip's layer between `inner` and `outer`. Where no marked slice is other
-// than the band, that is [`mark_extension`] on the shared strip exactly; the
-// light's own reading (`ink_at`) takes the marks angularly and keeps that.
+// strip's layer between `inner` and `outer`. A slot whose slice is the band
+// reads the shared strip itself, so where every marked slice is, this is
+// [`mark_extension`]'s answer; the light's own reading (`ink_at`) takes the
+// marks angularly and keeps that.
 fn drawn_marks(
     in: VsOut,
     slots: u32,
@@ -1783,9 +1770,6 @@ fn drawn_marks(
     aa: f32,
     analytic: bool,
 ) -> NodeLayer {
-    if !marks_move(in, slots) {
-        return mark_extension(slots, ring, uv, strip, inner, outer, aa, analytic);
-    }
     let top = ring.base + i32(oct_span()) - 1;
     var sd = EMPTY_DISTANCE;
     var coverage = 0.0;
@@ -1795,11 +1779,17 @@ fn drawn_marks(
             continue;
         }
         let r = mark_radii(in, s, inner, outer);
+        var own = strip;
+        if r.x != inner || r.y != outer {
+            if r.y <= r.x {
+                continue;
+            }
+            own = glyph_band(d, r.x, r.y, 1.0, aa);
+        }
         // Off this slot's strip is `mark_extension`'s own early-out, per slot.
-        if r.y <= r.x || (EARLY_OUT && !analytic && (d <= r.x - aa || d >= r.y + aa)) {
+        if EARLY_OUT && !analytic && layer_coverage(own) <= 0.0 {
             continue;
         }
-        let own = glyph_band(d, r.x, r.y, 1.0, aa);
         let layer = outer_glyph(s, ring, uv, own, r.x, r.y, aa);
         sd = min(sd, layer.sd);
         coverage = max(coverage, layer.coverage);

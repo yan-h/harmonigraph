@@ -4,6 +4,29 @@
 
 using metal::uint;
 
+struct _mslBufferSizes {
+    uint size4;
+    uint size5;
+};
+
+struct ShadowCaster {
+    metal::float4 rect;
+    metal::float4 cell;
+    metal::float4 map;
+    metal::float4 shade;
+};
+typedef ShadowCaster type_6[1];
+typedef uint type_8[1];
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
+};
+struct SceneOut {
+    metal::float4 other;
+    metal::float4 ink;
+    metal::float4 bloom_other;
+    metal::float4 bloom_ink;
+};
 struct CompositeParams {
     float darkest_pitch;
     float brightest_pitch;
@@ -32,14 +55,14 @@ struct MarkerParams {
     float world_unit;
     float padding;
 };
-struct type_7 {
+struct type_11 {
     metal::float4 inner[3];
 };
 struct OctaveParams {
     float span;
     float center;
     metal::float2 padding;
-    type_7 bounds;
+    type_11 bounds;
 };
 struct SpectralParams {
     float inner;
@@ -82,13 +105,13 @@ struct MarkerCellParams {
     float arm_points;
     float padding;
 };
-struct type_8 {
+struct type_12 {
     metal::float4 inner[64];
 };
-struct type_10 {
+struct type_14 {
     metal::uint4 inner[240];
 };
-struct type_11 {
+struct type_15 {
     metal::float4 inner[16];
 };
 struct Uniforms {
@@ -106,10 +129,14 @@ struct Uniforms {
     MarkerCellParams marker_cell;
     metal::float4 lattice_ground;
     metal::float4 lut_spacing;
-    type_8 pitch_lut;
-    type_8 spectral_lut;
-    type_10 spectrum_color;
-    type_11 ink_kernel;
+    type_12 pitch_lut;
+    type_12 spectral_lut;
+    type_14 spectrum_color;
+    type_15 ink_kernel;
+};
+struct ShadowThrough {
+    float seen;
+    float bloom;
 };
 struct VsOut {
     metal::float4 clip_pos;
@@ -176,6 +203,13 @@ struct AnimatedInk {
     NodeInk body;
     NodeInk marks;
 };
+struct Painted {
+    metal::packed_float3 rgb;
+    float seen;
+    float bloom;
+    float ink_alpha;
+    char _pad4[8];
+};
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
 constant uint OCCLUDER_HEADER = 5u;
@@ -207,6 +241,38 @@ constant float EMPTY_DISTANCE = 65504.0;
 constant float PLUS_QUAD_MARGIN = 1.6;
 constant metal::float3 GLOW_LUMINANCE = metal::float3(0.2126, 0.7152, 0.0722);
 
+metal::float4 glow_light(
+    metal::float2 uv,
+    metal::texture2d<float, metal::access::sample> glow_tex,
+    metal::sampler glow_sampler
+) {
+    metal::float4 _e4 = glow_tex.sample(glow_sampler, uv, metal::level(0.0));
+    return _e4;
+}
+
+metal::float3 wash_over(
+    metal::float3 ink,
+    float alpha,
+    metal::float3 light,
+    float share
+) {
+    metal::float3 w_3 = light * share;
+    return (w_3 * alpha) + (ink * (metal::float3(1.0) - w_3));
+}
+
+bool cell_packed(
+    metal::float4 cell
+) {
+    bool local = {};
+    if (cell.z > 0.0) {
+        local = cell.w > 0.0;
+    } else {
+        local = false;
+    }
+    bool _e10 = local;
+    return _e10;
+}
+
 float standoff_coverage(
     float d,
     float w,
@@ -219,6 +285,221 @@ float standoff_coverage(
         return remaining * ((1.0 - ((shape * u_1) * 0.5)) + ((((shape * shape) * u_1) * ((2.0 * u_1) - 1.0)) / 12.0));
     }
     return (metal::exp(shape * remaining) - 1.0) / (metal::exp(shape) - 1.0);
+}
+
+float shadow_kernel(
+    uint who,
+    metal::float2 points,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    if (who >= (1 + (_buffer_sizes.size4 - 0 - 64) / 64)) {
+        return 0.0;
+    }
+    metal::float4 cell_1 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].cell;
+    bool _e10 = cell_packed(cell_1);
+    if (!(_e10)) {
+        return 0.0;
+    }
+    metal::float2 atlas = static_cast<metal::float2>(metal::uint2(shadow_atlas.get_width(), shadow_atlas.get_height()));
+    metal::float4 map = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].map;
+    metal::float2 texel = metal::clamp(map.xy + (points * map.z), cell_1.xy + metal::float2(0.5), (cell_1.xy + cell_1.zw) - metal::float2(0.5));
+    metal::float4 _e39 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
+    float held = _e39.x;
+    float _e45 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.y;
+    if (_e45 == DISTANCE_COVERAGE_KIND) {
+        return metal::clamp(held, 0.0, 1.0);
+    }
+    float _e55 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.y;
+    if (_e55 >= 0.5) {
+        float _e62 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.z;
+        float _e69 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.w;
+        float _e70 = standoff_coverage(held, 2.0 * _e62, _e69);
+        return metal::clamp(_e70, 0.0, 1.0);
+    }
+    return metal::min(GAUSSIAN_GAIN * metal::clamp(held, 0.0, 1.0), 1.0);
+}
+
+float shadow_transmittance(
+    float full,
+    float depth,
+    float level
+) {
+    float keep = metal::max(1.0 - metal::clamp(depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
+    float through = metal::pow(keep, metal::clamp(full, 0.0, 1.0));
+    return 1.0 - (metal::clamp(level, 0.0, 1.0) * (1.0 - through));
+}
+
+uint naga_f2u32(float value) {
+    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
+}
+
+float node_visibility(
+    float who_1,
+    metal::float2 points_1,
+    float occlusion,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    device type_8 const& node_occluders,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    bool local_1 = {};
+    bool local_2 = {};
+    bool local_3 = {};
+    float visibility = 1.0;
+    uint k = {};
+    bool local_4 = {};
+    bool local_5 = {};
+    float hidden = {};
+    float strength = metal::clamp(occlusion, 0.0, 1.0);
+    if (strength == 0.0) {
+        return 1.0;
+    }
+    uint receiver = naga_f2u32(metal::max(who_1, 0.0));
+    uint casters = 1 + (_buffer_sizes.size4 - 0 - 64) / 64;
+    uint words_1 = 1 + (_buffer_sizes.size5 - 0 - 4) / 4;
+    if (!((receiver >= casters))) {
+        local_1 = words_1 < OCCLUDER_HEADER;
+    } else {
+        local_1 = true;
+    }
+    bool _e23 = local_1;
+    if (_e23) {
+        return 1.0;
+    }
+    uint columns = node_occluders[metal::min(unsigned(0), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    uint rows = node_occluders[metal::min(unsigned(1), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    uint _e33 = node_occluders[metal::min(unsigned(2), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    uint _e37 = node_occluders[metal::min(unsigned(3), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    metal::float2 origin = metal::float2(as_type<float>(_e33), as_type<float>(_e37));
+    uint _e43 = node_occluders[metal::min(unsigned(4), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    metal::float2 bin = metal::floor((points_1 - origin) * as_type<float>(_e43));
+    if (metal::all(bin >= metal::float2(0.0))) {
+        local_2 = bin.x < static_cast<float>(columns);
+    } else {
+        local_2 = false;
+    }
+    bool _e57 = local_2;
+    if (_e57) {
+        local_3 = bin.y < static_cast<float>(rows);
+    } else {
+        local_3 = false;
+    }
+    bool _e64 = local_3;
+    if (!(_e64)) {
+        return 1.0;
+    }
+    uint slot_2 = (OCCLUDER_HEADER + (naga_f2u32(bin.y) * columns)) + naga_f2u32(bin.x);
+    if ((slot_2 + 1u) >= words_1) {
+        return 1.0;
+    }
+    uint _e83 = node_occluders[metal::min(unsigned(slot_2 + 1u), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    uint end = metal::min(_e83, words_1);
+    uint _e89 = node_occluders[metal::min(unsigned(slot_2), (_buffer_sizes.size5 - 0 - 4) / 4)];
+    k = _e89;
+    uint2 loop_bound = uint2(4294967295u);
+    bool loop_init = true;
+    while(true) {
+        if (metal::all(loop_bound == uint2(0u))) { break; }
+        loop_bound -= uint2(loop_bound.y == 0u, 1u);
+        if (!loop_init) {
+            uint _e148 = k;
+            k = _e148 + 1u;
+        }
+        loop_init = false;
+        uint _e91 = k;
+        if (_e91 < end) {
+        } else {
+            break;
+        }
+        {
+            uint _e94 = k;
+            uint at = node_occluders[metal::min(unsigned(_e94), (_buffer_sizes.size5 - 0 - 4) / 4)];
+            if (!((at <= receiver))) {
+                local_4 = at >= casters;
+            } else {
+                local_4 = true;
+            }
+            bool _e103 = local_4;
+            if (_e103) {
+                continue;
+            }
+            ShadowCaster caster = shadow_casters[metal::min(unsigned(at), (_buffer_sizes.size4 - 0 - 64) / 64)];
+            if (metal::all(points_1 >= caster.rect.xy)) {
+                local_5 = metal::all(points_1 <= (caster.rect.xy + caster.rect.zw));
+            } else {
+                local_5 = false;
+            }
+            bool _e121 = local_5;
+            if (_e121) {
+                float _e122 = shadow_kernel(at, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+                float level_5 = metal::clamp(caster.shade.x, 0.0, 1.0);
+                hidden = level_5 * _e122;
+                if (caster.shade.y < 0.5) {
+                    float _e135 = shadow_transmittance(_e122, 1.0, level_5);
+                    hidden = 1.0 - _e135;
+                }
+                float _e138 = visibility;
+                float _e139 = hidden;
+                visibility = _e138 * (1.0 - (strength * _e139));
+            }
+            float _e144 = visibility;
+            if (_e144 == 0.0) {
+                break;
+            }
+        }
+    }
+    float _e150 = visibility;
+    return _e150;
+}
+
+float glow_shadow_depth(
+    constant Uniforms& u
+) {
+    float _e3 = u.geometry_shadow.depth;
+    return metal::clamp(_e3, 0.0, 1.0);
+}
+
+ShadowThrough node_shadow_through(
+    float who_2,
+    metal::float2 points_2,
+    float level_1,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant Uniforms& u,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    if (level_1 <= 0.0) {
+        return ShadowThrough {1.0, 1.0};
+    }
+    float _e14 = shadow_kernel(naga_f2u32(metal::max(who_2, 0.0)), points_2, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    float coverage_2 = metal::clamp(level_1, 0.0, 1.0) * _e14;
+    float _e16 = glow_shadow_depth(u);
+    return ShadowThrough {1.0 - (_e16 * coverage_2), 1.0 - coverage_2};
+}
+
+bool shadow_is_distance(
+    float who_3,
+    device type_6 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    uint caster_1 = naga_f2u32(metal::max(who_3, 0.0));
+    if (caster_1 >= (1 + (_buffer_sizes.size4 - 0 - 64) / 64)) {
+        return false;
+    }
+    float _e12 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.y;
+    return _e12 >= 0.5;
+}
+
+float glow_wash(
+    constant Uniforms& u
+) {
+    float _e3 = u.glow.wash;
+    return metal::clamp(_e3, 0.0, 1.0);
 }
 
 metal::float2 spectral_radii(
@@ -235,13 +516,13 @@ float paint_reach(
     constant Uniforms& u
 ) {
     float reach = GLYPH_FADE_LIMIT;
-    bool local_1 = {};
+    bool local_6 = {};
     if (!((in_1.marks.x != 0u))) {
-        local_1 = in_1.marks.y != 0u;
+        local_6 = in_1.marks.y != 0u;
     } else {
-        local_1 = true;
+        local_6 = true;
     }
-    bool _e16 = local_1;
+    bool _e16 = local_6;
     if (_e16) {
         float _e17 = reach;
         reach = metal::max(_e17, QUAD_MARGIN);
@@ -332,10 +613,6 @@ float octave_level(
 ) {
     uint _e2 = slot_byte(octaves, i_2);
     return static_cast<float>(_e2) / 255.0;
-}
-
-uint naga_f2u32(float value) {
-    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
 }
 
 uint oct_span(
@@ -432,9 +709,9 @@ metal::float2 oct_sector(
     constant Uniforms& u
 ) {
     uint _e4 = oct_span(u);
-    uint i_10 = static_cast<uint>(metal::clamp(as_type<int>(as_type<uint>(s_1) - as_type<uint>(ring_1.base)), 0, as_type<int>(as_type<uint>(static_cast<int>(_e4)) - as_type<uint>(1))));
-    float _e12 = oct_bound(i_10, u);
-    float _e17 = oct_bound(i_10 + 1u, u);
+    uint i_8 = static_cast<uint>(metal::clamp(as_type<int>(as_type<uint>(s_1) - as_type<uint>(ring_1.base)), 0, as_type<int>(as_type<uint>(static_cast<int>(_e4)) - as_type<uint>(1))));
+    float _e12 = oct_bound(i_8, u);
+    float _e17 = oct_bound(i_8 + 1u, u);
     return metal::float2(ring_1.seam - _e12, ring_1.seam - _e17);
 }
 
@@ -451,13 +728,13 @@ float oct_slot_level(
     metal::uint3 octaves_1,
     int s_3
 ) {
-    bool local_2 = {};
+    bool local_7 = {};
     if (!((s_3 < 0))) {
-        local_2 = s_3 >= 11;
+        local_7 = s_3 >= 11;
     } else {
-        local_2 = true;
+        local_7 = true;
     }
-    bool _e10 = local_2;
+    bool _e10 = local_7;
     if (_e10) {
         return 0.0;
     }
@@ -467,13 +744,13 @@ float oct_slot_level(
 
 float oct_arc_coverage(
     metal::float2 edges,
-    metal::float2 uv,
+    metal::float2 uv_1,
     float aa_1
 ) {
     metal::float2 b1_ = metal::float2(metal::cos(edges.x), metal::sin(edges.x));
     metal::float2 b2_ = metal::float2(metal::cos(edges.y), metal::sin(edges.y));
-    float c1_ = (uv.x * b1_.y) - (uv.y * b1_.x);
-    float c2_ = (uv.x * b2_.y) - (uv.y * b2_.x);
+    float c1_ = (uv_1.x * b1_.y) - (uv_1.y * b1_.x);
+    float c2_ = (uv_1.x * b2_.y) - (uv_1.y * b2_.x);
     float s1_ = metal::smoothstep(-(aa_1), aa_1, c1_);
     float s2_ = metal::smoothstep(-(aa_1), aa_1, -(c2_));
     return ((edges.x - edges.y) > 3.1415927) ? (1.0 - ((1.0 - s1_) * (1.0 - s2_))) : (s1_ * s2_);
@@ -509,13 +786,13 @@ NodeLayer glyph_band(
     float d_1,
     float inner_1,
     float outer_2,
-    float level,
+    float level_2,
     float aa_2
 ) {
     float mid = 0.5 * (inner_1 + outer_2);
     float _e14 = aa_inside(outer_2, d_1, aa_2);
     float _e15 = aa_inside(inner_1, d_1, aa_2);
-    return NodeLayer {metal::abs(d_1 - mid) - (0.5 * (outer_2 - inner_1)), level, _e14 * (1.0 - _e15)};
+    return NodeLayer {metal::abs(d_1 - mid) - (0.5 * (outer_2 - inner_1)), level_2, _e14 * (1.0 - _e15)};
 }
 
 float lut_position(
@@ -587,16 +864,16 @@ metal::float4 oct_slot_ink(
 ) {
     float presence = in_4.params.x;
     metal::float4 _e4 = oct_slot_lit(in_4, slot_1, u);
-    float level_3 = _e4.w;
-    if (level_3 <= 0.0) {
+    float level_6 = _e4.w;
+    if (level_6 <= 0.0) {
         metal::float4 _e10 = u.lattice_ground;
         return metal::float4(_e10.xyz, presence);
     }
-    float ghost_rest = metal::max(presence - level_3, 0.0);
-    float opacity = level_3 + ghost_rest;
+    float ghost_rest = metal::max(presence - level_6, 0.0);
+    float opacity = level_6 + ghost_rest;
     metal::float4 _e19 = u.lattice_ground;
     metal::float3 ground = _e19.xyz;
-    return metal::float4(((_e4.xyz * level_3) + (ground * ghost_rest)) / metal::float3(opacity), opacity);
+    return metal::float4(((_e4.xyz * level_6) + (ground * ghost_rest)) / metal::float3(opacity), opacity);
 }
 
 float slice_reach(
@@ -606,13 +883,13 @@ float slice_reach(
     float outer_3,
     constant Uniforms& u
 ) {
-    bool local_3 = {};
+    bool local_8 = {};
     if (!((s_4 < 0))) {
-        local_3 = s_4 >= 11;
+        local_8 = s_4 >= 11;
     } else {
-        local_3 = true;
+        local_8 = true;
     }
-    bool _e12 = local_3;
+    bool _e12 = local_8;
     if (_e12) {
         return outer_3;
     }
@@ -628,16 +905,16 @@ metal::float2 mark_radii(
     float outer_4,
     constant Uniforms& u
 ) {
-    bool local_4 = {};
+    bool local_9 = {};
     float band_in = u.node.band_inner;
     float band_out = u.node.band_outer;
     float _e12 = slice_reach(in_6, s_5, band_in, band_out, u);
     if (!((band_out <= band_in))) {
-        local_4 = _e12 == band_out;
+        local_9 = _e12 == band_out;
     } else {
-        local_4 = true;
+        local_9 = true;
     }
-    bool _e19 = local_4;
+    bool _e19 = local_9;
     if (_e19) {
         return metal::float2(inner_3, outer_4);
     }
@@ -645,51 +922,6 @@ metal::float2 mark_radii(
     float start = metal::min(_e25 + (_e12 - band_out), 1.58);
     float _e32 = u.node.mark_thickness;
     return metal::float2(start, metal::min(start + metal::max(_e32, 0.0), 1.58));
-}
-
-bool marks_move(
-    VsOut in_7,
-    uint slots,
-    constant Uniforms& u
-) {
-    uint i_3 = 0u;
-    bool local_5 = {};
-    float _e5 = u.node.band_outer;
-    float _e9 = u.node.band_inner;
-    if (_e5 <= _e9) {
-        return false;
-    }
-    uint2 loop_bound = uint2(4294967295u);
-    bool loop_init = true;
-    while(true) {
-        if (metal::all(loop_bound == uint2(0u))) { break; }
-        loop_bound -= uint2(loop_bound.y == 0u, 1u);
-        if (!loop_init) {
-            uint _e33 = i_3;
-            i_3 = _e33 + 1u;
-        }
-        loop_init = false;
-        uint _e14 = i_3;
-        if (_e14 < OCTAVE_SLOTS) {
-        } else {
-            break;
-        }
-        {
-            uint _e18 = i_3;
-            if ((slots & (1u << _e18)) != 0u) {
-                uint _e26 = i_3;
-                float _e27 = slice_thickness(in_7.thickness, _e26);
-                local_5 = _e27 != 1.0;
-            } else {
-                local_5 = false;
-            }
-            bool _e31 = local_5;
-            if (_e31) {
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 float glyph_taper(
@@ -703,14 +935,14 @@ float glyph_taper(
 }
 
 SectorFold sector_fold(
-    metal::float2 uv_1,
+    metal::float2 uv_2,
     metal::float2 edges_1
 ) {
     float mid_1 = 0.5 * (edges_1.x + edges_1.y);
     float half_ = metal::clamp(0.5 * (edges_1.x - edges_1.y), 0.0, 3.1415927);
     float c_2 = metal::cos(mid_1);
     float s_9 = metal::sin(mid_1);
-    return SectorFold {metal::float2(metal::abs((uv_1.y * c_2) - (uv_1.x * s_9)), (uv_1.x * c_2) + (uv_1.y * s_9)), metal::float2(metal::sin(half_), metal::cos(half_))};
+    return SectorFold {metal::float2(metal::abs((uv_2.y * c_2) - (uv_2.x * s_9)), (uv_2.x * c_2) + (uv_2.y * s_9)), metal::float2(metal::sin(half_), metal::cos(half_))};
 }
 
 float sector_side(
@@ -736,8 +968,8 @@ float annular_sector_distance(
     float gap
 ) {
     float distance = {};
-    bool local_6 = {};
-    bool local_7 = {};
+    bool local_10 = {};
+    bool local_11 = {};
     if (outer_5 <= inner_4) {
         return EMPTY_DISTANCE;
     }
@@ -764,17 +996,17 @@ float annular_sector_distance(
         distance = metal::min(_e68, metal::abs(radius - inner_4));
     }
     if (radius >= inner_4) {
-        local_6 = radius <= outer_5;
+        local_10 = radius <= outer_5;
     } else {
-        local_6 = false;
+        local_10 = false;
     }
-    bool _e77 = local_6;
+    bool _e77 = local_10;
     if (_e77) {
-        local_7 = (metal::dot(normal, f_2.q) + gap) <= 0.0;
+        local_11 = (metal::dot(normal, f_2.q) + gap) <= 0.0;
     } else {
-        local_7 = false;
+        local_11 = false;
     }
-    bool inside = local_7;
+    bool inside = local_11;
     float _e87 = distance;
     float _e88 = distance;
     return inside ? -(_e88) : _e87;
@@ -783,7 +1015,7 @@ float annular_sector_distance(
 NodeLayer outer_glyph(
     int s_6,
     OctRing ring_3,
-    metal::float2 uv_2,
+    metal::float2 uv_3,
     NodeLayer band,
     float inner_5,
     float outer_6,
@@ -792,7 +1024,7 @@ NodeLayer outer_glyph(
 ) {
     float sd = {};
     metal::float2 _e7 = oct_sector(s_6, ring_3, u);
-    SectorFold _e8 = sector_fold(uv_2, _e7);
+    SectorFold _e8 = sector_fold(uv_3, _e7);
     float _e9 = slice_gap_half(u);
     float gap_1 = (metal::dot(_e8.q, _e8.e) > 0.0) ? _e9 : 0.0;
     float _e17 = sector_side(_e8);
@@ -808,25 +1040,25 @@ NodeLayer outer_glyph(
     }
     metal::float2 b1_1 = metal::float2(metal::cos(_e7.x), metal::sin(_e7.x));
     metal::float2 b2_1 = metal::float2(metal::cos(_e7.y), metal::sin(_e7.y));
-    float c1_1 = (uv_2.x * b1_1.y) - (uv_2.y * b1_1.x);
-    float c2_1 = (uv_2.x * b2_1.y) - (uv_2.y * b2_1.x);
-    float _e55 = oct_arc_coverage(_e7, uv_2, aa_3);
+    float c1_1 = (uv_3.x * b1_1.y) - (uv_3.y * b1_1.x);
+    float c2_1 = (uv_3.x * b2_1.y) - (uv_3.y * b2_1.x);
+    float _e55 = oct_arc_coverage(_e7, uv_3, aa_3);
     float _e56 = slice_gap_half(u);
     float _e58 = aa_inside(_e56, metal::abs(c1_1), aa_3);
     float _e66 = aa_inside(_e56, metal::abs(c2_1), aa_3);
-    float gaps = (1.0 - (_e58 * metal::smoothstep(-(aa_3), aa_3, metal::dot(uv_2, b1_1)))) * (1.0 - (_e66 * metal::smoothstep(-(aa_3), aa_3, metal::dot(uv_2, b2_1))));
+    float gaps = (1.0 - (_e58 * metal::smoothstep(-(aa_3), aa_3, metal::dot(uv_3, b1_1)))) * (1.0 - (_e66 * metal::smoothstep(-(aa_3), aa_3, metal::dot(uv_3, b2_1))));
     float _e74 = sd;
     return NodeLayer {_e74, band.level, (band.coverage * _e55) * gaps};
 }
 
 SliceZones slice_zones(
-    VsOut in_8,
+    VsOut in_7,
     int s_7,
     OctRing ring_4,
-    metal::float2 uv_3,
+    metal::float2 uv_4,
     float d_3,
     NodeLayer band_1,
-    metal::float4 ink,
+    metal::float4 ink_1,
     float inner_6,
     float outer_7,
     float reach_1,
@@ -840,14 +1072,14 @@ SliceZones slice_zones(
     float far_level = {};
     if (reach_1 > inner_6) {
         NodeLayer _e18 = glyph_band(d_3, inner_6, reach_1, 1.0, aa_4);
-        NodeLayer _e19 = outer_glyph(s_7, ring_4, uv_3, _e18, inner_6, reach_1, aa_4, u);
+        NodeLayer _e19 = outer_glyph(s_7, ring_4, uv_4, _e18, inner_6, reach_1, aa_4, u);
         slice = _e19;
     }
-    float _e21 = oct_slot_level(in_8.octaves, s_7);
+    float _e21 = oct_slot_level(in_7.octaves, s_7);
     near = band_1;
     NodeLayer _e23 = slice;
     far = _e23;
-    metal::float4 _e25 = oct_slot_lit(in_8, s_7, u);
+    metal::float4 _e25 = oct_slot_lit(in_7, s_7, u);
     far_rgb = _e25.xyz;
     far_level = _e21;
     if (reach_1 < outer_7) {
@@ -856,19 +1088,19 @@ SliceZones slice_zones(
         far = band_1;
         metal::float4 _e33 = u.lattice_ground;
         far_rgb = _e33.xyz;
-        far_level = metal::max(in_8.params.x - _e21, 0.0);
+        far_level = metal::max(in_7.params.x - _e21, 0.0);
     }
     NodeLayer _e40 = near;
     float _e41 = layer_coverage(_e40);
     NodeLayer _e42 = far;
     float _e43 = layer_coverage(_e42);
     float rest = metal::max(_e43 - _e41, 0.0);
-    float near_ink = _e41 * ink.w;
+    float near_ink = _e41 * ink_1.w;
     float _e49 = far_level;
     float far_ink = rest * _e49;
     float cov_2 = near_ink + far_ink;
     metal::float3 _e54 = far_rgb;
-    metal::float3 rgb_1 = ((ink.xyz * near_ink) + (_e54 * far_ink)) / metal::float3(metal::max(cov_2, 0.0001));
+    metal::float3 rgb_1 = ((ink_1.xyz * near_ink) + (_e54 * far_ink)) / metal::float3(metal::max(cov_2, 0.0001));
     NodeLayer _e62 = slice;
     float _e63 = layer_coverage(_e62);
     float _e65 = near.sd;
@@ -876,15 +1108,15 @@ SliceZones slice_zones(
     float _e71 = far.sd;
     float _e72 = far_level;
     float _e74 = far.coverage;
-    return SliceZones {metal::float4(rgb_1, cov_2), _e63, NodeLayer {_e65, ink.w, _e68}, NodeLayer {_e71, _e72, _e74}, rest};
+    return SliceZones {metal::float4(rgb_1, cov_2), _e63, NodeLayer {_e65, ink_1.w, _e68}, NodeLayer {_e71, _e72, _e74}, rest};
 }
 
 metal::float3 spectral_lut_color(
-    float level_1,
+    float level_3,
     constant Uniforms& u
 ) {
     metal::float4 _e6 = u.lut_spacing;
-    float _e8 = lut_position(metal::clamp(level_1, 0.0, 1.0), _e6.zw);
+    float _e8 = lut_position(metal::clamp(level_3, 0.0, 1.0), _e6.zw);
     float f_4 = _e8 * 63.0;
     uint i0_1 = naga_f2u32(metal::floor(f_4));
     uint i1_1 = metal::min(i0_1 + 1u, 63u);
@@ -904,80 +1136,80 @@ float spectrum_color_level(
     uint b,
     constant Uniforms& u
 ) {
-    uint i_11 = metal::min(b, 3827u);
-    uint word = u.spectrum_color.inner[metal::min(unsigned(naga_div(i_11, 16u)), 239u)][metal::min(unsigned(naga_mod(naga_div(i_11, 4u), 4u)), 3u)];
-    return static_cast<float>((word >> (naga_mod(i_11, 4u) * 8u)) & 255u) / 255.0;
+    uint i_9 = metal::min(b, 3827u);
+    uint word = u.spectrum_color.inner[metal::min(unsigned(naga_div(i_9, 16u)), 239u)][metal::min(unsigned(naga_mod(naga_div(i_9, 4u), 4u)), 3u)];
+    return static_cast<float>((word >> (naga_mod(i_9, 4u) * 8u)) & 255u) / 255.0;
 }
 
 float spectrum_color_at(
     float pitch_1,
     constant Uniforms& u
 ) {
-    bool local_8 = {};
+    bool local_12 = {};
     float x_3 = ((pitch_1 - SPECTRUM_MIN_MIDI) * BUCKETS_PER_SEMITONE) - 0.5;
     if (!((x_3 < 0.0))) {
-        local_8 = x_3 > 3827.0;
+        local_12 = x_3 > 3827.0;
     } else {
-        local_8 = true;
+        local_12 = true;
     }
-    bool _e15 = local_8;
+    bool _e15 = local_12;
     if (_e15) {
         return 0.0;
     }
-    uint i_12 = naga_f2u32(metal::floor(x_3));
-    float _e19 = spectrum_color_level(i_12, u);
-    float _e22 = spectrum_color_level(i_12 + 1u, u);
+    uint i_10 = naga_f2u32(metal::floor(x_3));
+    float _e19 = spectrum_color_level(i_10, u);
+    float _e22 = spectrum_color_level(i_10 + 1u, u);
     return metal::mix(_e19, _e22, x_3 - metal::floor(x_3));
 }
 
 float wedge_fraction(
     metal::float2 edges_2,
-    metal::float2 uv_4
+    metal::float2 uv_5
 ) {
     float mid_2 = 0.5 * (edges_2.x + edges_2.y);
     float half_1 = metal::max(0.5 * (edges_2.x - edges_2.y), 0.00001);
-    float c_3 = (uv_4.x * metal::cos(mid_2)) + (uv_4.y * metal::sin(mid_2));
-    float s_10 = (-(uv_4.x) * metal::sin(mid_2)) + (uv_4.y * metal::cos(mid_2));
+    float c_3 = (uv_5.x * metal::cos(mid_2)) + (uv_5.y * metal::sin(mid_2));
+    float s_10 = (-(uv_5.x) * metal::sin(mid_2)) + (uv_5.y * metal::cos(mid_2));
     float delta = metal::atan2(s_10, c_3);
     return metal::clamp(0.5 - (delta / (2.0 * half_1)), 0.0, 1.0);
 }
 
 RingInk spectral_ring(
-    VsOut in_9,
+    VsOut in_8,
     OctRing oct,
-    metal::float2 uv_5,
+    metal::float2 uv_6,
     NodeLayer band_2,
     float aa_5,
     bool analytic,
     constant Uniforms& u
 ) {
-    bool local_9 = {};
-    bool local_10 = {};
+    bool local_13 = {};
+    bool local_14 = {};
     float cov = 0.0;
     int owner = {};
     float sd_1 = EMPTY_DISTANCE;
-    uint i_4 = 0u;
+    uint i_3 = 0u;
     float pitch_2 = {};
     metal::float2 _e6 = spectral_radii(u);
     if (_e6.y <= _e6.x) {
         return RingInk {metal::float3(0.0), 0.0, 0.0, NodeLayer {65504.0, 0.0, 0.0}};
     }
-    if (in_9.ring <= 0.0) {
+    if (in_8.ring <= 0.0) {
         return RingInk {metal::float3(0.0), 0.0, 0.0, NodeLayer {65504.0, 0.0, 0.0}};
     }
     if (EARLY_OUT) {
-        local_9 = !(analytic);
+        local_13 = !(analytic);
     } else {
-        local_9 = false;
+        local_13 = false;
     }
-    bool _e36 = local_9;
+    bool _e36 = local_13;
     if (_e36) {
         float _e39 = layer_coverage(band_2);
-        local_10 = _e39 <= 0.0;
+        local_14 = _e39 <= 0.0;
     } else {
-        local_10 = false;
+        local_14 = false;
     }
-    bool _e43 = local_10;
+    bool _e43 = local_14;
     if (_e43) {
         return RingInk {metal::float3(0.0), 0.0, 0.0, NodeLayer {65504.0, 0.0, 0.0}};
     }
@@ -988,27 +1220,27 @@ RingInk spectral_ring(
         if (metal::all(loop_bound_1 == uint2(0u))) { break; }
         loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
         if (!loop_init_1) {
-            uint _e77 = i_4;
-            i_4 = _e77 + 1u;
+            uint _e77 = i_3;
+            i_3 = _e77 + 1u;
         }
         loop_init_1 = false;
-        uint _e61 = i_4;
+        uint _e61 = i_3;
         uint _e62 = oct_span(u);
         if (_e61 < _e62) {
         } else {
             break;
         }
         {
-            uint _e65 = i_4;
-            int slot_2 = as_type<int>(as_type<uint>(oct.base) + as_type<uint>(static_cast<int>(_e65)));
-            NodeLayer _e70 = outer_glyph(slot_2, oct, uv_5, band_2, _e6.x, _e6.y, aa_5, u);
+            uint _e65 = i_3;
+            int slot_3 = as_type<int>(as_type<uint>(oct.base) + as_type<uint>(static_cast<int>(_e65)));
+            NodeLayer _e70 = outer_glyph(slot_3, oct, uv_6, band_2, _e6.x, _e6.y, aa_5, u);
             float _e71 = layer_coverage(_e70);
             float _e72 = sd_1;
             sd_1 = metal::min(_e72, _e70.sd);
             float _e75 = cov;
             if (_e71 > _e75) {
                 cov = _e71;
-                owner = slot_2;
+                owner = slot_3;
             }
         }
     }
@@ -1016,16 +1248,16 @@ RingInk spectral_ring(
     if (_e80 <= 0.0) {
         float _e85 = sd_1;
         float _e87 = cov;
-        return RingInk {metal::float3(0.0), 0.0, 0.0, NodeLayer {_e85, in_9.ring, _e87}};
+        return RingInk {metal::float3(0.0), 0.0, 0.0, NodeLayer {_e85, in_8.ring, _e87}};
     }
     int _e92 = owner;
-    float _e94 = oct_slot_pitch(_e92, in_9.cents);
+    float _e94 = oct_slot_pitch(_e92, in_8.cents);
     pitch_2 = _e94;
     bool _e96 = folded(u);
     if (!(_e96)) {
         int _e98 = owner;
         metal::float2 _e99 = oct_sector(_e98, oct, u);
-        float _e100 = wedge_fraction(_e99, uv_5);
+        float _e100 = wedge_fraction(_e99, uv_6);
         float _e101 = pitch_2;
         float _e107 = u.spectral.range_cents;
         pitch_2 = _e101 + (((_e100 - 0.5) * _e107) / 100.0);
@@ -1036,13 +1268,15 @@ RingInk spectral_ring(
     float _e115 = cov;
     float _e121 = sd_1;
     float _e123 = cov;
-    return RingInk {_e114, _e115 * in_9.ring, metal::clamp(_e113, 0.0, 1.0), NodeLayer {_e121, in_9.ring, _e123}};
+    return RingInk {_e114, _e115 * in_8.ring, metal::clamp(_e113, 0.0, 1.0), NodeLayer {_e121, in_8.ring, _e123}};
 }
 
-NodeLayer mark_extension(
-    uint slots_1,
+NodeLayer drawn_marks(
+    VsOut in_9,
+    uint slots,
     OctRing ring_5,
-    metal::float2 uv_6,
+    metal::float2 uv_7,
+    float d_4,
     NodeLayer strip,
     float inner_7,
     float outer_8,
@@ -1050,185 +1284,102 @@ NodeLayer mark_extension(
     bool analytic_1,
     constant Uniforms& u
 ) {
-    bool local_11 = {};
-    bool local_12 = {};
     float sd_2 = EMPTY_DISTANCE;
     float coverage = 0.0;
-    uint i_5 = 0u;
-    bool local_13 = {};
-    bool local_14 = {};
-    if (EARLY_OUT) {
-        local_11 = !(analytic_1);
-    } else {
-        local_11 = false;
-    }
-    bool _e13 = local_11;
-    if (_e13) {
-        float _e16 = layer_coverage(strip);
-        local_12 = _e16 <= 0.0;
-    } else {
-        local_12 = false;
-    }
-    bool _e20 = local_12;
-    if (_e20) {
-        return NodeLayer {EMPTY_DISTANCE, strip.level, 0.0};
-    }
-    uint _e26 = oct_span(u);
-    int top = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(ring_5.base) + as_type<uint>(static_cast<int>(_e26)))) - as_type<uint>(1));
+    uint i_4 = 0u;
+    bool local_15 = {};
+    bool local_16 = {};
+    NodeLayer own = {};
+    bool local_17 = {};
+    bool local_18 = {};
+    bool local_19 = {};
+    uint _e11 = oct_span(u);
+    int top = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(ring_5.base) + as_type<uint>(static_cast<int>(_e11)))) - as_type<uint>(1));
     uint2 loop_bound_2 = uint2(4294967295u);
     bool loop_init_2 = true;
     while(true) {
         if (metal::all(loop_bound_2 == uint2(0u))) { break; }
         loop_bound_2 -= uint2(loop_bound_2.y == 0u, 1u);
         if (!loop_init_2) {
-            uint _e66 = i_5;
-            i_5 = _e66 + 1u;
+            uint _e88 = i_4;
+            i_4 = _e88 + 1u;
         }
         loop_init_2 = false;
-        uint _e37 = i_5;
-        if (_e37 < OCTAVE_SLOTS) {
+        uint _e22 = i_4;
+        if (_e22 < OCTAVE_SLOTS) {
         } else {
             break;
         }
         {
-            uint _e40 = i_5;
-            int s_11 = static_cast<int>(_e40);
-            uint _e43 = i_5;
-            if ((slots_1 & (1u << _e43)) != 0u) {
-                local_13 = s_11 >= ring_5.base;
-            } else {
-                local_13 = false;
-            }
-            bool _e53 = local_13;
-            if (_e53) {
-                local_14 = s_11 <= top;
-            } else {
-                local_14 = false;
-            }
-            bool _e58 = local_14;
-            if (_e58) {
-                NodeLayer _e59 = outer_glyph(s_11, ring_5, uv_6, strip, inner_7, outer_8, aa_6, u);
-                float _e60 = sd_2;
-                sd_2 = metal::min(_e60, _e59.sd);
-                float _e63 = coverage;
-                coverage = metal::max(_e63, _e59.coverage);
-            }
-        }
-    }
-    float _e69 = sd_2;
-    float _e71 = coverage;
-    return NodeLayer {_e69, strip.level, _e71};
-}
-
-NodeLayer drawn_marks(
-    VsOut in_10,
-    uint slots_2,
-    OctRing ring_6,
-    metal::float2 uv_7,
-    float d_4,
-    NodeLayer strip_1,
-    float inner_8,
-    float outer_9,
-    float aa_7,
-    bool analytic_2,
-    constant Uniforms& u
-) {
-    float sd_3 = EMPTY_DISTANCE;
-    float coverage_1 = 0.0;
-    uint i_6 = 0u;
-    bool local_15 = {};
-    bool local_16 = {};
-    bool local_17 = {};
-    bool local_18 = {};
-    bool local_19 = {};
-    bool local_20 = {};
-    bool _e10 = marks_move(in_10, slots_2, u);
-    if (!(_e10)) {
-        NodeLayer _e12 = mark_extension(slots_2, ring_6, uv_7, strip_1, inner_8, outer_9, aa_7, analytic_2, u);
-        return _e12;
-    }
-    uint _e14 = oct_span(u);
-    int top_1 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(ring_6.base) + as_type<uint>(static_cast<int>(_e14)))) - as_type<uint>(1));
-    uint2 loop_bound_3 = uint2(4294967295u);
-    bool loop_init_3 = true;
-    while(true) {
-        if (metal::all(loop_bound_3 == uint2(0u))) { break; }
-        loop_bound_3 -= uint2(loop_bound_3.y == 0u, 1u);
-        if (!loop_init_3) {
-            uint _e92 = i_6;
-            i_6 = _e92 + 1u;
-        }
-        loop_init_3 = false;
-        uint _e25 = i_6;
-        if (_e25 < OCTAVE_SLOTS) {
-        } else {
-            break;
-        }
-        {
-            uint _e28 = i_6;
-            int s_12 = static_cast<int>(_e28);
-            uint _e31 = i_6;
-            if (!(((slots_2 & (1u << _e31)) == 0u))) {
-                local_15 = s_12 < ring_6.base;
+            uint _e25 = i_4;
+            int s_11 = static_cast<int>(_e25);
+            uint _e28 = i_4;
+            if (!(((slots & (1u << _e28)) == 0u))) {
+                local_15 = s_11 < ring_5.base;
             } else {
                 local_15 = true;
             }
-            bool _e42 = local_15;
-            if (!(_e42)) {
-                local_16 = s_12 > top_1;
+            bool _e39 = local_15;
+            if (!(_e39)) {
+                local_16 = s_11 > top;
             } else {
                 local_16 = true;
             }
-            bool _e48 = local_16;
-            if (_e48) {
+            bool _e45 = local_16;
+            if (_e45) {
                 continue;
             }
-            metal::float2 _e49 = mark_radii(in_10, s_12, inner_8, outer_9, u);
-            if (!((_e49.y <= _e49.x))) {
-                if (EARLY_OUT) {
-                    local_18 = !(analytic_2);
-                } else {
-                    local_18 = false;
-                }
-                bool _e61 = local_18;
-                if (_e61) {
-                    if (!((d_4 <= (_e49.x - aa_7)))) {
-                        local_20 = d_4 >= (_e49.y + aa_7);
-                    } else {
-                        local_20 = true;
-                    }
-                    bool _e74 = local_20;
-                    local_19 = _e74;
-                } else {
-                    local_19 = false;
-                }
-                bool _e76 = local_19;
-                local_17 = _e76;
+            metal::float2 _e46 = mark_radii(in_9, s_11, inner_7, outer_8, u);
+            own = strip;
+            if (!((_e46.x != inner_7))) {
+                local_17 = _e46.y != outer_8;
             } else {
                 local_17 = true;
             }
-            bool _e78 = local_17;
-            if (_e78) {
+            bool _e56 = local_17;
+            if (_e56) {
+                if (_e46.y <= _e46.x) {
+                    continue;
+                }
+                NodeLayer _e63 = glyph_band(d_4, _e46.x, _e46.y, 1.0, aa_6);
+                own = _e63;
+            }
+            if (EARLY_OUT) {
+                local_18 = !(analytic_1);
+            } else {
+                local_18 = false;
+            }
+            bool _e69 = local_18;
+            if (_e69) {
+                NodeLayer _e72 = own;
+                float _e73 = layer_coverage(_e72);
+                local_19 = _e73 <= 0.0;
+            } else {
+                local_19 = false;
+            }
+            bool _e77 = local_19;
+            if (_e77) {
                 continue;
             }
-            NodeLayer _e82 = glyph_band(d_4, _e49.x, _e49.y, 1.0, aa_7);
-            NodeLayer _e85 = outer_glyph(s_12, ring_6, uv_7, _e82, _e49.x, _e49.y, aa_7, u);
-            float _e86 = sd_3;
-            sd_3 = metal::min(_e86, _e85.sd);
-            float _e89 = coverage_1;
-            coverage_1 = metal::max(_e89, _e85.coverage);
+            NodeLayer _e78 = own;
+            NodeLayer _e81 = outer_glyph(s_11, ring_5, uv_7, _e78, _e46.x, _e46.y, aa_6, u);
+            float _e82 = sd_2;
+            sd_2 = metal::min(_e82, _e81.sd);
+            float _e85 = coverage;
+            coverage = metal::max(_e85, _e81.coverage);
         }
     }
-    float _e95 = sd_3;
-    float _e97 = coverage_1;
-    return NodeLayer {_e95, strip_1.level, _e97};
+    float _e91 = sd_2;
+    float _e93 = coverage;
+    return NodeLayer {_e91, strip.level, _e93};
 }
 
 NodeGeom node_geom(
     VsOut src,
-    bool analytic_3,
+    bool analytic_2,
     constant Uniforms& u
 ) {
+    bool local_20 = {};
     bool local_21 = {};
     bool local_22 = {};
     bool local_23 = {};
@@ -1238,76 +1389,75 @@ NodeGeom node_geom(
     bool local_27 = {};
     bool local_28 = {};
     bool local_29 = {};
-    bool local_30 = {};
     float d_8 = metal::length(src.uv);
     float _e6 = metal::fwidth(src.uv.x);
     float _e9 = aa_width(_e6, src.shadow_at.w, u);
     if (EARLY_OUT) {
-        local_21 = !(analytic_3);
+        local_20 = !(analytic_2);
+    } else {
+        local_20 = false;
+    }
+    bool _e15 = local_20;
+    if (_e15) {
+        float _e18 = paint_reach(src, _e9, u);
+        local_21 = d_8 > _e18;
     } else {
         local_21 = false;
     }
-    bool _e15 = local_21;
-    if (_e15) {
-        float _e18 = paint_reach(src, _e9, u);
-        local_22 = d_8 > _e18;
-    } else {
-        local_22 = false;
-    }
-    bool _e21 = local_22;
+    bool _e21 = local_21;
     if (_e21) {
         return NodeGeom {d_8, _e9, OctRing {0, 0.0}, false};
     }
     metal::float2 _e27 = spectral_radii(u);
     bool ring_draws = _e27.y > _e27.x;
     if (ring_draws) {
-        local_23 = metal::length(src.uv) >= (_e27.x - _e9);
+        local_22 = metal::length(src.uv) >= (_e27.x - _e9);
+    } else {
+        local_22 = false;
+    }
+    bool _e39 = local_22;
+    if (_e39) {
+        local_23 = metal::length(src.uv) <= (_e27.y + _e9);
     } else {
         local_23 = false;
     }
-    bool _e39 = local_23;
-    if (_e39) {
-        local_24 = metal::length(src.uv) <= (_e27.y + _e9);
+    bool in_audio_ring = local_23;
+    if (EARLY_OUT) {
+        local_24 = !(analytic_2);
     } else {
         local_24 = false;
     }
-    bool in_audio_ring = local_24;
-    if (EARLY_OUT) {
-        local_25 = !(analytic_3);
+    bool _e54 = local_24;
+    if (_e54) {
+        local_25 = !(in_audio_ring);
     } else {
         local_25 = false;
     }
-    bool _e54 = local_25;
-    if (_e54) {
-        local_26 = !(in_audio_ring);
+    bool _e59 = local_25;
+    if (_e59) {
+        local_26 = src.params.x <= 0.0;
     } else {
         local_26 = false;
     }
-    bool _e59 = local_26;
-    if (_e59) {
-        local_27 = src.params.x <= 0.0;
+    bool _e67 = local_26;
+    if (_e67) {
+        local_27 = src.params.y <= 0.0;
     } else {
         local_27 = false;
     }
-    bool _e67 = local_27;
-    if (_e67) {
-        local_28 = src.params.y <= 0.0;
+    bool _e75 = local_27;
+    if (_e75) {
+        local_28 = src.params.z <= 0.0;
     } else {
         local_28 = false;
     }
-    bool _e75 = local_28;
-    if (_e75) {
-        local_29 = src.params.z <= 0.0;
+    bool _e83 = local_28;
+    if (_e83) {
+        local_29 = ((src.octaves.x | src.octaves.y) | src.octaves.z) == 0u;
     } else {
         local_29 = false;
     }
-    bool _e83 = local_29;
-    if (_e83) {
-        local_30 = ((src.octaves.x | src.octaves.y) | src.octaves.z) == 0u;
-    } else {
-        local_30 = false;
-    }
-    bool _e97 = local_30;
+    bool _e97 = local_29;
     if (_e97) {
         return NodeGeom {d_8, _e9, OctRing {0, 0.0}, false};
     }
@@ -1316,17 +1466,17 @@ NodeGeom node_geom(
 }
 
 float mask_level(
-    float level_2
+    float level_4
 ) {
-    return metal::clamp(level_2 / INK_FLOOR, 0.0, 1.0);
+    return metal::clamp(level_4 / INK_FLOOR, 0.0, 1.0);
 }
 
 NodeInk base_node_ink(
-    VsOut in_11,
+    VsOut in_10,
     float d_5,
-    float aa_8,
+    float aa_7,
     OctRing oct_1,
-    bool analytic_4,
+    bool analytic_3,
     constant Uniforms& u
 ) {
     float base_alpha = 0.0;
@@ -1337,20 +1487,20 @@ NodeInk base_node_ink(
     float glyph_lit = 0.0;
     float node_sd = EMPTY_DISTANCE;
     NodeLayer band_3 = NodeLayer {65504.0, 0.0, 0.0};
+    bool local_30 = {};
+    uint i_5 = 0u;
     bool local_31 = {};
-    uint i_7 = 0u;
     bool local_32 = {};
     bool local_33 = {};
     bool local_34 = {};
     bool local_35 = {};
-    bool local_36 = {};
     metal::float3 slot_rgb = {};
     float cov_1 = {};
     float lit_shape = {};
     NodeLayer mark_strip = NodeLayer {65504.0, 0.0, 0.0};
     float mark = {};
     float mark_mask = {};
-    float presence_1 = in_11.params.x;
+    float presence_1 = in_10.params.x;
     metal::float4 _e16 = u.lattice_ground;
     glyph_rgb = _e16.xyz;
     float band_in_1 = u.node.band_inner;
@@ -1361,89 +1511,89 @@ NodeInk base_node_ink(
     float mark_in = metal::min(_e43, 1.58);
     float mark_out = metal::min(mark_in + mark_w_1, 1.58);
     if (band_out_1 > band_in_1) {
-        NodeLayer _e54 = glyph_band(d_5, band_in_1, band_out_1, 1.0, aa_8);
+        NodeLayer _e54 = glyph_band(d_5, band_in_1, band_out_1, 1.0, aa_7);
         band_3 = _e54;
     }
-    float swell_out = in_11.swell;
+    float swell_out = in_10.swell;
     bool swells_1 = swell_out > band_out_1;
     if (swells_1) {
-        local_31 = d_5 < (swell_out + aa_8);
+        local_30 = d_5 < (swell_out + aa_7);
     } else {
-        local_31 = false;
+        local_30 = false;
     }
-    bool in_swell = local_31;
-    uint2 loop_bound_4 = uint2(4294967295u);
-    bool loop_init_4 = true;
+    bool in_swell = local_30;
+    uint2 loop_bound_3 = uint2(4294967295u);
+    bool loop_init_3 = true;
     while(true) {
-        if (metal::all(loop_bound_4 == uint2(0u))) { break; }
-        loop_bound_4 -= uint2(loop_bound_4.y == 0u, 1u);
-        if (!loop_init_4) {
-            uint _e156 = i_7;
-            i_7 = _e156 + 1u;
+        if (metal::all(loop_bound_3 == uint2(0u))) { break; }
+        loop_bound_3 -= uint2(loop_bound_3.y == 0u, 1u);
+        if (!loop_init_3) {
+            uint _e156 = i_5;
+            i_5 = _e156 + 1u;
         }
-        loop_init_4 = false;
-        uint _e65 = i_7;
+        loop_init_3 = false;
+        uint _e65 = i_5;
         uint _e66 = oct_span(u);
         if (_e65 < _e66) {
             if (true) {
-                local_33 = analytic_4;
+                local_32 = analytic_3;
             } else {
-                local_33 = true;
+                local_32 = true;
             }
-            bool _e74 = local_33;
+            bool _e74 = local_32;
             if (!(_e74)) {
                 NodeLayer _e78 = band_3;
                 float _e79 = layer_coverage(_e78);
-                local_34 = _e79 > 0.0;
+                local_33 = _e79 > 0.0;
+            } else {
+                local_33 = true;
+            }
+            bool _e83 = local_33;
+            if (!(_e83)) {
+                local_34 = in_swell;
             } else {
                 local_34 = true;
             }
-            bool _e83 = local_34;
-            if (!(_e83)) {
-                local_35 = in_swell;
-            } else {
-                local_35 = true;
-            }
-            bool _e88 = local_35;
-            local_32 = _e88;
+            bool _e88 = local_34;
+            local_31 = _e88;
         } else {
-            local_32 = false;
+            local_31 = false;
         }
-        bool _e90 = local_32;
+        bool _e90 = local_31;
         if (_e90) {
         } else {
             break;
         }
         {
-            uint _e92 = i_7;
-            int slot_3 = as_type<int>(as_type<uint>(oct_1.base) + as_type<uint>(static_cast<int>(_e92)));
-            float _e96 = oct_slot_level(in_11.octaves, slot_3);
+            uint _e92 = i_5;
+            int slot_4 = as_type<int>(as_type<uint>(oct_1.base) + as_type<uint>(static_cast<int>(_e92)));
+            float _e96 = oct_slot_level(in_10.octaves, slot_4);
             if (_e96 <= 0.0) {
-                local_36 = presence_1 <= 0.0;
+                local_35 = presence_1 <= 0.0;
             } else {
-                local_36 = false;
+                local_35 = false;
             }
-            bool _e104 = local_36;
+            bool _e104 = local_35;
             if (_e104) {
                 continue;
             }
             NodeLayer _e106 = band_3;
-            NodeLayer _e107 = outer_glyph(slot_3, oct_1, in_11.uv, _e106, band_in_1, band_out_1, aa_8, u);
+            NodeLayer _e107 = outer_glyph(slot_4, oct_1, in_10.uv, _e106, band_in_1, band_out_1, aa_7, u);
             float _e108 = layer_coverage(_e107);
-            metal::float4 _e109 = oct_slot_ink(in_11, slot_3, u);
+            metal::float4 _e109 = oct_slot_ink(in_10, slot_4, u);
             float opacity_1 = _e109.w;
             slot_rgb = _e109.xyz;
             cov_1 = _e108 * opacity_1;
             lit_shape = _e108;
-            float _e116 = slice_reach(in_11, slot_3, band_in_1, band_out_1, u);
+            float _e116 = slice_reach(in_10, slot_4, band_in_1, band_out_1, u);
             if (_e116 == band_out_1) {
                 float _e118 = glyph_mask;
                 glyph_mask = metal::max(_e118, _e107.coverage);
                 float _e121 = node_sd;
-                float _e125 = layer_distance(_e121, NodeLayer {_e107.sd, opacity_1, _e107.coverage}, in_11);
+                float _e125 = layer_distance(_e121, NodeLayer {_e107.sd, opacity_1, _e107.coverage}, in_10);
                 node_sd = _e125;
             } else {
-                SliceZones _e127 = slice_zones(in_11, slot_3, oct_1, in_11.uv, d_5, _e107, _e109, band_in_1, band_out_1, _e116, aa_8, u);
+                SliceZones _e127 = slice_zones(in_10, slot_4, oct_1, in_10.uv, d_5, _e107, _e109, band_in_1, band_out_1, _e116, aa_7, u);
                 slot_rgb = _e127.ink.xyz;
                 cov_1 = _e127.ink.w;
                 lit_shape = _e127.lit;
@@ -1451,10 +1601,10 @@ NodeInk base_node_ink(
                 float _e139 = mask_level(_e127.far.level);
                 glyph_mask = metal::max(_e133, _e127.near.coverage + (_e127.rest * _e139));
                 float _e143 = node_sd;
-                float _e145 = layer_distance(_e143, _e127.near, in_11);
+                float _e145 = layer_distance(_e143, _e127.near, in_10);
                 node_sd = _e145;
                 float _e146 = node_sd;
-                float _e148 = layer_distance(_e146, _e127.far, in_11);
+                float _e148 = layer_distance(_e146, _e127.far, in_10);
                 node_sd = _e148;
             }
             float _e149 = cov_1;
@@ -1478,10 +1628,10 @@ NodeInk base_node_ink(
     glyph_mask = _e164 * _e159;
     {
         metal::float2 _e166 = spectral_radii(u);
-        NodeLayer _e171 = glyph_band(d_5, _e166.x, _e166.y, 1.0, aa_8);
-        RingInk _e172 = spectral_ring(in_11, oct_1, in_11.uv, _e171, aa_8, analytic_4, u);
+        NodeLayer _e171 = glyph_band(d_5, _e166.x, _e166.y, 1.0, aa_7);
+        RingInk _e172 = spectral_ring(in_10, oct_1, in_10.uv, _e171, aa_7, analytic_3, u);
         float _e173 = node_sd;
-        float _e175 = layer_distance(_e173, _e172.layer, in_11);
+        float _e175 = layer_distance(_e173, _e172.layer, in_10);
         node_sd = _e175;
         metal::float3 _e179 = glyph_rgb;
         float _e180 = glyph;
@@ -1491,21 +1641,21 @@ NodeInk base_node_ink(
         glyph_lit = (_e172.lit * _e172.cov) + (_e201 * (1.0 - _e172.cov));
         float _e208 = glyph;
         glyph = _e172.cov + (_e208 * (1.0 - _e172.cov));
-        float _e217 = mask_level(in_11.ring);
+        float _e217 = mask_level(in_10.ring);
         float audio_mask = _e172.layer.coverage * _e217;
         float _e219 = glyph_mask;
         glyph_mask = audio_mask + (_e219 * (1.0 - audio_mask));
     }
     if (mark_out > mark_in) {
-        NodeLayer _e231 = glyph_band(d_5, mark_in, mark_out, 1.0, aa_8);
+        NodeLayer _e231 = glyph_band(d_5, mark_in, mark_out, 1.0, aa_7);
         mark_strip = _e231;
     }
     float _e236 = mark_strip.sd;
     float _e240 = mark_strip.coverage;
-    NodeLayer _e242 = drawn_marks(in_11, in_11.marks.x, oct_1, in_11.uv, d_5, NodeLayer {_e236, in_11.params.y, _e240}, mark_in, mark_out, aa_8, analytic_4, u);
+    NodeLayer _e242 = drawn_marks(in_10, in_10.marks.x, oct_1, in_10.uv, d_5, NodeLayer {_e236, in_10.params.y, _e240}, mark_in, mark_out, aa_7, analytic_3, u);
     float _e247 = mark_strip.sd;
     float _e251 = mark_strip.coverage;
-    NodeLayer _e253 = drawn_marks(in_11, in_11.marks.y, oct_1, in_11.uv, d_5, NodeLayer {_e247, in_11.params.z, _e251}, mark_in, mark_out, aa_8, analytic_4, u);
+    NodeLayer _e253 = drawn_marks(in_10, in_10.marks.y, oct_1, in_10.uv, d_5, NodeLayer {_e247, in_10.params.z, _e251}, mark_in, mark_out, aa_7, analytic_3, u);
     float _e254 = layer_coverage(_e242);
     float _e255 = layer_coverage(_e253);
     float _e258 = mask_level(_e242.level);
@@ -1513,14 +1663,14 @@ NodeInk base_node_ink(
     float _e262 = mask_level(_e253.level);
     float bass_mask = _e253.coverage * _e262;
     float _e264 = node_sd;
-    float _e265 = layer_distance(_e264, _e242, in_11);
+    float _e265 = layer_distance(_e264, _e242, in_10);
     node_sd = _e265;
     float _e266 = node_sd;
-    float _e267 = layer_distance(_e266, _e253, in_11);
+    float _e267 = layer_distance(_e266, _e253, in_10);
     node_sd = _e267;
     mark = metal::max(_e254, _e255);
     mark_mask = metal::max(melody_mask, bass_mask);
-    metal::float3 mark_rgb = (_e254 > _e255) ? in_11.melody_color.xyz : in_11.bass_color.xyz;
+    metal::float3 mark_rgb = (_e254 > _e255) ? in_10.melody_color.xyz : in_10.bass_color.xyz;
     float mark_taper = 1.0 - metal::smoothstep(1.5600001, QUAD_MARGIN, d_5);
     float _e283 = mark;
     mark = _e283 * mark_taper;
@@ -1562,26 +1712,26 @@ NodeInk base_node_ink(
 }
 
 float slice_progress(
-    VsOut in_12,
-    uint i_8
+    VsOut in_11,
+    uint i_6
 ) {
-    return static_cast<float>((in_12.motion[metal::min(unsigned(naga_div(i_8, 3u)), 3u)] >> (naga_mod(i_8, 3u) * 10u)) & 1023u) / 1023.0;
+    return static_cast<float>((in_11.motion[metal::min(unsigned(naga_div(i_6, 3u)), 3u)] >> (naga_mod(i_6, 3u) * 10u)) & 1023u) / 1023.0;
 }
 
 AnimatedInk animated_slice_ink(
-    VsOut in_13,
-    float aa_9,
+    VsOut in_12,
+    float aa_8,
     OctRing oct_2,
     constant Uniforms& u
 ) {
     NodeInk result = NodeInk {metal::float3(0.0), 0.0, 0.0, 0.0, 65504.0};
     NodeInk marks = {};
-    uint i_9 = 0u;
-    float coverage_2 = {};
+    uint i_7 = 0u;
+    float coverage_1 = {};
     metal::float3 rgb = {};
     float lit = {};
+    bool local_36 = {};
     bool local_37 = {};
-    bool local_38 = {};
     NodeInk _e11 = result;
     marks = _e11;
     float band_in_2 = u.node.band_inner;
@@ -1591,28 +1741,28 @@ AnimatedInk animated_slice_ink(
     float _e30 = u.node.mark_thickness;
     float mark_out_1 = metal::min(mark_in_1 + metal::max(_e30, 0.0), 1.58);
     float anchor_radius = (band_out_2 > band_in_2) ? (0.5 * (band_in_2 + band_out_2)) : (0.5 * (mark_in_1 + mark_out_1));
-    bool swells_2 = in_13.swell > band_out_2;
-    uint2 loop_bound_5 = uint2(4294967295u);
-    bool loop_init_5 = true;
+    bool swells_2 = in_12.swell > band_out_2;
+    uint2 loop_bound_4 = uint2(4294967295u);
+    bool loop_init_4 = true;
     while(true) {
-        if (metal::all(loop_bound_5 == uint2(0u))) { break; }
-        loop_bound_5 -= uint2(loop_bound_5.y == 0u, 1u);
-        if (!loop_init_5) {
-            uint _e282 = i_9;
-            i_9 = _e282 + 1u;
+        if (metal::all(loop_bound_4 == uint2(0u))) { break; }
+        loop_bound_4 -= uint2(loop_bound_4.y == 0u, 1u);
+        if (!loop_init_4) {
+            uint _e282 = i_7;
+            i_7 = _e282 + 1u;
         }
-        loop_init_5 = false;
-        uint _e48 = i_9;
+        loop_init_4 = false;
+        uint _e48 = i_7;
         uint _e49 = oct_span(u);
         if (_e48 < _e49) {
         } else {
             break;
         }
         {
-            uint _e52 = i_9;
-            int slot_4 = as_type<int>(as_type<uint>(oct_2.base) + as_type<uint>(static_cast<int>(_e52)));
-            uint _e55 = i_9;
-            float _e56 = slice_progress(in_13, _e55);
+            uint _e52 = i_7;
+            int slot_5 = as_type<int>(as_type<uint>(oct_2.base) + as_type<uint>(static_cast<int>(_e52)));
+            uint _e55 = i_7;
+            float _e56 = slice_progress(in_12, _e55);
             if (_e56 <= 0.0) {
                 continue;
             }
@@ -1624,42 +1774,42 @@ AnimatedInk animated_slice_ink(
             if (scale <= 0.001) {
                 continue;
             }
-            float _e70 = oct_mid(slot_4, oct_2, u);
+            float _e70 = oct_mid(slot_5, oct_2, u);
             metal::float2 anchor = anchor_radius * metal::float2(metal::cos(_e70), metal::sin(_e70));
             float _e79 = u.node.pose.y;
             metal::float2 start_1 = anchor * (1.0 + (_e79 * (1.0 - _e56)));
-            metal::float2 uv_8 = anchor + ((in_13.uv - start_1) / metal::float2(scale));
+            metal::float2 uv_8 = anchor + ((in_12.uv - start_1) / metal::float2(scale));
             float d_9 = metal::length(uv_8);
-            float soft = aa_9 / scale;
+            float soft = aa_8 / scale;
             if (band_out_2 > band_in_2) {
                 NodeLayer _e95 = glyph_band(d_9, band_in_2, band_out_2, 1.0, soft);
-                NodeLayer _e96 = outer_glyph(slot_4, oct_2, uv_8, _e95, band_in_2, band_out_2, soft, u);
-                metal::float4 _e97 = oct_slot_ink(in_13, slot_4, u);
+                NodeLayer _e96 = outer_glyph(slot_5, oct_2, uv_8, _e95, band_in_2, band_out_2, soft, u);
+                metal::float4 _e97 = oct_slot_ink(in_12, slot_5, u);
                 float _e98 = glyph_taper(d_9, swells_2);
-                float _e100 = oct_slot_level(in_13.octaves, slot_4);
-                coverage_2 = ((_e96.coverage * _e98) * _e97.w) * _e56;
+                float _e100 = oct_slot_level(in_12.octaves, slot_5);
+                coverage_1 = ((_e96.coverage * _e98) * _e97.w) * _e56;
                 rgb = _e97.xyz;
                 lit = _e100 / metal::max(_e97.w, 0.0001);
-                float _e114 = slice_reach(in_13, slot_4, band_in_2, band_out_2, u);
+                float _e114 = slice_reach(in_12, slot_5, band_in_2, band_out_2, u);
                 if (_e114 == band_out_2) {
                     float _e118 = result.sd;
-                    float _e125 = layer_distance(_e118, NodeLayer {_e96.sd * scale, _e97.w * _e56, _e96.coverage}, in_13);
+                    float _e125 = layer_distance(_e118, NodeLayer {_e96.sd * scale, _e97.w * _e56, _e96.coverage}, in_12);
                     result.sd = _e125;
                     float _e128 = result.mask;
                     float _e133 = mask_level(_e97.w * _e56);
                     result.mask = metal::max(_e128, (_e96.coverage * _e98) * _e133);
                 } else {
-                    SliceZones _e136 = slice_zones(in_13, slot_4, oct_2, uv_8, d_9, _e96, _e97, band_in_2, band_out_2, _e114, soft, u);
+                    SliceZones _e136 = slice_zones(in_12, slot_5, oct_2, uv_8, d_9, _e96, _e97, band_in_2, band_out_2, _e114, soft, u);
                     rgb = _e136.ink.xyz;
-                    coverage_2 = (_e136.ink.w * _e98) * _e56;
+                    coverage_1 = (_e136.ink.w * _e98) * _e56;
                     lit = (_e100 * _e136.lit) / metal::max(_e136.ink.w, 0.0001);
                     NodeLayer near_1 = _e136.near;
                     NodeLayer far_1 = _e136.far;
                     float _e154 = result.sd;
-                    float _e161 = layer_distance(_e154, NodeLayer {_e136.near.sd * scale, _e136.near.level * _e56, _e136.near.coverage}, in_13);
+                    float _e161 = layer_distance(_e154, NodeLayer {_e136.near.sd * scale, _e136.near.level * _e56, _e136.near.coverage}, in_12);
                     result.sd = _e161;
                     float _e164 = result.sd;
-                    float _e171 = layer_distance(_e164, NodeLayer {_e136.far.sd * scale, _e136.far.level * _e56, _e136.far.coverage}, in_13);
+                    float _e171 = layer_distance(_e164, NodeLayer {_e136.far.sd * scale, _e136.far.level * _e56, _e136.far.coverage}, in_12);
                     result.sd = _e171;
                     float _e175 = mask_level(_e136.near.level * _e56);
                     float _e180 = mask_level(_e136.far.level * _e56);
@@ -1667,39 +1817,39 @@ AnimatedInk animated_slice_ink(
                     float _e185 = result.mask;
                     result.mask = metal::max(_e185, footprint * _e98);
                 }
-                float _e188 = coverage_2;
+                float _e188 = coverage_1;
                 float _e190 = result.alpha;
                 if (_e188 > _e190) {
                     metal::float3 _e193 = rgb;
-                    float _e194 = coverage_2;
+                    float _e194 = coverage_1;
                     result.rgb = _e193 * _e194;
-                    float _e197 = coverage_2;
+                    float _e197 = coverage_1;
                     result.alpha = _e197;
                     float _e199 = lit;
                     result.lit = _e199;
                 }
             }
-            metal::float2 _e200 = mark_radii(in_13, slot_4, mark_in_1, mark_out_1, u);
-            if (slot_4 >= 0) {
-                local_37 = slot_4 < 11;
+            metal::float2 _e200 = mark_radii(in_12, slot_5, mark_in_1, mark_out_1, u);
+            if (slot_5 >= 0) {
+                local_36 = slot_5 < 11;
+            } else {
+                local_36 = false;
+            }
+            bool _e208 = local_36;
+            if (_e208) {
+                local_37 = _e200.y > _e200.x;
             } else {
                 local_37 = false;
             }
-            bool _e208 = local_37;
-            if (_e208) {
-                local_38 = _e200.y > _e200.x;
-            } else {
-                local_38 = false;
-            }
-            bool _e215 = local_38;
+            bool _e215 = local_37;
             if (_e215) {
-                uint bit = 1u << static_cast<uint>(slot_4);
-                float melody = ((in_13.marks.x & bit) != 0u) ? in_13.params.y : 0.0;
-                float bass = ((in_13.marks.y & bit) != 0u) ? in_13.params.z : 0.0;
-                float level_4 = metal::max(melody, bass) * _e56;
-                metal::float3 color = (melody > bass) ? in_13.melody_color.xyz : in_13.bass_color.xyz;
-                NodeLayer _e247 = glyph_band(d_9, _e200.x, _e200.y, level_4, soft);
-                NodeLayer _e250 = outer_glyph(slot_4, oct_2, uv_8, _e247, _e200.x, _e200.y, soft, u);
+                uint bit = 1u << static_cast<uint>(slot_5);
+                float melody = ((in_12.marks.x & bit) != 0u) ? in_12.params.y : 0.0;
+                float bass = ((in_12.marks.y & bit) != 0u) ? in_12.params.z : 0.0;
+                float level_7 = metal::max(melody, bass) * _e56;
+                metal::float3 color = (melody > bass) ? in_12.melody_color.xyz : in_12.bass_color.xyz;
+                NodeLayer _e247 = glyph_band(d_9, _e200.x, _e200.y, level_7, soft);
+                NodeLayer _e250 = outer_glyph(slot_5, oct_2, uv_8, _e247, _e200.x, _e200.y, soft, u);
                 float taper = 1.0 - metal::smoothstep(1.5600001, QUAD_MARGIN, d_9);
                 float _e256 = layer_coverage(_e250);
                 float coverage_4 = _e256 * taper;
@@ -1710,10 +1860,10 @@ AnimatedInk animated_slice_ink(
                     marks.lit = 1.0;
                 }
                 float _e268 = marks.mask;
-                float _e271 = mask_level(level_4);
+                float _e271 = mask_level(level_7);
                 marks.mask = metal::max(_e268, (_e250.coverage * taper) * _e271);
                 float _e276 = marks.sd;
-                float _e281 = layer_distance(_e276, NodeLayer {_e250.sd * scale, level_4, _e250.coverage}, in_13);
+                float _e281 = layer_distance(_e276, NodeLayer {_e250.sd * scale, level_7, _e250.coverage}, in_12);
                 marks.sd = _e281;
             }
         }
@@ -1726,17 +1876,17 @@ AnimatedInk animated_slice_ink(
 NodeInk node_ink(
     VsOut src_1,
     float d_6,
-    float aa_10,
+    float aa_9,
     OctRing oct_3,
-    bool analytic_5,
+    bool analytic_4,
     constant Uniforms& u
 ) {
+    bool local_38 = {};
     bool local_39 = {};
-    bool local_40 = {};
-    NodeInk ink_1 = {};
+    NodeInk ink_2 = {};
     float _e8 = u.node.animation;
     if (_e8 == 0.0) {
-        NodeInk _e11 = base_node_ink(src_1, d_6, aa_10, oct_3, analytic_5, u);
+        NodeInk _e11 = base_node_ink(src_1, d_6, aa_9, oct_3, analytic_4, u);
         return _e11;
     }
     bool settled = (src_1.motion.w & 2147483648u) != 0u;
@@ -1744,60 +1894,138 @@ NodeInk node_ink(
     float _e25 = u.node.band_inner;
     if (_e21 <= _e25) {
         float _e32 = u.node.mark_thickness;
-        local_39 = _e32 <= 0.0;
+        local_38 = _e32 <= 0.0;
     } else {
-        local_39 = false;
+        local_38 = false;
     }
-    bool only_audio = local_39;
+    bool only_audio = local_38;
     if (!(settled)) {
-        local_40 = only_audio;
+        local_39 = only_audio;
     } else {
-        local_40 = true;
+        local_39 = true;
     }
-    bool _e41 = local_40;
+    bool _e41 = local_39;
     if (_e41) {
-        NodeInk _e42 = base_node_ink(src_1, d_6, aa_10, oct_3, analytic_5, u);
+        NodeInk _e42 = base_node_ink(src_1, d_6, aa_9, oct_3, analytic_4, u);
         return _e42;
     }
-    AnimatedInk _e43 = animated_slice_ink(src_1, aa_10, oct_3, u);
-    ink_1 = _e43.body;
+    AnimatedInk _e43 = animated_slice_ink(src_1, aa_9, oct_3, u);
+    ink_2 = _e43.body;
     metal::float2 _e46 = spectral_radii(u);
-    NodeLayer _e53 = glyph_band(metal::length(src_1.uv), _e46.x, _e46.y, 1.0, aa_10);
-    RingInk _e54 = spectral_ring(src_1, oct_3, src_1.uv, _e53, aa_10, analytic_5, u);
-    float _e59 = ink_1.lit;
-    float _e61 = ink_1.alpha;
+    NodeLayer _e53 = glyph_band(metal::length(src_1.uv), _e46.x, _e46.y, 1.0, aa_9);
+    RingInk _e54 = spectral_ring(src_1, oct_3, src_1.uv, _e53, aa_9, analytic_4, u);
+    float _e59 = ink_2.lit;
+    float _e61 = ink_2.alpha;
     float lit_1 = (_e54.lit * _e54.cov) + ((_e59 * _e61) * (1.0 - _e54.cov));
-    metal::float3 _e73 = ink_1.rgb;
-    ink_1.rgb = (_e54.color * _e54.cov) + (_e73 * (1.0 - _e54.cov));
-    float _e82 = ink_1.alpha;
-    ink_1.alpha = _e54.cov + (_e82 * (1.0 - _e54.cov));
-    float _e90 = ink_1.alpha;
-    ink_1.lit = lit_1 / metal::max(_e90, 0.0001);
+    metal::float3 _e73 = ink_2.rgb;
+    ink_2.rgb = (_e54.color * _e54.cov) + (_e73 * (1.0 - _e54.cov));
+    float _e82 = ink_2.alpha;
+    ink_2.alpha = _e54.cov + (_e82 * (1.0 - _e54.cov));
+    float _e90 = ink_2.alpha;
+    ink_2.lit = lit_1 / metal::max(_e90, 0.0001);
     float _e97 = mask_level(src_1.ring);
     float mask = _e54.layer.coverage * _e97;
-    float _e101 = ink_1.mask;
-    ink_1.mask = mask + (_e101 * (1.0 - mask));
-    float _e108 = ink_1.sd;
+    float _e101 = ink_2.mask;
+    ink_2.mask = mask + (_e101 * (1.0 - mask));
+    float _e108 = ink_2.sd;
     float _e110 = layer_distance(_e108, _e54.layer, src_1);
-    ink_1.sd = _e110;
-    float _e114 = ink_1.lit;
-    float _e116 = ink_1.alpha;
+    ink_2.sd = _e110;
+    float _e114 = ink_2.lit;
+    float _e116 = ink_2.alpha;
     float mark_lit = _e43.marks.alpha + ((_e114 * _e116) * (1.0 - _e43.marks.alpha));
-    metal::float3 _e128 = ink_1.rgb;
-    ink_1.rgb = _e43.marks.rgb + (_e128 * (1.0 - _e43.marks.alpha));
-    float _e139 = ink_1.alpha;
-    ink_1.alpha = _e43.marks.alpha + (_e139 * (1.0 - _e43.marks.alpha));
-    float _e148 = ink_1.alpha;
-    ink_1.lit = mark_lit / metal::max(_e148, 0.0001);
-    float _e156 = ink_1.mask;
-    ink_1.mask = _e43.marks.mask + (_e156 * (1.0 - _e43.marks.mask));
-    float _e165 = ink_1.sd;
-    ink_1.sd = metal::min(_e165, _e43.marks.sd);
-    NodeInk _e169 = ink_1;
+    metal::float3 _e128 = ink_2.rgb;
+    ink_2.rgb = _e43.marks.rgb + (_e128 * (1.0 - _e43.marks.alpha));
+    float _e139 = ink_2.alpha;
+    ink_2.alpha = _e43.marks.alpha + (_e139 * (1.0 - _e43.marks.alpha));
+    float _e148 = ink_2.alpha;
+    ink_2.lit = mark_lit / metal::max(_e148, 0.0001);
+    float _e156 = ink_2.mask;
+    ink_2.mask = _e43.marks.mask + (_e156 * (1.0 - _e43.marks.mask));
+    float _e165 = ink_2.sd;
+    ink_2.sd = metal::min(_e165, _e43.marks.sd);
+    NodeInk _e169 = ink_2;
     return _e169;
 }
 
-struct fs_node_cellInput {
+metal::float2 light_coord(
+    metal::float2 frag_pos,
+    constant Uniforms& u
+) {
+    metal::float2 _e4 = u.nebula.target_size;
+    return frag_pos / metal::max(_e4, metal::float2(1.0));
+}
+
+Painted node_paint(
+    VsOut in_13,
+    metal::texture2d<float, metal::access::sample> glow_tex,
+    metal::sampler glow_sampler,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    device type_8 const& node_occluders,
+    constant Uniforms& u,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    NodeInk ink_3 = {};
+    float visibility_1 = 1.0;
+    NodeGeom _e2 = node_geom(in_13, false, u);
+    ShadowThrough _e9 = node_shadow_through(in_13.shadow_box.x, in_13.shadow_at.xy, in_13.shadow_at.z, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
+    if (!(_e2.paints)) {
+        float shadow = 1.0 - _e9.seen;
+        float bloom = 1.0 - _e9.bloom;
+        if (bloom <= 0.0) {
+            metal::discard_fragment();
+        }
+        return Painted {metal::float3(0.0), shadow, bloom, 0.0};
+    }
+    NodeInk _e28 = node_ink(in_13, _e2.d, _e2.aa, _e2.oct, false, u);
+    ink_3 = _e28;
+    float _e31 = ink_3.alpha;
+    if (_e31 < INK_FLOOR) {
+        float _e37 = ink_3.sd;
+        ink_3 = NodeInk {metal::float3(0.0), 0.0, 0.0, 0.0, _e37};
+    }
+    float _e43 = ink_3.mask;
+    bool _e48 = shadow_is_distance(in_13.shadow_box.x, shadow_casters, _buffer_sizes);
+    float shadow_exposure = _e48 ? 1.0 : (1.0 - _e43);
+    float seen_through = 1.0 - ((1.0 - _e9.seen) * shadow_exposure);
+    float bloom_through = 1.0 - ((1.0 - _e9.bloom) * shadow_exposure);
+    float _e66 = ink_3.alpha;
+    if (_e66 > 0.0) {
+        float _e76 = u.geometry_shadow.occlusion;
+        float _e77 = node_visibility(in_13.shadow_box.x, in_13.shadow_at.xy, _e76, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, _buffer_sizes);
+        visibility_1 = _e77;
+    }
+    float _e79 = ink_3.alpha;
+    float _e80 = visibility_1;
+    float visible_alpha = _e79 * _e80;
+    float final_alpha = 1.0 - ((1.0 - visible_alpha) * seen_through);
+    float bloom_alpha = 1.0 - ((1.0 - visible_alpha) * bloom_through);
+    if (bloom_alpha <= 0.0) {
+        metal::discard_fragment();
+    }
+    metal::float2 _e96 = light_coord(in_13.clip_pos.xy, u);
+    metal::float4 _e97 = glow_light(_e96, glow_tex, glow_sampler);
+    metal::float3 _e99 = ink_3.rgb;
+    float _e101 = ink_3.alpha;
+    float _e103 = glow_wash(u);
+    float _e105 = ink_3.lit;
+    metal::float3 _e108 = wash_over(_e99, _e101, _e97.xyz, metal::mix(1.0, _e103, _e105));
+    float _e109 = visibility_1;
+    return Painted {_e108 * _e109, final_alpha, bloom_alpha, visible_alpha};
+}
+
+SplitOut node_split(
+    Painted paint,
+    float shadow_alpha,
+    constant Uniforms& u
+) {
+    float _e6 = u.geometry_shadow.occlusion;
+    float alpha_1 = metal::mix(shadow_alpha, paint.ink_alpha, metal::clamp(_e6, 0.0, 1.0));
+    return SplitOut {metal::float4(0.0, 0.0, 0.0, shadow_alpha), metal::float4(paint.rgb, alpha_1)};
+}
+
+struct fs_main_sceneInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 params [[user(loc2), center_perspective]];
     metal::uint3 octaves [[user(loc3), flat]];
@@ -1815,40 +2043,30 @@ struct fs_node_cellInput {
     metal::float4 shadow_box [[user(loc10), flat]];
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
-struct fs_node_cellOutput {
-    metal::float4 member [[color(0)]];
+struct fs_main_sceneOutput {
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
+    metal::float4 bloom_other [[color(2)]];
+    metal::float4 bloom_ink [[color(3)]];
 };
-fragment fs_node_cellOutput fs_node_cell(
-  fs_node_cellInput varyings [[stage_in]]
+fragment fs_main_sceneOutput fs_main_scene(
+  fs_main_sceneInput varyings [[stage_in]]
 , metal::float4 clip_pos [[position]]
+, metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
+, metal::sampler glow_sampler [[sampler(0)]]
+, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(1)]]
+, metal::sampler shadow_sampler [[sampler(1)]]
+, device type_6 const& shadow_casters [[buffer(1)]]
+, device type_8 const& node_occluders [[buffer(2)]]
 , constant Uniforms& u [[buffer(0)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
     const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.thickness, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.swell, varyings.ring, varyings.ink_carry, varyings.shadow_box, varyings.shadow_at };
-    bool local = {};
-    metal::float4 cell = in.shadow_box;
-    metal::float2 at = in.clip_pos.xy;
-    if (!(metal::any(at < cell.xy))) {
-        local = metal::any(at > (cell.xy + cell.zw));
-    } else {
-        local = true;
-    }
-    bool _e16 = local;
-    if (_e16) {
-        metal::discard_fragment();
-    }
-    bool analytic_6 = in.shadow_at.z < 0.0;
-    NodeGeom _e21 = node_geom(in, analytic_6, u);
-    if (!(_e21.paints)) {
-        return fs_node_cellOutput { metal::float4(0.0) };
-    }
-    NodeInk _e29 = node_ink(in, _e21.d, _e21.aa, _e21.oct, analytic_6, u);
-    if (in.params.w > 1.5) {
-        return fs_node_cellOutput { metal::float4(metal::clamp(-(_e29.sd), 0.0, 1.0), 0.0, 0.0, 0.0) };
-    }
-    if (analytic_6) {
-        float points = metal::clamp(_e29.sd * metal::abs(in.shadow_at.z), -65504.0, EMPTY_DISTANCE);
-        float stable = metal::rint(points * 32.0) / 32.0;
-        return fs_node_cellOutput { metal::float4(stable, 0.0, 0.0, 0.0) };
-    }
-    return fs_node_cellOutput { metal::float4((_e29.alpha < INK_FLOOR) ? 0.0 : _e29.alpha, 0.0, 0.0, 0.0) };
+    Painted _e1 = node_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, u, _buffer_sizes);
+    SplitOut _e3 = node_split(_e1, _e1.seen, u);
+    SplitOut _e5 = node_split(_e1, _e1.bloom, u);
+    float share_1 = 1.0 - in.params.w;
+    metal::float4 bloom_ink = metal::float4(_e5.ink.xyz * share_1, _e5.ink.w * metal::min(share_1, 1.0));
+    const auto _tmp = SceneOut {_e3.other, _e3.ink, _e5.other, bloom_ink};
+    return fs_main_sceneOutput { _tmp.other, _tmp.ink, _tmp.bloom_other, _tmp.bloom_ink };
 }

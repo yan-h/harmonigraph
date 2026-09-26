@@ -415,6 +415,8 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
 /// A mark stands off its OWN slot's slice rather than off the band: a thinned
 /// slice's mark follows it in toward the ring and a swelled one's out with it,
 /// by what the slice gave up or took, so a slice never draws over its mark.
+/// The same whether the slice has settled or is still arriving
+/// (`animated_slice_ink`'s own path).
 #[test]
 fn a_mark_follows_its_slices_thickness() {
     // Twice the neighbours' frame, so the move is several times the tolerance.
@@ -430,7 +432,7 @@ fn a_mark_follows_its_slices_thickness() {
         ..Default::default()
     }
     .rings();
-    let staged = |thickness: f32, marked: bool| -> Scene {
+    let staged = |thickness: f32, marked: bool, arriving: bool| -> Scene {
         let mut scene = single_marked_node(if marked { MIDDLE_C } else { 0 }, 0);
         // No light, no bloom and no audio ring: the mark alone is what the
         // two shots part on.
@@ -443,15 +445,25 @@ fn a_mark_follows_its_slices_thickness() {
         scene.rings_outer = rings.band.1;
         scene.mark_inner = rings.mark_inner;
         scene.nodes[0].thickness[harmonigraph_scene::MIDDLE_C_SLOT] = thickness;
+        if arriving {
+            // A hair short of settled, where the pose is all but home.
+            scene.note_animation = harmonigraph_scene::NoteAnimationConfig {
+                radial_start: -1.0,
+                ..Default::default()
+            };
+            scene.nodes[0].slice_progress = [0.999; harmonigraph_scene::OCTAVE_SLOTS];
+        }
         scene
     };
-    let mut mark_at = |thickness: f32| -> Light {
-        let bare = gpu.shot(&staged(thickness, false));
-        light_about_center(&light_over(&gpu.shot(&staged(thickness, true)), &bare), SIZE)
+    let mut mark_at = |thickness: f32, arriving: bool| -> Light {
+        let bare = gpu.shot(&staged(thickness, false, arriving));
+        let marked = gpu.shot(&staged(thickness, true, arriving));
+        light_about_center(&light_over(&marked, &bare), SIZE)
     };
-    let rest = mark_at(1.0);
-    let thin = mark_at(0.25);
-    let thick = mark_at(1.75);
+    let rest = mark_at(1.0, false);
+    let thin = mark_at(0.25, false);
+    let thick = mark_at(1.75, false);
+    let arriving = mark_at(0.25, true);
     assert!(rest.weight > 0.0 && thin.weight > 0.0 && thick.weight > 0.0, "a mark drew nothing");
     eprintln!(
         "mark from {:.1} px at rest, {:.1} thinned, {:.1} swelled",
@@ -468,6 +480,12 @@ fn a_mark_follows_its_slices_thickness() {
         (thick.near - rest.near - want).abs() < 4.0,
         "a swelled slice moved its mark out {:.1} px, not {want:.1}",
         thick.near - rest.near,
+    );
+    assert!(
+        (arriving.near - thin.near).abs() < 4.0,
+        "arriving, a quarter-thick slice's mark stands at {:.1} px, not the settled {:.1}",
+        arriving.near,
+        thin.near,
     );
 }
 

@@ -184,11 +184,10 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
 /// read the same routes, which is why it sits here rather than on either
 /// picture's page.
 fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    {
-        fn weight<'a>(value: &'a mut f32, label: &'a str) -> ValueBar<'a> {
-            ValueBar::new(value, 0.0..=INTENSITY_WEIGHT_MAX, label)
-        }
-        let targets = IntensityTarget::ALL.map(|target| match target {
+    fn weight<'a>(value: &'a mut f32, label: &'a str) -> ValueBar<'a> {
+        ValueBar::new(value, 0.0..=INTENSITY_WEIGHT_MAX, label)
+    }
+    let targets = IntensityTarget::ALL.map(|target| match target {
             IntensityTarget::Off => (target, "Off", "Drives nothing."),
             IntensityTarget::Opacity => (
                 target,
@@ -206,83 +205,80 @@ fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 "Drives how thick the note is drawn, as a multiple of its pane's note width: the roll's ribbons about their center line (Ribbon width), and the lattice's octave slices out from the MIDI layer's inner edge (the Layers bar). A note at rest is drawn at that width.",
             ),
         });
-        let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {
-            choice_row(ui, name, &mut source.target, &targets);
-            ui.add_enabled_ui(source.target != IntensityTarget::Off, |ui| {
-                weight(&mut source.weight, &format!("{name} weight")).show(ui).on_hover_text(
-                    format!(
-                        "{hover} Its distance from rest is multiplied by this before its display adds it."
-                    ),
-                );
-            });
-        };
-        let intensity = &mut view.intensity;
-        route(
-            ui,
-            &mut intensity.velocity,
-            "Velocity",
-            "The note-on velocity. It rests at full, so a softer note is taken away from its display.",
-        );
-        route(
-            ui,
-            &mut intensity.gain,
-            "Gain",
-            "The note's gain expression, in dB off unity divided by Gain range. \
-             It rests at unity, so a boost adds to its display and a cut takes away.",
-        );
-        ui.add_enabled_ui(intensity.gain.target != IntensityTarget::Off, |ui| {
-            ValueBar::new(&mut intensity.gain_range, GAIN_RANGE_MIN..=GAIN_RANGE_MAX, "Gain range")
-                .unit(1.0, " dB")
-                .decimals(0)
-                .show(ui)
-                .on_hover_text(
-                    "How many dB of gain make one Gain weight's worth. \
-                     At 24 dB, +12 dB adds half of it and -24 dB takes all of it away.",
-                );
+    let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {
+        choice_row(ui, name, &mut source.target, &targets);
+        ui.add_enabled_ui(source.target != IntensityTarget::Off, |ui| {
+            weight(&mut source.weight, &format!("{name} weight")).show(ui).on_hover_text(format!(
+                "{hover} Its distance from rest is multiplied by this before its display adds it."
+            ));
         });
-        route(
-            ui,
-            &mut intensity.pressure,
-            "Pressure",
-            "The note's pressure (aftertouch), from 0 unpressed to 1. It rests unpressed.",
-        );
-        route(
-            ui,
-            &mut intensity.timbre,
-            "Timbre",
-            "The note's timbre expression. It rests at 0.5, where an untouched timbre lane sits.",
-        );
-        // The whole of the lattice's and the roll's bloom, so it is live
-        // whether or not anything is routed to Glow.
-        ValueBar::new(&mut intensity.glow_base, 0.0..=BLOOM_MAX, "Glow base")
-            .unit(1.0, "×")
+    };
+    let intensity = &mut view.intensity;
+    route(
+        ui,
+        &mut intensity.velocity,
+        "Velocity",
+        "The note-on velocity. It rests at full, so a softer note is taken away from its display.",
+    );
+    route(
+        ui,
+        &mut intensity.gain,
+        "Gain",
+        "The note's gain expression, in dB off unity divided by Gain range. \
+             It rests at unity, so a boost adds to its display and a cut takes away.",
+    );
+    ui.add_enabled_ui(intensity.gain.target != IntensityTarget::Off, |ui| {
+        ValueBar::new(&mut intensity.gain_range, GAIN_RANGE_MIN..=GAIN_RANGE_MAX, "Gain range")
+            .unit(1.0, " dB")
+            .decimals(0)
             .show(ui)
             .on_hover_text(
-                "Soft halos around MIDI notes in the Lattice and the spectrogram's ribbons: \
+                "How many dB of gain make one Gain weight's worth. \
+                     At 24 dB, +12 dB adds half of it and -24 dB takes all of it away.",
+            );
+    });
+    route(
+        ui,
+        &mut intensity.pressure,
+        "Pressure",
+        "The note's pressure (aftertouch), from 0 unpressed to 1. It rests unpressed.",
+    );
+    route(
+        ui,
+        &mut intensity.timbre,
+        "Timbre",
+        "The note's timbre expression. It rests at 0.5, where an untouched timbre lane sits.",
+    );
+    // The whole of the lattice's and the roll's bloom, so it is live
+    // whether or not anything is routed to Glow.
+    ValueBar::new(&mut intensity.glow_base, 0.0..=BLOOM_MAX, "Glow base")
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "Soft halos around MIDI notes in the Lattice and the spectrogram's ribbons: \
                  how much a note at rest blooms, before the sources routed to Glow add in. \
                  0 turns bloom off; 1× is the reference strength.",
-            );
-        // The other two only count while something is routed to their display,
-        // so each is greyed out otherwise, as a source's weight is while it is
-        // Off.
-        let disabled = "Route a source to it above to use this.";
-        ui.add_enabled_ui(intensity.routes_to(IntensityTarget::Opacity), |ui| {
-            let hover = "The opacity of a note at rest, before the sources routed to it add in; \
+        );
+    // The other two only count while something is routed to their display,
+    // so each is greyed out otherwise, as a source's weight is while it is
+    // Off.
+    let disabled = "Route a source to it above to use this.";
+    ui.add_enabled_ui(intensity.routes_to(IntensityTarget::Opacity), |ui| {
+        let hover = "The opacity of a note at rest, before the sources routed to it add in; \
                          the sum is held between 0 and 1.";
-            weight(&mut intensity.opacity_rest, "Opacity base")
-                .show(ui)
-                .on_hover_text(hover)
-                .on_disabled_hover_text(format!("{hover} {disabled}"));
-        });
-        ui.add_enabled_ui(intensity.routes_to(IntensityTarget::Thickness), |ui| {
-            let hover = "The widest a note can be drawn, as a multiple of its pane's note width. \
+        weight(&mut intensity.opacity_rest, "Opacity base")
+            .show(ui)
+            .on_hover_text(hover)
+            .on_disabled_hover_text(format!("{hover} {disabled}"));
+    });
+    ui.add_enabled_ui(intensity.routes_to(IntensityTarget::Thickness), |ui| {
+        let hover = "The widest a note can be drawn, as a multiple of its pane's note width. \
                          1× lets a source only thin it. \
                          On the lattice a slice also stops at the node's edge.";
-            ValueBar::new(&mut intensity.thickness_max, THICKNESS_MAX_RANGE, "Thickness max")
-                .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(hover)
-                .on_disabled_hover_text(format!("{hover} {disabled}"));
-        });
-    }
+        ValueBar::new(&mut intensity.thickness_max, THICKNESS_MAX_RANGE, "Thickness max")
+            .unit(1.0, "×")
+            .show(ui)
+            .on_hover_text(hover)
+            .on_disabled_hover_text(format!("{hover} {disabled}"));
+    });
 }
