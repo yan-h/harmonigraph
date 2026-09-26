@@ -10,6 +10,22 @@ struct VertexOut {
     float t;
     char _pad3[8];
 };
+struct StarSlice {
+    metal::float2 offset;
+    float cell;
+    float sigma;
+    float cap;
+    float defocus;
+    float gain;
+    float occupancy;
+    float halo;
+    float blur;
+    float halo_reach;
+    float reach;
+};
+struct type_5 {
+    StarSlice inner[8];
+};
 struct Cloud {
     metal::float2 origin;
     metal::float2 size;
@@ -33,7 +49,13 @@ struct Cloud {
     float wash_layers;
     uint tile_cells;
     uint pitch_vertical;
-    metal::uint2 _pad;
+    float star_randomness;
+    float star_volume;
+    float star_glow;
+    float star_tint;
+    float star_wander;
+    float star_time;
+    type_5 star_slices;
 };
 constant float CLOUD_UNITS = 10.0;
 constant float CLOUD_TILE_ROT_COS = 0.8;
@@ -59,6 +81,15 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
+constant uint STAR_SLICES = 8u;
+constant float STAR_PANE = 540.0;
+constant float STAR_JITTER = 0.6;
+constant int STAR_HASH_PERIOD = 4096;
+constant float STAR_WANDER_PERIOD = 400.0;
+constant float STAR_EXPOSURE = 1.5;
+constant float STAR_HUE_FLOOR = 0.18;
+constant float STAR_RING_FADE = 0.7;
+constant float STAR_TAU = 6.2831855;
 
 float density_decode(
     float value
