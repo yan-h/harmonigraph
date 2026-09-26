@@ -628,10 +628,11 @@ fn initial_expressions_survive_unpaired_and_missed_reply_fallback() {
 /// #1127. A snapshot never covers history still waiting to publish. The Hub's
 /// first callback owes every row a snapshot, and here it also collects a late
 /// onset whose input sample no segment of this callback covers, so the delta
-/// waits for `end`'s forced flush while the snapshot is built. Both lanes are
+/// waits for `end`'s forced flush while `publish` builds snapshots. Both lanes are
 /// read on this thread by consumers that refuse history at or below a cut they
-/// have adopted: the display's tracker and, standing in for the take writer's
-/// identical check, a tracker fed the take lane.
+/// have adopted: the display's tracker, and a tracker fed the take lane. That
+/// second one holds the take to the same rule the writer does (it fences on
+/// `sequence <= cut`), though it is not the writer's code.
 #[test]
 fn a_late_reply_publishes_its_history_before_the_snapshot_that_covers_it() {
     use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker};
@@ -643,23 +644,26 @@ fn a_late_reply_publishes_its_history_before_the_snapshot_that_covers_it() {
     assert!(tune.run(0, vec![note(7, 0, 57, 0, true)], None).values.is_empty());
     assert_eq!(tune.run(512, vec![], None).values.len(), 1, "emitted uncorrected, on time");
     let mut display = NoteTracker::new();
-    let mut snapshots = Vec::new();
     let mut drain = |capture: &mut harmonigraph_record::testing::Capture| {
+        let mut snapshots = Vec::new();
         capture.display_into(&mut display, |event, _| {
             if let CanonicalEvent::Baseline(frame) = event {
                 snapshots.push(frame.source.0);
             }
         });
+        snapshots
     };
     hub.run(512, vec![], None);
-    drain(&mut capture);
-    // A second Hub callback pays the snapshot the first one held back, which is
-    // what says the fixture reached a row that owed one with history pending.
+    let first = drain(&mut capture);
+    // A second callback, so a snapshot paid twice or only a callback late fails.
     hub.run(1024, vec![], None);
-    drain(&mut capture);
+    let second = drain(&mut capture);
     let note = display.roll().notes().find(|n| n.note == 57).expect("the late onset is drawn");
     assert!(note.history_complete, "drawn from its own attack, not only from a snapshot");
-    assert_eq!(snapshots.iter().filter(|&&s| s == note.source.0).count(), 1, "{snapshots:?}");
+    // The row owed a snapshot with its history pending, which is what says the
+    // fixture reached the held-back path; `end` pays it in that same callback.
+    let owed = |seen: &[u64]| seen.iter().filter(|&&s| s == note.source.0).count();
+    assert_eq!((owed(&first), owed(&second)), (1, 0), "{first:?} then {second:?}");
     let mut take = NoteTracker::new();
     for record in capture.drain_canonical() {
         record.apply(&mut take).expect("the take lane keeps history before its snapshot");
