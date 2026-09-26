@@ -41,15 +41,13 @@ impl Source {
     }
 
     fn color(self) -> Color32 {
-        // Stable identities, made with the skin's own accent color model.
-        let hue = match self {
-            Self::Velocity => 240.0,
-            Self::Pressure => 85.0,
-            Self::Timbre => 310.0,
-            Self::Gain => 145.0,
-        };
-        let [r, g, b] = harmonigraph_scene::skin::accent_color(hue, 0.65);
-        Color32::from_rgb(r, g, b)
+        // Vivid source identities; fills mix these with the current skin's well.
+        match self {
+            Self::Velocity => Color32::from_rgb(46, 164, 255),
+            Self::Pressure => Color32::from_rgb(255, 139, 25),
+            Self::Timbre => Color32::from_rgb(174, 76, 255),
+            Self::Gain => Color32::from_rgb(30, 200, 102),
+        }
     }
 
     fn hint(self) -> &'static str {
@@ -144,79 +142,53 @@ fn group(
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
             .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
     };
-    let mut highlighted = None;
     for &source in &sources {
-        let response = ui
-            .push_id(source.name(), |ui| {
-                ui.horizontal(|ui| {
-                    let delete_width = 52.0 * scale;
-                    let width = (ui.available_width() - delete_width - ui.spacing().item_spacing.x)
-                        .max(0.0);
-                    let label = format!("{} weight", source.name());
-                    let response = ui
-                        .allocate_ui_with_layout(
-                            Vec2::new(width, theme::row_height(scale)),
-                            egui::Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                let mut bar = ValueBar::new(
-                                    source.setting(settings).weight_mut(target).as_mut().unwrap(),
-                                    0.0..=INTENSITY_WEIGHT_MAX,
-                                    &label,
-                                )
-                                .color(source.color());
-                                if source == Source::Timbre {
-                                    bar = bar.display(|v| format!("±{v:.2}"));
-                                }
-                                bar.show(ui).on_hover_text(source.hint())
-                            },
+        ui.push_id(source.name(), |ui| {
+            ui.horizontal(|ui| {
+                let delete_width = 52.0 * scale;
+                let width =
+                    (ui.available_width() - delete_width - ui.spacing().item_spacing.x).max(0.0);
+                let label = format!("{} weight", source.name());
+                ui.allocate_ui_with_layout(
+                    Vec2::new(width, theme::row_height(scale)),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        let mut bar = ValueBar::new(
+                            source.setting(settings).weight_mut(target).as_mut().unwrap(),
+                            0.0..=INTENSITY_WEIGHT_MAX,
+                            &label,
                         )
-                        .inner;
-                    if ui
-                        .add_sized(
-                            Vec2::new(delete_width, theme::row_height(scale)),
-                            egui::Button::new("Delete"),
-                        )
-                        .on_hover_text(format!(
-                            "Remove {} from {}",
-                            source.name(),
-                            target_name(target)
-                        ))
-                        .clicked()
-                    {
-                        *route = Some((source, target, None));
-                    }
-                    response
-                })
-                .inner
-            })
-            .inner;
-        if response.hovered() || response.dragged() || response.has_focus() {
-            highlighted = Some(source);
-        }
+                        .color(source.color());
+                        if source == Source::Timbre {
+                            bar = bar.display(|v| format!("±{v:.2}"));
+                        }
+                        bar.show(ui).on_hover_text(source.hint())
+                    },
+                );
+                if ui
+                    .add_sized(
+                        Vec2::new(delete_width, theme::row_height(scale)),
+                        egui::Button::new("Delete"),
+                    )
+                    .on_hover_text(format!("Remove {} from {}", source.name(), target_name(target)))
+                    .clicked()
+                {
+                    *route = Some((source, target, None));
+                }
+            });
+        });
     }
     if let Some(slot) = overlay.filter(|_| !sources.is_empty()) {
         let rect = base.rect.shrink(2.0 * scale);
-        if let Some(pointer) = base.hover_pos().filter(|p| rect.contains(*p)) {
-            highlighted = sources
-                .get(((pointer.y - rect.top()) / rect.height() * sources.len() as f32) as usize)
-                .copied();
-        }
-        ui.painter().set(
-            slot,
-            egui::Shape::Vec(reach_shapes(rect, settings, target, &sources, highlighted, scale)),
-        );
+        ui.painter()
+            .set(slot, egui::Shape::Vec(reach_shapes(rect, settings, target, &sources, scale)));
     } else if sources.is_empty() {
         widgets::weak(ui, "No mappings");
     }
 }
 
-fn band_color(source: Source, highlighted: Option<Source>) -> Color32 {
-    let strength = match highlighted {
-        Some(active) if active == source => 0.5,
-        Some(_) => 0.15,
-        None => 0.35,
-    };
-    theme::well().lerp_to_gamma(source.color(), strength)
+fn band_color(source: Source) -> Color32 {
+    theme::well().lerp_to_gamma(source.color(), 0.65)
 }
 
 fn reach_shapes(
@@ -224,10 +196,9 @@ fn reach_shapes(
     settings: &IntensitySettings,
     target: IntensityTarget,
     sources: &[Source],
-    highlighted: Option<Source>,
     scale: f32,
 ) -> Vec<egui::Shape> {
-    let (base, ceiling) = limits(settings, target);
+    let (_, ceiling) = limits(settings, target);
     let mut shapes = Vec::new();
     let height = rect.height() / sources.len() as f32;
     for (i, &source) in sources.iter().enumerate() {
@@ -240,15 +211,10 @@ fn reach_shapes(
             lane,
             source.reach(settings, target),
             ceiling,
-            band_color(source, highlighted),
+            band_color(source),
             scale,
         );
     }
-    let x = rect.left() + rect.width() * (base / ceiling).clamp(0.0, 1.0);
-    shapes.push(egui::Shape::line_segment(
-        [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-        Stroke::new(scale, theme::text()),
-    ));
     shapes
 }
 
@@ -265,8 +231,14 @@ fn band_shapes(
         Pos2::new(x(reach.min), rect.top()),
         Pos2::new(x(reach.max), rect.bottom()),
     );
+    let corners = egui::CornerRadius {
+        nw: 0,
+        sw: 0,
+        ne: theme::control_radius(scale),
+        se: theme::control_radius(scale),
+    };
     if span.width() > 0.0 {
-        shapes.push(egui::Shape::rect_filled(span, theme::control_radius(scale), color));
+        shapes.push(egui::Shape::rect_filled(span, corners, color));
     }
     if reach.gain_boosts {
         let mut start = x(reach.max);
@@ -290,7 +262,7 @@ fn band_shapes(
                 Vec2::new(5.0 * scale, rect.height()),
             )
             .intersect(rect);
-            shapes.push(egui::Shape::rect_filled(end, theme::control_radius(scale), color));
+            shapes.push(egui::Shape::rect_filled(end, corners, color));
             // Bound each diagonal explicitly: the reserved shape shares the
             // slider's painter, so there is no per-lane clip rectangle.
             let mut x = end.left() - end.height();
@@ -441,8 +413,8 @@ mod tests {
                 })
                 .unwrap()
         };
-        let velocity = band(&out, band_color(Source::Velocity, None));
-        let timbre = band(&out, band_color(Source::Timbre, None));
+        let velocity = band(&out, band_color(Source::Velocity));
+        let timbre = band(&out, band_color(Source::Timbre));
         assert!((velocity.left() - (plot.left() + plot.width() * 0.25)).abs() < 0.1);
         assert!((velocity.width() - plot.width() * 0.5).abs() < 0.1);
         assert!((timbre.left() - plot.left()).abs() < 0.1);
@@ -465,13 +437,13 @@ mod tests {
             .unwrap();
         assert!(overlay_index < text_index, "bands must stay beneath the text");
         assert!(out.shapes.iter().any(|s| matches!(&s.shape,
-            egui::Shape::Text(t) if t.galley.text() == "Opacity base" && t.fallback_color == theme::text())));
+            egui::Shape::Text(t) if t.galley.text() == "Opacity base" && t.fallback_color == theme::text_dim())));
         for source in Source::ALL {
             assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
-                egui::Shape::Path(p) if p.fill == theme::well().lerp_to_gamma(source.color(), 0.35))));
+                egui::Shape::Path(p) if p.fill == theme::well().lerp_to_gamma(source.color(), 0.5))));
         }
         assert!(overlay(&out).iter().any(|s| matches!(s,
-            egui::Shape::Rect(r) if r.fill == band_color(Source::Velocity, None) && r.corner_radius.nw > 0)));
+            egui::Shape::Rect(r) if r.fill == band_color(Source::Velocity) && r.corner_radius.nw == 0 && r.corner_radius.sw == 0 && r.corner_radius.ne > 0)));
         // Four mappings fit inside the bar, with timbre clipped at zero and
         // gain at the ceiling. Hatch strokes remain within their lane ends.
         for edge in [plot.left(), plot.right() - 5.0] {
@@ -483,13 +455,16 @@ mod tests {
         let out = frame(&ctx, &mut settings, vec![]);
         assert!(overlay(&out).iter().any(|s| matches!(s,
             egui::Shape::LineSegment { points, stroke }
-                if stroke.color == band_color(Source::Gain, None)
+                if stroke.color == band_color(Source::Gain)
                     && points[0].x >= plot.left() + plot.width() * 0.5
                     && points[1].x > points[0].x)));
+        let normal_ranges = overlay(&out).to_vec();
+        for pointer in [velocity.center(), texts(&out, "Velocity weight")[0].center()] {
+            frame(&ctx, &mut settings, vec![egui::Event::PointerMoved(pointer)]);
+            let hovered = frame(&ctx, &mut settings, vec![]);
+            assert_eq!(overlay(&hovered), normal_ranges, "ranges react to hover");
+        }
         frame(&ctx, &mut settings, vec![egui::Event::PointerMoved(velocity.center())]);
-        let out = frame(&ctx, &mut settings, vec![]);
-        assert_eq!(band(&out, band_color(Source::Velocity, Some(Source::Velocity))), velocity);
-        assert_eq!(band(&out, band_color(Source::Timbre, Some(Source::Velocity))), timbre);
 
         // The inset ranges use the base response rather than claiming a
         // separate interaction, so dragging anywhere in them still edits base.
@@ -512,9 +487,14 @@ mod tests {
             ))],
         );
         assert!(settings.opacity_rest > 0.6);
-        let marker = plot.left() + plot.width() * settings.opacity_rest;
-        assert!(overlay(&out).iter().any(|s| matches!(s,
-            egui::Shape::LineSegment { points, stroke } if stroke.color == theme::text()
-                && (points[0].x - marker).abs() < 0.1 && (points[1].x - marker).abs() < 0.1)));
+        let velocity = band(&out, band_color(Source::Velocity));
+        assert!(
+            (velocity.left() - (plot.left() + plot.width() * settings.opacity_rest)).abs() < 0.1
+        );
+        assert!(
+            !overlay(&out).iter().any(|s| matches!(s,
+            egui::Shape::LineSegment { stroke, .. } if stroke.color == theme::text())),
+            "the base uses the standard slider fill, not a custom marker"
+        );
     }
 }

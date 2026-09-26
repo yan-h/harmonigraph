@@ -435,11 +435,11 @@ impl<'a> ValueBar<'a> {
                 || track_fill(&response),
                 |color| {
                     let strength = if response.dragged() {
-                        0.55
+                        0.7
                     } else if response.hovered() {
-                        0.45
+                        0.6
                     } else {
-                        0.35
+                        0.5
                     };
                     theme::well().lerp_to_gamma(color, strength)
                 },
@@ -482,7 +482,7 @@ impl<'a> ValueBar<'a> {
             ));
         }
 
-        let lit = response.hovered() || response.dragged() || self.overlay_slot.is_some();
+        let lit = response.hovered() || response.dragged();
         let (text_color, value_color) = match (self.swatch, lit) {
             (Some(_), _) => (theme::well(), theme::well()),
             (None, true) => (theme::text(), theme::text()),
