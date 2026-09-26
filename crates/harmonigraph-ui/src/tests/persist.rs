@@ -461,7 +461,7 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// is what keeps it safe: `sanitize` finishes the arm before it clamps the
 /// taper to it, so `clamp` never sees a NaN as its `max`. A Shadow group's
 /// width is a lone number rather than half of a pair and rides the same
-/// repair — and it is edited through its own `width:…,depth:` anchor, which is
+/// repair — and it is edited through its own `width:…,spread:` anchor, which is
 /// the shape only a `ShadowStyle` writes, so the edit cannot land on another
 /// `…_width` key (`band_width`, say) the day the two hold the same number.
 #[test]
@@ -486,9 +486,9 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             _ => state.picture.appearance.spectrum.roll_lead_fade,
         };
         // Anchored on what follows, for `width`: a `ShadowStyle` is the only
-        // thing in the blob that writes a width with a depth after it, and
+        // thing in the blob that writes a width with a spread after it, and
         // both of its groups are edited at once.
-        let after = if key == "width" { "depth:" } else { "" };
+        let after = if key == "width" { "spread:" } else { "" };
         let edited =
             saved.replace(&format!("{key}:{was:?},{after}"), &format!("{key}:{value},{after}"));
         assert_ne!(edited, saved, "{hint}: `{key}` is not in the blob to edit");
@@ -1692,8 +1692,13 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
     // Every held field differs from the bare fallback. Width and depth also
     // differ from the group defaults, distinguishing the two fallback sources;
     // falloff deliberately shares the same early decay in both defaults.
-    let held =
-        ShadowStyle { kernel: ShadowKernel::Gaussian, width: 0.55, depth: 0.66, falloff: 1.2 };
+    let held = ShadowStyle {
+        kernel: ShadowKernel::Gaussian,
+        width: 0.55,
+        spread: 0.17,
+        depth: 0.66,
+        falloff: 1.2,
+    };
 
     let mut state = fresh();
     // A witness outside the section, so "the blob survived" is distinguishable
@@ -1704,11 +1709,12 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
 
     let whole = ron::to_string(&held).expect("a shadow style serializes");
     let pairs = top_level_pairs(&whole);
-    assert_eq!(pairs.len(), 4, "the probe must see the whole style, got {pairs:?}");
+    assert_eq!(pairs.len(), 5, "the probe must see the whole style, got {pairs:?}");
 
     for (key, _) in &pairs {
         let want = match key.as_str() {
             "width" => ShadowStyle { width: bare.width, ..held },
+            "spread" => ShadowStyle { spread: bare.spread, ..held },
             "depth" => ShadowStyle { depth: bare.depth, ..held },
             "falloff" => ShadowStyle { falloff: bare.falloff, ..held },
             "kernel" => ShadowStyle { kernel: bare.kernel, ..held },

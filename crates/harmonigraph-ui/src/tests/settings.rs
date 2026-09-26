@@ -1670,6 +1670,7 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
     let blurred = shapes(ShadowKernel::Gaussian);
     assert!(text_ys(&blurred, "Shadow falloff").is_empty());
     assert_eq!(text_ys(&blurred, "Shadow width").len(), 4, "Blur lost common shadow controls");
+    assert_eq!(text_ys(&blurred, "Shadow spread").len(), 4, "Blur lost its spread control");
 
     let contour = shapes(ShadowKernel::Distance);
     assert_eq!(
@@ -1678,6 +1679,7 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
         "a Contour shadow group has no falloff control",
     );
     assert_eq!(text_ys(&contour, "Shadow width").len(), 4, "Contour lost common shadow controls",);
+    assert!(text_ys(&contour, "Shadow spread").is_empty());
 }
 
 /// No settings tab draws two sections under one heading. A fold is saved as

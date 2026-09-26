@@ -48,7 +48,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         window.panes.values().all(|pane| pane.ink_history.is_some()),
         "the populated context must own temporal history"
     );
-    let pipeline = window.compiled.scenes[0].nodes.clone();
+    let pipeline = window.compiled.scenes[0].draws.nodes.clone();
     let atlas = FontAtlas {
         image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
         key: 99,
@@ -64,7 +64,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     assert!(reset.panes.is_empty());
     assert!(reset.sheets.atlas.view().is_none() && reset.sheets.marks.view().is_none());
     assert_eq!(reset.sheets.sdf_key, 0);
-    assert_eq!(reset.compiled.scenes[0].nodes, pipeline);
+    assert_eq!(reset.compiled.scenes[0].draws.nodes, pipeline);
     if let Some(timer) = &window.timer {
         let fresh = reset.timer.as_ref().expect("same timestamp-capable device");
         assert_ne!(fresh.set, timer.set);
@@ -80,7 +80,10 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let started = std::time::Instant::now();
     let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
     eprintln!("cached lattice reopen: {:?}", started.elapsed());
-    assert_eq!(reopened.compiled.scenes[0].nodes, pipeline, "reopening recompiled the pipeline");
+    assert_eq!(
+        reopened.compiled.scenes[0].draws.nodes, pipeline,
+        "reopening recompiled the pipeline"
+    );
     drop(reopened);
 
     shooter.resources.insert(instance.clone());
@@ -90,7 +93,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     });
     assert_eq!(differing_pixels(&first, &second), 0, "reopening changed the picture");
     assert_eq!(
-        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].nodes,
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].draws.nodes,
         pipeline
     );
 }
@@ -133,13 +136,13 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
             other => panic!("unexpected startup result: {other:?}"),
         }
     }
-    let pipeline = cache.compiled.lock().unwrap().as_ref().unwrap().2.scenes[0].nodes.clone();
+    let pipeline = cache.compiled.lock().unwrap().as_ref().unwrap().2.scenes[0].draws.nodes.clone();
     let asynchronous = shooter.draw_modified(&scene, LatticeLabels::default(), |callback| {
         callback.pipeline_cache = Some(cache.clone());
     });
     assert_eq!(differing_pixels(&synchronous, &asynchronous), 0);
     assert_eq!(
-        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].nodes,
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].draws.nodes,
         pipeline
     );
     shooter.resources = CallbackResources::default();
@@ -166,7 +169,7 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
         pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let replaced =
         cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
-    assert_ne!(bgra.compiled.scenes[0].nodes, replaced.compiled.scenes[0].nodes);
+    assert_ne!(bgra.compiled.scenes[0].draws.nodes, replaced.compiled.scenes[0].draws.nodes);
 
     // Separate instances can mint equal device IDs. Test that case explicitly.
     let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);

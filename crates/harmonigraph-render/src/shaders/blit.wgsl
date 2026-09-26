@@ -26,13 +26,14 @@
 // Composite-only bindings (declared module-wide; pipelines whose entry
 // points don't reference them omit them from their layout).
 @group(0) @binding(2) var bloom_tex: texture_2d<f32>;
-// The first 16 bytes of the lattice buffer: CompositeParams in uniforms.rs.
+// The first group of the lattice buffer: CompositeParams in uniforms.rs.
 // Binding 3 is this shorter view; the full lattice binds Uniforms at binding 0.
 struct CompositeParams {
     @align(16) darkest_pitch: f32,
     brightest_pitch: f32,
     render_scale: f32,
     bloom_strength: f32,
+    background: vec4<f32>,
 };
 @group(0) @binding(3) var<uniform> bu: CompositeParams;
 // The strength on its own, for a caller with no scene uniforms to take the
@@ -49,6 +50,8 @@ struct AddUniforms {
 @group(0) @binding(4) var<uniform> add: AddUniforms;
 // Lattice-only node contribution, summed before thresholding or compositing.
 @group(0) @binding(5) var ink_tex: texture_2d<f32>;
+// Ordered local-notation transmittance, with foreground ink coverage restored.
+@group(0) @binding(6) var local_shadow_tex: texture_2d<f32>;
 
 struct BlitOut {
     @builtin(position) pos: vec4<f32>,
@@ -170,7 +173,17 @@ fn fs_composite(in: BlitOut) -> @location(0) vec4<f32> {
     let scene = textureSample(scene_tex, scene_samp, in.uv);
     let bloom = textureSample(bloom_tex, scene_samp, in.uv);
     let ink = textureSample(ink_tex, scene_samp, in.uv);
-    let rgb = scene.rgb + ink.rgb + bloom.rgb * bu.bloom_strength;
+    let t = clamp(textureSample(local_shadow_tex, scene_samp, in.uv).r, 0.0, 1.0);
+    let light = scene.rgb + ink.rgb + bloom.rgb * bu.bloom_strength * t;
+    // Clip displayed light before the veil can be filled back in by HDR
+    // saturation. Include the host's eventual pane-fill contribution in the
+    // cap, but retain premultiplied alpha for the normal host composition.
+    // T=1 deliberately keeps the old path bit-for-bit, including its dither.
+    // Opaque receivers are exact; mixed translucent HDR layers use coverage-
+    // weighted transmittance rather than a separate display resolve per label.
+    let ground = bu.background.rgb * (1.0 - scene.a);
+    let capped = max(min(light + ground, vec3<f32>(t)) - ground, vec3<f32>(0.0));
+    let rgb = select(capped, light, t >= 1.0);
     // The quad covers the pane, including transparent pixels and the pure-alpha
     // masks that cast black shadows. Leave zero source RGB exact: premultiplied
     // blending still ADDS it, so noise there would invent light and stipple the

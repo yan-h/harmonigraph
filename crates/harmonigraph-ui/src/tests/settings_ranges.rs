@@ -71,7 +71,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     a.view.max_sevens = n;
     a.view.center_sevens = n;
     for shadow in a.view.shadow.groups_mut() {
-        poison!(shadow; width, depth, falloff);
+        poison!(shadow; width, spread, depth, falloff);
     }
     // `distance` is the zoom and has no bar of its own — navigation rather
     // than a dial — but it crosses this same door and `Camera::sanitize`
@@ -254,12 +254,12 @@ fn scenarios() -> Vec<Scenario> {
             // Mapped source weights are exercised in the enabled scenario.
             panes::Tab::Colors => 2 + 3,
             // The picture, then the background glow (8) with its texture
-            // switched off, then two shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 16 + 1 + 8 + 4,
+            // switched off, then two Gaussian shadow groups of three bars each.
+            panes::Tab::LatticeSettings => 16 + 1 + 8 + 6,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
-            panes::Tab::AnalyzerSettings => 5 + 3 + 1 + 4,
+            panes::Tab::AnalyzerSettings => 5 + 3 + 1 + 6,
             panes::Tab::System => 8,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
@@ -267,14 +267,14 @@ fn scenarios() -> Vec<Scenario> {
         cases.push(Scenario { pane, visits, ..base });
         // Exercise the conditional groups too: labels, fringe, marks, audio
         // reading, sevens, the glow texture, roll/note names, the spectrogram,
-        // backdrop, glow and Contour shadow falloff (one bar in each of a
-        // page's two groups).
+        // backdrop, glow and Contour shadow falloff (replacing Gaussian
+        // spread in each of a page's two groups).
         let visits = match pane {
             panes::Tab::Colors => visits + 8,
-            panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
+            panes::Tab::LatticeSettings => visits + 5 + 6,
             // ...the spectrogram's twelve, the ribbons' six, and the
             // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2 + 2,
+            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
