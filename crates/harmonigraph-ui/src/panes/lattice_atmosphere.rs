@@ -1,8 +1,8 @@
 //! Controls for the texture and breathing of the lattice's background glow.
 
 use harmonigraph_scene::{
-    AtmosphereSettings, BREATH_SPEED_MAX, BREATH_SPEED_MIN, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN,
-    NEBULA_SPEED_MAX, NEBULA_SPEED_MIN,
+    AtmosphereSettings, LatticeMaterial, BREATH_SPEED_MAX, BREATH_SPEED_MIN, NEBULA_SCALE_MAX,
+    NEBULA_SCALE_MIN, NEBULA_SPEED_MAX, NEBULA_SPEED_MIN,
 };
 
 /// A block of the Light section whose name is its switch: the texture and the
@@ -20,7 +20,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
     let name = if settings.enabled { name } else { name.color(crate::theme::text_dim()) };
     ui.add_enabled_ui(glow_enabled, |ui| {
         crate::widgets::checkbox(ui, &mut settings.enabled, name).on_hover_text(
-            "Cloud texture and slow breathing in the background glow. \
+            "Animated materials and slow breathing in the background glow. \
              Turning this off preserves both effects' settings.",
         );
     });
@@ -34,12 +34,17 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         return;
     }
     ui.add_enabled_ui(glow_enabled, |ui| {
+    crate::widgets::choice_row(ui, "Material", &mut settings.material, &[
+        (LatticeMaterial::Clouds, "Clouds", "The original softly drifting cloud texture"),
+        (LatticeMaterial::Contours, "Contours", "Nested bands following the combined note light"),
+        (LatticeMaterial::Interference, "Interference", "Curved wave fringes illuminated by the notes"),
+    ]);
     ValueBar::new(&mut settings.nebula_depth, 0.0..=1.0, "Texture depth")
-        .percent().show(ui).on_hover_text("Cloud texture in the combined background glow. 0% restores smooth halos. Colors come from the notes.");
-    multiplier(ui, &mut settings.nebula_scale, "Cloud size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
-        .on_hover_text("Size of the cloud texture relative to the pane. Larger values make broader clouds; lattice zoom does not resize the texture. 1× is the reference size.");
-    multiplier(ui, &mut settings.nebula_speed, "Cloud speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
-        .on_hover_text("1× is a slow drift. 0 freezes the cloud motion.");
+        .percent().show(ui).on_hover_text("Material contrast in the combined background glow. 0% restores smooth halos. Colors come from the notes.");
+    multiplier(ui, &mut settings.nebula_scale, "Texture size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
+        .on_hover_text("Larger values make broader texture and fewer contour bands. Material size is relative to the pane; contours follow the notes’ light. 1× is the reference size.");
+    multiplier(ui, &mut settings.nebula_speed, "Texture speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
+        .on_hover_text("1× is a slow drift. 0 freezes the material motion; changing notes still changes the light.");
     ValueBar::new(&mut settings.breath_amount, 0.0..=1.0, "Breathing depth")
         .percent().show(ui).on_hover_text("Brightness variation in the background glow. 0% keeps it steady; 100% allows deep fades. Does not change note brightness directly.");
     multiplier(ui, &mut settings.breath_speed, "Breathing speed", BREATH_SPEED_MIN..=BREATH_SPEED_MAX)

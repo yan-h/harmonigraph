@@ -470,7 +470,8 @@ impl LatticeCallback {
                         (nebula_time * 0.053).cos() as f32 * 0.9,
                     ]),
                     target_size: Float2([1.0; 2]),
-                    padding: Float2([0.0; 2]),
+                    material: atmosphere.material as u32,
+                    padding: 0.0,
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.
