@@ -173,7 +173,10 @@ pub fn derive_scene(
         // identity for a scale that has one, and no bloom at all for a light
         // whose 0 is its off position.
         render_scale: finite_or(view.render_scale, 1.0),
-        bloom_strength: finite_or(view.bloom_strength, 0.0),
+        // The bar, or the floor under it while a note can bloom over the bar
+        // (`IntensitySettings::bloom_reference`); each node's `bloom` is its
+        // share of this.
+        bloom_strength: view.intensity.bloom_reference(finite_or(view.bloom_strength, 0.0)),
         // Clamped here as well as in `sanitize`, for the shells that never come
         // through that door: reach sizes the halo's analytic span and its CPU
         // culling bound, which must describe the same supported range. Through

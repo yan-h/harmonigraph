@@ -56,8 +56,9 @@ pub use color::{
 };
 pub use derive::derive_scene;
 pub use intensity::{
-    IntensityReading, IntensitySettings, IntensitySource, IntensityTarget, GAIN_RANGE_MAX,
-    GAIN_RANGE_MIN, INTENSITY_WEIGHT_MAX,
+    IntensityReading, IntensitySettings, IntensitySource, IntensityTarget, BLOOM_MAX,
+    BLOOM_REFERENCE_FLOOR, GAIN_RANGE_MAX, GAIN_RANGE_MIN, INTENSITY_WEIGHT_MAX,
+    THICKNESS_MAX_RANGE,
 };
 pub use motion::NodeMotion;
 pub use octaves::{

@@ -54,7 +54,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; gain_range, opacity_base, glow_base, thickness_base);
+    poison!(a.view.intensity; gain_range, opacity_rest, thickness_max);
     poison!(a.view.intensity.velocity; weight);
     poison!(a.view.intensity.gain; weight);
     poison!(a.view.intensity.pressure; weight);
