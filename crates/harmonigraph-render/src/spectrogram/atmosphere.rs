@@ -248,7 +248,13 @@ fn star_slices(
             sigma,
             cap,
             defocus,
-            occupancy: settings.star_dust * (1.0 - d) * (1.0 - d) + settings.star_near * d * d,
+            occupancy: {
+                // Full at the end `Depth balance` leans to, thinning
+                // exponentially with the distance in depth from it.
+                let from_favoured = if settings.star_balance < 0.0 { d } else { 1.0 - d };
+                harmonigraph_scene::STAR_BALANCE_THIN
+                    .powf(-settings.star_balance.abs() * from_favoured)
+            },
             fringe,
             fringe_reach: if fringe > 0.0 { splat } else { 0.0 },
             reach: (reach_cells - swing / 2.0) * cell,

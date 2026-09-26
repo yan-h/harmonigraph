@@ -588,7 +588,7 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
 ///
 /// Every quality that differed between the prototype's four motion variants is
 /// a bar here rather than a choice made in the shader, as are the two levers on
-/// how heavy the field reads (`Glow` and `Far dust`), because Yan's pick was a
+/// how heavy the field reads (`Glow` and `Depth balance`), because Yan's pick was a
 /// starting point "with sliders exposed". The fresh values are that pick, V3,
 /// with round 8's YB3 for how a star is coloured and shaped.
 fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
@@ -643,17 +643,10 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "A wide, soft light of the sound behind the stars. 0% leaves the palette's darkest color between them; higher values fill the gaps between harmonics, and stars dimmer than the glow disappear into it.",
         );
-    ValueBar::new(&mut atmosphere.star_dust, 0.0..=1.0, "Far dust")
-        .percent()
+    ValueBar::new(&mut atmosphere.star_balance, -1.0..=1.0, "Depth balance")
         .show(ui)
         .on_hover_text(
-            "How many of the farthest, finest stars there are. Lower values thin the dust that fills the field between the brighter stars.",
-        );
-    ValueBar::new(&mut atmosphere.star_near, 0.0..=1.0, "Near stars")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How many of the nearest, biggest stars there are, as a share of their places. The depths between fade from Far dust to this.",
+            "Which depths keep all their stars. Left keeps all the far dust and thins the near stars; right keeps all the near stars and thins the dust; the middle keeps every depth full, so how many stars a depth has follows Star size alone.",
         );
     ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
         .percent()

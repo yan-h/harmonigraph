@@ -136,6 +136,9 @@ pub const STAR_GLOW_MAX: f32 = 1.5;
 /// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
 /// dense slice add up to a flat wash of its average colour.
 pub const STAR_FRINGE_MAX: f32 = 0.5;
+/// The share of its cells the thinned end of the depth keeps at a full
+/// [`SpectralAtmosphere::star_balance`] lean, as one over this.
+pub const STAR_BALANCE_THIN: f32 = 16.0;
 /// The top of [`SpectralAtmosphere::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// The top of [`SpectralAtmosphere::star_wander`], in cells of the star's own
@@ -341,13 +344,15 @@ pub struct SpectralAtmosphere {
     /// not the dust, to be what read as a heavy "cloud texture", and round 8
     /// was picked without it. Runs to [`STAR_GLOW_MAX`].
     pub star_glow: f32,
-    /// How many cells of the FARTHEST depth hold a star — the prototype's
-    /// `occ_far`, the other lever on how heavy the field reads. Nearer depths
-    /// fade from it to [`Self::star_near`] as `dust (1 - d)² + near d²`.
-    pub star_dust: f32,
-    /// How many cells of the NEAREST depth hold a star: the other end of the
-    /// occupancy [`Self::star_dust`] starts. The prototype's fixed quarter.
-    pub star_near: f32,
+    /// Which end of the depth keeps all its stars, from -1 (the far dust) to 1
+    /// (the nearest stars): the favoured end fills every cell and the share
+    /// falls off exponentially toward the other, to [`STAR_BALANCE_THIN`] of
+    /// them at a full lean. 0 fills every depth, so the count follows `Star
+    /// size` alone. It replaced two dials, Far dust and Near stars, which
+    /// set the two ends' shares separately; the fresh -0.5 keeps both of their
+    /// fresh ends (1 and a quarter), and the depths between sit a little
+    /// fuller than their quadratic fade did.
+    pub star_balance: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
     /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
@@ -465,9 +470,8 @@ impl Default for SpectralAtmosphere {
             star_density: 6.0,
             star_randomness: 0.6,
             star_glow: 0.0,
-            star_dust: 1.0,
             // The prototype's depth curves, as dials.
-            star_near: 0.25,
+            star_balance: -0.5,
             star_size_min: 2.0,
             star_size_max: 32.0,
             star_size_curve: 2.0,
@@ -537,8 +541,7 @@ impl SpectralAtmosphere {
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
         self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
-        self.star_dust = clamp(self.star_dust, fresh.star_dust, 0.0, 1.0);
-        self.star_near = clamp(self.star_near, fresh.star_near, 0.0, 1.0);
+        self.star_balance = clamp(self.star_balance, fresh.star_balance, -1.0, 1.0);
         self.star_size_min =
             clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
         self.star_size_max =

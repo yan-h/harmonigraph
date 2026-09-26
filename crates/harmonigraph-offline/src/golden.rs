@@ -188,7 +188,6 @@ fn read_atmosphere() -> harmonigraph_scene::SpectralAtmosphere {
         wash_lobe: 0.55,
         star_density: 2.0,
         star_glow: 0.7,
-        star_dust: 0.4,
         star_wander: 0.35,
         ..Default::default()
     }
