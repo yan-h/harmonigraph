@@ -156,7 +156,7 @@ impl SpectralOrientation {
     }
 }
 
-/// A look the heatmap's gradient can be set to in one press: four named ramps,
+/// A look the heatmap's gradient can be set to in one press: three named ramps,
 /// each stated as the [`Gradient`] that draws it.
 ///
 /// A starting point and NOT a mode. Nothing stores which one was pressed,
@@ -182,9 +182,6 @@ impl SpectralOrientation {
 /// keeping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpectrogramPreset {
-    /// Black to white with no color at all — the classic, and the most neutral
-    /// over the roll's own ribbons.
-    Mono,
     /// Navy through blue to cyan. The cool ramp.
     Ice,
     /// Violet through teal and green to yellow (viridis-like).
@@ -195,27 +192,25 @@ pub enum SpectrogramPreset {
 }
 
 impl SpectrogramPreset {
-    /// Every preset, in the order the row offers them: the neutral one first,
-    /// then the three colored ones.
+    /// Every preset, in the order the row offers them.
     ///
     /// Built from an exhaustive `match` rather than written out as a literal,
     /// the same way [`SpectralOrientation::ALL`] is and for the same reason: a
-    /// fifth look cannot reach the enum without reaching the row.
-    pub const ALL: [SpectrogramPreset; 4] = {
+    /// fourth look cannot reach the enum without reaching the row.
+    pub const ALL: [SpectrogramPreset; 3] = {
         use SpectrogramPreset::*;
         const fn covered(p: SpectrogramPreset) {
             match p {
-                Mono | Ice | Aurora | Magma => (),
+                Ice | Aurora | Magma => (),
             }
         }
-        covered(Mono);
-        [Mono, Ice, Aurora, Magma]
+        covered(Ice);
+        [Ice, Aurora, Magma]
     };
 
     /// The name the button carries.
     pub fn label(self) -> &'static str {
         match self {
-            SpectrogramPreset::Mono => "Mono",
             SpectrogramPreset::Ice => "Ice",
             SpectrogramPreset::Aurora => "Aurora",
             SpectrogramPreset::Magma => "Magma",
@@ -227,7 +222,6 @@ impl SpectrogramPreset {
     /// as the reader will next want to drag them.
     pub fn hint(self) -> &'static str {
         match self {
-            SpectrogramPreset::Mono => "Black to white; the most neutral over the roll",
             SpectrogramPreset::Ice => "Navy to blue to cyan",
             SpectrogramPreset::Aurora => "Violet to teal to green to yellow",
             SpectrogramPreset::Magma => "Indigo to magenta to orange to cream",
@@ -269,11 +263,6 @@ impl SpectrogramPreset {
             ..Gradient::default()
         };
         match self {
-            // The hue is unreachable at chroma 0 and is written as the one the
-            // colored presets are read against anyway, so that a Mono picture
-            // dragged off 0 opens on a color rather than on whatever angle 0
-            // happened to be spelled with.
-            SpectrogramPreset::Mono => of((0.0, 100.0), (269.0, 0.0), (0.0, 0.0)),
             SpectrogramPreset::Ice => of((0.0, 92.0), (269.0, -70.0), (0.635, 0.985)),
             SpectrogramPreset::Aurora => of((0.0, 88.0), (302.0, -193.0), (0.518, 0.968)),
             SpectrogramPreset::Magma => of((0.0, 90.0), (295.0, 136.0), (0.819, 0.969)),

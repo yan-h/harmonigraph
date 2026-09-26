@@ -549,13 +549,13 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
 /// properties — a bar is the column's width, a bar is one row high, the pane
 /// scrolls — that hold whatever the body contains, so two tabs could trade
 /// bodies with the suite green. The needles also pin where the old Lighting
-/// page's settings went: the lattice's glow with the Lattice, and the bloom
-/// the lattice and the ribbons share with the notes' other mappings.
+/// page's settings went: the lattice's background glow with the Lattice, and
+/// the bloom the lattice and the ribbons share with the notes' other mappings.
 #[test]
 fn each_settings_tab_draws_its_own_body_and_only_that() {
     const CASES: [(panes::Tab, &str); 4] = [
-        (panes::Tab::Colors, "Glow base"),
-        (panes::Tab::LatticeSettings, "Glow reach"),
+        (panes::Tab::Colors, "Bloom base"),
+        (panes::Tab::LatticeSettings, "Background glow reach"),
         (panes::Tab::AnalyzerSettings, "Ribbon opacity"),
         (panes::Tab::System, "Lattice resolution"),
     ];

@@ -296,7 +296,7 @@ pub(super) fn draw_roll(
     let dir = |v: egui::Vec2| [v.x, v.y];
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
     // The pass runs at the reference and each piece carries its share of it
-    // (see `IntensitySettings::bloom_share`): the Glow base itself while
+    // (see `IntensitySettings::bloom_share`): the Bloom base itself while
     // nothing is routed to Glow, so the halo is the base's alone.
     let bloom = harmonigraph_render::bloom_strength(
         state.appearance.view.intensity.sanitized().bloom_reference(),
@@ -879,7 +879,7 @@ const INTENSITY_TOLERANCE: f32 = 1.0 / 256.0;
 struct Look {
     /// The body's opacity, 0..1.
     fade: f32,
-    /// How much the body blooms, in the Glow base's × units
+    /// How much the body blooms, in the Bloom base's × units
     /// ([`IntensitySettings::bloom`]); an instance carries it as its share of
     /// the pass's strength.
     bloom: f32,
@@ -1281,7 +1281,7 @@ mod tests {
         assert_eq!((older.glow, newer.glow), ([1.0; 2], [1.0; 2]), "nothing routed to the glow");
 
         // The same pressure routed to the glow instead: it blooms that much
-        // over the Glow base, as a share of the base the pass runs at, and the
+        // over the Bloom base, as a share of the base the pass runs at, and the
         // fade stays in full. The base is low enough for the whole swell to
         // stand under the most a note blooms.
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {

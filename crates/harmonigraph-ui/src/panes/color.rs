@@ -28,8 +28,7 @@ pub(super) fn color_pane(
         // over. Both feed the one table every pitch-colored shape reads, so a
         // change here repaints the discs, the octave glyphs, the trail and the
         // piano roll together.
-        let pitches = (params.get(ParamKey::DarkestPitch), params.get(ParamKey::BrightestPitch));
-        spectrum_group(ui, &mut appearance.view, pitches);
+        spectrum_group(ui, &mut appearance.view);
         super::param_range_bar(
             ui,
             params,
@@ -52,14 +51,24 @@ pub(super) fn color_pane(
     });
 }
 
-/// The tooltip both groups' curve plots carry: the axis is named by the
-/// readout, so the words can be shared.
+/// The tooltip both groups' curve plots carry.
 const BEND_HINT: &str = "Where along the range the switched-on channels spend their change. \
                  Across is the range, up is how much of the change has happened. \
                  Drag right to hold the change back for the top of the range, for example the loudest few dB. \
                  Double-click straightens it.";
 
-fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig, (darkest, brightest): (f32, f32)) {
+fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    // One preset, the gradient a fresh view opens on, so the shipped look is a
+    // click away after the bars below have wandered off it. Named for its
+    // colors like the audio palettes, not "Default".
+    crate::widgets::preset_row(ui, "Palette", &["Dusk"], |ui, menu| {
+        if ui.button("Dusk").on_hover_text("Navy through violet and rose to cream").clicked() {
+            view.pitch_gradient = ViewConfig::default().pitch_gradient;
+            if menu {
+                ui.close();
+            }
+        }
+    });
     // The row first, the colors last — see [`GradientPreview`]: read where it
     // stands, the picture would spend every frame of every drag below it one
     // frame behind the bar being dragged.
@@ -78,8 +87,7 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig, (darkest, brightest)
         "Saturation at the low and high pitches: 0% is gray, 100% is the most vivid available color. \
                  Double-click resets.",
     );
-    let pitch_at = |t: f32| super::pitch_readout(darkest + t * (brightest - darkest));
-    BendPlot::new(&mut view.pitch_gradient, &pitch_at).show(ui).on_hover_text(BEND_HINT);
+    BendPlot::new(&mut view.pitch_gradient).show(ui).on_hover_text(BEND_HINT);
     preview
         .show(ui, &view.pitch_gradient)
         .on_hover_text("MIDI note colors from low pitch on the left to high pitch on the right.");
@@ -111,7 +119,7 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig, (darkest, brightest)
 ///
 /// **The presets come first**, ahead of the preview the group above opens with,
 /// and deliberate: a heatmap palette is a thing people pick by name before they
-/// dial it, and the four names are the whole of what a heatmap offers before it
+/// dial it, and the three names are the whole of what a heatmap offers before it
 /// offers any knobs at all. They write the bars below and are not a mode — see
 /// [`crate::SpectrogramPreset`]. The preview then sits between the names and the
 /// bars, which is where both of them are read against it.
@@ -151,14 +159,7 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         "Saturation at the low and high audio levels: 0% is gray, 100% is the most vivid available color. \
                  Double-click resets.",
     );
-    // Read before the range bar below writes them, so a drag of that bar
-    // reaches this readout a frame late — the one place it shows.
-    let (floor, ceiling) = (cfg.volume_floor_db, cfg.volume_ceiling_db);
-    let level_at = |t: f32| format!("{:.0} dB", floor + t * (ceiling - floor));
-    BendPlot::new(&mut cfg.spectrogram_gradient, &level_at)
-        .home(home)
-        .show(ui)
-        .on_hover_text(BEND_HINT);
+    BendPlot::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(BEND_HINT);
     RangeBar::new(
         &mut cfg.volume_floor_db,
         &mut cfg.volume_ceiling_db,
@@ -196,8 +197,8 @@ fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ),
             IntensityTarget::Glow => (
                 target,
-                "Glow",
-                "Adds to how much the note blooms over Glow base: the halo round its lattice slices and round its roll ribbon.",
+                "Bloom",
+                "Adds to how much the note blooms over Bloom base: the halo round its lattice slices and round its roll ribbon.",
             ),
             IntensityTarget::Thickness => (
                 target,
@@ -251,12 +252,12 @@ fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
     );
     // The whole of the lattice's and the roll's bloom, so it is live
     // whether or not anything is routed to Glow.
-    ValueBar::new(&mut intensity.glow_base, 0.0..=BLOOM_MAX, "Glow base")
+    ValueBar::new(&mut intensity.glow_base, 0.0..=BLOOM_MAX, "Bloom base")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
             "Soft halos around MIDI notes in the Lattice and the spectrogram's ribbons: \
-                 how much a note at rest blooms, before the sources routed to Glow add in. \
+                 how much a note at rest blooms, before the sources routed to Bloom add in. \
                  0 turns bloom off; 1× is the reference strength.",
         );
     // The other two only count while something is routed to their display,

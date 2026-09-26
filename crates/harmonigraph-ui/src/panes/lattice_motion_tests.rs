@@ -102,9 +102,12 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
             let times: &[f64] = if off < 1.0 {
                 &[0.05, 0.1, 0.2, 0.3, 0.35, 1.2, 2.2]
             } else {
-                &[0.05, 1.0, 2.0, 4.9, 5.0, 5.9, 6.0, 6.1, 6.2, 6.3, 8.2]
+                &[0.05, 1.0, 2.0, 4.9, 5.0, 5.9, 6.0, 6.8, 7.0, 7.1, 7.2, 7.3, 9.2]
             };
-            let again = if off < 1.0 { 0.3 } else { 6.2 };
+            let again = if off < 1.0 { 0.3 } else { 7.2 };
+            // One fade after the off, plus the 0.9 spread an ordered release
+            // holds its presence for.
+            let released = if order == AnimationOrder::Simultaneous { 6.0 } else { 7.0 };
             for &now in times {
                 if now == off || now == again {
                     event(&mut audio, now, now == again);
@@ -113,11 +116,11 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
                 let measured = frame(&mut audio, now, 0, true);
                 let control = frame(&mut silent, now, 0, false);
                 assert!(origin(&measured).audio_ring > 0.0);
-                if off < 1.0 || now < 6.0 {
+                if off < 1.0 || now < released {
                     assert_eq!(pose(&measured), pose(&control), "{order:?}, off={off}, now={now}");
                 } else {
-                    // The long note's release ends at 6.0; its former audio
-                    // ring has become an audio-only settled pose by re-press.
+                    // The long note's release has ended; its former audio ring
+                    // has become an audio-only settled pose by re-press.
                     assert_eq!(origin(&measured).slice_progress, [1.0; 11]);
                 }
             }

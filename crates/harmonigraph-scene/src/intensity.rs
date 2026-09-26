@@ -33,10 +33,10 @@ pub const GAIN_RANGE_MAX: f32 = 60.0;
 /// The ends of the Thickness max bar, as multiples of a pane's note width. 1
 /// lets a source only thin a note.
 pub const THICKNESS_MAX_RANGE: std::ops::RangeInclusive<f32> = 1.0..=4.0;
-/// The top of the Glow base bar, and the most a routed note blooms.
+/// The top of the Bloom base bar, and the most a routed note blooms.
 pub const BLOOM_MAX: f32 = 2.0;
 /// The least a pane's bloom pass runs at while something is routed to Glow, so
-/// a note can bloom over a Glow base of 0. Below it a note at rest blooms a
+/// a note can bloom over a Bloom base of 0. Below it a note at rest blooms a
 /// little less than the base alone would draw, which is too faint to see.
 /// Whatever else lights the bloom's input without a share of its own (the
 /// markers, the roll's lead) blooms at this floor too.
@@ -50,7 +50,7 @@ pub enum IntensityTarget {
     Off,
     /// The note's opacity: the lattice's octave slices and the roll's ribbons.
     Opacity,
-    /// How much the note blooms, added to the Glow base: the halo round its
+    /// How much the note blooms, added to the Bloom base: the halo round its
     /// lattice slices and round its roll ribbon. The lattice's node glow does
     /// not read it.
     Glow,
@@ -150,7 +150,7 @@ impl Default for IntensitySettings {
 pub struct IntensityReading {
     /// 0 to 1, with 1 as the note drawn in full.
     pub opacity: f32,
-    /// How far the note's bloom stands off the Glow base, in its × units: 0 at
+    /// How far the note's bloom stands off the Bloom base, in its × units: 0 at
     /// rest. Unbounded here; [`IntensitySettings::bloom`] adds the base and
     /// bounds the two.
     pub glow: f32,
@@ -205,18 +205,18 @@ impl IntensitySettings {
                 .any(|source| source.target == target)
     }
 
-    /// The Glow base, whatever a shell hands over: finite and on its bar.
+    /// The Bloom base, whatever a shell hands over: finite and on its bar.
     fn glow_at_rest(&self) -> f32 {
         finite_or(self.glow_base, 0.0).clamp(0.0, BLOOM_MAX)
     }
 
-    /// How much a note reading `reading` blooms, in the Glow base's × units:
+    /// How much a note reading `reading` blooms, in the Bloom base's × units:
     /// the base itself at rest, and never below 0 nor past [`BLOOM_MAX`].
     pub fn bloom(&self, reading: IntensityReading) -> f32 {
         (self.glow_at_rest() + reading.glow).clamp(0.0, BLOOM_MAX)
     }
 
-    /// The strength both panes' bloom passes run at: the Glow base, except
+    /// The strength both panes' bloom passes run at: the Bloom base, except
     /// that while something is routed to Glow it never drops below
     /// [`BLOOM_REFERENCE_FLOOR`], so a note can bloom over a base of 0. Each
     /// note's share of it is [`bloom_share`](Self::bloom_share).

@@ -36,6 +36,7 @@ mod value;
 pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
 pub(crate) use fold::{paint_chevron, paint_fold};
+pub(crate) use gradient::track_hue;
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, GROUP_GAP};
 pub use label::{label, weak};

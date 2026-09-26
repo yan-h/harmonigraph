@@ -112,7 +112,6 @@ fn persist_round_trips_camera_and_view() {
     state.picture.appearance.view.octave_extra_size = 0.4;
     state.picture.appearance.view.octave_extra_blend = 0.5;
     state.picture.appearance.view.plus_arm = 0.5;
-    state.picture.appearance.view.plus_width = 0.3;
     state.picture.appearance.view.plus_taper = 0.07;
     for (index, group) in state.picture.appearance.view.shadow.groups_mut().into_iter().enumerate()
     {
@@ -168,10 +167,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.picture.appearance.view.octave_extra_size, 0.4);
     assert_eq!(restored.picture.appearance.view.octave_extra_blend, 0.5);
     assert_eq!(restored.picture.appearance.view.plus_arm, 0.5);
-    assert_eq!(
-        restored.picture.appearance.view.plus_width, 0.3,
-        "so does the thickness of its arms"
-    );
     assert_eq!(restored.picture.appearance.view.plus_taper, 0.07, "and the taper on their ends");
     assert_eq!(
         restored.picture.appearance.view.shadow.groups(),
@@ -467,20 +462,17 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// taper to it, so `clamp` never sees a NaN as its `max`. A Shadow group's
 /// width is a lone number rather than half of a pair and rides the same
 /// repair — and it is edited through its own `width:…,depth:` anchor, which is
-/// the shape only a `ShadowStyle` writes, so the edit cannot land on
-/// `plus_width` the day the two happen to hold the same number.
+/// the shape only a `ShadowStyle` writes, so the edit cannot land on another
+/// `…_width` key (`band_width`, say) the day the two hold the same number.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 6] = [
+    let cases: [(&str, &str, &str); 5] = [
         ("width", "NaN", "a NaN Shadow width"),
         ("roll_lead", "NaN", "a NaN lead"),
         ("roll_lead_fade", "inf", "an infinite lead fade"),
-        // The marker's own pair, and its width beside them — the width is a
-        // lone number rather than half of a pair, but it rides the same repair
-        // and a NaN one puts a handle nowhere on the same bar.
+        // The marker's own pair.
         ("plus_arm", "NaN", "a NaN arm"),
         ("plus_taper", "inf", "an infinite taper"),
-        ("plus_width", "NaN", "a NaN width"),
     ];
     for (key, value, hint) in cases {
         let mut state = fresh();
@@ -491,7 +483,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             "roll_lead" => state.picture.appearance.spectrum.roll_lead,
             "plus_arm" => state.picture.appearance.view.plus_arm,
             "plus_taper" => state.picture.appearance.view.plus_taper,
-            "plus_width" => state.picture.appearance.view.plus_width,
             _ => state.picture.appearance.spectrum.roll_lead_fade,
         };
         // Anchored on what follows, for `width`: a `ShadowStyle` is the only
@@ -515,7 +506,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             ("roll_lead_fade", cfg.roll_lead_fade),
             ("plus_arm", view.plus_arm),
             ("plus_taper", view.plus_taper),
-            ("plus_width", view.plus_width),
         ] {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
@@ -1072,8 +1062,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "camera_presets",
         "fps_cap",
         "ui_scale",
-        "skin",
-        "skin_lightness",
+        "skin_dials",
         "perf_pos",
     ];
 

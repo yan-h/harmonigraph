@@ -239,8 +239,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     // color accessor reads it, and on a thread shared with another editor the
     // one in force is whichever that editor last set. A scale change below
     // rebuilds the style from it.
-    let interaction = &state.workspace.interaction;
-    let reskinned = theme::set_skin(ui.ctx(), &interaction.skin, interaction.skin_lightness);
+    let reskinned = theme::set_skin(ui.ctx(), state.workspace.interaction.skin_dials);
     if startup::draw(ui, state) {
         return;
     }
@@ -328,6 +327,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     let animating = state.picture.runtime.tracker.voices().next().is_some()
         || state.picture.runtime.learn_active
         || roll_scrolling(state, now)
+        || releasing(state, now)
         || state.picture.runtime.spectrum.is_flowing(now);
     if animating {
         // Uncapped means "as fast as the shell offers"; a cap turns that into
@@ -480,6 +480,23 @@ fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
 /// Whether the piano roll still has something moving across it: its window
 /// reaches back to a note that was sounding. Goes quiet once the last note
 /// has scrolled off the far edge, so an idle plugin still idles.
+/// Whether a lattice note is still departing after its voice was pruned: an
+/// ordered release holds its presence for the stagger, so it runs
+/// `1 + stagger_spread` fades past the off where the voice lasts one.
+fn releasing(state: &SharedState, now: f64) -> bool {
+    let animation = state.picture.appearance.view.note_animation;
+    let span = f64::from(state.picture.runtime.frame_params.fade_time)
+        * (1.0 + f64::from(animation.stagger_spread));
+    animation.staggers()
+        && state
+            .picture
+            .runtime
+            .tracker
+            .roll()
+            .latest_activity(now)
+            .is_some_and(|last| now - last <= span)
+}
+
 fn roll_scrolling(state: &SharedState, now: f64) -> bool {
     let cfg = &state.picture.appearance.spectrum;
     cfg.show_roll

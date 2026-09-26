@@ -27,7 +27,8 @@ pub(super) fn labels(ui: &mut egui::Ui, state: &mut PictureState) {
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
-            "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
+            "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom. \
+             Also sets how thick the idle crosses are drawn.",
         );
     clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
 }

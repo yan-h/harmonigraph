@@ -1,10 +1,10 @@
 //! The [`BendPlot`]: where along its range a gradient spends its change, and
 //! which of its channels do.
 
-use egui::{CornerRadius, Response, Sense, Stroke, TextStyle, Ui, Vec2};
+use egui::{CornerRadius, Response, Sense, Stroke, Ui, Vec2};
 use harmonigraph_scene::{Bend, Gradient};
 
-use super::bar::{bar_radius, bar_width, BAR_TEXT_PAD, HANDLE_INSET};
+use super::bar::{bar_radius, bar_width, HANDLE_INSET};
 use crate::theme;
 
 /// Rows the plot stands, so a corner at 90% of the range is a drag of a few
@@ -43,20 +43,16 @@ fn plot_area(well: egui::Rect, scale: f32) -> egui::Rect {
 /// tracks run along each channel's own VALUE (the hue circle, the `L*` axis)
 /// and not along the range at all.
 ///
-/// The readout says where the corner stands in the range's own units — a note
-/// for the pitch gradient, a level for the analyzer's — which is what `axis`
-/// is handed for.
+/// No readout: the curve's shape is the setting, and the preview under the
+/// group shows what it does to the colors.
 pub struct BendPlot<'a> {
     gradient: &'a mut Gradient,
     home: Gradient,
-    axis: &'a dyn Fn(f32) -> String,
 }
 
 impl<'a> BendPlot<'a> {
-    /// `axis` names a position along the range, 0 at the bottom and 1 at the
-    /// top.
-    pub fn new(gradient: &'a mut Gradient, axis: &'a dyn Fn(f32) -> String) -> Self {
-        BendPlot { gradient, home: Gradient::default(), axis }
+    pub fn new(gradient: &'a mut Gradient) -> Self {
+        BendPlot { gradient, home: Gradient::default() }
     }
 
     /// The gradient a double-click takes the corner back to.
@@ -98,7 +94,7 @@ impl<'a> BendPlot<'a> {
             if let Some(p) = response.interact_pointer_pos() {
                 let across = (p.x - plot.left()) / plot.width().max(1.0);
                 let up = (plot.bottom() - p.y) / plot.height().max(1.0);
-                // Snapped to whole percentages, so the readout is the number held.
+                // Snapped to whole percentages, so a stored corner is a round number.
                 let snap = |v: f32| (v * 100.0).round() / 100.0;
                 let next =
                     Bend { at: snap(across), share: snap(up), ..self.gradient.bend }.sanitized();
@@ -137,15 +133,6 @@ impl<'a> BendPlot<'a> {
         let fill = if live { theme::text() } else { theme::text_dim() };
         painter.circle(dot, 4.0 * scale, fill, Stroke::new(scale, theme::panel()));
 
-        let readout = format!("{:.0}% by {}", bend.share * 100.0, (self.axis)(bend.at));
-        let text_color = if live { theme::text() } else { theme::text_dim() };
-        let galley =
-            painter.layout_no_wrap(readout, TextStyle::Monospace.resolve(ui.style()), text_color);
-        // In the top-left corner, which the curve reaches only when it spends
-        // its change at the very bottom of the range.
-        let pad = BAR_TEXT_PAD * scale * 0.5;
-        painter.galley(rect.left_top() + Vec2::splat(pad), galley, text_color);
-
         response.on_hover_cursor(egui::CursorIcon::Crosshair)
     }
 }
@@ -180,8 +167,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    let axis = |t: f32| format!("{:.0}%", t * 100.0);
-                    plot.set(BendPlot::new(g, &axis).show(ui).rect);
+                    plot.set(BendPlot::new(g).show(ui).rect);
                 },
             );
         };

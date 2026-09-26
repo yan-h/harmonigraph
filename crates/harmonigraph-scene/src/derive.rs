@@ -9,7 +9,7 @@ use crate::trail::TrailField;
 use crate::view::{finite_or, size, DrawnWindow, FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint,
-    NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX,
+    NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX, PLUS_WIDTH_PER_LABEL_SCALE, SCALE_BAR_RANGE,
 };
 use glam::Vec4;
 use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
@@ -170,7 +170,7 @@ pub fn derive_scene(
         // What the renderer's own clamp cannot do is catch a NaN, so this hands
         // it a real number and leaves the range where it is.
         render_scale: finite_or(view.render_scale, 1.0),
-        // The Glow base, or the floor under it while a note can bloom over the
+        // The Bloom base, or the floor under it while a note can bloom over the
         // base (`IntensitySettings::bloom_reference`); each node's `bloom` is
         // its share of this.
         bloom_strength: view.intensity.bloom_reference(),
@@ -223,11 +223,11 @@ fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::Pit
 /// Half an arm's thickness, as a share of the arm's length (see
 /// [`Scene::plus_half_width`]).
 ///
-/// The view keeps the width as a LENGTH beside the arm, because that is what
-/// makes the two bars independent — a long hairline and a short block are both
-/// askable. The shader wants the PROPORTION, its uv being the arm's own units.
-/// This is the one place that conversion happens, and the one place the square
-/// at the top of the width bar is decided.
+/// The width is a LENGTH independent of the arm, set by the label scale
+/// ([`PLUS_WIDTH_PER_LABEL_SCALE`]), so a long hairline and a short block are
+/// both askable. The shader wants the PROPORTION, its uv being the arm's own
+/// units. This is the one place that conversion happens, and the one place the
+/// cross filling its own square is decided.
 pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
     let arm = size(view.plus_arm, PLUS_SIZE_MAX);
     // An arm of 0 draws no markers at all, so this is only ever asked of one
@@ -236,14 +236,16 @@ pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
     if arm <= 0.0 {
         return 0.0;
     }
-    // Half, because the bar is the WHOLE thickness across an arm and the
-    // shader measures out from the arm's centre line.
-    let half = size(view.plus_width, PLUS_SIZE_MAX) * 0.5;
+    // Half, because the constant is the WHOLE thickness across an arm and the
+    // shader measures out from the arm's centre line. `size` because a shell
+    // that skips `sanitize` can hand over a NaN scale.
+    let scale = size(view.label_scale, *SCALE_BAR_RANGE.end());
+    let half = PLUS_WIDTH_PER_LABEL_SCALE * scale * 0.5;
     // At 1 the cross has filled its own square: every fragment inside the quad
     // is inside one arm or the other, and a wider one has nowhere left to
-    // spread. Clamped rather than left to the shader so the square is a stated
-    // end of the bar rather than whatever a distance field happens to do past
-    // it.
+    // spread. A short arm at a big label scale gets there. Clamped rather than
+    // left to the shader so the square is a stated end rather than whatever a
+    // distance field happens to do past it.
     (half / arm).clamp(0.0, 1.0)
 }
 

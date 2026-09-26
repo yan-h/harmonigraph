@@ -617,31 +617,32 @@ mod tests {
 
         let fresh = harmonigraph_scene::ViewConfig::default();
         use harmonigraph_scene::NoteNames;
-        // Arm length, arm width, taper, whether a chord is held over it, and
-        // which names show. The smallest arms earn their shots: a marker's
-        // edge is the rings' band, which is a fixed number of PIXELS, so it is
-        // at the bottom of the arm bar that the band is most of the marker and
-        // the shape has the least room to be the shape it claims.
+        // Arm length, label scale (which sets the arm's width), taper, whether
+        // a chord is held over it, and which names show. The smallest arms
+        // earn their shots: a marker's edge is the rings' band, which is a
+        // fixed number of PIXELS, so it is at the bottom of the arm bar that
+        // the band is most of the marker and the shape has the least room to
+        // be the shape it claims.
+        let scale = fresh.label_scale;
         let shots: Vec<(f32, f32, f32, bool, NoteNames)> = vec![
             // The fresh marker, then the ends of the arm bar, then the two
             // pictures the naming rule makes of the field.
-            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
-            (0.05, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
-            (0.5, fresh.plus_width, fresh.plus_taper, false, NoteNames::Played),
-            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, true, NoteNames::Past),
-            (fresh.plus_arm, fresh.plus_width, fresh.plus_taper, false, NoteNames::All),
-            // The width, across its whole span at one arm: a hairline, the
-            // fresh proportion, a heavy cross, and the square at the top.
-            (fresh.plus_arm, 0.0, fresh.plus_taper, false, NoteNames::Played),
-            (fresh.plus_arm, 0.25, fresh.plus_taper, false, NoteNames::Played),
-            (fresh.plus_arm, 0.5, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, scale, fresh.plus_taper, false, NoteNames::Played),
+            (0.05, scale, fresh.plus_taper, false, NoteNames::Played),
+            (0.5, scale, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, scale, fresh.plus_taper, true, NoteNames::Past),
+            (fresh.plus_arm, scale, fresh.plus_taper, false, NoteNames::All),
+            // The width, across the label scale's span at one arm: the
+            // thinnest cross and the heaviest.
+            (fresh.plus_arm, 0.3, fresh.plus_taper, false, NoteNames::Played),
+            (fresh.plus_arm, 3.0, fresh.plus_taper, false, NoteNames::Played),
             // The taper, across its whole span: a square end, half the arm,
             // and an arm that fades the whole way from the crossing.
-            (fresh.plus_arm, fresh.plus_width, 0.0, false, NoteNames::Played),
-            (fresh.plus_arm, fresh.plus_width, 0.5 * fresh.plus_arm, false, NoteNames::Played),
-            (fresh.plus_arm, fresh.plus_width, fresh.plus_arm, false, NoteNames::Played),
+            (fresh.plus_arm, scale, 0.0, false, NoteNames::Played),
+            (fresh.plus_arm, scale, 0.5 * fresh.plus_arm, false, NoteNames::Played),
+            (fresh.plus_arm, scale, fresh.plus_arm, false, NoteNames::Played),
         ];
-        for (size, width, taper, chord, names) in shots {
+        for (size, label_scale, taper, chord, names) in shots {
             let mut state = PictureState::new(FORMAT);
             state.appearance.view.note_names = names;
             // The DAW's own lattice ground rather than the fixture's near-black:
@@ -662,12 +663,12 @@ mod tests {
             }
             state.appearance.camera.zoom_by(2.5);
             state.appearance.view.plus_arm = size;
-            state.appearance.view.plus_width = width;
+            state.appearance.view.label_scale = label_scale;
             state.appearance.view.plus_taper = taper;
             let name = format!(
-                "plus-arm{:.0}-width{:.0}-taper{:.0}{}-{names:?}",
+                "plus-arm{:.0}-scale{:.0}-taper{:.0}{}-{names:?}",
                 size * 100.0,
-                width * 100.0,
+                label_scale * 100.0,
                 taper * 100.0,
                 if chord { "-chord" } else { "" },
             );
