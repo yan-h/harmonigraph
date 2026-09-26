@@ -707,33 +707,43 @@ fn section_and_region_chevrons_share_visible_hover_feedback() {
     let section_cell =
         egui::Rect::from_min_size(section.min, egui::Vec2::splat(theme::tab_bar_height(1.0)));
     let region_cell = h.ctx.read_response(egui::Id::new(("analyzer region fold", 0))).unwrap().rect;
-    for cell in [section_cell, region_cell] {
+    // What each hovered control paints: its hover fill, and its chevron strokes.
+    // Compared with each other rather than restated from the theme, so a
+    // restyle of the shared paint moves both and the test with them.
+    let hovered = [section_cell, region_cell].map(|cell| {
         let out = h.frame(&mut state, vec![egui::Event::PointerMoved(cell.center())]);
-        assert!(
-            out.shapes.iter().any(|cs| matches!(&cs.shape,
-                egui::Shape::Rect(r) if r.rect.contains(cell.center()) && (r.rect.height() - theme::row_height(1.0)).abs() < 0.5
-                    && (r.rect.center().y - cell.center().y).abs() < 0.5
-                    && r.corner_radius == egui::CornerRadius::same(theme::control_radius(1.0))
-                    && r.fill == theme::widget_hover()
-                    && r.stroke.width == 0.0
-            )),
-            "no unoutlined hover fill at {cell:?}"
-        );
-        // Two: a pane's fold is a double chevron, where a settings heading's
-        // single one says something else (see `paint_fold`).
-        let bright = out
+        let fill = out
             .shapes
             .iter()
-            .filter(|cs| {
-                matches!(&cs.shape,
-                    egui::Shape::Path(p) if p.points.len() == 3
-                        && cell.contains_rect(egui::Rect::from_points(&p.points))
-                        && p.stroke.color == egui::epaint::ColorMode::Solid(theme::text())
-                )
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r)
+                    if r.rect.contains(cell.center()) && r.fill == theme::widget_hover() =>
+                {
+                    Some((r.rect.size(), r.corner_radius, r.stroke))
+                }
+                _ => None,
             })
-            .count();
-        assert_eq!(bright, 2, "not a bright double chevron at {cell:?}");
-    }
+            .unwrap_or_else(|| panic!("no hover fill at {cell:?}"));
+        let strokes: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Path(p)
+                    if p.points.len() == 3
+                        && cell.contains_rect(egui::Rect::from_points(&p.points)) =>
+                {
+                    Some(p.stroke.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        // Two: a pane's fold is a double chevron, where a settings heading's
+        // single one says something else (see `paint_fold`).
+        assert_eq!(strokes.len(), 2, "not a double chevron at {cell:?}");
+        (fill, strokes)
+    });
+    assert_eq!(hovered[0].0, hovered[1].0, "the section and region chevrons hover differently");
+    assert_eq!(hovered[0].1, hovered[1].1, "the section and region chevrons draw differently");
 }
 
 #[test]
