@@ -373,9 +373,11 @@ impl SpectralEffects {
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
-            pitch_softness: 35.0,
-            time_softness: 120.0,
-            spread: 0.25,
+            // The softness, spread, contours, cloud and Stars dials below are
+            // the look captured from the DAW on 2026-09-25.
+            pitch_softness: 13.135_052,
+            time_softness: 87.567_01,
+            spread: 0.065_225_996,
             // One texel a slab: Yan judged it live at a 600 s Span (2026-09-20),
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
@@ -383,39 +385,36 @@ impl Default for SpectralAtmosphere {
             // Full strength is what the `Lava` style drew, and that style was
             // the fresh one.
             contour_strength: 1.0,
-            contours: 7.0,
-            contour_softness: 0.15,
+            contours: 17.0,
+            contour_softness: 0.492_202_6,
             // Previously added to the shared bloom default (0.633_927_7).
             // Keep the fresh ribbon picture when its bloom becomes independent.
             note_glow: 1.133_927_7,
             cloud_depth: 1.0,
-            cloud_speed: 1.0,
-            // The visible direction of the former drift's steady component.
-            cloud_direction: 147.994_61,
-            // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
-            // drew, because `SCALE_CELLS` carries the retired dial's default.
-            scale_size: 1.0,
+            cloud_speed: 0.359_415_77,
+            // Just past straight left.
+            cloud_direction: 181.0,
+            // 1.0x draws what `cloud_scale` 0.5 against `scale_size` 2.2 drew,
+            // because `SCALE_CELLS` carries the retired dial's default.
+            scale_size: 0.153_937_07,
             scale_variety: 0.5,
-            scale_refract: 0.30,
-            cloud_style: CloudStyle::Mosaic,
-            // J2 "dissolved" from the prototype's sheet J, translated: globs
-            // about two harmonic lines across and the rim fully dissolved. Its
-            // third term was a `Ragged` rim wobble, retired once `Fuzz` 1 was
-            // found to mask it; the radius band carries the size it added.
-            wash_size: 1.0,
-            wash_fuzz: 1.0,
-            wash_lobe: 0.55,
+            scale_refract: -1.0,
+            cloud_style: CloudStyle::Stars,
+            wash_size: 0.097_921_36,
+            wash_fuzz: 0.226_044_71,
+            wash_lobe: 0.0,
             wash_refract: 0.85,
             wash_layers: 0.5,
-            // V3 of the prototype's round 4 (`drift.py`): B4's field with the
-            // wide glow at 0.7, each star wandering, and both depth cues on.
-            star_density: 2.0,
+            // V3 of the prototype's round 4 (`drift.py`), dialled denser in the
+            // DAW: three times the stars, a wider glow, the far dust at full,
+            // and a little more wander.
+            star_density: 6.0,
             star_randomness: 0.6,
             star_volume: 0.0,
-            star_glow: 0.7,
-            star_dust: 0.4,
+            star_glow: 0.877_804_76,
+            star_dust: 1.0,
             star_halo: 0.12,
-            star_wander: 0.35,
+            star_wander: 0.45,
             star_far_speed: 0.15,
             star_far_blur: 0.7,
             star_defocus: 0.6,

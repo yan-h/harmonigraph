@@ -163,6 +163,37 @@ fn probe_audio() -> Audio {
     Audio::from_samples(SAMPLE_RATE, samples, 1)
 }
 
+/// The atmosphere the bucket-read frames were blessed at: the refracting
+/// scales over the old softness and terraces.
+///
+/// Held here rather than inherited, because those frames are about how the
+/// heatmap reads its buckets, and the fresh look is retuned whenever one is
+/// captured from the DAW — a capture that turned the default texture to Stars
+/// would otherwise make each of them a starfield frame. The texture frames
+/// below still open at the fresh settings, which is what they are about.
+fn read_atmosphere() -> harmonigraph_scene::SpectralAtmosphere {
+    harmonigraph_scene::SpectralAtmosphere {
+        pitch_softness: 35.0,
+        time_softness: 120.0,
+        spread: 0.25,
+        contours: 7.0,
+        contour_softness: 0.15,
+        cloud_speed: 1.0,
+        cloud_direction: 147.994_61,
+        scale_size: 1.0,
+        scale_refract: 0.30,
+        cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
+        wash_size: 1.0,
+        wash_fuzz: 1.0,
+        wash_lobe: 0.55,
+        star_density: 2.0,
+        star_glow: 0.7,
+        star_dust: 0.4,
+        star_wander: 0.35,
+        ..Default::default()
+    }
+}
+
 /// One golden frame: the pane's size and what it is dialled to.
 struct Shot {
     /// Output pixels. The spectral fixture is full-bleed, so the height IS the
@@ -254,7 +285,7 @@ impl Shot {
     /// same axes, so every note in the fixture is heatmap the gate cannot see —
     /// and the roll is not what #503 moves.
     fn take(&self) -> Take {
-        self.dialled(|_| {})
+        self.dialled(|a| a.spectrum.atmosphere = read_atmosphere())
     }
 
     /// The same take with one further turn of the appearance, for a shot that

@@ -856,9 +856,7 @@ mod tests {
         let clouded = |wash: bool, speed: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
-            if wash {
-                a.cloud_style = style;
-            }
+            a.cloud_style = if wash { style } else { harmonigraph_scene::CloudStyle::Mosaic };
             // Fast enough that a second of render carries the field a visible
             // way: at the fresh 1x the whole run is a fraction of one glob.
             a.cloud_speed = speed;

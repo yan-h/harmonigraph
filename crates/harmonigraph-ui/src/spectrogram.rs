@@ -1089,7 +1089,13 @@ mod tests {
     #[test]
     fn corrected_source_clock_keeps_history_and_incremental_aggregation_ordered() {
         let mut spectrum = crate::AudioSpectrum::default();
-        let config = crate::SpectrumConfig { attack: 0.0, release: 0.0, ..Default::default() };
+        // The hop counts and sample lengths below are sized to an 8192 window.
+        let config = crate::SpectrumConfig {
+            window: crate::SpectrumWindow::Balanced,
+            attack: 0.0,
+            release: 0.0,
+            ..Default::default()
+        };
         let samples: Vec<_> = (0..24_000).map(|i| (i as f32 * 0.047).sin()).collect();
         spectrum.push_source_samples(&samples, 1, 48_000.0, 0.25, &config);
         let before = spectrum.history().len();

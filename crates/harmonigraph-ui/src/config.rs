@@ -14,9 +14,9 @@ pub use harmonigraph_scene::SCALE_BAR_RANGE;
 /// respond more slowly (the tradeoff is physics, not implementation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
-    /// 4096 samples (~85 ms at 48 kHz).
+    /// 4096 samples (~85 ms at 48 kHz): the default.
     Fast,
-    /// 8192 samples (~171 ms): the default balance.
+    /// 8192 samples (~171 ms).
     Balanced,
     /// 16384 samples (~341 ms).
     Precise,
@@ -862,10 +862,11 @@ pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;
 /// The bar still offers [`LEVEL_MAX_DB`], so 0 is one drag away.
 const DEFAULT_ANALYZER_CEILING_DB: f32 = -18.606_335;
 
-/// The top of the heatmap's own colour window.
+/// The top of the heatmap's own colour window, captured from the DAW on
+/// 2026-09-25.
 /// Kept separate from the analyzer ceiling because both were dialled to their
 /// own values in the live capture.
-const DEFAULT_VOLUME_CEILING_DB: f32 = -4.780_288_7;
+const DEFAULT_VOLUME_CEILING_DB: f32 = -28.842_316;
 
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
@@ -893,7 +894,8 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Right,
-            window: SpectrumWindow::Balanced,
+            // As captured from the DAW on 2026-09-25.
+            window: SpectrumWindow::Fast,
             // One taper — the picture with no averaging in it. The steadier
             // counts cost contrast as well as CPU (see `SpectrumTapers`), so
             // which of them is worth it is a judgement about material, and the
@@ -917,28 +919,26 @@ impl Default for SpectrumConfig {
             // couple of kHz.
             tilt: -4.5,
             marking_scale: 1.184_416_5,
-            // Bright levels wear their own color; dark ones are lifted to a
-            // pastel of theirs about as bright as the old white outline at
-            // 30% opacity, which kept quiet contours visible.
-            keyline_lift: 0.6,
-            // Off until dialled in; the prototype's pick was 85% at the floor,
-            // and under about 70% a texture this faint reads as a flat wash.
-            // The height and gap are that pick (one stripe in two, gone 60% of
-            // the way up), waiting under the strength bar.
-            backdrop_strength: 0.0,
-            backdrop_height: 0.6,
+            // Bright levels wear their own color; dark ones are lifted a little
+            // toward a pastel of theirs, as captured from the DAW on 2026-09-25.
+            keyline_lift: 0.230_529_95,
+            // The backdrop as captured from the DAW on 2026-09-25: one stripe in
+            // two, at about 60% at the floor and fading out nearly at the
+            // ceiling.
+            backdrop_strength: 0.603_898_1,
+            backdrop_height: 0.952_823_6,
             backdrop_gap: 1.0,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,
             high_midi: 131.344_91,
             show_roll: true,
-            // Over three quarters of the pane to the roll, as captured from
-            // the DAW on 2026-09-10; the analyzer's own display keeps the rest.
-            roll_fraction: 0.776_992_8,
-            // Nearly three minutes of history, as captured from the DAW on
-            // 2026-09-13, to keep the recent musical section in view.
-            roll_seconds: 170.627_2,
+            // Nearly three quarters of the pane to the roll, as captured from
+            // the DAW on 2026-09-25; the analyzer's own display keeps the rest.
+            roll_fraction: 0.726_662_64,
+            // About ten seconds of history, as captured from the DAW on
+            // 2026-09-25.
+            roll_seconds: 10.260_36,
             // Thin: a note is a line through the spectrogram at its own
             // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
             // axis still separates two neighbouring keys, which is what makes
@@ -967,19 +967,27 @@ impl Default for SpectrumConfig {
             note_names_travel: false,
             note_name_scale: 1.415_327_1,
             show_spectrogram: true,
-            // Aurora retuned in the DAW on 2026-09-08: a shorter violet-to-
-            // green arc, the full lightness axis, and more colour at both ends
-            // than the preset button itself writes.
+            // Aurora retuned in the DAW: a shorter violet-to-green arc, the
+            // full lightness axis, and more colour at both ends than the preset
+            // button itself writes. As captured on 2026-09-25, its hue and
+            // lightness bend late, most of the change landing in the loud end;
+            // chroma walks straight.
             spectrogram_gradient: Gradient {
-                hue_start: 302.0,
-                hue_span: -181.224_01,
+                hue_start: 305.221_25,
+                hue_span: -150.618_23,
                 lightness: 50.0,
                 lightness_ramp: 100.0,
                 chroma: 0.794_999_96,
                 chroma_ramp: 0.410_000_03,
-                ..Gradient::default()
+                bend: harmonigraph_scene::Bend {
+                    at: 0.93,
+                    share: 0.74,
+                    hue: true,
+                    lightness: true,
+                    chroma: false,
+                },
             },
-            volume_floor_db: -70.808_27,
+            volume_floor_db: -64.853_1,
             volume_ceiling_db: DEFAULT_VOLUME_CEILING_DB,
         }
     }

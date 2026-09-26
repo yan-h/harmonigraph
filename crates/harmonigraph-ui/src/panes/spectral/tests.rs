@@ -1820,8 +1820,13 @@ fn paint_tone(rect: egui::Rect, cfg: SpectrumConfig) -> Vec<egui::Shape> {
 
 #[test]
 fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
-    let mut cfg =
-        SpectrumConfig { show_spectrogram: false, show_roll: false, ..Default::default() };
+    // No backdrop: its stripes are a mesh of their own, beside the body.
+    let mut cfg = SpectrumConfig {
+        show_spectrogram: false,
+        show_roll: false,
+        backdrop_strength: 0.0,
+        ..Default::default()
+    };
     // The fill alone: the outline is always drawn, last, and is checked by
     // `analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark`.
     let meshes = |cfg| {
@@ -1862,6 +1867,8 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
         volume_floor_db: -40.0,
         volume_ceiling_db: 0.0,
         tilt: 0.0,
+        // No backdrop: its stripes are a mesh of their own, beside the body.
+        backdrop_strength: 0.0,
         ..Default::default()
     };
     // Silence, a subpixel sliver, two visible but palette-black levels,
