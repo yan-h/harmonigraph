@@ -1027,6 +1027,17 @@ impl Hub {
             }
         }
         let Some(callback) = self.callback else { return };
+        self.snapshots(callback, owner, recorder);
+        // Every record collected this callback has been published, and nothing
+        // still to come is scheduled before this callback began, so this is a
+        // sound and monotone frontier without a coverage protocol behind it.
+        if owner.recording.source_frontier(self.clock, callback.steady_time).is_err() {
+            recorder.fail_configuration();
+        }
+    }
+
+    /// Pay every snapshot a row owes and can state now, one lane at a time.
+    fn snapshots(&mut self, callback: api::Callback, owner: &Owner, recorder: &mut Recorder) {
         let sample = callback.steady_time;
         let time = self.presentation(sample);
         let timing = EventTiming {
@@ -1039,6 +1050,15 @@ impl Hub {
         let route = owner.recording_route(timing, time).unwrap_or_default();
         for index in 0..=TUNERS {
             if !self.rows[index].live || !self.rows[index].repair.any() {
+                continue;
+            }
+            // The frame's cut is `applied`, which counts every delta this row
+            // has scheduled, so one still waiting in `pending` would reach the
+            // lane AFTER a snapshot that already covers it — and the display
+            // and the take writer both refuse history at or below a cut they
+            // have adopted (#1127). The repair stays owed, and `end` pays it
+            // at the latest, after its forced flush has put the history out.
+            if self.pending.iter().any(|item| usize::from(item.source) == index) {
                 continue;
             }
             let identity = identity(index as u8);
@@ -1062,12 +1082,6 @@ impl Hub {
                 }
             }
         }
-        // Every record collected this callback has been published, and nothing
-        // still to come is scheduled before this callback began, so this is a
-        // sound and monotone frontier without a coverage protocol behind it.
-        if owner.recording.source_frontier(self.clock, sample).is_err() {
-            recorder.fail_configuration();
-        }
     }
 
     /// Whether any source this Hub sequences, its own included, has Retune on,
@@ -1086,6 +1100,11 @@ impl Hub {
         // Whatever no sub-block reached is published against whatever segment
         // the recorder does have, and says so if there is none.
         self.flush(owner, recorder, true);
+        // A snapshot `publish` held back behind that history is owed now, not
+        // a callback later that may never come.
+        if let Some(callback) = self.callback {
+            self.snapshots(callback, owner, recorder);
+        }
         self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);
