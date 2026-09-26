@@ -595,8 +595,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     use harmonigraph_scene::{
         STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_GLOW_MAX,
         STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
-        STAR_SIZE_RANGE_MAX, STAR_SIZE_RANGE_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
-        STAR_WANDER_MAX,
+        STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN, STAR_WANDER_MAX,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
         .unit(1.0, "\u{d7}")
@@ -604,17 +603,24 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How many stars at every depth. Higher values pack them closer; past about 3\u{d7} the faintest dust is finer than a pixel and merges into texture.",
         );
-    ValueBar::new(
-        &mut atmosphere.star_size_range,
-        STAR_SIZE_RANGE_MIN..=STAR_SIZE_RANGE_MAX,
-        "Size range",
-    )
-    .eased(true)
-    .unit(1.0, "\u{d7}")
-    .show(ui)
-    .on_hover_text(
-        "How much farther apart, and so fewer and bigger, the nearest stars are than the farthest dust. 1\u{d7} spaces every depth like the dust.",
-    );
+    // Dragged in octaves, so the small end has room on the track: the sizes run
+    // over two orders of magnitude and a linear track would crush 0.5 to 4
+    // into its first few percent.
+    let (mut small, mut big) = (atmosphere.star_size_min.log2(), atmosphere.star_size_max.log2());
+    let response =
+        RangeBar::new(&mut small, &mut big, STAR_SIZE_MIN.log2()..=STAR_SIZE_MAX.log2(), "Star size")
+            .display(|octaves| format!("{:.1} px", octaves.exp2()))
+            .show(ui)
+            .on_hover_text(
+                "The smallest and biggest stars: the farthest dust at the low end, the nearest stars at the high end, with Size curve deciding how the depths between share it out. Bigger stars are also farther apart.",
+            );
+    // Only on a change: the round trip through octaves is not exact, and
+    // writing it back every frame would move the stored sizes by an ulp at a
+    // time — and every star with them, since the life clocks key on them.
+    if response.changed() {
+        atmosphere.star_size_min = small.exp2();
+        atmosphere.star_size_max = big.exp2();
+    }
     ValueBar::new(
         &mut atmosphere.star_size_curve,
         STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
@@ -694,12 +700,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .on_hover_text(
         "How long each star lives before a new one takes its place, fading in and out. With Speed spread, the smallest stars live shorter so they stay near their places, and twinkle faster.",
     );
-    ValueBar::new(&mut atmosphere.star_far_blur, 0.0..=1.0, "Far star blur")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How much the farther stars read a blurred copy of the sound rather than the sharp one, so the dust follows the picture more loosely than the near stars do.",
-        );
     ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
         .percent()
         .show(ui)

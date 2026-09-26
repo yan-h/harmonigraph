@@ -311,18 +311,19 @@ struct Cloud {
 };
 struct StarSlice {
     offset: vec2<f32>,
+    spread: vec2<f32>,
     cell: f32,
     sigma: f32,
     cap: f32,
     defocus: f32,
     occupancy: f32,
-    blur: f32,
     fringe: f32,
     fringe_reach: f32,
     reach: f32,
     life: f32,
-    spread: vec2<f32>,
-    _pad: vec2<f32>,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -1465,16 +1466,13 @@ fn star_brightest(c: vec3<f32>) -> f32 {
     return max(c.r, max(c.g, c.b));
 }
 
-// The level a star sees at pane point `pt`: the Spread-combined light, mixed
-// toward the wide one by `blur`.
-fn star_level_at(pt: vec2<f32>, blur: f32) -> f32 {
+// The level a star sees at pane point `pt`: the Spread-combined light, so
+// how loosely the stars follow the picture is `Wide blur mix` and the two
+// softnesses, as it is for every texture. A Stars-only blur toward the wide
+// light stood here and was that dial a second time.
+fn star_level_at(pt: vec2<f32>) -> f32 {
     let uv = pt / cloud.size;
-    var level = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-    if blur > 0.0 {
-        let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
-        level = mix(level, wide, blur);
-    }
-    return clamp(level, 0.0, 1.0);
+    return clamp(textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r, 0.0, 1.0);
 }
 
 // `wash_hash`'s mixer cut into four eight-bit draws, each centred in its
@@ -1544,7 +1542,7 @@ fn star_cell(
         return vec4<f32>(0.0);
     }
     let at = (centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
-    let level = star_level_at(at, s.blur);
+    let level = star_level_at(at);
     // Over silence a star is not drawn at all, so a quiet pane is the floor
     // exactly rather than the floor with stars of the floor's colour on it.
     if level <= 0.0 {

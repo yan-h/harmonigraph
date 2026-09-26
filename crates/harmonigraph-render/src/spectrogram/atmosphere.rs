@@ -132,10 +132,16 @@ struct StarSlice {
     /// This slice's drift, in its own cells, reduced modulo
     /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
     offset: [f32; 2],
-    /// The cell one star is hashed into: two star pixels at the far end over
-    /// the square root of half the density, times `Size range` raised to
-    /// `d^Size curve` — at the fresh 16 and 2, 32 at the near end and most of
-    /// the depth fine dust.
+    /// How far, in cells along the drift, a star whose speed is the widest
+    /// `Speed spread` allows moves from its slice's drift over one life. A
+    /// star's own is this times `2h - 1` for its hashed `h`, and it sits at
+    /// that times `age - 0.5` through its life, so it passes where the drift
+    /// puts it at mid-life and strays at most half this either side.
+    spread: [f32; 2],
+    /// The cell one star is hashed into: `Star size`'s low end at the far end
+    /// over the square root of half the density, times the ratio of its ends
+    /// raised to `d^Size curve` — at the fresh 2 to 32 and 2, 32 at the near
+    /// end and most of the depth fine dust.
     cell: f32,
     /// The core's base sigma, before the per-star size draw.
     sigma: f32,
@@ -147,8 +153,6 @@ struct StarSlice {
     defocus: f32,
     /// The share of cells that hold a star.
     occupancy: f32,
-    /// The share of the WIDE light a star here reads instead of the close one.
-    blur: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)`: `Fringe`, alike at every depth.
     fringe: f32,
@@ -164,13 +168,7 @@ struct StarSlice {
     /// [`STAR_LIFE_PERIOD`] in f64. A cell's lives start at this plus its
     /// hashed stagger.
     life: f32,
-    /// How far, in cells along the drift, a star whose speed is the widest
-    /// `Speed spread` allows moves from its slice's drift over one life. A
-    /// star's own is this times `2h - 1` for its hashed `h`, and it sits at
-    /// that times `age - 0.5` through its life, so it passes where the drift
-    /// puts it at mid-life and strays at most half this either side.
-    spread: [f32; 2],
-    _pad: [f32; 2],
+    _pad: [f32; 3],
 }
 
 /// The slice's depth, 0 for the farthest and 1 for the nearest.
@@ -207,12 +205,18 @@ fn star_slices(
     let travel = now * rate;
     let (sin, cos) = f64::from(settings.cloud_direction).to_radians().sin_cos();
     let reach_cells = star_reach_cells(settings);
-    let far_cell = 2.0 / (settings.star_density / 2.0).sqrt();
+    let packing = (settings.star_density / 2.0).sqrt();
+    let (small, big) = (settings.star_size_min, settings.star_size_max);
     std::array::from_fn(|k| {
         let d = star_depth(k);
-        let cell = far_cell * settings.star_size_range.powf(d.powf(settings.star_size_curve));
-        let sigma = 0.5 + 0.8 * d;
-        let cap = (0.33 * cell).min(1.8);
+        let along = d.powf(settings.star_size_curve);
+        let cell = small * (big / small).powf(along) / packing;
+        // The core and its cap grow with this depth's spacing over the fresh
+        // 2-to-32 one at the same depth, so a bigger `Star size` is bigger
+        // stars and not only sparser ones, and the fresh ends are 1 here.
+        let scale = small / 2.0 * (big / small / 16.0).powf(along);
+        let sigma = (0.5 + 0.8 * d) * scale;
+        let cap = (0.33 * cell).min(1.8 * scale);
         let defocus = 1.0 + settings.star_defocus * d * d;
         let fringe = settings.star_fringe;
         // The prototype's splat radius for a fringe of 2.5 sigmas.
@@ -239,18 +243,17 @@ fn star_slices(
         let swing = (widest * lifetime / cell).min(2.0 * STAR_SPREAD_REACH);
         StarSlice {
             offset: [shift(cos), shift(sin)],
+            spread: [swing * cos as f32, swing * sin as f32],
             cell,
             sigma,
             cap,
             defocus,
             occupancy: settings.star_dust * (1.0 - d) * (1.0 - d) + settings.star_near * d * d,
-            blur: settings.star_far_blur * (1.0 - d),
             fringe,
             fringe_reach: if fringe > 0.0 { splat } else { 0.0 },
             reach: (reach_cells - swing / 2.0) * cell,
             life: (now / f64::from(lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32,
-            spread: [swing * cos as f32, swing * sin as f32],
-            _pad: [0.0; 2],
+            _pad: [0.0; 3],
         }
     })
 }
@@ -1257,13 +1260,15 @@ mod tests {
                 star_defocus: harmonigraph_scene::STAR_DEFOCUS_MAX,
                 star_fringe: harmonigraph_scene::STAR_FRINGE_MAX,
                 star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_size_range: harmonigraph_scene::STAR_SIZE_RANGE_MAX,
+                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                star_size_max: harmonigraph_scene::STAR_SIZE_MAX,
                 ..spread
             },
             harmonigraph_scene::SpectralAtmosphere {
                 star_wander: 0.0,
                 star_density: harmonigraph_scene::STAR_DENSITY_MIN,
-                star_size_range: harmonigraph_scene::STAR_SIZE_RANGE_MIN,
+                star_size_min: harmonigraph_scene::STAR_SIZE_MAX,
+                star_size_max: harmonigraph_scene::STAR_SIZE_MAX,
                 ..spread
             },
             // The steepest speed gaps sit at the far end at the low curve and

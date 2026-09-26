@@ -151,12 +151,12 @@ pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// excursion, and three quarters with none; the renderer's
 /// `the_star_ring_holds_every_star_that_reaches_a_pixel` holds it.
 pub const STAR_WANDER_MAX: f32 = 0.45;
-/// Bounds shared by the [`SpectralAtmosphere::star_size_range`] control and
-/// sanitizer: the nearest depth's star spacing over the farthest's. 1 draws
-/// every depth at the dust's spacing.
-pub const STAR_SIZE_RANGE_MIN: f32 = 1.0;
-/// See [`STAR_SIZE_RANGE_MIN`].
-pub const STAR_SIZE_RANGE_MAX: f32 = 64.0;
+/// Bounds shared by the two ends of the `Star size` control
+/// ([`SpectralAtmosphere::star_size_min`], [`SpectralAtmosphere::star_size_max`])
+/// and their sanitizer, in star pixels of spacing at density 2.
+pub const STAR_SIZE_MIN: f32 = 0.5;
+/// See [`STAR_SIZE_MIN`].
+pub const STAR_SIZE_MAX: f32 = 64.0;
 /// Bounds shared by the [`SpectralAtmosphere::star_size_curve`] control and
 /// sanitizer.
 pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
@@ -348,13 +348,18 @@ pub struct SpectralAtmosphere {
     /// How many cells of the NEAREST depth hold a star: the other end of the
     /// occupancy [`Self::star_dust`] starts. The prototype's fixed quarter.
     pub star_near: f32,
-    /// The nearest depth's star spacing over the farthest's, which is how much
-    /// bigger and sparser the near stars are than the dust. A depth `d` from 0
-    /// (far) to 1 (near) spaces its stars at the dust's spacing times
-    /// `range^(d^curve)`. Runs over
-    /// [`STAR_SIZE_RANGE_MIN`]..=[`STAR_SIZE_RANGE_MAX`].
-    pub star_size_range: f32,
-    /// The exponent on depth in [`Self::star_size_range`]'s spacing: 1 spreads
+    /// The farthest depth's star size, as its spacing in star pixels at
+    /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
+    /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
+    /// each star's core and its cap with that spacing's ratio to the fresh
+    /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
+    /// the old fixed curve did. Runs over [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`],
+    /// never above [`Self::star_size_max`].
+    pub star_size_min: f32,
+    /// The nearest depth's star size: the biggest stars in the field. See
+    /// [`Self::star_size_min`].
+    pub star_size_max: f32,
+    /// The exponent on depth in the star size's spacing: 1 spreads
     /// the sizes evenly over the depths, higher puts most depths in the fine
     /// dust. The prototype's 2. Runs over
     /// [`STAR_SIZE_CURVE_MIN`]..=[`STAR_SIZE_CURVE_MAX`].
@@ -385,9 +390,6 @@ pub struct SpectralAtmosphere {
     /// The farthest depth's speed as a share of the nearest's: the parallax.
     /// 1 moves every depth together.
     pub star_far_speed: f32,
-    /// How much of a blurred copy of the sound the farthest stars read, fading
-    /// to none at the nearest depth.
-    pub star_far_blur: f32,
     /// How much the nearest stars are softened, growing with depth squared.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
@@ -466,7 +468,8 @@ impl Default for SpectralAtmosphere {
             star_dust: 1.0,
             // The prototype's depth curves, as dials.
             star_near: 0.25,
-            star_size_range: 16.0,
+            star_size_min: 2.0,
+            star_size_max: 32.0,
             star_size_curve: 2.0,
             star_speed_curve: 1.0,
             star_speed_spread: 0.5,
@@ -474,7 +477,6 @@ impl Default for SpectralAtmosphere {
             star_fringe: 0.25,
             star_wander: 0.45,
             star_far_speed: 0.15,
-            star_far_blur: 0.7,
             star_defocus: 0.3,
         }
     }
@@ -537,12 +539,15 @@ impl SpectralAtmosphere {
         self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
         self.star_dust = clamp(self.star_dust, fresh.star_dust, 0.0, 1.0);
         self.star_near = clamp(self.star_near, fresh.star_near, 0.0, 1.0);
-        self.star_size_range = clamp(
-            self.star_size_range,
-            fresh.star_size_range,
-            STAR_SIZE_RANGE_MIN,
-            STAR_SIZE_RANGE_MAX,
-        );
+        self.star_size_min =
+            clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        self.star_size_max =
+            clamp(self.star_size_max, fresh.star_size_max, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        // One control with two handles, so its ends cannot cross on screen;
+        // a blob that holds them crossed is drawn, and kept, as the one pair.
+        if self.star_size_min > self.star_size_max {
+            std::mem::swap(&mut self.star_size_min, &mut self.star_size_max);
+        }
         self.star_size_curve = clamp(
             self.star_size_curve,
             fresh.star_size_curve,
@@ -561,7 +566,6 @@ impl SpectralAtmosphere {
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
         self.star_wander = clamp(self.star_wander, fresh.star_wander, 0.0, STAR_WANDER_MAX);
         self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
-        self.star_far_blur = clamp(self.star_far_blur, fresh.star_far_blur, 0.0, 1.0);
         self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
         self
     }
