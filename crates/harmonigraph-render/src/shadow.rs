@@ -57,6 +57,7 @@ pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle) -> f32 {
     let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     if style.casts() {
         spectral_sigma_points(style) * style.kernel.reach_sigmas()
+            + style.gaussian_spread_points(spectral_sigma_points(style))
     } else {
         0.0
     }
@@ -133,6 +134,8 @@ pub(crate) struct Caster {
     /// scene draw for no new information. A Gaussian still needs the shared
     /// cell that holds its convolution.
     pub direct_distance: bool,
+    /// Gaussian source expansion in pane points; ignored by Contour.
+    pub spread_points: f32,
 }
 
 /// The caster a name's glyphs make: the box round every glyph's rect, the
@@ -148,6 +151,7 @@ pub(crate) fn caster_of(
     sigma_points: f32,
     kernel: harmonigraph_scene::ShadowKernel,
     falloff: f32,
+    spread_points: f32,
 ) -> Caster {
     let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
     for g in glyphs {
@@ -162,6 +166,7 @@ pub(crate) fn caster_of(
         sigma_points,
         kernel,
         falloff,
+        spread_points,
         direct_distance: false,
     };
     if !(max[0] > min[0] && max[1] > min[1]) {
@@ -199,7 +204,7 @@ pub(crate) struct ShadowBox {
     /// ([`DISTANCE_COVERAGE_KIND`]); z: how far past the caster's ink this cell
     /// reaches, in the pane's points — the pad the rect was grown by, which is
     /// where the distance profile reaches zero and so the value a
-    /// texel past its encoded reach holds; w: falloff for evaluated coverage.
+    /// texel past its encoded reach holds; w: falloff for evaluated coverage, or Gaussian source expansion in points.
     ///
     /// x is read by the node's SCENE draw, which needs the caster's whole entry
     /// and so reaches the array rather than the box; y and z by the passes that
@@ -383,6 +388,13 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         return Packed::default();
     }
     let is_distance = |c: &Caster| c.kernel.is_distance();
+    let spread_of = |c: &Caster| {
+        if is_distance(c) {
+            0.0
+        } else {
+            c.spread_points.max(0.0)
+        }
+    };
     // One caster's σ in the target's pixels, which is where its cell is drawn.
     //
     // Floored at zero because `shape` runs for every non-direct caster,
@@ -418,7 +430,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         // the kind — the two renderers reach different multiples of it and
         // `ShadowKernel::reach_sigmas` is the one place that is written down.
         let texels = sigma * scale;
-        let pad = ((c.kernel.reach_sigmas() * texels).ceil() + 1.0) / k;
+        let pad = ((c.kernel.reach_sigmas() * texels).ceil() + 1.0) / k + spread_of(c);
         // The BLUR chain's σ, which a distance cell has none of because it
         // bypasses that chain.
         (scale, k, if is_distance(c) { 0.0 } else { texels }, pad)
@@ -514,7 +526,7 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
             rect,
             cell,
             cell_map: [k, sigma_cell, level, scale],
-            who: [c as f32, kind, pad, 0.0],
+            who: [c as f32, kind, pad, spread_of(caster)],
         });
         if whole {
             entry.shade = [level, kind, caster.sigma_points, caster.falloff];
@@ -1164,8 +1176,27 @@ pub(crate) mod tests {
             sigma_points: 1.0,
             kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             falloff: 1.0,
+            spread_points: 0.0,
             direct_distance: false,
         }
+    }
+
+    #[test]
+    fn gaussian_spread_pads_the_source_without_changing_blur_or_contour() {
+        let base = Caster { sigma_points: 5.877344, ..caster(30.0, 30.0, 10.0, 2.0) };
+        let expanded = Caster { spread_points: 2.0, ..base };
+        let a = pack(&[base], 2.0, 4096);
+        let b = pack(&[expanded], 2.0, 4096);
+        assert_eq!(a.boxes[0].cell_map, b.boxes[0].cell_map);
+        assert_eq!(b.boxes[0].rect[0], a.boxes[0].rect[0] - 2.0);
+        assert_eq!(b.boxes[0].rect[2], a.boxes[0].rect[2] + 4.0);
+        assert_eq!(b.boxes[0].who[3], 2.0);
+        assert!(b.boxes[0].cell[2] > a.boxes[0].cell[2]);
+        let contour = Caster { kernel: harmonigraph_scene::ShadowKernel::Distance, ..base };
+        assert_eq!(
+            pack(&[contour], 2.0, 4096),
+            pack(&[Caster { spread_points: 100.0, ..contour }], 2.0, 4096)
+        );
     }
 
     /// A whole frame at ONE style: every caster at `sigma_px` in the target's
@@ -1717,6 +1748,7 @@ pub(crate) mod tests {
             sigma_points: 1.0,
             kernel: ShadowKernel::Distance,
             falloff: 1.0,
+            spread_points: 0.0,
             direct_distance: false,
         };
         // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
@@ -1765,6 +1797,7 @@ pub(crate) mod tests {
                 sigma_points: sigma,
                 kernel: ShadowKernel::Distance,
                 falloff,
+                spread_points: 0.0,
                 direct_distance: false,
             };
             let pad = pack_at(&[caster], sigma, 1.0, 8192, ShadowKernel::Distance).boxes[0].who[2];
@@ -1797,6 +1830,7 @@ pub(crate) mod tests {
             sigma_points: sigma,
             kernel,
             falloff: 1.0,
+            spread_points: 0.0,
             direct_distance: false,
         };
         let (near, far) = (10.0, 40.0);
@@ -1839,6 +1873,7 @@ pub(crate) mod tests {
             sigma_points: 1.0,
             kernel: ShadowKernel::Distance,
             falloff: 1.0,
+            spread_points: 0.0,
             direct_distance: true,
         };
         let distance = pack_at(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance);
@@ -1864,13 +1899,14 @@ pub(crate) mod tests {
             sigma_points: 1.0,
             kernel: ShadowKernel::Distance,
             falloff: 1.0,
+            spread_points: 0.0,
             direct_distance: false,
         };
         let exact = pack_at(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
         assert_eq!(exact.boxes[0].who[1], DISTANCE_KIND);
 
-        let name = caster_of(&[crate::text::tests::glyph()], 1.0, ShadowKernel::Distance, 1.0);
+        let name = caster_of(&[crate::text::tests::glyph()], 1.0, ShadowKernel::Distance, 1.0, 0.0);
         let name = pack_at(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(name.boxes[0].cell[2] > 0.0 && name.boxes[0].cell[3] > 0.0);
         assert_eq!(name.boxes[0].who[1], DISTANCE_KIND);

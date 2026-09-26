@@ -258,6 +258,12 @@ fn shadow_transmittance(full: f32, depth: f32, level: f32) -> f32 {
     return 1.0 - clamp(level, 0.0, 1.0) * (1.0 - through);
 }
 
+// Lattice notation is a local veil over displayed light. Its depth scales
+// coverage, leaving the kernel's shape and reach independent of darkness.
+fn local_shadow_transmittance(full: f32, depth: f32, level: f32) -> f32 {
+    return 1.0 - clamp(full, 0.0, 1.0) * clamp(depth, 0.0, 1.0) * clamp(level, 0.0, 1.0);
+}
+
 // Where a point of the pane reads its caster's cell, in atlas texels: the cell's
 // origin plus how far into the box the point stands, at the scale the packer
 // related the two by (`pack` in shadow.rs).

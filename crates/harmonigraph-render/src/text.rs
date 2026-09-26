@@ -66,6 +66,8 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "vs_shadow_box",
     "fs_shadow_box",
     "fs_shadow_box_plain",
+    "fs_label_transmittance",
+    "fs_glyph_transmittance",
 ];
 
 /// One glyph: where it goes on screen, where it lives in the atlas it is cut
@@ -815,7 +817,7 @@ pub(crate) fn create_glyph_cell_pipelines(
 /// The spectral text group's Gaussian producer. Unlike the lattice's retained
 /// coverage control, this rasterizes coverage from the fixed glyph SDF, so the
 /// two spectral kernels share one zero contour.
-fn create_glyph_sdf_coverage_pipeline(
+pub(crate) fn create_glyph_sdf_coverage_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
@@ -866,11 +868,9 @@ fn create_spectral_shadow_pipeline(
 /// A name's shadow into the scene pass, over the name's own box
 /// (`fs_shadow_box`).
 ///
-/// The shadow multiplies both visible components and, with bloom on, both
-/// bloom components: a halo a name darkens has to bloom as darkened.
-/// The glyphs beside it write the visible pair alone
-/// ([`create_text_pipeline`]), which is what keeps the name itself out of the
-/// bloom.
+/// The shadow multiplies both visible components. The bloom sources remain
+/// untouched; the ordered local transmittance pass shadows their finished
+/// light at composition time. Glyph fill also stays out of the bloom sources.
 ///
 /// Four groups, the second empty: the pane's uniforms, the atlas at group 2 and
 /// the casters' kernels at group 3, where the shader declares each — the light
@@ -914,6 +914,28 @@ pub(crate) fn create_shadow_box_pipeline(
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
         &targets,
+    )
+}
+
+pub(crate) fn create_local_shadow_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    glyph_layout: &wgpu::BindGroupLayout,
+    layouts: crate::SceneLayouts<'_>,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    glyph_pipeline(
+        device,
+        shader,
+        "label_local_shadow",
+        &[Some(glyph_layout), Some(layouts.glow), Some(layouts.shadow), Some(layouts.casters)],
+        ("vs_shadow_box", "fs_label_transmittance"),
+        &[],
+        &[Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })],
     )
 }
 
@@ -1470,6 +1492,7 @@ impl CallbackTrait for TextCallback {
                     sigma_points: sigma,
                     kernel,
                     falloff,
+                    spread_points: style.map_or(0.0, |s| s.gaussian_spread_points(sigma)),
                     direct_distance: false,
                 })
                 .collect();
@@ -2613,6 +2636,41 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn gaussian_spread_expands_spectral_text_shadow_without_changing_fill() {
+        let Some((device, queue)) = headless_device() else { return };
+        let style = harmonigraph_scene::ShadowStyle {
+            width: 2.0,
+            depth: 1.0,
+            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            ..Default::default()
+        };
+        let draw = |style| {
+            draw_from_scaled(
+                &device,
+                &queue,
+                glyph(),
+                Some(style),
+                atlas(),
+                SlideAxis::default(),
+                1.0,
+            )
+            .0
+        };
+        let base = draw(style);
+        let grown = draw(harmonigraph_scene::ShadowStyle { spread: 0.5, ..style });
+        assert_eq!(pixel(&base, 28, 28), pixel(&grown, 28, 28), "visible glyph fill moved");
+        assert!(
+            pixel(&grown, 11, 28)[3] > pixel(&base, 11, 28)[3],
+            "expanded glyph footprint was clipped"
+        );
+        let contour = harmonigraph_scene::ShadowStyle {
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..style
+        };
+        assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
     /// A spectral shadow is worth its color's alpha, which is the label's
