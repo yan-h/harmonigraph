@@ -155,6 +155,15 @@ impl IntensitySettings {
         self
     }
 
+    /// Whether any source drives `target`. A display none does reads in full
+    /// and ignores its base.
+    pub fn routes_to(&self, target: IntensityTarget) -> bool {
+        target != IntensityTarget::Off
+            && [self.velocity, self.gain, self.pressure, self.timbre]
+                .iter()
+                .any(|source| source.target == target)
+    }
+
     /// What one note, played at `velocity` with its expressions standing at
     /// `expressions`, comes to on every display.
     pub fn read(&self, velocity: f32, expressions: Expressions) -> IntensityReading {
@@ -170,16 +179,15 @@ impl IntensitySettings {
             (self.timbre, expressions.timbre),
         ];
         let display = |target: IntensityTarget, base: f32| {
-            let mut routed =
-                sources.iter().filter(|(source, _)| source.target == target).peekable();
-            if routed.peek().is_none() {
+            if !self.routes_to(target) {
                 return 1.0;
             }
             // A zero weight is skipped rather than multiplied, which is what
             // keeps a silent note's bounded dB out of a sum it has no part in.
             let sum = base
-                + routed
-                    .filter(|(source, _)| source.weight != 0.0)
+                + sources
+                    .iter()
+                    .filter(|(source, _)| source.target == target && source.weight != 0.0)
                     .map(|(source, value)| source.weight * value)
                     .sum::<f32>();
             // `clamp` passes a NaN through, and a host's value is not

@@ -101,13 +101,31 @@ fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                  A display nothing is routed to draws in full and ignores this."
             )
         };
-        weight(&mut intensity.opacity_base, "Opacity base")
-            .show(ui)
-            .on_hover_text(base_hover("opacity"));
-        weight(&mut intensity.glow_base, "Glow base").show(ui).on_hover_text(base_hover("glow"));
-        weight(&mut intensity.thickness_base, "Thickness base")
-            .show(ui)
-            .on_hover_text(format!("{} Nothing draws thickness yet.", base_hover("thickness")));
+        // Each base only counts while something is routed to its display, so
+        // it is greyed out otherwise, as a source's weight is while it is Off.
+        let routed = IntensityTarget::ALL.map(|target| intensity.routes_to(target));
+        let base = |ui: &mut egui::Ui, value: &mut f32, label: &str, target, hover: String| {
+            ui.add_enabled_ui(routed[target as usize], |ui| {
+                weight(value, label).show(ui).on_hover_text(&hover).on_disabled_hover_text(
+                    format!("{hover} Route a source to it above to use this."),
+                );
+            });
+        };
+        base(
+            ui,
+            &mut intensity.opacity_base,
+            "Opacity base",
+            IntensityTarget::Opacity,
+            base_hover("opacity"),
+        );
+        base(ui, &mut intensity.glow_base, "Glow base", IntensityTarget::Glow, base_hover("glow"));
+        base(
+            ui,
+            &mut intensity.thickness_base,
+            "Thickness base",
+            IntensityTarget::Thickness,
+            format!("{} Nothing draws thickness yet.", base_hover("thickness")),
+        );
     });
 }
 
