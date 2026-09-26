@@ -4,8 +4,8 @@
 
 use egui::{Color32, Pos2, Rect, Stroke, Ui, Vec2};
 use harmonigraph_scene::{
-    IntensityReach, IntensitySettings, IntensitySource, IntensityTarget, BLOOM_MAX,
-    INTENSITY_WEIGHT_MAX, THICKNESS_MAX_RANGE,
+    IntensityReach, IntensitySettings, IntensitySource, IntensityTarget, INTENSITY_WEIGHT_MAX,
+    THICKNESS_MAX_RANGE,
 };
 
 use crate::{theme, widgets};
@@ -73,7 +73,6 @@ impl Source {
 fn target_name(target: IntensityTarget) -> &'static str {
     match target {
         IntensityTarget::Opacity => "Opacity",
-        IntensityTarget::Glow => "Bloom",
         IntensityTarget::Thickness => "Thickness",
     }
 }
@@ -81,7 +80,6 @@ fn target_name(target: IntensityTarget) -> &'static str {
 fn limits(settings: &IntensitySettings, target: IntensityTarget) -> (f32, f32) {
     match target {
         IntensityTarget::Opacity => (settings.opacity_rest, 1.0),
-        IntensityTarget::Glow => (settings.glow_base, BLOOM_MAX),
         IntensityTarget::Thickness => (settings.thickness_base, settings.thickness_max),
     }
 }
@@ -90,7 +88,7 @@ pub(super) fn show(ui: &mut Ui, settings: &mut IntensitySettings) {
     widgets::weak(ui, "Bands show possible reach. Stripes mark clipping; dashes mark gain boosts.");
     // Apply additions/removals after drawing so rows keep stable geometry this frame.
     let mut route = None;
-    for target in [IntensityTarget::Opacity, IntensityTarget::Thickness, IntensityTarget::Glow] {
+    for target in IntensityTarget::ALL {
         ui.push_id(target_name(target), |ui| {
             group(ui, settings, target, &mut route);
         });
@@ -137,8 +135,6 @@ fn group(
     let base = match target {
         IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, 0.0..=1.0, "Opacity base")
             .overlay_slot(&mut overlay).show(ui).on_hover_text("Starting opacity, even with no mappings. Only timbre can reduce it. A base of 1 leaves no room for positive additions."),
-        IntensityTarget::Glow => ValueBar::new(&mut settings.glow_base, 0.0..=BLOOM_MAX, "Bloom base")
-            .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting note bloom, even with no mappings. Mappings can add bloom from base 0. The separate lattice background glow is unchanged."),
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
             .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
     };
@@ -349,7 +345,7 @@ mod tests {
         };
         let out = frame(&ctx, &mut settings, vec![]);
         let add = texts(&out, "Add mapping");
-        assert_eq!(add.len(), 3);
+        assert_eq!(add.len(), 2);
         click(&ctx, &mut settings, add[1].center());
         let menu = frame(&ctx, &mut settings, vec![]);
         let item = texts(&menu, "Velocity")[0];

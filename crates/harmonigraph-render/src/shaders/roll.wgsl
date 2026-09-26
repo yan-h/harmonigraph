@@ -49,8 +49,8 @@ struct Locals {
     /// Width of the antialiasing ramp in points — one pixel of whatever is
     /// being drawn into, which is not the display's pixel in the bloom's pass.
     feather: f32,
-    /// 1 in the bloom's pass, which draws each body at its glow rather than its
-    /// fade (see [`core_color`]); 0 on screen.
+    /// 1 in the bloom pass, which uses the body's original opacity;
+    /// 0 on screen, where per-note opacity mappings apply.
     light: f32,
     /// Unit screen vectors of the pane's two axes. Pitch runs across the
     /// pane's short side, depth (time) along its long side.
@@ -105,9 +105,8 @@ struct VertexOut {
     @location(12) @interpolate(flat) feather: f32,
     /// The two depth offsets the readings below are given at. See [`along`].
     @location(13) @interpolate(flat) ramp: vec2<f32>,
-    /// Opacity at those two depths (`xy`), and the body's light for the bloom
-    /// (`zw`).
-    @location(14) @interpolate(flat) reads: vec4<f32>,
+    /// Opacity at those two depths.
+    @location(14) @interpolate(flat) fade: vec2<f32>,
 };
 
 @vertex
@@ -118,13 +117,13 @@ fn vs_note(
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(3) outline_reach: f32,
-    // Lead, lead fade, lead alpha and cap reach; span then ramp; fade then
-    // glow: packed, since a vertex takes sixteen at most.
+    // Lead, lead fade, lead alpha and cap reach; span then ramp.
+    // Packed, since a vertex takes sixteen at most.
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
     @location(9) outline: vec4<f32>,
     @location(14) span_ramp: vec4<f32>,
-    @location(15) reads: vec4<f32>,
+    @location(15) fade: vec2<f32>,
     @location(5) taper_depth: vec4<f32>,
     @location(6) taper: vec4<f32>,
 ) -> VertexOut {
@@ -185,7 +184,7 @@ fn vs_note(
     out.who = who;
     out.feather = locals.feather;
     out.ramp = span_ramp.zw;
-    out.reads = reads;
+    out.fade = fade;
     return out;
 }
 
@@ -239,7 +238,7 @@ fn vs_shadow_cell(
     // The cell holds the segment's whole coverage whatever piece it is for,
     // so a piece's shadow runs on across the cut; fading is the outline's.
     out.ramp = vec2<f32>(0.0);
-    out.reads = vec4<f32>(1.0);
+    out.fade = vec2<f32>(1.0);
     return out;
 }
 
@@ -585,7 +584,7 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
     let wrap =
         outline_coverage(in, d, in.outline_reach) * (1.0 - inside(in, d, 0.0)) * lead_coverage(in);
-    return in.outline * max(wrap, cap_coverage(in)) * along(in, in.reads.xy);
+    return in.outline * max(wrap, cap_coverage(in)) * along(in, in.fade);
 }
 
 /// Flat premultiplied gamma-space body color. A leading tip set to fade loses
@@ -594,18 +593,9 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
 fn core_color(in: VertexOut) -> vec4<f32> {
     let body = in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in);
     if (locals.light < 0.5) {
-        return body * along(in, in.reads.xy);
+        return body * along(in, in.fade);
     }
-    // In the bloom's pass the body wears its glow instead, so the light a note
-    // gives off follows its own display. A glow past 1 is a note blooming over
-    // the pass's strength: its colour takes the whole of it, into a float
-    // target, and its alpha stops at 1. Past 1 an alpha would take more than
-    // everything under it away in the blend, and the chain's threshold reads
-    // colour over alpha, so the note's colour reads that much brighter there
-    // too: past the knee a share of 2 is twice the light, and a dim note is
-    // lifted through it.
-    let glow = along(in, in.reads.zw);
-    return vec4<f32>(body.rgb * glow, body.a * min(glow, 1.0));
+    return body;
 }
 
 // One of the note's intensity readings at this depth: `ends` is its value at

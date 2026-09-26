@@ -632,17 +632,6 @@ impl NodeMotion {
                 .map(|i| motion.levels[i])
                 .chain([melody_level, bass_level])
                 .fold(0.0, f32::max);
-            // The Glow display drives the BLOOM instead, per node: the reading
-            // of its loudest lit slot, as its share of the pass's strength
-            // (`scene.bloom_strength`, the same reference). An unlit node
-            // blooms at rest, which is the base's own share of the reference:
-            // nothing at a base of 0, though the pass runs at its floor.
-            let loudest = (0..11).max_by(|&a, &b| motion.levels[a].total_cmp(&motion.levels[b]));
-            let reading = match loudest {
-                Some(slot) if motion.levels[slot] > 0.0 => motion.readings[slot],
-                _ => IntensityReading::REST,
-            };
-            node.bloom = view.intensity.bloom_share(view.intensity.bloom(reading));
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -930,7 +919,6 @@ mod tests {
         });
         let pressed = draw(&mut motion, &mut tracker, &view, 1.1, false);
         assert_eq!(slot(&pressed), (0.5, Some(0.5), false, 1.0), "the ink follows at once");
-        assert_eq!(origin(&pressed).bloom, 1.0, "nothing is routed to Glow");
 
         tracker.handle_event(off(1.2, 60));
         let (activation, _, departing, glow) =
@@ -938,35 +926,6 @@ mod tests {
         assert!(departing, "released");
         assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
         assert!((glow - 0.5).abs() < 1e-5, "the glow departs on the envelope alone: {glow}");
-
-        // Pressure routed to the glow instead, at half weight over a Bloom base
-        // of half: a note at half pressure blooms at three quarters, half again
-        // the base's own, and neither the slice ink nor the node glow is
-        // touched by it.
-        let view = ViewConfig {
-            intensity: crate::IntensitySettings {
-                pressure: IntensitySource { glow: Some(0.5), ..Default::default() },
-                glow_base: 0.5,
-                ..Default::default()
-            },
-            ..view
-        };
-        let mut tracker = NoteTracker::new();
-        let mut motion = NodeMotion::default();
-        tracker.handle_event(on(0.0, 60));
-        tracker.handle_event(NoteEvent {
-            source: SourceId::DIRECT,
-            time: 0.0,
-            channel: 0,
-            note: 60,
-            kind: harmonigraph_core::NoteEventKind::Expression {
-                expression: harmonigraph_core::Expression::Pressure,
-                value: 0.5,
-            },
-        });
-        let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
-        assert_eq!(slot(&held), (1.0, Some(1.0), false, 1.0));
-        assert_eq!(origin(&held).bloom, 1.5);
     }
     /// An off delivered after the frame past it replays the horizon, and the
     /// release it replays fades from the note's reading at its off, as an

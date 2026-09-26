@@ -79,15 +79,8 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            // `w` is how much of the bloom this node GIVES UP, so the zero it
-            // always was is the full bloom, and a note blooming over its bar
-            // gives up a negative amount. Bounded by the most a share can be.
-            params: [
-                n.activation,
-                n.melody_level,
-                n.bass_level,
-                1.0 - n.bloom.clamp(0.0, BLOOM_SHARE_MAX),
-            ],
+            // `w` carries cell kinds in the shadow pass and is unused here.
+            params: [n.activation, n.melody_level, n.bass_level, 0.0],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];

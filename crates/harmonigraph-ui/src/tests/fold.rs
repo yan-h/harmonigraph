@@ -123,7 +123,27 @@ fn texts(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
 /// Dock the analyzer from its row on the Analyzer settings page.
 fn dock(h: &mut DockHarness, state: &mut SharedState, position: Position) {
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
-    let output = h.frame(state, vec![]);
+    let mut output = h.frame(state, vec![]);
+    // Picture controls above View can put Dock below the viewport.
+    for _ in 0..12 {
+        if !texts(&output, "Dock").is_empty() {
+            break;
+        }
+        let at = pane_body(state, &panes::Tab::AnalyzerSettings).unwrap().center();
+        h.frame(
+            state,
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, -100.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        output = h.settle_folds(state);
+    }
     let row = texts(&output, "Dock").first().copied().expect("no Dock row");
     let label = if position == Position::Right { "Right" } else { "Below" };
     let at = texts(&output, label)

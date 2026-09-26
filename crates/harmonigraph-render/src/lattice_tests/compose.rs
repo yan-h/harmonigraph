@@ -41,48 +41,6 @@ fn fractional_bloom_strength_is_independent_of_render_scale() {
     assert!((0.85..1.15).contains(&ratio), "render scale changes halo strength: {scale_totals:?}");
 }
 
-/// A node's bloom share (the Glow display) scales its halo and leaves its ink:
-/// less share is less halo, none is no halo, the full share draws exactly what
-/// a node that never had one drew, and a share past it — a note blooming over
-/// its pane's bar — draws more.
-///
-/// Not in proportion: the share dims the bright pass's copy of the ink, and
-/// the threshold's knee then takes more than that away (half the share is
-/// about an eighth of the halo here), as it does for a faded note.
-#[test]
-fn a_nodes_bloom_share_scales_its_halo_and_not_its_ink() {
-    let Some(mut shooter) = Shooter::new([256, 256]) else { return };
-    let mut scene = single_marked_node(0, 0);
-    scene.glow_reach = 0.0;
-    scene.pluses.clear();
-    scene.nodes[0].octaves.fill(1.0);
-    scene.pitch_lut.fill(glam::Vec4::new(0.7, 0.5, 0.3, 1.0));
-    scene.bloom_strength = 0.0;
-    let plain = shooter.shot(&scene);
-    scene.bloom_strength = 0.75;
-    let full = shooter.shot(&scene);
-    let mut at = |share: f32| {
-        scene.nodes[0].bloom = share;
-        shooter.shot(&scene)
-    };
-    // Light outside the ink, where the plain frame is black.
-    let halo = |frame: &[u8]| -> u64 {
-        plain
-            .chunks_exact(4)
-            .zip(frame.chunks_exact(4))
-            .filter(|(a, _)| a[..3] == [0, 0, 0])
-            .map(|(_, b)| b[..3].iter().map(|v| u64::from(*v)).sum::<u64>())
-            .sum()
-    };
-    assert!(at(1.0) == full, "the full share drew something other than the default");
-    let shares = [0.0, 0.5, 0.75, 1.0, 2.0].map(|share| halo(&at(share)));
-    eprintln!("halo by share: {shares:?}");
-    assert_eq!(shares[3], halo(&full));
-    assert!(shares[3] > 500, "fixture needs a measurable halo: {shares:?}");
-    assert!(shares.windows(2).all(|w| w[0] < w[1]), "less share, not less halo: {shares:?}");
-    assert!(shares[0] * 20 < shares[3], "no share still gave a halo: {shares:?}");
-}
-
 /// A sheet in FRONT of the home sheet is drawn over it; a sheet BEHIND it
 /// is drawn under. Both directions matter, and only one of them is obvious:
 /// forcing the home sheet to the bottom (so an off-sheet note could never be

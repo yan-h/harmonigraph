@@ -2854,7 +2854,7 @@ fn paint(
     state.appearance.spectrum.orientation = orientation;
     state.appearance.spectrum.roll_fraction = roll_fraction;
     state.appearance.spectrum.roll_seconds = 10.0;
-    state.appearance.view.intensity.glow_base = 1.2; // exercise the ribbon bloom passes
+    state.appearance.view.note_bloom = 1.2; // exercise the ribbon bloom passes
 
     // Exercise the spectrogram's mesh path in every orientation too, with
     // energy at both axis extremes (where cell clamping is most likely to
@@ -2935,7 +2935,7 @@ fn the_rolls_ink_stops_at_the_now_line() {
             state.appearance.view.shadow.spectral_geometry.width = 1.0;
             state.appearance.spectrum.roll_lead = lead;
             state.appearance.spectrum.roll_lead_fade = lead;
-            state.appearance.view.intensity.glow_base = 1.2;
+            state.appearance.view.note_bloom = 1.2;
             // Held at `now`, so its leading end sits exactly on the line.
             state.runtime.tracker.handle_event(NoteEvent::on(99.0, SourceId::DIRECT, 0, 60, 0.8));
 

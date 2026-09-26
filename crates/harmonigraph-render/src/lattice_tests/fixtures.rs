@@ -93,7 +93,6 @@ pub(super) fn standalone_marker(
         bass_color: glam::Vec4::ZERO,
         audio_ring: 0.0,
         glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 0.0, row: node as u32 },
-        bloom: 1.0,
         trail: 0.0,
     });
     one_marker(node, pos, radius, color, strength)
@@ -165,7 +164,6 @@ pub(super) fn parity_scene() -> Scene {
             // fixture is the picture with nothing carried — which is exactly
             // what a still image of the draw paths wants.
             glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: i },
-            bloom: 1.0,
             trail: 0.0,
         });
     }
@@ -541,7 +539,6 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         audio_ring: 1.0,
         // Lit and settled on the strip's first row: one node, nothing carried.
         glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 },
-        bloom: 1.0,
         trail: 0.0,
     }];
     // BLACK, which is the colour `Shooter::shot` clears to, so the pane and the

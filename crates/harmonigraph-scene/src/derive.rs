@@ -115,7 +115,6 @@ pub fn derive_scene(
             // Stable snapshot row; motion supplies current ink, then the
             // shell's glow pass carries its brightness and row ownership.
             glow: GlowStep { incarnation: 0, level: 0.0, row: nodes.len() as u32 },
-            bloom: 1.0,
             trail: 0.0,
         });
         node_pcs.push(node_pc);
@@ -170,10 +169,7 @@ pub fn derive_scene(
         // What the renderer's own clamp cannot do is catch a NaN, so this hands
         // it a real number and leaves the range where it is.
         render_scale: finite_or(view.render_scale, 1.0),
-        // The Bloom base, or the floor under it while a note can bloom over the
-        // base (`IntensitySettings::bloom_reference`); each node's `bloom` is
-        // its share of this.
-        bloom_strength: view.intensity.bloom_reference(),
+        bloom_strength: view.note_bloom_strength(),
         // Clamped here as well as in `sanitize`, for the shells that never come
         // through that door: reach sizes the halo's analytic span and its CPU
         // culling bound, which must describe the same supported range. Through

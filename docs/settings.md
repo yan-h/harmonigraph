@@ -12,7 +12,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and background glow, background glow texture and breathing, and shadows for lattice shapes and text. |
 | Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
-| Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **Note intensity** maps velocity, gain, pressure and timbre to opacity, bloom or thickness. |
+| Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **Note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, skin and skin lightness, tab-bar visibility and layout reset. |
 
 Settings opens on Tuning in a fresh workspace.
@@ -24,17 +24,26 @@ Right-clicking the Lattice or Analyzer picture offers a link to its settings tab
 Each tab keeps a single owner for its controls;
 shared settings name their scope in the help text.
 
+## Note bloom
+
+**Note bloom** is one shared control in **Lattice → Light** and **Analyzer → MIDI ribbons**.
+Changing either slider changes both pictures.
+It runs from 0 (off) to 2×,
+with 1× as the reference halo.
+The Spiral keeps its separate **Spiral bloom** control.
+Bloom is independent of the note intensity mappings.
+
 ## Note intensity
 
 On **Mappings → Note intensity**,
 below **Audio level colors**,
-the **Opacity**, **Thickness**, and **Bloom** groups each hold their base and incoming mappings.
+the **Opacity** and **Thickness** groups each hold their base and incoming mappings.
 Use **Add mapping** to assign a source;
 each source can affect several targets with an independent weight in each group.
 The **Delete** button removes only that mapping;
 adding it again starts at weight 1.
 Every target starts at its base and adds the weighted contributions routed to it.
-**Opacity base** and **Bloom base** apply even with every mapping off.
+**Opacity base** applies even with every mapping off.
 **Thickness base** applies too,
 in multiples of the pane's reference width:
 **Ribbon width** in the Analyzer and the MIDI layer width in the Lattice.
@@ -53,7 +62,6 @@ a zero-width layer remains hidden.
 Only timbre can reduce a target below its base.
 The contributions are summed before the final limits:
 opacity stays between 0 and 1,
-bloom between 0 and 2,
 and thickness between zero and **Thickness max** times its reference width.
 An opacity base of 1 leaves no room for positive additions;
 lower it to see velocity or pressure brighten the note.

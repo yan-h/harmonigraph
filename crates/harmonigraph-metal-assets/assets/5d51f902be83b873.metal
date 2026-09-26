@@ -37,8 +37,7 @@ struct VertexOut {
     uint who;
     float feather;
     metal::float2 ramp;
-    char _pad14[8];
-    metal::float4 reads;
+    metal::float2 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -76,9 +75,9 @@ struct vs_noteOutput {
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
     metal::float2 ramp [[user(loc13), flat]];
-    metal::float4 reads [[user(loc14), flat]];
+    metal::float2 fade [[user(loc14), flat]];
 };
-struct vb_15_type { metal::uchar data[112]; };
+struct vb_15_type { metal::uchar data[104]; };
 vertex vs_noteOutput vs_note(
   uint vertex_ [[vertex_id]]
 , uint who [[instance_id]]
@@ -94,10 +93,10 @@ vertex vs_noteOutput vs_note(
     metal::float4 core = {};
     metal::float4 outline = {};
     metal::float4 span_ramp = {};
-    metal::float4 reads = {};
+    metal::float2 fade = {};
     metal::float4 taper_depth = {};
     metal::float4 taper = {};
-    if (who < (_buffer_sizes.buffer_size15 / 112)) {
+    if (who < (_buffer_sizes.buffer_size15 / 104)) {
         const vb_15_type vb_15_elem = vb_15_in[who];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
@@ -107,9 +106,9 @@ vertex vs_noteOutput vs_note(
         core = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         outline = unpackUnorm8x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47]);
         span_ramp = unpackFloat32x4_(vb_15_elem.data[48], vb_15_elem.data[49], vb_15_elem.data[50], vb_15_elem.data[51], vb_15_elem.data[52], vb_15_elem.data[53], vb_15_elem.data[54], vb_15_elem.data[55], vb_15_elem.data[56], vb_15_elem.data[57], vb_15_elem.data[58], vb_15_elem.data[59], vb_15_elem.data[60], vb_15_elem.data[61], vb_15_elem.data[62], vb_15_elem.data[63]);
-        reads = unpackFloat32x4_(vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67], vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79]);
-        taper_depth = unpackFloat32x4_(vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95]);
-        taper = unpackFloat32x4_(vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99], vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103], vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111]);
+        fade = unpackFloat32x2_(vb_15_elem.data[64], vb_15_elem.data[65], vb_15_elem.data[66], vb_15_elem.data[67], vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71]);
+        taper_depth = unpackFloat32x4_(vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87]);
+        taper = unpackFloat32x4_(vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99], vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
     }
     metal::float2 local = {};
     VertexOut out = {};
@@ -149,8 +148,8 @@ vertex vs_noteOutput vs_note(
     float _e130 = locals.feather;
     out.feather = _e130;
     out.ramp = span_ramp.zw;
-    out.reads = reads;
+    out.fade = fade;
     VertexOut _e134 = out;
     const auto _tmp = _e134;
-    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.reads };
+    return vs_noteOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.fade };
 }
