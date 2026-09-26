@@ -105,13 +105,7 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     use harmonigraph_scene::LatticeMaterial;
     let mut patterns = Vec::new();
-    for material in [
-        LatticeMaterial::Clouds,
-        LatticeMaterial::Fibres,
-        LatticeMaterial::Liquid,
-        LatticeMaterial::Contours,
-        LatticeMaterial::Interference,
-    ] {
+    for material in [LatticeMaterial::Contours, LatticeMaterial::Interference] {
         for (levels, accumulation) in
             [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)]
         {
@@ -125,7 +119,7 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
                 ..Default::default()
             };
             scene.atmosphere.material = material;
-            // The glow target is half-resolution: resolve the fine threads
+            // The glow target is half-resolution: resolve the wave fringes
             // rather than testing their subpixel average at this small size.
             scene.atmosphere.nebula_scale = 4.0;
             scene.atmosphere.breath_amount = 0.0;
@@ -159,7 +153,7 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
                     for c in 0..3 {
                         assert!(
                             (f32::from(after[c]) - f32::from(before[c]) * ratio).abs() < 2.0,
-                            "the cloud mask must preserve the glow's hue"
+                            "the material mask must preserve the glow's hue"
                         );
                     }
                     changed += usize::from(before[3] - after[3] > 5);
@@ -176,10 +170,14 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
             scene.glow_timing.as_mut().unwrap().now = 8.0;
             shooter.shot_again(&scene);
             let later = read_glow(&shooter);
-            assert_ne!(textured, later, "clouds must drift inside a held glow");
+            assert_ne!(textured, later, "materials must drift inside a held glow");
             assert_eq!(later, glow(&mut shooter, &scene), "texture cannot depend on history");
             scene.atmosphere.nebula_speed = 0.0;
-            assert_eq!(textured, glow(&mut shooter, &scene), "zero speed freezes the cloud field");
+            assert_eq!(
+                textured,
+                glow(&mut shooter, &scene),
+                "zero speed freezes the material field"
+            );
             scene.atmosphere.enabled = false;
             assert_eq!(smooth, glow(&mut shooter, &scene), "master off restores the smooth glow");
         }

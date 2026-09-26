@@ -3407,7 +3407,7 @@ fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
 
 // Integer hashing avoids a per-pixel transcendental and keeps spatial noise
 // repeatable. The field is shared across the pane: overlapping halos reveal
-// one cloud, with no separate cloud stamped onto each note.
+// one material, with no separate texture stamped onto each note.
 fn nebula_hash(cell: vec2<i32>) -> f32 {
     var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
     n = (n ^ (n >> 16u)) * 0x7feb352du;
@@ -3427,49 +3427,12 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// Soft periodic ridges, fading to their mean when they become subpixel.
-// The footprint is explicit because the resolve calls this under per-pixel
-// coverage branches, where implicit derivatives are not uniform.
-fn material_ridge(phase: f32, footprint: f32) -> f32 {
-    let ridge = pow(0.5 + 0.5 * cos(phase), 6.0);
-    return mix(ridge, 0.225586, smoothstep(0.7, 2.5, footprint));
-}
-
 fn lattice_material(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32) -> f32 {
     let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
     let q = p + (warp - 0.5) * 1.2;
     // One resolve texel in material coordinates, including reduced render scales.
     let footprint = 5.0 / (u.nebula.scale * f32(textureDimensions(glow_sum).y));
-    if u.nebula.material == 1u {
-        // Two families of bent threads, with broad variation along each strand.
-        let a = material_ridge(q.x * 38.0 + q.y * 9.0 + drift.x * 3.0, footprint * 90.0);
-        let b = material_ridge(q.x * -13.0 + q.y * 31.0 - drift.y * 3.0, footprint * 85.0);
-        let weave = max(a, b * 0.65);
-        return 0.10 + 0.90 * weave;
-    }
-    if u.nebula.material == 2u {
-        // Distance between the nearest two moving cell centres gives a shared
-        // network of caustic seams. It creates detail without refracting ink.
-        let cell_p = q * 2.0 + drift;
-        let cell = vec2<i32>(floor(cell_p));
-        let f = fract(cell_p);
-        var nearest = 100.0;
-        var second = 100.0;
-        for (var y = -1; y <= 1; y++) {
-            for (var x = -1; x <= 1; x++) {
-                let offset = vec2<i32>(x, y);
-                let id = cell + offset;
-                let seed = vec2<f32>(nebula_hash(id), nebula_hash(id + vec2<i32>(57, 113)));
-                let centre = vec2<f32>(offset) + 0.5 + 0.28 * sin(seed * 6.283185 + drift * 2.0);
-                let d = length(centre - f);
-                second = min(second, max(nearest, d));
-                nearest = min(nearest, d);
-            }
-        }
-        let seam = 1.0 - smoothstep(0.0, max(0.16, footprint * 5.0), second - nearest);
-        return 0.12 + 0.88 * seam * seam;
-    }
-    if u.nebula.material == 3u {
+    if u.nebula.material == 0u {
         // Actual light coverage supplies the islands; noise only bends their
         // boundaries. No history means a camera move cannot leave old islands.
         let phase = sqrt(alpha) * (48.0 / u.nebula.scale)
@@ -3486,37 +3449,13 @@ fn lattice_material(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32
     return 0.10 + 0.90 * mix(fringes, 0.21875, smoothstep(0.7, 2.5, footprint * 55.0));
 }
 
-// Keep the original Clouds function separate: folding its arithmetic into
-// this selector changed three golden frames by one output level under Metal.
 fn material_light(light: vec4<f32>, pixel: vec2<f32>, contour: vec2<f32>) -> vec4<f32> {
-    if u.nebula.material == 0u {
-        return nebula_light(light, pixel);
-    }
     if u.nebula.depth <= 0.0 || light.a <= 0.0 {
         return light;
     }
     let p = (pixel - u.nebula.target_size * 0.5)
         / u.nebula.target_size.y * (5.0 / u.nebula.scale);
     let density = lattice_material(p, u.nebula.drift, contour.x, contour.y);
-    return light * mix(1.0, density, u.nebula.depth);
-}
-
-fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
-    if u.nebula.depth <= 0.0 || light.a <= 0.0 {
-        return light;
-    }
-    // Aspect-correct pane coordinates, independent of DPI and render scale.
-    // Camera rebasing cannot reset this field; notes move through the medium.
-    let p = (pixel - u.nebula.target_size * 0.5)
-        / u.nebula.target_size.y * (5.0 / u.nebula.scale);
-    let drift = u.nebula.drift;
-    let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
-    let cloud = nebula_noise(p + warp * 1.2 + drift);
-    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
-    let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, cloud * 0.75 + detail * 0.25);
-    // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
-    // and the overlap rule's peak bound. No glow means no nebula light at all.
-    // Applying once after the fold also textures dense saturated chords.
     return light * mix(1.0, density, u.nebula.depth);
 }
 
@@ -3581,7 +3520,7 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
     // The accumulated coverage is the contour field even when the color
     // overlap dial changes. Derivatives are taken before coverage branches.
     var contour = vec2<f32>(0.0);
-    if u.nebula.material == 3u {
+    if u.nebula.material == 0u {
         contour = vec2<f32>(accumulated.a, fwidth(accumulated.a));
     }
     // The gamma screen is also the exact sole contribution (up to target

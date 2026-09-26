@@ -1790,7 +1790,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        material: harmonigraph_scene::LatticeMaterial::Fibres,
+        material: harmonigraph_scene::LatticeMaterial::Interference,
         nebula_depth: 0.45,
         breath_speed: 2.2,
         ..Default::default()
@@ -2236,6 +2236,34 @@ fn animation_controls_round_trip_and_retired_fields_do_not_discard_appearance() 
     assert_ne!(retired, current);
     assert!(state.load_persist(&retired));
     assert_eq!(state.save_persist(), current);
+}
+
+#[test]
+fn retired_lattice_materials_refuse_the_entire_editor_and_appearance_document() {
+    let mut state = fresh();
+    state.picture.appearance.view.atmosphere.material =
+        harmonigraph_scene::LatticeMaterial::Contours;
+    let saved = state.save_persist();
+    let appearance = state.picture.appearance.serialize();
+    for retired in ["Clouds", "Fibres", "Liquid"] {
+        let dropped = saved.replace("material:Contours", &format!("material:{retired}"));
+        assert_ne!(saved, dropped, "fixture must carry the retired variant");
+        let mut restored = fresh();
+        let before = restored.save_persist();
+        assert!(!restored.load_persist(&dropped));
+        assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
+        set_console_collapsed(&mut restored, true);
+        assert_eq!(restored.save_persist(), before);
+        assert!(restored
+            .picture
+            .runtime
+            .console
+            .lines()
+            .any(|line| line.contains("did not parse")));
+        let dropped = appearance.replace("material:Contours", &format!("material:{retired}"));
+        assert_ne!(appearance, dropped);
+        assert!(AppearanceDocument::parse(&dropped).is_err());
+    }
 }
 
 #[test]

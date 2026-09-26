@@ -564,16 +564,15 @@ impl SpectralAtmosphere {
 }
 
 /// A material in the combined lattice light, independent of note ink and history.
-/// Discriminants are the shader's material selector; Clouds keeps the existing look.
+/// Discriminants are the shader's material selector.
+/// Retired Clouds, Fibres and Liquid variants reject the saved document whole;
+/// documents without a material field default to Contours.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum LatticeMaterial {
     #[default]
-    Clouds = 0,
-    Fibres = 1,
-    Liquid = 2,
-    Contours = 3,
-    Interference = 4,
+    Contours = 0,
+    Interference = 1,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -592,7 +591,7 @@ impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            material: LatticeMaterial::Clouds,
+            material: LatticeMaterial::Contours,
             nebula_depth: 0.139_642_13,
             nebula_scale: 0.581_716_2,
             nebula_speed: 1.0,
