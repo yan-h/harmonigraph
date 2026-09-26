@@ -53,7 +53,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
         (
             &mut cfg.show_spectrogram,
             "Show audio levels as a frequency-versus-time heatmap. \
-             Uses the shared History duration under View and the Audio level colors on Colors.",
+             Uses the shared History duration under View and the Audio level colors on Mappings.",
         ),
         |ui| {
             block(ui, "Softness");
@@ -219,7 +219,7 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
         (
             &mut cfg.show_roll,
             "Show played MIDI notes as ribbons over the shared time axis. \
-             Their colors come from MIDI note colors on Colors.",
+             Their colors come from MIDI note colors on Mappings.",
         ),
         |ui| {
             ValueBar::new(
@@ -511,7 +511,7 @@ pub(crate) fn analysis_section(
         .on_hover_text(
             "Levels mapped to zero and full height in the Analyzer and Spiral, also used by lattice audio rings. \
                      Lower the upper end to enlarge quiet signals. \
-                     Audio colors have their own Level color range on Colors.",
+                     Audio colors have their own Level color range on Mappings.",
         );
         let labels: Vec<_> = crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
         let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
