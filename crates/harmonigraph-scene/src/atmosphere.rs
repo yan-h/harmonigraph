@@ -144,12 +144,34 @@ pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// A BOUND rather than a taste, like the Mosaic's radius band: the shader walks
 /// the 3x3 cells around a pixel, so a star has to stay near enough its own cell
 /// for that ring to hold it. A centre strays `STAR_JITTER / 2 + wander` from its
-/// cell's middle, so the nearest a star outside the ring can come to the pixel
-/// is `1.5 - STAR_JITTER / 2 - wander` cells, and every star's light is windowed
-/// to zero by then. At 0.45 that is still three quarters of a cell, which is
-/// wider than the core of any star but the biggest mid-depth ones; the renderer's
+/// cell's middle, plus up to a quarter cell of [`SpectralAtmosphere::star_speed_spread`]
+/// excursion, so the nearest a star outside the ring can come to the pixel is
+/// `1.5 - STAR_JITTER / 2 - wander - excursion` cells, and every star's light is
+/// windowed to zero by then. At 0.45 that is still half a cell with the whole
+/// excursion, and three quarters with none; the renderer's
 /// `the_star_ring_holds_every_star_that_reaches_a_pixel` holds it.
 pub const STAR_WANDER_MAX: f32 = 0.45;
+/// Bounds shared by the [`SpectralAtmosphere::star_size_range`] control and
+/// sanitizer: the nearest depth's star spacing over the farthest's. 1 draws
+/// every depth at the dust's spacing.
+pub const STAR_SIZE_RANGE_MIN: f32 = 1.0;
+/// See [`STAR_SIZE_RANGE_MIN`].
+pub const STAR_SIZE_RANGE_MAX: f32 = 64.0;
+/// Bounds shared by the [`SpectralAtmosphere::star_size_curve`] control and
+/// sanitizer.
+pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
+/// See [`STAR_SIZE_CURVE_MIN`].
+pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
+/// Bounds shared by the [`SpectralAtmosphere::star_speed_curve`] control and
+/// sanitizer.
+pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;
+/// See [`STAR_SPEED_CURVE_MIN`].
+pub const STAR_SPEED_CURVE_MAX: f32 = 4.0;
+/// Bounds shared by the [`SpectralAtmosphere::star_lifetime`] control and
+/// sanitizer, in seconds.
+pub const STAR_LIFETIME_MIN: f32 = 0.5;
+/// See [`STAR_LIFETIME_MIN`].
+pub const STAR_LIFETIME_MAX: f32 = 20.0;
 
 /// Bounds shared by the [`AtmosphereSettings::nebula_scale`] control and sanitizer.
 pub const NEBULA_SCALE_MIN: f32 = 0.25;
@@ -321,8 +343,37 @@ pub struct SpectralAtmosphere {
     pub star_glow: f32,
     /// How many cells of the FARTHEST depth hold a star — the prototype's
     /// `occ_far`, the other lever on how heavy the field reads. Nearer depths
-    /// fade from it to a fixed quarter.
+    /// fade from it to [`Self::star_near`] as `dust (1 - d)² + near d²`.
     pub star_dust: f32,
+    /// How many cells of the NEAREST depth hold a star: the other end of the
+    /// occupancy [`Self::star_dust`] starts. The prototype's fixed quarter.
+    pub star_near: f32,
+    /// The nearest depth's star spacing over the farthest's, which is how much
+    /// bigger and sparser the near stars are than the dust. A depth `d` from 0
+    /// (far) to 1 (near) spaces its stars at the dust's spacing times
+    /// `range^(d^curve)`. Runs over
+    /// [`STAR_SIZE_RANGE_MIN`]..=[`STAR_SIZE_RANGE_MAX`].
+    pub star_size_range: f32,
+    /// The exponent on depth in [`Self::star_size_range`]'s spacing: 1 spreads
+    /// the sizes evenly over the depths, higher puts most depths in the fine
+    /// dust. The prototype's 2. Runs over
+    /// [`STAR_SIZE_CURVE_MIN`]..=[`STAR_SIZE_CURVE_MAX`].
+    pub star_size_curve: f32,
+    /// The exponent on depth in the parallax: a depth moves at
+    /// `far + (1 - far) d^curve` of the nearest's speed. 1 steps the speeds
+    /// evenly. Runs over [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
+    pub star_speed_curve: f32,
+    /// How far each star's own speed is drawn round its depth's, as a share of
+    /// half the gap to the neighbouring depths' speeds: at 1 the speeds fill
+    /// the gaps between depths and the parallax is a continuum rather than
+    /// steps. A star keeps its speed for its [`Self::star_lifetime`].
+    pub star_speed_spread: f32,
+    /// How long one star lives, in seconds, before its cell draws a new one.
+    /// Each fades in and out over its life. A depth whose cells are too small
+    /// to hold a star at its spread speed for this long lives shorter, so the
+    /// finest dust turns over fastest. Runs over
+    /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
+    pub star_lifetime: f32,
     /// A wider, fainter fringe of each star's own colour round its core, at
     /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
     /// Runs to [`STAR_FRINGE_MAX`].
@@ -413,6 +464,13 @@ impl Default for SpectralAtmosphere {
             star_randomness: 0.6,
             star_glow: 0.0,
             star_dust: 1.0,
+            // The prototype's depth curves, as dials.
+            star_near: 0.25,
+            star_size_range: 16.0,
+            star_size_curve: 2.0,
+            star_speed_curve: 1.0,
+            star_speed_spread: 0.5,
+            star_lifetime: 6.0,
             star_fringe: 0.25,
             star_wander: 0.45,
             star_far_speed: 0.15,
@@ -478,6 +536,28 @@ impl SpectralAtmosphere {
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
         self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
         self.star_dust = clamp(self.star_dust, fresh.star_dust, 0.0, 1.0);
+        self.star_near = clamp(self.star_near, fresh.star_near, 0.0, 1.0);
+        self.star_size_range = clamp(
+            self.star_size_range,
+            fresh.star_size_range,
+            STAR_SIZE_RANGE_MIN,
+            STAR_SIZE_RANGE_MAX,
+        );
+        self.star_size_curve = clamp(
+            self.star_size_curve,
+            fresh.star_size_curve,
+            STAR_SIZE_CURVE_MIN,
+            STAR_SIZE_CURVE_MAX,
+        );
+        self.star_speed_curve = clamp(
+            self.star_speed_curve,
+            fresh.star_speed_curve,
+            STAR_SPEED_CURVE_MIN,
+            STAR_SPEED_CURVE_MAX,
+        );
+        self.star_speed_spread = clamp(self.star_speed_spread, fresh.star_speed_spread, 0.0, 1.0);
+        self.star_lifetime =
+            clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
         self.star_wander = clamp(self.star_wander, fresh.star_wander, 0.0, STAR_WANDER_MAX);
         self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);

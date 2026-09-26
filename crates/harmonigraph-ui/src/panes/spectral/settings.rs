@@ -594,6 +594,8 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
 fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
     use harmonigraph_scene::{
         STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_GLOW_MAX,
+        STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
+        STAR_SIZE_RANGE_MAX, STAR_SIZE_RANGE_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
         STAR_WANDER_MAX,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
@@ -602,6 +604,27 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How many stars at every depth. Higher values pack them closer; past about 3\u{d7} the faintest dust is finer than a pixel and merges into texture.",
         );
+    ValueBar::new(
+        &mut atmosphere.star_size_range,
+        STAR_SIZE_RANGE_MIN..=STAR_SIZE_RANGE_MAX,
+        "Size range",
+    )
+    .eased(true)
+    .unit(1.0, "\u{d7}")
+    .show(ui)
+    .on_hover_text(
+        "How much farther apart, and so fewer and bigger, the nearest stars are than the farthest dust. 1\u{d7} spaces every depth like the dust.",
+    );
+    ValueBar::new(
+        &mut atmosphere.star_size_curve,
+        STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
+        "Size curve",
+    )
+    .curve(|curve, p| p.powf(curve))
+    .show(ui)
+    .on_hover_text(
+        "How the star spacing grows from the farthest depth to the nearest. 1 grows it evenly; higher values keep most depths fine dust and save the big stars for the nearest. The line previews it.",
+    );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Randomness")
         .percent()
         .show(ui)
@@ -619,6 +642,12 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .show(ui)
         .on_hover_text(
             "How many of the farthest, finest stars there are. Lower values thin the dust that fills the field between the brighter stars.",
+        );
+    ValueBar::new(&mut atmosphere.star_near, 0.0..=1.0, "Near stars")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How many of the nearest, biggest stars there are, as a share of their places. The depths between fade from Far dust to this.",
         );
     ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
         .percent()
@@ -638,6 +667,33 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How fast the farthest stars drift, as a share of the nearest stars' speed. Lower values deepen the parallax; 100% moves every depth together.",
         );
+    ValueBar::new(
+        &mut atmosphere.star_speed_curve,
+        STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
+        "Speed curve",
+    )
+    .curve(|curve, p| p.powf(curve))
+    .show(ui)
+    .on_hover_text(
+        "How the drift speed grows from the farthest depth to the nearest. 1 steps it evenly; higher values keep most depths slow and the nearest fast, lower ones the reverse. The line previews it.",
+    );
+    ValueBar::new(&mut atmosphere.star_speed_spread, 0.0..=1.0, "Speed spread")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How much each star's speed differs from the others at its depth. 0% moves each depth as one sheet; 100% fills the gaps between the depths' speeds, so the parallax is a continuum rather than steps.",
+        );
+    ValueBar::new(
+        &mut atmosphere.star_lifetime,
+        STAR_LIFETIME_MIN..=STAR_LIFETIME_MAX,
+        "Star lifetime",
+    )
+    .eased(true)
+    .unit(1.0, " s")
+    .show(ui)
+    .on_hover_text(
+        "How long each star lives before a new one takes its place, fading in and out. With Speed spread, the smallest stars live shorter so they stay near their places, and twinkle faster.",
+    );
     ValueBar::new(&mut atmosphere.star_far_blur, 0.0..=1.0, "Far star blur")
         .percent()
         .show(ui)
