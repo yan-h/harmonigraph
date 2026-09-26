@@ -397,6 +397,7 @@ impl LatticeCallback {
                     brightest_pitch: scene.brightest_pitch,
                     render_scale,
                     bloom_strength: bloom_strength(scene.bloom_strength),
+                    background: Float4(scene.background.to_array()),
                 },
                 camera: CameraParams {
                     view_proj: Matrix4(view_proj.to_cols_array_2d().map(Float4)),

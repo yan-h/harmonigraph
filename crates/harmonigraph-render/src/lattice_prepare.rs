@@ -302,6 +302,18 @@ impl LatticeCallback {
                         },
                         &resources.compiled.glyph_layout,
                     );
+                    resources.compiled.local_shadows = create_local_shadow_pipelines(
+                        device,
+                        &lattice_shader,
+                        &glyph_shader,
+                        SceneLayouts {
+                            uniforms: &resources.compiled.bind_group_layout,
+                            glow: &resources.compiled.filter_layout,
+                            shadow: &resources.compiled.shadow_layout,
+                            casters: &resources.compiled.caster_layout,
+                        },
+                        &resources.compiled.glyph_layout,
+                    );
                     let (
                         glyph_coverage_cell_pipeline,
                         glyph_distance_cell_pipeline,
@@ -805,7 +817,6 @@ impl LatticeCallback {
         offscreen: &Offscreen,
         egui_encoder: &mut wgpu::CommandEncoder,
     ) {
-        let atlas = offscreen.shadow.as_ref().filter(|_| pane.box_count > 0);
         let scene = &compiled.scenes[usize::from(offscreen.bloom.is_some())];
         let attachment = |view| {
             Some(wgpu::RenderPassColorAttachment {
@@ -849,6 +860,51 @@ impl LatticeCallback {
             pass.draw(0..4, 0..1);
         }
 
+        self.draw_ordered(&mut pass, &scene.draws, compiled, pane, offscreen);
+    }
+
+    fn encode_local_shadows(
+        &self,
+        compiled: &CompiledLatticeResources,
+        pane: &PaneBuffers,
+        offscreen: &Offscreen,
+        encoder: &mut wgpu::CommandEncoder,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("lattice_local_shadows"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &offscreen.local_shadow_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        // Width/depth zero must also clear last frame's shadow. They never
+        // key an allocation, and the empty field needs no geometry draws.
+        if self.uniforms.marker_shadow.width > 0.0
+            && self.uniforms.marker_shadow.depth > 0.0
+            && (pane.glyph_count > 0 || pane.plus_count > 0)
+        {
+            self.draw_ordered(&mut pass, &compiled.local_shadows, compiled, pane, offscreen);
+        }
+    }
+
+    fn draw_ordered(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        scene: &OrderedPipelines,
+        compiled: &CompiledLatticeResources,
+        pane: &PaneBuffers,
+        offscreen: &Offscreen,
+    ) {
+        let atlas = offscreen.shadow.as_ref().filter(|_| pane.box_count > 0);
         // That same target at group 1 of every node and marker draw, for
         // the wash to read back. The dummy where the light does not exist
         // at all, which is the Reach bar at 0 — a transparent read is the
@@ -930,7 +986,6 @@ impl LatticeCallback {
                 }
             }
         }
-        drop(pass);
     }
 
     fn encode_frame(
@@ -963,6 +1018,7 @@ impl LatticeCallback {
             self.encode_node_glow(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
 
             self.encode_scene(&resources.compiled, pane, offscreen, egui_encoder);
+            self.encode_local_shadows(&resources.compiled, pane, offscreen, egui_encoder);
 
             if let Some(bloom) = &offscreen.bloom {
                 bloom.chain.run(egui_encoder, Self::bloom_pipelines(resources), "lattice");

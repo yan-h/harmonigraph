@@ -66,6 +66,8 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "vs_shadow_box",
     "fs_shadow_box",
     "fs_shadow_box_plain",
+    "fs_label_transmittance",
+    "fs_glyph_transmittance",
 ];
 
 /// One glyph: where it goes on screen, where it lives in the atlas it is cut
@@ -866,11 +868,9 @@ fn create_spectral_shadow_pipeline(
 /// A name's shadow into the scene pass, over the name's own box
 /// (`fs_shadow_box`).
 ///
-/// The shadow multiplies both visible components and, with bloom on, both
-/// bloom components: a halo a name darkens has to bloom as darkened.
-/// The glyphs beside it write the visible pair alone
-/// ([`create_text_pipeline`]), which is what keeps the name itself out of the
-/// bloom.
+/// The shadow multiplies both visible components. The bloom sources remain
+/// untouched; the ordered local transmittance pass shadows their finished
+/// light at composition time. Glyph fill also stays out of the bloom sources.
 ///
 /// Four groups, the second empty: the pane's uniforms, the atlas at group 2 and
 /// the casters' kernels at group 3, where the shader declares each — the light
@@ -914,6 +914,28 @@ pub(crate) fn create_shadow_box_pipeline(
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
         &targets,
+    )
+}
+
+pub(crate) fn create_local_shadow_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    glyph_layout: &wgpu::BindGroupLayout,
+    layouts: crate::SceneLayouts<'_>,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    glyph_pipeline(
+        device,
+        shader,
+        "label_local_shadow",
+        &[Some(glyph_layout), Some(layouts.glow), Some(layouts.shadow), Some(layouts.casters)],
+        ("vs_shadow_box", "fs_label_transmittance"),
+        &[],
+        &[Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })],
     )
 }
 

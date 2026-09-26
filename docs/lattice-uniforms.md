@@ -20,7 +20,10 @@ The shader's explicit group alignment matches Rust's `repr(C, align(16))`;
 the Pod derive also rejects implicit Rust padding.
 
 Lattice binding 0 starts with `CompositeParams`.
-Blit binding 3 deliberately changes from a 128-byte view with bloom at byte 124 to that 16-byte group with bloom at byte 12. Both bound types are checked against the same Rust declaration, and the prefix's zero offset and bloom offset are asserted explicitly.
+Blit binding 3 reads that 32-byte group,
+with bloom at byte 12 and the pane background at byte 16 for local shadow composition.
+Both bound types are checked against the same Rust declaration,
+and the prefix's zero offset and bloom offset are asserted explicitly.
 Roll/spiral bloom still uses the separate `AddUniforms` buffer at binding 4;
 its shader declaration and transport remain unchanged.
 

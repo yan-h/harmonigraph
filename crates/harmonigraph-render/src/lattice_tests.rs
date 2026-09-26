@@ -13,6 +13,7 @@ mod glow_reach;
 mod glow_union;
 mod golden;
 mod labels;
+mod local_shadows;
 mod marks;
 #[cfg(target_os = "macos")]
 mod metal_assets;

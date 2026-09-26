@@ -826,11 +826,11 @@ impl Default for ShadowSettings {
                 depth: 0.190_952_61,
                 falloff: -4.0,
             },
-            // A narrower Gaussian shadow holds the text near its surface.
+            // Local notation shadows reach full darkness at full coverage.
             lattice_text: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
                 width: 0.324_596_76,
-                depth: 0.219_002_02,
+                depth: 1.0,
                 falloff: -4.0,
             },
             // Nine tenths deep under the roll's ribbons and the spiral's dots,

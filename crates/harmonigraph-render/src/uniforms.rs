@@ -50,6 +50,8 @@ uniform_group! {
         brightest_pitch: f32,
         render_scale: f32,
         bloom_strength: f32,
+        /// Pane fill participates in the local display-range cap.
+        background: Float4,
     }
 }
 uniform_group! {

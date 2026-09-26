@@ -218,6 +218,12 @@ Its preview shows the Contour shadow profile,
 which reaches zero at one Shadow width and never bends into an S curve.
 Blur shadows keep their Gaussian profile.
 
+Lattice text shadows use local darkness for both Contour and Blur.
+They attenuate bright slices and finished bloom only inside their footprint,
+with foreground ink covering shadows behind it.
+Darkness defaults to 100%;
+saved projects retain their existing setting.
+
 Drag a numeric bar to change its value, or double-click to type.
 Entry uses the displayed units:
 `25%` or `25` means 25 percent on a percentage bar, and `250 ms` or `250` means 250 milliseconds on a timing bar.
