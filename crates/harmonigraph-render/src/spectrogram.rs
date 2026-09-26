@@ -1645,8 +1645,8 @@ mod tests {
     ///
     /// The CPU side of the drift is held by its own tests; this is the half
     /// they cannot see, whether `star_color` applies `offset` at all and with
-    /// which sign. Every depth moves at one speed (`Star speed`'s ends equal) with no
-    /// spread, over a flat level so a star's colour does not change with where
+    /// which sign. Every depth moves at one speed (`Star speed`'s ends equal),
+    /// over a flat level so a star's colour does not change with where
     /// it is, on a 540-point pane so a star pixel is a device pixel — and the
     /// clock steps by the time the drift takes to cover a whole number of
     /// them. Lives are long and the step short, so a star's fade moves a
@@ -1657,7 +1657,7 @@ mod tests {
     fn the_starfield_moves_by_the_drift() {
         const PANE: u32 = 540;
         const SHIFT: usize = 6;
-        const SPEED: f32 = 4.0;
+        const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = refracted_fixture();
         cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
@@ -1672,7 +1672,7 @@ mod tests {
         s.cloud_depth = 1.0;
         (s.pitch_softness, s.time_softness) = (0.0, 0.0);
         (s.star_speed_min, s.star_speed_max, s.cloud_direction) = (SPEED, SPEED, 0.0);
-        (s.star_speed_spread, s.star_lifetime) = (0.0, 20.0);
+        s.star_lifetime = 20.0;
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().now +=

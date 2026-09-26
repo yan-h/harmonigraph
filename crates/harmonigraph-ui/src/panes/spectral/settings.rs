@@ -131,10 +131,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     &mut atmosphere.cloud_style,
                     &[
                         (
-                            CloudStyle::Mosaic,
-                            "Mosaic",
-                            "A pile of soft domes refracting the sound through their faces, \
-                             then colored by the shared Contour levels and palette controls",
+                            CloudStyle::Stars,
+                            "Stars",
+                            "Pinpoint stars at several depths, each taking the color and brightness \
+                             of the sound under it as it drifts. Nearer stars are fewer, bigger, \
+                             brighter and faster. Contour levels do not apply to it",
                         ),
                         (
                             CloudStyle::Watercolor,
@@ -143,11 +144,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
                         (
-                            CloudStyle::Stars,
-                            "Stars",
-                            "Pinpoint stars at several depths, each taking the color and brightness \
-                             of the sound under it as it drifts. Nearer stars are fewer, bigger, \
-                             brighter and faster. Contour levels do not apply to it",
+                            CloudStyle::Mosaic,
+                            "Mosaic",
+                            "A pile of soft domes refracting the sound through their faces, \
+                             then colored by the shared Contour levels and palette controls",
                         ),
                     ],
                 );
@@ -656,10 +656,10 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         "Star speed",
     )
-    .display(|speed| format!("{speed:.2}\u{d7}"))
+    .display(|speed| format!("{:.0}%", speed * 100.0))
     .show(ui)
     .on_hover_text(
-        "How fast the farthest stars drift at the low end and the nearest at the high end, with Speed curve deciding how the depths between share it out. 1\u{d7} carries a star a pane-height in about nine seconds; 0 holds it still. A wider range deepens the parallax; equal ends move every depth together.",
+        "How fast the farthest stars drift at the low end and the nearest at the high end, with Speed curve deciding how the depths between share it out. 100% carries a star a pane-height in about nine seconds; 0% holds it still. A wider range deepens the parallax; equal ends move every depth together.",
     );
     ValueBar::new(
         &mut atmosphere.star_speed_curve,
@@ -671,12 +671,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .on_hover_text(
         "How the drift speed grows from the farthest depth to the nearest. 1 steps it evenly; higher values keep most depths slow and the nearest fast, lower ones the reverse. The line previews it.",
     );
-    ValueBar::new(&mut atmosphere.star_speed_spread, 0.0..=1.0, "Speed spread")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How much each star's speed differs from the others at its depth. 0% moves each depth as one sheet; 100% is the most each depth can take: enough to fill the gaps between the depths' speeds where the stars have room, and less for the smallest stars, which must stay near their places over a whole Star lifetime. Shorter lifetimes leave room for more.",
-        );
     ValueBar::new(
         &mut atmosphere.star_lifetime,
         STAR_LIFETIME_MIN..=STAR_LIFETIME_MAX,
@@ -686,7 +680,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .unit(1.0, " s")
     .show(ui)
     .on_hover_text(
-        "How long each star lives before a new one takes its place, fading in and out, alike at every depth. Longer lives leave the smallest stars less Speed spread.",
+        "How long each star lives before a new one takes its place, fading in and out, alike at every depth.",
     );
     ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
         .percent()
