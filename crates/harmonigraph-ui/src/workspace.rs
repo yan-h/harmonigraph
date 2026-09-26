@@ -122,8 +122,26 @@ impl Layout {
     /// back while another analyzer tab shows: that tab has no region rail to
     /// unfold them from. Derived rather than stored, so a tab switch edits no
     /// saved width and returning to Spectral lands on exactly its old layout.
-    /// Dividers and fits work on the stored sizes and hold this fixed.
+    ///
+    /// Never more than the shown sections' own stored widths. A fixed lend
+    /// would let a window shrunk below it fit the stored sizes into nothing,
+    /// and write those zeros into the saved layout; capped, a narrow enough
+    /// window shrinks the lend along with everything else (see [`Self::fit`]).
+    /// Dividers edit only the stored sizes, so while this is lent the Analyzer
+    /// cannot be dragged narrower than it plus the minimum pane.
     fn repaid(&self) -> f32 {
+        let right = self.right;
+        let shown: f32 = [right.lattice, right.analyzer, right.settings]
+            .into_iter()
+            .zip(self.folded)
+            .filter(|(_, folded)| !folded)
+            .map(|(size, _)| size)
+            .sum();
+        self.lent().min(shown)
+    }
+
+    /// The whole folded-region width, when another analyzer tab shows.
+    fn lent(&self) -> f32 {
         let lent = self.position == Position::Right
             && !self.folded[Section::Analyzer as usize]
             && self.analyzer_tab != Tab::Spectral;
@@ -230,7 +248,7 @@ impl Layout {
         let folded = self.folded;
         let compact = self.compact();
         let position = self.position;
-        let repaid = self.repaid();
+        let lent = self.lent();
         let sizes = self.sizes_mut();
         if compact {
             if !folded[2] {
@@ -240,6 +258,13 @@ impl Layout {
         }
         match position {
             Position::Right => {
+                // The stored widths fill `free` beside what `repaid` lends
+                // them, which is `lent` capped at their own total: all of it
+                // while that leaves them at least as much, and otherwise an
+                // equal share, so a lend never squeezes the stored sizes out.
+                let rails = folded.iter().filter(|&&fold| fold).count() as f32 * rail;
+                let free = area.x - 2.0 * gap - rails;
+                let repaid = lent.min((free * 0.5).max(0.0));
                 let widths = fit_axis(
                     [sizes.lattice, sizes.analyzer, sizes.settings],
                     folded,

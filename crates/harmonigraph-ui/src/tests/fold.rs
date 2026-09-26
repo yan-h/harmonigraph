@@ -846,6 +846,46 @@ fn another_analyzer_tab_borrows_back_the_width_of_folded_regions() {
     }
 }
 
+/// A window shrunk below the lent width while Spiral shows shrinks the lend
+/// with it rather than squeezing the saved sizes to nothing, so Spectral comes
+/// back with the same proportions.
+#[test]
+fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
+    let floor = 400.0;
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    state.workspace.min_window_size.x = floor;
+    state.workspace.layout.right =
+        workspace::Sizes { lattice: 300.0, analyzer: 900.0, cross: 800.0, settings: 280.0 };
+    state.workspace.layout.sized = true;
+    let mut h = DockHarness::at(egui::vec2(1486.0, 800.0));
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    let lent: f32 = state.workspace.layout.region_widths.iter().sum();
+    assert!(lent > floor, "the fold ({lent}) must outgrow the whole narrowed window");
+    let folded = state.workspace.layout.right;
+    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
+
+    h.screen.max.x = h.screen.min.x + floor;
+    h.settle(&mut state);
+    pick_analyzer_tab(&mut h, &mut state, panes::Tab::Spectral);
+
+    let saved = state.workspace.layout.right;
+    for (now, was) in [
+        (saved.lattice, folded.lattice),
+        (saved.analyzer, folded.analyzer),
+        (saved.settings, folded.settings),
+    ] {
+        assert!(now > 20.0, "a saved width collapsed: {saved:?}");
+        assert!((now / saved.lattice - was / folded.lattice).abs() < 0.01, "{saved:?}");
+    }
+    let rects = state.workspace.layout_runtime.rects;
+    let drawn: f32 = rects.iter().map(|rect| rect.width()).sum();
+    assert!(rects.iter().all(|rect| rect.width() > 20.0), "{rects:?}");
+    assert!((drawn + 2.0 * 3.0 - h.screen.width()).abs() < 1.0, "{rects:?}");
+}
+
 /// Where a region's outer edge survives its fold, Expand appears exactly where
 /// Collapse was. The other region's rail rides the shrinking window edge.
 #[test]
