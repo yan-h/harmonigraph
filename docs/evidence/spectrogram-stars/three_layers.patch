@@ -1,0 +1,11 @@
+--- a/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
++++ b/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+@@ -1627,7 +1627,7 @@
+ fn star_color(pt: vec2<f32>) -> vec3<f32> {
+     var out = palette_color(0.0);
+     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
+-    for (var k = 0u; k < STAR_SLICES; k += 1u) {
++    for (var k = 0u; k < STAR_SLICES; k += 2u) {
+         let s = cloud.star_slices[k];
+         // A fringe has no window of its own, so with one on only the ring's
+         // fade bounds a star.

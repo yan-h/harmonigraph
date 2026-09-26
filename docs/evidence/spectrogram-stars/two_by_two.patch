@@ -1,0 +1,64 @@
+--- a/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
++++ b/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+@@ -1435,7 +1435,7 @@
+ // The ring's reach, in cells: the nearest a star from a cell outside the 3x3
+ // walk can come to a pixel, 1.5 less half the jitter. Every star's coverage is
+ // windowed to zero by it (`the_star_ring_holds_every_star_that_reaches_a_pixel`).
+-const STAR_REACH: f32 = 1.2;
++const STAR_REACH: f32 = 0.7;
+ // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
+ // atmosphere.rs), and its log.
+ const STAR_ATLAS_WIDTH: i32 = 2048;
+@@ -1463,7 +1463,7 @@
+ const STAR_LIFT: f32 = 0.18;
+ // Where, as a share of the ring's reach, a star's light starts fading to the
+ // zero it must reach there. See `STAR_REACH` and the test that holds it.
+-const STAR_RING_FADE: f32 = 0.7;
++const STAR_RING_FADE: f32 = 0.857142857;
+
+ // The level a star sees at pane point `pt`: the Spread-combined light, so
+ // how loosely the stars follow the picture is `Wide blur mix` and the two
+@@ -1636,36 +1636,14 @@
+             cut = min(cut, 5.0 * s.cap * s.defocus);
+         }
+         let r = sp / s.cell - s.offset;
+-        let o = floor(r);
+-        // The pixel from its own cell's corner, so every distance below is
+-        // taken between numbers of order one rather than of the hash period.
++        let o = floor(r - 0.5);
+         let f = r - o;
+-        // The walk's first cell, the pixel's up and left, in the slice's
+-        // grid; the CPU sizes the grid a cell past anything this reaches, so
+-        // the rows below never leave it. A row's cells are consecutive texels.
+-        let local = vec2<i32>(o) - 1 - s.origin;
+-        var index = s.base + local.y * s.grid.x + local.x;
+-        var slice = vec4<f32>(0.0);
+-        {
+-            let g = f - vec2<f32>(0.0, -1.0);
+-            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
+-            slice += star_texel(s, g, index + 1, cut);
+-            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
+-            index += s.grid.x;
+-        }
+-        {
+-            let g = f - vec2<f32>(0.0, 0.0);
+-            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
+-            slice += star_texel(s, g, index + 1, cut);
+-            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
+-            index += s.grid.x;
+-        }
+-        {
+-            let g = f - vec2<f32>(0.0, 1.0);
+-            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
+-            slice += star_texel(s, g, index + 1, cut);
+-            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
+-        }
++        let local = vec2<i32>(o) - s.origin;
++        let index = s.base + local.y * s.grid.x + local.x;
++        var slice = star_texel(s, f, index, cut);
++        slice += star_texel(s, f - vec2<f32>(1.0, 0.0), index + 1, cut);
++        slice += star_texel(s, f - vec2<f32>(0.0, 1.0), index + s.grid.x, cut);
++        slice += star_texel(s, f - vec2<f32>(1.0, 1.0), index + s.grid.x + 1, cut);
+         if slice.w > 0.0 {
+             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
+         }

@@ -86,6 +86,9 @@ life fade and the current light under each star.
 
 ## Picture-changing candidates, measured but not shipped
 
+The [preserved prototype patches and evidence](evidence/spectrogram-stars/README.md) include runnable shader changes,
+raw timings and labeled visual comparisons.
+
 A second interleaved run compares more aggressive source-only prototypes with the optimized shader above.
 All figures below include the existing light and star-bake passes;
 the bake still processes five layers even when a prototype draws only three.
