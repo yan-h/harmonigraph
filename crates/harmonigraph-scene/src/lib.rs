@@ -230,15 +230,14 @@ pub const PLUS_SIZE_MAX: f32 = 0.9;
 /// [`PLUS_SIZE_MAX`], per unit of [`ViewConfig::label_scale`] — so a bigger
 /// label scale draws heavier crosses the way it draws heavier letters.
 ///
-/// Against the letters it is about 80% of a stroke: Iosevka's stems are 0.079
-/// em and its bars 0.070, and a letter's em is 0.77 uv at label scale 1, so
-/// 0.061 and 0.054 uv. Kept at the thickness captured as the default look,
-/// divided by the default label scale, so the default picture is unchanged.
+/// A letter's horizontal stroke: Iosevka's bars are 0.070 em and its stems
+/// 0.079, and a letter's em is 0.77 uv at label scale 1, so 0.054 and 0.061
+/// uv. The bar's weight rather than the stem's, since a cross is all bars.
 ///
 /// The two part in one place: a label's type is clamped to 1–512 physical
 /// pixels and sized at the focus plane (`text.rs`'s ladder), and a cross is
 /// neither.
-pub const PLUS_WIDTH_PER_LABEL_SCALE: f32 = 0.045_750_268;
+pub const PLUS_WIDTH_PER_LABEL_SCALE: f32 = 0.054;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes

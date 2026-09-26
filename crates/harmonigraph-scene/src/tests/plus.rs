@@ -237,9 +237,9 @@ fn the_label_scale_sets_the_cross_width() {
         scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
             .plus_half_width
     };
-    // The default look, bit for bit: the old bar's default of 0.045_857_143,
-    // halved and taken as a share of the arm.
-    assert_eq!(half_at(ViewConfig::default().label_scale), 0.045_857_143f32 * 0.5 / arm);
+    // At label scale 1 the whole width is the constant, halved and taken as a
+    // share of the arm.
+    assert!((half_at(1.0) - PLUS_WIDTH_PER_LABEL_SCALE * 0.5 / arm).abs() < 1e-6);
     // Proportional, so twice the label scale is twice the thickness.
     let (one, two) = (half_at(1.0), half_at(2.0));
     assert!((two - 2.0 * one).abs() < 1e-6, "scale 1 drew {one}, scale 2 drew {two}");
