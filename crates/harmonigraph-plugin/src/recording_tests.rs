@@ -5,10 +5,11 @@ use parking_lot::Mutex;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use vst3::Steinberg::Vst::Event_::EventTypes_;
+use vst3::Steinberg::Vst::ProcessContext_::StatesAndFlags_;
 use vst3::Steinberg::Vst::{
     AudioBusBuffers, AudioBusBuffers__type0, Event, IAudioProcessor, IAudioProcessorTrait,
     IComponent, IComponentTrait, IEventList, IEventListTrait, NoteOffEvent, NoteOnEvent,
-    ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
+    ProcessContext, ProcessData, ProcessModes_, ProcessSetup, SymbolicSampleSizes_,
 };
 use vst3::Steinberg::{
     kInvalidArgument, kResultOk, tresult, IPluginBaseTrait, IPluginFactory, IPluginFactoryTrait,
@@ -20,6 +21,8 @@ use vst3::{Class, ComPtr, ComWrapper, Interface};
 const SAMPLE_32: i32 = SymbolicSampleSizes_::kSample32 as i32;
 #[allow(clippy::unnecessary_cast)]
 const REALTIME: i32 = ProcessModes_::kRealtime as i32;
+#[allow(clippy::unnecessary_cast)]
+const PLAYING: u32 = StatesAndFlags_::kPlaying as u32;
 
 struct Device {
     component: ComPtr<IComponent>,
@@ -63,6 +66,22 @@ impl Device {
     /// built by the caller BEFORE the callback, so the fixture itself allocates
     /// nothing inside the guarded `process`.
     fn block_with(&self, input_events: *mut IEventList, output_events: *mut IEventList) {
+        self.block_in(input_events, output_events, ptr::null_mut());
+    }
+    /// One callback with the transport at `position` samples, playing or parked.
+    fn block_at(&self, input_events: *mut IEventList, position: i64, playing: bool) {
+        let mut context: ProcessContext = unsafe { std::mem::zeroed() };
+        context.state = if playing { PLAYING } else { 0 };
+        context.sampleRate = 48000.0;
+        context.projectTimeSamples = position;
+        self.block_in(input_events, ptr::null_mut(), &mut context);
+    }
+    fn block_in(
+        &self,
+        input_events: *mut IEventList,
+        output_events: *mut IEventList,
+        process_context: *mut ProcessContext,
+    ) {
         let mut input = [[0.25, 0.5, 0.75, 1.0], [-0.25, -0.5, -0.75, -1.0]];
         let mut output = [[0.0; 4]; 2];
         let mut inputs = input.each_mut().map(|c| c.as_mut_ptr());
@@ -81,7 +100,7 @@ impl Device {
             outputParameterChanges: ptr::null_mut(),
             inputEvents: input_events,
             outputEvents: output_events,
-            processContext: ptr::null_mut(),
+            processContext: process_context,
         };
         // The dev-enabled assert_process_allocs guards the exported wrapper,
         // including this plugin's actual callback, on every test run.
@@ -241,6 +260,141 @@ fn vst3_notes_reach_the_take_and_the_host_through_the_guarded_callback() {
     );
     let times: Vec<_> = take.notes().map(|note| note.t).collect();
     assert_eq!(times, vec![0.0, 3.0 / 48000.0], "each note keeps its own sample offset");
+
+    drop(control);
+    wait(|| probe.finished());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// #1129 on the plain route: a take armed while a note is held. The note-on
+/// arrives in a callback no take owns, so the only way the take learns of it
+/// is the pass opening with what is already sounding.
+#[test]
+fn vst3_take_armed_mid_note_opens_with_the_held_note() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-vst3-held-{}", std::process::id()));
+    let (recorder, control) = harmonigraph_record::channel();
+    let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    crate::configuration::inject_recorder(recorder);
+    let device = Device::new();
+    let struck = Events::queued(vec![note_on(60, 1)]);
+    device.block_with(event_list(&struck), ptr::null_mut());
+    control.start(48000.0, String::new(), false);
+    device.block();
+    let released = Events::queued(vec![note_off(60, 2)]);
+    device.block_with(event_list(&released), ptr::null_mut());
+    control.stop(None);
+    drop(device);
+    wait(|| control.last_take().is_some());
+    assert!(!probe.failed());
+
+    let take = harmonigraph_take::Take::read(control.last_take().unwrap()).unwrap();
+    let notes: Vec<_> = take.notes().map(|note| (note.t, note.note, note.kind)).collect();
+    // The first recorded callback is the second, 4 samples in: the held note
+    // opens the pass at its first sample, and its release keeps its own time.
+    assert_eq!(
+        notes,
+        vec![
+            (4.0 / 48000.0, 60, harmonigraph_take::NoteKind::On { velocity: 0.75 }),
+            (8.0 / 48000.0 + 2.0 / 48000.0, 60, harmonigraph_take::NoteKind::Off),
+        ]
+    );
+
+    drop(control);
+    wait(|| probe.finished());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// #1129, every pass rather than the first: a loop wraps while a note is
+/// held, so the second pass begins with the note already sounding and holds
+/// nothing of it but its release unless the split opens it again.
+#[test]
+fn vst3_a_pass_split_by_a_loop_opens_with_the_note_held_across_it() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-vst3-split-{}", std::process::id()));
+    let (recorder, control) = harmonigraph_record::channel();
+    let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    control.start(48000.0, String::new(), false);
+    crate::configuration::inject_recorder(recorder);
+    let device = Device::new();
+    let struck = Events::queued(vec![note_on(60, 1)]);
+    device.block_at(event_list(&struck), 48000, true);
+    device.block_at(ptr::null_mut(), 48004, true);
+    // Back a second while playing — past the 50 ms a playing host may jitter
+    // backwards — so the loop wraps and the take splits.
+    device.block_at(ptr::null_mut(), 0, true);
+    let released = Events::queued(vec![note_off(60, 2)]);
+    device.block_at(event_list(&released), 4, true);
+    control.stop(None);
+    drop(device);
+    wait(|| control.last_take().is_some());
+    assert!(!probe.failed());
+
+    let second = control.last_take().unwrap();
+    assert!(
+        second.to_string_lossy().ends_with("-2.take"),
+        "the second pass is voiced, so it is the take: {second:?}"
+    );
+    let take = harmonigraph_take::Take::read(&second).unwrap();
+    let notes: Vec<_> = take.notes().map(|note| (note.t, note.note, note.kind)).collect();
+    assert_eq!(
+        notes,
+        vec![
+            (0.0, 60, harmonigraph_take::NoteKind::On { velocity: 0.75 }),
+            (4.0 / 48000.0 + 2.0 / 48000.0, 60, harmonigraph_take::NoteKind::Off),
+        ]
+    );
+
+    drop(control);
+    wait(|| probe.finished());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// A pause inside one pass, on the plain route. The resume owes the take the
+/// key struck during the pause, and only that one: the key held since before
+/// it already has its On in this pass, and a second would replay as a
+/// retrigger that cuts its row in two at the resume.
+#[test]
+fn vst3_a_resume_opens_with_only_the_notes_the_pass_has_not_seen_begin() {
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-vst3-resume-{}", std::process::id()));
+    let (recorder, control) = harmonigraph_record::channel();
+    let probe = harmonigraph_record::testing::worker_probe(&control, directory.clone());
+    control.start(48000.0, String::new(), false);
+    crate::configuration::inject_recorder(recorder);
+    let device = Device::new();
+    let struck = Events::queued(vec![note_on(60, 1)]);
+    device.block_at(event_list(&struck), 48000, true);
+    device.block_at(ptr::null_mut(), 48004, true);
+    // Parked where it stopped: no forward motion, so nothing here records.
+    device.block_at(ptr::null_mut(), 48004, false);
+    let paused = Events::queued(vec![note_on(64, 1)]);
+    device.block_at(event_list(&paused), 48004, false);
+    device.block_at(ptr::null_mut(), 48004, false);
+    device.block_at(ptr::null_mut(), 48008, true);
+    let released = Events::queued(vec![note_off(60, 1), note_off(64, 2)]);
+    device.block_at(event_list(&released), 48012, true);
+    control.stop(None);
+    drop(device);
+    wait(|| control.last_take().is_some());
+    assert!(!probe.failed());
+
+    let path = control.last_take().unwrap();
+    assert!(!path.to_string_lossy().ends_with("-2.take"), "a resume is not a split");
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let notes: Vec<_> = take.notes().map(|note| (note.t, note.note, note.kind)).collect();
+    let on = harmonigraph_take::NoteKind::On { velocity: 0.75 };
+    let off = harmonigraph_take::NoteKind::Off;
+    assert_eq!(
+        notes,
+        vec![
+            (48001.0 / 48000.0, 60, on),
+            (48008.0 / 48000.0, 64, on),
+            (48012.0 / 48000.0 + 1.0 / 48000.0, 60, off),
+            (48012.0 / 48000.0 + 2.0 / 48000.0, 64, off),
+        ],
+        "one On per key: the held key once, where it was struck; the paused one at the resume"
+    );
 
     drop(control);
     wait(|| probe.finished());

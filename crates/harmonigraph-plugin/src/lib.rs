@@ -115,6 +115,26 @@ pub struct Harmonigraph {
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: RecorderSlot,
+    /// What the plain-MIDI arm has sounding: the velocity each channel's key
+    /// was struck at. Kept on every block, armed or not, so each recording run
+    /// can open with the notes already held (#1129). The configured route has
+    /// no use for it — the Hub's rows are its authority on what is sounding.
+    plain_held: Box<[[Option<PlainHeld>; 128]; 16]>,
+    /// The [`recording_run`](harmonigraph_record::Recorder::recording_run)
+    /// the plain arm last opened with `plain_held`.
+    plain_opened: u64,
+    /// The pass that run was in: a new one has seen none of the held notes
+    /// begin, whatever their `recorded` marks say.
+    plain_pass: Option<harmonigraph_record::configuration::RecordAddress>,
+}
+
+/// One key the plain-MIDI arm holds.
+#[derive(Clone, Copy)]
+struct PlainHeld {
+    velocity: f32,
+    /// Whether the current pass already holds an On for it — the key was
+    /// struck while it recorded, or a run of it opened with the key held.
+    recorded: bool,
 }
 
 impl Drop for Harmonigraph {
@@ -676,6 +696,9 @@ impl Default for Harmonigraph {
             samples_processed: 0,
             presentation_seconds: 0.0,
             take: RecorderSlot(Some(take)),
+            plain_held: Box::new([[None; 128]; 16]),
+            plain_opened: 0,
+            plain_pass: None,
             _background,
         }
     }
@@ -773,6 +796,7 @@ impl Plugin for Harmonigraph {
             mailbox.published.publish(owner.snapshot);
         }
         self.samples_processed = 0;
+        *self.plain_held = [[None; 128]; 16];
         self.audio_producer.reset();
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
@@ -836,10 +860,59 @@ impl Plugin for Harmonigraph {
         if let Some(owner) = self.configuration.as_mut() {
             owner.record(&mut self.take, take_origin, self.presentation_seconds);
         }
+        // Each recording run opens with the notes already held that this pass
+        // has not seen begin, at the run's first sample: armed mid-note,
+        // resumed from a pause, or split from the last pass by a loop, it
+        // would otherwise hold only releases and draw nothing for them
+        // (#1129). A note whose On this pass already holds is left alone — a
+        // second On is a retrigger on replay, which would cut its row in two
+        // at every resume.
+        if let Some(origin) = take_origin.filter(|_| self.configuration.is_none()) {
+            let run = self.take.recording_run();
+            if run != self.plain_opened {
+                self.plain_opened = run;
+                // Named for the configured route, but it is simply the pass
+                // this block records into, on either route.
+                let pass = self.take.configuration_address();
+                let new_pass = pass != self.plain_pass;
+                self.plain_pass = pass;
+                for (channel, keys) in self.plain_held.iter_mut().enumerate() {
+                    for (note, held) in keys.iter_mut().enumerate() {
+                        let Some(held) = held else { continue };
+                        if new_pass || !held.recorded {
+                            let on = NoteEventKind::On { velocity: held.velocity };
+                            self.take.note(origin, SourceId::DIRECT, channel as u8, note as u8, on);
+                            held.recorded = true;
+                        }
+                    }
+                }
+            }
+        }
         while let Some(event) = context.next_event() {
+            // All Notes Off and All Sound Off end whatever the channel holds
+            // without an Off per key; kept, those would open every later run.
+            if let NoteEvent::MidiCC { channel, cc: 120 | 123, .. } = event {
+                if let Some(keys) = self.plain_held.get_mut(usize::from(channel)) {
+                    *keys = [None; 128];
+                }
+            }
             if let Some(MappedNote { timing, channel, note, kind }) =
                 mapped_note(event).filter(|_| self.configuration.is_none())
             {
+                if let Some(held) = self
+                    .plain_held
+                    .get_mut(usize::from(channel))
+                    .and_then(|keys| keys.get_mut(usize::from(note)))
+                {
+                    match kind {
+                        NoteEventKind::On { velocity } => {
+                            let recorded = take_origin.is_some();
+                            *held = Some(PlainHeld { velocity, recorded });
+                        }
+                        NoteEventKind::Off => *held = None,
+                        _ => {}
+                    }
+                }
                 let time = ring_time(self.presentation_seconds, timing, self.sample_rate);
                 let event = CoreNoteEvent { source: SourceId::DIRECT, time, channel, note, kind };
                 let delta: harmonigraph_core::canonical::NoteDelta = event.into();

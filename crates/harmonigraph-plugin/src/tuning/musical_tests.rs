@@ -807,6 +807,72 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
     std::fs::remove_dir_all(&directory).unwrap();
 }
 
+/// #1129: a take that starts between a note's input and the sample it is
+/// scheduled to sound at. The onset is sequenced 400 samples into a callback
+/// no take owns, so D = 512 schedules it 400 samples into the first callback
+/// the take records — its delta routes to no pass, and only a snapshot of what
+/// is already sounding can tell the take it exists.
+#[test]
+fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (recorder, mut capture) = harmonigraph_record::testing::channel();
+    crate::configuration::inject_recorder(recorder);
+    let mut phrase = Phrase::new();
+    phrase.step([vec![note(1, 0, 60, 400, true)], vec![], vec![]], [0, 1, 2]);
+    capture.arm();
+    let directory =
+        std::env::temp_dir().join(format!("harmonigraph-take-onset-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("onset.take");
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    // Expression every callback, as a played note has: each is sequenced in
+    // the callback a snapshot may be cut in, and scheduled D after it.
+    for step in 0..4 {
+        phrase.step([vec![expression(1, 0.01 * f64::from(step), 0)], vec![], vec![]], [0, 1, 2]);
+        writer.drain(&mut capture);
+    }
+    phrase.step([vec![note(1, 0, 60, 100, false)], vec![], vec![]], [0, 1, 2]);
+    for _ in 0..4 {
+        phrase.idle();
+        writer.drain(&mut capture);
+    }
+    // Read, which is also the check that every snapshot follows the history
+    // it cuts: a take that sorts one before it is refused whole.
+    let take = harmonigraph_take::Take::read(&path).unwrap();
+    let origin = take.configurations.first().expect("the take recorded a block").t;
+    let mut tracker = harmonigraph_core::NoteTracker::new();
+    for record in &take.events {
+        record.apply(&mut tracker).unwrap();
+    }
+    let drawn: Vec<_> = tracker
+        .roll()
+        .notes()
+        .filter(|n| n.source == harmonigraph_core::SourceId(1) && n.note == 60)
+        .collect();
+    assert_eq!(drawn.len(), 1, "the take draws the held note: {:?}", take.events);
+    assert!(
+        (drawn[0].start - (origin + 400.0 / 44100.0)).abs() < 1e-9,
+        "at the sample it was scheduled to sound: {} vs origin {origin}",
+        drawn[0].start
+    );
+    assert!(drawn[0].end.is_some(), "and its release, which the take did record");
+    assert!(
+        !take.events.iter().any(|record| matches!(
+            record.note(),
+            Some(n) if n.note == 60 && matches!(n.kind, harmonigraph_take::NoteKind::On { .. })
+        )),
+        "the fixture must put the onset itself in no pass, or a snapshot is not what drew it"
+    );
+    assert!(take.events.iter().any(|record| matches!(
+        record,
+        CanonicalRecord::Baseline(frame) if frame.voices.iter().any(|voice| voice.note == 60)
+    )));
+    drop(writer);
+    drop(phrase);
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
 /// Custom axis sizes go through the same score, and the player's own attack
 /// expression is preserved beside the correction rather than replaced by it.
 #[test]
