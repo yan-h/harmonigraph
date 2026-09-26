@@ -358,6 +358,20 @@ pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
 /// which is the case for leaving headroom here rather than trimming to what
 /// the default alone needs.
 ///
+/// What that costs is measured (#1111), on UNBENT gradients swept in `t` steps
+/// of 2.5e-4. The default LEVEL gradient's chroma fraction reaches exactly 1.0
+/// at its top, where the boundary near `L*` 94 at hues about 120-130 has a
+/// sharp corner: green saturates while blue turns steep within 0.2 `L*`. The
+/// table misses it by 5.8/255 on the default, and by 30.9/255 at worst with
+/// hue start swept over 290-310 and lightness over 45-55 (worst at 296 / 48,
+/// at `t` 0.996). A brightness bend puts the corner where the table samples
+/// more coarsely, and on #1110's branch that read 36.7/255. Accepted: the miss
+/// sits in the loudest half-percent of the ramp at non-default dials. What
+/// would remove it is a table entry pinned on the corner — a second warp beside
+/// the bend's in [`LutSpacing`] and in every shader's `lut_position`, catching
+/// only the one corner the arc crosses — or a chroma fraction held under 1.0,
+/// which moves the look.
+///
 /// Do NOT read that error as a mismatch between shapes. It is the difference
 /// between the table and an ideal nothing draws.
 pub const PITCH_LUT_N: usize = 64;
