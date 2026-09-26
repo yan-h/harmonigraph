@@ -30,6 +30,7 @@ pub(super) fn lattice_settings_pane(
     section(ui, "Notes", |ui| {
         nodes::layers(ui, &mut state.appearance.view);
         nodes::motion(ui, &mut state.appearance.view, params);
+        nodes::intensity(ui, &mut state.appearance.view);
         labels::labels(ui, state);
         nodes::octaves(ui, &mut state.appearance.view);
         nodes::audio_ring(ui, &mut state.appearance.view);

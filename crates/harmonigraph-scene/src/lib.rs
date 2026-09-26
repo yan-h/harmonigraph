@@ -22,6 +22,8 @@
 //!   colour schemes the plugin has (the analyzer's, by loudness).
 //! - [`skin`] — the static palette the UI and renderer share.
 //! - [`trail`] — a quiet mark on the nodes the music has already been to.
+//! - [`intensity`] — how loud each note is drawn, from its velocity and
+//!   expressions.
 //!
 //! Every public item is re-exported at the crate root, so downstream code
 //! keeps using `harmonigraph_scene::Camera` rather than module paths.
@@ -30,6 +32,7 @@ pub mod atmosphere;
 pub mod camera;
 pub mod color;
 pub mod derive;
+pub mod intensity;
 pub mod motion;
 pub mod octaves;
 pub mod skin;
@@ -52,6 +55,10 @@ pub use color::{
     HUE_CIRCLE_N,
 };
 pub use derive::derive_scene;
+pub use intensity::{
+    IntensityReading, IntensitySettings, IntensitySource, IntensityTarget, GAIN_RANGE_MAX,
+    GAIN_RANGE_MIN, INTENSITY_WEIGHT_MAX,
+};
 pub use motion::NodeMotion;
 pub use octaves::{
     clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
@@ -436,6 +443,13 @@ pub struct NodeInstance {
     /// range lights the outermost indicator on its side rather than
     /// disappearing.
     pub octaves: [f32; OCTAVE_SLOTS],
+    /// How far each octave's LIT slice reaches across the band, 0..1 by the
+    /// same slots as [`octaves`](Self::octaves): it fills from the band's inner
+    /// edge out to this share of the band's width, and the rest of the band
+    /// keeps the ghost an unlit slot draws, so the ring stays whole. 1 is the
+    /// full slice, which is what every slot reads that is not lit or that
+    /// nothing drives (see [`crate::intensity`]).
+    pub thickness: [f32; OCTAVE_SLOTS],
     pub hovered: bool,
     /// On the home (center sevens) sheet. An idle node draws nothing
     /// wherever it sits; what marks a home position is the MARKER standing
@@ -562,6 +576,13 @@ pub struct NodeInstance {
     /// level carried on the Glow attack and release, a row that holds still
     /// while the node keeps glowing, and the coefficient that carried it.
     pub glow: GlowStep,
+    /// How much of this node's ink the lattice's BLOOM takes, 0..1: the Glow
+    /// display's reading (see [`crate::intensity`]) of the loudest note
+    /// lighting it, and 1 where nothing is routed to Glow or nothing is lit.
+    /// The ink on screen is untouched; only the bright pass's copy of it is
+    /// scaled, so a note's halo follows its playing. The node glow above does
+    /// not read it.
+    pub bloom: f32,
     /// Whether the music is remembered here (see [`trail`]): 0 where it has
     /// never been, 1 where it has. A memory never fades, so those are the
     /// only two values a node carries; the field is an `f32` because the

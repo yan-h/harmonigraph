@@ -10,7 +10,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 
 | Tab | What you will find |
 | --- | --- |
-| Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and glow, glow texture and breathing, and shadows for lattice shapes and text. |
+| Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, note intensity, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and glow, glow texture and breathing, and shadows for lattice shapes and text. |
 | Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic or Watercolor texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
 | Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, skin and skin lightness, tab-bar visibility and layout reset. |

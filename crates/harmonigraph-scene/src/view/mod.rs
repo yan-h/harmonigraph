@@ -591,6 +591,9 @@ pub struct ViewConfig {
     pub fade_shape: f32,
     /// Appearance of note arrivals and departures, on the shared Note fade clock.
     pub note_animation: NoteAnimationConfig,
+    /// How loud each note is drawn, and how far each display reads that
+    /// (see [`crate::intensity`]). Shared by the lattice and the roll.
+    pub intensity: crate::IntensitySettings,
     // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands
     // on the home sheet alone (see `derive_pluses`) — off it, a position at
@@ -1349,6 +1352,7 @@ impl ViewConfig {
         // duration beside it is the Fade param rather than a blob field, and
         // has no door here to need.
         self.note_animation = self.note_animation.sanitized();
+        self.intensity = self.intensity.sanitized();
         self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
 
         // The spectral kernel's width, against that same hole and one more: it
@@ -1716,6 +1720,7 @@ impl Default for ViewConfig {
             // drag away.
             fade_shape: 0.313_509_55,
             note_animation: NoteAnimationConfig::default(),
+            intensity: crate::IntensitySettings::default(),
             // A shallow step past the band — about a third of the band's own
             // width, so a mark reads as its slice carrying on rather than as a
             // second ring around everything.

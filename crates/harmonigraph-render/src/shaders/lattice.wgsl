@@ -461,7 +461,10 @@ struct Instance {
     // x: activation 0..1. y/z: the melody and bass marks' own levels, which
     // follow the marked voice rather than this node's activation — each
     // ring eases in over the scene layer's attack when its note takes that
-    // end, and drops to 0 the frame the key comes up.
+    // end, and drops to 0 the frame the key comes up. w: how much of the
+    // bloom's copy of this node's ink is taken away (the Glow display), 0 for
+    // the full bloom and never past 1, so a draw into a cell may overwrite it
+    // with the kinds above 1 that `layer_distance` reads.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
@@ -470,6 +473,9 @@ struct Instance {
     // node — so
     // this is the MIDI picture whole and is painted off pitch_lut throughout.
     @location(3) octaves: vec3<u32>,
+    // How far each octave's LIT slice reaches across the band, packed as
+    // `octaves` is. See [`slice_reach`].
+    @location(1) thickness: vec3<u32>,
     @location(15) motion: vec4<u32>,
     // The node's pitch class in cents (0..1200). It both PLACES the octave
     // indicators and COLORS them, off the one quantity: each indicator's
@@ -540,6 +546,7 @@ struct VsOut {
     @location(0) uv: vec2<f32>, // -1..1 across the quad
     @location(2) params: vec4<f32>,
     @location(3) @interpolate(flat) octaves: vec3<u32>,
+    @location(1) @interpolate(flat) thickness: vec3<u32>,
     @location(9) @interpolate(flat) motion: vec4<u32>,
     @location(4) @interpolate(flat) cents: f32,
     // Which ROW of the ink strip is this node's — the row the light's own clock
@@ -713,6 +720,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     out.uv = corner * margin;
     out.params = inst.params;
     out.octaves = inst.octaves;
+    out.thickness = inst.thickness;
     out.motion = inst.motion;
     out.cents = inst.cents;
     out.strip_row = inst.glow.y;
@@ -1116,6 +1124,52 @@ fn oct_slot_lit(in: VsOut, slot: i32) -> vec4<f32> {
     // class for the glyph's true pitch.
     let pitch = oct_slot_pitch(slot, in.cents);
     return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(in.octaves, slot));
+}
+
+// How far out slot `s`'s LIT slice reaches across the band from `inner` to
+// `outer`: its inner edge plus its thickness's share of the width, pushing
+// outward as the note does, and exactly `outer` at thickness 1 so a full
+// slice takes the path it always did. What the rest of the band shows is the
+// ghost an unlit slot draws there, which keeps the ring whole
+// ([`slice_zones`]).
+fn slice_reach(in: VsOut, s: i32, inner: f32, outer: f32) -> f32 {
+    if s < 0 || s >= i32(OCTAVE_SLOTS) {
+        return outer;
+    }
+    let t = octave_level(in.thickness, u32(s));
+    return select(inner + (outer - inner) * t, outer, t >= 1.0);
+}
+
+// A slice drawn short of the band's outer edge, as two zones of one wedge:
+// its lit ink out to `reach` ([`slice_reach`]), and the ghost at the node's
+// presence over the rest of the band. `full` is the whole slice's layer and
+// `ink` its [`oct_slot_ink`].
+//
+// The two PARTITION the wedge's coverage rather than compositing one over the
+// other, so the antialiased edge at `reach` is a crossfade and the band's own
+// edges are counted once, the same bargain the full slice makes. `xyz` is the
+// colour, `w` the coverage, and the lit zone's own layer comes back beside
+// them for the shadow and the wash.
+struct SliceZones {
+    ink: vec4<f32>,
+    lit: NodeLayer,
+}
+
+fn slice_zones(
+    in: VsOut, s: i32, ring: OctRing, uv: vec2<f32>, d: f32,
+    full: NodeLayer, ink: vec4<f32>, inner: f32, reach: f32, aa: f32,
+) -> SliceZones {
+    // A collapsed annulus is not a coverage of zero (`glyph_band`), so a slice
+    // with no thickness at all has no lit zone rather than a quarter of one.
+    var lit = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+    if reach > inner {
+        lit = outer_glyph(s, ring, uv, glyph_band(d, inner, reach, 1.0, aa), inner, reach, aa);
+    }
+    let lit_cov = layer_coverage(lit) * ink.w;
+    let ghost_cov = max(layer_coverage(full) - layer_coverage(lit), 0.0) * in.params.x;
+    let cov = lit_cov + ghost_cov;
+    let rgb = (ink.xyz * lit_cov + u.lattice_ground.rgb * ghost_cov) / max(cov, 1e-4);
+    return SliceZones(vec4<f32>(rgb, cov), lit);
 }
 
 // The signed field and level of one annular sector. The radial field arrives
@@ -1913,17 +1967,37 @@ fn base_node_ink(
         // place of the other.
         let ink = oct_slot_ink(in, slot);
         let opacity = ink.w;
-        node_sd = layer_distance(
-            node_sd,
-            NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
-            in,
-        );
-        let slot_rgb = ink.xyz;
+        var slot_rgb = ink.xyz;
         // The wedge enters ONCE, after the two layers are resolved: they are
         // the same shape at different opacities, and compositing their COVERED
         // FRACTIONS instead would count the antialiased edge twice and leave a
         // lit slice a brighter fringe than the silent ones it meets.
-        let cov = shape * opacity;
+        var cov = shape * opacity;
+        // How much of the wedge the lit ink covers, for the wash below.
+        var lit_shape = shape;
+        let reach = slice_reach(in, slot, band_in, band_out);
+        if reach >= band_out {
+            node_sd = layer_distance(
+                node_sd,
+                NodeLayer(shape_layer.sd, opacity, shape_layer.coverage),
+                in,
+            );
+        } else {
+            let zones = slice_zones(in, slot, oct, in.uv, d, shape_layer, ink, band_in, reach, aa);
+            slot_rgb = zones.ink.xyz;
+            cov = zones.ink.w;
+            lit_shape = layer_coverage(zones.lit);
+            node_sd = layer_distance(
+                node_sd,
+                NodeLayer(zones.lit.sd, opacity, zones.lit.coverage),
+                in,
+            );
+            node_sd = layer_distance(
+                node_sd,
+                NodeLayer(shape_layer.sd, presence, shape_layer.coverage),
+                in,
+            );
+        }
         if cov > glyph {
             glyph = cov;
             glyph_rgb = slot_rgb;
@@ -1938,7 +2012,7 @@ fn base_node_ink(
             // Follow this slot's own level, even while a mark still holds
             // its extension: a released slice fades to the ground and keeps
             // the full wash field as its ink becomes grey.
-            glyph_lit = shape * level;
+            glyph_lit = lit_shape * level;
         }
     }
     // Ease the glyph layer off across the billboard's margin instead of
@@ -2101,14 +2175,27 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, band_in, band_out, 1.0, soft), band_in, band_out, soft);
             let ink = oct_slot_ink(in, slot);
             let taper = 1.0 - smoothstep(1.0, GLYPH_FADE_LIMIT, d);
-            let coverage = shape.coverage * taper * ink.w * opacity;
+            let level = oct_slot_level(in.octaves, slot);
+            var coverage = shape.coverage * taper * ink.w * opacity;
+            var rgb = ink.rgb;
+            var lit = level / max(ink.w, 1e-4);
+            let reach = slice_reach(in, slot, band_in, band_out);
+            if reach >= band_out {
+                result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
+            } else {
+                let zones = slice_zones(in, slot, oct, uv, d, shape, ink, band_in, reach, soft);
+                rgb = zones.ink.xyz;
+                coverage = zones.ink.w * taper * opacity;
+                lit = level * zones.lit.coverage / max(zones.ink.w, 1e-4);
+                result.sd = layer_distance(result.sd, NodeLayer(zones.lit.sd * scale, ink.w * opacity, zones.lit.coverage), in);
+                result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, in.params.x * opacity, shape.coverage), in);
+            }
             if coverage > result.alpha {
-                result.rgb = ink.rgb * coverage;
+                result.rgb = rgb * coverage;
                 result.alpha = coverage;
-                result.lit = oct_slot_level(in.octaves, slot) / max(ink.w, 1e-4);
+                result.lit = lit;
             }
             result.mask = max(result.mask, shape.coverage * taper * mask_level(ink.w * opacity));
-            result.sd = layer_distance(result.sd, NodeLayer(shape.sd * scale, ink.w * opacity, shape.coverage), in);
         }
         if slot >= 0 && slot < i32(OCTAVE_SLOTS) && mark_out > mark_in {
             let bit = 1u << u32(slot);
@@ -2570,7 +2657,11 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
     let seen = node_split(paint, paint.seen);
     let bloom = node_split(paint, paint.bloom);
-    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink);
+    // The bloom's copy of the ink at the node's own share of it (the Glow
+    // display, `Instance::params.w` as what is taken away), so a note's halo
+    // follows how it is played while the ink on screen stays as it is. The
+    // shadow the copy carries is left whole.
+    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink * (1.0 - in.params.w));
 }
 
 // ---- Node glow -------------------------------------------------------------

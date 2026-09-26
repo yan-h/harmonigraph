@@ -19,7 +19,7 @@
 use egui::Color32;
 use harmonigraph_core::RollNote;
 use harmonigraph_render::{RollAxes, RollInstance};
-use harmonigraph_scene::pitch_lut_color;
+use harmonigraph_scene::{pitch_lut_color, IntensityReading};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::panes::scene_color;
@@ -393,6 +393,8 @@ fn roll_instances_with_floor(
     // pixel, in points at this display's density, the same figure it takes as
     // `feather`. Ink reaches half of it past whatever it edges.
     let feather_px = 1.0 / ppp.max(1e-3);
+    // How each note's playing reads on every display, shared with the lattice.
+    let intensity = state.appearance.view.intensity.sanitized();
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -548,6 +550,9 @@ fn roll_instances_with_floor(
             if t + ink_pitch >= 0.0 && t - ink_pitch <= 1.0 {
                 let half = 0.5 * lead_px;
                 let center = axes.at(t, split) - axes.dir_depth() * half;
+                // The lead reads the note as it ended.
+                let (_, last) = note.expressions()[note.expressions().len() - 1];
+                let (fade, glow, taper) = read_through(intensity.read(note.velocity, last));
                 detached.push(RollInstance {
                     center: [center.x, center.y],
                     half_extent: [half_pitch, half],
@@ -561,6 +566,12 @@ fn roll_instances_with_floor(
                     cap_reach: 0.0,
                     core: note_color(state, pitch, cfg.roll_opacity).to_array(),
                     outline: outline_color.to_array(),
+                    span: RollInstance::WHOLE,
+                    ramp: [0.0, 0.0],
+                    fade,
+                    glow,
+                    taper_depth: [0.0; 4],
+                    taper,
                 });
             }
         }
@@ -801,7 +812,7 @@ fn roll_instances_with_floor(
             } else {
                 (center, half_depth, 0.0, 0.0, 0.0, 0.0)
             };
-            instances.push(RollInstance {
+            let segment = RollInstance {
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
@@ -812,10 +823,150 @@ fn roll_instances_with_floor(
                 cap_reach: cap_px,
                 core: core.to_array(),
                 outline: outline_color.to_array(),
-            });
+                span: RollInstance::WHOLE,
+                ramp: [0.0, 0.0],
+                fade: [1.0, 1.0],
+                glow: [1.0, 1.0],
+                taper_depth: [0.0; 4],
+                taper: RollInstance::UNTAPERED,
+            };
+            // Where a moment of this segment lands along its box, as the
+            // shader's depth offset from the center: the same floor and shift
+            // the ends took, then the lead's half, which moved the center.
+            let centre = (d0 + d1) * 0.5;
+            let lead_half = if lead_px > 0.0 { lead_px * 0.5 } else { 0.0 };
+            let offset = |at: f64| {
+                let d = mid + (time.depth_of_unclamped(at) - mid) * stretch + shift;
+                (d - centre) * axes.depth_len() + lead_half
+            };
+            let points = intensity_points(note, &intensity, t0, t1);
+            push_pieces(&mut instances, segment, &points, offset);
         }
     }
     (instances, detached)
+}
+
+/// The largest error on any display a note may be drawn with, which decides
+/// how many pieces a segment is cut into (see [`intensity_points`]).
+const INTENSITY_TOLERANCE: f32 = 1.0 / 256.0;
+
+/// A note's reading on every display from `t0` to `t1`, as breakpoints
+/// `(time, reading)` oldest first to be read as straight lines: its expression
+/// breakpoints between the two, with the fewest kept that stay within
+/// [`INTENSITY_TOLERANCE`] of the rest on every display. Two sharing a time are
+/// a step.
+///
+/// A note whose intensity never moves is its two ends at one value, and is
+/// drawn as the one segment it always was.
+fn intensity_points(
+    note: &RollNote,
+    intensity: &harmonigraph_scene::IntensitySettings,
+    t0: f64,
+    t1: f64,
+) -> Vec<(f64, IntensityReading)> {
+    let loud = |values| intensity.read(note.velocity, values);
+    let mut points = vec![(t0, loud(note.expressions_at(t0)))];
+    points.extend(
+        note.expressions().iter().filter(|(t, _)| *t > t0 && *t < t1).map(|&(t, e)| (t, loud(e))),
+    );
+    points.push((t1, loud(note.expressions_at(t1))));
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    simplify(&points, &mut keep, 0, points.len() - 1);
+    points.into_iter().zip(keep).filter_map(|(point, kept)| kept.then_some(point)).collect()
+}
+
+/// Douglas–Peucker over `points[first..=last]`, marking in `keep` each point
+/// the line between the kept ones would miss by more than
+/// [`INTENSITY_TOLERANCE`] on any display.
+fn simplify(points: &[(f64, IntensityReading)], keep: &mut [bool], first: usize, last: usize) {
+    let ((ta, a), (tb, b)) = (points[first], points[last]);
+    let along = |t: f64| if tb > ta { ((t - ta) / (tb - ta)) as f32 } else { 0.0 };
+    let error = |(t, at): (f64, IntensityReading)| {
+        let s = along(t);
+        let off = |value: f32, from: f32, to: f32| (value - (from + (to - from) * s)).abs();
+        off(at.opacity, a.opacity, b.opacity).max(off(at.glow, a.glow, b.glow)).max(off(
+            at.thickness,
+            a.thickness,
+            b.thickness,
+        ))
+    };
+    let worst = (first + 1..last).map(|i| (i, error(points[i]))).max_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((i, _)) = worst.filter(|&(_, error)| error > INTENSITY_TOLERANCE) {
+        keep[i] = true;
+        simplify(points, keep, first, i);
+        simplify(points, keep, i, last);
+    }
+}
+
+/// An instance's [`fade`](RollInstance::fade), [`glow`](RollInstance::glow)
+/// and [`taper`](RollInstance::taper), held at one `reading` all along it.
+fn read_through(reading: IntensityReading) -> ([f32; 2], [f32; 2], [f32; 4]) {
+    ([reading.opacity; 2], [reading.glow; 2], [reading.thickness; 4])
+}
+
+/// `segment` cut into one piece per stretch between two of its intensity
+/// `points`, each carrying its stretch's fade, glow and thickness at both
+/// ends. Every piece keeps the segment's whole box, so its outline, lead and
+/// cap are the segment's; only the span each one draws differs, and the
+/// outermost two reach past the box. `offset` places a time on the box's depth
+/// axis, newer times lower.
+///
+/// Thickness tapers the box itself, so each piece also carries its
+/// neighbours' far ends (see [`RollInstance::taper_depth`]): the shape beside
+/// a cut is then the one the piece next to it draws, and the outline measured
+/// off it runs on across the cut without a seam.
+fn push_pieces(
+    instances: &mut Vec<RollInstance>,
+    segment: RollInstance,
+    points: &[(f64, IntensityReading)],
+    offset: impl Fn(f64) -> f32,
+) {
+    let (oldest, newest) = (points[0].0, points[points.len() - 1].0);
+    let pieces: Vec<_> = points.windows(2).filter(|pair| pair[1].0 > pair[0].0).collect();
+    // No length to cut (a note pressed this frame), or nothing to read along
+    // it: the segment whole, at its newest intensity.
+    if pieces.is_empty() || (pieces.len() == 1 && pieces[0][0].1 == pieces[0][1].1) {
+        let (fade, glow, taper) = read_through(points[points.len() - 1].1);
+        instances.push(RollInstance { fade, glow, taper, ..segment });
+        return;
+    }
+    for (i, pair) in pieces.iter().enumerate() {
+        let ((older, at_older), (newer, at_newer)) = (pair[0], pair[1]);
+        let (low, high) = (offset(newer), offset(older));
+        // The neighbour's point to measure against beyond each cut: the far
+        // end of the piece there, or, where the width steps at the cut, the
+        // step's other side at the cut itself. Held at this piece's own end
+        // past the outermost two.
+        let beyond = |neighbour: Option<&&[(f64, IntensityReading)]>,
+                      end: (f64, IntensityReading),
+                      near: usize,
+                      far: usize| {
+            match neighbour {
+                Some(pair) if pair[near].1.thickness != end.1.thickness => {
+                    (offset(end.0), pair[near].1.thickness)
+                }
+                Some(pair) => (offset(pair[far].0), pair[far].1.thickness),
+                None => (offset(end.0), end.1.thickness),
+            }
+        };
+        let (newer_at, newer_width) = beyond(pieces.get(i + 1), (newer, at_newer), 0, 1);
+        let (older_at, older_width) =
+            beyond(i.checked_sub(1).and_then(|j| pieces.get(j)), (older, at_older), 1, 0);
+        instances.push(RollInstance {
+            span: [
+                if newer == newest { f32::MIN } else { low },
+                if older == oldest { f32::MAX } else { high },
+            ],
+            ramp: [low, high],
+            fade: [at_newer.opacity, at_older.opacity],
+            glow: [at_newer.glow, at_older.glow],
+            taper_depth: [newer_at, low, high, older_at],
+            taper: [newer_width, at_newer.thickness, at_older.thickness, older_width],
+            ..segment
+        });
+    }
 }
 
 #[cfg(test)]
@@ -991,6 +1142,101 @@ mod tests {
             assert_eq!(note.core[3], alpha, "opacity {opacity} produced alpha {}", note.core[3]);
             assert_eq!(note.outline[3], 255, "opacity {opacity} dimmed the surround");
         }
+    }
+
+    /// A note whose intensity moves along it is cut into pieces of its one
+    /// box, as few as draw the fade within tolerance, and they tile the box:
+    /// the outermost two reach past it and each cut is shared by the pieces
+    /// either side. A note whose intensity holds still is drawn whole.
+    #[test]
+    fn a_notes_fade_follows_its_pressure_in_pieces_of_one_box() {
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.low_midi = 54.0;
+        state.appearance.spectrum.high_midi = 66.0;
+        let tracker = &mut state.runtime.tracker;
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        // Pressure up to full and back down, every 5 ms: a swell with one apex.
+        for i in 1..=200 {
+            let time = f64::from(i) * 0.005;
+            let value = 1.0 - (time as f32 - 0.5).abs() * 2.0;
+            tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Expression {
+                    expression: harmonigraph_core::Expression::Pressure,
+                    value,
+                },
+            });
+        }
+
+        let whole = *one(&instances(&state, 1.0));
+        assert_eq!((whole.span, whole.fade), (RollInstance::WHOLE, [1.0, 1.0]));
+
+        let fade = harmonigraph_scene::IntensitySettings {
+            pressure: harmonigraph_scene::IntensitySource {
+                target: harmonigraph_scene::IntensityTarget::Opacity,
+                weight: 1.0,
+            },
+            ..Default::default()
+        };
+        state.appearance.view.intensity = fade;
+        let pieces = instances(&state, 1.0);
+        assert_eq!(pieces.len(), 2, "a swell with one apex is two lines: {pieces:?}");
+        let (older, newer) = (pieces[0], pieces[1]);
+        let reset = |piece| RollInstance {
+            span: whole.span,
+            ramp: whole.ramp,
+            fade: whole.fade,
+            glow: whole.glow,
+            taper_depth: whole.taper_depth,
+            taper: whole.taper,
+            ..piece
+        };
+        assert_eq!((reset(older), reset(newer)), (whole, whole), "a piece is its segment's box");
+        assert_eq!((older.span[1], newer.span[0]), (f32::MAX, f32::MIN), "the ends reach past");
+        assert_eq!(older.span[0], newer.span[1], "the cut is shared");
+        assert!(newer.ramp[0] < newer.ramp[1], "newer times sit lower along depth");
+        let [apex, start] = older.fade;
+        let [end, apex_again] = newer.fade;
+        assert!(start < 0.02 && end < 0.02 && apex > 0.98, "{older:?} {newer:?}");
+        assert_eq!(apex, apex_again);
+        assert_eq!((older.glow, newer.glow), ([1.0; 2], [1.0; 2]), "nothing routed to the glow");
+
+        // The same pressure routed to the glow instead: the glow takes the
+        // fade's ends and the fade stays in full.
+        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
+            pressure: harmonigraph_scene::IntensitySource {
+                target: harmonigraph_scene::IntensityTarget::Glow,
+                ..fade.pressure
+            },
+            ..fade
+        };
+        let glowing = instances(&state, 1.0);
+        assert_eq!(glowing.len(), 2);
+        assert_eq!((glowing[0].glow, glowing[1].glow), (older.fade, newer.fade));
+        assert_eq!((glowing[0].fade, glowing[1].fade), ([1.0; 2], [1.0; 2]));
+
+        // ...and to thickness: each piece tapers along its own stretch, and
+        // is told the far end of the piece beside it, held at its own end past
+        // the note's two ends.
+        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
+            pressure: harmonigraph_scene::IntensitySource {
+                target: harmonigraph_scene::IntensityTarget::Thickness,
+                ..fade.pressure
+            },
+            ..fade
+        };
+        let thick = instances(&state, 1.0);
+        assert_eq!(thick.len(), 2);
+        let (older, newer) = (thick[0], thick[1]);
+        assert_eq!((older.fade, newer.fade), ([1.0; 2], [1.0; 2]));
+        assert_eq!(older.taper, [end, apex, start, start]);
+        assert_eq!(newer.taper, [end, end, apex, start]);
+        assert_eq!(older.taper_depth, [newer.ramp[0], older.ramp[0], older.ramp[1], older.ramp[1]]);
+        assert_eq!(newer.taper_depth, [newer.ramp[0], newer.ramp[0], newer.ramp[1], older.ramp[1]]);
     }
 
     /// The outline stands the same distance off at every zoom and every note

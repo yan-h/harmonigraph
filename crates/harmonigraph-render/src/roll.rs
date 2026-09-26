@@ -21,7 +21,7 @@
 //!
 //! **Why the buffer is still rewritten every frame.** The obvious next step
 //! is an append-and-evict ring — settled notes never change, so they could
-//! be uploaded once. They are not, deliberately. At 36 bytes per note a busy
+//! be uploaded once. They are not, deliberately. At 112 bytes a piece a busy
 //! roll is tens of kilobytes a frame against the megabytes that were the
 //! whole problem, so a ring would be optimizing three orders of magnitude
 //! below the cost it was built for, and it would have to carry the far-edge
@@ -164,9 +164,57 @@ pub struct RollInstance {
     /// What color that is stays the pane's decision — this crate draws the
     /// instance it is handed and invents nothing.
     pub outline: [u8; 4],
+    /// The stretch of depth this instance draws, as offsets from
+    /// [`center`](Self::center) in points: [`WHOLE`](Self::WHOLE) for the
+    /// whole box, or one PIECE of it.
+    ///
+    /// Pieces are how a note's opacity, glow and thickness follow its playing
+    /// along a segment: the caller hands over the segment's box once per
+    /// piece, each with the same geometry and a span of its own, and the spans
+    /// tile the box. So the outline, the lead and the cap are the segment's,
+    /// and no piece has an end of its own for an outline to wrap — exactly,
+    /// while the width holds still, and near a cut to within what a piece can
+    /// see of its neighbours when it does not (see
+    /// [`taper_depth`](Self::taper_depth)). `vs_note` cuts the quad at the
+    /// span, so two pieces meet on one shared edge and every pixel is drawn by
+    /// one of them.
+    pub span: [f32; 2],
+    /// The two depth offsets [`fade`](Self::fade) and [`glow`](Self::glow)
+    /// are given at; each is a straight line between them, held past either
+    /// end.
+    pub ramp: [f32; 2],
+    /// Opacity at the two [`ramp`](Self::ramp) depths, multiplying the body
+    /// and the outline together. `[1.0, 1.0]` is unfaded.
+    pub fade: [f32; 2],
+    /// How much light the body gives the bloom at the two
+    /// [`ramp`](Self::ramp) depths, in place of its fade: the bloom's pass
+    /// draws the body at this, so the note's opacity and its light are two
+    /// displays. `[1.0, 1.0]` is the full bloom.
+    pub glow: [f32; 2],
+    /// Four depth offsets, ascending, that [`taper`](Self::taper) is given at.
+    ///
+    /// The middle two are this piece's own ends and the outer two its
+    /// neighbouring pieces' far ends, or a step's other side where one stands
+    /// at a cut, so the outline near a cut is measured against the shape the
+    /// piece beside it draws. Beyond them a piece cannot see, so a neighbour
+    /// shorter than the outline's reach can leave the outline a step at the
+    /// cut. Read only while [`taper`](Self::taper) moves.
+    pub taper_depth: [f32; 4],
+    /// The ribbon's width at each of the four [`taper_depth`](Self::taper_depth)
+    /// depths, as a share of its full [`half_extent`](Self::half_extent)
+    /// across pitch: straight lines between them, held past both ends, and
+    /// growing about the center line. The body, the outline standing off it,
+    /// the shadow and the bloom all follow the tapered shape, and its distance
+    /// is still the true one. [`UNTAPERED`](Self::UNTAPERED) for a ribbon
+    /// at full width all along.
+    pub taper: [f32; 4],
 }
 
 impl RollInstance {
+    /// A [`span`](Self::span) that draws the whole box.
+    pub const WHOLE: [f32; 2] = [f32::MIN, f32::MAX];
+    /// A [`taper`](Self::taper) at full width all along.
+    pub const UNTAPERED: [f32; 4] = [1.0; 4];
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<RollInstance>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -175,12 +223,16 @@ impl RollInstance {
             1 => Float32x2, // half_extent
             2 => Float32,   // shear
             3 => Float32,   // outline_reach
-            4 => Float32,  // lead
-            5 => Float32,  // lead_fade
-            6 => Float32,  // lead_alpha
-            7 => Float32,  // cap_reach
-            8 => Unorm8x4, // core
-            9 => Unorm8x4, // outline
+            // Several to a slot, since a vertex takes sixteen at most and
+            // `vs_shadow_cell` spends four of them (10..=13) on its second
+            // buffer.
+            4 => Float32x4, // lead, lead_fade, lead_alpha, cap_reach
+            8 => Unorm8x4,  // core
+            9 => Unorm8x4,  // outline
+            14 => Float32x4, // span, ramp
+            15 => Float32x4, // fade, glow
+            5 => Float32x4,  // taper_depth
+            6 => Float32x4,  // taper
         ],
     };
 }
@@ -296,7 +348,9 @@ struct RollUniforms {
     origin_points: [f32; 2],
     viewport_points: [f32; 2],
     feather: f32,
-    _pad: f32,
+    /// 1 in the bloom's pass, where the body is drawn at its
+    /// [`RollInstance::glow`] rather than its fade; 0 on screen.
+    light: f32,
     pitch_dir: [f32; 2],
     depth_dir: [f32; 2],
     _axis_pad: [f32; 2],
@@ -806,8 +860,16 @@ impl CallbackTrait for RollCallback {
             .instances
             .iter()
             .map(|note| {
-                let half_pitch = note.half_extent[0] + note.shear.abs() * note.half_extent[1];
-                let half_depth = note.half_extent[1];
+                // A piece casts from its own span of the box, so pieces cost
+                // the atlas what their segment would.
+                let lo = (-note.half_extent[1]).max(note.span[0]);
+                let hi = note.half_extent[1].min(note.span[1]).max(lo);
+                let center = [
+                    note.center[0] + self.axes.depth_dir[0] * 0.5 * (lo + hi),
+                    note.center[1] + self.axes.depth_dir[1] * 0.5 * (lo + hi),
+                ];
+                let half_pitch = note.half_extent[0] + note.shear.abs() * lo.abs().max(hi.abs());
+                let half_depth = 0.5 * (hi - lo);
                 let screen_half = [
                     self.axes.pitch_dir[0].abs() * half_pitch
                         + self.axes.depth_dir[0].abs() * half_depth,
@@ -816,8 +878,8 @@ impl CallbackTrait for RollCallback {
                 ];
                 crate::shadow::Caster {
                     rect: [
-                        note.center[0] - screen_half[0],
-                        note.center[1] - screen_half[1],
+                        center[0] - screen_half[0],
+                        center[1] - screen_half[1],
                         2.0 * screen_half[0],
                         2.0 * screen_half[1],
                     ],
@@ -842,7 +904,7 @@ impl CallbackTrait for RollCallback {
             // which is what the offline render's byte-for-byte determinism
             // test rests on.
             feather: 1.0 / ppp,
-            _pad: 0.0,
+            light: 0.0,
             pitch_dir: self.axes.pitch_dir,
             depth_dir: self.axes.depth_dir,
             _axis_pad: [0.0; 2],
@@ -887,6 +949,7 @@ impl CallbackTrait for RollCallback {
                 origin_points: [viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp],
                 viewport_points: [bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp],
                 feather: 1.0 / half_ppp,
+                light: 1.0,
                 ..uniforms
             }
         });
@@ -1384,6 +1447,12 @@ mod tests {
             cap_reach: 4.0,
             core: [255, 0, 0, 255],
             outline: [0, 0, 0, 255],
+            span: RollInstance::WHOLE,
+            ramp: [0.0, 0.0],
+            fade: [1.0, 1.0],
+            glow: [1.0, 1.0],
+            taper_depth: [0.0; 4],
+            taper: RollInstance::UNTAPERED,
         }
     }
 
@@ -1660,6 +1729,12 @@ mod tests {
                     cap_reach: reach,
                     core: [255, 0, 0, 255],
                     outline: [0, 0, 0, 255],
+                    span: RollInstance::WHOLE,
+                    ramp: [0.0, 0.0],
+                    fade: [1.0, 1.0],
+                    glow: [1.0, 1.0],
+                    taper_depth: [0.0; 4],
+                    taper: RollInstance::UNTAPERED,
                 };
                 let cb = RollCallback {
                     rect,
@@ -2323,6 +2398,11 @@ mod tests {
             at(&lit, 128, 128),
             at(&plain, 128, 128),
         );
+        // The bloom's pass reads the note's glow, not its fade: a note whose
+        // glow is out gives off no light, and draws its body as it would.
+        let dark = RollInstance { glow: [0.0, 0.0], ..note };
+        let unlit = draw_bloomed(&device, &queue, vec![dark], TOP, 1.5, wgpu::Color::BLACK);
+        assert_eq!(unlit, plain, "a note whose glow is out still bloomed");
         // Light, not a shape: the halo may never take alpha away from what is
         // under it, and over an opaque frame that means the alpha channel is
         // untouched everywhere.
@@ -2695,6 +2775,143 @@ mod tests {
         );
     }
 
+    /// A note cut into pieces draws exactly the note it was cut from, and a
+    /// fade takes its body and outline out together along depth.
+    ///
+    /// The cut sits off the pixel grid on purpose, where two quads meeting on
+    /// a shared edge is what decides which of them draws the row.
+    #[test]
+    fn pieces_tile_their_note_and_a_fade_runs_along_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let whole = centered_note();
+        let cut = 10.3;
+        let pieces = vec![
+            RollInstance { span: [f32::MIN, cut], ..whole },
+            RollInstance { span: [cut, f32::MAX], ..whole },
+        ];
+        assert!(
+            draw(&device, &queue, pieces, bg_color())
+                == draw(&device, &queue, vec![whole], bg_color()),
+            "two pieces of a note drew something other than the note",
+        );
+
+        // Depth runs down y under `TOP`: transparent at the note's top end
+        // (y 68), opaque at its bottom (y 188).
+        let faded = RollInstance { ramp: [-60.0, 60.0], fade: [0.0, 1.0], ..whole };
+        let frame = draw(&device, &queue, vec![faded], bg_color());
+        let red = |y| pixel(&frame, 128, y)[0];
+        assert!(near(pixel(&frame, 128, 69), BG), "top: {:?}", pixel(&frame, 128, 69));
+        assert!(near(pixel(&frame, 128, 187), [255, 0, 0, 255]), "{:?}", pixel(&frame, 128, 187));
+        assert!(red(100) < red(128) && red(128) < red(160), "the fade is not a ramp");
+        assert!(!shadowed(pixel(&frame, 128, 66)), "a faded-out end kept its outline");
+        let reversed = RollInstance { ramp: [-60.0, 60.0], fade: [1.0, 0.0], ..whole };
+        let frame = draw(&device, &queue, vec![reversed], bg_color());
+        assert!(shadowed(pixel(&frame, 128, 66)), "an opaque end lost its outline");
+    }
+
+    /// [`centered_note`] tapering from half its width at its top end (y 68)
+    /// to all of it at its bottom (y 188), in a straight line.
+    fn tapered_note() -> RollInstance {
+        RollInstance {
+            taper_depth: [-60.0, -60.0, 60.0, 60.0],
+            taper: [0.5, 0.5, 1.0, 1.0],
+            ..centered_note()
+        }
+    }
+
+    /// A tapered note narrows about its center line, and its outline stands
+    /// its own reach off the narrowed flank rather than off the full box.
+    #[test]
+    fn a_tapered_note_narrows_about_its_center_and_its_outline_follows() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let frame = draw(&device, &queue, vec![tapered_note()], bg_color());
+        // Row 70 is 2.5 points into the note, where it is 12.2 points wide:
+        // 121.9..134.1 across pitch.
+        let at = |x| pixel(&frame, x, 70);
+        assert!(near(at(128), [255, 0, 0, 255]), "the center: {:?}", at(128));
+        for x in [120, 135] {
+            assert!(shadowed(at(x)), "no outline 1.4 points off the flank at {x}: {:?}", at(x));
+        }
+        // Inside the full box, but past the outline's reach from the taper.
+        for x in [117, 138] {
+            assert!(near(at(x), BG), "the full box drew at {x}: {:?}", at(x));
+        }
+        // Near the bottom it is all but the full width again.
+        assert!(near(pixel(&frame, 117, 186), [255, 0, 0, 255]), "{:?}", pixel(&frame, 117, 186));
+    }
+
+    /// Pieces cut from a tapered note, each told its neighbour's far end,
+    /// draw the note they were cut from, with the cut off the pixel grid.
+    #[test]
+    fn pieces_of_a_tapered_note_tile_it() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let whole = tapered_note();
+        let cut = 10.3;
+        let at_cut = 0.5 + 0.5 * (cut + 60.0) / 120.0;
+        let pieces = vec![
+            RollInstance {
+                span: [f32::MIN, cut],
+                taper_depth: [-60.0, -60.0, cut, 60.0],
+                taper: [0.5, 0.5, at_cut, 1.0],
+                ..whole
+            },
+            RollInstance {
+                span: [cut, f32::MAX],
+                taper_depth: [-60.0, cut, 60.0, 60.0],
+                taper: [0.5, at_cut, 1.0, 1.0],
+                ..whole
+            },
+        ];
+        let (cut_up, reference) = (
+            draw(&device, &queue, pieces, bg_color()),
+            draw(&device, &queue, vec![whole], bg_color()),
+        );
+        let worst = cut_up.iter().zip(&reference).map(|(a, b)| a.abs_diff(*b)).max();
+        assert!(worst <= Some(1), "two pieces of a tapered note differ from it by {worst:?}");
+    }
+
+    /// A width that STEPS at a cut keeps the outline on the step's shoulder
+    /// and round its corner, though the piece drawing that stretch is the
+    /// narrow one: each piece measures its neighbour's side of the step.
+    #[test]
+    fn a_stepped_width_keeps_its_shoulder_outlined() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Half width above y 128 (122..134 across pitch), whole below
+        // (116..140).
+        let pieces = vec![
+            RollInstance {
+                span: [f32::MIN, 0.0],
+                taper_depth: [-60.0, -60.0, 0.0, 0.0],
+                taper: [0.5, 0.5, 0.5, 1.0],
+                ..centered_note()
+            },
+            RollInstance {
+                span: [0.0, f32::MAX],
+                taper_depth: [0.0, 0.0, 60.0, 60.0],
+                taper: [0.5, 1.0, 1.0, 1.0],
+                ..centered_note()
+            },
+        ];
+        let frame = draw(&device, &queue, pieces, bg_color());
+        let red = [255, 0, 0, 255];
+        assert!(near(pixel(&frame, 128, 126), red) && near(pixel(&frame, 118, 130), red));
+        // 1.5 points above the shoulder, 3.5 off the narrow flank.
+        assert!(shadowed(pixel(&frame, 118, 126)), "no shoulder: {:?}", pixel(&frame, 118, 126));
+        // 0.7 points from the wide part's corner, diagonally, and 6.5 off the
+        // narrow flank.
+        assert!(shadowed(pixel(&frame, 115, 127)), "no corner: {:?}", pixel(&frame, 115, 127));
+        // 4.9 points from it: past the reach.
+        assert!(near(pixel(&frame, 112, 124), BG), "{:?}", pixel(&frame, 112, 124));
+    }
+
     /// A glide's outline keeps its thickness instead of thinning with the
     /// angle.
     ///
@@ -2792,11 +3009,20 @@ mod tests {
         // The center line drifts 5 points each way, so the box spans pitch
         // 119..137 and its outline reaches two points past that.
         let sliver = RollInstance { half_extent: [4.0, 0.005], shear: 1000.0, ..centered_note() };
-        let frame = draw(&device, &queue, vec![sliver], bg_color());
-        let x_far = (0..112).chain(145..SIZE[0]);
-        for (x, y) in x_far.flat_map(|x| (118..138).map(move |y| (x, y))) {
-            let got = pixel(&frame, x, y);
-            assert!(near(got, BG), "the sliver painted {got:?} at ({x}, {y}), far along pitch");
+        // ...and the same sliver tapering, which measures its distance the
+        // other way (`tapered_distance`) and owes the same bound.
+        let tapered = RollInstance {
+            taper_depth: [-0.005, -0.005, 0.005, 0.005],
+            taper: [0.5, 0.5, 1.0, 1.0],
+            ..sliver
+        };
+        for note in [sliver, tapered] {
+            let frame = draw(&device, &queue, vec![note], bg_color());
+            let x_far = (0..112).chain(145..SIZE[0]);
+            for (x, y) in x_far.flat_map(|x| (118..138).map(move |y| (x, y))) {
+                let got = pixel(&frame, x, y);
+                assert!(near(got, BG), "the sliver painted {got:?} at ({x}, {y}), far along pitch");
+            }
         }
     }
 }

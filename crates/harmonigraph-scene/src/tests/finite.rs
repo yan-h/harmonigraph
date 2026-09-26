@@ -93,6 +93,19 @@ fn poisoned_view() -> ViewConfig {
             stagger_spread: nan,
             radial_start: nan,
         },
+        intensity: {
+            let source = |target| crate::IntensitySource { target, weight: nan };
+            crate::IntensitySettings {
+                velocity: source(crate::IntensityTarget::Opacity),
+                gain: source(crate::IntensityTarget::Glow),
+                pressure: source(crate::IntensityTarget::Thickness),
+                timbre: source(crate::IntensityTarget::Opacity),
+                gain_range: nan,
+                opacity_base: nan,
+                glow_base: nan,
+                thickness_base: nan,
+            }
+        },
         mark_thickness: nan,
         mark_delay: nan,
         plus_arm: nan,
@@ -226,6 +239,7 @@ fn scene_floats(scene: &Scene) -> Floats {
             departing: _,
             slice_progress,
             octaves,
+            thickness,
             hovered: _,
             on_home: _,
             scale,
@@ -239,12 +253,15 @@ fn scene_floats(scene: &Scene) -> Floats {
             bass_color,
             audio_ring,
             glow,
+            bloom,
             trail,
         } = node;
         f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
         f.one(format!("nodes[{i}].activation"), *activation);
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);
+        f.one(format!("nodes[{i}].bloom"), *bloom);
+        f.many(&format!("nodes[{i}].thickness"), *thickness);
         f.one(format!("nodes[{i}].scale"), *scale);
         f.one(format!("nodes[{i}].comma"), *comma);
         f.one(format!("nodes[{i}].cents"), *cents);
