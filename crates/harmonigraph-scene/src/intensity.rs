@@ -34,7 +34,8 @@ pub enum IntensityTarget {
     /// round its roll ribbon (Ribbon bloom). The lattice's node glow does not
     /// read it.
     Glow,
-    /// How thick it is drawn. Nothing draws this yet (#1130 step 4).
+    /// How thick it is drawn: the roll's ribbons, across pitch about their
+    /// center line. The lattice's slices do not follow it yet (#1130 step 5).
     Thickness,
 }
 

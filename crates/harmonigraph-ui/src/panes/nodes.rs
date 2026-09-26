@@ -49,7 +49,7 @@ fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             IntensityTarget::Thickness => (
                 target,
                 "Thickness",
-                "Drives how thick the note is drawn. Nothing draws it yet.",
+                "Drives how thick the note is drawn: the roll's ribbons, about their center line.",
             ),
         });
         let route = |ui: &mut egui::Ui, source: &mut IntensitySource, name: &str, hover: &str| {
@@ -124,7 +124,7 @@ fn intensity_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
             &mut intensity.thickness_base,
             "Thickness base",
             IntensityTarget::Thickness,
-            format!("{} Nothing draws thickness yet.", base_hover("thickness")),
+            base_hover("thickness"),
         );
     });
 }
