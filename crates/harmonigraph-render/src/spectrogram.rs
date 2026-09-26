@@ -1554,23 +1554,21 @@ mod tests {
     /// silence, and needs neither the tile nor the reduced tone target.
     ///
     /// Silence is the claim the look is most likely to break: no star is drawn
-    /// over silence, the fill past the ring is gated the same way, and the glow
-    /// carries the level to a positive power, so a quiet pane must be the floor
-    /// EXACTLY — on a palette whose floor is not black, so an invented black
-    /// would show — rather than a field of faint noise. Held with the glow on
-    /// too, and at a reduced cloud sample spacing, which is where the other
-    /// textures take the tone target this one must not.
+    /// over silence, so a quiet pane must be the floor EXACTLY — on a palette
+    /// whose floor is not black, so an invented black would show — rather than
+    /// a field of faint noise. Held at a reduced cloud sample spacing too,
+    /// which is where the other textures take the tone target this one must
+    /// not.
     #[test]
     fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
         let Some((device, queue)) = headless_device() else { return };
-        for (pixel, glow) in [(0.5, 0.0), (2.0, 0.8)] {
+        for pixel in [0.5, 2.0] {
             let mut cb = refracted_fixture();
             let mut resources = CallbackResources::default();
             resources
                 .insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-            s.star_glow = glow;
             s.cloud_depth = 0.0;
             let bare = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
@@ -1598,6 +1596,76 @@ mod tests {
             assert_eq!(silent, floor, "silence drew something other than the floor: pixel={pixel}");
             assert!(floor.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]), "the floor is black");
         }
+    }
+
+    /// The shader carries the starfield along each slice's drift, the way the
+    /// CPU hands it over: a frame a moment later is the earlier one moved by
+    /// exactly the distance the drift covered, in the drift's direction.
+    ///
+    /// The CPU side of the drift is held by its own tests; this is the half
+    /// they cannot see, whether `star_color` applies `offset` at all and with
+    /// which sign. Every depth moves at one speed (`Far star speed` 1) with no
+    /// spread, over a flat level so a star's colour does not change with where
+    /// it is, on a 540-point pane so a star pixel is a device pixel — and the
+    /// clock steps by the time the drift takes to cover a whole number of
+    /// them. Lives are long and the step short, so a star's fade moves a
+    /// couple of levels at most, and a life that turns over is at zero at both
+    /// ends of the turn. An ignored offset leaves the field where it was, and
+    /// a flipped one moves it the other way: either fails the first assert.
+    #[test]
+    fn the_starfield_moves_by_the_drift() {
+        const PANE: u32 = 540;
+        const SHIFT: usize = 6;
+        const SPEED: f32 = 4.0;
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = refracted_fixture();
+        cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
+        relay_quad(&mut cb, 12);
+        cb.read.rows = PANE;
+        cb.grid.fill(150);
+        let atmosphere = cb.atmosphere.as_mut().unwrap();
+        atmosphere.region = cb.rect;
+        atmosphere.now = 3.0;
+        let s = &mut atmosphere.settings;
+        s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+        s.cloud_depth = 1.0;
+        (s.pitch_softness, s.time_softness) = (0.0, 0.0);
+        (s.cloud_speed, s.cloud_direction) = (SPEED, 0.0);
+        (s.star_far_speed, s.star_speed_spread, s.star_lifetime) = (1.0, 0.0, 20.0);
+        let mut resources = CallbackResources::default();
+        let before = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().now +=
+            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_px_per_second());
+        let after = frame_with(&device, &queue, &mut resources, &cb);
+
+        // Clear of the edges, where the light the stars read need not be flat.
+        let (margin, side) = (40usize, PANE as usize);
+        let px = |frame: &[u8], x: usize, y: usize| {
+            let at = (y * side + x) * 4;
+            [frame[at], frame[at + 1], frame[at + 2]]
+        };
+        let apart = |a: [u8; 3], b: [u8; 3]| (0..3).any(|c| a[c].abs_diff(b[c]) > 8);
+        let interior = || {
+            (margin..side - margin)
+                .flat_map(move |y| (margin + SHIFT..side - margin).map(move |x| (x, y)))
+        };
+        let total = interior().count();
+        let floor = cb.shades.lut[0];
+        let lit = interior()
+            .filter(|&(x, y)| apart(px(&before, x, y), [floor[0], floor[1], floor[2]]))
+            .count();
+        assert!(lit * 5 > total, "too few stars to see a move: {lit} of {total} pixels lit");
+        let moved =
+            interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x - SHIFT, y))).count();
+        assert!(
+            moved * 200 < total,
+            "the field is not the earlier one moved {SHIFT} px: {moved} of {total} differ"
+        );
+        let still = interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x, y))).count();
+        assert!(
+            still * 10 > total,
+            "the field did not move: only {still} of {total} pixels changed"
+        );
     }
 
     fn cloud_fixture() -> SpectrogramCallback {

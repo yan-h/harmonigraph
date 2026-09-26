@@ -131,8 +131,6 @@ pub const SCALE_REFRACT_MAX: f32 = 1.0;
 pub const STAR_DENSITY_MIN: f32 = 0.5;
 /// See [`STAR_DENSITY_MIN`].
 pub const STAR_DENSITY_MAX: f32 = 10.0;
-/// The top of [`SpectralAtmosphere::star_glow`].
-pub const STAR_GLOW_MAX: f32 = 1.5;
 /// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
 /// dense slice add up to a flat wash of its average colour.
 pub const STAR_FRINGE_MAX: f32 = 0.5;
@@ -141,19 +139,6 @@ pub const STAR_FRINGE_MAX: f32 = 0.5;
 pub const STAR_BALANCE_THIN: f32 = 16.0;
 /// The top of [`SpectralAtmosphere::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
-/// The top of [`SpectralAtmosphere::star_wander`], in cells of the star's own
-/// depth.
-///
-/// A BOUND rather than a taste, like the Mosaic's radius band: the shader walks
-/// the 3x3 cells around a pixel, so a star has to stay near enough its own cell
-/// for that ring to hold it. A centre strays `STAR_JITTER / 2 + wander` from its
-/// cell's middle, plus up to a quarter cell of [`SpectralAtmosphere::star_speed_spread`]
-/// excursion, so the nearest a star outside the ring can come to the pixel is
-/// `1.5 - STAR_JITTER / 2 - wander - excursion` cells, and every star's light is
-/// windowed to zero by then. At 0.45 that is still half a cell with the whole
-/// excursion, and three quarters with none; the renderer's
-/// `the_star_ring_holds_every_star_that_reaches_a_pixel` holds it.
-pub const STAR_WANDER_MAX: f32 = 0.45;
 /// Bounds shared by the two ends of the `Star size` control
 /// ([`SpectralAtmosphere::star_size_min`], [`SpectralAtmosphere::star_size_max`])
 /// and their sanitizer, in star pixels of spacing at density 2.
@@ -339,11 +324,6 @@ pub struct SpectralAtmosphere {
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
     pub star_randomness: f32,
-    /// The wide light of the sound under the stars, as the ground they are
-    /// laid over; a star no brighter than it is not drawn. Round 5 found this,
-    /// not the dust, to be what read as a heavy "cloud texture", and round 8
-    /// was picked without it. Runs to [`STAR_GLOW_MAX`].
-    pub star_glow: f32,
     /// Which end of the depth keeps all its stars, from -1 (the far dust) to 1
     /// (the nearest stars): the favoured end fills every cell and the share
     /// falls off exponentially toward the other, to [`STAR_BALANCE_THIN`] of
@@ -374,24 +354,20 @@ pub struct SpectralAtmosphere {
     /// evenly. Runs over [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
     pub star_speed_curve: f32,
     /// How far each star's own speed is drawn round its depth's, as a share of
-    /// half the gap to the neighbouring depths' speeds: at 1 the speeds fill
-    /// the gaps between depths and the parallax is a continuum rather than
-    /// steps. A star keeps its speed for its [`Self::star_lifetime`].
+    /// the widest spread the depth can hold: half the gap to the neighbouring
+    /// depths' speeds (at which the parallax is a continuum rather than steps),
+    /// or, if less, the speed that carries a star to the edge of the shader's
+    /// 3x3 ring over its [`Self::star_lifetime`]. So the finest dust strays
+    /// least, and every setting of the dial does something.
     pub star_speed_spread: f32,
-    /// How long one star lives, in seconds, before its cell draws a new one.
-    /// Each fades in and out over its life. A depth whose cells are too small
-    /// to hold a star at its spread speed for this long lives shorter, so the
-    /// finest dust turns over fastest. Runs over
+    /// How long one star lives, in seconds, before its cell draws a new one,
+    /// alike at every depth. Each fades in and out over its life. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
     /// A wider, fainter fringe of each star's own colour round its core, at
     /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
     /// Runs to [`STAR_FRINGE_MAX`].
     pub star_fringe: f32,
-    /// How far each star strays from the shared drift on a slow path of its
-    /// own, in cells of its own depth. Capped at [`STAR_WANDER_MAX`] by the
-    /// shader's ring, which is why the bar stops there.
-    pub star_wander: f32,
     /// The farthest depth's speed as a share of the nearest's: the parallax.
     /// 1 moves every depth together.
     pub star_far_speed: f32,
@@ -472,7 +448,6 @@ impl Default for SpectralAtmosphere {
             // depths small, and the farthest dust still.
             star_density: 6.0,
             star_randomness: 0.214_038_73,
-            star_glow: 0.0,
             star_balance: 0.078,
             star_size_min: 3.333_390_2,
             star_size_max: 11.502_775,
@@ -481,7 +456,6 @@ impl Default for SpectralAtmosphere {
             star_speed_spread: 0.5,
             star_lifetime: 6.0,
             star_fringe: 0.25,
-            star_wander: 0.45,
             star_far_speed: 0.0,
             star_defocus: 0.6,
         }
@@ -542,7 +516,6 @@ impl SpectralAtmosphere {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
-        self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
         self.star_balance = clamp(self.star_balance, fresh.star_balance, -1.0, 1.0);
         self.star_size_min =
             clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
@@ -569,7 +542,6 @@ impl SpectralAtmosphere {
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
-        self.star_wander = clamp(self.star_wander, fresh.star_wander, 0.0, STAR_WANDER_MAX);
         self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
         self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
         self

@@ -841,7 +841,7 @@ mod tests {
     /// vacuous is worth no more than the fixture behind it.
     ///
     /// The starfield runs the same four renders. It has a second clock beside
-    /// the drift — each star's own wander, off `now` as well — and it is the one
+    /// the drift — the stars' lives, off `now` as well — and it is the one
     /// texture that does not go through the shared palette lookup, so it is a
     /// second draw path rather than a second setting of this one.
     #[test]

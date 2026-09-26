@@ -298,13 +298,11 @@ struct Cloud {
     // rotation is defined in (time, pitch), so its basis follows this
     // orientation. The unrotated mosaic does not read it.
     pitch_vertical: u32,
-    // The starfield's own dials, and its wander clock in seconds, already
-    // reduced by `STAR_WANDER_PERIOD`. Read by none of the textures above.
+    // The starfield's `Randomness`, and its life clock in lives, already
+    // reduced by `STAR_LIFE_PERIOD` (`star_life` in atmosphere.rs). Read by
+    // none of the textures above.
     star_randomness: f32,
-    star_glow: f32,
-    star_wander: f32,
-    star_time: f32,
-    _star_pad: vec2<f32>,
+    star_life: f32,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
@@ -318,12 +316,8 @@ struct StarSlice {
     defocus: f32,
     occupancy: f32,
     fringe: f32,
-    fringe_reach: f32,
     reach: f32,
-    life: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    _pad: f32,
 };
 @group(1) @binding(0) var close_light: texture_2d<f32>;
 @group(1) @binding(1) var wide_light: texture_2d<f32>;
@@ -1389,21 +1383,20 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // **Depth slices, not octaves.** Five jittered star grids from far (fine dust,
 // two-pixel cells, many and faint) to near (32-pixel cells at the fresh `Size
 // range`, few, bright, soft), each sliding at the shared drift times its own
-// parallax factor, and each star adding a slow wander of its own on top. The CPU
-// works out every slice's numbers and its drift (`star_slices`); this walks the
-// 3x3 cells round the pixel in each.
+// parallax factor. The CPU works out every slice's numbers and its drift
+// (`star_slices`); this walks the 3x3 cells round the pixel in each.
 //
 // **Lives, so the speeds need not step.** A star's own speed is drawn round its
-// slice's (`Speed spread`), which carries it off its grid; so it lives only as
-// long as the ring can still see it, then its cell draws a new star, fading the
-// old one out and the new one in over the ends of their lives. Cells turn over
-// at hashed times, so the field never does at once. The life a star is in is
-// hashed into everything about it.
+// slice's (`Speed spread`), which carries it off its grid; so it lives `Star
+// lifetime`, then its cell draws a new star, fading the old one out and the new
+// one in over the ends of their lives. The spread is what gives way to keep a
+// star in the ring for a whole life: a slice whose cells are small gets less of
+// it. Cells turn over at hashed times, so the field never does at once. The life
+// a star is in is hashed into everything about it.
 //
 // **One light tap per star, at the star's CURRENT centre.** So a star is one
 // colour and one brightness, never a smear of the pixels under it, and as it
-// drifts it takes on the colour of what it crosses. Far stars read partly the
-// wide light, so the dust follows the picture more loosely than the near stars.
+// drifts it takes on the colour of what it crosses.
 //
 // **Paint, not light.** Yan: *"star color should change over time but each star
 // should only have one color at any given moment"*. Summed light could not do
@@ -1416,10 +1409,8 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // laid far to near, each OVER what is under it, so no core can whiten and no rim
 // can turn another colour. Round 8 of the prototype (`round8.py`, Yan's YB3).
 //
-// The ground under them is the scheme's floor, or with `Glow` the palette under
-// the wide light exposed with `1 - exp(-1.5 x)` over it. Contours never reach
-// any of it. Silence is exactly the floor: a star over silence is not drawn and
-// the glow carries the level to a positive power.
+// The ground under them is the scheme's floor, and contours never reach it.
+// Silence is exactly the floor: a star over silence is not drawn.
 //
 // Every length is in STAR PIXELS, a 540th of the pane's height, because the
 // prototype's pane was 540 pixels; the stars keep their size relative to the
@@ -1428,14 +1419,12 @@ const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
 // How far a centre is hashed off its cell's middle, as a whole width.
 const STAR_JITTER: f32 = 0.6;
-// The hash's period in each slice's cells; the CPU reduces each drift by it.
-const STAR_HASH_PERIOD: i32 = 4096;
-// Every wander frequency is a whole number of cycles in this many seconds, so
-// the clock can be reduced by it with no jump: 20 to 80 cycles, 0.05-0.2 Hz.
-const STAR_WANDER_PERIOD: f32 = 400.0;
-// Every slice's life clock is reduced by this many lives on the CPU; a power
-// of two, so masking the life index by it wraps with the clock and no life is
-// cut short where the clock wraps.
+// The hash's period in each slice's cells; the CPU reduces each drift by it
+// (and says there why it is this wide).
+const STAR_HASH_PERIOD: i32 = 65536;
+// The life clock is reduced by this many lives on the CPU; a power of two, so
+// masking the life index by it wraps with the clock and no life is cut short
+// where the clock wraps.
 const STAR_LIFE_PERIOD: u32 = 4096u;
 // The share of its life a star spends fading in, and again fading out, each
 // as a smoothstep.
@@ -1449,22 +1438,11 @@ const STAR_LIFE_PERIOD: u32 = 4096u;
 // fading as `sin²` over its whole life left the field a fifth darker than
 // two; with the fade kept to its ends it is 5% darker.
 const STAR_FADE: f32 = 0.2;
-// The glow's exposure over the floor.
-const STAR_EXPOSURE: f32 = 1.5;
 // How far up the palette the brightest-ranked star is lifted past its level.
 const STAR_LIFT: f32 = 0.18;
-// How steeply a star brighter than the glow under it comes in, per unit of
-// brightest channel: the prototype's round 7 rule, so a star dimmer than the
-// ground is not drawn and cannot darken it.
-const STAR_OVER_GROUND: f32 = 6.0;
 // Where, as a share of the ring's reach, a star's light starts fading to the
 // zero it must reach there. See `StarSlice::reach` and the test that holds it.
 const STAR_RING_FADE: f32 = 0.7;
-const STAR_TAU: f32 = 6.2831853;
-
-fn star_brightest(c: vec3<f32>) -> f32 {
-    return max(c.r, max(c.g, c.b));
-}
 
 // The level a star sees at pane point `pt`: the Spread-combined light, so
 // how loosely the stars follow the picture is `Wide blur mix` and the two
@@ -1477,7 +1455,7 @@ fn star_level_at(pt: vec2<f32>) -> f32 {
 
 // `wash_hash`'s mixer cut into four eight-bit draws, each centred in its
 // step so none is 0 or 1: fine enough for anything about a star, and a star's
-// ten draws take three hashes rather than four.
+// six draws take two hashes.
 fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
     var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
     n = n ^ (salt * 0x27d4eb2du);
@@ -1490,18 +1468,9 @@ fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
 
 // One cell's star, if it has one, at `r` — this slice's cell coordinate for the
 // pixel — as its coverage there in `w` and its one colour times that coverage in
-// `rgb`. `ground` is the brightest channel of the glow under the pixel and the
-// bias that lets a star over the bare floor through (`star_color`). `cut` is
-// where nothing of a star here is left: five sigmas of the widest core, the
-// fringe's own window, and never past the ring's reach.
-fn star_cell(
-    s: StarSlice,
-    r: vec2<f32>,
-    cell: vec2<i32>,
-    salt: u32,
-    cut: f32,
-    ground: vec2<f32>,
-) -> vec4<f32> {
+// `rgb`. `cut` is where nothing of a star here is left: five sigmas of the
+// widest core, or with a fringe the ring's reach, and never past that.
+fn star_cell(s: StarSlice, r: vec2<f32>, cell: vec2<i32>, salt: u32, cut: f32) -> vec4<f32> {
     // The period is a power of two, so a mask IS the Euclidean wrap, negative
     // cells included, without `wrap_cell`'s integer divisions.
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
@@ -1509,7 +1478,7 @@ fn star_cell(
     // below is keyed on the life, so each is a new star. The high half of the
     // key is the life plus one: the stagger hashes at zero there, and the
     // slices' salts all sit in the low half.
-    let age = s.life + star_hash(hashed, salt + 3u).x;
+    let age = cloud.star_life + star_hash(hashed, salt + 2u).x;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
     // Jitter, whether this life holds a star at all, and its speed. At most
@@ -1522,21 +1491,9 @@ fn star_cell(
     // with it at mid-life.
     let through = fract(age);
     let spread = s.spread * ((2.0 * a.w - 1.0) * (through - 0.5));
-    let placed = vec2<f32>(cell) + 0.5 + STAR_JITTER * (a.xy - 0.5) + spread;
-    // Only the wander is left, at most `star_wander` on each axis: a star that
-    // cannot reach the pixel wherever that puts it takes no more hashing.
-    // Together with the eight-bit draws, which put the speed in the first
-    // hash, measured at about 3% of the starfield at 4K.
-    let slack = max(abs(r - placed) - cloud.star_wander, vec2<f32>(0.0));
-    if length(slack) * s.cell >= cut {
-        return vec4<f32>(0.0);
-    }
-    // Wander rates and phases.
-    let b = star_hash(hashed, key + 1u);
-    let rate = (20.0 + floor(b.xy * 60.999)) / STAR_WANDER_PERIOD;
-    let phase = fract(rate * cloud.star_time) + b.zw;
-    let wander = cloud.star_wander * sin(STAR_TAU * phase);
-    let centre = placed + wander;
+    let centre = vec2<f32>(cell) + 0.5 + STAR_JITTER * (a.xy - 0.5) + spread;
+    // A star that cannot reach the pixel takes no light tap and no more
+    // hashing; the eight-bit draws put everything this needs in the first.
     let dist = length(r - centre) * s.cell;
     if dist >= cut {
         return vec4<f32>(0.0);
@@ -1551,23 +1508,22 @@ fn star_cell(
     // Brightness rank and size. The rank's mean is `1 / (2 + 6 r)`; dividing
     // it out leaves a draw whose mean is one at every Randomness, so the dial
     // spreads stars around the light rather than darkening the field.
-    let c = star_hash(hashed, key + 2u);
+    let c = star_hash(hashed, key + 1u);
     let randomness = cloud.star_randomness;
     let colour = star_paint(level, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
-    // The shape is coverage only: a soft point and a same-colour fringe.
+    // The shape is coverage only: a soft point and a same-colour fringe, the
+    // fringe bounded by nothing but the ring's fade below.
     let size = exp((0.3 + 0.9 * randomness) * (c.y - 0.5) * 2.0);
     let sigma = min(s.sigma * size, s.cap) * s.defocus;
     var cover = exp(-dist * dist / (2.0 * sigma * sigma));
     if s.fringe > 0.0 {
-        let window = max(1.0 - dist / s.fringe_reach, 0.0);
-        cover += s.fringe * exp(-dist / (2.5 * sigma)) * window * window;
+        cover += s.fringe * exp(-dist / (2.5 * sigma));
     }
     // Zero at the ring's reach, so a star the walk cannot see from this pixel
     // draws nothing here either and no cell edge shows.
     cover = min(cover, 1.0) * (1.0 - smoothstep(STAR_RING_FADE * s.reach, s.reach, dist));
     // It fades in over the start of its life and out over the end.
-    let fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
-    cover *= star_over_ground(colour, ground) * fade;
+    cover *= smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
     return vec4<f32>(colour * cover, cover);
 }
 
@@ -1588,47 +1544,33 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
     return palette_color(clamp(level * spread + lift, 0.0, 1.0));
 }
 
-// How much of a star's coverage survives over the glow: a star no brighter than
-// the ground under it would only darken it. `ground` is `star_color`'s.
-fn star_over_ground(colour: vec3<f32>, ground: vec2<f32>) -> f32 {
-    return clamp((star_brightest(colour) - ground.x) * STAR_OVER_GROUND + ground.y, 0.0, 1.0);
-}
-
-// The ground, then every slice laid over it far to near: within a slice the
-// stars' coverages add and their colours average by coverage, and the slice
+// The scheme's floor, then every slice laid over it far to near: within a slice
+// the stars' coverages add and their colours average by coverage, and the slice
 // covers what is under it by its summed coverage, capped at one. The salts are
-// four apart: a star hashes at its salt and the two past it, a cell's stagger at
-// the third.
+// three apart: a star hashes at its salt and the one past it, a cell's stagger
+// at the second.
 //
-// The 3x3 walk is written out as nine calls rather than two nested loops: the
-// loops, EMPTY, cost about 14 ms a 4K frame on an M1 Pro, which is to say the
-// compiler did not unroll them, where the nine calls cost the ring nothing.
+// The 3x3 walk is one flat loop of nine. Both alternatives measured slower on an
+// M1 Pro at 4K: two nested loops, which the compiler did not unroll (EMPTY, they
+// cost about 14 ms a frame), and the nine calls written out by hand (57 ms a
+// frame against the flat loop's 44).
 fn star_color(pt: vec2<f32>) -> vec3<f32> {
-    let uv = pt / cloud.size;
-    let wide = density_decode(textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r);
-    let floor_colour = palette_color(0.0);
-    var out = floor_colour;
-    // (brightest channel of the ground, bias): no star is held back over the
-    // bare floor, and as the glow rises past a sixth the bias reaches round
-    // 7's rule, where a star must outshine the ground to be drawn at all.
-    var ground = vec2<f32>(0.0, 1.0e4);
-    if cloud.star_glow > 0.0 {
-        let under = clamp(wide, 0.0, 1.0);
-        let glow = cloud.star_glow * palette_color(under) * sqrt(under);
-        out = floor_colour + (1.0 - floor_colour) * (1.0 - exp(-STAR_EXPOSURE * glow));
-        let top = star_brightest(out);
-        ground = vec2<f32>(top, 1.0 - min((top - star_brightest(floor_colour)) * STAR_OVER_GROUND, 1.0));
-    }
+    var out = palette_color(0.0);
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
         let s = cloud.star_slices[k];
-        let cut = min(s.reach, max(5.0 * s.cap * s.defocus, s.fringe_reach));
+        // A fringe has no window of its own, so with one on only the ring's
+        // fade bounds a star.
+        var cut = s.reach;
+        if s.fringe <= 0.0 {
+            cut = min(s.reach, 5.0 * s.cap * s.defocus);
+        }
         let r = sp / s.cell - s.offset;
         let o = vec2<i32>(floor(r));
-        let salt = 1000u + 4u * k;
+        let salt = 1000u + 3u * k;
         var slice = vec4<f32>(0.0);
         for (var n = 0; n < 9; n += 1) {
-            slice += star_cell(s, r, o + vec2<i32>(n % 3 - 1, n / 3 - 1), salt, cut, ground);
+            slice += star_cell(s, r, o + vec2<i32>(n % 3 - 1, n / 3 - 1), salt, cut);
         }
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));

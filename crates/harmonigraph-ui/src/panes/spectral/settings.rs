@@ -599,15 +599,15 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
 /// that is light rather than a displaced reading of it.
 ///
 /// Every quality that differed between the prototype's four motion variants is
-/// a bar here rather than a choice made in the shader, as are the two levers on
-/// how heavy the field reads (`Glow` and `Depth balance`), because Yan's pick was a
-/// starting point "with sliders exposed". The fresh values are that pick, V3,
-/// with round 8's YB3 for how a star is coloured and shaped.
+/// a bar here rather than a choice made in the shader, as is the lever on how
+/// heavy the field reads (`Depth balance`), because Yan's pick was a starting
+/// point "with sliders exposed". The fresh values are that pick, V3, with round
+/// 8's YB3 for how a star is coloured and shaped.
 fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
     use harmonigraph_scene::{
-        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_GLOW_MAX,
-        STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
-        STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN, STAR_WANDER_MAX,
+        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_LIFETIME_MAX,
+        STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
+        STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
         .unit(1.0, "\u{d7}")
@@ -628,7 +628,8 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
             );
     // Only on a change: the round trip through octaves is not exact, and
     // writing it back every frame would move the stored sizes by an ulp at a
-    // time — and every star with them, since the life clocks key on them.
+    // time — and every star with them, since each depth's cells and its drift
+    // in them key on them.
     if response.changed() {
         atmosphere.star_size_min = small.exp2();
         atmosphere.star_size_max = big.exp2();
@@ -649,12 +650,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones. The field's average brightness stays the same at every setting.",
         );
-    ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "A wide, soft light of the sound behind the stars. 0% leaves the palette's darkest color between them; higher values fill the gaps between harmonics, and stars dimmer than the glow disappear into it.",
-        );
     ValueBar::new(&mut atmosphere.star_balance, -1.0..=1.0, "Depth balance")
         .show(ui)
         .on_hover_text(
@@ -665,12 +660,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .show(ui)
         .on_hover_text(
             "A faint, wider fringe around every star in the star's own color. 0% draws bare soft points.",
-        );
-    ValueBar::new(&mut atmosphere.star_wander, 0.0..=STAR_WANDER_MAX, "Wander")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How far each star strays from the shared drift on its own slow path, as a share of the spacing between stars at its depth. 0% moves every depth as one sheet.",
         );
     ValueBar::new(&mut atmosphere.star_far_speed, 0.0..=1.0, "Far star speed")
         .percent()
@@ -692,7 +681,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "How much each star's speed differs from the others at its depth. 0% moves each depth as one sheet; 100% fills the gaps between the depths' speeds, so the parallax is a continuum rather than steps.",
+            "How much each star's speed differs from the others at its depth. 0% moves each depth as one sheet; 100% is the most each depth can take: enough to fill the gaps between the depths' speeds where the stars have room, and less for the smallest stars, which must stay near their places over a whole Star lifetime. Shorter lifetimes leave room for more.",
         );
     ValueBar::new(
         &mut atmosphere.star_lifetime,
@@ -703,7 +692,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .unit(1.0, " s")
     .show(ui)
     .on_hover_text(
-        "How long each star lives before a new one takes its place, fading in and out. With Speed spread, the smallest stars live shorter so they stay near their places, and twinkle faster.",
+        "How long each star lives before a new one takes its place, fading in and out, alike at every depth. Longer lives leave the smallest stars less Speed spread.",
     );
     ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
         .percent()

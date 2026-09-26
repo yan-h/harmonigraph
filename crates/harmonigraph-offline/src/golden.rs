@@ -378,9 +378,8 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
 /// The starfield draws the frame on record.
 ///
 /// Its own frame for the reason the wash has one: nothing else committed here
-/// runs `star_color` end to end — every slice, the palette position, the fringe,
-/// the fill past the ring and the far-to-near compositing — at the settings the
-/// page opens it at. It
+/// runs `star_color` end to end — every slice, the palette position, the fringe
+/// and the far-to-near compositing — at the settings the page opens it at. It
 /// is also the one texture that does not go through the shared palette lookup
 /// at the end, so no frame above says anything about it.
 #[test]
