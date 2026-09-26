@@ -1493,9 +1493,10 @@ fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
 // x and y: the centre, from the cell's corner, in cells, as f32 bits — a
 // near cell can be hundreds of pixels wide, too wide for a half float's
 // thousandth of one to hold still. z: the colour, ten bits a channel, which
-// is finer than any target this draws into. w: sigma in star pixels and the
-// life's fade as two half floats; sigma is never zero, so w is zero exactly
-// where there is no star.
+// is finer than any target this draws into. w: inverse sigma per star pixel
+// and the life's fade as two half floats. The reciprocal is baked once per
+// star rather than divided out at every pixel in reach. It is never zero,
+// so w is zero exactly where there is no star.
 fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
     // The period is a power of two, so a mask IS the Euclidean wrap, negative
     // cells included, without `wrap_cell`'s integer divisions.
@@ -1535,7 +1536,7 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
         bitcast<u32>(centre.x),
         bitcast<u32>(centre.y),
         (tens.r << 20u) | (tens.g << 10u) | tens.b,
-        pack2x16float(vec2<f32>(sigma, fade)),
+        pack2x16float(vec2<f32>(1.0 / sigma, fade)),
     );
 }
 
@@ -1577,12 +1578,12 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, cut: f32) -> vec4<f32> {
     }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
     let shape = unpack2x16float(t.w);
-    let sigma = shape.x;
+    let inverse_sigma = shape.x;
     // The shape is coverage only: a soft point and a same-colour fringe, the
     // fringe bounded by nothing but the ring's fade below.
-    var cover = exp(-dist * dist / (2.0 * sigma * sigma));
+    var cover = exp(-0.5 * (dist * inverse_sigma) * (dist * inverse_sigma));
     if s.fringe > 0.0 {
-        cover += s.fringe * exp(-dist / (2.5 * sigma));
+        cover += s.fringe * exp(-0.4 * dist * inverse_sigma);
     }
     // Zero at the ring's reach, so a star the walk cannot see from this pixel
     // draws nothing here either and no cell edge shows.
@@ -1619,6 +1620,10 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
 // flat loop of nine measured fastest on an M1 Pro at 4K (44 ms, against 57 for
 // the nine written out and about 14 more for two nested loops); with the stars
 // baked, the flat loop's per-cell index arithmetic was most of what was left.
+// Writing out only the three rows removes another 8–12% on that GPU; baking
+// inverse sigma saves the repeated divisions too, for 16–20% together.
+// Keep the depth loop: unrolling both loops measured slower than either.
+// See docs/spectrogram-star-performance.md for the paired measurements.
 fn star_color(pt: vec2<f32>) -> vec3<f32> {
     var out = palette_color(0.0);
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
@@ -1641,12 +1646,25 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
         let local = vec2<i32>(o) - 1 - s.origin;
         var index = s.base + local.y * s.grid.x + local.x;
         var slice = vec4<f32>(0.0);
-        for (var row = -1; row <= 1; row += 1) {
-            let g = f - vec2<f32>(0.0, f32(row));
+        {
+            let g = f - vec2<f32>(0.0, -1.0);
             slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
             slice += star_texel(s, g, index + 1, cut);
             slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
             index += s.grid.x;
+        }
+        {
+            let g = f - vec2<f32>(0.0, 0.0);
+            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
+            slice += star_texel(s, g, index + 1, cut);
+            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
+            index += s.grid.x;
+        }
+        {
+            let g = f - vec2<f32>(0.0, 1.0);
+            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
+            slice += star_texel(s, g, index + 1, cut);
+            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
         }
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
