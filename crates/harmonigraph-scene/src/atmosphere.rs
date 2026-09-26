@@ -314,9 +314,6 @@ pub struct SpectralAtmosphere {
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
     pub star_randomness: f32,
-    /// How far loudness also grows a star's core and adds stars. At 0
-    /// loudness sets colour only, and size and presence stay random.
-    pub star_volume: f32,
     /// The wide light of the sound under the stars, as the ground they are
     /// laid over; a star no brighter than it is not drawn. Round 5 found this,
     /// not the dust, to be what read as a heavy "cloud texture", and round 8
@@ -343,9 +340,6 @@ pub struct SpectralAtmosphere {
     /// How much the nearest stars are softened, growing with depth squared.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
-    /// How far each star's palette colour is mixed toward a hashed star
-    /// temperature, red through white to blue, at the colour's own brightness.
-    pub star_tint: f32,
 }
 
 /// Which of the three spectrogram effects a setting actually draws — what the
@@ -413,11 +407,10 @@ impl Default for SpectralAtmosphere {
             wash_layers: 0.5,
             // V3 of the prototype's round 4 (`drift.py`), dialled denser in the
             // DAW: three times the stars, the far dust at full, and a little
-            // more wander. The glow, fringe, softness and tint are round 8's
-            // YB3 (`round8.py`), which was picked with no glow and no tint.
+            // more wander. The glow, fringe and softness are round 8's
+            // YB3 (`round8.py`), which was picked with no glow.
             star_density: 6.0,
             star_randomness: 0.6,
-            star_volume: 0.0,
             star_glow: 0.0,
             star_dust: 1.0,
             star_fringe: 0.25,
@@ -425,7 +418,6 @@ impl Default for SpectralAtmosphere {
             star_far_speed: 0.15,
             star_far_blur: 0.7,
             star_defocus: 0.3,
-            star_tint: 0.0,
         }
     }
 }
@@ -484,7 +476,6 @@ impl SpectralAtmosphere {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
-        self.star_volume = clamp(self.star_volume, fresh.star_volume, 0.0, 1.0);
         self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
         self.star_dust = clamp(self.star_dust, fresh.star_dust, 0.0, 1.0);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
@@ -492,7 +483,6 @@ impl SpectralAtmosphere {
         self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
         self.star_far_blur = clamp(self.star_far_blur, fresh.star_far_blur, 0.0, 1.0);
         self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
-        self.star_tint = clamp(self.star_tint, fresh.star_tint, 0.0, 1.0);
         self
     }
 

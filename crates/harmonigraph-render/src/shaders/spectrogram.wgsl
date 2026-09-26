@@ -301,11 +301,10 @@ struct Cloud {
     // The starfield's own dials, and its wander clock in seconds, already
     // reduced by `STAR_WANDER_PERIOD`. Read by none of the textures above.
     star_randomness: f32,
-    star_volume: f32,
     star_glow: f32,
-    star_tint: f32,
     star_wander: f32,
     star_time: f32,
+    _star_pad: vec2<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 8>,
@@ -1436,17 +1435,6 @@ const STAR_OVER_GROUND: f32 = 6.0;
 const STAR_RING_FADE: f32 = 0.7;
 const STAR_TAU: f32 = 6.2831853;
 
-// Star temperature, cool red through white to hot blue, at five even stops.
-// A chain of clamped mixes rather than an indexed array, which a GPU compiler
-// may put in memory rather than registers.
-fn star_temperature(u: f32) -> vec3<f32> {
-    let x = clamp(u, 0.0, 1.0) * 4.0;
-    var c = mix(vec3<f32>(1.00, 0.45, 0.20), vec3<f32>(1.00, 0.72, 0.45), clamp(x, 0.0, 1.0));
-    c = mix(c, vec3<f32>(1.00, 0.95, 0.85), clamp(x - 1.0, 0.0, 1.0));
-    c = mix(c, vec3<f32>(0.80, 0.88, 1.00), clamp(x - 2.0, 0.0, 1.0));
-    return mix(c, vec3<f32>(0.55, 0.68, 1.00), clamp(x - 3.0, 0.0, 1.0));
-}
-
 fn star_brightest(c: vec3<f32>) -> f32 {
     return max(c.r, max(c.g, c.b));
 }
@@ -1504,23 +1492,14 @@ fn star_cell(
     if level <= 0.0 {
         return vec4<f32>(0.0);
     }
-    // `Loudness shapes stars`: louder places keep more of their stars and grow
-    // them. At 0 presence is the occupancy draw alone.
-    let volume = cloud.star_volume;
-    if volume > 0.0 && a.z >= s.occupancy * pow(level, 1.5 * volume) {
-        return vec4<f32>(0.0);
-    }
+    // The rank's mean is `1 / (2 + 6 r)`; dividing it out leaves a draw whose
+    // mean is one at every Randomness, so the dial spreads stars around the
+    // light rather than darkening the field.
     let randomness = cloud.star_randomness;
-    var colour = star_paint(level, pow(c.y, 1.0 + 6.0 * randomness));
-    if cloud.star_tint > 0.0 {
-        // Toward a hashed star temperature at the colour's own brightness, so
-        // the tint turns the hue and leaves the palette position alone.
-        let d = wash_hash(hashed, salt + 3u);
-        colour = mix(colour, star_temperature(d.y) * star_brightest(colour), cloud.star_tint);
-    }
+    let colour = star_paint(level, pow(c.y, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
     // The shape is coverage only: a soft point and a same-colour fringe.
     let size = exp((0.3 + 0.9 * randomness) * (c.z - 0.5) * 2.0);
-    let sigma = min(s.sigma * size * (1.0 + volume * level), s.cap) * s.defocus;
+    let sigma = min(s.sigma * size, s.cap) * s.defocus;
     var cover = exp(-dist * dist / (2.0 * sigma * sigma));
     if s.fringe > 0.0 {
         let window = max(1.0 - dist / s.fringe_reach, 0.0);
@@ -1533,15 +1512,20 @@ fn star_cell(
     return vec4<f32>(colour * cover, cover);
 }
 
-// A star's one colour, its brightness spent as a palette position: `rank` 0
-// for most stars and 1 for a rare bright one, steeper with `Randomness`; at 0
-// every star is the colour behind it lifted by its rank. The lift fades in with
-// the level, so a star over near-silence cannot climb the palette on its rank
-// alone. Linear in `rank`, so the mean rank paints the mean star.
+// A star's one colour, its brightness spent as a palette position. `rank` is
+// the star's brightness draw normalised to a mean of ONE: most stars below it,
+// a rare bright one far above, steeper with `Randomness`. Both the spread and
+// the lift are linear in it with a mean of one and of `STAR_LIFT / 2`, so the
+// field's average palette position is the light behind it plus that lift at
+// every Randomness — the dial redistributes brightness, it does not darken
+// (it did before, by about a quarter at 0.6). Only the palette's top clips.
+// At 0 every star is the colour behind it lifted by its draw, as before. The
+// lift fades in with the level, so a star over near-silence cannot climb the
+// palette on its rank alone. The mean rank, 1, paints the mean star.
 fn star_paint(level: f32, rank: f32) -> vec3<f32> {
     let randomness = cloud.star_randomness;
-    let spread = (1.0 - randomness) + randomness * (0.35 + 1.15 * rank);
-    let lift = STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
+    let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
+    let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
     return palette_color(clamp(level * spread + lift, 0.0, 1.0));
 }
 
@@ -1576,7 +1560,6 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
         ground = vec2<f32>(top, 1.0 - min((top - star_brightest(floor_colour)) * STAR_OVER_GROUND, 1.0));
     }
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
-    let mean_rank = 1.0 / (2.0 + 6.0 * cloud.star_randomness);
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
         let s = cloud.star_slices[k];
         let cut = min(s.reach, max(5.0 * s.cap * s.defocus, s.fringe_reach));
@@ -1592,7 +1575,7 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
         // star is drawn, so neither is this.
         let level = clamp(mix(close, wide, s.blur), 0.0, 1.0);
         if s.unseen > 0.0 && level > 0.0 {
-            let colour = star_paint(level, mean_rank);
+            let colour = star_paint(level, 1.0);
             let cover = s.unseen * star_over_ground(colour, ground);
             slice += vec4<f32>(colour * cover, cover);
         }

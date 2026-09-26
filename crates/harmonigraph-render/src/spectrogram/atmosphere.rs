@@ -503,13 +503,12 @@ struct Uniforms {
     pitch_vertical: u32,
     /// The starfield's own dials, sanitized, and its wander clock: `now`
     /// reduced by [`STAR_WANDER_PERIOD`]. `star_slices` lands on a 16-byte
-    /// boundary, as the shader's array must, with no padding before it.
+    /// boundary, as the shader's array must, after two floats of padding.
     star_randomness: f32,
-    star_volume: f32,
     star_glow: f32,
-    star_tint: f32,
     star_wander: f32,
     star_time: f32,
+    _star_pad: [f32; 2],
     star_slices: [StarSlice; STAR_SLICES],
 }
 
@@ -1131,11 +1130,10 @@ impl Targets {
             tile_cells: tile.map_or(0, TileKey::period),
             pitch_vertical: u32::from(pitch_vertical),
             star_randomness: settings.star_randomness,
-            star_volume: settings.star_volume,
             star_glow: settings.star_glow,
-            star_tint: settings.star_tint,
             star_wander: settings.star_wander,
             star_time: atmosphere.now.rem_euclid(STAR_WANDER_PERIOD) as f32,
+            _star_pad: [0.0; 2],
             star_slices: star_slices(settings, atmosphere.now),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));

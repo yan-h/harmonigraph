@@ -606,7 +606,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones.",
+            "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones. The field's average brightness stays the same at every setting.",
         );
     ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
         .percent()
@@ -648,18 +648,6 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text("How much the nearest stars are softened, as if out of focus. 0% keeps every star sharp.");
-    ValueBar::new(&mut atmosphere.star_tint, 0.0..=1.0, "Star temperature tint")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Mix each star's palette color toward a star-like color of its own, from red to white to blue, at the same brightness. 0% colors stars from the palette alone.",
-        );
-    ValueBar::new(&mut atmosphere.star_volume, 0.0..=1.0, "Loudness shapes stars")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How far loudness also makes stars bigger and adds more of them. 0% leaves every star's size and presence random; loudness always sets color.",
-        );
 }
 
 #[cfg(test)]
