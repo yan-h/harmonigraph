@@ -375,7 +375,7 @@ fn check(edge: Edge) {
             assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
-        // The lattice and the ribbons share one bloom on the Mapping page; the
+        // The lattice and the ribbons share one bloom on the Mappings page; the
         // Spiral keeps its own.
         let blooms: &[&str] = match scenario.pane {
             panes::Tab::Colors => &["Glow base"],

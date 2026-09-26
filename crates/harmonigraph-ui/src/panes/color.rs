@@ -1,4 +1,4 @@
-//! The Mapping page: how what is played and heard maps onto what is drawn, for
+//! The Mappings page: how what is played and heard maps onto what is drawn, for
 //! every picture at once. MIDI notes take their color from pitch and their
 //! opacity, bloom and thickness from how they are played; analyzed audio takes
 //! its color from level. Shadows and each picture's own light live on its own
