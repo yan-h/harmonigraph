@@ -26,11 +26,17 @@ use harmonigraph_core::LatticePos;
 /// layout and camera included -- because `UI_PERSIST_VERSION` is a floor and a
 /// floor cannot guard a variant. #913 renamed these two and said so in its PR
 /// body with the measured refusal, which is the bar for doing it again.
+///
+/// [`CloudStyle::Stars`] is the odd one out: it does not displace the picture's
+/// levels at all but REPLACES the picture with light — pinpoint stars in depth,
+/// each coloured and lit by the sound under it — so Contours do not reach it and
+/// every `star_` setting belongs to it alone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
     #[default]
     Mosaic,
     Watercolor,
+    Stars,
 }
 
 /// The band both cloud size dials run over — [`SpectralAtmosphere::scale_size`]
@@ -118,6 +124,31 @@ pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
 pub const SCALE_REFRACT_MIN: f32 = -1.0;
 /// See [`SCALE_REFRACT_MIN`].
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
+
+/// Bounds shared by the [`SpectralAtmosphere::star_density`] control and
+/// sanitizer, as a multiplier on stars per area. Past about 3x the farthest
+/// dust is finer than a pixel of a 540-point pane and merges into texture.
+pub const STAR_DENSITY_MIN: f32 = 0.5;
+/// See [`STAR_DENSITY_MIN`].
+pub const STAR_DENSITY_MAX: f32 = 6.0;
+/// The top of [`SpectralAtmosphere::star_glow`].
+pub const STAR_GLOW_MAX: f32 = 1.5;
+/// The top of [`SpectralAtmosphere::star_halo`].
+pub const STAR_HALO_MAX: f32 = 0.5;
+/// The top of [`SpectralAtmosphere::star_defocus`].
+pub const STAR_DEFOCUS_MAX: f32 = 1.5;
+/// The top of [`SpectralAtmosphere::star_wander`], in cells of the star's own
+/// depth.
+///
+/// A BOUND rather than a taste, like the Mosaic's radius band: the shader walks
+/// the 3x3 cells around a pixel, so a star has to stay near enough its own cell
+/// for that ring to hold it. A centre strays `STAR_JITTER / 2 + wander` from its
+/// cell's middle, so the nearest a star outside the ring can come to the pixel
+/// is `1.5 - STAR_JITTER / 2 - wander` cells, and every star's light is windowed
+/// to zero by then. At 0.45 that is still three quarters of a cell, which is
+/// wider than the core of any star but the biggest mid-depth ones; the renderer's
+/// `the_star_ring_holds_every_star_that_reaches_a_pixel` holds it.
+pub const STAR_WANDER_MAX: f32 = 0.45;
 
 /// Bounds shared by the [`AtmosphereSettings::nebula_scale`] control and sanitizer.
 pub const NEBULA_SCALE_MIN: f32 = 0.25;
@@ -248,7 +279,7 @@ pub struct SpectralAtmosphere {
     pub scale_refract: f32,
     /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
-    /// belongs to it alone.
+    /// belongs to it alone; `Stars` is the starfield, and so is every `star_`.
     pub cloud_style: CloudStyle,
     /// How big one glob is, as a multiplier on that size: how many of them
     /// cross the cloud frame moves the other way, because the count is divided
@@ -267,6 +298,48 @@ pub struct SpectralAtmosphere {
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
+    /// Stars per area at every depth, as a multiplier: the cells each depth's
+    /// stars are hashed into shrink by its square root. Runs over
+    /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
+    ///
+    /// Every `star_` setting below belongs to [`CloudStyle::Stars`] alone, and
+    /// each fresh value is the prototype's V3 — the variant Yan's pick named —
+    /// so the page opens on the look he chose, with its levers on bars.
+    pub star_density: f32,
+    /// How far the stars differ from each other: the steepness of the
+    /// brightness rank, the spread of core sizes and the palette-position
+    /// jitter, all together.
+    pub star_randomness: f32,
+    /// How far loudness also grows a star's core and halo and adds stars. At 0
+    /// loudness sets brightness only, and size and presence stay random.
+    pub star_volume: f32,
+    /// The wide light of the sound under the stars. Round 5 found this, not
+    /// the dust, to be what read as a heavy "cloud texture". Runs to
+    /// [`STAR_GLOW_MAX`].
+    pub star_glow: f32,
+    /// How many cells of the FARTHEST depth hold a star — the prototype's
+    /// `occ_far`, the other lever on how heavy the field reads. Nearer depths
+    /// fade from it to a fixed quarter.
+    pub star_dust: f32,
+    /// Halo strength around the nearer stars, growing with depth squared. Runs
+    /// to [`STAR_HALO_MAX`].
+    pub star_halo: f32,
+    /// How far each star strays from the shared drift on a slow path of its
+    /// own, in cells of its own depth. Capped at [`STAR_WANDER_MAX`] by the
+    /// shader's ring, which is why the bar stops there.
+    pub star_wander: f32,
+    /// The farthest depth's speed as a share of the nearest's: the parallax.
+    /// 1 moves every depth together.
+    pub star_far_speed: f32,
+    /// How much of a blurred copy of the sound the farthest stars read, fading
+    /// to none at the nearest depth.
+    pub star_far_blur: f32,
+    /// How much the nearest stars are softened, growing with depth squared.
+    /// Runs to [`STAR_DEFOCUS_MAX`].
+    pub star_defocus: f32,
+    /// How far each star's palette hue is mixed toward a hashed star
+    /// temperature, red through white to blue.
+    pub star_tint: f32,
 }
 
 /// Which of the three spectrogram effects a setting actually draws — what the
@@ -334,6 +407,19 @@ impl Default for SpectralAtmosphere {
             wash_lobe: 0.55,
             wash_refract: 0.85,
             wash_layers: 0.5,
+            // V3 of the prototype's round 4 (`drift.py`): B4's field with the
+            // wide glow at 0.7, each star wandering, and both depth cues on.
+            star_density: 2.0,
+            star_randomness: 0.6,
+            star_volume: 0.0,
+            star_glow: 0.7,
+            star_dust: 0.4,
+            star_halo: 0.12,
+            star_wander: 0.35,
+            star_far_speed: 0.15,
+            star_far_blur: 0.7,
+            star_defocus: 0.6,
+            star_tint: 0.2,
         }
     }
 }
@@ -389,6 +475,18 @@ impl SpectralAtmosphere {
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
+        self.star_density =
+            clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
+        self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_volume = clamp(self.star_volume, fresh.star_volume, 0.0, 1.0);
+        self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
+        self.star_dust = clamp(self.star_dust, fresh.star_dust, 0.0, 1.0);
+        self.star_halo = clamp(self.star_halo, fresh.star_halo, 0.0, STAR_HALO_MAX);
+        self.star_wander = clamp(self.star_wander, fresh.star_wander, 0.0, STAR_WANDER_MAX);
+        self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
+        self.star_far_blur = clamp(self.star_far_blur, fresh.star_far_blur, 0.0, 1.0);
+        self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
+        self.star_tint = clamp(self.star_tint, fresh.star_tint, 0.0, 1.0);
         self
     }
 
@@ -405,6 +503,10 @@ impl SpectralAtmosphere {
                 && match self.cloud_style {
                     CloudStyle::Mosaic => self.scale_refract != 0.0,
                     CloudStyle::Watercolor => self.wash_refract != 0.0,
+                    // Light rather than a displacement, so it has no dial at
+                    // which it draws the ordinary picture: `Cloud depth` alone
+                    // switches it off.
+                    CloudStyle::Stars => true,
                 },
         }
     }

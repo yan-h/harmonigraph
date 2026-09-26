@@ -438,10 +438,11 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
             .percent()
             .show(ui)
             .on_hover_text(
-                "How strongly the refracted levels replace the original picture. 0% removes \
-                 the texture; 100% uses only the displaced readings. Contours and the palette \
-                 apply afterward, without extra lighting or pigment. Reads whatever the \
-                 softness above leaves: with none, the measured picture itself.",
+                "How strongly the texture replaces the original picture. 0% removes the \
+                 texture; 100% uses only the texture. Mosaic and Watercolor displace levels, \
+                 then Contours and the palette apply; Stars replaces the picture with a \
+                 starfield colored from the palette. Reads whatever the softness above \
+                 leaves: with none, the measured picture itself.",
             );
         ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
             // Two constructions rather than two presets of one, so the dials below
@@ -466,6 +467,13 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
                         "A field of overlapping globs, each reading the sound near its own \
                          centre. Fine layer mix blends their levels before Contour levels and the palette",
                     ),
+                    (
+                        CloudStyle::Stars,
+                        "Stars",
+                        "Pinpoint stars at several depths, each taking the color and brightness \
+                         of the sound under it as it drifts. Nearer stars are fewer, bigger, \
+                         brighter and faster. Contour levels do not apply to it",
+                    ),
                 ],
             );
             ValueBar::new(
@@ -476,8 +484,8 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
             .unit(1.0, "\u{d7}")
             .show(ui)
             .on_hover_text(
-                "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
-                     it still.",
+                "1\u{d7} carries the texture about a pane-height every four minutes, and the \
+                     nearest stars a pane-height in about nine seconds. 0 holds it still.",
             );
             ValueBar::new(
                 &mut atmosphere.cloud_direction,
@@ -493,7 +501,9 @@ pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureSt
             // Two constructions, so two sets of dials: nothing a wash carries means
             // anything to a refracting scale, and a page listing both would be mostly
             // controls that do nothing wherever it stands.
-            if atmosphere.cloud_style == CloudStyle::Watercolor {
+            if atmosphere.cloud_style == CloudStyle::Stars {
+                star_bars(ui, atmosphere);
+            } else if atmosphere.cloud_style == CloudStyle::Watercolor {
                 wash_bars(ui, atmosphere);
             } else {
                 ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
@@ -570,6 +580,82 @@ fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .show(ui)
         .on_hover_text(
             "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
+        );
+}
+
+/// The starfield: pinpoints in depth drifting with parallax, and the one texture
+/// that is light rather than a displaced reading of it.
+///
+/// Every quality that differed between the prototype's four motion variants is
+/// a bar here rather than a choice made in the shader, as are the two levers on
+/// how heavy the field reads (`Glow` and `Far dust`), because Yan's pick was a
+/// starting point "with sliders exposed". The fresh values are that pick, V3.
+fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
+    use harmonigraph_scene::{
+        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_GLOW_MAX, STAR_HALO_MAX,
+        STAR_WANDER_MAX,
+    };
+    ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
+        .unit(1.0, "\u{d7}")
+        .show(ui)
+        .on_hover_text(
+            "How many stars at every depth. Higher values pack them closer; past about 3\u{d7} the faintest dust is finer than a pixel and merges into texture.",
+        );
+    ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Randomness")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How much stars differ from each other in brightness, size and color. 0% makes an even field; 100% makes a few bright stars among many faint ones.",
+        );
+    ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "A wide, soft light of the sound behind the stars. 0% leaves black between them; higher values fill the gaps between harmonics.",
+        );
+    ValueBar::new(&mut atmosphere.star_dust, 0.0..=1.0, "Far dust")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How many of the farthest, finest stars there are. Lower values thin the dust that fills the field between the brighter stars.",
+        );
+    ValueBar::new(&mut atmosphere.star_halo, 0.0..=STAR_HALO_MAX, "Halo")
+        .percent()
+        .show(ui)
+        .on_hover_text("A soft halo around the nearer stars. 0% draws bare pinpoints.");
+    ValueBar::new(&mut atmosphere.star_wander, 0.0..=STAR_WANDER_MAX, "Wander")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far each star strays from the shared drift on its own slow path, as a share of the spacing between stars at its depth. 0% moves every depth as one sheet.",
+        );
+    ValueBar::new(&mut atmosphere.star_far_speed, 0.0..=1.0, "Far star speed")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How fast the farthest stars drift, as a share of the nearest stars' speed. Lower values deepen the parallax; 100% moves every depth together.",
+        );
+    ValueBar::new(&mut atmosphere.star_far_blur, 0.0..=1.0, "Far star blur")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How much the farther stars read a blurred copy of the sound rather than the sharp one, so the dust follows the picture more loosely than the near stars do.",
+        );
+    ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
+        .percent()
+        .show(ui)
+        .on_hover_text("How much the nearest stars are softened, as if out of focus. 0% keeps every star sharp.");
+    ValueBar::new(&mut atmosphere.star_tint, 0.0..=1.0, "Star temperature tint")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Mix each star's palette color toward a star-like color of its own, from red to white to blue. 0% colors stars from the palette alone.",
+        );
+    ValueBar::new(&mut atmosphere.star_volume, 0.0..=1.0, "Loudness shapes stars")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far loudness also makes stars bigger, widens their halos and adds more of them. 0% leaves every star's size and presence random; loudness always sets brightness.",
         );
 }
 

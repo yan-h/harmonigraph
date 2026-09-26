@@ -375,6 +375,22 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
     check_take("spectrogram-watercolour-wash", shot, take);
 }
 
+/// The starfield draws the frame on record.
+///
+/// Its own frame for the reason the wash has one: nothing else committed here
+/// runs `star_field` end to end — every slice, the palette hue, the temperature
+/// table, the glow and the tonemap — at the settings the page opens it at. It
+/// is also the one texture that does not go through the shared palette lookup
+/// at the end, so no frame above says anything about it.
+#[test]
+fn the_starfield_draws_the_frame_on_record() {
+    let shot = Shot { size: TALL, range: whole_axis() };
+    let take = shot.dialled(|a| {
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+    });
+    check_take("spectrogram-starfield", shot, take);
+}
+
 /// A non-vacuous Step 7 frame: held roll notes use the Gaussian geometry
 /// route while their labels and the axis use the Distance text route. The
 /// pair lands through separate pane compositors, so this is also the frame

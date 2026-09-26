@@ -839,13 +839,25 @@ mod tests {
     /// lifted black to mid-tone, so the moment that lift got a floor under it
     /// they agreed pixel for pixel. A guard that a change of LOOK can turn
     /// vacuous is worth no more than the fixture behind it.
+    ///
+    /// The starfield runs the same four renders. It has a second clock beside
+    /// the drift — each star's own wander, off `now` as well — and it is the one
+    /// texture that does not go through the shared palette lookup, so it is a
+    /// second draw path rather than a second setting of this one.
     #[test]
     fn rendering_a_drifting_wash_twice_is_byte_identical() {
+        use harmonigraph_scene::CloudStyle;
+        for style in [CloudStyle::Watercolor, CloudStyle::Stars] {
+            drifting_texture_renders_twice_to_the_same_bytes(style);
+        }
+    }
+
+    fn drifting_texture_renders_twice_to_the_same_bytes(style: harmonigraph_scene::CloudStyle) {
         let clouded = |wash: bool, speed: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
             if wash {
-                a.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
+                a.cloud_style = style;
             }
             // Fast enough that a second of render carries the field a visible
             // way: at the fresh 1x the whole run is a fraction of one glob.
@@ -884,7 +896,7 @@ mod tests {
             }
         };
         let Some(first) = run(&clouded(true, 8.0)) else { return };
-        assert_eq!(first, run(&clouded(true, 8.0)).expect("a second GPU run"));
+        assert!(first == run(&clouded(true, 8.0)).expect("a second GPU run"), "{style:?} differs");
         let scales = run(&clouded(false, 8.0)).expect("a third GPU run");
         let still = run(&clouded(true, 0.0)).expect("a fourth GPU run");
         let mid = first.len() / 2;
@@ -899,11 +911,11 @@ mod tests {
         let pane = first[mid].len() / 4;
         assert!(
             lit * 2 > pane,
-            "the fixture draws a mostly black pane, so neither assert below is about the \
-             wash: {lit} of {pane} pixels lit",
+            "the fixture draws a mostly black pane, so neither assert below is about \
+             {style:?}: {lit} of {pane} pixels lit",
         );
-        assert!(first[mid] != scales[mid], "the wash drew the scales' frame {mid}");
-        assert!(first[mid] != still[mid], "the cloud clock moved nothing in frame {mid}");
+        assert!(first[mid] != scales[mid], "{style:?} drew the scales' frame {mid}");
+        assert!(first[mid] != still[mid], "{style:?}'s clock moved nothing in frame {mid}");
     }
 
     #[test]

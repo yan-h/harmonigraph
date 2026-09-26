@@ -90,6 +90,8 @@ const CASES: &[(&str, Option<Turn>)] = &[
             (s.wash_lobe, s.wash_layers) = (0.0, 0.0);
         }),
     ),
+    ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
+    ("stars, no far dust", Some(|s| (s.cloud_style, s.star_dust) = (CloudStyle::Stars, 0.0))),
 ];
 
 struct Case {
