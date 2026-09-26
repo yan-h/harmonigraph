@@ -48,8 +48,8 @@ pub use layout::{Layout, Placement, PRESETS};
 // which only the tests wanted, and `sane_scale` and `SpectrogramSurface`,
 // which nothing outside their own module wanted at all.
 pub use config::{
-    Backdrop, KeylineStyle, SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumTapers,
-    SpectrumWindow, SCALE_BAR_RANGE, TILT_STEPS,
+    SpectralOrientation, SpectrogramPreset, SpectrumConfig, SpectrumTapers, SpectrumWindow,
+    SCALE_BAR_RANGE, TILT_STEPS,
 };
 // The Spiral pane's framing, which is `AppearanceDocument::spiral`'s type. `panes`
 // is private, so a public field of a type from in there is a field nothing

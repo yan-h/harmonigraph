@@ -32,42 +32,6 @@ impl SpectrumWindow {
     }
 }
 
-/// How the analyzer marks its measured edge, picked in the Analyzer settings
-/// beside the outline's lift.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum KeylineStyle {
-    /// A continuous line joining every sample to the next.
-    Line,
-    /// One device pixel on each sample's own level and nothing joining
-    /// neighbours: a stem-and-dot analyzer whose stems, one per pixel column,
-    /// are the fill. Where the curve moves less than a pixel per column the
-    /// caps join into a one-pixel edge; a steeper flank is left to the fill,
-    /// so dense partials read as pixels at their tips and troughs rather than
-    /// as hairlines between them.
-    Dots,
-    /// No outline: the fill's own edge, and the backdrop if one is on, carry
-    /// the contour.
-    Off,
-}
-
-/// A neutral light laid in the empty space above the analyzer curve, picked in
-/// the Analyzer settings beside the outline. It stops exactly at the curve, so
-/// the fill reads as a shape cut out of it whatever the fill's color, and the
-/// fill keeps the spectrogram's own color. Strongest at the floor, where the
-/// quiet (short, dark) levels are, and faded out at
-/// [`backdrop_height`](SpectrumConfig::backdrop_height).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Backdrop {
-    Off,
-    /// One lit pixel column every [`backdrop_period`](SpectrumConfig::backdrop_period)
-    /// columns. The black between them is what makes a flat fill of ANY color
-    /// tell apart from it.
-    Stripes,
-    /// Every column lit: a smooth wash. A fill whose brightness matches the
-    /// wash at some height is lost against it there, which stripes avoid.
-    Gradient,
-}
-
 /// How many tapers the analyzer averages, picked in the Analyzer settings
 /// section beside the window length.
 ///
@@ -416,17 +380,15 @@ pub struct SpectrumConfig {
     /// white outline, 0 is exactly the color under it, and between, bright
     /// levels keep their own color while dark ones are brightened to it.
     pub keyline_lift: f32,
-    /// Whether that outline is a line, a one-pixel cap per sample, or absent.
-    pub keyline_style: KeylineStyle,
-    /// The light above the curve, if any.
-    pub backdrop: Backdrop,
-    /// The backdrop's opacity at the floor, 0..1.
+    /// The backdrop's opacity at the floor, 0..1. At 0 there is no backdrop,
+    /// and no separate switch: see [`Self::backdrop_gap`] for what it is.
     pub backdrop_strength: f32,
     /// Where the backdrop has faded to nothing, as a fraction of the level
     /// axis from the floor (0) to the ceiling (1).
     pub backdrop_height: f32,
-    /// Pixel columns from one stripe to the next; whole numbers only.
-    pub backdrop_period: f32,
+    /// Dark pixel columns between one lit stripe and the next; whole numbers
+    /// only. 0 lights every column, a smooth wash; see [`BACKDROP_GAP_RANGE`].
+    pub backdrop_gap: f32,
     /// Spectral light and note halos, independent of the lattice's atmosphere.
     pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
@@ -698,11 +660,11 @@ impl SpectrumConfig {
             *BACKDROP_HEIGHT_RANGE.start(),
             *BACKDROP_HEIGHT_RANGE.end(),
         );
-        self.backdrop_period = bounded(
-            self.backdrop_period,
-            fresh.backdrop_period,
-            *BACKDROP_PERIOD_RANGE.start(),
-            *BACKDROP_PERIOD_RANGE.end(),
+        self.backdrop_gap = bounded(
+            self.backdrop_gap,
+            fresh.backdrop_gap,
+            *BACKDROP_GAP_RANGE.start(),
+            *BACKDROP_GAP_RANGE.end(),
         )
         .round();
         self.atmosphere = self.atmosphere.sanitized();
@@ -915,8 +877,17 @@ pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0
 /// The Backdrop height bar's range: a sliver above the floor up to the ceiling.
 pub(crate) const BACKDROP_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
 
-/// The Stripe spacing bar's range, in pixel columns. One would be the Gradient.
-pub(crate) const BACKDROP_PERIOD_RANGE: std::ops::RangeInclusive<f32> = 2.0..=8.0;
+/// The Stripe spacing bar's range, in dark pixel columns between stripes.
+///
+/// The backdrop is a neutral light laid in the empty space above the analyzer
+/// curve. It stops exactly at the curve, so the fill reads as a shape cut out
+/// of it and keeps the spectrogram's own color. Strongest at the floor, where
+/// the quiet (short, dark) levels are, and faded out at
+/// [`backdrop_height`](SpectrumConfig::backdrop_height). With a gap, the black
+/// between stripes is what makes a flat fill of ANY color tell apart from it;
+/// at 0 every column is lit, a smooth wash, and a fill whose brightness
+/// matches the wash at some height is lost against it there.
+pub(crate) const BACKDROP_GAP_RANGE: std::ops::RangeInclusive<f32> = 0.0..=7.0;
 
 impl Default for SpectrumConfig {
     fn default() -> Self {
@@ -950,14 +921,13 @@ impl Default for SpectrumConfig {
             // pastel of theirs about as bright as the old white outline at
             // 30% opacity, which kept quiet contours visible.
             keyline_lift: 0.6,
-            keyline_style: KeylineStyle::Line,
-            // Off until picked. The strength and height are the prototype's
-            // pick (stripes one in two, 85% at the floor, gone 60% of the way
-            // up): under about 70% a texture this faint reads as a flat wash.
-            backdrop: Backdrop::Off,
-            backdrop_strength: 0.85,
+            // Off until dialled in; the prototype's pick was 85% at the floor,
+            // and under about 70% a texture this faint reads as a flat wash.
+            // The height and gap are that pick (one stripe in two, gone 60% of
+            // the way up), waiting under the strength bar.
+            backdrop_strength: 0.0,
             backdrop_height: 0.6,
-            backdrop_period: 2.0,
+            backdrop_gap: 1.0,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
             low_midi: 41.322_09,
