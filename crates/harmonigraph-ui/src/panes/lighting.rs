@@ -1,7 +1,7 @@
-//! Light and shadow for each picture: the lattice's bloom, glow and shadows on
-//! the Lattice page, and the Spiral's bloom and the Analyzer and Spiral shadows
-//! on the Analyzer page. The spectrogram's own bloom sits with the MIDI ribbons
-//! it lights.
+//! Light and shadow for each picture: the lattice's bloom, glow and shadows in
+//! the Lattice page's Light section, and the Spiral's bloom and the Analyzer
+//! and Spiral shadows on the Analyzer page. The spectrogram's own bloom sits
+//! with the MIDI ribbons it lights.
 
 use super::section;
 use crate::widgets::{choice_row, ValueBar};
@@ -12,30 +12,24 @@ use harmonigraph_scene::{
     SHADOW_FALLOFF_MIN, SPECTRAL_SHADOW_MAX,
 };
 
-/// The Lattice page's lighting: bloom and glow, the glow's texture, then the
-/// shadows under the lattice's ink.
-pub(super) fn lattice_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
-    glow_section(ui, &mut appearance.view);
-    super::lattice_atmosphere::settings(ui, &mut appearance.view);
-    // Shadows remain editable with glow off: they also darken the picture
-    // behind ink.
-    let shadow = &mut appearance.view.shadow;
-    section(ui, "Shadows", |ui| {
-        shadow_group(
-            ui,
-            "Rings and marks",
-            "Audio rings, MIDI rings, melody and bass marks",
-            true,
-            &mut shadow.lattice_geometry,
-        );
-        shadow_group(
-            ui,
-            "Labels and crosses",
-            "Note names, tuning marks and idle crosses",
-            true,
-            &mut shadow.lattice_text,
-        );
-    });
+/// The shadows under the lattice's ink, last in the Light section. They stay
+/// editable with glow off: they also darken the picture behind ink.
+pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    let shadow = &mut view.shadow;
+    shadow_group(
+        ui,
+        "Ring and mark shadows",
+        "Audio rings, MIDI rings, melody and bass marks",
+        true,
+        &mut shadow.lattice_geometry,
+    );
+    shadow_group(
+        ui,
+        "Label and cross shadows",
+        "Note names, tuning marks and idle crosses",
+        true,
+        &mut shadow.lattice_text,
+    );
 }
 
 /// The Analyzer page's lighting: the Spiral's bloom, then the shadows, which
@@ -64,34 +58,36 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    section(ui, "Glow", |ui| {
-        ValueBar::new(&mut view.bloom_strength, 0.0..=2.0, "Bloom")
-            .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
-                "Soft halos around bright MIDI notes in the Lattice. \
+/// Bloom and the glow's reach, strength and colour, first in the Light
+/// section.
+pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    super::block(ui, "Glow");
+    ValueBar::new(&mut view.bloom_strength, 0.0..=2.0, "Bloom")
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "Soft halos around bright MIDI notes in the Lattice. \
                      0 turns bloom off; \
                      1× is the reference strength.",
-            );
-        // A share of the node's radius, the unit the shared gap and the Clearance in
-        // Note read in, and measured from the same place: the reach is a distance
-        // out from the node's edge exactly as the Clearance is. Eased, because the
-        // bar spans two pictures rather than one range of one: the accent — a halo
-        // reaching about as far as the gap to a neighbour — is the bottom eighth
-        // of it, and the wash is everything above. Cubic travel gives the accent
-        // half the bar, so a light meant to sit on its own node is still dialled a
-        // hundredth at a time, and the far end is reachable in the same drag.
-        ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Glow reach")
-            .eased(true)
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Distance the glow extends beyond a node, as a percentage of its radius. \
+        );
+    // A share of the node's radius, the unit the shared gap and the Clearance in
+    // Note read in, and measured from the same place: the reach is a distance
+    // out from the node's edge exactly as the Clearance is. Eased, because the
+    // bar spans two pictures rather than one range of one: the accent — a halo
+    // reaching about as far as the gap to a neighbour — is the bottom eighth
+    // of it, and the wash is everything above. Cubic travel gives the accent
+    // half the bar, so a light meant to sit on its own node is still dialled a
+    // hundredth at a time, and the far end is reachable in the same drag.
+    ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Glow reach")
+        .eased(true)
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Distance the glow extends beyond a node, as a percentage of its radius. \
                      Larger values blend neighboring glows. \
                      0% turns glow off.",
-            );
-        ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+        );
+    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
             ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow gain")
             .unit(1.0, "×")
                 .show(ui)
@@ -138,7 +134,12 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Audio-ring colors do not feed the glow.",
                 );
         });
-        ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+}
+
+/// What the glow does to the lit ink, and its clock: in the Light section's
+/// More fold, where no saved project had moved any of the three.
+pub(super) fn glow_more(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
             // The INK's own share of the light, where a Shadow depth says the
             // ground's: one question asked twice, and the answers are free of each
             // other on purpose — a dark pool with a tinted ring in it is a picture
@@ -173,7 +174,6 @@ fn glow_section(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      0 ms removes it immediately.",
                 );
         });
-    });
 }
 
 fn shadow_group(

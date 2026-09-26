@@ -315,13 +315,13 @@ fn the_video_pane_does_not_start_with_a_rule() {
 ///
 /// The space that sets a section off from the one above once went in above
 /// the rule alone, which is the same space landing UNDER a folded heading and
-/// nowhere over it. "Audio analysis" because a section with one below it is
-/// the only kind with a rule on both sides to measure between.
+/// nowhere over it. "Analysis" because a section with one below it is the only
+/// kind with a rule on both sides to measure between.
 #[test]
 fn a_folded_heading_sits_centred_between_its_rules() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
-    state.workspace.interaction.folded_sections.insert("Analyzer/Audio analysis".to_owned());
+    state.workspace.interaction.folded_sections.insert("Analyzer/Analysis".to_owned());
     let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
     h.settle(&mut state);
     let out = h.frame(&mut state, vec![]);
@@ -331,12 +331,12 @@ fn a_folded_heading_sits_centred_between_its_rules() {
         .shapes
         .iter()
         .find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == "AUDIO ANALYSIS" && leaf.contains(t.pos) => {
+            egui::Shape::Text(t) if t.galley.text() == "ANALYSIS" && leaf.contains(t.pos) => {
                 Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
             }
             _ => None,
         })
-        .expect("the Analyzer page drew no Audio analysis heading");
+        .expect("the Analyzer page drew no Analysis heading");
     let rules: Vec<f32> = out
         .shapes
         .iter()
@@ -845,7 +845,7 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // under the Display pane's headers is layout, not this test's business.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
-        ("a settings bar", Grab::Bar("Frequency range")),
+        ("a settings bar", Grab::Bar("Pitch softness")),
     ] {
         for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
             let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
@@ -868,13 +868,13 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
 /// outside the window ends that way every time.
 #[test]
 fn the_console_names_a_drag_the_wheel_had_to_end() {
-    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Frequency range"), Lose::Nothing);
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch softness"), Lose::Nothing);
     assert!(
         logged.iter().any(|line| line.starts_with("wheel: a drag on")),
         "the wheel ended a stranded drag without saying so: {logged:?}",
     );
     for quiet in [Lose::Pointer, Lose::Focus] {
-        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Frequency range"), quiet);
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch softness"), quiet);
         assert!(
             !logged.iter().any(|line| line.starts_with("wheel:")),
             "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
@@ -1445,7 +1445,8 @@ fn the_comma_tables_sideways_bar_runs_under_its_cells() {
 }
 
 /// The Lattice page drawn with the audio ring `width` thick and carrying
-/// `reading`, as the shapes it emitted.
+/// `reading`, as the shapes it emitted. Every More fold is open, the audio
+/// ring's settings being in the Notes section's.
 fn audio_section_shapes(
     reading: harmonigraph_scene::SpectralReading,
     width: f32,
@@ -1458,7 +1459,9 @@ fn audio_section_shapes(
     // sizes it, which reads here as a gate that never opens.
     state.picture.appearance.view.ring_inner = 0.3;
     let tab = panes::Tab::LatticeSettings;
-    tab_body(&mut state, tab, 320.0, PANE_HEIGHT).shapes
+    let ctx = crate::tests::probe::themed();
+    ctx.memory_mut(|memory| memory.set_everything_is_visible(true));
+    tab_body_on(&ctx, &mut state, tab, 320.0, PANE_HEIGHT, 0.0).shapes
 }
 
 /// The y every run of `needle` in `shapes` was painted at.
@@ -1501,24 +1504,26 @@ fn track_color(shapes: &[egui::epaint::ClippedShape], y: f32) -> egui::Color32 {
 }
 
 /// The spectrogram keeps its time axis when MIDI is hidden; ribbon-only
-/// controls are visibly disabled, so no live bar silently does nothing.
+/// controls go with the ribbons, so no live bar silently does nothing.
 #[test]
 fn history_stays_editable_without_midi_ribbons() {
-    let colors = |show_roll| {
+    let shapes = |show_roll| {
         let mut state = fresh();
         state.picture.appearance.spectrum.show_roll = show_roll;
         state.picture.appearance.spectrum.show_spectrogram = true;
         let tab = panes::Tab::AnalyzerSettings;
-        let shapes = tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes;
-        ["History duration", "Ribbon width", "Ribbon opacity", "Extension release"]
-            .map(|name| track_color(&shapes, one_text_y(&shapes, name)))
+        tab_body(&mut state, tab, 420.0, PANE_HEIGHT).shapes
     };
-    let shown = colors(true);
-    let hidden = colors(false);
-    assert_eq!(shown[0], hidden[0], "the spectrogram lost its history control");
-    assert_ne!(shown[1], hidden[1], "ribbon width stayed live without ribbons");
-    assert_ne!(shown[2], hidden[2], "ribbon opacity stayed live without ribbons");
-    assert_ne!(shown[3], hidden[3], "extension release stayed live without ribbons");
+    let (shown, hidden) = (shapes(true), shapes(false));
+    assert_eq!(
+        track_color(&shown, one_text_y(&shown, "History duration")),
+        track_color(&hidden, one_text_y(&hidden, "History duration")),
+        "the spectrogram lost its history control",
+    );
+    for ribbon in ["Ribbon width", "Ribbon opacity", "Ribbon bloom"] {
+        assert_eq!(text_ys(&shown, ribbon).len(), 1, "{ribbon} missing with ribbons on");
+        assert!(text_ys(&hidden, ribbon).is_empty(), "{ribbon} stayed without ribbons");
+    }
 }
 
 /// Each reading's own bar is the LIVE one — Tolerance under Fold, Zoom under
@@ -1593,16 +1598,17 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
     }
 }
 
-/// With no audio layer in the picture, its heading remains as the signpost but
-/// its settings spend no vertical room. Giving the layer any drawable width
-/// reveals the complete group again.
+/// With no audio layer in the picture, its settings and their name spend no
+/// vertical room: the Layers bar is what turns the layer on, and it is not in
+/// this group. Giving the layer any drawable width reveals the complete group
+/// again.
 #[test]
 fn audio_ring_settings_hide_with_the_layer() {
     use harmonigraph_scene::SpectralReading;
 
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
         let hidden = audio_section_shapes(reading, 0.0);
-        assert_eq!(text_ys(&hidden, "AUDIO RING").len(), 1, "the section lost its heading");
+        assert!(text_ys(&hidden, "Audio ring").is_empty(), "a name stood over no settings");
         for setting in [
             "Ring display",
             "Ring threshold",
@@ -1619,6 +1625,7 @@ fn audio_ring_settings_hide_with_the_layer() {
         }
 
         let expanded = audio_section_shapes(reading, 0.3);
+        assert_eq!(text_ys(&expanded, "Audio ring").len(), 1, "the group lost its name");
         for setting in [
             "Ring display",
             "Ring threshold",
@@ -1826,4 +1833,92 @@ fn every_section_heading_stands_one_gap_from_its_neighbours() {
 /// The colour a section rule is stroked in.
 fn h_rule_color(window: &DockHarness) -> egui::Color32 {
     window.ctx.style_of(egui::Theme::Dark).visuals.widgets.noninteractive.bg_stroke.color
+}
+
+/// The rect `needle` was painted at inside the settings `leaf`, the lowest if
+/// it is painted more than once.
+fn painted_in(out: &egui::FullOutput, leaf: egui::Rect, needle: &str) -> Option<egui::Rect> {
+    out.shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == needle && leaf.contains(t.pos) => {
+                Some(egui::Rect::from_min_size(t.pos, t.galley.size()))
+            }
+            _ => None,
+        })
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+}
+
+/// A real click at `at` through the dock.
+fn click_at(h: &mut DockHarness, state: &mut SharedState, at: egui::Pos2) {
+    h.frame(state, vec![egui::Event::PointerMoved(at)]);
+    h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+    h.frame(state, vec![press(at, false)]);
+}
+
+/// A feature's switch in its section heading turns the feature off and takes
+/// its rows with it, but leaves the section unfolded: the switch is the
+/// picture's and the fold is the reader's.
+#[test]
+fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::AnalyzerSettings);
+    let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    h.settle(&mut state);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let out = h.frame(&mut state, vec![]);
+    let heading = painted_in(&out, leaf, "MIDI RIBBONS").expect("no MIDI ribbons heading");
+    assert!(painted_in(&out, leaf, "Ribbon width").is_some(), "the ribbons open without rows");
+    // The switch is the rightmost box painted across the heading's row.
+    let switch = out
+        .shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r)
+                if leaf.contains(r.rect.center())
+                    && r.rect.left() > heading.right()
+                    && (r.rect.center().y - heading.center().y).abs() < 4.0 =>
+            {
+                Some(r.rect.center())
+            }
+            _ => None,
+        })
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .expect("the MIDI ribbons heading drew no switch");
+
+    click_at(&mut h, &mut state, switch);
+    let out = h.frame(&mut state, vec![]);
+    assert!(!state.picture.appearance.spectrum.show_roll, "the switch did not turn ribbons off");
+    assert!(painted_in(&out, leaf, "MIDI RIBBONS").is_some(), "the heading went with them");
+    assert!(painted_in(&out, leaf, "Ribbon width").is_none(), "a ribbon row outlived the ribbons");
+    assert!(
+        state.workspace.interaction.folded_sections.is_empty(),
+        "the switch folded a section: {:?}",
+        state.workspace.interaction.folded_sections,
+    );
+
+    click_at(&mut h, &mut state, switch);
+    let out = h.frame(&mut state, vec![]);
+    assert!(state.picture.appearance.spectrum.show_roll, "the switch did not turn ribbons on");
+    assert!(painted_in(&out, leaf, "Ribbon width").is_some(), "the rows did not come back");
+}
+
+/// A section's More fold starts shut, holding its settings out of the page,
+/// and a click on it opens them.
+#[test]
+fn a_more_fold_starts_shut_and_opens_on_a_click() {
+    let mut state = fresh();
+    state.workspace.layout.select(panes::Tab::LatticeSettings);
+    let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    h.settle(&mut state);
+    let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
+    let out = h.frame(&mut state, vec![]);
+    assert!(painted_in(&out, leaf, "Glow attack").is_none(), "the Light section's More is open");
+    // The Light section is the page's last, so its More is the lowest.
+    let more = painted_in(&out, leaf, "More").expect("the Lattice page drew no More fold");
+
+    click_at(&mut h, &mut state, more.center());
+    // The fold opens over egui's animation, a few frames at the harness's clock.
+    let out = (0..30).map(|_| h.frame(&mut state, vec![])).last().expect("a frame");
+    assert!(painted_in(&out, leaf, "Glow attack").is_some(), "the click did not open the fold");
 }

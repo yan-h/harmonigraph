@@ -815,7 +815,7 @@ pub struct ViewConfig {
     /// The node halo: how far past a node's outermost drawn edge its light
     /// spreads, in the quad UV units the layer sizes are in. 0 turns it off —
     /// nothing is drawn at all — so the glow's other fields need no toggle of
-    /// their own, and the Glow section greys them under it.
+    /// their own, and the Glow rows grey them under it.
     ///
     /// What it draws is every sounding octave's hue laid round the node by
     /// angle, over a falloff sized to the whole node: the node's outermost

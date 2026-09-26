@@ -35,7 +35,7 @@ pub(crate) use gestures::DEPTH_ZOOM_PER_DRAG_POINT;
 /// things with it.
 pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
-pub(super) use settings::{spectrogram_settings_pane, spectrum_settings_pane};
+pub(super) use settings::{analysis_section, ribbons_section, spectrogram_section, view_section};
 
 use crate::panes::window_shows_node;
 use crate::{theme, PictureState};

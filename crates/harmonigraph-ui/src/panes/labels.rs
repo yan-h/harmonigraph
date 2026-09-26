@@ -1,4 +1,4 @@
-//! The Labels section of the Lattice settings page: the text on the
+//! The note labels on the Lattice settings page: the text on the
 //! lattice as one subject — what a node's label says (its name, its cents),
 //! how big it draws, and which nodes carry one at all.
 //!
@@ -12,26 +12,29 @@
 //! over in [`super::plus`], so a resting name and the crosses standing around
 //! it are one grey (`label_ink` in [`super::lattice`]).
 
-use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::PictureState;
 use harmonigraph_core::NoteTracker;
 use harmonigraph_scene::{NoteNames, ViewConfig};
 
-/// What a label says, which nodes carry one and how big it draws.
-pub(super) fn labels_pane(ui: &mut egui::Ui, state: &mut PictureState) {
-    section(ui, "Note labels", |ui| {
-        names_row(ui, &mut state.appearance.view);
-        crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
-            .on_hover_text("Each node's pitch class in cents, under its name.");
-        ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
-            .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
-                "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
-            );
-        clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
-    });
+/// How big a label draws: the one setting of this subject that leads the
+/// Lattice page's Notes section.
+pub(super) fn label_scale(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    ValueBar::new(&mut view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom.",
+        );
+}
+
+/// What a label says and which nodes carry one, in the Notes section's More
+/// fold: no saved project had moved either.
+pub(super) fn label_options(ui: &mut egui::Ui, state: &mut PictureState) {
+    names_row(ui, &mut state.appearance.view);
+    crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
+        .on_hover_text("Each node's pitch class in cents, under its name.");
+    clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
 }
 
 /// Which nodes are named: the whole lattice, everywhere the music has been,

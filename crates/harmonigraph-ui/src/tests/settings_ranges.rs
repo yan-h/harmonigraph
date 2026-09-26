@@ -234,46 +234,55 @@ fn scenarios() -> Vec<Scenario> {
     };
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
+        // The picture pages hold a More fold in each section, so they are
+        // measured with every fold open: a fold shut would count its bars out.
+        let expanded = matches!(pane, panes::Tab::LatticeSettings | panes::Tab::AnalyzerSettings);
         let visits = match pane {
             panes::Tab::Tuning => 7,
             panes::Tab::Colors => 2,
-            // The picture, then bloom, glow and its texture (14), then two
-            // shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 17 + 14 + 4,
-            // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
-            // two shadow groups.
-            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
+            // The picture, then bloom and glow (9) with its texture switched
+            // off, then two shadow groups of two bars each.
+            panes::Tab::LatticeSettings => 17 + 9 + 4,
+            // The analyzer's view and axes (5) and analysis (3) with the
+            // spectrogram and ribbons switched off, the Spiral's bloom, two
+            // shadow groups.
+            panes::Tab::AnalyzerSettings => 5 + 3 + 1 + 4,
             panes::Tab::System => 4,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
-        cases.push(Scenario { pane, visits, ..base });
+        cases.push(Scenario { pane, visits, expanded, ..base });
         // Exercise the conditional groups too: labels, fringe, marks, audio
-        // reading, sevens, roll/note names, backdrop, glow and Contour shadow falloff
-        // (one bar in each of a page's two groups).
+        // reading, sevens, the glow texture, roll/note names, the spectrogram,
+        // backdrop, glow and Contour shadow falloff (one bar in each of a
+        // page's two groups).
         let visits = match pane {
-            panes::Tab::LatticeSettings => visits + 6 + 2,
-            // ...and the backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 2 + 2,
+            panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
+            // ...the spectrogram's twelve, the ribbons' six, and the
+            // backdrop's height and stripe spacing.
+            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2 + 2,
             _ => visits,
         };
-        cases.push(Scenario { pane, visits, enabled: true, ..base });
+        cases.push(Scenario { pane, visits, expanded, enabled: true, ..base });
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
-    // page and puts five of its own there, and nothing else on the page moves.
+    // section and puts five of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
     // state selects the scales, so without this the five are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         wash: true,
-        visits: 7 + 20 + 1 + 1 + 4,
+        expanded: true,
+        enabled: true,
+        visits: 13 + 12 + 6 + 2 + 2 - 3 + 5,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
         cases.push(Scenario {
             pane: panes::Tab::LatticeSettings,
             projection,
+            expanded: true,
             enabled: true,
             visits: 23 + 14 + 6,
             ..base
@@ -366,7 +375,9 @@ fn check(edge: Edge) {
         }
         let blooms: &[&str] = match scenario.pane {
             panes::Tab::LatticeSettings => &["Bloom"],
-            panes::Tab::AnalyzerSettings => &["Ribbon bloom", "Spiral bloom"],
+            // The ribbons' bloom is theirs, switched off with them.
+            panes::Tab::AnalyzerSettings if scenario.enabled => &["Ribbon bloom", "Spiral bloom"],
+            panes::Tab::AnalyzerSettings => &["Spiral bloom"],
             _ => &[],
         };
         for &label in blooms {
