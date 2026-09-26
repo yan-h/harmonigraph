@@ -1041,6 +1041,15 @@ impl Hub {
             if !self.rows[index].live || !self.rows[index].repair.any() {
                 continue;
             }
+            // The frame's cut is `applied`, which counts every delta this row
+            // has scheduled, so one still waiting in `pending` would reach the
+            // lane AFTER a snapshot that already covers it — and the display
+            // and the take writer both refuse history at or below a cut they
+            // have adopted (#1127). The repair stays owed; a later publish
+            // pays it once the history is out.
+            if self.pending.iter().any(|item| usize::from(item.source) == index) {
+                continue;
+            }
             let identity = identity(index as u8);
             // One lane at a time, on its own free cells and its own next
             // identity. A display ring nobody is draining must not hold this

@@ -625,6 +625,47 @@ fn initial_expressions_survive_unpaired_and_missed_reply_fallback() {
     }
 }
 
+/// #1127. A snapshot never covers history still waiting to publish. The Hub's
+/// first callback owes every row a snapshot, and here it also collects a late
+/// onset whose input sample no segment of this callback covers, so the delta
+/// waits for `end`'s forced flush while the snapshot is built. Both lanes are
+/// read on this thread by consumers that refuse history at or below a cut they
+/// have adopted: the display's tracker and, standing in for the take writer's
+/// identical check, a tracker fed the take lane.
+#[test]
+fn a_late_reply_publishes_its_history_before_the_snapshot_that_covers_it() {
+    use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker};
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    assert!(tune.run(0, vec![note(7, 0, 57, 0, true)], None).values.is_empty());
+    assert_eq!(tune.run(512, vec![], None).values.len(), 1, "emitted uncorrected, on time");
+    let mut display = NoteTracker::new();
+    let mut snapshots = Vec::new();
+    let mut drain = |capture: &mut harmonigraph_record::testing::Capture| {
+        capture.display_into(&mut display, |event, _| {
+            if let CanonicalEvent::Baseline(frame) = event {
+                snapshots.push(frame.source.0);
+            }
+        });
+    };
+    hub.run(512, vec![], None);
+    drain(&mut capture);
+    // A second Hub callback pays the snapshot the first one held back, which is
+    // what says the fixture reached a row that owed one with history pending.
+    hub.run(1024, vec![], None);
+    drain(&mut capture);
+    let note = display.roll().notes().find(|n| n.note == 57).expect("the late onset is drawn");
+    assert!(note.history_complete, "drawn from its own attack, not only from a snapshot");
+    assert_eq!(snapshots.iter().filter(|&&s| s == note.source.0).count(), 1, "{snapshots:?}");
+    let mut take = NoteTracker::new();
+    for record in capture.drain_canonical() {
+        record.apply(&mut take).expect("the take lane keeps history before its snapshot");
+    }
+}
+
 /// Each initial value follows original input order, even though the Hub
 /// sorts controllers before attacks. Publication keeps every retrigger's
 /// assigned pitch, including the lifetime replaced within the same sample.
