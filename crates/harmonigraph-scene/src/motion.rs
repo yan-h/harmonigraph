@@ -448,6 +448,11 @@ impl NodeMotion {
         let initial = self.at.is_none();
         let begin = self.at.unwrap_or(now - horizon);
         let mut edges = Vec::new();
+        // Each ended note's reading at its off. Expressions are not edges, so
+        // a replayed held note otherwise reads what it did at its last edge —
+        // the seed or onset, for a note that never bent — and its slot would
+        // release from that rather than from where the note left off.
+        let mut endings = HashMap::default();
         // One bounded roll scan per surface, never one scan per node. Only
         // edges since the checkpoint are replayed; retained old notes cannot
         // restart a finished animation when history is trimmed.
@@ -488,6 +493,7 @@ impl NodeMotion {
             }
             if let Some(at) = note.end {
                 add(at, None);
+                endings.insert(id, intensity.read(note.velocity, note.expressions_at(at)));
             }
             // observed_until is loss of observation, not a factual key-up.
             // Current voices reconcile it below without inventing an off time.
@@ -514,6 +520,21 @@ impl NodeMotion {
         while index < edges.len() {
             let time = edges[index].at;
             self.advance(time - at, env);
+            // Bring each note ending here to its reading at the off while it is
+            // still held, so its slot keeps that one once the off removes it.
+            // The held set is unchanged, so this gate pass moves no gate.
+            let mut ending = false;
+            for edge in edges[index..].iter().take_while(|e| e.at == time) {
+                if let (None, Some(held), Some(&reading)) =
+                    (edge.value, self.held.get_mut(&edge.id), endings.get(&edge.id))
+                {
+                    held.reading = reading;
+                    ending = true;
+                }
+            }
+            if ending {
+                self.gates(scene, tuning, view, env, fade, tracker, now, false);
+            }
             // Equal-time off/on edges form one gate update, so a replacement
             // key cannot falsely end an otherwise continuous node presence.
             while index < edges.len() && edges[index].at == time {
@@ -926,6 +947,46 @@ mod tests {
         let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
         assert_eq!(slot(&held), (1.0, Some(1.0), false, 1.0));
         assert_eq!(origin(&held).bloom, 1.5);
+    }
+    /// An off delivered after the frame past it replays the horizon, and the
+    /// release it replays fades from the note's reading at its off, as an
+    /// off delivered on time does: not from the reading at its onset, which
+    /// under pressure routed to opacity over a base of 0 is nothing at all.
+    #[test]
+    fn a_late_off_releases_from_the_reading_at_the_off() {
+        use crate::{IntensitySource, IntensityTarget};
+        let intensity = crate::IntensitySettings {
+            pressure: IntensitySource { target: IntensityTarget::Opacity, weight: 1.0 },
+            opacity_rest: 0.0,
+            ..Default::default()
+        };
+        let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
+        let release = |late: bool| {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(on(0.0, 60));
+            tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: 0.05,
+                channel: 0,
+                note: 60,
+                kind: harmonigraph_core::NoteEventKind::Expression {
+                    expression: harmonigraph_core::Expression::Pressure,
+                    value: 1.0,
+                },
+            });
+            for frame in 1..10 {
+                draw(&mut motion, &mut tracker, &view, f64::from(frame) * 0.1, false);
+            }
+            if late {
+                draw(&mut motion, &mut tracker, &view, 1.0, false);
+            }
+            tracker.handle_event(off(0.95, 60));
+            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).activation
+        };
+        let (on_time, late) = (release(false), release(true));
+        assert!(on_time > 0.5, "the on-time release is still fading: {on_time}");
+        assert!((late - on_time).abs() < 1e-5, "late {late} against on time {on_time}");
     }
     /// Pressure routed to thickness swells the lit slot from rest and nothing
     /// else: its ink and light stay full, and once the note is gone the slot
