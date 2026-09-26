@@ -162,10 +162,20 @@ impl SkinDials {
     }
 }
 
-/// The OKLab `[a, b]` of `chroma` at `hue` degrees.
-fn polar(hue: f32, chroma: f32) -> [f32; 2] {
+/// A grey at OKLab `lightness`, leaning `tint` (a fraction of [`TINT_MAX`])
+/// toward `hue` degrees: every background and text colour a skin has.
+pub fn tinted(lightness: f32, hue: f32, tint: f32) -> [u8; 3] {
     let (sin, cos) = hue.to_radians().sin_cos();
-    [chroma * cos, chroma * sin]
+    let chroma = tint * TINT_MAX;
+    srgb(lightness, chroma * cos, chroma * sin)
+}
+
+/// The accent `hue` degrees makes at `saturation` (a fraction of
+/// [`ACCENT_MAX`]).
+pub fn accent_color(hue: f32, saturation: f32) -> [u8; 3] {
+    let (sin, cos) = hue.to_radians().sin_cos();
+    let chroma = saturation * ACCENT_MAX;
+    srgb(ACCENT_LIGHTNESS, chroma * cos, chroma * sin)
 }
 
 impl Skin {
@@ -186,16 +196,15 @@ impl Skin {
     /// accent fills are mixes of the accent into the surface they sit on, so
     /// they stay opaque (see `theme::accent_fill`).
     pub fn from_dials(dials: SkinDials) -> Skin {
-        let [a, b] = polar(dials.tint_hue, dials.tint * TINT_MAX);
-        let layer = |steps: f32| srgb(dials.lightness + steps * STEP, a, b);
+        let grey = |lightness: f32| tinted(lightness, dials.tint_hue, dials.tint);
+        let layer = |steps: f32| grey(dials.lightness + steps * STEP);
         let (panel, header, well, widget) = (layer(0.0), layer(1.0), layer(2.0), layer(3.0));
-        let [accent_a, accent_b] = polar(dials.accent_hue, dials.accent_saturation * ACCENT_MAX);
-        let accent = srgb(ACCENT_LIGHTNESS, accent_a, accent_b);
+        let accent = accent_color(dials.accent_hue, dials.accent_saturation);
         let mut dim = TEXT_DIM_LIGHTNESS;
-        let mut text_dim = srgb(dim, a, b);
+        let mut text_dim = grey(dim);
         while contrast(text_dim, panel) < LABEL_FLOOR && dim < 1.0 {
             dim += 0.005;
-            text_dim = srgb(dim, a, b);
+            text_dim = grey(dim);
         }
         Skin {
             panel,
@@ -206,7 +215,7 @@ impl Skin {
             widget,
             widget_hover: layer(4.0),
             accent,
-            text: srgb(TEXT_LIGHTNESS, a, b),
+            text: grey(TEXT_LIGHTNESS),
             text_dim,
             accent_fill: mix(well, accent, 0.42),
             accent_fill_hover: mix(well, accent, 0.58),

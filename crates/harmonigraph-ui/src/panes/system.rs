@@ -6,6 +6,10 @@ use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::skin;
 
+fn rgb([r, g, b]: [u8; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(r, g, b)
+}
+
 /// Render quality/cost, then the workspace layout.
 pub(super) fn system_pane(
     ui: &mut egui::Ui,
@@ -114,21 +118,37 @@ pub(super) fn system_pane(
             .on_hover_text(
                 "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
             );
+        // Each colour bar's track is the colour its values make, off the same
+        // functions the skin is made with. The hue tracks are drawn at full
+        // accent saturation whatever the dials hold, so a grey setting never
+        // turns the circle it is picked from grey; the amount tracks preview
+        // the real colours at the hue in force.
+        let hue_circle = |hue: f32| rgb(skin::accent_color(hue, 1.0));
+        let (tint_hue, accent_hue) = (dials.tint_hue, dials.accent_hue);
+        let tint_ramp = |tint: f32| rgb(skin::tinted(skin::ACCENT_LIGHTNESS, tint_hue, tint));
+        let accent_ramp = |saturation: f32| rgb(skin::accent_color(accent_hue, saturation));
         ValueBar::new(&mut dials.tint_hue, skin::HUE_RANGE, "Tint hue")
             .unit(1.0, "°")
             .decimals(0)
+            .swatch(&hue_circle)
             .show(ui)
             .on_hover_text("The hue the interface's greys and text lean toward.");
-        ValueBar::new(&mut dials.tint, 0.0..=1.0, "Tint amount").percent().show(ui).on_hover_text(
-            "How far the greys lean toward the tint hue. 0% is neutral grey; 100% is still only a slight tint.",
-        );
+        ValueBar::new(&mut dials.tint, 0.0..=1.0, "Tint amount")
+            .percent()
+            .swatch(&tint_ramp)
+            .show(ui)
+            .on_hover_text(
+                "How far the greys lean toward the tint hue. 0% is neutral grey; 100% is still only a slight tint.",
+            );
         ValueBar::new(&mut dials.accent_hue, skin::HUE_RANGE, "Accent hue")
             .unit(1.0, "°")
             .decimals(0)
+            .swatch(&hue_circle)
             .show(ui)
             .on_hover_text("The hue of slider fills, selections and other highlights.");
         ValueBar::new(&mut dials.accent_saturation, 0.0..=1.0, "Accent saturation")
             .percent()
+            .swatch(&accent_ramp)
             .show(ui)
             .on_hover_text("How colourful the highlights are. 0% is a grey accent.");
         crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
