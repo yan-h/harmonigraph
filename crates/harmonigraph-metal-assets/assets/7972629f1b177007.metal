@@ -14,9 +14,11 @@ struct StarSlice {
     float occupancy;
     float fringe;
     float reach;
-    float _pad;
+    int base;
+    metal::int2 origin;
+    metal::int2 grid;
 };
-struct type_5 {
+struct type_7 {
     StarSlice inner[5];
 };
 struct Cloud {
@@ -44,7 +46,7 @@ struct Cloud {
     uint pitch_vertical;
     float star_randomness;
     float star_life;
-    type_5 star_slices;
+    type_7 star_slices;
 };
 struct Pile {
     metal::float2 face;
@@ -109,6 +111,8 @@ constant float WASH_FBM_FINE_TILED = 2.0;
 constant uint STAR_SLICES = 5u;
 constant float STAR_PANE = 540.0;
 constant float STAR_JITTER = 0.6;
+constant int STAR_ATLAS_WIDTH = 2048;
+constant uint STAR_ATLAS_SHIFT = 11u;
 constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;

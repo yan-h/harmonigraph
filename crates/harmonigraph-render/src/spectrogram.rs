@@ -47,6 +47,7 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "fs_cloud_backdrop_linear",
     "vs_cloud_tile",
     "fs_cloud_tile",
+    "fs_star_bake",
 ];
 
 /// The stored-dB grid the shader reads: `capacity` slots of `bins` bytes, slab
@@ -712,6 +713,13 @@ impl CallbackTrait for SpectrogramCallback {
                 let lut = &pane.lut.as_ref().expect("drawable gradient").view;
                 let tone_size = atmosphere::tone_size(pixels, ppp, settings, sampling.pixel_points);
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
+                let stars = atmosphere::stars(pixels, settings);
+                let star_size = stars.map(|layout| {
+                    atmosphere::star_atlas_size(
+                        layout.size(),
+                        pane.cloud.as_ref().and_then(atmosphere::Targets::star_size),
+                    )
+                });
                 // Any of the three sizes rebuilds the whole set, and that is
                 // deliberate: nothing here is retained across frames — every
                 // target is refilled every frame — so a rebuild costs an
@@ -729,7 +737,10 @@ impl CallbackTrait for SpectrogramCallback {
                 // it is still the one this frame wants.
                 let texels = tile.map(atmosphere::TileKey::texels);
                 let resize = pane.cloud.as_ref().is_none_or(|c| {
-                    c.size != size || c.tone_size() != tone_size || c.tile_texels() != texels
+                    c.size != size
+                        || c.tone_size() != tone_size
+                        || c.tile_texels() != texels
+                        || c.star_size() != star_size
                 });
                 if resize {
                     let carried = pane
@@ -737,12 +748,18 @@ impl CallbackTrait for SpectrogramCallback {
                         .take()
                         .filter(|held| held.tile_texels() == texels)
                         .and_then(atmosphere::Targets::into_tile);
-                    let wanted = atmosphere::Allocation { size, tone: tone_size, tile, carried };
+                    let wanted = atmosphere::Allocation {
+                        size,
+                        tone: tone_size,
+                        tile,
+                        carried,
+                        stars: star_size,
+                    };
                     pane.cloud =
                         Some(atmosphere::Targets::new(device, cloud, wanted, layout, grid, lut));
                 }
                 let target = pane.cloud.as_mut().expect("allocated above");
-                target.update(queue, uniforms, rect, ppp, settings, tile);
+                target.update(queue, uniforms, rect, ppp, settings, tile, stars);
                 // Terraces alone still need their transfer/composite, but the
                 // one-pixel source would integrate the whole history only for
                 // the composite to discard that expensive result. A cloud is
@@ -841,6 +858,30 @@ impl CallbackTrait for SpectrogramCallback {
                             // recorded against a tile that was actually filled.
                             target.tile_baked(key);
                         }
+                    }
+                    // Every star on screen this frame, after the material
+                    // pass because each reads the finished light under it.
+                    if let Some((view, group)) = target.star_pass() {
+                        #[cfg(test)]
+                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                        let mut pass =
+                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("spectral_star_bake"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                ..Default::default()
+                            });
+                        pass.set_pipeline(&cloud.stars);
+                        pass.set_bind_group(0, &target.source_group, &[]);
+                        pass.set_bind_group(1, group, &[]);
+                        pass.draw(0..3, 0..1);
                     }
                     // The cloud's own tone, once per half point of pane
                     // rather than once per pixel of the composite. After the
