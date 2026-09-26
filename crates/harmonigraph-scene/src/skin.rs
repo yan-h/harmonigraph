@@ -107,9 +107,9 @@ pub const LIGHTNESS_RANGE: RangeInclusive<f32> = 0.08..=0.16;
 /// Either hue dial: once round the circle.
 pub const HUE_RANGE: RangeInclusive<f32> = 0.0..=360.0;
 
-/// The OKLab chroma a full `tint` gives the greys: enough to read as a warm
-/// or cool grey, not enough to read as a colour.
-pub const TINT_MAX: f32 = 0.04;
+/// The OKLab chroma a full `tint` gives the greys: enough for dim text to
+/// read plainly as a warm or cool grey, not enough to read as a colour.
+pub const TINT_MAX: f32 = 0.06;
 
 /// The OKLab chroma a full `accent_saturation` asks for, about the most any
 /// hue holds at [`ACCENT_LIGHTNESS`]; hues that hold less are pulled in to
@@ -134,7 +134,7 @@ impl Default for SkinDials {
         SkinDials {
             lightness: 0.15,
             tint_hue: 285.0,
-            tint: 0.125,
+            tint: 0.08,
             accent_hue: 255.0,
             accent_saturation: 0.25,
         }
@@ -170,6 +170,25 @@ pub fn tinted(lightness: f32, hue: f32, tint: f32) -> [u8; 3] {
     srgb(lightness, chroma * cos, chroma * sin)
 }
 
+/// Dim text on `panel`: the tinted grey at its fixed lightness, lifted only
+/// as far as it takes to keep [`LABEL_FLOOR`] against the page.
+fn lifted_dim(panel: [u8; 3], hue: f32, tint: f32) -> [u8; 3] {
+    let mut dim = TEXT_DIM_LIGHTNESS;
+    let mut text_dim = tinted(dim, hue, tint);
+    while contrast(text_dim, panel) < LABEL_FLOOR && dim < 1.0 {
+        dim += 0.005;
+        text_dim = tinted(dim, hue, tint);
+    }
+    text_dim
+}
+
+/// The dim text `dials` make — every label in the panel — without the rest
+/// of the skin, for a track previewing it once per point along a bar.
+pub fn text_dim_color(dials: SkinDials) -> [u8; 3] {
+    let panel = tinted(dials.lightness, dials.tint_hue, dials.tint);
+    lifted_dim(panel, dials.tint_hue, dials.tint)
+}
+
 /// The accent `hue` degrees makes at `saturation` (a fraction of
 /// [`ACCENT_MAX`]).
 pub fn accent_color(hue: f32, saturation: f32) -> [u8; 3] {
@@ -200,12 +219,7 @@ impl Skin {
         let layer = |steps: f32| grey(dials.lightness + steps * STEP);
         let (panel, header, well, widget) = (layer(0.0), layer(1.0), layer(2.0), layer(3.0));
         let accent = accent_color(dials.accent_hue, dials.accent_saturation);
-        let mut dim = TEXT_DIM_LIGHTNESS;
-        let mut text_dim = grey(dim);
-        while contrast(text_dim, panel) < LABEL_FLOOR && dim < 1.0 {
-            dim += 0.005;
-            text_dim = grey(dim);
-        }
+        let text_dim = lifted_dim(panel, dials.tint_hue, dials.tint);
         Skin {
             panel,
             header,

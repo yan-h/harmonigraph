@@ -4,7 +4,7 @@
 use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::AppearanceDocument;
-use harmonigraph_scene::skin;
+use harmonigraph_scene::skin::{self, SkinDials};
 
 fn rgb([r, g, b]: [u8; 3]) -> egui::Color32 {
     egui::Color32::from_rgb(r, g, b)
@@ -118,24 +118,26 @@ pub(super) fn system_pane(
             .on_hover_text(
                 "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
             );
-        // Each colour bar's track is the colour its values make, off the same
-        // functions the skin is made with. The hue tracks are drawn at full
-        // accent saturation whatever the dials hold, so a grey setting never
-        // turns the circle it is picked from grey; the amount tracks preview
-        // the real colours at the hue in force.
-        let hue_circle = |hue: f32| rgb(skin::accent_color(hue, 1.0));
-        let (tint_hue, accent_hue) = (dials.tint_hue, dials.accent_hue);
-        let tint_ramp = |tint: f32| rgb(skin::tinted(skin::ACCENT_LIGHTNESS, tint_hue, tint));
-        let accent_ramp = |saturation: f32| rgb(skin::accent_color(accent_hue, saturation));
+        // Each colour bar's track is a colour the panel really wears — the
+        // tint's is the labels' dim text, the accent's is the accent — at
+        // every setting of its own dial with the other dials held where they
+        // are, off the same functions the skin is made with. So the colour
+        // under a handle is the one on screen, and a track the other dials
+        // have greyed out is grey because every option on it is.
+        let held = *dials;
+        let tint_hue_track = |tint_hue| rgb(skin::text_dim_color(SkinDials { tint_hue, ..held }));
+        let tint_track = |tint| rgb(skin::text_dim_color(SkinDials { tint, ..held }));
+        let accent_hue_track = |hue| rgb(skin::accent_color(hue, held.accent_saturation));
+        let saturation_track = |saturation| rgb(skin::accent_color(held.accent_hue, saturation));
         ValueBar::new(&mut dials.tint_hue, skin::HUE_RANGE, "Tint hue")
             .unit(1.0, "°")
             .decimals(0)
-            .swatch(&hue_circle)
+            .swatch(&tint_hue_track)
             .show(ui)
             .on_hover_text("The hue the interface's greys and text lean toward.");
         ValueBar::new(&mut dials.tint, 0.0..=1.0, "Tint amount")
             .percent()
-            .swatch(&tint_ramp)
+            .swatch(&tint_track)
             .show(ui)
             .on_hover_text(
                 "How far the greys lean toward the tint hue. 0% is neutral grey; 100% is still only a slight tint.",
@@ -143,12 +145,12 @@ pub(super) fn system_pane(
         ValueBar::new(&mut dials.accent_hue, skin::HUE_RANGE, "Accent hue")
             .unit(1.0, "°")
             .decimals(0)
-            .swatch(&hue_circle)
+            .swatch(&accent_hue_track)
             .show(ui)
             .on_hover_text("The hue of slider fills, selections and other highlights.");
         ValueBar::new(&mut dials.accent_saturation, 0.0..=1.0, "Accent saturation")
             .percent()
-            .swatch(&accent_ramp)
+            .swatch(&saturation_track)
             .show(ui)
             .on_hover_text("How colourful the highlights are. 0% is a grey accent.");
         crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(

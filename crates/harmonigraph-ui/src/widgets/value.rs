@@ -247,8 +247,10 @@ impl<'a> ValueBar<'a> {
     /// Paint the track as the colour each value along it makes, and mark
     /// the value with a handle rather than a fill: for a bar whose number
     /// names a COLOUR, where a fill in the accent would say nothing about
-    /// which one. The name and readout are drawn in the page colour, which
-    /// reads on a mid-lightness colour where the theme's light text does not.
+    /// which one. The name and readout are drawn in the well colour, as a
+    /// [`SpectrumBar`](super::gradient::SpectrumBar) writes its name on its hue
+    /// track: it reads on a mid-lightness colour where the theme's light text
+    /// does not.
     pub fn swatch(mut self, colour_of: &'a dyn Fn(f32) -> Color32) -> Self {
         self.swatch = Some(colour_of);
         self
@@ -447,7 +449,7 @@ impl<'a> ValueBar<'a> {
 
         let lit = response.hovered() || response.dragged();
         let (text_color, value_color) = match (self.swatch, lit) {
-            (Some(_), _) => (theme::panel(), theme::panel()),
+            (Some(_), _) => (theme::well(), theme::well()),
             (None, true) => (theme::text(), theme::text()),
             (None, false) => (theme::text_dim(), theme::text()),
         };
