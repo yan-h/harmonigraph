@@ -819,7 +819,7 @@ mod tests {
     ///
     /// The spectrogram's cloud layer is the one place in the draw path with a
     /// clock of its own, and all that keeps it reproducible is that the drift
-    /// comes off `atmosphere.now * cloud_speed` rather than a wall clock. The
+    /// comes off `atmosphere.now` times a speed dial rather than a wall clock. The
     /// shader text reads the same either way, so this is measured.
     ///
     /// Both halves are non-vacuous, and either could be silently absent. The
@@ -827,7 +827,7 @@ mod tests {
     /// value is the other one, so the frame is held against the same take drawn
     /// with the scales — and the clock has to MOVE something, or this is the
     /// test above with one more uniform in it. The second is held against the
-    /// same run with `Drift speed` alone at 0 and NOT against another frame of
+    /// same run with the drift speed alone at 0 and NOT against another frame of
     /// the run itself: over a fixture with light in it the spectrogram scrolls,
     /// so any two frames differ whatever the cloud clock does, and a
     /// frame-to-frame comparison would pass with the whole layer frozen.
@@ -860,8 +860,11 @@ mod tests {
                 a.cloud_style = style;
             }
             // Fast enough that a second of render carries the field a visible
-            // way: at the fresh 1x the whole run is a fraction of one glob.
+            // way: at the fresh 1x the whole run is a fraction of one glob. The
+            // stars take their own speed, and their nearest at its top is as
+            // visible.
             a.cloud_speed = speed;
+            a.star_speed_max = speed.min(harmonigraph_scene::STAR_SPEED_MAX);
             let mut take = transient_take(0.0);
             take.header.appearance = Some(state.appearance.serialize());
             take

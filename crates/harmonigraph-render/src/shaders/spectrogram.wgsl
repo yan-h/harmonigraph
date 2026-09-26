@@ -314,12 +314,13 @@ struct StarSlice {
     sigma: f32,
     cap: f32,
     defocus: f32,
-    occupancy: f32,
     fringe: f32,
     reach: f32,
     // The atlas texel, counted along its rows, this slice's first cell is
     // baked into; the cell that is; and how many it holds across and down.
     base: i32,
+    // Spelled out so the Rust side's `[i32; 2]` lands where a vec2 aligns.
+    _pad: i32,
     origin: vec2<i32>,
     grid: vec2<i32>,
 };
@@ -1507,11 +1508,9 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32) -> vec4<u32> {
     let age = cloud.star_life + star_hash(hashed, salt + 2u).x;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
-    // Jitter, whether this life holds a star at all, and its speed.
+    // Jitter and speed. Every life holds a star, so a depth's count is its
+    // cell size alone.
     let a = star_hash(hashed, key);
-    if a.z >= s.occupancy {
-        return vec4<u32>(0u);
-    }
     // Through its life a star slides off the drift at its own speed, level
     // with it at mid-life.
     let through = fract(age);

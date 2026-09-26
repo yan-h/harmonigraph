@@ -134,9 +134,6 @@ pub const STAR_DENSITY_MAX: f32 = 10.0;
 /// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
 /// dense slice add up to a flat wash of its average colour.
 pub const STAR_FRINGE_MAX: f32 = 0.5;
-/// The share of its cells the thinned end of the depth keeps at a full
-/// [`SpectralAtmosphere::star_balance`] lean, as one over this.
-pub const STAR_BALANCE_THIN: f32 = 16.0;
 /// The top of [`SpectralAtmosphere::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// Bounds shared by the two ends of the `Star size` control
@@ -150,6 +147,13 @@ pub const STAR_SIZE_MAX: f32 = 64.0;
 pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_CURVE_MIN`].
 pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
+/// Bounds shared by the two ends of the `Star speed` control
+/// ([`SpectralAtmosphere::star_speed_min`], [`SpectralAtmosphere::star_speed_max`])
+/// and their sanitizer, as a multiplier on the prototype's pace: at 1 a depth
+/// crosses the pane's height in about nine seconds, at the top in under two.
+pub const STAR_SPEED_MIN: f32 = 0.0;
+/// See [`STAR_SPEED_MIN`].
+pub const STAR_SPEED_MAX: f32 = 5.0;
 /// Bounds shared by the [`SpectralAtmosphere::star_speed_curve`] control and
 /// sanitizer.
 pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;
@@ -321,22 +325,15 @@ pub struct SpectralAtmosphere {
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
     pub star_randomness: f32,
-    /// Which end of the depth keeps all its stars, from -1 (the far dust) to 1
-    /// (the nearest stars): the favoured end fills every cell and the share
-    /// falls off exponentially toward the other, to [`STAR_BALANCE_THIN`] of
-    /// them at a full lean. 0 fills every depth, so the count follows `Star
-    /// size` alone. It replaced two dials, Far dust and Near stars, which
-    /// set the two ends' shares separately; the fresh -0.5 keeps both of their
-    /// fresh ends (1 and a quarter), and the depths between sit a little
-    /// fuller than their quadratic fade did.
-    pub star_balance: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
     /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
     /// each star's core and its cap with that spacing's ratio to the fresh
     /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
-    /// the old fixed curve did. Runs over [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`],
-    /// never above [`Self::star_size_max`].
+    /// the old fixed curve did. Every cell holds a star, so how many a depth
+    /// has follows its spacing alone. Runs over
+    /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], never above
+    /// [`Self::star_size_max`].
     pub star_size_min: f32,
     /// The nearest depth's star size: the biggest stars in the field. See
     /// [`Self::star_size_min`].
@@ -346,9 +343,19 @@ pub struct SpectralAtmosphere {
     /// dust. The prototype's 2. Runs over
     /// [`STAR_SIZE_CURVE_MIN`]..=[`STAR_SIZE_CURVE_MAX`].
     pub star_size_curve: f32,
-    /// The exponent on depth in the parallax: a depth moves at
-    /// `far + (1 - far) d^curve` of the nearest's speed. 1 steps the speeds
-    /// evenly. Runs over [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
+    /// The farthest depth's drift speed: the slowest stars. A depth `d` from 0
+    /// (far) to 1 (near) drifts at `min + (max - min) d^curve`, along the
+    /// shared `Drift direction`; the stars never read `cloud_speed`, which is
+    /// the other textures' pace. Runs over
+    /// [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`], never above
+    /// [`Self::star_speed_max`].
+    pub star_speed_min: f32,
+    /// The nearest depth's drift speed: the fastest stars. See
+    /// [`Self::star_speed_min`].
+    pub star_speed_max: f32,
+    /// The exponent on depth in the parallax, between the two ends of
+    /// [`Self::star_speed_min`]. 1 steps the speeds evenly. Runs over
+    /// [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
     pub star_speed_curve: f32,
     /// How far each star's own speed is drawn round its depth's, as a share of
     /// the widest spread the depth can hold: half the gap to the neighbouring
@@ -365,9 +372,6 @@ pub struct SpectralAtmosphere {
     /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
     /// Runs to [`STAR_FRINGE_MAX`].
     pub star_fringe: f32,
-    /// The farthest depth's speed as a share of the nearest's: the parallax.
-    /// 1 moves every depth together.
-    pub star_far_speed: f32,
     /// How much the nearest stars are softened, growing with depth squared.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
@@ -436,21 +440,19 @@ impl Default for SpectralAtmosphere {
             wash_refract: 0.85,
             wash_layers: 0.5,
             // Yan's Stars look as dialled in the DAW on 2026-09-25, from the
-            // prototype's V3 motion and round 8's YB3 colouring: dense, near
-            // stars full and the dust a little thinned (the Far dust 0.81 and
-            // Near stars 1 he saved, as a balance), sizes 3.3 to 11.5 with most
-            // depths small, and the farthest dust still.
+            // prototype's V3 motion and round 8's YB3 colouring: dense, sizes
+            // 3.3 to 11.5 with most depths small, and the farthest dust still.
             star_density: 6.0,
             star_randomness: 0.214_038_73,
-            star_balance: 0.078,
             star_size_min: 3.333_390_2,
             star_size_max: 11.502_775,
             star_size_curve: 3.392_461_8,
+            star_speed_min: 0.0,
+            star_speed_max: 1.0,
             star_speed_curve: 1.031_25,
             star_speed_spread: 0.5,
             star_lifetime: 6.0,
             star_fringe: 0.25,
-            star_far_speed: 0.0,
             star_defocus: 0.6,
         }
     }
@@ -509,7 +511,6 @@ impl SpectralAtmosphere {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
-        self.star_balance = clamp(self.star_balance, fresh.star_balance, -1.0, 1.0);
         self.star_size_min =
             clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
         self.star_size_max =
@@ -525,6 +526,14 @@ impl SpectralAtmosphere {
             STAR_SIZE_CURVE_MIN,
             STAR_SIZE_CURVE_MAX,
         );
+        self.star_speed_min =
+            clamp(self.star_speed_min, fresh.star_speed_min, STAR_SPEED_MIN, STAR_SPEED_MAX);
+        self.star_speed_max =
+            clamp(self.star_speed_max, fresh.star_speed_max, STAR_SPEED_MIN, STAR_SPEED_MAX);
+        // The same one control with two handles as `Star size`.
+        if self.star_speed_min > self.star_speed_max {
+            std::mem::swap(&mut self.star_speed_min, &mut self.star_speed_max);
+        }
         self.star_speed_curve = clamp(
             self.star_speed_curve,
             fresh.star_speed_curve,
@@ -535,7 +544,6 @@ impl SpectralAtmosphere {
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
-        self.star_far_speed = clamp(self.star_far_speed, fresh.star_far_speed, 0.0, 1.0);
         self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
         self
     }
