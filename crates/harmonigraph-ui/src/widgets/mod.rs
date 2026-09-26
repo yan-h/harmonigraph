@@ -36,6 +36,7 @@ mod value;
 pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
 pub(crate) use fold::{paint_chevron, paint_fold};
+pub(crate) use gradient::track_hue;
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, GROUP_GAP};
 pub use label::{label, weak};
@@ -46,7 +47,7 @@ pub use range::RangeBar;
 pub use rows::{
     button_row, checkbox, choice_row, option_label, record_button, row_field, toggle_switch,
 };
-pub(crate) use rows::{choice_buttons, preset_row, selected_combo};
+pub(crate) use rows::{checkbox_box, choice_buttons, preset_row, selected_combo, CHECKBOX_BOX};
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
 pub use value::{progress_bar, ValueBar};

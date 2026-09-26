@@ -250,12 +250,14 @@ current focus and decisions for work intended to reduce the attention that futur
 
 Shared personal skills come from your local [agent-config](https://github.com/yan-h/agent-config) checkout,
 independently of this repository.
-Install `audit-merges` once for Claude and Codex:
+Install `audit-merges` and `review-and-merge` once for Claude and Codex:
 
 ```sh
 mkdir -p ~/.claude/skills ~/.agents/skills
 ln -s ~/projects/agent-config/skills/audit-merges ~/.claude/skills/audit-merges
 ln -s ~/projects/agent-config/skills/audit-merges ~/.agents/skills/audit-merges
+ln -s ~/projects/agent-config/skills/review-and-merge ~/.claude/skills/review-and-merge
+ln -s ~/projects/agent-config/skills/review-and-merge ~/.agents/skills/review-and-merge
 ```
 
 Use your checkout's actual path,

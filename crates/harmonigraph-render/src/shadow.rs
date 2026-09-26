@@ -242,13 +242,14 @@ impl ShadowBox {
         ],
     };
 
-    /// The same rows again, at the three locations a node's own instance rows
+    /// The same rows again, at the four locations a node's own instance rows
     /// leave free (`Instance` in lattice.wgsl, `GpuInstance::LAYOUT`) — the
     /// second instance-step buffer the node draw and the cell draw both bind.
     ///
     /// Scattered rather than consecutive because a vertex attribute's location
     /// has to be under sixteen and a node's rows already reach fifteen; which
-    /// three are free is what picks them.
+    /// four are free is what picks them. Together the two fill all sixteen, so
+    /// a node attribute added now has to share a slot with one already there.
     pub(crate) const BESIDE_NODES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Instance,
@@ -257,7 +258,7 @@ impl ShadowBox {
         ],
     };
 
-    /// After a roll instance's ten attributes, for rasterizing its box SDF
+    /// After a roll instance's eleven attributes, for rasterizing its box SDF
     /// into a Gaussian cell.
     pub(crate) const BESIDE_ROLL: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<ShadowBox>() as wgpu::BufferAddress,

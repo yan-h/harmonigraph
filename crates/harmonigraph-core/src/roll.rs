@@ -136,6 +136,21 @@ impl RollNote {
         &self.expressions
     }
 
+    /// Where the note's expressions stood at `at`, read off
+    /// [`expressions`](Self::expressions) as straight lines. A step is taken
+    /// at its own time, so `at` on a step reads the value after it; before the
+    /// first breakpoint and after the last, the nearest one holds.
+    pub fn expressions_at(&self, at: Time) -> Expressions {
+        let after = self.expressions.partition_point(|(time, _)| *time <= at);
+        let Some(&(t0, from)) = after.checked_sub(1).map(|i| &self.expressions[i]) else {
+            return self.expressions[0].1;
+        };
+        match self.expressions.get(after) {
+            Some(&(t1, to)) => from.lerp(to, ((at - t0) / (t1 - t0)) as f32),
+            None => from,
+        }
+    }
+
     /// Record the note's expressions changing to `values` at `at`.
     ///
     /// A value arriving within one spacing of the breakpoint before last moves
@@ -909,6 +924,23 @@ mod tests {
         let note = tracker.roll().notes().next().unwrap();
         let points: Vec<_> = note.expressions().iter().map(|(t, e)| (*t, e.pressure)).collect();
         assert_eq!(points, vec![(0.0, 0.25), (2.0, 0.25), (2.0, 0.75)]);
+    }
+
+    /// Read at a time, the history is straight lines that hold at both ends,
+    /// and a step reads its new value from its own instant on.
+    #[test]
+    fn expressions_at_reads_lines_and_steps() {
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(1.0, 60));
+        let mut note = tracker.roll().notes().next().unwrap().clone();
+        let point = |t, pressure| (t, crate::Expressions { pressure, ..Default::default() });
+        note.expressions = vec![point(1.0, 0.2), point(2.0, 0.4), point(3.0, 0.4), point(3.0, 1.0)];
+        let at = |t| note.expressions_at(t).pressure;
+        assert_eq!(at(0.0), 0.2, "before the first point, it holds");
+        assert!((at(1.5) - 0.3).abs() < 1e-6, "a line between two points: {}", at(1.5));
+        assert_eq!(at(2.9), 0.4, "a held level stays level up to its step");
+        assert_eq!(at(3.0), 1.0, "and takes the new value at the step itself");
+        assert_eq!(at(9.0), 1.0, "after the last, the last holds");
     }
 
     /// Pressure every millisecond for ten seconds: the history stays inside

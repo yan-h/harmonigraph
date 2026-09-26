@@ -226,41 +226,23 @@ fn a_marker_radius_that_is_not_a_number_takes_the_field_away() {
     }
 }
 
-/// The view keeps the width as a LENGTH beside the arm, because that is what
-/// makes the two bars independent; the shader needs HALF of it as a share of
-/// the arm, its uv being the arm's own units. This pins that conversion —
-/// including the square at the top of the bar, and the ends where dividing is
-/// the obvious way to get it wrong.
+/// A cross's thickness follows the label scale, as a letter's stroke does: the
+/// half-width the shader reads is proportional to it, at a letter's bar weight
+/// ([`PLUS_WIDTH_PER_LABEL_SCALE`]) per unit of scale.
 #[test]
-fn the_width_reaches_the_scene_as_a_share_of_the_arm() {
-    // (arm, width) -> half the thickness, as a share of one arm.
-    for (arm, width, want) in [
-        // A representative proportion: a little over half an arm across.
-        (0.2f32, 0.11f32, 0.275f32),
-        // Half of it, taken from either end of the bar — the shader measures
-        // out from the arm's own centre line, so the whole thickness is never
-        // what reaches it.
-        (0.4, 0.2, 0.25),
-        (0.2, 0.1, 0.25),
-        // Twice the arm across, and the cross has filled its own square. Past
-        // that it stays one rather than running off the end of the octant.
-        (0.2, 0.4, 1.0),
-        (0.2, 0.9, 1.0),
-        // A width below nothing is the thinnest cross rather than a shape
-        // turned inside out.
-        (0.2, -1.0, 0.0),
-        // No arm at all: `derive_pluses` draws nothing here, so what matters is
-        // that asking costs no division by zero.
-        (0.0, 0.5, 0.0),
-    ] {
-        let view = ViewConfig { plus_arm: arm, plus_width: width, ..plus_view() };
-        let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-        assert!(
-            (scene.plus_half_width - want).abs() < 1e-5,
-            "a {width} width on a {arm} arm reaches the scene as {}, wanted {want}",
-            scene.plus_half_width,
-        );
-    }
+fn the_label_scale_sets_the_cross_width() {
+    let arm = ViewConfig::default().plus_arm;
+    let half_at = |label_scale: f32| {
+        let view = ViewConfig { plus_arm: arm, label_scale, ..plus_view() };
+        scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0)
+            .plus_half_width
+    };
+    // At label scale 1 the whole width is the constant, halved and taken as a
+    // share of the arm.
+    assert!((half_at(1.0) - PLUS_WIDTH_PER_LABEL_SCALE * 0.5 / arm).abs() < 1e-6);
+    // Proportional, so twice the label scale is twice the thickness.
+    let (one, two) = (half_at(1.0), half_at(2.0));
+    assert!((two - 2.0 * one).abs() < 1e-6, "scale 1 drew {one}, scale 2 drew {two}");
 }
 
 /// The view keeps the taper as a WIDTH beside the reach, because that is the
@@ -306,7 +288,7 @@ fn neither_proportion_moves_a_marker_or_changes_how_far_it_reaches() {
     let plain = plus_view();
     for (label, dialled) in [
         ("a taper", ViewConfig { plus_taper: 0.2, ..plain.clone() }),
-        ("a width", ViewConfig { plus_width: 0.5, ..plain.clone() }),
+        ("a label scale", ViewConfig { label_scale: 2.0, ..plain.clone() }),
     ] {
         let a = scene_of(&NoteTracker::new(), &Tuning::default(), &plain, &plain_frame(), 0.0);
         let b = scene_of(&NoteTracker::new(), &Tuning::default(), &dialled, &plain_frame(), 0.0);

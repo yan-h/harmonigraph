@@ -2814,14 +2814,6 @@ fn the_hz_readout_carries_its_unit() {
 /// Painted at both the widest and the narrowest range it allows.
 #[test]
 fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
-    struct Defaults;
-    impl crate::params::ParamBackend for Defaults {
-        fn get(&self, key: crate::params::ParamKey) -> f32 {
-            key.default_value()
-        }
-        fn set(&self, _: crate::params::ParamKey, _: f32) {}
-    }
-
     let axis = (
         harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
         harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
@@ -2833,9 +2825,8 @@ fn the_settings_pane_paints_at_either_extreme_of_the_pitch_range() {
         // A settings column rather than a picture: narrow and tall, and the
         // pane takes the whole of it.
         let column = egui::vec2(320.0, 700.0);
-        let output = painted_full(column, |ui| {
-            spectrum_settings_pane(ui, &mut state, &mut Default::default(), &Defaults)
-        });
+        let output =
+            painted_full(column, |ui| view_section(ui, &mut state, &mut Default::default()));
         assert!(!output.shapes.is_empty(), "{low}..{high} drew nothing");
     }
 }
@@ -3227,21 +3218,26 @@ fn the_live_time_axis_keeps_a_nonzero_geometry_window() {
 /// the fixed `picture_off_scale` instead.
 #[test]
 fn the_picture_paints_the_same_in_every_skin() {
-    use harmonigraph_scene::skin::{set_active_skin, skins, DEFAULT_LIGHTNESS};
-    let paint = |index| {
-        set_active_skin(index, DEFAULT_LIGHTNESS);
+    use harmonigraph_scene::skin::{set_active_skin, SkinDials, LIGHTNESS_RANGE};
+    let paint = |dials| {
+        set_active_skin(dials);
         let shapes = paint_tone(reference_pane(), SpectrumConfig::default());
         shapes.into_iter().filter(|s| !matches!(s, egui::Shape::Callback(_))).collect::<Vec<_>>()
     };
-    let default = paint(0);
+    let default = paint(SkinDials::default());
     assert!(
         default.iter().any(
             |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if is_ruling(stroke.color))
         ),
         "the fixture has to reach the rulings for this to say anything",
     );
-    for (index, entry) in skins().iter().enumerate().skip(1) {
-        assert!(paint(index) == default, "{} changed the picture", entry.id);
-    }
-    set_active_skin(0, DEFAULT_LIGHTNESS);
+    let other = SkinDials {
+        lightness: *LIGHTNESS_RANGE.start(),
+        tint_hue: 60.0,
+        tint: 1.0,
+        accent_hue: 20.0,
+        accent_saturation: 1.0,
+    };
+    assert!(paint(other) == default, "{other:?} changed the picture");
+    set_active_skin(SkinDials::default());
 }

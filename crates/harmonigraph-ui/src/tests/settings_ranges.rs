@@ -50,10 +50,15 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
         ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
-        plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
+        plus_arm, plus_taper, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
+    poison!(a.view.intensity; gain_range, opacity_base, glow_base, thickness_base);
+    poison!(a.view.intensity.velocity; weight);
+    poison!(a.view.intensity.gain; weight);
+    poison!(a.view.intensity.pressure; weight);
+    poison!(a.view.intensity.timbre; weight);
     poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
@@ -91,7 +96,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         star_wander, star_far_speed, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_speed_spread, star_lifetime);
     saved.workspace.interaction.ui_scale = v;
-    saved.workspace.interaction.skin_lightness = v;
+    poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their
     // real shared load boundary; zero Video visits below explicitly records
     // that its text/choice/divider controls are not range-guard coverage.
@@ -240,37 +245,41 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Tuning => 7,
             panes::Tab::Colors => 2,
-            // The picture, then bloom, glow and its texture (14), then two
-            // shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 17 + 14 + 4,
-            // Analyzer and spectrogram, the ribbons' bloom, the Spiral's bloom,
-            // two shadow groups.
-            panes::Tab::AnalyzerSettings => 7 + 18 + 1 + 1 + 4,
-            panes::Tab::System => 4,
+            // The picture, Note intensity (8), then bloom and glow (9) with its
+            // texture switched off, then two shadow groups of two bars each.
+            panes::Tab::LatticeSettings => 16 + 8 + 9 + 4,
+            // The analyzer's view and axes (5) and analysis (3) with the
+            // spectrogram and ribbons switched off, the Spiral's bloom, two
+            // shadow groups.
+            panes::Tab::AnalyzerSettings => 5 + 3 + 1 + 4,
+            panes::Tab::System => 8,
             panes::Tab::Video | panes::Tab::Console => 0,
             _ => panic!("add the new settings page's range scenario"),
         };
         cases.push(Scenario { pane, visits, ..base });
         // Exercise the conditional groups too: labels, fringe, marks, audio
-        // reading, sevens, roll/note names, backdrop, glow and Contour shadow falloff
-        // (one bar in each of a page's two groups).
+        // reading, sevens, the glow texture, roll/note names, the spectrogram,
+        // backdrop, glow and Contour shadow falloff (one bar in each of a
+        // page's two groups).
         let visits = match pane {
-            panes::Tab::LatticeSettings => visits + 6 + 2,
-            // ...and the backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 2 + 2,
+            panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
+            // ...the spectrogram's twelve, the ribbons' six, and the
+            // backdrop's height and stripe spacing.
+            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
-    // page and puts five of its own there, and nothing else on the page moves.
+    // section and puts five of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
     // state selects the scales, so without this the five are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Watercolor,
-        visits: 7 + 20 + 1 + 1 + 4,
+        enabled: true,
+        visits: 13 + 12 + 6 + 2 + 2 - 3 + 5,
         ..base
     });
     // The starfield's, on the same terms: the three scale bars off, thirteen of
@@ -278,7 +287,8 @@ fn scenarios() -> Vec<Scenario> {
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
-        visits: 7 + 28 + 1 + 1 + 4,
+        enabled: true,
+        visits: 13 + 12 + 6 + 2 + 2 - 3 + 13,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -286,7 +296,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 23 + 14 + 6,
+            visits: 22 + 8 + 14 + 6,
             ..base
         });
     }
@@ -373,7 +383,9 @@ fn check(edge: Edge) {
         }
         let blooms: &[&str] = match scenario.pane {
             panes::Tab::LatticeSettings => &["Bloom"],
-            panes::Tab::AnalyzerSettings => &["Ribbon bloom", "Spiral bloom"],
+            // The ribbons' bloom is theirs, switched off with them.
+            panes::Tab::AnalyzerSettings if scenario.enabled => &["Ribbon bloom", "Spiral bloom"],
+            panes::Tab::AnalyzerSettings => &["Spiral bloom"],
             _ => &[],
         };
         for &label in blooms {
@@ -516,6 +528,15 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
         &old.view.note_animation,
         &new.view.note_animation,
     );
+    assert_poisoned_float_fields("view.intensity", &old.view.intensity, &new.view.intensity);
+    let sources = |i: &harmonigraph_scene::IntensitySettings| {
+        [("velocity", i.velocity), ("gain", i.gain), ("pressure", i.pressure), ("timbre", i.timbre)]
+    };
+    for ((name, before), (_, after)) in
+        sources(&old.view.intensity).into_iter().zip(sources(&new.view.intensity))
+    {
+        assert_poisoned_float_fields(&format!("view.intensity.{name}"), &before, &after);
+    }
     assert_poisoned_float_fields("view.glow_curve", &old.view.glow_curve, &new.view.glow_curve);
     assert_poisoned_float_fields("view.atmosphere", &old.view.atmosphere, &new.view.atmosphere);
     assert_poisoned_float_fields(

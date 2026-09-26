@@ -48,8 +48,7 @@ const UNCLAIMED_ALPHA: f32 = 74.0 / 255.0;
 /// their own directly beneath it. A circle drawn at the gradient's own
 /// brightness and chroma answers those bars as well, and answers them by going
 /// blind: at a chroma of 0 the whole turn is grey, at a dark setting it is
-/// nearly black, and both are one click away — Mono, on the Analyzer section's
-/// Palette row, is exactly the first of them. The one control that has to show
+/// nearly black, and both are one drag away on the bars beneath. The one control that has to show
 /// hues would show none at the settings a reader is most likely to be dialling
 /// their way out of. What the six knobs COMPOSE is the [`GradientPreview`]
 /// the group stands under, which is drawn from the same table the picture is.
@@ -64,6 +63,22 @@ const TRACK_LIGHTNESS: f32 = 60.0;
 /// fraction is of the floor every hue can hold rather than of each hue's own
 /// ceiling, and a track drawn low on that axis reads as washed out.
 const TRACK_CHROMA: f32 = 0.85;
+
+/// The colour at `hue` degrees on `circle`, a [`hue_circle`], interpolated
+/// between its two nearest samples.
+fn circle_at(circle: &[glam::Vec4; HUE_CIRCLE_N], hue: f32) -> glam::Vec4 {
+    let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
+    let i0 = f.floor() as usize % HUE_CIRCLE_N;
+    circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor())
+}
+
+/// The fixed hue circle a [`SpectrumBar`] turns, as a colour per hue in
+/// degrees, for any other bar picking a hue: one rainbow, so every hue bar in
+/// the panel reads alike, and one memoized table between them.
+pub(crate) fn track_hue() -> impl Fn(f32) -> Color32 {
+    let circle = hue_circle(TRACK_LIGHTNESS, TRACK_CHROMA);
+    move |hue| scene_color(circle_at(&circle, hue), 1.0)
+}
 
 /// Height of a [`GradientPreview`]. Shorter than a row, because it is a
 /// picture and not a control: nothing on it can be dragged, and a band standing
@@ -134,7 +149,7 @@ const SPAN_LABEL: &str = "Hue";
 /// which is the CLAIMED end at every arc wide enough to reach past it, about 60
 /// degrees on the column this pane opens at.
 ///
-/// What that costs is Mono and the arcs narrower than the name is wide: there
+/// What that costs is a grey ramp and the arcs narrower than the name is wide: there
 /// the word stands on held-back color and goes quiet. That is the right way for
 /// it to fail — those are the settings where the bar has least to say, and the
 /// alternative is the whole rest of the range spent at 2.5:1.
@@ -591,11 +606,8 @@ impl<'a> SpectrumBar<'a> {
             SPECTRUM_SEGMENTS,
             (corner as f32, corner as f32),
             |p| {
-                let hue = g.hue_start + p * FULL_TURN * winding;
-                let f = hue.rem_euclid(FULL_TURN) / FULL_TURN * HUE_CIRCLE_N as f32;
-                let i0 = f.floor() as usize % HUE_CIRCLE_N;
                 let alpha = if claimed > 0.0 && p <= claimed { 1.0 } else { UNCLAIMED_ALPHA };
-                scene_color(circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor()), alpha)
+                scene_color(circle_at(&circle, g.hue_start + p * FULL_TURN * winding), alpha)
             },
         );
         let centered = |galley: &egui::Galley, x: f32| {
@@ -1540,8 +1552,8 @@ mod tests {
     /// That division is the whole of what the two bands are for, and it is
     /// invisible to every other test here — a track painted out of the pitch
     /// ramp draws the same rounded mesh in the same place at the same size, and
-    /// passes all of them. What it costs is the control: Mono is one click on
-    /// the Analyzer section, and a track that answered the chroma pair would be a
+    /// passes all of them. What it costs is the control: a grey ramp is one drag
+    /// of the Saturation bar, and a track that answered the chroma pair would be a
     /// hue picker drawn in grey.
     #[test]
     fn the_track_is_hue_alone_and_the_preview_is_the_gradient() {
@@ -1569,7 +1581,10 @@ mod tests {
             ),
             ("a steep chroma ramp", Gradient { chroma: 0.5, chroma_ramp: 1.0, ..base }),
             ("a dark picture", Gradient { lightness: 12.0, ..base }),
-            ("Mono", Gradient { lightness: 50.0, lightness_ramp: 100.0, chroma: 0.0, ..base }),
+            (
+                "a grey ramp",
+                Gradient { lightness: 50.0, lightness_ramp: 100.0, chroma: 0.0, ..base },
+            ),
         ] {
             let (moved, drawn) = painted(dialled);
             assert_eq!(moved, track, "{what} moved the hue track");
@@ -1659,7 +1674,7 @@ mod tests {
         // squeezed into it, and now it stops `p <= claimed` from lighting the
         // one column at `p == 0`. A lit column at the left edge of a track
         // claiming nothing is a picture that says the gradient reaches the
-        // first hue, and Mono is one click away on the Analyzer section.
+        // first hue, and a grey ramp is one drag of the Saturation bar away.
         let nothing = track_of(Gradient { hue_span: 0.0, ..arc });
         let lit: Vec<usize> =
             nothing.iter().enumerate().filter(|(_, c)| c.a() != dim).map(|(i, _)| i).collect();

@@ -79,7 +79,9 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            params: [n.activation, n.melody_level, n.bass_level, 0.0],
+            // `w` is how much of the bloom this node GIVES UP, so the zero it
+            // always was is the full bloom.
+            params: [n.activation, n.melody_level, n.bass_level, 1.0 - n.bloom.clamp(0.0, 1.0)],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -101,6 +103,7 @@ impl LatticeCallback {
             // Untimed snapshots seed current ink. Encoded timed frames replace
             // the third value with the renderer's own history coefficient.
             glow: [n.glow.level, n.glow.row as f32, 1.0, 1.0],
+            thickness: pack_octaves(&n.thickness),
         };
 
         // A node that can paint nothing is not shipped at all. The shader

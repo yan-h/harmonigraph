@@ -49,7 +49,9 @@ struct Locals {
     /// Width of the antialiasing ramp in points — one pixel of whatever is
     /// being drawn into, which is not the display's pixel in the bloom's pass.
     feather: f32,
-    _pad: f32,
+    /// 1 in the bloom's pass, which draws each body at its glow rather than its
+    /// fade (see [`core_color`]); 0 on screen.
+    light: f32,
     /// Unit screen vectors of the pane's two axes. Pitch runs across the
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
@@ -78,17 +80,19 @@ struct VertexOut {
     /// How far the outline reaches past the note's edge, in points, and 0 when
     /// the outline is off. It wraps every side — see [`outline_coverage`].
     @location(3) @interpolate(flat) outline_reach: f32,
-    /// How much of the box's LEADING end is a lead rather than the note itself,
-    /// in points — 0 for the ordinary segment that is all note. See
-    /// [`lead_coverage`].
-    @location(4) @interpolate(flat) lead: f32,
-    /// How much of that lead is spent fading out at the tip, in points.
-    @location(5) @interpolate(flat) lead_fade: f32,
-    /// How much of the lead is still standing, 0..1.
-    @location(6) @interpolate(flat) lead_alpha: f32,
-    /// How far the outline's cap at the NOTE's own leading end reaches, in
-    /// points. See [`cap_coverage`].
-    @location(7) @interpolate(flat) cap_reach: f32,
+    /// Four to a slot, since a stage passes sixteen at most:
+    /// - `x`: how much of the box's LEADING end is a lead rather than the note
+    ///   itself, in points — 0 for the ordinary segment that is all note. See
+    ///   [`lead_coverage`].
+    /// - `y`: how much of that lead is spent fading out at the tip, in points.
+    /// - `z`: how much of the lead is still standing, 0..1.
+    /// - `w`: how far the outline's cap at the NOTE's own leading end reaches,
+    ///   in points. See [`cap_coverage`].
+    @location(4) @interpolate(flat) lead: vec4<f32>,
+    /// Four depth offsets, ascending, and the ribbon's width at each as a share
+    /// of its full `half_extent.x`. See [`taper_at`].
+    @location(5) @interpolate(flat) taper_depth: vec4<f32>,
+    @location(6) @interpolate(flat) taper: vec4<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(8) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
@@ -99,6 +103,11 @@ struct VertexOut {
     /// Width of one coverage sample in points. A visible note uses one display
     /// pixel; a Gaussian cell uses one of its own deliberately coarser texels.
     @location(12) @interpolate(flat) feather: f32,
+    /// The two depth offsets the readings below are given at. See [`along`].
+    @location(13) @interpolate(flat) ramp: vec2<f32>,
+    /// Opacity at those two depths (`xy`), and the body's light for the bloom
+    /// (`zw`).
+    @location(14) @interpolate(flat) reads: vec4<f32>,
 };
 
 @vertex
@@ -109,12 +118,15 @@ fn vs_note(
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(3) outline_reach: f32,
-    @location(4) lead: f32,
-    @location(5) lead_fade: f32,
-    @location(6) lead_alpha: f32,
-    @location(7) cap_reach: f32,
+    // Lead, lead fade, lead alpha and cap reach; span then ramp; fade then
+    // glow: packed, since a vertex takes sixteen at most.
+    @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
     @location(9) outline: vec4<f32>,
+    @location(14) span_ramp: vec4<f32>,
+    @location(15) reads: vec4<f32>,
+    @location(5) taper_depth: vec4<f32>,
+    @location(6) taper: vec4<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -143,7 +155,13 @@ fn vs_note(
         half_extent.y + margin,
     );
 
-    let local = corner * extent;
+    // Cut along depth to this instance's own span of the box: a piece of a
+    // segment draws its stretch and no more, and neighbouring pieces share the
+    // cut, so each pixel is drawn once. A whole box's span reaches past both
+    // ends and cuts nothing.
+    var local = corner * extent;
+    let span = span_ramp.xy;
+    local.y = select(max(-extent.y, span.x), min(extent.y, span.y), corner.y > 0.0);
     let pos = center + locals.pitch_dir * local.x + locals.depth_dir * local.y;
 
     let in_viewport = pos - locals.origin_points;
@@ -159,14 +177,15 @@ fn vs_note(
     out.shear = shear;
     out.outline_reach = locals.shadow.w;
     out.lead = lead;
-    out.lead_fade = lead_fade;
-    out.lead_alpha = lead_alpha;
-    out.cap_reach = cap_reach;
+    out.taper_depth = taper_depth;
+    out.taper = taper;
     out.core = core;
     out.outline = outline;
     out.at = pos;
     out.who = who;
     out.feather = locals.feather;
+    out.ramp = span_ramp.zw;
+    out.reads = reads;
     return out;
 }
 
@@ -180,12 +199,11 @@ fn vs_shadow_cell(
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
     @location(3) outline_reach: f32,
-    @location(4) lead: f32,
-    @location(5) lead_fade: f32,
-    @location(6) lead_alpha: f32,
-    @location(7) cap_reach: f32,
+    @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
     @location(9) outline: vec4<f32>,
+    @location(5) taper_depth: vec4<f32>,
+    @location(6) taper: vec4<f32>,
     @location(10) box_rect: vec4<f32>,
     @location(11) box_cell: vec4<f32>,
     @location(12) box_meta: vec4<f32>,
@@ -209,14 +227,19 @@ fn vs_shadow_cell(
     out.shear = shear;
     out.outline_reach = locals.shadow.w;
     out.lead = lead;
-    out.lead_fade = lead_fade;
-    out.lead_alpha = lead_alpha;
-    out.cap_reach = cap_reach;
+    // The cell holds this piece's tapered shape, so its shadow narrows with
+    // the ribbon.
+    out.taper_depth = taper_depth;
+    out.taper = taper;
     out.core = core;
     out.outline = outline;
     out.at = point;
     out.who = u32(box_who.x + 0.5);
     out.feather = 1.0 / max(box_meta.x, 1e-6);
+    // The cell holds the segment's whole coverage whatever piece it is for,
+    // so a piece's shadow runs on across the cut; fading is the outline's.
+    out.ramp = vec2<f32>(0.0);
+    out.reads = vec4<f32>(1.0);
     return out;
 }
 
@@ -307,19 +330,22 @@ fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
 /// A segment with no lead leaves at the first line, so the ordinary ribbon pays
 /// nothing at all for a lead it does not have.
 fn lead_coverage(in: VertexOut) -> f32 {
-    if (in.lead <= 0.0) {
+    let lead = in.lead.x;
+    let lead_fade = in.lead.y;
+    let lead_alpha = in.lead.z;
+    if (lead <= 0.0) {
         return 1.0;
     }
     let f = max(in.feather, 1e-6);
     let u = in.local.y + in.half_extent.y;
     // The lead's own coverage: its opacity, taken out over the fade at the tip.
-    var led = in.lead_alpha;
-    if (in.lead_fade > 0.0) {
-        led = in.lead_alpha * clamp(u / max(min(in.lead_fade, in.lead), f), 0.0, 1.0);
+    var led = lead_alpha;
+    if (lead_fade > 0.0) {
+        led = lead_alpha * clamp(u / max(min(lead_fade, lead), f), 0.0, 1.0);
     }
     // ...and the note's, which is solid. 1 inside the note, 0 in the lead, a
     // pixel wide in between.
-    let note = clamp((u - in.lead) / f + 0.5, 0.0, 1.0);
+    let note = clamp((u - lead) / f + 0.5, 0.0, 1.0);
     return mix(led, 1.0, note);
 }
 
@@ -339,7 +365,21 @@ fn box_distance(in: VertexOut) -> f32 {
 /// Pulling one end in shortens the box by `trim` and slides its center half
 /// that far along the note's center LINE — along depth, and `slope` times that
 /// along pitch — so a sheared box keeps its long edges where they were.
+///
+/// A ribbon whose width holds still along this instance is the parallelogram,
+/// at that width; one whose width moves is [`tapered_distance`]. Both are
+/// exact, so an unmoving note draws exactly as it did before widths moved.
 fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
+    let t = in.taper;
+    if (all(t == vec4<f32>(t.x))) {
+        return parallelogram_distance(in, trim, in.half_extent.x * t.x);
+    }
+    return tapered_distance(in, trim);
+}
+
+/// [`box_distance_trimmed`] for a ribbon `half_pitch` either side of its
+/// center line all along.
+fn parallelogram_distance(in: VertexOut, trim: f32, half_pitch: f32) -> f32 {
     let slope = in.shear;
     // A bent note is a sheared box: its long edges run at `slope`, its ends
     // stay square across the depth axis, `half_extent.x` either side of the
@@ -362,7 +402,6 @@ fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
     // a bead. The outline's own corners are round, being a constant distance
     // from a square one, and that is the shape a note wants wrapped around it.
     let half_along = in.half_extent.y - 0.5 * trim;
-    let half_pitch = in.half_extent.x;
     // The center line's far end, from the center.
     let end = vec2<f32>(slope * half_along, half_along);
     var p = in.local - 0.5 * trim * vec2<f32>(slope, 1.0);
@@ -382,6 +421,96 @@ fn box_distance_trimmed(in: VertexOut, trim: f32) -> f32 {
     near = min(near, dot(v, v));
     within = min(within, half_pitch * half_along - abs(side));
     return select(sqrt(near), -sqrt(near), within > 0.0);
+}
+
+/// The ribbon's half width at depth `y`, as a share of the full
+/// `half_extent.x`: straight lines through the four taper points, held past
+/// both ends. Two points at one depth are a step, read at its newer value on
+/// the far side.
+///
+/// The middle two points are this piece's own ends, and the outer two are
+/// its NEIGHBOURS' far ends (a step's other side, where one stands between),
+/// so near a cut this piece measures the shape the piece beside it draws
+/// rather than its own flank run on. What it cannot see is a piece beyond
+/// those: a neighbour shorter than the outline's reach lets the next one's
+/// flank be nearer than this piece knows, and the outline steps by that much
+/// at the cut. Douglas–Peucker keeps pieces short only where the width bends
+/// hard, which is where that difference is smallest.
+fn taper_at(in: VertexOut, y: f32) -> f32 {
+    let d = in.taper_depth;
+    let w = in.taper;
+    if (y < d.y) {
+        return mix(w.x, w.y, clamp((y - d.x) / max(d.y - d.x, 1e-6), 0.0, 1.0));
+    }
+    if (y < d.z) {
+        return mix(w.y, w.z, clamp((y - d.y) / max(d.z - d.y, 1e-6), 0.0, 1.0));
+    }
+    return mix(w.z, w.w, clamp((y - d.z) / max(d.w - d.z, 1e-6), 0.0, 1.0));
+}
+
+/// Squared distance from `p` to the segment `a`..`b`.
+fn segment_distance2(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-12), 0.0, 1.0);
+    let q = pa - ba * h;
+    return dot(q, q);
+}
+
+/// Squared distance from `p` to both flanks between two depths: `a` and `b`
+/// are each a depth and the half width there, in points, either side of a
+/// center line drifting `slope` along pitch per point of depth.
+fn flanks_distance2(p: vec2<f32>, slope: f32, a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let near = vec2<f32>(slope * a.x, a.x);
+    let far = vec2<f32>(slope * b.x, b.x);
+    let across_a = vec2<f32>(a.y, 0.0);
+    let across_b = vec2<f32>(b.y, 0.0);
+    return min(
+        segment_distance2(p, near + across_a, far + across_b),
+        segment_distance2(p, near - across_a, far - across_b),
+    );
+}
+
+/// One taper point, as a depth and a half width in points, pulled onto the
+/// box between `lo` and `hi`. A point past either end stands at that end at
+/// the width the ribbon has there; a point on the box keeps its own width, so
+/// a step keeps both its sides.
+fn taper_vertex(in: VertexOut, depth: f32, width: f32, lo: f32, hi: f32) -> vec2<f32> {
+    let y = clamp(depth, lo, hi);
+    let share = select(taper_at(in, y), width, depth >= lo && depth <= hi);
+    return vec2<f32>(y, in.half_extent.x * share);
+}
+
+/// [`box_distance_trimmed`] for a ribbon whose width moves along the piece:
+/// the exact distance to the polygon its two flanks bound, straight between
+/// the taper points and square across depth at the box's ends. It is still
+/// the TRUE distance (#1118), so a sliver glide's outline stays within its
+/// reach along pitch here as well.
+fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
+    let slope = in.shear;
+    let lo = -in.half_extent.y + trim;
+    let hi = in.half_extent.y;
+    let p = in.local;
+    let d = in.taper_depth;
+    let w = in.taper;
+    let start = vec2<f32>(lo, in.half_extent.x * taper_at(in, lo));
+    let v0 = taper_vertex(in, d.x, w.x, lo, hi);
+    let v1 = taper_vertex(in, d.y, w.y, lo, hi);
+    let v2 = taper_vertex(in, d.z, w.z, lo, hi);
+    let v3 = taper_vertex(in, d.w, w.w, lo, hi);
+    let end = vec2<f32>(hi, in.half_extent.x * taper_at(in, hi));
+    var near = min(
+        segment_distance2(p, vec2<f32>(slope * lo - start.y, lo), vec2<f32>(slope * lo + start.y, lo)),
+        segment_distance2(p, vec2<f32>(slope * hi - end.y, hi), vec2<f32>(slope * hi + end.y, hi)),
+    );
+    near = min(near, flanks_distance2(p, slope, start, v0));
+    near = min(near, flanks_distance2(p, slope, v0, v1));
+    near = min(near, flanks_distance2(p, slope, v1, v2));
+    near = min(near, flanks_distance2(p, slope, v2, v3));
+    near = min(near, flanks_distance2(p, slope, v3, end));
+    let inside = p.y > lo && p.y < hi
+        && abs(p.x - slope * p.y) < in.half_extent.x * taper_at(in, p.y);
+    return select(sqrt(near), -sqrt(near), inside);
 }
 
 /// How much of the outline's cap at the NOTE's own leading end is painted
@@ -420,11 +549,11 @@ fn cap_coverage(in: VertexOut) -> f32 {
     // surplus is CLIPPED across pitch rather than merely drawn, which is a
     // hard vertical edge standing where a rounded corner belongs. With no
     // outline at all there is no band for the cap to be part of.
-    let reach = min(in.cap_reach, in.outline_reach);
-    if (in.lead <= 0.0 || reach <= 0.0) {
+    let reach = min(in.lead.w, in.outline_reach);
+    if (in.lead.x <= 0.0 || reach <= 0.0) {
         return 0.0;
     }
-    let d = box_distance_trimmed(in, in.lead);
+    let d = box_distance_trimmed(in, in.lead.x);
     return outline_coverage(in, d, reach) * (1.0 - inside(in, d, 0.0));
 }
 
@@ -456,14 +585,29 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
     let wrap =
         outline_coverage(in, d, in.outline_reach) * (1.0 - inside(in, d, 0.0)) * lead_coverage(in);
-    return in.outline * max(wrap, cap_coverage(in));
+    return in.outline * max(wrap, cap_coverage(in)) * along(in, in.reads.xy);
 }
 
 /// Flat premultiplied gamma-space body color. A leading tip set to fade loses
 /// its contribution through
 /// [`lead_coverage`].
 fn core_color(in: VertexOut) -> vec4<f32> {
-    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in);
+    // On screen the body wears its fade; in the bloom's pass, its glow, so
+    // the light a note gives off follows its own display.
+    let ends = select(in.reads.xy, in.reads.zw, locals.light > 0.5);
+    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, ends);
+}
+
+// One of the note's intensity readings at this depth: `ends` is its value at
+// the two depths `ramp` names, which the caller sampled at the ends of this
+// piece, and between them a straight line. The fade multiplies the body and
+// its outline together, so a note faded to nothing leaves no dark silhouette
+// behind. Held past both ends, which is what carries the newest value into a
+// lead.
+fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
+    let run = in.ramp.y - in.ramp.x;
+    let t = select(0.0, clamp((in.local.y - in.ramp.x) / run, 0.0, 1.0), abs(run) > 1e-6);
+    return mix(ends.x, ends.y, t);
 }
 
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used

@@ -112,7 +112,6 @@ fn persist_round_trips_camera_and_view() {
     state.picture.appearance.view.octave_extra_size = 0.4;
     state.picture.appearance.view.octave_extra_blend = 0.5;
     state.picture.appearance.view.plus_arm = 0.5;
-    state.picture.appearance.view.plus_width = 0.3;
     state.picture.appearance.view.plus_taper = 0.07;
     for (index, group) in state.picture.appearance.view.shadow.groups_mut().into_iter().enumerate()
     {
@@ -168,10 +167,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.picture.appearance.view.octave_extra_size, 0.4);
     assert_eq!(restored.picture.appearance.view.octave_extra_blend, 0.5);
     assert_eq!(restored.picture.appearance.view.plus_arm, 0.5);
-    assert_eq!(
-        restored.picture.appearance.view.plus_width, 0.3,
-        "so does the thickness of its arms"
-    );
     assert_eq!(restored.picture.appearance.view.plus_taper, 0.07, "and the taper on their ends");
     assert_eq!(
         restored.picture.appearance.view.shadow.groups(),
@@ -467,20 +462,17 @@ fn a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits() {
 /// taper to it, so `clamp` never sees a NaN as its `max`. A Shadow group's
 /// width is a lone number rather than half of a pair and rides the same
 /// repair — and it is edited through its own `width:…,depth:` anchor, which is
-/// the shape only a `ShadowStyle` writes, so the edit cannot land on
-/// `plus_width` the day the two happen to hold the same number.
+/// the shape only a `ShadowStyle` writes, so the edit cannot land on another
+/// `…_width` key (`band_width`, say) the day the two hold the same number.
 #[test]
 fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
-    let cases: [(&str, &str, &str); 6] = [
+    let cases: [(&str, &str, &str); 5] = [
         ("width", "NaN", "a NaN Shadow width"),
         ("roll_lead", "NaN", "a NaN lead"),
         ("roll_lead_fade", "inf", "an infinite lead fade"),
-        // The marker's own pair, and its width beside them — the width is a
-        // lone number rather than half of a pair, but it rides the same repair
-        // and a NaN one puts a handle nowhere on the same bar.
+        // The marker's own pair.
         ("plus_arm", "NaN", "a NaN arm"),
         ("plus_taper", "inf", "an infinite taper"),
-        ("plus_width", "NaN", "a NaN width"),
     ];
     for (key, value, hint) in cases {
         let mut state = fresh();
@@ -491,7 +483,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             "roll_lead" => state.picture.appearance.spectrum.roll_lead,
             "plus_arm" => state.picture.appearance.view.plus_arm,
             "plus_taper" => state.picture.appearance.view.plus_taper,
-            "plus_width" => state.picture.appearance.view.plus_width,
             _ => state.picture.appearance.spectrum.roll_lead_fade,
         };
         // Anchored on what follows, for `width`: a `ShadowStyle` is the only
@@ -515,7 +506,6 @@ fn a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one() {
             ("roll_lead_fade", cfg.roll_lead_fade),
             ("plus_arm", view.plus_arm),
             ("plus_taper", view.plus_taper),
-            ("plus_width", view.plus_width),
         ] {
             assert!(v.is_finite(), "{hint}: `{name}` opened at {v}");
         }
@@ -1072,8 +1062,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "camera_presets",
         "fps_cap",
         "ui_scale",
-        "skin",
-        "skin_lightness",
+        "skin_dials",
         "perf_pos",
     ];
 
@@ -1902,7 +1891,7 @@ fn a_folded_section_survives_an_editor_reopen() {
     window.settle(&mut state);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let out = window.frame(&mut state, vec![]);
-    assert!(drawn(&out, leaf, "Show spectrogram"), "the section opens unfolded");
+    assert!(drawn(&out, leaf, "Softness"), "the section opens unfolded");
 
     // The Spectrogram heading, found where it was painted and clicked for real.
     let header = out
@@ -1924,7 +1913,7 @@ fn a_folded_section_survives_an_editor_reopen() {
         "the click did not reach the persisted field: {:?}",
         state.workspace.interaction.folded_sections,
     );
-    assert!(!drawn(&out, leaf, "Show spectrogram"), "the click did not fold the section");
+    assert!(!drawn(&out, leaf, "Softness"), "the click did not fold the section");
     let saved = state.save_persist();
 
     // The window closes and reopens: a FRESH `Context`, and the state the
@@ -1937,20 +1926,23 @@ fn a_folded_section_survives_an_editor_reopen() {
     let leaf = reopened.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     assert!(drawn(&out, leaf, "SPECTROGRAM"), "the folded section keeps its heading");
     assert!(
-        !drawn(&out, leaf, "Show spectrogram"),
+        !drawn(&out, leaf, "Softness"),
         "the fold sprang open across the reopen — is its state in egui memory?",
     );
-    // A fold is per section: the one above it is still open.
-    assert!(drawn(&out, leaf, "LIVE RESPONSE"), "folding one section folded another");
+    // A fold is per section: the one below it is still open.
+    assert!(drawn(&out, leaf, "Ribbon width"), "folding one section folded another");
 }
 
-/// Folding View, the Analyzer page's first section, folds View alone. The
-/// analysis sections once drew inside its body, so they vanished with it.
+/// Folding View folds View alone. The analysis sections once drew inside its
+/// body, so they vanished with it. The two sections over it are folded too,
+/// so the ones under it are inside the window to be seen.
 #[test]
 fn folding_the_analyzer_view_leaves_the_sections_below_it() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
-    state.workspace.interaction.folded_sections.insert("Analyzer/View".to_owned());
+    for section in ["Analyzer/Spectrogram", "Analyzer/MIDI ribbons", "Analyzer/View"] {
+        state.workspace.interaction.folded_sections.insert(section.to_owned());
+    }
     let mut window = super::harness::DockHarness::new();
     window.settle(&mut state);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
@@ -1962,8 +1954,8 @@ fn folding_the_analyzer_view_leaves_the_sections_below_it() {
         })
     };
     assert!(!drawn("Spectrum outline intensity"), "the View section did not fold");
-    for heading in ["AUDIO ANALYSIS", "LEVEL MAPPING", "LIVE RESPONSE"] {
-        assert!(drawn(heading), "folding View took {heading} with it");
+    for name in ["ANALYSIS", "Level mapping", "Live response"] {
+        assert!(drawn(name), "folding View took {name} with it");
     }
 }
 

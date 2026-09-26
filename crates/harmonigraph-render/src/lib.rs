@@ -565,7 +565,9 @@ struct GpuInstance {
     world_pos: [f32; 3],
     /// x: activation, y: melody mark level, z: bass mark level (see
     /// lattice.wgsl). The mark levels ride with the activation rather than in
-    /// a vertex attribute of their own. w: reserved, always zero.
+    /// a vertex attribute of their own. w: how much of the bloom's copy of
+    /// this node's ink is taken away, `1 - NodeInstance::bloom`, so 0 is the
+    /// full bloom.
     /// The first three are levels the same node
     /// draws at, read together by the layers that draw it.
     params: [f32; 4],
@@ -610,13 +612,16 @@ struct GpuInstance {
     /// coefficient, followed by display-only breathing. Untimed snapshots
     /// seed current ink with coefficient 1 and no breathing modulation.
     glow: [f32; 4],
+    /// How far each octave's lit slice reaches across the band
+    /// (`NodeInstance::thickness`), packed as [`octaves`](Self::octaves) is.
+    thickness: [u32; 3],
 }
 
 impl GpuInstance {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuInstance>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        // Location 1 was the unused node color. Locations 5 and 9 belong to
+        // Location 1 is the slices' thickness. Locations 5 and 9 belong to
         // the second instance-step buffer, which rides beside this one
         // (`shadow::ShadowBox::BESIDE_NODES`). The audio ring's own slot is
         // 11, and it carries how far the layer is on at this node rather than
@@ -632,7 +637,7 @@ impl GpuInstance {
             0 => Float32x3, 2 => Float32x4, 3 => Uint32x3, 15 => Uint32x4,
             4 => Float32, 6 => Uint32x2,
             7 => Float32x4, 8 => Float32x4, 10 => Float32, 11 => Float32,
-            12 => Float32x4
+            12 => Float32x4, 1 => Uint32x3
         ],
     };
 }
@@ -652,9 +657,9 @@ fn pack_spectrum(levels: &harmonigraph_scene::SpectralLevels) -> [[u32; 4]; SPEC
     rows
 }
 
-/// Pack the per-octave activation levels into the bit layout
-/// `octave_level()` in lattice.wgsl unpacks: 8 bits per slot,
-/// little-endian (slot 0 = lowest byte of the first word).
+/// Pack per-octave values in 0..1 — the activation levels, and the slices'
+/// thickness — into the bit layout `octave_level()` in lattice.wgsl unpacks:
+/// 8 bits per slot, little-endian (slot 0 = lowest byte of the first word).
 fn pack_octaves(levels: &[f32; harmonigraph_scene::OCTAVE_SLOTS]) -> [u32; 3] {
     let mut octaves = [0u32; 3];
     for (slot, &level) in levels.iter().enumerate() {
