@@ -114,7 +114,9 @@ pub enum Tab {
     /// The Analyzer and Spiral pictures, the spectrogram in the Analyzer, and
     /// the analysis they share. Titled "Analyzer".
     AnalyzerSettings,
-    /// Note and level colors, shared by every picture.
+    /// Note and level colors and how a note's playing draws it, shared by
+    /// every picture. Titled "Mappings"; the variant keeps its saved name,
+    /// since a renamed one fails a saved workspace's whole parse.
     Colors,
     /// Rendering cost and the editor's own interface.
     System,
@@ -188,7 +190,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         // apart.
         Tab::LatticeSettings => "Lattice",
         Tab::AnalyzerSettings => "Analyzer",
-        Tab::Colors => "Colors",
+        Tab::Colors => "Mappings",
         Tab::System => "System",
         Tab::Console => "Console",
         Tab::Spectral => "Analyzer",

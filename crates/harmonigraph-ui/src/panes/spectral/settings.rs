@@ -285,14 +285,6 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
                          1× is the reference size; labels also grow when you zoom in on frequency.",
                     );
             });
-            ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
-                .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(
-                    "Soft halos around MIDI ribbons in the spectrogram. \
-                     0 turns bloom off; \
-                     1× is the reference strength.",
-                );
         },
     );
 }

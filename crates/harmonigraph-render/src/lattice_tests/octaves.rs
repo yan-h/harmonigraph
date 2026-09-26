@@ -669,10 +669,12 @@ fn a_lone_notes_octave_fades_in_a_straight_line() {
 }
 
 /// A lit slice at half thickness lights the inner half of the band, pushing
-/// out from its inner edge, and the outer half keeps the ghost an unlit slot
-/// draws there, so the ring stays whole.
+/// out from its inner edge, and leaves the outer half EMPTY: a notch in the
+/// ring rather than the ghost an unlit slot draws there. The ghost comes back
+/// into the notch only as far as the node's presence outlives the slot's own
+/// level, which is how the ring fills back in as the note releases.
 #[test]
-fn a_thin_slice_lights_from_the_inner_edge_and_keeps_the_ghost_beyond() {
+fn a_thin_slice_lights_from_the_inner_edge_and_leaves_a_notch_beyond() {
     use harmonigraph_scene::octave_layout;
 
     const SIZE: [u32; 2] = [384, 384];
@@ -683,6 +685,9 @@ fn a_thin_slice_lights_from_the_inner_edge_and_keeps_the_ghost_beyond() {
     let slot = harmonigraph_scene::MIDDLE_C_SLOT;
     let scene = |level: f32, thickness: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
+        // No light and no bloom, so an empty notch is the black pane.
+        scene.glow_reach = 0.0;
+        scene.bloom_strength = 0.0;
         let node = &mut scene.nodes[0];
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[slot] = level;
@@ -699,19 +704,26 @@ fn a_thin_slice_lights_from_the_inner_edge_and_keeps_the_ghost_beyond() {
     // Well inside each half, clear of the edge at half way.
     let (inside, outside) = ((0.1, 0.35), (0.65, 0.9));
     let near = |got: [f32; 3], want: [f32; 3]| (0..3).all(|j| (got[j] - want[j]).abs() < 2.5);
+    let empty = [0.0; 3];
     let lit = probe.mean_across(&full, mid, wedge, inside.0, inside.1);
     let ghost = probe.mean_across(&silent, mid, wedge, outside.0, outside.1);
     assert!(!near(lit, ghost), "the lit slice and its ghost are one colour: {lit:?}");
+    assert!(!near(ghost, empty), "the ghost is the empty pane: {ghost:?}");
     let got = probe.mean_across(&thin, mid, wedge, inside.0, inside.1);
     assert!(near(got, lit), "the inner half reads {got:?}, not the lit {lit:?}");
     let got = probe.mean_across(&thin, mid, wedge, outside.0, outside.1);
-    assert!(near(got, ghost), "the outer half reads {got:?}, not the ghost {ghost:?}");
-    // At no thickness the whole wedge is the ghost, and not a sliver of lit
-    // ink at the inner edge.
+    assert!(near(got, empty), "the outer half reads {got:?}, not an empty notch");
+    // At no thickness the whole wedge is empty, and not a sliver of lit ink
+    // at the inner edge.
     let none = gpu.shot(&scene(1.0, 0.0));
     let got = probe.mean_across(&none, mid, wedge, 0.05, 0.95);
-    let want = probe.mean_across(&silent, mid, wedge, 0.05, 0.95);
-    assert!(near(got, want), "a slice of no thickness reads {got:?}, not the ghost {want:?}");
+    assert!(near(got, empty), "a slice of no thickness reads {got:?}, not an empty wedge");
+    // Half released under a presence another octave holds in full, the ghost
+    // is half back in the notch: neither empty nor the whole ghost.
+    let releasing = gpu.shot(&scene(0.5, 0.5));
+    let got = probe.mean_across(&releasing, mid, wedge, outside.0, outside.1);
+    let between = (0..3).all(|j| got[j] > empty[j] + 2.5 && got[j] < ghost[j] - 2.5);
+    assert!(between, "half released, the notch reads {got:?} against the ghost {ghost:?}");
     // A slice still arriving draws through `animated_slice_ink` rather than
     // the settled path, and owes the same two halves: a hair short of
     // settled, where the pose is all but home.
@@ -723,7 +735,54 @@ fn a_thin_slice_lights_from_the_inner_edge_and_keeps_the_ghost_beyond() {
     let got = probe.mean_across(&shot, mid, wedge, inside.0, inside.1);
     assert!(near(got, lit), "arriving, the inner half reads {got:?}, not the lit {lit:?}");
     let got = probe.mean_across(&shot, mid, wedge, outside.0, outside.1);
-    assert!(near(got, ghost), "arriving, the outer half reads {got:?}, not the ghost {ghost:?}");
+    assert!(near(got, empty), "arriving, the outer half reads {got:?}, not an empty notch");
+}
+
+/// A lit slice thicker than the band swells past its outer edge, in its own
+/// lit colour, where a slice at rest draws nothing; settled or arriving.
+#[test]
+fn a_thick_slice_swells_past_the_band() {
+    use harmonigraph_scene::octave_layout;
+
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let scene = |thickness: f32| {
+        let mut scene = octave_wheel_scene(layout, 0.0);
+        scene.glow_reach = 0.0;
+        scene.bloom_strength = 0.0;
+        let node = &mut scene.nodes[0];
+        node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
+        node.octaves[slot] = 1.0;
+        node.thickness[slot] = thickness;
+        node.activation = 1.0;
+        scene
+    };
+    let (mid, wedge) = wedge_of(layout, slot, 0.0);
+    let full = gpu.shot(&scene(1.0));
+    let probe = BandProbe::new(&full, SIZE, mid);
+    // At 1.5 the slice reaches half a band past the band's outer edge; read
+    // from a tenth to two fifths of a band past it.
+    let (past, inside) = ((1.1, 1.4), (0.2, 0.8));
+    let near = |got: [f32; 3], want: [f32; 3]| (0..3).all(|j| (got[j] - want[j]).abs() < 2.5);
+    let lit = probe.mean_across(&full, mid, wedge, inside.0, inside.1);
+    let got = probe.mean_across(&full, mid, wedge, past.0, past.1);
+    assert!(near(got, [0.0; 3]), "a slice at rest drew {got:?} past the band");
+    let thick = gpu.shot(&scene(1.5));
+    let got = probe.mean_across(&thick, mid, wedge, past.0, past.1);
+    assert!(near(got, lit), "past the band a swelled slice reads {got:?}, not the lit {lit:?}");
+    let got = probe.mean_across(&thick, mid, wedge, inside.0, inside.1);
+    assert!(near(got, lit), "inside the band a swelled slice reads {got:?}, not {lit:?}");
+    let mut arriving = scene(1.5);
+    arriving.note_animation =
+        harmonigraph_scene::NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
+    arriving.nodes[0].slice_progress = [0.999; harmonigraph_scene::OCTAVE_SLOTS];
+    let shot = gpu.shot(&arriving);
+    let got = probe.mean_across(&shot, mid, wedge, past.0, past.1);
+    assert!(near(got, lit), "arriving, past the band reads {got:?}, not the lit {lit:?}");
 }
 
 /// The ground reaches the shader as a UNIFORM, and the picture has to track

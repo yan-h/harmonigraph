@@ -86,7 +86,7 @@ impl Default for Motion {
             delay: [0.0; 11],
             levels: [0.0; 11],
             targets: [0.0; 11],
-            readings: [IntensityReading::FULL; 11],
+            readings: [IntensityReading::REST; 11],
             gate: false,
             melody: MarkMotion::default(),
             bass: MarkMotion::default(),
@@ -549,12 +549,12 @@ impl NodeMotion {
             let motion = &self.nodes[&node.lattice_pos];
             node.slice_progress = motion.progress;
             // Opacity fades each slot's ink, and the node's presence with it,
-            // while the envelope under it runs untouched. Thickness narrows a
+            // while the envelope under it runs untouched. Thickness reshapes a
             // LIT slot only: a slot keeps its last reading once released, and
             // an unlit one draws the ghost at full width whatever it read, so
-            // it goes as 1 and the shader keeps its full-slice path there.
+            // it goes as 1 and the shader keeps its full-slice path there —
+            // and its mark goes back to standing off the band.
             let fades = motion.readings.map(|reading| reading.opacity);
-            let glows = motion.readings.map(|reading| reading.glow);
             node.octaves = std::array::from_fn(|i| motion.levels[i] * fades[i]);
             node.thickness = std::array::from_fn(|i| {
                 if node.octaves[i] > 0.0 {
@@ -592,12 +592,16 @@ impl NodeMotion {
                 .chain([melody_level, bass_level])
                 .fold(0.0, f32::max);
             // The Glow display drives the BLOOM instead, per node: the reading
-            // of its loudest lit slot.
+            // of its loudest lit slot, as its share of the pass's strength
+            // (`scene.bloom_strength`, the same reference). An unlit node
+            // blooms at rest, which is the base's own share of the reference:
+            // nothing at a base of 0, though the pass runs at its floor.
             let loudest = (0..11).max_by(|&a, &b| motion.levels[a].total_cmp(&motion.levels[b]));
-            node.bloom = match loudest {
-                Some(slot) if motion.levels[slot] > 0.0 => glows[slot],
-                _ => 1.0,
+            let reading = match loudest {
+                Some(slot) if motion.levels[slot] > 0.0 => motion.readings[slot],
+                _ => IntensityReading::REST,
             };
+            node.bloom = view.intensity.bloom_share(view.intensity.bloom(reading));
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -849,15 +853,16 @@ mod tests {
             }
         }
     }
-    /// Pressure routed to opacity fades a slot's ink and the node's presence,
-    /// straight away as the pressure moves, and nothing else: a note faded to
-    /// nothing is still held, and still departs on its own release. The glow,
-    /// with nothing routed to it, stays in full.
+    /// Pressure routed to opacity over a base of 0 fades a slot's ink and the
+    /// node's presence, straight away as the pressure moves, and nothing else:
+    /// a note faded to nothing is still held, and still departs on its own
+    /// release. The glow, with nothing routed to it, stays in full.
     #[test]
     fn intensity_fades_the_ink_but_not_the_note() {
         use crate::{IntensitySource, IntensityTarget};
         let intensity = crate::IntensitySettings {
             pressure: IntensitySource { target: IntensityTarget::Opacity, weight: 1.0 },
+            opacity_rest: 0.0,
             ..Default::default()
         };
         let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
@@ -893,9 +898,10 @@ mod tests {
         assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
         assert!((glow - 0.5).abs() < 1e-5, "the glow departs on the envelope alone: {glow}");
 
-        // Pressure routed to the glow instead, at half weight over a base of
-        // half: a note at half pressure gives the bloom three quarters of its
-        // ink, and neither the slice ink nor the node glow is touched by it.
+        // Pressure routed to the glow instead, at half weight over a Bloom base
+        // of half: a note at half pressure blooms at three quarters, half again
+        // the base's own, and neither the slice ink nor the node glow is
+        // touched by it.
         let view = ViewConfig {
             intensity: crate::IntensitySettings {
                 pressure: IntensitySource { target: IntensityTarget::Glow, weight: 0.5 },
@@ -919,13 +925,13 @@ mod tests {
         });
         let held = draw(&mut motion, &mut tracker, &view, 1.1, false);
         assert_eq!(slot(&held), (1.0, Some(1.0), false, 1.0));
-        assert_eq!(origin(&held).bloom, 0.75);
+        assert_eq!(origin(&held).bloom, 1.5);
     }
-    /// Pressure routed to thickness narrows the lit slot and nothing else:
-    /// its ink and light stay full, and once the note is gone the slot reads
-    /// full width again though it keeps its last reading.
+    /// Pressure routed to thickness swells the lit slot from rest and nothing
+    /// else: its ink and light stay full, and once the note is gone the slot
+    /// reads full width again though it keeps its last reading.
     #[test]
-    fn thickness_narrows_a_lit_slot_only() {
+    fn thickness_reshapes_a_lit_slot_only() {
         use crate::{IntensitySource, IntensityTarget};
         let intensity = crate::IntensitySettings {
             pressure: IntensitySource { target: IntensityTarget::Thickness, weight: 1.0 },
@@ -949,7 +955,7 @@ mod tests {
         let node = origin(&held);
         let lit = node.octaves.iter().position(|&l| l > 0.0).expect("a lit slot");
         assert_eq!((node.octaves[lit], node.glow.level), (1.0, 1.0), "ink and light stay full");
-        assert_eq!(node.thickness[lit], 0.25);
+        assert_eq!(node.thickness[lit], 1.25);
         assert!(
             node.thickness.iter().enumerate().all(|(i, &t)| i == lit || t == 1.0),
             "{:?}",
@@ -958,7 +964,7 @@ mod tests {
         tracker.handle_event(off(1.2, 60));
         let releasing = *origin(&draw(&mut motion, &mut tracker, &view, 1.7, false));
         assert!(releasing.octaves[lit] > 0.0 && releasing.octaves[lit] < 1.0);
-        assert_eq!(releasing.thickness[lit], 0.25, "a release keeps the note's width");
+        assert_eq!(releasing.thickness[lit], 1.25, "a release keeps the note's width");
         let gone = *origin(&draw(&mut motion, &mut tracker, &view, 3.0, false));
         assert_eq!(gone.octaves[lit], 0.0);
         assert_eq!(gone.thickness, [1.0; 11], "a spent slot reads full");

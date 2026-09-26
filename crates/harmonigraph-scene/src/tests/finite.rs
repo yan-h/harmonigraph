@@ -101,9 +101,9 @@ fn poisoned_view() -> ViewConfig {
                 pressure: source(crate::IntensityTarget::Thickness),
                 timbre: source(crate::IntensityTarget::Opacity),
                 gain_range: nan,
-                opacity_base: nan,
                 glow_base: nan,
-                thickness_base: nan,
+                opacity_rest: nan,
+                thickness_max: nan,
             }
         },
         mark_thickness: nan,
@@ -118,7 +118,6 @@ fn poisoned_view() -> ViewConfig {
         show_perf: base.show_perf,
         show_perf_detail: base.show_perf_detail,
         render_scale: nan,
-        bloom_strength: nan,
         spiral_bloom: nan,
         glow_reach: nan,
         atmosphere: AtmosphereSettings {
@@ -442,7 +441,8 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         ("glow_blend", scene.glow_blend, 0.0),
         ("glow_accumulation", scene.glow_accumulation, 0.0),
         ("render_scale", scene.render_scale, 1.0),
-        ("bloom_strength", scene.bloom_strength, 0.0),
+        // Gain is routed to Glow above, so the pass runs at its floor.
+        ("bloom_strength", scene.bloom_strength, crate::BLOOM_REFERENCE_FLOOR),
         ("shadow.lattice_geometry.width", shadow.lattice_geometry.width, 0.0),
         ("shadow.lattice_geometry.depth", shadow.lattice_geometry.depth, 0.0),
         ("shadow.lattice_geometry.falloff", shadow.lattice_geometry.falloff, SHADOW_FALLOFF_MIN),

@@ -164,16 +164,16 @@ pub fn derive_scene(
         pitch_lut_spacing: crate::LutSpacing::of(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
-        // Repaired but not bounded, which is the one pair here that splits the
-        // two: the renderer owns both ranges and deliberately keeps them wider
-        // than the bars (`RENDER_SCALE_RANGE`, `render::bloom_strength`), so a
+        // Repaired but not bounded: the renderer owns the range and
+        // deliberately keeps it wider than the bar (`RENDER_SCALE_RANGE`), so a
         // range imposed here would narrow what a shell is allowed to ask for.
-        // What the renderer's own clamps cannot do is catch a NaN, so this
-        // hands them a real number and leaves the range where it is: the
-        // identity for a scale that has one, and no bloom at all for a light
-        // whose 0 is its off position.
+        // What the renderer's own clamp cannot do is catch a NaN, so this hands
+        // it a real number and leaves the range where it is.
         render_scale: finite_or(view.render_scale, 1.0),
-        bloom_strength: finite_or(view.bloom_strength, 0.0),
+        // The Bloom base, or the floor under it while a note can bloom over the
+        // base (`IntensitySettings::bloom_reference`); each node's `bloom` is
+        // its share of this.
+        bloom_strength: view.intensity.bloom_reference(),
         // Clamped here as well as in `sanitize`, for the shells that never come
         // through that door: reach sizes the halo's analytic span and its CPU
         // culling bound, which must describe the same supported range. Through

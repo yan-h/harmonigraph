@@ -278,25 +278,20 @@ metal::float4 core_color(
     VertexOut in_10,
     constant Locals& locals
 ) {
-    float _e7 = locals.light;
-    metal::float2 ends_1 = (_e7 > 0.5) ? in_10.reads.zw : in_10.reads.xy;
-    float _e12 = box_distance(in_10);
-    float _e14 = inside(in_10, _e12, 0.0);
-    float _e16 = lead_coverage(in_10);
-    float _e18 = along(in_10, ends_1);
-    return ((in_10.core * _e14) * _e16) * _e18;
+    float _e2 = box_distance(in_10);
+    float _e4 = inside(in_10, _e2, 0.0);
+    float _e6 = lead_coverage(in_10);
+    metal::float4 body = (in_10.core * _e4) * _e6;
+    float _e10 = locals.light;
+    if (_e10 < 0.5) {
+        float _e15 = along(in_10, in_10.reads.xy);
+        return body * _e15;
+    }
+    float _e19 = along(in_10, in_10.reads.zw);
+    return metal::float4(body.xyz * _e19, body.w * metal::min(_e19, 1.0));
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
-) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
-}
-
-struct fs_core_linearInput {
+struct fs_core_gammaInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -312,16 +307,15 @@ struct fs_core_linearInput {
     metal::float2 ramp [[user(loc13), flat]];
     metal::float4 reads [[user(loc14), flat]];
 };
-struct fs_core_linearOutput {
+struct fs_core_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_core_linearOutput fs_core_linear(
-  fs_core_linearInput varyings [[stage_in]]
+fragment fs_core_gammaOutput fs_core_gamma(
+  fs_core_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 ) {
     const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, {}, varyings.reads };
     metal::float4 _e1 = core_color(in, locals);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_core_linearOutput { metal::float4(_e3, _e1.w) };
+    return fs_core_gammaOutput { _e1 };
 }

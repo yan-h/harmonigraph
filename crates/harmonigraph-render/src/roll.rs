@@ -189,7 +189,9 @@ pub struct RollInstance {
     /// How much light the body gives the bloom at the two
     /// [`ramp`](Self::ramp) depths, in place of its fade: the bloom's pass
     /// draws the body at this, so the note's opacity and its light are two
-    /// displays. `[1.0, 1.0]` is the full bloom.
+    /// displays. A share of the callback's bloom strength: `[1.0, 1.0]` is
+    /// the note blooming at that strength, and past 1 over it, which the
+    /// pass's float targets carry rather than clip.
     pub glow: [f32; 2],
     /// Four depth offsets, ascending, that [`taper`](Self::taper) is given at.
     ///
@@ -207,6 +209,10 @@ pub struct RollInstance {
     /// the shadow and the bloom all follow the tapered shape, and its distance
     /// is still the true one. [`UNTAPERED`](Self::UNTAPERED) for a ribbon
     /// at full width all along.
+    ///
+    /// At most 1, since the quad, the culls and the shadow's cell are sized
+    /// from the box: a caller whose ribbon swells hands over a box grown to
+    /// its widest point and the widths as shares of that.
     pub taper: [f32; 4],
 }
 
@@ -257,8 +263,9 @@ pub struct RollAxes {
 /// bloom's offscreen chain covers, so a rect any larger would spend the halo's
 /// resolution on somewhere the roll cannot draw.
 ///
-/// `bloom` is the lattice's own bloom strength, applied to these notes through
-/// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
+/// `bloom` is the strength the bloom runs at, applied to these notes through
+/// the lattice's own chain (see [`RollBloom`]), and each instance's
+/// [`glow`](RollInstance::glow) is its share of it. 0 skips it whole.
 #[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback(
     rect: egui::Rect,
@@ -390,6 +397,10 @@ struct RollResources {
     /// second draw costs.
     outline_pipeline: wgpu::RenderPipeline,
     core_pipeline: wgpu::RenderPipeline,
+    /// The bodies again, into the bloom chain's own [`BLOOM_FORMAT`] rather
+    /// than the target's, shaded as the target is so the halo is the colour
+    /// the notes are.
+    light_pipeline: wgpu::RenderPipeline,
     shadow_cell_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     /// The bloom chain's four post passes and the one that lays the result
@@ -397,8 +408,9 @@ struct RollResources {
     /// and stepped through by the same [`crate::BloomChain::run`], so the
     /// halo the roll grows is the halo the lattice grows: same threshold at
     /// the same resolution, same knee, same kernel, same fractions of the
-    /// pane's screen size. Only the target FORMAT is the roll's own, which is
-    /// why the pipelines are its own and the chain is not.
+    /// pane's screen size, in the same half floats ([`BLOOM_FORMAT`]). Only
+    /// the threshold's reading of coverage and the composite's target are the
+    /// roll's own, which is why the pipelines are its own and the chain is not.
     bright_pipeline: wgpu::RenderPipeline,
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
@@ -463,6 +475,14 @@ struct RollBloom {
     /// The roll's size in device pixels this was built for.
     size: [u32; 2],
 }
+
+/// The bloom chain's working format, from the notes it re-renders to the
+/// blurred quarter its composite samples: half floats, for the lattice's own
+/// reason (`LATTICE_COLOR_FORMAT`) and one of the roll's. A note blooming over
+/// the pass's strength carries a [`RollInstance::glow`] past 1, and an 8-bit
+/// target would clip that light at the note's own colour, so a swell of
+/// pressure would stop brightening its halo the moment it passed the bar.
+const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Starting size of a pane's instance buffer; it grows by
 /// `next_power_of_two` when a frame overflows it. A roll holds a few
@@ -536,10 +556,11 @@ impl RollResources {
                 },
             ],
         });
-        let note_pipeline = |layer| {
+        let note_pipeline = |format, layer| {
             create_roll_pipeline(
                 device,
-                target_format,
+                format,
+                target_format.is_srgb(),
                 &layout,
                 &shadow_layouts.atlas,
                 &shadow_layouts.casters,
@@ -554,7 +575,7 @@ impl RollResources {
                 device,
                 &blit_shader,
                 entry,
-                target_format,
+                BLOOM_FORMAT,
                 &filter_layout,
                 None,
             )
@@ -568,8 +589,9 @@ impl RollResources {
             ..Default::default()
         });
         RollResources {
-            outline_pipeline: note_pipeline("outline"),
-            core_pipeline: note_pipeline("core"),
+            outline_pipeline: note_pipeline(target_format, "outline"),
+            core_pipeline: note_pipeline(target_format, "core"),
+            light_pipeline: note_pipeline(BLOOM_FORMAT, "core"),
             shadow_cell_pipeline: create_shadow_cell_pipeline(device, &layout),
             layout,
             bright_pipeline: filter("fs_bright_coverage"),
@@ -607,7 +629,6 @@ struct RollBloomShared<'a> {
     filter_layout: &'a wgpu::BindGroupLayout,
     bloom_layout: &'a wgpu::BindGroupLayout,
     sampler: &'a wgpu::Sampler,
-    format: wgpu::TextureFormat,
 }
 
 impl RollPane {
@@ -665,7 +686,7 @@ impl RollBloom {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: shared.format,
+                format: BLOOM_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -674,7 +695,7 @@ impl RollBloom {
         let bloom = crate::BloomChain::new(
             device,
             "roll",
-            shared.format,
+            BLOOM_FORMAT,
             shared.filter_layout,
             shared.sampler,
             &notes_view,
@@ -730,10 +751,13 @@ impl RollBloom {
 }
 
 /// Both layers use ordinary premultiplied alpha blending. Body opacity lives
-/// in each instance, independently of the dark outline.
+/// in each instance, independently of the dark outline. `srgb` is whether the
+/// surface the notes end on encodes for itself, which picks the shading; it is
+/// the surface's even where `target_format` is the bloom chain's.
 fn create_roll_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
+    srgb: bool,
     layout: &wgpu::BindGroupLayout,
     shadow: &wgpu::BindGroupLayout,
     casters: &wgpu::BindGroupLayout,
@@ -755,7 +779,7 @@ fn create_roll_pipeline(
     });
     // Same fork egui makes, for the same reason: an sRGB-aware target wants
     // linear values and encodes them itself.
-    let shade = if target_format.is_srgb() { "linear" } else { "gamma" };
+    let shade = if srgb { "linear" } else { "gamma" };
     let entry_point = format!("fs_{layer}_{shade}");
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(&format!("roll_{layer}")),
@@ -957,7 +981,7 @@ impl CallbackTrait for RollCallback {
         // Split apart so the pane can be borrowed mutably while the pipelines
         // and layouts beside it are still readable.
         let RollResources {
-            core_pipeline,
+            light_pipeline,
             layout,
             shadow_cell_pipeline,
             bright_pipeline,
@@ -967,17 +991,10 @@ impl CallbackTrait for RollCallback {
             filter_layout,
             bloom_layout,
             sampler,
-            target_format,
             panes,
             ..
         } = resources;
-        let shared = RollBloomShared {
-            notes_layout: layout,
-            filter_layout,
-            bloom_layout,
-            sampler,
-            format: *target_format,
-        };
+        let shared = RollBloomShared { notes_layout: layout, filter_layout, bloom_layout, sampler };
         // A roll's id is its surface (the docked pane, the Render preview), and
         // a closed tab simply stops calling back — so the panes still being
         // prepared are the only evidence of which ones exist. Swept from
@@ -1034,7 +1051,7 @@ impl CallbackTrait for RollCallback {
                 });
                 // The BODIES alone. The outline is black, and black is the
                 // one thing that cannot bloom.
-                pass.set_pipeline(core_pipeline);
+                pass.set_pipeline(light_pipeline);
                 pass.set_bind_group(0, &bloom.notes_bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, 0..pane.count);
@@ -2431,6 +2448,38 @@ mod tests {
         };
         assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
         assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
+    }
+
+    /// A glow past 1 is a note blooming over the pass's strength, and it blooms
+    /// by its share: three times a strength of 0.5 lights the frame beside the
+    /// note as a strength of 1.5 does. An 8-bit chain clipped it at the note's
+    /// own colour instead, which measured barely more light than a share of 1.
+    #[test]
+    fn a_glow_past_one_blooms_by_its_share() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        // Past the threshold's knee, so its light is its share alone.
+        let note = RollInstance {
+            outline_reach: 0.0,
+            core: [255, 230, 200, 255],
+            outline: [0, 0, 0, 0],
+            ..centered_note()
+        };
+        // All the light 4 points past the note's edge, where there is no body.
+        let beside = |glow: f32, strength: f32| {
+            let note = RollInstance { glow: [glow; 2], ..note };
+            let frame =
+                draw_bloomed(&device, &queue, vec![note], TOP, strength, wgpu::Color::BLACK);
+            pixel(&frame, 144, 128)[..3].iter().map(|&c| f32::from(c)).sum::<f32>()
+        };
+        let (whole, over, stronger) = (beside(1.0, 0.5), beside(3.0, 0.5), beside(1.0, 1.5));
+        assert!(whole > 20.0, "too little halo to compare: {whole}");
+        assert!(over > 2.5 * whole, "a share of 3 gave {over} against {whole} at 1");
+        assert!(
+            (over - stronger).abs() <= 3.0,
+            "{over} at a share of 3, {stronger} at 3x strength"
+        );
     }
 
     /// One `prepare` of `cb` against `resources`, submitted — the unit both

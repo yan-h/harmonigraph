@@ -58,21 +58,10 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// Bloom, then the background glow, first in the Light section: the glow's
-/// reach, strength and colour, what it does to the lit ink, and its clock.
-///
-/// Bloom is a loose row ahead of the block rather than in it: it is the halo
-/// round each note, a separate effect from the light field the block sets, and
-/// "Glow" alone read as either one once note intensity could route to bloom.
+/// The background glow, first in the Light section: its reach, strength and
+/// colour, what it does to the lit ink, and its clock. The note halo beside
+/// it is the Bloom base on the Mappings page.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    ValueBar::new(&mut view.bloom_strength, 0.0..=2.0, "Bloom")
-        .unit(1.0, "×")
-        .show(ui)
-        .on_hover_text(
-            "Soft halos around bright MIDI notes in the Lattice. \
-                     0 turns bloom off; \
-                     1× is the reference strength.",
-        );
     super::block(ui, "Background glow");
     // A share of the node's radius, the unit the shared gap and the Clearance in
     // Note read in, and measured from the same place: the reach is a distance

@@ -42,8 +42,9 @@ fn fractional_bloom_strength_is_independent_of_render_scale() {
 }
 
 /// A node's bloom share (the Glow display) scales its halo and leaves its ink:
-/// less share is less halo, none is no halo, and the full share draws exactly
-/// what a node that never had one drew.
+/// less share is less halo, none is no halo, the full share draws exactly what
+/// a node that never had one drew, and a share past it — a note blooming over
+/// its pane's bar — draws more.
 ///
 /// Not in proportion: the share dims the bright pass's copy of the ink, and
 /// the threshold's knee then takes more than that away (half the share is
@@ -74,7 +75,8 @@ fn a_nodes_bloom_share_scales_its_halo_and_not_its_ink() {
             .sum()
     };
     assert!(at(1.0) == full, "the full share drew something other than the default");
-    let shares = [0.0, 0.5, 0.75, 1.0].map(|share| halo(&at(share)));
+    let shares = [0.0, 0.5, 0.75, 1.0, 2.0].map(|share| halo(&at(share)));
+    eprintln!("halo by share: {shares:?}");
     assert_eq!(shares[3], halo(&full));
     assert!(shares[3] > 500, "fixture needs a measurable halo: {shares:?}");
     assert!(shares.windows(2).all(|w| w[0] < w[1]), "less share, not less halo: {shares:?}");
