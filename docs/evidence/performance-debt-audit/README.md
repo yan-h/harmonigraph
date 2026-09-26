@@ -6,18 +6,22 @@ Audited source: `b26fa162`;
 macOS arm64,
 Rust 1.92.0.
 
-From a checkout of the audited revision,
-run one witness with an empty scratch directory outside the repository:
+Keep these evidence files in a checkout containing this audit PR,
+and prepare a separate source checkout at `b26fa162`.
+That older revision does not contain the evidence scripts.
+From the checkout containing this audit,
+set `audit_source` to the absolute path of the older source checkout and run a witness:
 
 ```sh
-python3 docs/evidence/performance-debt-audit/run.py confirmed "$PWD"
-python3 docs/evidence/performance-debt-audit/run.py motion "$PWD"
-python3 docs/evidence/performance-debt-audit/run.py fixtures "$PWD"
-python3 docs/evidence/performance-debt-audit/run.py png "$PWD"
+audit_source="/absolute/path/to/source-at-b26fa162"
+python3 docs/evidence/performance-debt-audit/run.py confirmed "$audit_source"
+python3 docs/evidence/performance-debt-audit/run.py motion "$audit_source"
+python3 docs/evidence/performance-debt-audit/run.py fixtures "$audit_source"
+python3 docs/evidence/performance-debt-audit/run.py png "$audit_source"
 ```
 
 The driver creates a temporary Cargo project,
-seeds its dependency resolution from the checkout's lockfile,
+seeds its dependency resolution from the audited source checkout's lockfile,
 and builds offline with the compiler wrapper disabled.
 It writes no repository source.
 Dependencies must already be available locally.
@@ -31,9 +35,11 @@ Timing modes require macOS because their process CPU clock assumes Darwin's micr
 | Profile fixtures | [fixtures.rs](fixtures.rs), [fixtures.txt](fixtures.txt) | Shows immediate release on delivery of a future-dated Off, and equal drawn windows under the profiler's two named larger cases. The chosen aspect is illustrative, not an instrumented dock measurement. |
 | PNG ownership | [png.rs](png.rs), [png.txt](png.txt) | Calls the real sink for three frames and then one frame to the same scratch path, exposing stale trailing files. No GPU or ffmpeg. |
 
-[ui-profile.txt](ui-profile.txt) records the existing headless release profiles:
+[ui-profile.txt](ui-profile.txt) records the existing headless release profiles,
+which run from the audited source checkout:
 
 ```sh
+cd "$audit_source"
 RUSTC_WRAPPER='' cargo test --release -p harmonigraph-ui -- \
   --ignored --nocapture --test-threads=1 \
   profile_frame profile_allocations profile_visual_runtime
