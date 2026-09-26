@@ -214,18 +214,10 @@ pub const RING_INNER_MAX: f32 = 0.9;
 /// indicator, so the same ceiling is useful on both axes.
 pub const GAP_MAX: f32 = 0.2;
 
-/// How far a resting marker may be asked to reach on EITHER of its two axes —
-/// the length of an arm ([`ViewConfig::plus_arm`]) and the thickness across
-/// one ([`ViewConfig::plus_width`]) — in the same quad UV units the layer
-/// sizes above are in, so a marker and a ring radius are two readings on one
-/// axis and can be compared by their numbers.
-///
-/// ONE constant under both bars rather than two: the two numbers are lengths
-/// on the same axis, and a second ceiling would be two numbers saying one
-/// thing (as [`GAP_MAX`] says of the pair above it). It does not make the two
-/// bars read alike — a length is measured from the crossing OUT and a width
-/// ACROSS an arm, so a plus has filled its own square once the width reaches
-/// twice the length, and the rest of the width bar is that same square.
+/// How far a resting marker's arm may be asked to reach
+/// ([`ViewConfig::plus_arm`]), in the same quad UV units the layer sizes above
+/// are in, so a marker and a ring radius are two readings on one axis and can
+/// be compared by their numbers.
 ///
 /// Sized against [`RING_INNER_MAX`] rather than under it: a marker is not part
 /// of the ring stack and owes it no room, so at the top of the arm bar it
@@ -233,6 +225,19 @@ pub const GAP_MAX: f32 = 0.2;
 /// rest is a field of crosses rather than of points. That is the far end being
 /// a different picture, which is what a bar's far end is for.
 pub const PLUS_SIZE_MAX: f32 = 0.9;
+
+/// A resting marker's whole thickness across an arm, in the quad UV of
+/// [`PLUS_SIZE_MAX`], per unit of [`ViewConfig::label_scale`] — so a bigger
+/// label scale draws heavier crosses the way it draws heavier letters.
+///
+/// A letter's horizontal stroke: Iosevka's bars are 0.070 em and its stems
+/// 0.079, and a letter's em is 0.77 uv at label scale 1, so 0.054 and 0.061
+/// uv. The bar's weight rather than the stem's, since a cross is all bars.
+///
+/// The two part in one place: a label's type is clamped to 1–512 physical
+/// pixels and sized at the focus plane (`text.rs`'s ladder), and a cross is
+/// neither.
+pub const PLUS_WIDTH_PER_LABEL_SCALE: f32 = 0.054;
 
 /// How far past a node's outermost drawn edge its glow may be asked to reach
 /// (see [`ViewConfig::glow_reach`]), in the same quad UV units the layer sizes
@@ -844,7 +849,7 @@ pub struct Scene {
     pub pluses: Vec<PlusInstance>,
     /// Half an arm's thickness, as a SHARE of the arm's length — the shape's
     /// one proportion, and what the shader folds a fragment's distance against
-    /// (see [`ViewConfig::plus_width`], which is the WHOLE thickness and in
+    /// (see [`PLUS_WIDTH_PER_LABEL_SCALE`], which is the WHOLE thickness and in
     /// quad UV).
     ///
     /// View-wide, as the length beside it is not: a length reaches the renderer

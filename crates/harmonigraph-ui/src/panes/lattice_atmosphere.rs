@@ -1,4 +1,4 @@
-//! Controls for the lattice's nebula glow and breathing.
+//! Controls for the texture and breathing of the lattice's background glow.
 
 use harmonigraph_scene::{
     AtmosphereSettings, BREATH_SPEED_MAX, BREATH_SPEED_MIN, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN,
@@ -16,29 +16,32 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
 
     crate::widgets::group_space(ui);
     // Dimmed while off, as a switched section's heading is.
-    let name = egui::RichText::new("Glow texture and breathing").strong();
+    let name = egui::RichText::new("Background glow texture and breathing").strong();
     let name = if settings.enabled { name } else { name.color(crate::theme::text_dim()) };
     ui.add_enabled_ui(glow_enabled, |ui| {
         crate::widgets::checkbox(ui, &mut settings.enabled, name).on_hover_text(
-            "Cloud texture and slow breathing in the lattice glow. \
+            "Cloud texture and slow breathing in the background glow. \
              Turning this off preserves both effects' settings.",
         );
     });
     if !glow_enabled {
-        crate::widgets::weak(ui, "Set Glow reach and Glow gain above zero to see these effects.");
+        crate::widgets::weak(
+            ui,
+            "Set Background glow reach and gain above zero to see these effects.",
+        );
     }
     if !settings.enabled {
         return;
     }
     ui.add_enabled_ui(glow_enabled, |ui| {
     ValueBar::new(&mut settings.nebula_depth, 0.0..=1.0, "Texture depth")
-        .percent().show(ui).on_hover_text("Cloud texture in the combined lattice glow. 0% restores smooth halos. Colors come from the notes.");
+        .percent().show(ui).on_hover_text("Cloud texture in the combined background glow. 0% restores smooth halos. Colors come from the notes.");
     multiplier(ui, &mut settings.nebula_scale, "Cloud size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
         .on_hover_text("Size of the cloud texture relative to the pane. Larger values make broader clouds; lattice zoom does not resize the texture. 1× is the reference size.");
     multiplier(ui, &mut settings.nebula_speed, "Cloud speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
         .on_hover_text("1× is a slow drift. 0 freezes the cloud motion.");
     ValueBar::new(&mut settings.breath_amount, 0.0..=1.0, "Breathing depth")
-        .percent().show(ui).on_hover_text("Brightness variation in the existing lattice glow. 0% keeps it steady; 100% allows deep fades. Does not change note brightness directly.");
+        .percent().show(ui).on_hover_text("Brightness variation in the background glow. 0% keeps it steady; 100% allows deep fades. Does not change note brightness directly.");
     multiplier(ui, &mut settings.breath_speed, "Breathing speed", BREATH_SPEED_MIN..=BREATH_SPEED_MAX)
         .on_hover_text("1× is the original slow breathing. 0 keeps the halo at its normal brightness.");
     });

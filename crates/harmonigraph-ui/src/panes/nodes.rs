@@ -34,7 +34,7 @@ pub(super) fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
             ),
             IntensityTarget::Glow => (
                 target,
-                "Glow",
+                "Bloom",
                 "Drives how much the note blooms: the halo round its lattice slices (the Bloom bar) and round its roll ribbon (the Ribbon bloom bar). Each needs its bloom above 0.",
             ),
             IntensityTarget::Thickness => (
@@ -109,7 +109,13 @@ pub(super) fn intensity(ui: &mut egui::Ui, view: &mut ViewConfig) {
             IntensityTarget::Opacity,
             base_hover("opacity"),
         );
-        base(ui, &mut intensity.glow_base, "Glow base", IntensityTarget::Glow, base_hover("glow"));
+        base(
+            ui,
+            &mut intensity.glow_base,
+            "Bloom base",
+            IntensityTarget::Glow,
+            base_hover("bloom"),
+        );
         base(
             ui,
             &mut intensity.thickness_base,
@@ -506,7 +512,7 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
             ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
                 .unit(100.0, "%")
                 .show(ui)
-                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival lasts that much longer -- and a note released before it finishes departs without order. Zero starts every slice together; Simultaneous ignores this setting.");
+                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together; Simultaneous ignores this setting.");
         });
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset")
             .unit(100.0, "%").show(ui)

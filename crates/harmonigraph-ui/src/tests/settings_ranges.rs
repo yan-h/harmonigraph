@@ -50,7 +50,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
         ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
-        plus_arm, plus_taper, plus_width, glow_reach, glow_strength, glow_accumulation,
+        plus_arm, plus_taper, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
@@ -244,7 +244,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::Colors => 2,
             // The picture, Note intensity (8), then bloom and glow (9) with its
             // texture switched off, then two shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 17 + 8 + 9 + 4,
+            panes::Tab::LatticeSettings => 16 + 8 + 9 + 4,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -284,7 +284,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 23 + 8 + 14 + 6,
+            visits: 22 + 8 + 14 + 6,
             ..base
         });
     }
