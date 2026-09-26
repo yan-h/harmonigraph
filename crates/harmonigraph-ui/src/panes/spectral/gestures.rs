@@ -161,7 +161,7 @@ pub(super) fn drag_split(
 /// wider would restyle a render nobody touched. The Video tab is where a
 /// video's look is dialled in and its preview reads the same field, so it has
 /// to sit still while the editor around it moves — the same call
-/// [`spectrum_settings_pane`](super::spectrum_settings_pane) makes in refusing
+/// [`view_section`](super::view_section) makes in refusing
 /// an automatic orientation.
 ///
 /// Held for the docked pane alone, and by its tab dispatch (see

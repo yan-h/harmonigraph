@@ -562,7 +562,7 @@ pub enum SevensLabel {
 ///
 /// One axis, and it is how far a name reaches past the note that put it
 /// there. Nothing here changes what a label says or how big it draws — those
-/// are the rest of the Labels section — only which nodes get one.
+/// are the rest of the Note labels block — only which nodes get one.
 ///
 /// [`Past`](NoteNames::Past) is the trail, and the only mode with a history
 /// behind it: it is the one that reads

@@ -9,7 +9,7 @@ use harmonigraph_scene::{
 };
 
 use crate::config::BALLISTICS_MAX;
-use crate::panes::{edge_bar, section};
+use crate::panes::{block, edge_bar, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
 use crate::widgets::{button_row, choice_row, RangeBar, ValueBar};
 use crate::PictureState;
@@ -40,12 +40,270 @@ pub(crate) fn span_readout(seconds: f32) -> String {
     format!("{:.1} s", seconds.max(0.0))
 }
 
-/// The Analyzer picture and the audio measurement shared by every audio view.
-pub(crate) fn spectrum_settings_pane(
+/// The spectrogram's look: how soft it is, whether its levels are terraced,
+/// and the texture over it. First on the Analyzer page, being what gets
+/// dialled per song. Its switch is in the heading, because off there is
+/// nothing here that draws; the history it shares with the ribbons is under
+/// View, the axis it is.
+pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+    let atmosphere = &mut cfg.atmosphere;
+    switched_section(
+        ui,
+        "Spectrogram",
+        (
+            &mut cfg.show_spectrogram,
+            "Show audio levels as a frequency-versus-time heatmap. \
+             Uses the shared History duration under View and the Audio level colors on Colors.",
+        ),
+        |ui| {
+            block(ui, "Softness");
+            // No style selector. Plain, Blur and Lava were three presets over three
+            // independent effects — the blur, the terraces and the cloud — and each of
+            // those now has a dial whose zero is off. The measured picture is all three
+            // at zero, and the renderer takes its plain path there, so nothing is paid
+            // for an effect that is not drawn. A row whose effect is off is greyed
+            // rather than hidden, like every other section of this page, so the page's
+            // inventory does not move under a drag.
+            ValueBar::new(
+                &mut atmosphere.pitch_softness,
+                PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
+                "Pitch softness",
+            )
+            .unit(1.0, "¢")
+            .show(ui)
+            .on_hover_text("Blur width along pitch, in cents; 100 cents is one semitone. 0 leaves pitch unblurred. Applies only to the spectrogram.");
+            ValueBar::new(
+                &mut atmosphere.time_softness,
+                TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX,
+                "Time softness",
+            )
+            .unit(1.0, " ms")
+            .show(ui)
+            .on_hover_text("Blur width along time, in milliseconds. 0 leaves time unblurred. Applies only to the spectrogram.");
+            let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
+            ui.add_enabled_ui(soft, |ui| {
+                ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Wide blur mix").percent().show(ui)
+                    .on_hover_text("Blend the close blur with a blur five times wider. 0% uses the close blur only; 100% uses the wider field. Pitch and Time softness set their base widths.");
+            });
+            block(ui, "Level contours");
+            ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How far the levels are gathered into smooth terraces. 0% leaves the measured \
+                     levels alone and costs nothing. Applies after texture refraction, so the \
+                     same controls set the stepping of the refracted picture.",
+                );
+            ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
+                ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contour levels")
+                    .integer()
+                    .show(ui)
+                    .on_hover_text("Number of level bands between the low and high audio-color endpoints. More bands make finer steps.");
+                ValueBar::new(
+                    &mut atmosphere.contour_softness,
+                    CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
+                    "Contour edge softness",
+                )
+                .percent()
+                .show(ui)
+                .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
+            });
+            block(ui, "Texture");
+            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How strongly the refracted levels replace the original picture. 0% removes \
+                     the texture; 100% uses only the displaced readings. Contours and the palette \
+                     apply afterward, without extra lighting or pigment. Reads whatever the \
+                     softness above leaves: with none, the measured picture itself.",
+                );
+            ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+                // Two constructions rather than two presets of one, so the dials below
+                // the shared three are per style: nothing a wash carries means anything
+                // to a refracting scale, and the page would otherwise be a list of controls
+                // most of which do nothing.
+                use harmonigraph_scene::CloudStyle;
+                choice_row(
+                    ui,
+                    "Style",
+                    &mut atmosphere.cloud_style,
+                    &[
+                        (
+                            CloudStyle::Mosaic,
+                            "Mosaic",
+                            "A pile of soft domes refracting the sound through their faces, \
+                             then colored by the shared Contour levels and palette controls",
+                        ),
+                        (
+                            CloudStyle::Watercolor,
+                            "Watercolor",
+                            "A field of overlapping globs, each reading the sound near its own \
+                             centre. Fine layer mix blends their levels before Contour levels and the palette",
+                        ),
+                    ],
+                );
+                ValueBar::new(
+                    &mut atmosphere.cloud_speed,
+                    CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
+                    "Drift speed",
+                )
+                .unit(1.0, "\u{d7}")
+                .show(ui)
+                .on_hover_text(
+                    "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
+                         it still.",
+                );
+                ValueBar::new(
+                    &mut atmosphere.cloud_direction,
+                    CLOUD_DIRECTION_MIN..=CLOUD_DIRECTION_MAX,
+                    "Drift direction",
+                )
+                .integer()
+                .unit(1.0, "°")
+                .show(ui)
+                .on_hover_text(
+                    "Constant direction of texture travel: 0° right, 90° down, 180° left and 270° up.",
+                );
+                // Two constructions, so two sets of dials: nothing a wash carries means
+                // anything to a refracting scale, and a page listing both would be mostly
+                // controls that do nothing wherever it stands.
+                if atmosphere.cloud_style == CloudStyle::Watercolor {
+                    wash_bars(ui, atmosphere);
+                } else {
+                    ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
+                        .eased(true)
+                        .unit(1.0, "\u{d7}")
+                        .show(ui)
+                        .on_hover_text(
+                            "Size of each mosaic cell relative to the pane. 1× is the reference size; larger values make broader cells. Refraction is a fraction of each cell's width, so larger cells also displace the picture farther.",
+                        );
+                    ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Size variation")
+                        .percent()
+                        .show(ui)
+                        .on_hover_text(
+                            "Variation in mosaic cell size. 0% makes an even grid; 100% mixes small and large cells, with the largest about four times the smallest. The cells continue to cover the whole picture.",
+                        );
+                    ValueBar::new(
+                        &mut atmosphere.scale_refract,
+                        SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
+                        "Refraction",
+                    )
+                    .unit(100.0, "%")
+                    .show(ui)
+                    .on_hover_text(
+                        "Displacement of the spectrogram within each mosaic cell, as a percentage of cell width. Positive values bend bands outward; negative values pull toward the center. -100% gives each cell one level; 0% leaves the picture unchanged.",
+                    );
+                }
+            });
+        },
+    );
+}
+
+/// Played MIDI notes as ribbons over the history, and their names. Their
+/// switch is in the heading.
+pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+    switched_section(
+        ui,
+        "MIDI ribbons",
+        (
+            &mut cfg.show_roll,
+            "Show played MIDI notes as ribbons over the shared time axis. \
+             Their colors come from MIDI note colors on Colors.",
+        ),
+        |ui| {
+            ValueBar::new(
+                &mut cfg.roll_thickness,
+                crate::config::ROLL_THICKNESS_RANGE,
+                "Ribbon width",
+            )
+            .unit(1.0, " st")
+            .show(ui)
+            .on_hover_text(
+                "Ribbon width in semitones (st), measured on the frequency axis. \
+                     1 st is the width of one semitone at any zoom.",
+            );
+            ValueBar::new(&mut cfg.roll_opacity, 0.0..=1.0, "Ribbon opacity")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "Opacity of MIDI ribbon colors over the spectrogram. \
+                     Their dark surrounds keep their full strength.",
+                );
+            edge_bar(
+                ui,
+                (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
+                crate::ROLL_LEAD_MAX,
+                "Held-note extension",
+                {
+                    let fresh = crate::SpectrumConfig::default();
+                    (fresh.roll_lead, fresh.roll_lead_fade)
+                },
+                |v| format!("{:.1}%", v * 100.0),
+            )
+            .on_hover_text(
+                "Distance held notes extend into the spectrum, as a percentage of its depth. \
+                 Solid to the inner handle, faded out by the outer. \
+                 0% stops notes at the history boundary.",
+            );
+            ValueBar::new(
+                &mut cfg.roll_lead_release,
+                0.0..=crate::ROLL_LEAD_RELEASE_MAX,
+                "Extension release",
+            )
+            .unit(1000.0, " ms")
+            .decimals(0)
+            .show(ui)
+            .on_hover_text(
+                "Time for a released extension to fade where it detached from the history boundary. 0 ms removes it immediately.",
+            );
+            crate::widgets::checkbox(ui, &mut cfg.note_names, "Show note names").on_hover_text(
+                "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
+            );
+            ui.add_enabled_ui(cfg.note_names, |ui| {
+                // The box moves a name to its ribbon's other END, which is the
+                // onset only where time runs the screen's way (`Anchor::of`).
+                let (label, hover) = if cfg.orientation.is_time_reversed() {
+                    (
+                        "Labels wait at the now-line",
+                        "Place labels at the newest end of each note, so a held note's name waits at the now-line. \
+                         Turn off to have labels travel with each note's onset.",
+                    )
+                } else {
+                    (
+                        "Labels follow note onset",
+                        "Place labels at the start of each note so they travel with its onset. \
+                         Turn off to keep labels at the newest edge.",
+                    )
+                };
+                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, label).on_hover_text(hover);
+                ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
+                    .unit(1.0, "×")
+                    .show(ui)
+                    .on_hover_text(
+                        "Text size relative to each MIDI ribbon. \
+                         1× is the reference size; labels also grow when you zoom in on frequency.",
+                    );
+            });
+            ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
+                .unit(1.0, "×")
+                .show(ui)
+                .on_hover_text(
+                    "Soft halos around MIDI ribbons in the spectrogram. \
+                     0 turns bloom off; \
+                     1× is the reference strength.",
+                );
+        },
+    );
+}
+
+/// The analyzer's layout and its two axes: where it docks, which edge the
+/// spectrum is on, how much pitch and how much time it shows. Then the
+/// spectrum's own look.
+pub(crate) fn view_section(
     ui: &mut egui::Ui,
     state: &mut PictureState,
     dock: &mut crate::workspace::Position,
-    params: &dyn ParamBackend,
 ) {
     use crate::workspace::Position;
     use crate::SpectralOrientation;
@@ -121,7 +379,33 @@ pub(crate) fn spectrum_settings_pane(
                 "Size of frequency labels and the pointer readout. \
                      1× is the reference size; labels stay the same size when you zoom.",
             );
-
+        ValueBar::new(
+            &mut cfg.roll_seconds,
+            crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX,
+            "History duration",
+        )
+        .eased(true)
+        .decimals(1)
+        .unit(1.0, " s")
+        .display(span_readout)
+        .show(ui)
+        .on_hover_text(
+            "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
+             Drag the picture along its time axis to zoom, or double-click this bar to type seconds.",
+        );
+        button_row(ui, |ui| {
+            if ui
+                .button("Clear history")
+                .on_hover_text(
+                    "Clear MIDI ribbons and spectrogram history. A held note reappears in the roll only when played again.",
+                )
+                .clicked()
+            {
+                state.runtime.tracker.clear_roll();
+                state.runtime.spectrum.clear_history();
+            }
+        });
+        block(ui, "Spectrum");
         ValueBar::new(&mut cfg.keyline_lift, 0.0..=1.0, "Spectrum outline intensity").percent().show(ui).on_hover_text(
             "How bright the line along the top of the spectrum is kept. The line takes the color of the spectrum under it, \
                  and dark colors are brightened toward white until they reach this level; brighter ones keep their own color. \
@@ -149,20 +433,20 @@ pub(crate) fn spectrum_settings_pane(
                 );
         }
     });
-    // Beside View rather than inside it: these are sections of their own, and
-    // folding View must not fold them too.
-    analysis_settings(ui, &mut state.appearance.spectrum, params);
 }
 
-/// Measurement controls shared by every audio view, within the Analyzer page.
-fn analysis_settings(
+/// Measurement controls shared by every audio view: the input and its
+/// resolution, how levels map to height, and how fast the live picture moves.
+/// Set once and left, in every saved project, so the section is one place to
+/// find all of it rather than three.
+pub(crate) fn analysis_section(
     ui: &mut egui::Ui,
     cfg: &mut crate::SpectrumConfig,
     params: &dyn ParamBackend,
 ) {
     use crate::{SpectrumTapers, SpectrumWindow};
 
-    section(ui, "Audio analysis", |ui| {
+    section(ui, "Analysis", |ui| {
         crate::widgets::weak(
             ui,
             "Shared by the Analyzer, Spiral, spectrogram and lattice audio rings. These settings do not change pass-through audio.",
@@ -210,9 +494,7 @@ fn analysis_settings(
             (SpectrumTapers::Three, "3", "Average three tapers of the same audio for less speckle, with softer frequency detail and higher processing cost."),
             (SpectrumTapers::Five, "5", "Average five tapers for the steadiest levels, with the softest frequency detail and highest processing cost."),
         ]);
-    });
-
-    section(ui, "Level mapping", |ui| {
+        block(ui, "Level mapping");
         // Both ends of the height scale on one control, like the pitch range: the
         // window on the spectrum's dynamics rather than just where it bottoms out.
         RangeBar::new(
@@ -234,8 +516,7 @@ fn analysis_settings(
             (step, label.as_str(), "Reference slope in dB/oct. 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies. Affects every audio view.")
         ).collect();
         choice_row(ui, "Tilt (dB/oct)", &mut cfg.tilt, &options);
-    });
-    section(ui, "Live response", |ui| {
+        block(ui, "Live response");
         // Two bars and not one, because a spectrum's two directions are different
         // events: a partial arriving is worth seeing when it happens, and the same
         // partial's noise wobbling down is not worth drawing at all.
@@ -252,275 +533,6 @@ fn analysis_settings(
                      Increase for a steadier curve. \
                      0 ms responds immediately.",
             );
-    });
-}
-
-/// Spectrogram history, its MIDI overlay, and heatmap appearance.
-pub(crate) fn spectrogram_settings_pane(ui: &mut egui::Ui, state: &mut PictureState) {
-    let cfg = &mut state.appearance.spectrum;
-    section(ui, "Spectrogram", |ui| {
-        crate::widgets::checkbox(ui, &mut cfg.show_spectrogram, "Show spectrogram").on_hover_text(
-            "Show audio levels as a frequency-versus-time heatmap. \
-                     Uses the shared History duration and the Audio level colors on Colors.",
-        );
-        crate::widgets::weak(ui, "Frequency range is under View; the audio palette is on Colors.");
-    });
-    section(ui, "History", |ui| {
-        ValueBar::new(
-            &mut cfg.roll_seconds,
-            crate::ROLL_SECONDS_MIN..=crate::ROLL_SECONDS_MAX,
-            "History duration",
-        )
-        .eased(true)
-        .decimals(1)
-        .unit(1.0, " s")
-        .display(span_readout)
-        .show(ui)
-        .on_hover_text(
-            "Time shown by both MIDI ribbons and the spectrogram, up to 600 seconds. \
-             Drag the picture along its time axis to zoom, or double-click this bar to type seconds.",
-        );
-        button_row(ui, |ui| {
-            if ui
-                .button("Clear history")
-                .on_hover_text(
-                    "Clear MIDI ribbons and spectrogram history. A held note reappears in the roll only when played again.",
-                )
-                .clicked()
-            {
-                state.runtime.tracker.clear_roll();
-                state.runtime.spectrum.clear_history();
-            }
-        });
-    });
-    section(ui, "MIDI ribbons", |ui| {
-        crate::widgets::checkbox(ui, &mut cfg.show_roll, "Show MIDI ribbons").on_hover_text(
-            "Show played MIDI notes as ribbons over the shared time axis. \
-             Their colors come from MIDI note colors on Colors.",
-        );
-        ui.add_enabled_ui(cfg.show_roll, |ui| {
-            ValueBar::new(&mut cfg.roll_thickness, crate::config::ROLL_THICKNESS_RANGE, "Ribbon width")
-                .unit(1.0, " st")
-                .show(ui)
-                .on_hover_text(
-                    "Ribbon width in semitones (st), measured on the frequency axis. \
-                     1 st is the width of one semitone at any zoom.",
-                );
-            ValueBar::new(&mut cfg.roll_opacity, 0.0..=1.0, "Ribbon opacity")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "Opacity of MIDI ribbon colors over the spectrogram. \
-                     Their dark surrounds keep their full strength.",
-                );
-            edge_bar(
-                ui,
-                (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
-                crate::ROLL_LEAD_MAX,
-                "Held-note extension",
-                {
-                    let fresh = crate::SpectrumConfig::default();
-                    (fresh.roll_lead, fresh.roll_lead_fade)
-                },
-                |v| format!("{:.1}%", v * 100.0),
-            )
-            .on_hover_text(
-                "Distance held notes extend into the spectrum, as a percentage of its depth. \
-                 Solid to the inner handle, faded out by the outer. \
-                 0% stops notes at the history boundary.",
-            );
-            ValueBar::new(
-                &mut cfg.roll_lead_release,
-                0.0..=crate::ROLL_LEAD_RELEASE_MAX,
-                "Extension release",
-            )
-            .unit(1000.0, " ms")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Time for a released extension to fade where it detached from the history boundary. 0 ms removes it immediately.",
-            );
-            crate::widgets::checkbox(ui, &mut cfg.note_names, "Show note names").on_hover_text(
-                "Label MIDI ribbons using the lattice tuning and spelling. Crowded labels wait for space.",
-            );
-            ui.add_enabled_ui(cfg.note_names && cfg.show_roll, |ui| {
-                // The box moves a name to its ribbon's other END, which is the
-                // onset only where time runs the screen's way (`Anchor::of`).
-                let (label, hover) = if cfg.orientation.is_time_reversed() {
-                    (
-                        "Labels wait at the now-line",
-                        "Place labels at the newest end of each note, so a held note's name waits at the now-line. \
-                         Turn off to have labels travel with each note's onset.",
-                    )
-                } else {
-                    (
-                        "Labels follow note onset",
-                        "Place labels at the start of each note so they travel with its onset. \
-                         Turn off to keep labels at the newest edge.",
-                    )
-                };
-                crate::widgets::checkbox(ui, &mut cfg.note_names_travel, label).on_hover_text(hover);
-                ValueBar::new(&mut cfg.note_name_scale, crate::SCALE_BAR_RANGE, "Label scale")
-                    .unit(1.0, "×")
-                    .show(ui)
-                    .on_hover_text(
-                        "Text size relative to each MIDI ribbon. \
-                         1× is the reference size; labels also grow when you zoom in on frequency.",
-                    );
-            });
-            ValueBar::new(&mut cfg.atmosphere.note_glow, 0.0..=2.0, "Ribbon bloom")
-                .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(
-                    "Soft halos around MIDI ribbons in the spectrogram. \
-                     0 turns bloom off; \
-                     1× is the reference strength.",
-                );
-        });
-    });
-    let atmosphere = &mut cfg.atmosphere;
-    section(ui, "Softness", |ui| {
-        // No style selector. Plain, Blur and Lava were three presets over three
-        // independent effects — the blur, the terraces and the cloud — and each of
-        // those now has a dial whose zero is off. The measured picture is all three
-        // at zero, and the renderer takes its plain path there, so nothing is paid
-        // for an effect that is not drawn. A row whose effect is off is greyed
-        // rather than hidden, like every other section of this page, so the page's
-        // inventory does not move under a drag.
-        ValueBar::new(
-            &mut atmosphere.pitch_softness,
-            PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
-            "Pitch softness",
-        )
-        .unit(1.0, "¢")
-        .show(ui)
-        .on_hover_text("Blur width along pitch, in cents; 100 cents is one semitone. 0 leaves pitch unblurred. Applies only to the spectrogram.");
-        ValueBar::new(
-            &mut atmosphere.time_softness,
-            TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX,
-            "Time softness",
-        )
-        .unit(1.0, " ms")
-        .show(ui)
-        .on_hover_text("Blur width along time, in milliseconds. 0 leaves time unblurred. Applies only to the spectrogram.");
-        let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
-        ui.add_enabled_ui(soft, |ui| {
-            ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Wide blur mix").percent().show(ui)
-                .on_hover_text("Blend the close blur with a blur five times wider. 0% uses the close blur only; 100% uses the wider field. Pitch and Time softness set their base widths.");
-        });
-    });
-    section(ui, "Level contours", |ui| {
-        ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How far the levels are gathered into smooth terraces. 0% leaves the measured \
-                 levels alone and costs nothing. Applies after texture refraction, so the \
-                 same controls set the stepping of the refracted picture.",
-            );
-        ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
-            ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contour levels")
-                .integer()
-                .show(ui)
-                .on_hover_text("Number of level bands between the low and high audio-color endpoints. More bands make finer steps.");
-            ValueBar::new(
-                &mut atmosphere.contour_softness,
-                CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
-                "Contour edge softness",
-            )
-            .percent()
-            .show(ui)
-            .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
-        });
-    });
-    section(ui, "Texture", |ui| {
-        ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How strongly the refracted levels replace the original picture. 0% removes \
-                 the texture; 100% uses only the displaced readings. Contours and the palette \
-                 apply afterward, without extra lighting or pigment. Reads whatever the \
-                 softness above leaves: with none, the measured picture itself.",
-            );
-        ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
-            // Two constructions rather than two presets of one, so the dials below
-            // the shared three are per style: nothing a wash carries means anything
-            // to a refracting scale, and the page would otherwise be a list of controls
-            // most of which do nothing.
-            use harmonigraph_scene::CloudStyle;
-            choice_row(
-                ui,
-                "Texture",
-                &mut atmosphere.cloud_style,
-                &[
-                    (
-                        CloudStyle::Mosaic,
-                        "Mosaic",
-                        "A pile of soft domes refracting the sound through their faces, \
-                         then colored by the shared Contour levels and palette controls",
-                    ),
-                    (
-                        CloudStyle::Watercolor,
-                        "Watercolor",
-                        "A field of overlapping globs, each reading the sound near its own \
-                         centre. Fine layer mix blends their levels before Contour levels and the palette",
-                    ),
-                ],
-            );
-            ValueBar::new(
-                &mut atmosphere.cloud_speed,
-                CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
-                "Drift speed",
-            )
-            .unit(1.0, "\u{d7}")
-            .show(ui)
-            .on_hover_text(
-                "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds \
-                     it still.",
-            );
-            ValueBar::new(
-                &mut atmosphere.cloud_direction,
-                CLOUD_DIRECTION_MIN..=CLOUD_DIRECTION_MAX,
-                "Drift direction",
-            )
-            .integer()
-            .unit(1.0, "°")
-            .show(ui)
-            .on_hover_text(
-                "Constant direction of texture travel: 0° right, 90° down, 180° left and 270° up.",
-            );
-            // Two constructions, so two sets of dials: nothing a wash carries means
-            // anything to a refracting scale, and a page listing both would be mostly
-            // controls that do nothing wherever it stands.
-            if atmosphere.cloud_style == CloudStyle::Watercolor {
-                wash_bars(ui, atmosphere);
-            } else {
-                ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
-                    .eased(true)
-                    .unit(1.0, "\u{d7}")
-                    .show(ui)
-                    .on_hover_text(
-                        "Size of each mosaic cell relative to the pane. 1× is the reference size; larger values make broader cells. Refraction is a fraction of each cell's width, so larger cells also displace the picture farther.",
-                    );
-                ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Size variation")
-                    .percent()
-                    .show(ui)
-                    .on_hover_text(
-                        "Variation in mosaic cell size. 0% makes an even grid; 100% mixes small and large cells, with the largest about four times the smallest. The cells continue to cover the whole picture.",
-                    );
-                ValueBar::new(
-                    &mut atmosphere.scale_refract,
-                    SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
-                    "Refraction",
-                )
-                .unit(100.0, "%")
-                .show(ui)
-                .on_hover_text(
-                    "Displacement of the spectrogram within each mosaic cell, as a percentage of cell width. Positive values bend bands outward; negative values pull toward the center. -100% gives each cell one level; 0% leaves the picture unchanged.",
-                );
-            }
-        });
     });
 }
 
@@ -627,7 +639,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 1600.0));
         ctx.run_ui(
             egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
-            |ui| spectrum_settings_pane(ui, state, &mut Default::default(), backend),
+            |ui| analysis_section(ui, &mut state.appearance.spectrum, backend),
         )
     }
 
