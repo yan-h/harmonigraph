@@ -263,7 +263,7 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
         let resources = shooter.resources.get_mut::<LatticeResources>().unwrap();
         resources.watcher = ShaderWatcher::watching(lattice, text_path, common.clone());
         assert!(poll_now(&mut resources.watcher).is_none());
-        resources.compiled.scenes.each_ref().map(|s| s.nodes.clone())
+        resources.compiled.scenes.each_ref().map(|s| s.draws.nodes.clone())
     };
     std::thread::sleep(std::time::Duration::from_millis(20));
     std::fs::write(&common, format!("{COMMON_SRC}\n// reload both attachments\n")).unwrap();
@@ -274,9 +274,9 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
     for ((before, after), untouched) in
         old.iter().zip(&resources.compiled.scenes).zip(&peer.compiled.scenes)
     {
-        assert_ne!(*before, after.nodes, "both pipeline variants must rebuild");
+        assert_ne!(*before, after.draws.nodes, "both pipeline variants must rebuild");
         assert_eq!(
-            *before, untouched.nodes,
+            *before, untouched.draws.nodes,
             "reload leaked into another context's compiled handles"
         );
     }
@@ -292,7 +292,7 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
     assert_eq!(plain, shooter.draw(&scene, labels(&scene)));
     let resources = shooter.resources.get::<LatticeResources>().unwrap();
     for (before, after) in accepted.iter().zip(&resources.compiled.scenes) {
-        assert_eq!(before.nodes, after.nodes, "a rejected edit replaced a pipeline");
+        assert_eq!(before.draws.nodes, after.draws.nodes, "a rejected edit replaced a pipeline");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
