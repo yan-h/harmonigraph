@@ -240,7 +240,7 @@ fn group(
             scale,
         );
         let suffix = if target == IntensityTarget::Opacity { "" } else { "×" };
-        let boosts = if reach.gain_boosts { " at unity; gain boosts →" } else { "" };
+        let boosts = if reach.gain_boosts { " (unity gain)" } else { "" };
         widgets::weak(
             ui,
             format!(
@@ -475,7 +475,7 @@ mod tests {
         assert!((velocity.width() - base.width() * 0.5).abs() < 0.1);
         assert!((timbre.left() - base.left()).abs() < 0.1);
         assert!((timbre.right() - velocity.right()).abs() < 0.1);
-        assert!(!texts(&out, "Together 0.00–1.00 at unity; gain boosts →").is_empty());
+        assert!(!texts(&out, "Together 0.00–1.00 (unity gain)").is_empty());
         assert!(out.shapes.iter().any(|s| matches!(&s.shape,
             egui::Shape::LineSegment { points, stroke }
                 if stroke.color == Source::Gain.color()

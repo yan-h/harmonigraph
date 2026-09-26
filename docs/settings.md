@@ -4,7 +4,7 @@ The Settings column's tabs run from the pictures to the editor:
 **Tuning** sets intervals and temperaments;
 under CLAP it also configures adaptive tuning and each connected Tune instance.
 **Lattice** and **Analyzer** hold everything their pictures draw, down to light and shadow.
-**Colors** holds the tables every picture shares.
+**Mappings** holds the color tables and note intensity mappings every picture shares.
 **Video** records takes, frames the exported Lattice and Analyzer, chooses the spectrogram timeline and render trigger, and starts or reruns export.
 **System** holds rendering cost and the editor's own interface.
 
@@ -12,7 +12,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and background glow, background glow texture and breathing, and shadows for lattice shapes and text. |
 | Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
-| Colors | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **Note intensity** maps velocity, gain, pressure and timbre to opacity, bloom or thickness. |
+| Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **Note intensity** maps velocity, gain, pressure and timbre to opacity, bloom or thickness. |
 | System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, skin and skin lightness, tab-bar visibility and layout reset. |
 
 Settings opens on Tuning in a fresh workspace.
@@ -26,7 +26,7 @@ shared settings name their scope in the help text.
 
 ## Note intensity
 
-On **Colors → Note intensity**,
+On **Mappings → Note intensity**,
 the **Opacity**, **Thickness**, and **Bloom** groups each hold their base and incoming mappings.
 Use **Add mapping** to assign a source;
 choosing one already used elsewhere moves it to this group.
