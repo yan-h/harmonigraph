@@ -6,6 +6,11 @@ The performance fixtures need repair before their labels can be used as evidence
 This audit changes no product code.
 
 Audited revision: `b26fa162`.
+Main advanced to `3a3846fd` before handoff.
+A final check of the six finding sites found five unchanged;
+motion lost per-node bloom work but retained the repeated sweeps described below.
+All reported timing remains tied to the audited revision,
+not the newer picture.
 Star shader optimization was excluded because another session owns it.
 Three independent read-only reviews covered audio/core/analysis,
 UI/editor,
