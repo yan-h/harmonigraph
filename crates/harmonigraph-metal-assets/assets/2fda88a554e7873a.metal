@@ -11,10 +11,9 @@ struct StarSlice {
     float sigma;
     float cap;
     float defocus;
-    float occupancy;
     float fringe;
     float reach;
-    float _pad;
+    metal::float2 _pad;
 };
 struct type_5 {
     StarSlice inner[5];
