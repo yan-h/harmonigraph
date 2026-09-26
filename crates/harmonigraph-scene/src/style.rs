@@ -683,8 +683,8 @@ impl ShadowKernel {
 /// One GROUP of casters' shadow: which renderer draws it, how far it reaches,
 /// how dark it lands and where inside that reach the darkness sits.
 ///
-/// Four values and no more. Which kernel a group is drawn by is a look; the
-/// other three are what a person dials against that look. Anything that only
+/// Which kernel a group is drawn by is a look; the other controls are what a
+/// person dials against that look. Anything that only
 /// calibrates a renderer — such as the Gaussian's gain — is a renderer
 /// constant and lives at the consumer, so
 /// switching a group's kernel does not move its bars.
@@ -710,6 +710,10 @@ pub struct ShadowStyle {
     /// 0 is the picture with no shadow in it for this group, pixel for pixel:
     /// no cell is packed and every draw multiplies by 1.
     pub width: f32,
+    /// How far a Gaussian's caster grows before blur, as a fraction of the
+    /// resolved Shadow width. 0 keeps the original ink; 1 grows it by one
+    /// whole width. Contour shadows ignore this stored setting.
+    pub spread: f32,
     /// How dark the shadow lands where it is whole, 0..=1 — the factor the
     /// frame is left with under this group's solid ink, spent in STOPS across
     /// the width above (`shadow_transmittance` in common.wgsl).
@@ -748,6 +752,7 @@ impl Default for ShadowStyle {
             // A broad shadow preserves the form of the ring and marker across
             // the wide light field.
             width: 0.418_517_17,
+            spread: 0.0,
             // Just under half depth leaves the shadow legible without cutting
             // the shared field back to the ground.
             depth: 0.477_784_4,
@@ -768,6 +773,15 @@ impl ShadowStyle {
         self.width > 0.0 && self.depth > 0.0
     }
 
+    /// Gaussian caster growth in screen points at the resolved blur sigma.
+    /// A full spread is one Shadow width, or twice sigma.
+    pub fn gaussian_spread_points(self, sigma_points: f32) -> f32 {
+        if self.kernel.is_distance() {
+            return 0.0;
+        }
+        2.0 * finite_or(sigma_points, 0.0).max(0.0) * finite_or(self.spread, 0.0).clamp(0.0, 1.0)
+    }
+
     /// This style held to the ranges its bars name — the PICTURE's door, where
     /// [`ViewConfig::sanitize`](crate::ViewConfig::sanitize) is the blob's.
     ///
@@ -777,6 +791,7 @@ impl ShadowStyle {
         ShadowStyle {
             kernel: self.kernel,
             width: finite_or(self.width, 0.0).clamp(0.0, width_max),
+            spread: finite_or(self.spread, 0.0).clamp(0.0, 1.0),
             depth: finite_or(self.depth, 0.0).clamp(0.0, 1.0),
             falloff: finite_or(self.falloff, SHADOW_FALLOFF_MIN)
                 .clamp(SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX),
@@ -823,6 +838,7 @@ impl Default for ShadowSettings {
             lattice_geometry: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
                 width: 0.800_113_4,
+                spread: 0.0,
                 depth: 0.190_952_61,
                 falloff: -4.0,
             },
@@ -830,6 +846,7 @@ impl Default for ShadowSettings {
             lattice_text: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
                 width: 0.324_596_76,
+                spread: 0.0,
                 depth: 1.0,
                 falloff: -4.0,
             },
@@ -838,6 +855,7 @@ impl Default for ShadowSettings {
             spectral_geometry: ShadowStyle {
                 kernel: ShadowKernel::Distance,
                 width: 0.917_033_8,
+                spread: 0.0,
                 depth: 0.912_995_6,
                 falloff: -4.0,
             },
@@ -845,6 +863,7 @@ impl Default for ShadowSettings {
             spectral_text: ShadowStyle {
                 kernel: ShadowKernel::Distance,
                 width: 0.642_857_13,
+                spread: 0.0,
                 depth: 0.962_187_95,
                 falloff: -4.0,
             },

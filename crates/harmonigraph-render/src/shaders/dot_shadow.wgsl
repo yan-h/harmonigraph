@@ -22,6 +22,7 @@ struct DotShadowOut {
     @location(1) @interpolate(flat) radius: f32,
     @location(2) at: vec2<f32>,
     @location(3) @interpolate(flat) who: u32,
+    @location(4) @interpolate(flat) spread: f32,
 };
 
 fn dot_corner(vertex: u32) -> vec2<f32> {
@@ -52,6 +53,7 @@ fn vs_dot_shadow(
     out.radius = radius;
     out.at = point;
     out.who = who;
+    out.spread = 0.0;
     return out;
 }
 
@@ -79,6 +81,7 @@ fn vs_dot_shadow_cell(
     out.radius = radius;
     out.at = point;
     out.who = u32(box_who.x + 0.5);
+    out.spread = box_who.w;
     return out;
 }
 
@@ -88,7 +91,7 @@ fn dot_distance(in: DotShadowOut) -> f32 {
 
 @fragment
 fn fs_dot_shadow_coverage(in: DotShadowOut) -> @location(0) vec4<f32> {
-    let d = dot_distance(in);
+    let d = dot_distance(in) - in.spread;
     let aa = max(fwidth(d), 1.0e-6);
     let coverage = clamp(0.5 - d / aa, 0.0, 1.0);
     return vec4<f32>(coverage, 0.0, 0.0, 1.0);

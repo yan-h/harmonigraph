@@ -184,6 +184,16 @@ fn shadow_group(
         (bar.unit(harmonigraph_render::SPECTRAL_WIDTH_POINTS, " pt").decimals(2), "Shadow width in screen points. Stays constant when you zoom frequency. 0 pt removes the shadow.")
     };
     bar.show(ui).on_hover_text(hint);
+    if style.kernel == ShadowKernel::Gaussian {
+        ValueBar::new(&mut style.spread, 0.0..=1.0, "Shadow spread")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Expands the shadow caster before blurring, without changing the visible ink. \
+                 100% grows the caster by one Shadow width on every side. \
+                 0% keeps its original shape; a Shadow width of 0 still removes the shadow.",
+            );
+    }
     ValueBar::new(&mut style.depth, 0.0..=1.0, "Shadow darkness").percent().show(ui).on_hover_text(
         "Maximum darkening beneath this group. \
                  0% removes the shadow; \

@@ -91,7 +91,7 @@ struct MarkerCellParams {
     points_to_texels: f32,
     aa_scale: f32,
     arm_points: f32,
-    padding: f32,
+    spread_points: f32,
 };
 
 struct Uniforms {
@@ -631,7 +631,7 @@ fn vs_node_cell(
     let centre = pane_points(centre_clip);
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
-    if box.who.y < 0.5 {
+    if box.who.y < 0.5 && box.who.w <= 0.0 {
         let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.cell_map.x);
         out.clip_pos =
             select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, out.clip_pos.w), cell_packed(box.cell));
@@ -672,6 +672,13 @@ fn vs_node_cell(
     out.params.w = box.who.y;
     out.strip_row = box.cell_map.y;
     out.ink_carry = box.who.w;
+    if box.who.y < 0.5 {
+        // Expanded Gaussian coverage uses the existing layer fields and cell
+        // quad. The ordinary Gaussian above keeps its original rasterizer.
+        out.params.w = 3.0;
+        out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
+        out.ink_carry = box.who.w / max(uv_points, 1e-6);
+    }
     return out;
 }
 
@@ -1057,6 +1064,12 @@ fn layer_coverage(layer: NodeLayer) -> f32 {
 }
 
 fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
+    if in.params.w > 2.5 {
+        let aa = aa_width(in.strip_row, in.shadow_at.w);
+        let coverage = clamp(layer.level, 0.0, 1.0)
+            * aa_inside(in.ink_carry, layer.sd, aa);
+        return min(field, -coverage);
+    }
     if in.params.w > 1.5 {
         let coverage = clamp(layer.level, 0.0, 1.0) * standoff_coverage(
             layer.sd * abs(in.shadow_at.z), 2.0 * in.strip_row, in.ink_carry,
@@ -2826,7 +2839,7 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     // No caster to READ — this draw is the one that fills the cell — and the
     // cell's own scale, which is what the cross is cut with here rather than
     // the pane's.
-    out.shadow_box = vec4<f32>(0.0);
+    out.shadow_box = vec4<f32>(u.marker_cell.spread_points / arm_points, 0.0, 0.0, 0.0);
     out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.marker_cell.aa_scale);
     return out;
 }
@@ -3646,6 +3659,12 @@ fn plus_paint(in: PlusVsOut) -> Painted {
 @fragment
 fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
+    if in.shadow_box.x > 0.0 {
+        let spread = in.shadow_box.x;
+        let body = aa_inside(spread, plus_sd(in.uv), aa);
+        let taper = plus_taper(max(abs(in.uv) - vec2<f32>(spread), vec2<f32>(0.0)));
+        return vec4<f32>(body * taper, 0.0, 0.0, 0.0);
+    }
     return vec4<f32>(plus_coverage(in.uv, aa), 0.0, 0.0, 0.0);
 }
 

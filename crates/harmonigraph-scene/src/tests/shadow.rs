@@ -12,20 +12,26 @@ use harmonigraph_core::{NoteTracker, Tuning};
 /// invisible at its declaration, and this is what sees it.
 #[test]
 fn the_shadow_controls_keep_one_range_at_both_doors() {
-    for (asked_width, widths, asked_depth, depth, asked_falloff, falloff) in [
-        (-1.0, [0.0; 4], -0.5, 0.0, -9.0, SHADOW_FALLOFF_MIN),
-        (2.0, [1.0, 1.0, 2.0, 2.0], 0.8, 0.8, 1.0, 1.0),
-        (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0),
-        (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 9.0, SHADOW_FALLOFF_MAX),
+    for (asked_width, widths, asked_spread, spread, asked_depth, depth, asked_falloff, falloff) in [
+        (-1.0, [0.0; 4], -0.5, 0.0, -0.5, 0.0, -9.0, SHADOW_FALLOFF_MIN),
+        (2.0, [1.0, 1.0, 2.0, 2.0], 0.17, 0.17, 0.8, 0.8, 1.0, 1.0),
+        (3.0, [1.0, 1.0, 3.0, 3.0], 1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
+        (9.0, [1.0, 1.0, 3.0, 3.0], 3.0, 1.0, 3.0, 1.0, 9.0, SHADOW_FALLOFF_MAX),
     ] {
         let asked = ShadowStyle {
             width: asked_width,
+            spread: asked_spread,
             depth: asked_depth,
             falloff: asked_falloff,
             ..ShadowStyle::default()
         };
-        let want =
-            widths.map(|width| ShadowStyle { width, depth, falloff, ..ShadowStyle::default() });
+        let want = widths.map(|width| ShadowStyle {
+            width,
+            spread,
+            depth,
+            falloff,
+            ..ShadowStyle::default()
+        });
         let mut view = ViewConfig {
             shadow: ShadowSettings {
                 lattice_geometry: asked,
@@ -46,6 +52,18 @@ fn the_shadow_controls_keep_one_range_at_both_doors() {
             assert_eq!(kept, want[group], "the bar kept group {group} at {asked:?}");
         }
     }
+}
+
+#[test]
+fn gaussian_spread_uses_resolved_width_and_contour_ignores_it() {
+    let style = ShadowStyle { kernel: ShadowKernel::Gaussian, spread: 0.17, ..Default::default() };
+    assert!((style.gaussian_spread_points(6.0) - 2.04).abs() < 1e-6);
+    assert_eq!(
+        ShadowStyle { kernel: ShadowKernel::Distance, ..style }.gaussian_spread_points(6.0),
+        0.0
+    );
+    assert_eq!(ShadowStyle { spread: f32::NAN, ..style }.gaussian_spread_points(6.0), 0.0);
+    assert_eq!(ShadowStyle { spread: 2.0, ..style }.gaussian_spread_points(6.0), 12.0);
 }
 
 #[test]

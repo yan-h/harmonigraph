@@ -323,6 +323,12 @@ impl LatticeCallback {
                         &glyph_shader,
                         &resources.compiled.glyph_layout,
                     );
+                    resources.compiled.glyph_spread_cell_pipeline =
+                        text::create_glyph_sdf_coverage_pipeline(
+                            device,
+                            &glyph_shader,
+                            &resources.compiled.glyph_layout,
+                        );
                     resources.compiled.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
                     resources.compiled.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
                     resources.compiled.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
@@ -558,7 +564,7 @@ impl LatticeCallback {
                 points_to_texels: cell.cell_map[0],
                 aa_scale: cell.cell_map[3],
                 arm_points: self.marker_arm_points,
-                padding: 0.0,
+                spread_points: cell.who[3],
             };
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -701,6 +707,8 @@ impl LatticeCallback {
                 // per box, its own cell draw serving both kinds.
                 pass.set_pipeline(if self.shadow.lattice_text.kernel.is_distance() {
                     &compiled.glyph_distance_cell_pipeline
+                } else if self.shadow.lattice_text.gaussian_spread_points(1.0) > 0.0 {
+                    &compiled.glyph_spread_cell_pipeline
                 } else {
                     &compiled.glyph_coverage_cell_pipeline
                 });

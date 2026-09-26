@@ -1021,6 +1021,7 @@ struct CompiledLatticeResources {
     /// into its cell, the passes that sweep the cells, and the box each name
     /// multiplies the scene by off its finished cell.
     glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
+    glyph_spread_cell_pipeline: wgpu::RenderPipeline,
     glyph_distance_cell_pipeline: wgpu::RenderPipeline,
     glyph_distance_pad_pipeline: wgpu::RenderPipeline,
     shadow_cell_pipelines: shadow::CellPipelines,
@@ -2781,6 +2782,8 @@ impl CompiledLatticeResources {
             glyph_distance_cell_pipeline,
             glyph_distance_pad_pipeline,
         ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
+        let glyph_spread_cell_pipeline =
+            text::create_glyph_sdf_coverage_pipeline(device, &glyph_shader, &glyph_layout);
         progress(startup::Stage::Shadows);
         let shadow_cell_pipelines = shadow::create_cell_pipelines(device, &shadow_layout);
         progress(startup::Stage::Interface);
@@ -2867,6 +2870,7 @@ impl CompiledLatticeResources {
             strip_layout,
             sampler,
             glyph_coverage_cell_pipeline,
+            glyph_spread_cell_pipeline,
             glyph_distance_cell_pipeline,
             glyph_distance_pad_pipeline,
             shadow_cell_pipelines,

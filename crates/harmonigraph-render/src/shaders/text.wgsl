@@ -170,6 +170,8 @@ struct SdfOut {
     @location(2) @interpolate(flat) near_bounds: vec4<f32>,
     @location(3) @interpolate(flat) coarse_bounds: vec4<f32>,
     @location(4) @interpolate(flat) scales: vec2<f32>,
+    // Gaussian source radius and one cell texel, both in pane points.
+    @location(5) @interpolate(flat) expansion: vec2<f32>,
 };
 
 const SDF_NEAR_PAD: f32 = 32.0;
@@ -221,6 +223,7 @@ fn vs_glyph_distance_cell(
         sdf_coarse.xy - vec2<f32>(SDF_COARSE_PAD),
         sdf_coarse.zw + vec2<f32>(SDF_COARSE_PAD),
     );
+    out.expansion = vec2<f32>(box_who.w, 1.0 / max(box_meta.x, 1e-6));
     out.scales = vec2<f32>(
         0.5 * (sdf_rect.z / max(near_span.x, 1.0e-6)
             + sdf_rect.w / max(near_span.y, 1.0e-6)),
@@ -621,8 +624,13 @@ fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
 /// shared separable blur.
 @fragment
 fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
-    let d = glyph_sdf_distance(in);
-    let aa = max(fwidth(d), 1.0e-6);
+    let d = glyph_sdf_distance(in) - in.expansion.x;
+    var aa = max(fwidth(d), 1.0e-6);
+    if in.expansion.x > 0.0 {
+        // A thin stem can have positive SDF samples on both sides of its
+        // centre and a vanishing derivative. Retain its sub-texel coverage.
+        aa = max(aa, in.expansion.y);
+    }
     return vec4<f32>(clamp(0.5 - d / aa, 0.0, 1.0), 0.0, 0.0, 1.0);
 }
 

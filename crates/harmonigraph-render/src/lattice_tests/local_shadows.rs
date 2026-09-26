@@ -13,7 +13,8 @@ fn scene(kernel: ShadowKernel, depth: f32) -> Scene {
     scene.pitch_lut.fill(glam::vec4(0.9, 0.8, 0.7, 1.0));
     scene.glow_strength = 4.0;
     scene.shadow.lattice_geometry.depth = 0.0;
-    scene.shadow.lattice_text = ShadowStyle { kernel, width: 0.7, depth, falloff: 0.0 };
+    scene.shadow.lattice_text =
+        ShadowStyle { kernel, width: 0.7, depth, falloff: 0.0, spread: 0.0 };
     scene
 }
 
@@ -187,5 +188,83 @@ fn foreground_ink_restores_local_shadow_transmittance() {
             );
             assert!(differing_pixels(&deep, &flat) > 100, "shadow skirt must remain exposed");
         }
+    }
+}
+
+#[test]
+fn gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    shooter.clear = wgpu::Color { r: 0.8, g: 0.8, b: 0.8, a: 1.0 };
+    // A three-point stem with a matching signed field: changing only the
+    // screen rect would anisotropically stretch the square fixture's distances.
+    let mut stem_sdf = crate::text::tests::sdf_atlas();
+    for (i, d) in std::sync::Arc::make_mut(&mut stem_sdf.image).iter_mut().enumerate() {
+        let p = glam::vec2((i % 128) as f32 + 0.5, (i / 128) as f32 + 0.5);
+        let q = (p - glam::Vec2::splat(64.0)).abs() - glam::vec2(1.5, 12.0);
+        *d = q.max(glam::Vec2::ZERO).length() + q.x.max(q.y).min(0.0);
+    }
+    stem_sdf.key = 2;
+    for group in 0..3 {
+        let mut scene = scene(ShadowKernel::Gaussian, 0.0);
+        scene.glow_strength = 0.0;
+        scene.bloom_strength = 0.0;
+        scene.background = glam::vec4(0.8, 0.8, 0.8, 1.0);
+        scene.shadow.lattice_geometry.width = 0.7;
+        let at = glam::vec3(-1.5, 1.5, 0.0);
+        if group == 2 {
+            scene.pluses.push(one_marker(0, at, 0.35, glam::Vec4::ONE, 1.0));
+        }
+        let labels = |scene: &Scene| {
+            if group == 1 {
+                let center = on_screen(scene, SIZE, at);
+                let mut glyph = name_glyph(scene, [center.x - 1.5, center.y - 12.0, 3.0, 24.0]);
+                glyph.sdf_near = [62.5, 52.0, 65.5, 76.0];
+                glyph.sdf_coarse = glyph.sdf_near;
+                let mut labels = a_name(vec![glyph]);
+                labels.sdf = Some(stem_sdf.clone());
+                labels
+            } else {
+                LatticeLabels::default()
+            }
+        };
+        fn style(scene: &mut Scene, group: usize) -> &mut ShadowStyle {
+            if group == 0 {
+                &mut scene.shadow.lattice_geometry
+            } else {
+                &mut scene.shadow.lattice_text
+            }
+        }
+        let ink = shooter.shot_with(&scene, labels(&scene));
+        style(&mut scene, group).spread = 0.5;
+        let spread_ink = shooter.shot_with(&scene, labels(&scene));
+        assert!(
+            ink == spread_ink,
+            "group {group}: spread moved {} visible ink pixels",
+            differing_pixels(&ink, &spread_ink)
+        );
+        style(&mut scene, group).depth = 1.0;
+        style(&mut scene, group).spread = 0.0;
+        let ordinary = shooter.shot_with(&scene, labels(&scene));
+        style(&mut scene, group).spread = 0.5;
+        let expanded = shooter.shot_with(&scene, labels(&scene));
+        let darkness = |frame: &[u8]| -> u64 {
+            ink.chunks_exact(4)
+                .zip(frame.chunks_exact(4))
+                .map(|(a, b)| u64::from(a[0].saturating_sub(b[0])))
+                .sum()
+        };
+        assert!(darkness(&ordinary) > 100, "group {group}: fixture casts no shadow");
+        assert!(
+            darkness(&expanded) > darkness(&ordinary) * 3 / 2,
+            "group {group}: spread failed to expand the source"
+        );
+        style(&mut scene, group).kernel = ShadowKernel::Distance;
+        style(&mut scene, group).spread = 0.0;
+        let contour = shooter.shot_with(&scene, labels(&scene));
+        style(&mut scene, group).spread = 1.0;
+        assert!(
+            contour == shooter.shot_with(&scene, labels(&scene)),
+            "group {group}: Contour consumed spread"
+        );
     }
 }

@@ -911,6 +911,7 @@ impl CallbackTrait for RollCallback {
                     sigma_points: sigma,
                     kernel: style.kernel,
                     falloff: style.falloff,
+                    spread_points: style.gaussian_spread_points(sigma),
                     direct_distance: true,
                 }
             })
@@ -2375,6 +2376,32 @@ mod tests {
             lo > 0.0 && hi - lo < 250.0,
             "the Gaussian shadow grew in atlas-texel steps {steps:?} from {darkness:?}",
         );
+    }
+
+    #[test]
+    fn gaussian_spread_expands_roll_shadow_and_contour_ignores_it() {
+        let Some((device, queue)) = headless_device() else { return };
+        let style = harmonigraph_scene::ShadowStyle {
+            width: 2.0,
+            depth: 1.0,
+            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            ..Default::default()
+        };
+        let note = RollInstance { core: [255; 4], ..centered_note() };
+        let draw = |style| draw_shadowed(&device, &queue, vec![note], style, bg_color());
+        let base = draw(style);
+        let grown = draw(harmonigraph_scene::ShadowStyle { spread: 0.5, ..style });
+        assert_eq!(pixel(&base, 128, 128), pixel(&grown, 128, 128), "visible core moved");
+        // x=140 is the body's edge; the ordinary Gaussian ends at x=152.
+        assert!(
+            pixel(&grown, 153, 128)[2] < pixel(&base, 153, 128)[2],
+            "expanded footprint was clipped"
+        );
+        let contour = harmonigraph_scene::ShadowStyle {
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..style
+        };
+        assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
     /// The bloom adds light around a note and to the note itself, and adds it
