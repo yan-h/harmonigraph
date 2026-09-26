@@ -130,7 +130,7 @@ pub const SCALE_REFRACT_MAX: f32 = 1.0;
 /// dust is finer than a pixel of a 540-point pane and merges into texture.
 pub const STAR_DENSITY_MIN: f32 = 0.5;
 /// See [`STAR_DENSITY_MIN`].
-pub const STAR_DENSITY_MAX: f32 = 6.0;
+pub const STAR_DENSITY_MAX: f32 = 10.0;
 /// The top of [`SpectralAtmosphere::star_glow`].
 pub const STAR_GLOW_MAX: f32 = 1.5;
 /// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
