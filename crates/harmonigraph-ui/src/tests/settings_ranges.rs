@@ -285,12 +285,12 @@ fn scenarios() -> Vec<Scenario> {
         ..base
     });
     // The starfield's, on the same terms: the three scale bars and the shared
-    // Drift speed off, ten of its own on.
+    // Drift speed off, nine of its own on.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
         enabled: true,
-        visits: 13 + 12 + 5 + 2 + 2 - 3 - 1 + 10,
+        visits: 13 + 12 + 5 + 2 + 2 - 3 - 1 + 9,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
