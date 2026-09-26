@@ -599,9 +599,11 @@ fn folding_section<R>(
     })
     .unzip();
     let open = !folded.unwrap_or(false);
+    // The box's own gap to the name is a checkbox label's, `icon_spacing`, not
+    // the gap across a row: that is also about what the open chevron's ink
+    // leaves before the box, so the three read as evenly spaced.
     let lead = if switch.is_some() {
-        crate::widgets::CHECKBOX_BOX * crate::theme::ui_scale(ui.ctx())
-            + ui.spacing().item_spacing.x
+        crate::widgets::CHECKBOX_BOX * crate::theme::ui_scale(ui.ctx()) + ui.spacing().icon_spacing
     } else {
         0.0
     };
