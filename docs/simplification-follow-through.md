@@ -127,6 +127,11 @@ not claims of measured defects or completed design reviews.
 Done in #1061:
 the planned frame count is authoritative,
 and ffmpeg pads the soundtrack with silence (`apad`) and trims it to the video span instead of cutting the video with `-shortest`.
+The length change that made was decided in #1125:
+a *Loop end* take ends exactly at its loop's end,
+so its tail is 0 unless `--tail` is given,
+restoring what `-shortest` used to give it;
+every other take keeps the 4 s tail and pads with silence.
 The proposal as it was written follows.
 
 Today a soundtrack can end the video early through ffmpeg's `-shortest` behavior.
