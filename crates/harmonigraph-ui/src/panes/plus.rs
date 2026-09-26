@@ -25,10 +25,11 @@
 //! getting from one junction to the next. What the eye reads the lattice's rows
 //! and columns off is the regularity of the field itself.
 //!
-//! Under those pair the marker's two LENGTHS — how far an arm reaches and how
-//! thick it is — and they are independent on purpose: a long hairline and a
-//! short block are different pictures of the same field, and a shape with one
-//! fixed proportion could be neither. There is no third bar for what runs
+//! Under those pair the marker's LENGTH — how far an arm reaches and how much
+//! of it tapers. Its thickness has no bar here: it follows Label scale, so a
+//! cross weighs what the letters beside it weigh
+//! ([`PLUS_WIDTH_PER_LABEL_SCALE`](harmonigraph_scene::PLUS_WIDTH_PER_LABEL_SCALE)).
+//! There is no bar for what runs
 //! to a neighbour, and none for SOFTNESS: a marker's edge is a ring's edge, the
 //! same screen-constant band the audio ring and the octave band carry, so the
 //! resting field and the layers that stand on it come to an end the same way.
@@ -97,11 +98,10 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
                 "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
                      Raise above Idle ring brightness to keep the lattice easy to navigate.",
             );
-        // Length first, then thickness, in the order the shape is built: an arm
-        // reaches, and then it has a width. Both are in the same quad UV a node's
-        // ring radii are dialled in, so this pair and Inner on the Layers bar are
-        // readings on ONE axis — a marker that fits inside the middle a node's
-        // rings stand around can be read off the numbers rather than by eye.
+        // In the same quad UV a node's ring radii are dialled in, so this pair
+        // and Inner on the Layers bar are readings on ONE axis — a marker that
+        // fits inside the middle a node's rings stand around can be read off
+        // the numbers rather than by eye.
         edge_bar(
             ui,
             (&mut appearance.view.plus_arm, &mut appearance.view.plus_taper),
@@ -116,26 +116,8 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
         .on_hover_text(
             "Cross-arm length from the center, as a percentage of the node radius. \
                      Solid to the inner handle, faded out by the outer handle. \
-                     0% hides crosses. \
+                     0% hides crosses; named nodes draw none. \
                      Double-click resets.",
         );
-        // A length of its own rather than a share of the arm above it. Tied to the
-        // arm the marker would have one proportion at every size, and this bar is
-        // exactly the freedom that buys: a long hairline crossing, or a short thick
-        // one, off the same two numbers.
-        //
-        // No off position, and it needs none: an arm with no thickness is still cut
-        // with the screen-constant band every edge here carries, so the bottom of
-        // this bar is the thinnest cross the screen can draw. What takes the field
-        // away is the bar above.
-        ValueBar::new(&mut appearance.view.plus_width, 0.0..=PLUS_SIZE_MAX, "Cross width")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Full width of each cross arm, as a percentage of the node radius. \
-                     0% is a hairline; \
-                     Cross length at 0% hides crosses. \
-                     Named nodes do not draw crosses.",
-            );
     });
 }

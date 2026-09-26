@@ -605,11 +605,11 @@ fn lone_marker_scene(half_width: f32, taper_start: f32) -> Scene {
 }
 
 /// The two proportions a marker carries are read by the SHADER as the shapes
-/// they name: a filled square at the top of the width bar, and ends that
+/// they name: a filled square at a half-width of 1, and ends that
 /// actually run out at the bottom of the taper.
 ///
-/// `the_width_reaches_the_scene_as_a_share_of_the_arm` pins the conversion on
-/// the way in, and it cannot see this: the number arriving correct in the
+/// `the_label_scale_sets_the_cross_width` pins the conversion on the way in,
+/// and it cannot see this: the number arriving correct in the
 /// uniform says nothing about the distance field spending it. What is measured
 /// here is AREA, which is a number rather than a look — a cross of half-width
 /// `t` covers `8t - 4t^2` of an arm-squared where a filled square covers 4, so

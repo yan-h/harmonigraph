@@ -1,4 +1,4 @@
-//! Light and shadow for each picture: the lattice's bloom, glow and shadows in
+//! Light and shadow for each picture: the lattice's bloom, background glow and shadows in
 //! the Lattice page's Light section, and the Spiral's bloom and the Analyzer
 //! and Spiral shadows on the Analyzer page. The spectrogram's own bloom sits
 //! with the MIDI ribbons it lights.
@@ -58,10 +58,13 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// Bloom and the glow, first in the Light section: its reach, strength and
-/// colour, what it does to the lit ink, and its clock.
+/// Bloom, then the background glow, first in the Light section: the glow's
+/// reach, strength and colour, what it does to the lit ink, and its clock.
+///
+/// Bloom is a loose row ahead of the block rather than in it: it is the halo
+/// round each note, a separate effect from the light field the block sets, and
+/// "Glow" alone read as either one once note intensity could route to bloom.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    super::block(ui, "Glow");
     ValueBar::new(&mut view.bloom_strength, 0.0..=2.0, "Bloom")
         .unit(1.0, "×")
         .show(ui)
@@ -70,6 +73,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      0 turns bloom off; \
                      1× is the reference strength.",
         );
+    super::block(ui, "Background glow");
     // A share of the node's radius, the unit the shared gap and the Clearance in
     // Note read in, and measured from the same place: the reach is a distance
     // out from the node's edge exactly as the Clearance is. Eased, because the
@@ -78,28 +82,28 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // of it, and the wash is everything above. Cubic travel gives the accent
     // half the bar, so a light meant to sit on its own node is still dialled a
     // hundredth at a time, and the far end is reachable in the same drag.
-    ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Glow reach")
+    ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Background glow reach")
         .eased(true)
         .percent()
         .show(ui)
         .on_hover_text(
-            "Distance the glow extends beyond a node, as a percentage of its radius. \
+            "Distance the background glow extends beyond a node, as a percentage of its radius. \
                      Larger values blend neighboring glows. \
-                     0% turns glow off.",
+                     0% turns the background glow off.",
         );
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
-            ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Glow gain")
+            ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Background glow gain")
             .unit(1.0, "×")
                 .show(ui)
                 .on_hover_text(
-                    "Brightness of the lattice glow. 0 removes the light; 1× is the reference gain.",
+                    "Brightness of the background glow. 0 removes the light; 1× is the reference gain.",
                 );
             ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Overlap buildup")
                 .percent()
                 .show(ui)
                 .on_hover_text(
                     "Controls how light builds up where note glows overlap. \
-                     0% caps their combined brightness at the level set by Glow gain. \
+                     0% caps their combined brightness at the level set by Background glow gain. \
                      100% lets their light build up where they overlap. \
                      A single note's glow stays unchanged.",
                 );
@@ -154,17 +158,17 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             // and not the note Fade in Note, because a halo is the slow part of the
             // picture: on the layers' envelopes it flickers with the marks, which
             // are meant to be fast.
-            ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Glow attack")
+            ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Background glow attack")
                 .unit(1000.0, " ms").decimals(0)
                 .show(ui)
                 .on_hover_text(
-                    "Response time for the glow to brighten and change color after a note arrives. 0 ms responds immediately.",
+                    "Response time for the background glow to brighten and change color after a note arrives. 0 ms responds immediately.",
                 );
-            ValueBar::new(&mut view.glow_release, 0.0..=GLOW_BALLISTICS_MAX, "Glow release")
+            ValueBar::new(&mut view.glow_release, 0.0..=GLOW_BALLISTICS_MAX, "Background glow release")
                 .unit(1000.0, " ms").decimals(0)
                 .show(ui)
                 .on_hover_text(
-                    "Response time for the glow to fade after the node goes silent. \
+                    "Response time for the background glow to fade after the node goes silent. \
                      About 37% remains after one interval; it keeps its last color as it fades. \
                      0 ms removes it immediately.",
                 );

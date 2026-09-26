@@ -109,7 +109,6 @@ fn poisoned_view() -> ViewConfig {
         mark_thickness: nan,
         mark_delay: nan,
         plus_arm: nan,
-        plus_width: nan,
         plus_taper: nan,
         meantone: base.meantone,
         meantone_auto: base.meantone_auto,

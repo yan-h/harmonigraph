@@ -685,21 +685,9 @@ pub struct ViewConfig {
     /// other two travel as shares of this, so nothing downstream carries a
     /// second copy of the convention.
     pub plus_arm: f32,
-    /// How thick an arm is, ACROSS it and all the way across — the whole bar,
-    /// not half of one — in the same quad UV [`plus_arm`](Self::plus_arm) is
-    /// in.
-    ///
-    /// A length of its own rather than a share of the arm, which is what lets
-    /// a long arm be a hairline and a short one a block: tied to the arm, the
-    /// shape would have one proportion and the arm bar would be the only
-    /// control the marker has. Past twice the arm the cross has filled its own
-    /// square, and every width above that draws that same square.
-    ///
-    /// 0 is not off. An arm with no thickness is still cut with the same
-    /// screen-constant band as one with, so the bottom of the bar is the
-    /// thinnest cross this screen can draw rather than no cross —
-    /// [`plus_arm`](Self::plus_arm) at 0 is what takes the field away.
-    pub plus_width: f32,
+    // How thick an arm is has no field: it follows
+    // [`label_scale`](Self::label_scale) (`PLUS_WIDTH_PER_LABEL_SCALE`), so a
+    // cross weighs what the letters beside it weigh.
     /// How far the tapered END of an arm runs, in the same quad UV
     /// [`plus_arm`](Self::plus_arm) is in: each arm is solid out to
     /// `plus_arm - plus_taper` and fades to nothing by its tip. 0 is a square
@@ -1521,7 +1509,6 @@ impl ViewConfig {
         // error, and holding it to the arm here would drag a dialled width down
         // whenever the arm bar was pulled in.
         self.plus_arm = finite_or(self.plus_arm, fresh.plus_arm).clamp(0.0, PLUS_SIZE_MAX);
-        self.plus_width = finite_or(self.plus_width, fresh.plus_width).clamp(0.0, PLUS_SIZE_MAX);
         self.plus_taper = finite_or(self.plus_taper, fresh.plus_taper).clamp(0.0, self.plus_arm);
     }
 }
@@ -1735,11 +1722,8 @@ impl Default for ViewConfig {
             // (`ring_inner`, in the same UV): the resting lattice reads as
             // separate crosses with ground between them rather than as a
             // near-continuous mesh. Captured from the DAW on 2026-09-07, with
-            // the two below.
+            // the taper below.
             plus_arm: 0.305_142_85,
-            // A hairline stroke, so the crosses stay marks rather than blocks
-            // through the node glow field.
-            plus_width: 0.045_857_143,
             // About two thirds of each arm is taper, so the marker arrives at
             // a fine point rather than carrying its width to the tip.
             plus_taper: 0.195_142_84,

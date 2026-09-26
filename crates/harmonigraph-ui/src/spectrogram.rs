@@ -179,7 +179,7 @@ pub(crate) struct TexLayout {
 ///   is 0 at every level, so the absolute chroma is 0 whatever the gamut holds,
 ///   and Oklab's `a` and `b` are `c * cos(h)` and `c * sin(h)` — identically 0.
 ///   Every texel is the same grey at every angle, and the HUE pair decides
-///   nothing. That is the Mono preset.
+///   nothing. That is the Saturation bar dragged to 0 at both ends.
 /// - **A brightness pair closed on either end of the `L*` axis.** `HUE_FLOOR` is
 ///   0 at both 0 and 100, so `chroma_of` answers 0 for every fraction and every
 ///   hue, and `oklab_srgb` is black at 0 and white at 100 whichever way the arc
@@ -197,8 +197,7 @@ pub(crate) struct TexLayout {
 /// the wrong one. Sanitize's answer is what the BARS read back and write, so
 /// folding there would snap the hue home under a pointer dragging it — and a hue
 /// dialled at no chroma is a real setting, the one a picture opens on when the
-/// chroma bar is next raised off 0. `SpectrogramPreset::Mono` writes one
-/// deliberately. The key's question is not "is this legal" but "does this decide
+/// chroma bar is next raised off 0. The key's question is not "is this legal" but "does this decide
 /// a texel", and only the key may answer it.
 fn what_decides_a_texel(g: Gradient) -> Gradient {
     let toneless = g.chroma == 0.0 && g.chroma_ramp == 0.0;
@@ -1503,7 +1502,6 @@ mod tests {
         let ends = |p: crate::SpectrogramPreset| -> ((f32, f32), (f32, f32)) {
             use crate::SpectrogramPreset::*;
             match p {
-                Mono => ((0.0, 100.0), (0.0, 0.0)),
                 Ice => ((0.0, 92.0), (0.635, 0.985)),
                 Aurora => ((0.0, 88.0), (0.518, 0.968)),
                 Magma => ((0.0, 90.0), (0.819, 0.969)),
@@ -2712,12 +2710,18 @@ mod tests {
             assert!(!rebuilds(&moved), "a drag on this rebuilds the table on every frame");
         }
 
-        // The hue pair at NO CHROMA, which is the Mono preset and the one place
+        // The hue pair at NO CHROMA, a grey ramp and the one place
         // a gradient knob decides nothing. `chroma_at` is 0 at every level, so
         // the absolute chroma is 0 whatever the hue, and Oklab's `a` and `b` are
         // `c * cos(h)` and `c * sin(h)` — identically 0. Every texel is the same
         // grey at every angle, and the spectrum bar's track is a DRAG.
-        let mono = crate::SpectrogramPreset::Mono.gradient();
+        let mono = harmonigraph_scene::Gradient {
+            lightness: 50.0,
+            lightness_ramp: 100.0,
+            chroma: 0.0,
+            chroma_ramp: 0.0,
+            ..crate::SpectrogramPreset::Ice.gradient()
+        };
         let toneless = SpectrumConfig { spectrogram_gradient: mono, ..cfg };
         for turned in [30.0f32, 180.0, 359.0] {
             let mut c = toneless;
