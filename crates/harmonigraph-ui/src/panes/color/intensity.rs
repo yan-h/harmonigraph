@@ -2,7 +2,7 @@
 //! No live-note selection or cached derived state: ranges use the same sum
 //! as the picture, and are painted after this frame's controls have edited it.
 
-use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, Stroke, Ui, Vec2};
 use harmonigraph_scene::{
     IntensityReach, IntensitySettings, IntensitySource, IntensityTarget, BLOOM_MAX,
     INTENSITY_WEIGHT_MAX, THICKNESS_MAX_RANGE,
@@ -135,22 +135,14 @@ fn group(
         .into_iter()
         .filter(|source| source.setting(settings).weight(target).is_some())
         .collect();
-    // Reserve only the height. The base bar's actual rect supplies the common
-    // horizontal scale (including the settings column's own width clamp).
-    let preview = (!sources.is_empty()).then(|| {
-        ui.allocate_exact_size(Vec2::new(0.0, sources.len() as f32 * 4.0 * scale), Sense::hover()).0
-    });
-    if preview.is_some() {
-        // allocate_exact_size adds item spacing; remove it to attach the bands.
-        ui.add_space(-ui.spacing().item_spacing.y);
-    }
+    let mut overlay = None;
     let base = match target {
         IntensityTarget::Opacity => ValueBar::new(&mut settings.opacity_rest, 0.0..=1.0, "Opacity base")
-            .show(ui).on_hover_text("Starting opacity, even with no mappings. Only timbre can reduce it. A base of 1 leaves no room for positive additions."),
+            .overlay_slot(&mut overlay).show(ui).on_hover_text("Starting opacity, even with no mappings. Only timbre can reduce it. A base of 1 leaves no room for positive additions."),
         IntensityTarget::Glow => ValueBar::new(&mut settings.glow_base, 0.0..=BLOOM_MAX, "Bloom base")
-            .unit(1.0, "×").show(ui).on_hover_text("Starting note bloom, even with no mappings. Mappings can add bloom from base 0. The separate lattice background glow is unchanged."),
+            .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting note bloom, even with no mappings. Mappings can add bloom from base 0. The separate lattice background glow is unchanged."),
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
-            .unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
+            .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
     };
     let mut highlighted = None;
     for &source in &sources {
@@ -202,67 +194,66 @@ fn group(
             highlighted = Some(source);
         }
     }
-    if let Some(preview) = preview {
-        let rect = Rect::from_min_max(
-            Pos2::new(base.rect.left(), preview.top()),
-            Pos2::new(base.rect.right(), preview.bottom()),
-        );
-        let hover = ui.interact(rect, ui.id().with("reach"), Sense::hover());
-        if let Some(pointer) = hover.hover_pos() {
-            highlighted = sources.get(((pointer.y - rect.top()) / (4.0 * scale)) as usize).copied();
+    if let Some(slot) = overlay.filter(|_| !sources.is_empty()) {
+        let rect = base.rect.shrink(2.0 * scale);
+        if let Some(pointer) = base.hover_pos().filter(|p| rect.contains(*p)) {
+            highlighted = sources
+                .get(((pointer.y - rect.top()) / rect.height() * sources.len() as f32) as usize)
+                .copied();
         }
-        paint_reach(
-            ui.painter(),
-            rect,
-            base.rect.top(),
-            settings,
-            target,
-            &sources,
-            highlighted,
-            scale,
+        ui.painter().set(
+            slot,
+            egui::Shape::Vec(reach_shapes(rect, settings, target, &sources, highlighted, scale)),
         );
-        hover.on_hover_text("Each colored band shows its source's possible reach from the base. Striped ends are clipped. Dashed extensions show gain above unity. These are configured ranges, not live notes.");
-    } else {
+    } else if sources.is_empty() {
         widgets::weak(ui, "No mappings");
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn paint_reach(
-    painter: &egui::Painter,
+fn band_color(source: Source, highlighted: Option<Source>) -> Color32 {
+    let strength = match highlighted {
+        Some(active) if active == source => 0.5,
+        Some(_) => 0.15,
+        None => 0.35,
+    };
+    theme::well().lerp_to_gamma(source.color(), strength)
+}
+
+fn reach_shapes(
     rect: Rect,
-    base_top: f32,
     settings: &IntensitySettings,
     target: IntensityTarget,
     sources: &[Source],
     highlighted: Option<Source>,
     scale: f32,
-) {
-    if !painter.is_visible() || !painter.clip_rect().intersects(rect) {
-        return;
-    }
+) -> Vec<egui::Shape> {
     let (base, ceiling) = limits(settings, target);
+    let mut shapes = Vec::new();
+    let height = rect.height() / sources.len() as f32;
     for (i, &source) in sources.iter().enumerate() {
-        let color = if highlighted.is_some_and(|s| s != source) {
-            source.color().gamma_multiply(0.3)
-        } else {
-            source.color()
-        };
         let lane = Rect::from_min_size(
-            rect.min + Vec2::new(0.0, i as f32 * 4.0 * scale),
-            Vec2::new(rect.width(), 4.0 * scale),
+            rect.min + Vec2::new(0.0, i as f32 * height),
+            Vec2::new(rect.width(), height),
         );
-        paint_band(painter, lane, source.reach(settings, target), ceiling, color, scale);
+        band_shapes(
+            &mut shapes,
+            lane,
+            source.reach(settings, target),
+            ceiling,
+            band_color(source, highlighted),
+            scale,
+        );
     }
     let x = rect.left() + rect.width() * (base / ceiling).clamp(0.0, 1.0);
-    painter.line_segment(
-        [Pos2::new(x, rect.top()), Pos2::new(x, base_top)],
+    shapes.push(egui::Shape::line_segment(
+        [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
         Stroke::new(scale, theme::text()),
-    );
+    ));
+    shapes
 }
 
-fn paint_band(
-    painter: &egui::Painter,
+fn band_shapes(
+    shapes: &mut Vec<egui::Shape>,
     rect: Rect,
     reach: IntensityReach,
     ceiling: f32,
@@ -270,24 +261,23 @@ fn paint_band(
     scale: f32,
 ) {
     let x = |value: f32| rect.left() + rect.width() * (value / ceiling).clamp(0.0, 1.0);
-    painter.rect_filled(rect, theme::control_radius(scale), theme::well());
     let span = Rect::from_min_max(
         Pos2::new(x(reach.min), rect.top()),
         Pos2::new(x(reach.max), rect.bottom()),
     );
     if span.width() > 0.0 {
-        painter.rect_filled(span, theme::control_radius(scale), color);
+        shapes.push(egui::Shape::rect_filled(span, theme::control_radius(scale), color));
     }
     if reach.gain_boosts {
         let mut start = x(reach.max);
         while start < rect.right() {
-            painter.line_segment(
+            shapes.push(egui::Shape::line_segment(
                 [
                     Pos2::new(start, rect.center().y),
                     Pos2::new((start + 3.0 * scale).min(rect.right()), rect.center().y),
                 ],
                 Stroke::new(scale, color),
-            );
+            ));
             start += 6.0 * scale;
         }
     }
@@ -300,14 +290,23 @@ fn paint_band(
                 Vec2::new(5.0 * scale, rect.height()),
             )
             .intersect(rect);
-            painter.rect_filled(end, theme::control_radius(scale), color);
-            let clip = painter.with_clip_rect(painter.clip_rect().intersect(end));
-            for i in 0..4 {
-                let x = at + i as f32 * 3.0 * scale;
-                clip.line_segment(
-                    [Pos2::new(x, rect.bottom()), Pos2::new(x + rect.height(), rect.top())],
-                    Stroke::new(scale, theme::well()),
-                );
+            shapes.push(egui::Shape::rect_filled(end, theme::control_radius(scale), color));
+            // Bound each diagonal explicitly: the reserved shape shares the
+            // slider's painter, so there is no per-lane clip rectangle.
+            let mut x = end.left() - end.height();
+            while x < end.right() {
+                let low = (end.left() - x).max(0.0);
+                let high = (end.right() - x).min(end.height());
+                if low < high {
+                    shapes.push(egui::Shape::line_segment(
+                        [
+                            Pos2::new(x + low, end.bottom() - low),
+                            Pos2::new(x + high, end.bottom() - high),
+                        ],
+                        Stroke::new(scale, theme::well()),
+                    ));
+                }
+                x += 3.0 * scale;
             }
         }
     }
@@ -397,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn bands_share_the_base_scale_and_highlight_the_hovered_source() {
+    fn inset_bands_stay_under_text_and_follow_base_drags() {
         let ctx = crate::tests::probe::themed();
         let mut settings = IntensitySettings {
             opacity_rest: 0.25,
@@ -421,54 +420,101 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let band = |out: &egui::FullOutput, color: Color32| {
+        let plot = base.shrink(2.0);
+        fn overlay(out: &egui::FullOutput) -> &[egui::Shape] {
             out.shapes
                 .iter()
-                .find_map(|shape| match &shape.shape {
-                    egui::Shape::Rect(r)
-                        if r.fill == color
-                            && r.rect.width() > 10.0
-                            && (r.rect.height() - 4.0).abs() < 0.01 =>
-                    {
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Vec(shapes) => Some(shapes.as_slice()),
+                    _ => None,
+                })
+                .unwrap()
+        }
+        let band = |out: &egui::FullOutput, color: Color32| {
+            overlay(out)
+                .iter()
+                .find_map(|s| match s {
+                    egui::Shape::Rect(r) if r.fill == color && r.rect.width() > 10.0 => {
                         Some(r.rect)
                     }
                     _ => None,
                 })
                 .unwrap()
         };
-        let velocity = band(&out, Source::Velocity.color());
-        let timbre = band(&out, Source::Timbre.color());
-        assert!((velocity.left() - (base.left() + base.width() * 0.25)).abs() < 0.1);
-        assert!((velocity.width() - base.width() * 0.5).abs() < 0.1);
-        assert!((timbre.left() - base.left()).abs() < 0.1);
+        let velocity = band(&out, band_color(Source::Velocity, None));
+        let timbre = band(&out, band_color(Source::Timbre, None));
+        assert!((velocity.left() - (plot.left() + plot.width() * 0.25)).abs() < 0.1);
+        assert!((velocity.width() - plot.width() * 0.5).abs() < 0.1);
+        assert!((timbre.left() - plot.left()).abs() < 0.1);
         assert!((timbre.right() - velocity.right()).abs() < 0.1);
-        assert!(!out.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(t) if t.galley.text().starts_with("Together"))));
-        let gain = band(&out, Source::Gain.color());
-        assert!((gain.bottom() - base.top()).abs() < 0.1);
+        for shape in overlay(&out) {
+            assert!(
+                base.contains_rect(shape.visual_bounding_rect()),
+                "range escaped slider: {shape:?}"
+            );
+        }
+        let overlay_index =
+            out.shapes.iter().position(|s| matches!(s.shape, egui::Shape::Vec(_))).unwrap();
+        let text_index = out
+            .shapes
+            .iter()
+            .position(|s| {
+                matches!(&s.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Opacity base")
+            })
+            .unwrap();
+        assert!(overlay_index < text_index, "bands must stay beneath the text");
+        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+            egui::Shape::Text(t) if t.galley.text() == "Opacity base" && t.fallback_color == theme::text())));
         for source in Source::ALL {
             assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Path(p) if p.fill == theme::well().lerp_to_gamma(source.color(), 0.35))));
         }
-        assert!(out.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Rect(r) if r.fill == Source::Velocity.color() && r.corner_radius.nw > 0)));
-        // This fixture clips timbre at zero and gain at the upper end; the
-        // hatch strokes must actually be drawn through narrow edge clips.
-        for x in [base.left(), base.right() - 5.0] {
-            assert!(out.shapes.iter().any(|s| (s.clip_rect.left() - x).abs() < 0.1
-                && (s.clip_rect.width() - 5.0).abs() < 0.1
-                && matches!(s.shape, egui::Shape::LineSegment { .. })));
+        assert!(overlay(&out).iter().any(|s| matches!(s,
+            egui::Shape::Rect(r) if r.fill == band_color(Source::Velocity, None) && r.corner_radius.nw > 0)));
+        // Four mappings fit inside the bar, with timbre clipped at zero and
+        // gain at the ceiling. Hatch strokes remain within their lane ends.
+        for edge in [plot.left(), plot.right() - 5.0] {
+            assert!(overlay(&out).iter().any(|s| matches!(s,
+                egui::Shape::LineSegment { points, stroke } if stroke.color == theme::well()
+                    && points.iter().all(|p| p.x >= edge && p.x <= edge + 5.0))));
         }
         settings.gain.opacity = Some(0.25);
         let out = frame(&ctx, &mut settings, vec![]);
-        assert!(out.shapes.iter().any(|s| matches!(&s.shape,
+        assert!(overlay(&out).iter().any(|s| matches!(s,
             egui::Shape::LineSegment { points, stroke }
-                if stroke.color == Source::Gain.color()
-                    && points[0].x >= base.left() + base.width() * 0.5
+                if stroke.color == band_color(Source::Gain, None)
+                    && points[0].x >= plot.left() + plot.width() * 0.5
                     && points[1].x > points[0].x)));
         frame(&ctx, &mut settings, vec![egui::Event::PointerMoved(velocity.center())]);
         let out = frame(&ctx, &mut settings, vec![]);
-        assert_eq!(band(&out, Source::Velocity.color()), velocity);
-        assert_eq!(band(&out, Source::Timbre.color().gamma_multiply(0.3)), timbre);
+        assert_eq!(band(&out, band_color(Source::Velocity, Some(Source::Velocity))), velocity);
+        assert_eq!(band(&out, band_color(Source::Timbre, Some(Source::Velocity))), timbre);
+
+        // The inset ranges use the base response rather than claiming a
+        // separate interaction, so dragging anywhere in them still edits base.
+        frame(
+            &ctx,
+            &mut settings,
+            vec![egui::Event::PointerButton {
+                pos: velocity.center(),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let out = frame(
+            &ctx,
+            &mut settings,
+            vec![egui::Event::PointerMoved(Pos2::new(
+                base.left() + base.width() * 0.75,
+                velocity.center().y,
+            ))],
+        );
+        assert!(settings.opacity_rest > 0.6);
+        let marker = plot.left() + plot.width() * settings.opacity_rest;
+        assert!(overlay(&out).iter().any(|s| matches!(s,
+            egui::Shape::LineSegment { points, stroke } if stroke.color == theme::text()
+                && (points[0].x - marker).abs() < 0.1 && (points[1].x - marker).abs() < 0.1)));
     }
 }

@@ -78,6 +78,7 @@ fn curve_points(shapes: &[egui::Shape]) -> Vec<egui::Pos2> {
 pub struct ValueBar<'a> {
     value: &'a mut f32,
     color: Option<Color32>,
+    overlay_slot: Option<&'a mut Option<egui::layers::ShapeIdx>>,
     range: RangeInclusive<f32>,
     label: &'a str,
     /// Ease the low end of the range (geometric when min > 0, cubic
@@ -115,6 +116,7 @@ impl<'a> ValueBar<'a> {
         ValueBar {
             value,
             color: None,
+            overlay_slot: None,
             range,
             label,
             eased: false,
@@ -133,6 +135,15 @@ impl<'a> ValueBar<'a> {
     /// Tint the value fill while retaining the normal well and interaction states.
     pub fn color(mut self, color: Color32) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Reserve paint between the fill and text for a caller that needs values
+    /// edited by later controls in this frame. Text entry and off-screen bars
+    /// leave no slot; callers must keep their shapes within the returned rect.
+    pub(crate) fn overlay_slot(mut self, slot: &'a mut Option<egui::layers::ShapeIdx>) -> Self {
+        *slot = None;
+        self.overlay_slot = Some(slot);
         self
     }
 
@@ -332,7 +343,7 @@ impl<'a> ValueBar<'a> {
         }
     }
 
-    pub fn show(self, ui: &mut Ui) -> Response {
+    pub fn show(mut self, ui: &mut Ui) -> Response {
         #[cfg(test)]
         super::range_probe::record(self.label, &[*self.value], &self.range);
         let scale = theme::ui_scale(ui.ctx());
@@ -439,6 +450,10 @@ impl<'a> ValueBar<'a> {
             }
         }
 
+        if let Some(slot) = self.overlay_slot.as_deref_mut() {
+            *slot = Some(painter.add(egui::Shape::Noop));
+        }
+
         // Over the fill and under the text: the fill is what the curve is
         // drawn ON and the two text runs are what it is drawn UNDER, which is
         // the order that keeps the number legible where the line passes behind
@@ -467,7 +482,7 @@ impl<'a> ValueBar<'a> {
             ));
         }
 
-        let lit = response.hovered() || response.dragged();
+        let lit = response.hovered() || response.dragged() || self.overlay_slot.is_some();
         let (text_color, value_color) = match (self.swatch, lit) {
             (Some(_), _) => (theme::well(), theme::well()),
             (None, true) => (theme::text(), theme::text()),

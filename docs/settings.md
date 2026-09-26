@@ -60,7 +60,10 @@ lower it to see velocity or pressure brighten the note.
 Note-release fading still applies,
 and the lattice's separate background node glow does not follow these mappings.
 
-The rounded bands touch the top of each base bar and share its value scale.
+The rounded bands sit inside each base slider,
+behind its label and value,
+and share its value scale.
+A light vertical marker shows the base.
 Their colors match the weight slider fills;
 each band shows that source's possible reach from the base.
 Hover a band or edit its weight to highlight it.
