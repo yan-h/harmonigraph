@@ -105,7 +105,9 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     use harmonigraph_scene::LatticeMaterial;
     let mut patterns = Vec::new();
-    for material in [LatticeMaterial::Contours, LatticeMaterial::Interference] {
+    for material in
+        [LatticeMaterial::Clouds, LatticeMaterial::Contours, LatticeMaterial::Interference]
+    {
         for (levels, accumulation) in
             [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)]
         {

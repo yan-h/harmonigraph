@@ -205,7 +205,7 @@ float lattice_material(
     float _e22 = u.nebula.scale;
     float footprint = 5.0 / (_e22 * static_cast<float>(metal::uint2(glow_sum.get_width(), glow_sum.get_height()).y));
     uint _e33 = u.nebula.material;
-    if (_e33 == 0u) {
+    if (_e33 == 1u) {
         float _e40 = u.nebula.scale;
         float phase = ((metal::sqrt(alpha) * (48.0 / _e40)) + ((warp.x - 0.5) * 2.0)) + (drift.x * 2.0);
         float terrace = 0.5 + (0.5 * metal::sin(phase));
@@ -219,32 +219,68 @@ float lattice_material(
     return 0.1 + (0.9 * metal::mix(fringes, 0.21875, metal::smoothstep(0.7, 2.5, footprint * 55.0)));
 }
 
-metal::float4 material_light(
+metal::float4 nebula_light(
     metal::float4 light,
     metal::float2 pixel,
-    metal::float2 contour_1,
-    constant Uniforms& u,
-    metal::texture2d<float, metal::access::sample> glow_sum
+    constant Uniforms& u
 ) {
     bool local = {};
-    float _e6 = u.nebula.depth;
-    if (!((_e6 <= 0.0))) {
+    float _e5 = u.nebula.depth;
+    if (!((_e5 <= 0.0))) {
         local = light.w <= 0.0;
     } else {
         local = true;
     }
-    bool _e16 = local;
-    if (_e16) {
+    bool _e15 = local;
+    if (_e15) {
         return light;
     }
-    metal::float2 _e20 = u.nebula.target_size;
-    float _e28 = u.nebula.target_size.y;
-    float _e34 = u.nebula.scale;
-    metal::float2 p_2 = ((pixel - (_e20 * 0.5)) / metal::float2(_e28)) * (5.0 / _e34);
-    metal::float2 _e41 = u.nebula.drift;
-    float _e44 = lattice_material(p_2, _e41, contour_1.x, contour_1.y, u, glow_sum);
-    float _e48 = u.nebula.depth;
-    return light * metal::mix(1.0, _e44, _e48);
+    metal::float2 _e19 = u.nebula.target_size;
+    float _e27 = u.nebula.target_size.y;
+    float _e33 = u.nebula.scale;
+    metal::float2 p_2 = ((pixel - (_e19 * 0.5)) / metal::float2(_e27)) * (5.0 / _e33);
+    metal::float2 drift_1 = u.nebula.drift;
+    float _e42 = nebula_noise(p_2 + drift_1);
+    float _e48 = nebula_noise((p_2 + metal::float2(8.3, 2.7)) - drift_1);
+    metal::float2 warp_1 = metal::float2(_e42, _e48);
+    float _e54 = nebula_noise((p_2 + (warp_1 * 1.2)) + drift_1);
+    float _e62 = nebula_noise(((p_2 * 2.3) - drift_1) + metal::float2(3.1, 7.4));
+    float density = 0.08 + (0.92 * metal::smoothstep(0.25, 0.7, (_e54 * 0.75) + (_e62 * 0.25)));
+    float _e78 = u.nebula.depth;
+    return light * metal::mix(1.0, density, _e78);
+}
+
+metal::float4 material_light(
+    metal::float4 light_1,
+    metal::float2 pixel_1,
+    metal::float2 contour_1,
+    constant Uniforms& u,
+    metal::texture2d<float, metal::access::sample> glow_sum
+) {
+    bool local_1 = {};
+    uint _e6 = u.nebula.material;
+    if (_e6 == 0u) {
+        metal::float4 _e9 = nebula_light(light_1, pixel_1, u);
+        return _e9;
+    }
+    float _e13 = u.nebula.depth;
+    if (!((_e13 <= 0.0))) {
+        local_1 = light_1.w <= 0.0;
+    } else {
+        local_1 = true;
+    }
+    bool _e23 = local_1;
+    if (_e23) {
+        return light_1;
+    }
+    metal::float2 _e27 = u.nebula.target_size;
+    float _e35 = u.nebula.target_size.y;
+    float _e41 = u.nebula.scale;
+    metal::float2 p_3 = ((pixel_1 - (_e27 * 0.5)) / metal::float2(_e35)) * (5.0 / _e41);
+    metal::float2 _e48 = u.nebula.drift;
+    float _e51 = lattice_material(p_3, _e48, contour_1.x, contour_1.y, u, glow_sum);
+    float _e55 = u.nebula.depth;
+    return light_1 * metal::mix(1.0, _e51, _e55);
 }
 
 struct fs_glow_resolveInput {
@@ -265,18 +301,18 @@ fragment fs_glow_resolveOutput fs_glow_resolve(
     if (_e4 <= 0.0) {
         return fs_glow_resolveOutput { metal::float4(0.0) };
     }
-    metal::int2 pixel_1 = naga_f2i32(pos.xy);
+    metal::int2 pixel_2 = naga_f2i32(pos.xy);
     metal::float2 _e15 = u.nebula.target_size;
     metal::float2 scene_pixel = (pos.xy * _e15) / static_cast<metal::float2>(metal::uint2(glow_sum.get_width(), glow_sum.get_height()));
     uint clamped_lod_e23 = metal::min(uint(0), glow_sum.get_num_mip_levels() - 1);
-    metal::float4 sum = glow_sum.read(metal::min(metal::uint2(pixel_1), metal::uint2(glow_sum.get_width(clamped_lod_e23), glow_sum.get_height(clamped_lod_e23)) - 1), clamped_lod_e23);
+    metal::float4 sum = glow_sum.read(metal::min(metal::uint2(pixel_2), metal::uint2(glow_sum.get_width(clamped_lod_e23), glow_sum.get_height(clamped_lod_e23)) - 1), clamped_lod_e23);
     uint clamped_lod_e26 = metal::min(uint(0), glow_screen.get_num_mip_levels() - 1);
-    metal::float4 _e26 = glow_screen.read(metal::min(metal::uint2(pixel_1), metal::uint2(glow_screen.get_width(clamped_lod_e26), glow_screen.get_height(clamped_lod_e26)) - 1), clamped_lod_e26);
+    metal::float4 _e26 = glow_screen.read(metal::min(metal::uint2(pixel_2), metal::uint2(glow_screen.get_width(clamped_lod_e26), glow_screen.get_height(clamped_lod_e26)) - 1), clamped_lod_e26);
     metal::float2 bounded = _e26.xy;
     uint clamped_lod_e30 = metal::min(uint(0), glow_accumulated.get_num_mip_levels() - 1);
-    metal::float4 accumulated = glow_accumulated.read(metal::min(metal::uint2(pixel_1), metal::uint2(glow_accumulated.get_width(clamped_lod_e30), glow_accumulated.get_height(clamped_lod_e30)) - 1), clamped_lod_e30);
+    metal::float4 accumulated = glow_accumulated.read(metal::min(metal::uint2(pixel_2), metal::uint2(glow_accumulated.get_width(clamped_lod_e30), glow_accumulated.get_height(clamped_lod_e30)) - 1), clamped_lod_e30);
     uint _e37 = u.nebula.material;
-    if (_e37 == 0u) {
+    if (_e37 == 1u) {
         float _e42 = metal::fwidth(accumulated.w);
         contour = metal::float2(accumulated.w, _e42);
     }
@@ -300,21 +336,21 @@ fragment fs_glow_resolveOutput fs_glow_resolve(
     float screen = bounded.x;
     float coverage = bounded.y;
     float total = metal::dot(rgb_2, GLOW_LUMINANCE);
-    float light_1 = metal::min(screen, 1.0) * peak_luminance;
+    float light_2 = metal::min(screen, 1.0) * peak_luminance;
     if (total <= 0.0) {
         metal::float2 _e88 = contour;
         metal::float4 _e89 = material_light(metal::mix(metal::float4(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation), scene_pixel, _e88, u, glow_sum);
         return fs_glow_resolveOutput { _e89 };
     }
-    linear = rgb_2 * (light_1 / total);
+    linear = rgb_2 * (light_2 / total);
     float _e94 = linear.x;
     float _e96 = linear.y;
     float _e99 = linear.z;
     float largest = metal::max(metal::max(_e94, _e96), _e99);
     if (largest > peak_luminance) {
-        float chroma = metal::clamp((peak_luminance - light_1) / (largest - light_1), 0.0, 1.0);
+        float chroma = metal::clamp((peak_luminance - light_2) / (largest - light_2), 0.0, 1.0);
         metal::float3 _e109 = linear;
-        linear = metal::mix(metal::float3(light_1), _e109, chroma);
+        linear = metal::mix(metal::float3(light_2), _e109, chroma);
     }
     metal::float3 _e111 = linear;
     metal::float3 _e115 = glow_gamma(metal::max(_e111, metal::float3(0.0)));

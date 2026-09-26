@@ -3432,7 +3432,7 @@ fn lattice_material(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32
     let q = p + (warp - 0.5) * 1.2;
     // One resolve texel in material coordinates, including reduced render scales.
     let footprint = 5.0 / (u.nebula.scale * f32(textureDimensions(glow_sum).y));
-    if u.nebula.material == 0u {
+    if u.nebula.material == 1u {
         // Actual light coverage supplies the islands; noise only bends their
         // boundaries. No history means a camera move cannot leave old islands.
         let phase = sqrt(alpha) * (48.0 / u.nebula.scale)
@@ -3449,13 +3449,37 @@ fn lattice_material(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32
     return 0.10 + 0.90 * mix(fringes, 0.21875, smoothstep(0.7, 2.5, footprint * 55.0));
 }
 
+// Keep Clouds in its original function to preserve its Metal arithmetic and
+// byte-exact default frames while the other materials evolve independently.
 fn material_light(light: vec4<f32>, pixel: vec2<f32>, contour: vec2<f32>) -> vec4<f32> {
+    if u.nebula.material == 0u {
+        return nebula_light(light, pixel);
+    }
     if u.nebula.depth <= 0.0 || light.a <= 0.0 {
         return light;
     }
     let p = (pixel - u.nebula.target_size * 0.5)
         / u.nebula.target_size.y * (5.0 / u.nebula.scale);
     let density = lattice_material(p, u.nebula.drift, contour.x, contour.y);
+    return light * mix(1.0, density, u.nebula.depth);
+}
+
+fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
+    if u.nebula.depth <= 0.0 || light.a <= 0.0 {
+        return light;
+    }
+    // Aspect-correct pane coordinates, independent of DPI and render scale.
+    // Camera rebasing cannot reset this field; notes move through the medium.
+    let p = (pixel - u.nebula.target_size * 0.5)
+        / u.nebula.target_size.y * (5.0 / u.nebula.scale);
+    let drift = u.nebula.drift;
+    let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
+    let cloud = nebula_noise(p + warp * 1.2 + drift);
+    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
+    let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, cloud * 0.75 + detail * 0.25);
+    // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
+    // and the overlap rule's peak bound. No glow means no nebula light at all.
+    // Applying once after the fold also textures dense saturated chords.
     return light * mix(1.0, density, u.nebula.depth);
 }
 
@@ -3520,7 +3544,7 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
     // The accumulated coverage is the contour field even when the color
     // overlap dial changes. Derivatives are taken before coverage branches.
     var contour = vec2<f32>(0.0);
-    if u.nebula.material == 0u {
+    if u.nebula.material == 1u {
         contour = vec2<f32>(accumulated.a, fwidth(accumulated.a));
     }
     // The gamma screen is also the exact sole contribution (up to target

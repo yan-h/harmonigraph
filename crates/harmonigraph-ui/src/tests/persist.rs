@@ -2245,7 +2245,7 @@ fn retired_lattice_materials_refuse_the_entire_editor_and_appearance_document() 
         harmonigraph_scene::LatticeMaterial::Contours;
     let saved = state.save_persist();
     let appearance = state.picture.appearance.serialize();
-    for retired in ["Clouds", "Fibres", "Liquid"] {
+    for retired in ["Fibres", "Liquid"] {
         let dropped = saved.replace("material:Contours", &format!("material:{retired}"));
         assert_ne!(saved, dropped, "fixture must carry the retired variant");
         let mut restored = fresh();

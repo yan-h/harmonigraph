@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "compiler": "Apple metal version 32023.883 (metalfe-32023.883)\nTarget: air64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.BJ1eKF/Metal.xctoolchain/usr/metal/current/bin\n",
+  "compiler": "Apple metal version 32023.883 (metalfe-32023.883)\nTarget: air64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.QQyJR4/Metal.xctoolchain/usr/metal/current/bin\n",
   "flags": [
     "-std=metal3.2",
     "-mmacosx-version-min=15.0",
@@ -41,9 +41,6 @@
     "24a99247832171f0.metal": "1aeac2c0e0c473330cbe3a161d78bacbc899b6d61445bc495f94b614ac36f4ed",
     "24a99247832171f0.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "24a99247832171f0.metallib": "6a23132f76d6191a864d95fb36b46ad43c505f0c7118cbf2b812559cb06c8e3a",
-    "2563451184a37600.metal": "610de37248fdf63e8aa97766b405e6f875184fdbc3d8858c4e27ca335ea4a2b5",
-    "2563451184a37600.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
-    "2563451184a37600.metallib": "622ce64c96f8213ae21ec46939df4815e9a8e7814f21b1ecec6291dbbd4a7d43",
     "27a5161946f29b4a.metal": "843c331d78f8048fa31e15f410d831f8cec8d04a39b4de9c6941bae0996e20ca",
     "27a5161946f29b4a.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "27a5161946f29b4a.metallib": "b2ef8cf56f5877df29548fd85e6cfe2ba80a4238348489b68af095385709bb5c",
@@ -86,6 +83,9 @@
     "4e6eefd224f14f5f.metal": "2ab0c6016afec5afadc03f4d4f3b3733c7ab7b4797ad9cc67fed75e2ca929165",
     "4e6eefd224f14f5f.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "4e6eefd224f14f5f.metallib": "8d661850b7080a66f55924697214f80b613eba3ba7b2b7578a31d6ad0c1114b6",
+    "555b9114ac37c020.metal": "dc470206e9937a5a48c0c02fcb6efc536f006a101840d3bb5aa88677cae7622f",
+    "555b9114ac37c020.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
+    "555b9114ac37c020.metallib": "69e8b775a02f81715b916f6cbe6d3e77b14f1460411f9f4b50322fe66af17acf",
     "562818ebc0fdd7e3.metal": "10d50aaddde511a61433217ad2633373c45bbd7dda28b9d2755cc6eb1670bf7f",
     "562818ebc0fdd7e3.options": "30968010505604b44544dcf3741d29a49f2e221f18231780e6e6ccb8b495a3d6",
     "562818ebc0fdd7e3.metallib": "b49e49a4e90960d870109c353670791a0facc7bc2a0bfe656250a58d164a387e",
