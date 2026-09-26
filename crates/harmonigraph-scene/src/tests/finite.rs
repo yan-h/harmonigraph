@@ -88,23 +88,19 @@ fn poisoned_view() -> ViewConfig {
         spectral_ring_attack: nan,
         spectral_ring_release: nan,
         fade_shape: nan,
+        note_bloom: nan,
         note_animation: NoteAnimationConfig {
             order: base.note_animation.order,
             stagger_spread: nan,
             radial_start: nan,
         },
         intensity: {
-            let source = || crate::IntensitySource {
-                opacity: Some(nan),
-                glow: Some(nan),
-                thickness: Some(nan),
-            };
+            let source = || crate::IntensitySource { opacity: Some(nan), thickness: Some(nan) };
             crate::IntensitySettings {
                 velocity: source(),
                 gain: source(),
                 pressure: source(),
                 timbre: source(),
-                glow_base: nan,
                 opacity_rest: nan,
                 thickness_base: nan,
                 thickness_max: nan,
@@ -255,14 +251,12 @@ fn scene_floats(scene: &Scene) -> Floats {
             bass_color,
             audio_ring,
             glow,
-            bloom,
             trail,
         } = node;
         f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
         f.one(format!("nodes[{i}].activation"), *activation);
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);
-        f.one(format!("nodes[{i}].bloom"), *bloom);
         f.many(&format!("nodes[{i}].thickness"), *thickness);
         f.one(format!("nodes[{i}].scale"), *scale);
         f.one(format!("nodes[{i}].comma"), *comma);
@@ -445,8 +439,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         ("glow_blend", scene.glow_blend, 0.0),
         ("glow_accumulation", scene.glow_accumulation, 0.0),
         ("render_scale", scene.render_scale, 1.0),
-        // Gain is routed to Glow above, so the pass runs at its floor.
-        ("bloom_strength", scene.bloom_strength, crate::BLOOM_REFERENCE_FLOOR),
+        ("bloom_strength", scene.bloom_strength, crate::ViewConfig::default().note_bloom),
         ("shadow.lattice_geometry.width", shadow.lattice_geometry.width, 0.0),
         ("shadow.lattice_geometry.depth", shadow.lattice_geometry.depth, 0.0),
         ("shadow.lattice_geometry.falloff", shadow.lattice_geometry.falloff, SHADOW_FALLOFF_MIN),

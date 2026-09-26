@@ -45,7 +45,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     };
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
-    poison!(a.view; render_scale, spiral_bloom, sevens_size, label_scale,
+    poison!(a.view; render_scale, spiral_bloom, note_bloom, sevens_size, label_scale,
         octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
@@ -54,7 +54,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
-    poison!(a.view.intensity; glow_base, opacity_rest, thickness_base, thickness_max);
+    poison!(a.view.intensity; opacity_rest, thickness_base, thickness_max);
     for source in [
         &mut a.view.intensity.velocity,
         &mut a.view.intensity.gain,
@@ -250,12 +250,12 @@ fn scenarios() -> Vec<Scenario> {
     for &pane in SETTINGS_PANES {
         let visits = match pane {
             panes::Tab::Tuning => 7,
-            // The pitch colors, then three bases and Thickness max.
+            // The pitch colors, then two bases and Thickness max.
             // Mapped source weights are exercised in the enabled scenario.
-            panes::Tab::Colors => 2 + 4,
+            panes::Tab::Colors => 2 + 3,
             // The picture, then the background glow (8) with its texture
             // switched off, then two shadow groups of two bars each.
-            panes::Tab::LatticeSettings => 16 + 8 + 4,
+            panes::Tab::LatticeSettings => 16 + 1 + 8 + 4,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -270,11 +270,11 @@ fn scenarios() -> Vec<Scenario> {
         // backdrop, glow and Contour shadow falloff (one bar in each of a
         // page's two groups).
         let visits = match pane {
-            panes::Tab::Colors => visits + 12,
+            panes::Tab::Colors => visits + 8,
             panes::Tab::LatticeSettings => visits + 5 + 6 + 2,
-            // ...the spectrogram's twelve, the ribbons' five, and the
+            // ...the spectrogram's twelve, the ribbons' six, and the
             // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 12 + 5 + 2 + 2,
+            panes::Tab::AnalyzerSettings => visits + 12 + 6 + 2 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -288,7 +288,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Watercolor,
         enabled: true,
-        visits: 13 + 12 + 5 + 2 + 2 - 3 + 5,
+        visits: 13 + 12 + 6 + 2 + 2 - 3 + 5,
         ..base
     });
     // The starfield's, on the same terms: the three scale bars and the shared
@@ -297,7 +297,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
         enabled: true,
-        visits: 13 + 12 + 5 + 2 + 2 - 3 - 1 + 9,
+        visits: 13 + 12 + 6 + 2 + 2 - 3 - 1 + 9,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -305,7 +305,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 22 + 13 + 6,
+            visits: 22 + 1 + 13 + 6,
             ..base
         });
     }
@@ -403,17 +403,14 @@ fn check(edge: Edge) {
             assert!(saw("Pitch flexibility"));
             assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
         }
-        // The lattice and the ribbons share one bloom on the Mappings page; the
-        // Spiral keeps its own.
-        let blooms: &[&str] = match scenario.pane {
-            panes::Tab::Colors => &["Bloom base"],
-            panes::Tab::AnalyzerSettings => &["Spiral bloom"],
-            _ => &[],
-        };
-        for &label in blooms {
-            assert!(saw(label), "{scenario:?} drew no {label:?} bar");
-        }
-        assert!(!saw("Bloom") && !saw("Ribbon bloom"), "{scenario:?} drew a retired bloom bar");
+        // One shared note bloom is editable beside either picture it affects.
+        assert_eq!(
+            saw("Note bloom"),
+            scenario.pane == panes::Tab::LatticeSettings
+                || (scenario.pane == panes::Tab::AnalyzerSettings && scenario.enabled)
+        );
+        assert_eq!(saw("Spiral bloom"), scenario.pane == panes::Tab::AnalyzerSettings);
+        assert!(!saw("Bloom base"), "{scenario:?} drew the retired mapping base");
         for visit in visits {
             if visit.label == "Contour levels" {
                 assert_eq!(

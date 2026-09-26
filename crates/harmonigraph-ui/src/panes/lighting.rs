@@ -58,9 +58,19 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
     });
 }
 
-/// The background glow, first in the Light section: its reach, strength and
-/// colour, what it does to the lit ink, and its clock. The note halo beside
-/// it is the Bloom base on the Mappings page.
+/// The same global note bloom is editable beside either picture it affects.
+pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
+    ValueBar::new(strength, 0.0..=2.0, "Note bloom")
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text(
+            "Soft halos around bright notes. Shared by the Lattice and MIDI ribbons in the Analyzer. \
+             Changing this control updates both pictures. 0 turns bloom off; 1× is the reference strength.",
+        );
+    crate::widgets::weak(ui, "Shared by Lattice and Analyzer MIDI ribbons.");
+}
+
+/// The background glow: its reach, strength, colour, wash and clock.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     super::block(ui, "Background glow");
     // A share of the node's radius, the unit the shared gap and the Clearance in

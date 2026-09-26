@@ -38,8 +38,7 @@ struct VertexOut {
     uint who;
     float feather;
     metal::float2 ramp;
-    char _pad14[8];
-    metal::float4 reads;
+    metal::float2 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -117,9 +116,9 @@ struct vs_shadow_cellOutput {
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
     metal::float2 ramp [[user(loc13), flat]];
-    metal::float4 reads [[user(loc14), flat]];
+    metal::float2 fade [[user(loc14), flat]];
 };
-struct vb_15_type { metal::uchar data[112]; };
+struct vb_15_type { metal::uchar data[104]; };
 struct vb_14_type { metal::uchar data[64]; };
 vertex vs_shadow_cellOutput vs_shadow_cell(
   uint vertex_ [[vertex_id]]
@@ -138,7 +137,7 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     metal::float4 outline = {};
     metal::float4 taper_depth = {};
     metal::float4 taper = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 112)) {
+    if (i_id < (_buffer_sizes.buffer_size15 / 104)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
@@ -147,8 +146,8 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
         lead = unpackFloat32x4_(vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27], vb_15_elem.data[28], vb_15_elem.data[29], vb_15_elem.data[30], vb_15_elem.data[31], vb_15_elem.data[32], vb_15_elem.data[33], vb_15_elem.data[34], vb_15_elem.data[35], vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
         core = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
         outline = unpackUnorm8x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47]);
-        taper_depth = unpackFloat32x4_(vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95]);
-        taper = unpackFloat32x4_(vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99], vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103], vb_15_elem.data[104], vb_15_elem.data[105], vb_15_elem.data[106], vb_15_elem.data[107], vb_15_elem.data[108], vb_15_elem.data[109], vb_15_elem.data[110], vb_15_elem.data[111]);
+        taper_depth = unpackFloat32x4_(vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87]);
+        taper = unpackFloat32x4_(vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99], vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
     }
     metal::float4 box_rect = {};
     metal::float4 box_cell = {};
@@ -194,8 +193,8 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     out.who = naga_f2u32(box_who.x + 0.5);
     out.feather = 1.0 / metal::max(box_meta.x, 0.000001);
     out.ramp = metal::float2(0.0);
-    out.reads = metal::float4(1.0);
+    out.fade = metal::float2(1.0);
     VertexOut _e93 = out;
     const auto _tmp = _e93;
-    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.reads };
+    return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.fade };
 }

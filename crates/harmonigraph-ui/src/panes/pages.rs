@@ -37,6 +37,7 @@ pub(super) fn lattice_settings_pane(
     plus_pane(ui, &mut state.appearance);
     section(ui, "Light", |ui| {
         let view = &mut state.appearance.view;
+        lighting::note_bloom(ui, &mut view.note_bloom);
         lighting::glow(ui, view);
         lattice_atmosphere::settings(ui, view);
         lighting::lattice_shadows(ui, view);
@@ -54,7 +55,7 @@ pub(super) fn analyzer_settings_pane(
     params: &dyn ParamBackend,
 ) {
     spectrogram_section(ui, &mut state.appearance.spectrum);
-    ribbons_section(ui, &mut state.appearance.spectrum);
+    ribbons_section(ui, &mut state.appearance.spectrum, &mut state.appearance.view.note_bloom);
     view_section(ui, state, &mut interaction.dock);
     analysis_section(ui, &mut state.appearance.spectrum, params);
     analyzer_lighting(ui, &mut state.appearance);

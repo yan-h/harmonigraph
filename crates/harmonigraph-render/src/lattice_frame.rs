@@ -82,12 +82,7 @@ impl LatticeCallback {
             // `w` is how much of the bloom this node GIVES UP, so the zero it
             // always was is the full bloom, and a note blooming over its bar
             // gives up a negative amount. Bounded by the most a share can be.
-            params: [
-                n.activation,
-                n.melody_level,
-                n.bass_level,
-                1.0 - n.bloom.clamp(0.0, BLOOM_SHARE_MAX),
-            ],
+            params: [n.activation, n.melody_level, n.bass_level, 0.0],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];

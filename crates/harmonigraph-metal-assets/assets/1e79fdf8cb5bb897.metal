@@ -33,8 +33,7 @@ struct VertexOut {
     uint who;
     float feather;
     metal::float2 ramp;
-    char _pad14[8];
-    metal::float4 reads;
+    metal::float2 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -284,11 +283,10 @@ metal::float4 core_color(
     metal::float4 body = (in_10.core * _e4) * _e6;
     float _e10 = locals.light;
     if (_e10 < 0.5) {
-        float _e15 = along(in_10, in_10.reads.xy);
-        return body * _e15;
+        float _e14 = along(in_10, in_10.fade);
+        return body * _e14;
     }
-    float _e19 = along(in_10, in_10.reads.zw);
-    return metal::float4(body.xyz * _e19, body.w * metal::min(_e19, 1.0));
+    return body;
 }
 
 struct fs_core_gammaInput {
@@ -305,7 +303,7 @@ struct fs_core_gammaInput {
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
     metal::float2 ramp [[user(loc13), flat]];
-    metal::float4 reads [[user(loc14), flat]];
+    metal::float2 fade [[user(loc14), flat]];
 };
 struct fs_core_gammaOutput {
     metal::float4 member [[color(0)]];
@@ -315,7 +313,7 @@ fragment fs_core_gammaOutput fs_core_gamma(
 , metal::float4 position [[position]]
 , constant Locals& locals [[buffer(0)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, {}, varyings.reads };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
     metal::float4 _e1 = core_color(in, locals);
     return fs_core_gammaOutput { _e1 };
 }

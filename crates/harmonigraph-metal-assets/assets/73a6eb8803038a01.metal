@@ -2065,8 +2065,6 @@ fragment fs_main_sceneOutput fs_main_scene(
     Painted _e1 = node_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, u, _buffer_sizes);
     SplitOut _e3 = node_split(_e1, _e1.seen, u);
     SplitOut _e5 = node_split(_e1, _e1.bloom, u);
-    float share_1 = 1.0 - in.params.w;
-    metal::float4 bloom_ink = metal::float4(_e5.ink.xyz * share_1, _e5.ink.w * metal::min(share_1, 1.0));
-    const auto _tmp = SceneOut {_e3.other, _e3.ink, _e5.other, bloom_ink};
+    const auto _tmp = SceneOut {_e3.other, _e3.ink, _e5.other, _e5.ink};
     return fs_main_sceneOutput { _tmp.other, _tmp.ink, _tmp.bloom_other, _tmp.bloom_ink };
 }

@@ -14,7 +14,7 @@ struct ShadowCaster {
     metal::float4 map;
     metal::float4 shade;
 };
-typedef ShadowCaster type_6[1];
+typedef ShadowCaster type_5[1];
 struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
@@ -44,8 +44,7 @@ struct VertexOut {
     uint who;
     float feather;
     metal::float2 ramp;
-    char _pad14[8];
-    metal::float4 reads;
+    metal::float2 fade;
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -88,7 +87,7 @@ float shadow_kernel(
     metal::float2 points,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
-    device type_6 const& shadow_casters,
+    device type_5 const& shadow_casters,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     if (who >= (1 + (_buffer_sizes.size2 - 0 - 64) / 64)) {
@@ -354,7 +353,7 @@ float outline_coverage(
     float reach,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
-    device type_6 const& shadow_casters,
+    device type_5 const& shadow_casters,
     constant Locals& locals,
     constant _mslBufferSizes& _buffer_sizes
 ) {
@@ -390,7 +389,7 @@ float cap_coverage(
     VertexOut in_10,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
-    device type_6 const& shadow_casters,
+    device type_5 const& shadow_casters,
     constant Locals& locals,
     constant _mslBufferSizes& _buffer_sizes
 ) {
@@ -424,7 +423,7 @@ metal::float4 outline_color(
     VertexOut in_12,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
     metal::sampler shadow_sampler,
-    device type_6 const& shadow_casters,
+    device type_5 const& shadow_casters,
     constant Locals& locals,
     constant _mslBufferSizes& _buffer_sizes
 ) {
@@ -434,20 +433,11 @@ metal::float4 outline_color(
     float _e9 = lead_coverage(in_12);
     float wrap = (_e3 * (1.0 - _e5)) * _e9;
     float _e12 = cap_coverage(in_12, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
-    float _e17 = along(in_12, in_12.reads.xy);
-    return (in_12.outline * metal::max(wrap, _e12)) * _e17;
+    float _e16 = along(in_12, in_12.fade);
+    return (in_12.outline * metal::max(wrap, _e12)) * _e16;
 }
 
-metal::float3 linear_from_gamma_rgb(
-    metal::float3 srgb
-) {
-    metal::bool3 cutoff = srgb < metal::float3(0.04045);
-    metal::float3 lower = srgb / metal::float3(12.92);
-    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
-    return metal::select(higher, lower, cutoff);
-}
-
-struct fs_outline_linearInput {
+struct fs_outline_gammaInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -461,22 +451,21 @@ struct fs_outline_linearInput {
     uint who [[user(loc11), flat]];
     float feather [[user(loc12), flat]];
     metal::float2 ramp [[user(loc13), flat]];
-    metal::float4 reads [[user(loc14), flat]];
+    metal::float2 fade [[user(loc14), flat]];
 };
-struct fs_outline_linearOutput {
+struct fs_outline_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_outline_linearOutput fs_outline_linear(
-  fs_outline_linearInput varyings [[stage_in]]
+fragment fs_outline_gammaOutput fs_outline_gamma(
+  fs_outline_gammaInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(0)]]
 , metal::sampler shadow_sampler [[sampler(0)]]
-, device type_6 const& shadow_casters [[buffer(1)]]
+, device type_5 const& shadow_casters [[buffer(1)]]
 , constant Locals& locals [[buffer(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, {}, varyings.reads };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
     metal::float4 _e1 = outline_color(in, shadow_atlas, shadow_sampler, shadow_casters, locals, _buffer_sizes);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_outline_linearOutput { metal::float4(_e3, _e1.w) };
+    return fs_outline_gammaOutput { _e1 };
 }

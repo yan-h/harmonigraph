@@ -20,7 +20,7 @@ use egui::Color32;
 use harmonigraph_core::Expressions;
 use harmonigraph_core::RollNote;
 use harmonigraph_render::{RollAxes, RollInstance};
-use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget, BLOOM_MAX};
+use harmonigraph_scene::{pitch_lut_color, IntensitySettings, IntensityTarget};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
 use crate::panes::scene_color;
@@ -295,12 +295,7 @@ pub(super) fn draw_roll(
     let detached_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, options.split));
     let dir = |v: egui::Vec2| [v.x, v.y];
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
-    // The pass runs at the reference and each piece carries its share of it
-    // (see `IntensitySettings::bloom_share`): the Bloom base itself while
-    // nothing is routed to Glow, so the halo is the base's alone.
-    let bloom = harmonigraph_render::bloom_strength(
-        state.appearance.view.intensity.sanitized().bloom_reference(),
-    );
+    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.note_bloom_strength());
     let pane = crate::panes::lattice::pane_id(options.surface);
     let shadow_surface = crate::text::spectral_shadow_surface(options.surface);
     let clipped_start = notes.len();
@@ -570,7 +565,7 @@ fn roll_instances_with_floor(
                 let (_, last) = note.expressions()[note.expressions().len() - 1];
                 let look = Look::of(&intensity, note.velocity, last);
                 let grow = look.grow();
-                let (fade, glow, taper) = read_through(&intensity, look, grow);
+                let (fade, taper) = read_through(look, grow);
                 detached.push(RollInstance {
                     center: [center.x, center.y],
                     half_extent: [half_pitch * grow, half],
@@ -587,7 +582,6 @@ fn roll_instances_with_floor(
                     span: RollInstance::WHOLE,
                     ramp: [0.0, 0.0],
                     fade,
-                    glow,
                     taper_depth: [0.0; 4],
                     taper,
                 });
@@ -849,7 +843,6 @@ fn roll_instances_with_floor(
                 span: RollInstance::WHOLE,
                 ramp: [0.0, 0.0],
                 fade: [1.0, 1.0],
-                glow: [1.0, 1.0],
                 taper_depth: [0.0; 4],
                 taper: RollInstance::UNTAPERED,
             };
@@ -863,7 +856,7 @@ fn roll_instances_with_floor(
                 (d - centre) * axes.depth_len() + lead_half
             };
             let points = intensity_points(note, &intensity, t0, t1);
-            push_pieces(&mut instances, &intensity, segment, &points, offset);
+            push_pieces(&mut instances, segment, &points, offset);
         }
     }
     (instances, detached)
@@ -879,10 +872,6 @@ const INTENSITY_TOLERANCE: f32 = 1.0 / 256.0;
 struct Look {
     /// The body's opacity, 0..1.
     fade: f32,
-    /// How much the body blooms, in the Bloom base's × units
-    /// ([`IntensitySettings::bloom`]); an instance carries it as its share of
-    /// the pass's strength.
-    bloom: f32,
     /// The ribbon's width as a multiple of the Ribbon width.
     width: f32,
 }
@@ -890,7 +879,7 @@ struct Look {
 impl Look {
     fn of(intensity: &IntensitySettings, velocity: f32, expressions: Expressions) -> Self {
         let reading = intensity.read(velocity, expressions);
-        Look { fade: reading.opacity, bloom: intensity.bloom(reading), width: reading.thickness }
+        Look { fade: reading.opacity, width: reading.thickness }
     }
 
     /// How far a box has to grow across pitch to hold this width: never less
@@ -923,9 +912,9 @@ fn intensity_points(
     keep[0] = true;
     keep[points.len() - 1] = true;
     // Each display's whole range, in a `Look`'s own units: opacity's 0..1,
-    // bloom's 0..BLOOM_MAX and the width's Thickness max.
+    // and the width's Thickness max.
     let tolerance =
-        [1.0, BLOOM_MAX, intensity.thickness_max.max(1.0)].map(|range| INTENSITY_TOLERANCE * range);
+        [1.0, intensity.thickness_max.max(1.0)].map(|range| INTENSITY_TOLERANCE * range);
     simplify(&points, tolerance, &mut keep, 0, points.len() - 1);
     points.into_iter().zip(keep).filter_map(|(point, kept)| kept.then_some(point)).collect()
 }
@@ -935,7 +924,7 @@ fn intensity_points(
 /// `tolerance` on any display.
 fn simplify(
     points: &[(f64, Look)],
-    tolerance: [f32; 3],
+    tolerance: [f32; 2],
     keep: &mut [bool],
     first: usize,
     last: usize,
@@ -948,9 +937,12 @@ fn simplify(
         let off = |value: f32, from: f32, to: f32, tolerance: f32| {
             (value - (from + (to - from) * s)).abs() / tolerance
         };
-        off(at.fade, a.fade, b.fade, tolerance[0])
-            .max(off(at.bloom, a.bloom, b.bloom, tolerance[1]))
-            .max(off(at.width, a.width, b.width, tolerance[2]))
+        off(at.fade, a.fade, b.fade, tolerance[0]).max(off(
+            at.width,
+            a.width,
+            b.width,
+            tolerance[1],
+        ))
     };
     let worst = (first + 1..last).map(|i| (i, error(points[i]))).max_by(|a, b| a.1.total_cmp(&b.1));
     if let Some((i, _)) = worst.filter(|&(_, error)| error > 1.0) {
@@ -960,19 +952,13 @@ fn simplify(
     }
 }
 
-/// An instance's [`fade`](RollInstance::fade), [`glow`](RollInstance::glow)
-/// and [`taper`](RollInstance::taper), held at one `look` all along it, in a
-/// box grown `grow` times the Ribbon width.
-fn read_through(
-    intensity: &IntensitySettings,
-    look: Look,
-    grow: f32,
-) -> ([f32; 2], [f32; 2], [f32; 4]) {
-    ([look.fade; 2], [intensity.bloom_share(look.bloom); 2], [look.width / grow; 4])
+/// An instance's fade and taper, held at one look in a box grown by `grow`.
+fn read_through(look: Look, grow: f32) -> ([f32; 2], [f32; 4]) {
+    ([look.fade; 2], [look.width / grow; 4])
 }
 
 /// `segment` cut into one piece per stretch between two of its intensity
-/// `points`, each carrying its stretch's fade, glow and thickness at both
+/// `points`, each carrying its stretch's fade and thickness at both
 /// ends. Every piece keeps the segment's whole box, so its outline, lead and
 /// cap are the segment's; only the span each one draws differs, and the
 /// outermost two reach past the box. `offset` places a time on the box's depth
@@ -990,7 +976,6 @@ fn read_through(
 /// swells keeps its box, and its widths, exactly.
 fn push_pieces(
     instances: &mut Vec<RollInstance>,
-    intensity: &IntensitySettings,
     mut segment: RollInstance,
     points: &[(f64, Look)],
     offset: impl Fn(f64) -> f32,
@@ -1002,8 +987,8 @@ fn push_pieces(
     // No length to cut (a note pressed this frame), or nothing to read along
     // it: the segment whole, at its newest intensity.
     if pieces.is_empty() || (pieces.len() == 1 && pieces[0][0].1 == pieces[0][1].1) {
-        let (fade, glow, taper) = read_through(intensity, points[points.len() - 1].1, grow);
-        instances.push(RollInstance { fade, glow, taper, ..segment });
+        let (fade, taper) = read_through(points[points.len() - 1].1, grow);
+        instances.push(RollInstance { fade, taper, ..segment });
         return;
     }
     let share = |look: Look| look.width / grow;
@@ -1034,7 +1019,6 @@ fn push_pieces(
             ],
             ramp: [low, high],
             fade: [at_newer.fade, at_older.fade],
-            glow: [at_newer.bloom, at_older.bloom].map(|bloom| intensity.bloom_share(bloom)),
             taper_depth: [newer_at, low, high, older_at],
             taper: [newer_width, share(at_newer), share(at_older), older_width],
             ..segment
@@ -1265,7 +1249,6 @@ mod tests {
             span: whole.span,
             ramp: whole.ramp,
             fade: whole.fade,
-            glow: whole.glow,
             taper_depth: whole.taper_depth,
             taper: whole.taper,
             ..piece
@@ -1278,27 +1261,6 @@ mod tests {
         let [end, apex_again] = newer.fade;
         assert!(start < 0.02 && end < 0.02 && apex == 1.0, "{older:?} {newer:?}");
         assert_eq!(apex, apex_again);
-        assert_eq!((older.glow, newer.glow), ([1.0; 2], [1.0; 2]), "nothing routed to the glow");
-
-        // The same pressure routed to the glow instead: it blooms that much
-        // over the Bloom base, as a share of the base the pass runs at, and the
-        // fade stays in full. The base is low enough for the whole swell to
-        // stand under the most a note blooms.
-        state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
-            pressure: harmonigraph_scene::IntensitySource {
-                glow: fade.pressure.opacity,
-                ..Default::default()
-            },
-            glow_base: 0.5,
-            ..Default::default()
-        };
-        let bar = state.appearance.view.intensity.glow_base;
-        let share = |[a, b]: [f32; 2]| [(bar + a) / bar, (bar + b) / bar];
-        let glowing = instances(&state, 1.0);
-        assert_eq!(glowing.len(), 2);
-        assert_eq!((glowing[0].glow, glowing[1].glow), (share(older.fade), share(newer.fade)));
-        assert_eq!((glowing[0].fade, glowing[1].fade), ([1.0; 2], [1.0; 2]));
-
         // ...and to thickness, where it swells the note from its Ribbon width
         // to twice that: the box grows to the widest point, and each piece
         // tapers along its own stretch as a share of it, told the far end of

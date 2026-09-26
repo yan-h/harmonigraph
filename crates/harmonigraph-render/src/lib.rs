@@ -564,13 +564,9 @@ const _: () = assert!(SPECTRUM_WORDS == 240);
 struct GpuInstance {
     world_pos: [f32; 3],
     /// x: activation, y: melody mark level, z: bass mark level (see
-    /// lattice.wgsl). The mark levels ride with the activation rather than in
-    /// a vertex attribute of their own. w: how much of the bloom's copy of
-    /// this node's ink is taken away, `1 - NodeInstance::bloom`, so 0 is the
-    /// full bloom and a note blooming over its pane's bar is negative. Never
-    /// past 1, which is what lets the cell draw reuse it for kinds above that.
-    /// The first three are levels the same node
+    /// lattice.wgsl). The first three are levels the same node
     /// draws at, read together by the layers that draw it.
+    /// The fourth component is reserved for shadow-cell kinds in cell draws.
     params: [f32; 4],
     /// Per-octave activation, 8 bits per slot, little-endian packed
     /// (slot 0 = lowest byte of the first word).
@@ -693,12 +689,6 @@ fn pack_slot_bytes(values: &[f32; harmonigraph_scene::OCTAVE_SLOTS], steps: f32)
     }
     words
 }
-
-/// The most of its ink a node's bloom can take (`NodeInstance::bloom`): the
-/// top of the bloom bar over the floor the pass never runs below while a note
-/// can bloom over it (`IntensitySettings::bloom_share`).
-const BLOOM_SHARE_MAX: f32 =
-    harmonigraph_scene::BLOOM_MAX / harmonigraph_scene::BLOOM_REFERENCE_FLOOR;
 
 /// How far past the band's outer edge a node's farthest lit slice swells, in
 /// uv, off the packed `thickness` the shader reads: 0 where none does. A

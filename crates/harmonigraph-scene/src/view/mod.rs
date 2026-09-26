@@ -594,6 +594,9 @@ pub struct ViewConfig {
     /// How loud each note is drawn, and how far each display reads that
     /// (see [`crate::intensity`]). Shared by the lattice and the roll.
     pub intensity: crate::IntensitySettings,
+    /// Shared bloom strength for the lattice and MIDI ribbons, in × of the
+    /// reference halo. Independent of per-note intensity mappings.
+    pub note_bloom: f32,
     // An unlit node has no mark of its own: the marker standing at a node
     // position is the whole of what says the position is there, and it stands
     // on the home sheet alone (see `derive_pluses`) — off it, a position at
@@ -797,8 +800,8 @@ pub struct ViewConfig {
     pub render_scale: f32,
     /// The bloom's halo around the Spiral's note dots. The lattice and the
     /// spectrogram's MIDI ribbons share
-    /// [`IntensitySettings::glow_base`](crate::IntensitySettings::glow_base)
-    /// instead, which the notes' playing adds to. Its own value so that it sits
+    /// [`note_bloom`](Self::note_bloom)
+    /// instead. Its own value so that it sits
     /// with the Spiral's other settings on the Analyzer tab.
     pub spiral_bloom: f32,
     /// The node halo: how far past a node's outermost drawn edge its light
@@ -833,7 +836,7 @@ pub struct ViewConfig {
     /// sounding slice.
     ///
     /// Distinct from the bloom
-    /// ([`IntensitySettings::glow_base`](crate::IntensitySettings::glow_base))
+    /// ([`note_bloom`](Self::note_bloom))
     /// in what it measures: bloom thresholds a finished picture, so only its
     /// bright end blooms. This strength belongs to the lattice. Glow is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
@@ -991,6 +994,12 @@ pub(crate) fn size(value: f32, high: f32) -> f32 {
 }
 
 impl ViewConfig {
+    /// Shared note bloom, finite and within the control's range even for
+    /// callers that build a view without loading a saved appearance.
+    pub fn note_bloom_strength(&self) -> f32 {
+        finite_or(self.note_bloom, Self::default().note_bloom).clamp(0.0, 2.0)
+    }
+
     /// The note envelope, assembled from the two halves it is stored in: the
     /// shape is a LOOK and lives here, the duration is host-automatable and
     /// lives in [`FrameParams`].
@@ -1492,6 +1501,7 @@ impl ViewConfig {
         // clamps remain wider defensive boundaries for callers that do not
         // load an AppearanceDocument through this sanitizer.
         self.render_scale = finite_or(self.render_scale, fresh.render_scale).clamp(0.5, 2.0);
+        self.note_bloom = self.note_bloom_strength();
         self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom).clamp(0.0, 2.0);
 
         // The resting marker's three lengths. The arm and its taper are a
@@ -1705,6 +1715,7 @@ impl Default for ViewConfig {
             fade_shape: 0.313_509_55,
             note_animation: NoteAnimationConfig::default(),
             intensity: crate::IntensitySettings::default(),
+            note_bloom: 0.633_927_7,
             // A shallow step past the band — about a third of the band's own
             // width, so a mark reads as its slice carrying on rather than as a
             // second ring around everything.
@@ -1735,7 +1746,7 @@ impl Default for ViewConfig {
             show_perf: false,
             show_perf_detail: false,
             render_scale: 1.0,
-            // The lattice's bloom strength (`IntensitySettings::glow_base`),
+            // The shared note bloom strength (`note_bloom`),
             // which the Spiral shared until it had its own.
             spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light

@@ -168,7 +168,7 @@ pub struct RollInstance {
     /// [`center`](Self::center) in points: [`WHOLE`](Self::WHOLE) for the
     /// whole box, or one PIECE of it.
     ///
-    /// Pieces are how a note's opacity, glow and thickness follow its playing
+    /// Pieces are how a note's opacity and thickness follow its playing
     /// along a segment: the caller hands over the segment's box once per
     /// piece, each with the same geometry and a span of its own, and the spans
     /// tile the box. So the outline, the lead and the cap are the segment's,
@@ -179,20 +179,13 @@ pub struct RollInstance {
     /// span, so two pieces meet on one shared edge and every pixel is drawn by
     /// one of them.
     pub span: [f32; 2],
-    /// The two depth offsets [`fade`](Self::fade) and [`glow`](Self::glow)
+    /// The two depth offsets [`fade`](Self::fade)
     /// are given at; each is a straight line between them, held past either
     /// end.
     pub ramp: [f32; 2],
     /// Opacity at the two [`ramp`](Self::ramp) depths, multiplying the body
     /// and the outline together. `[1.0, 1.0]` is unfaded.
     pub fade: [f32; 2],
-    /// How much light the body gives the bloom at the two
-    /// [`ramp`](Self::ramp) depths, in place of its fade: the bloom's pass
-    /// draws the body at this, so the note's opacity and its light are two
-    /// displays. A share of the callback's bloom strength: `[1.0, 1.0]` is
-    /// the note blooming at that strength, and past 1 over it, which the
-    /// pass's float targets carry rather than clip.
-    pub glow: [f32; 2],
     /// Four depth offsets, ascending, that [`taper`](Self::taper) is given at.
     ///
     /// The middle two are this piece's own ends and the outer two its
@@ -236,7 +229,7 @@ impl RollInstance {
             8 => Unorm8x4,  // core
             9 => Unorm8x4,  // outline
             14 => Float32x4, // span, ramp
-            15 => Float32x4, // fade, glow
+            15 => Float32x2, // fade
             5 => Float32x4,  // taper_depth
             6 => Float32x4,  // taper
         ],
@@ -264,8 +257,7 @@ pub struct RollAxes {
 /// resolution on somewhere the roll cannot draw.
 ///
 /// `bloom` is the strength the bloom runs at, applied to these notes through
-/// the lattice's own chain (see [`RollBloom`]), and each instance's
-/// [`glow`](RollInstance::glow) is its share of it. 0 skips it whole.
+/// the lattice's own chain (see [`RollBloom`]). 0 skips it whole.
 #[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback(
     rect: egui::Rect,
@@ -355,8 +347,8 @@ struct RollUniforms {
     origin_points: [f32; 2],
     viewport_points: [f32; 2],
     feather: f32,
-    /// 1 in the bloom's pass, where the body is drawn at its
-    /// [`RollInstance::glow`] rather than its fade; 0 on screen.
+    /// 1 in the bloom pass, which uses the body's original opacity;
+    /// 0 on screen, where per-note opacity mappings apply.
     light: f32,
     pitch_dir: [f32; 2],
     depth_dir: [f32; 2],
@@ -477,11 +469,8 @@ struct RollBloom {
 }
 
 /// The bloom chain's working format, from the notes it re-renders to the
-/// blurred quarter its composite samples: half floats, for the lattice's own
-/// reason (`LATTICE_COLOR_FORMAT`) and one of the roll's. A note blooming over
-/// the pass's strength carries a [`RollInstance::glow`] past 1, and an 8-bit
-/// target would clip that light at the note's own colour, so a swell of
-/// pressure would stop brightening its halo the moment it passed the bar.
+/// blurred quarter its composite samples. Half floats preserve faint gradients
+/// through the blur passes, as in the lattice's `LATTICE_COLOR_FORMAT`.
 const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Starting size of a pane's instance buffer; it grows by
@@ -1467,7 +1456,6 @@ mod tests {
             span: RollInstance::WHOLE,
             ramp: [0.0, 0.0],
             fade: [1.0, 1.0],
-            glow: [1.0, 1.0],
             taper_depth: [0.0; 4],
             taper: RollInstance::UNTAPERED,
         }
@@ -1749,7 +1737,6 @@ mod tests {
                     span: RollInstance::WHOLE,
                     ramp: [0.0, 0.0],
                     fade: [1.0, 1.0],
-                    glow: [1.0, 1.0],
                     taper_depth: [0.0; 4],
                     taper: RollInstance::UNTAPERED,
                 };
@@ -2415,11 +2402,6 @@ mod tests {
             at(&lit, 128, 128),
             at(&plain, 128, 128),
         );
-        // The bloom's pass reads the note's glow, not its fade: a note whose
-        // glow is out gives off no light, and draws its body as it would.
-        let dark = RollInstance { glow: [0.0, 0.0], ..note };
-        let unlit = draw_bloomed(&device, &queue, vec![dark], TOP, 1.5, wgpu::Color::BLACK);
-        assert_eq!(unlit, plain, "a note whose glow is out still bloomed");
         // Light, not a shape: the halo may never take alpha away from what is
         // under it, and over an opaque frame that means the alpha channel is
         // untouched everywhere.
@@ -2448,38 +2430,6 @@ mod tests {
         };
         assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
         assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
-    }
-
-    /// A glow past 1 is a note blooming over the pass's strength, and it blooms
-    /// by its share: three times a strength of 0.5 lights the frame beside the
-    /// note as a strength of 1.5 does. An 8-bit chain clipped it at the note's
-    /// own colour instead, which measured barely more light than a share of 1.
-    #[test]
-    fn a_glow_past_one_blooms_by_its_share() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        // Past the threshold's knee, so its light is its share alone.
-        let note = RollInstance {
-            outline_reach: 0.0,
-            core: [255, 230, 200, 255],
-            outline: [0, 0, 0, 0],
-            ..centered_note()
-        };
-        // All the light 4 points past the note's edge, where there is no body.
-        let beside = |glow: f32, strength: f32| {
-            let note = RollInstance { glow: [glow; 2], ..note };
-            let frame =
-                draw_bloomed(&device, &queue, vec![note], TOP, strength, wgpu::Color::BLACK);
-            pixel(&frame, 144, 128)[..3].iter().map(|&c| f32::from(c)).sum::<f32>()
-        };
-        let (whole, over, stronger) = (beside(1.0, 0.5), beside(3.0, 0.5), beside(1.0, 1.5));
-        assert!(whole > 20.0, "too little halo to compare: {whole}");
-        assert!(over > 2.5 * whole, "a share of 3 gave {over} against {whole} at 1");
-        assert!(
-            (over - stronger).abs() <= 3.0,
-            "{over} at a share of 3, {stronger} at 3x strength"
-        );
     }
 
     /// One `prepare` of `cb` against `resources`, submitted — the unit both

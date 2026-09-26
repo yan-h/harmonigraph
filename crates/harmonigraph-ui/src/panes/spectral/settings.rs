@@ -215,7 +215,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
 
 /// Played MIDI notes as ribbons over the history, and their names. Their
 /// switch is in the heading.
-pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
+pub(crate) fn ribbons_section(
+    ui: &mut egui::Ui,
+    cfg: &mut crate::SpectrumConfig,
+    note_bloom: &mut f32,
+) {
     switched_section(
         ui,
         "MIDI ribbons",
@@ -243,6 +247,7 @@ pub(crate) fn ribbons_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
                     "Opacity of MIDI ribbon colors over the spectrogram. \
                      Their dark surrounds keep their full strength.",
                 );
+            super::super::lighting::note_bloom(ui, note_bloom);
             edge_bar(
                 ui,
                 (&mut cfg.roll_lead, &mut cfg.roll_lead_fade),
