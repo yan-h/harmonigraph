@@ -1692,8 +1692,13 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
     // Every held field differs from the bare fallback. Width and depth also
     // differ from the group defaults, distinguishing the two fallback sources;
     // falloff deliberately shares the same early decay in both defaults.
-    let held =
-        ShadowStyle { kernel: ShadowKernel::Gaussian, width: 0.55, depth: 0.66, falloff: 1.2 };
+    let held = ShadowStyle {
+        kernel: ShadowKernel::Gaussian,
+        width: 0.55,
+        spread: 0.17,
+        depth: 0.66,
+        falloff: 1.2,
+    };
 
     let mut state = fresh();
     // A witness outside the section, so "the blob survived" is distinguishable
@@ -1704,11 +1709,12 @@ fn a_shadow_group_missing_one_field_fills_it_from_the_bare_style() {
 
     let whole = ron::to_string(&held).expect("a shadow style serializes");
     let pairs = top_level_pairs(&whole);
-    assert_eq!(pairs.len(), 4, "the probe must see the whole style, got {pairs:?}");
+    assert_eq!(pairs.len(), 5, "the probe must see the whole style, got {pairs:?}");
 
     for (key, _) in &pairs {
         let want = match key.as_str() {
             "width" => ShadowStyle { width: bare.width, ..held },
+            "spread" => ShadowStyle { spread: bare.spread, ..held },
             "depth" => ShadowStyle { depth: bare.depth, ..held },
             "falloff" => ShadowStyle { falloff: bare.falloff, ..held },
             "kernel" => ShadowStyle { kernel: bare.kernel, ..held },

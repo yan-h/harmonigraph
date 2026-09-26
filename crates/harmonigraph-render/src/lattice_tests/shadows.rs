@@ -1293,13 +1293,14 @@ fn the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar() {
         // deliberately different thicknesses against σ, and at the top of the
         // bar a cross an arm wide is thin enough that the gain leaves its
         // shadow at a quarter of the ground where a ring stack's is at three
-        // quarters. That difference is the Shadow depth being a FLOOR and is
-        // what this fixture stands on; a bound that ruled it out would be
-        // asking the cross to be a node.
+        // quarters. The threshold must admit both caster thicknesses.
+        // Linear notation transmittance also
+        // reaches the 8-bit floor sooner than the old power-law tail; the
+        // final-step assertion below still rejects a visibly clipped quad.
         assert!(
             profile[0] > 0.1
                 && reach
-                    > 0.75
+                    > 0.65
                         * deep_scene.shadow.lattice_geometry.kernel.reach_sigmas()
                         * sigma(&deep_scene),
             "{what} cast {:.3} at its ink and out to {reach} px, against a σ of {}",

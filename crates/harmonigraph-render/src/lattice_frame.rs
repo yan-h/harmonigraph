@@ -228,7 +228,9 @@ impl LatticeCallback {
         let (geometry_sigma, text_sigma) = (sigma_of(geometry), sigma_of(text));
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
-        let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas();
+        let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
+        let text_spread = text.gaussian_spread_points(text_sigma);
+        let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas() + geometry_spread;
         let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
@@ -261,6 +263,7 @@ impl LatticeCallback {
                 sigma_points: geometry_sigma,
                 kernel: geometry.kernel,
                 falloff: geometry.falloff,
+                spread_points: geometry_spread,
                 direct_distance: false,
             };
             let (Some(c), Some(x), Some(y)) = (
@@ -328,6 +331,7 @@ impl LatticeCallback {
                 sigma_points: text_sigma,
                 kernel: text.kernel,
                 falloff: text.falloff,
+                spread_points: text_spread,
                 direct_distance: true,
             });
         }
@@ -372,7 +376,13 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                casters.push(shadow::caster_of(run, text_sigma, text.kernel, text.falloff));
+                casters.push(shadow::caster_of(
+                    run,
+                    text_sigma,
+                    text.kernel,
+                    text.falloff,
+                    text_spread,
+                ));
             }
         }
         LatticeCallback {
@@ -397,6 +407,7 @@ impl LatticeCallback {
                     brightest_pitch: scene.brightest_pitch,
                     render_scale,
                     bloom_strength: bloom_strength(scene.bloom_strength),
+                    background: Float4(scene.background.to_array()),
                 },
                 camera: CameraParams {
                     view_proj: Matrix4(view_proj.to_cols_array_2d().map(Float4)),
@@ -472,13 +483,15 @@ impl LatticeCallback {
                 // inherit notation's style even though this pipeline draws them.
                 geometry_shadow: ShadowParams {
                     width: geometry.width,
-                    reach_sigmas: geometry.kernel.reach_sigmas(),
+                    reach_sigmas: geometry.kernel.reach_sigmas()
+                        + if geometry.casts() { geometry.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: geometry.depth,
                     occlusion: 1.0,
                 },
                 marker_shadow: ShadowParams {
                     width: text.width,
-                    reach_sigmas: text.kernel.reach_sigmas(),
+                    reach_sigmas: text.kernel.reach_sigmas()
+                        + if text.casts() { text.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: text.depth,
                     occlusion: 0.0,
                 },

@@ -170,6 +170,8 @@ struct SdfOut {
     @location(2) @interpolate(flat) near_bounds: vec4<f32>,
     @location(3) @interpolate(flat) coarse_bounds: vec4<f32>,
     @location(4) @interpolate(flat) scales: vec2<f32>,
+    // Gaussian source radius and one cell texel, both in pane points.
+    @location(5) @interpolate(flat) expansion: vec2<f32>,
 };
 
 const SDF_NEAR_PAD: f32 = 32.0;
@@ -221,6 +223,7 @@ fn vs_glyph_distance_cell(
         sdf_coarse.xy - vec2<f32>(SDF_COARSE_PAD),
         sdf_coarse.zw + vec2<f32>(SDF_COARSE_PAD),
     );
+    out.expansion = vec2<f32>(box_who.w, 1.0 / max(box_meta.x, 1e-6));
     out.scales = vec2<f32>(
         0.5 * (sdf_rect.z / max(near_span.x, 1.0e-6)
             + sdf_rect.w / max(near_span.y, 1.0e-6)),
@@ -621,8 +624,13 @@ fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
 /// shared separable blur.
 @fragment
 fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
-    let d = glyph_sdf_distance(in);
-    let aa = max(fwidth(d), 1.0e-6);
+    let d = glyph_sdf_distance(in) - in.expansion.x;
+    var aa = max(fwidth(d), 1.0e-6);
+    if in.expansion.x > 0.0 {
+        // A thin stem can have positive SDF samples on both sides of its
+        // centre and a vanishing derivative. Retain its sub-texel coverage.
+        aa = max(aa, in.expansion.y);
+    }
     return vec4<f32>(clamp(0.5 - d / aa, 0.0, 1.0), 0.0, 0.0, 1.0);
 }
 
@@ -721,63 +729,18 @@ fn vs_shadow_box(
     return out;
 }
 
-/// A name's shadow: everything already in the frame under the box, multiplied
-/// by the transmittance of the name's blurred ink.
-///
-/// The multiply rides on the blend the scene pass already composites under.
-/// `PREMULTIPLIED_ALPHA_BLENDING` is `out = src + dst * (1 - src.a)`, so a
-/// fragment of `rgb = 0, a = 1 - T` leaves `dst * T`: the frame under the name
-/// darkened by `T`, whatever the frame holds there — ground, a ring's ink, a
-/// marker, another name, or nothing at all (a transparent texel becomes
-/// `(0, 1 - T)`, which composites the pane's own ground to `ground * T`). No
-/// receiver carries any shadow code; the light is under everything and takes
-/// the shadow by being there first. Drawn before the name's own glyphs, so the
-/// name's ink is the one thing its shadow never touches.
-///
-/// `T` is `shadow_transmittance` over the blur standing at this fragment, and
-/// it is the same function a ring and a cross spend over their own cells
-/// (`shadow_through` in lattice.wgsl), with each caller handing it its group's
-/// own depth. The name's LEVEL is spent there as a share, which is what a name
-/// easing in as its marker eases out casts.
-///
-/// One bilinear tap PER TERM of the kernel, each in its own cell at its own
-/// resolution (`shadow_kernel` in common.wgsl), summed by weight before the
-/// transmittance is taken: a sum of transmittances is a different picture from
-/// the transmittance of a sum, and the second is the one a kernel means.
-///
-/// The LATTICE's box draw alone binds group 2. The bindings a pipeline must
-/// carry are the ones its entry point reads, so every other surface's text —
-/// which casts no shadow and draws through [`fs_fill`] — takes a
-/// layout with group 0 and nothing else, and a pane with no atlas has no dummy
-/// to bind.
-///
-/// A label shadow darkens both components of each picture, at the visible
-/// depth for the first pair and full depth for the bloom pair. The glyph ink
-/// is kept out of both bloom components so it neither glows nor bites the
-/// halo of the node it covers (`SceneOut`, common.wgsl).
-///
-/// What it buys: the composite is `scene + bloom * strength` into an 8-bit
-/// target, so over a bright halo the unshadowed pixel is already past 1 and
-/// pins to white, and a shadow that does not carry the sum back under 1 lands
-/// as nothing at all. Modelled at a halo of 0.9 and a name's `T` of 0.62, the
-/// darkening that reaches the screen is 38% once the bloom's own copy is taken
-/// to a whole shadow — with the visible shadow left exactly as light as
-/// `shadow_depth` says. Over an unlit node there is no bloom to take away and
-/// this does nothing, which is what makes it an answer to the bright case
-/// alone.
+// A local veil over both visible components, in painter order. Notation
+// never darkens the bloom source: that would spread a label's light deficit
+// through the bloom blur, beyond the shadow's own footprint.
 @fragment
 fn fs_shadow_box(in: BoxOut) -> SceneOut {
     let full = shadow_kernel(in.who, in.at);
-    let t = shadow_transmittance(full, locals.shadow_depth, in.level);
-    // The bright pass's copy, always at a WHOLE shadow (1) rather than at
-    // `shadow_depth`: the copy the bright pass reads takes every caster's
-    // shadow to the shader's own floor, whatever the visible one is left at.
-    let lit = shadow_transmittance(full, 1.0, in.level);
+    let t = local_shadow_transmittance(full, locals.shadow_depth, in.level);
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
-        vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
-        vec4<f32>(0.0, 0.0, 0.0, 1.0 - lit),
+        vec4<f32>(0.0),
+        vec4<f32>(0.0),
     );
 }
 
@@ -785,7 +748,22 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
 @fragment
 fn fs_shadow_box_plain(in: BoxOut) -> SplitOut {
     let full = shadow_kernel(in.who, in.at);
-    let t = shadow_transmittance(full, locals.shadow_depth, in.level);
+    let t = local_shadow_transmittance(full, locals.shadow_depth, in.level);
     let shadow = vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
     return SplitOut(shadow, shadow);
+}
+
+// The same shadow on the scalar transmittance target. Source-over multiplies
+// what is behind by T; this target is never sent through the bloom blur.
+@fragment
+fn fs_label_transmittance(in: BoxOut) -> @location(0) vec4<f32> {
+    let t = local_shadow_transmittance(shadow_kernel(in.who, in.at), locals.shadow_depth, in.level);
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
+}
+
+@fragment
+fn fs_glyph_transmittance(in: VertexOut) -> @location(0) vec4<f32> {
+    let a = coverage(in, in.texel) * in.fill.a
+        * node_visibility(in.who, in.points, locals.node_occlusion);
+    return vec4<f32>(a, 0.0, 0.0, a);
 }

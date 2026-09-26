@@ -12,6 +12,7 @@ struct CompositeParams {
     brightest_pitch: f32,
     render_scale: f32,
     bloom_strength: f32,
+    background: vec4<f32>,
 };
 
 struct CameraParams {
@@ -90,7 +91,7 @@ struct MarkerCellParams {
     points_to_texels: f32,
     aa_scale: f32,
     arm_points: f32,
-    padding: f32,
+    spread_points: f32,
 };
 
 struct Uniforms {
@@ -262,15 +263,15 @@ fn pane_points(clip: vec4<f32>) -> vec2<f32> {
 
 // What a caster's blur leaves of the frame under one fragment, in each of the
 // two pictures the scene pass writes (`SceneOut`): `seen` is the one on
-// screen, `bloom` the copy the bright pass reads, always at a whole shadow
-// (1) whatever `seen`'s own depth is.
+// screen, `bloom` the copy the bright pass reads. Geometry shadows use full
+// depth there; notation shadows leave that source untouched.
 struct ShadowThrough {
     seen: f32,
     bloom: f32,
 }
 
 // A marker's own Gaussian shadow, read at this point of the pane and spent
-// through `shadow_transmittance`: what its ink leaves of the frame under it,
+// through `local_shadow_transmittance`: what its ink leaves of the frame under it,
 // 0..=1.
 //
 // A caster with no cell leaves the frame exactly whole — a frame with no atlas
@@ -280,13 +281,11 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> Shadow
     if level <= 0.0 {
         return ShadowThrough(1.0, 1.0);
     }
-    // Taken ONCE and spent twice — the kernel is what the two pictures share,
-    // and the depth is the only term they part on, so the tap is paid for once
-    // however many attachments read it.
+    // Notation shadows remain local: never blur their deficit into bloom.
     let full = shadow_kernel(u32(max(who, 0.0)), points);
     return ShadowThrough(
-        shadow_transmittance(full, depth, level),
-        shadow_transmittance(full, 1.0, level),
+        local_shadow_transmittance(full, depth, level),
+        1.0,
     );
 }
 
@@ -336,8 +335,8 @@ fn plus_shadow_through(
         shadow_casters[caster].shade.w,
     );
     return ShadowThrough(
-        shadow_transmittance(full, plus_shadow_depth(), distance_level),
-        shadow_transmittance(full, 1.0, distance_level),
+        local_shadow_transmittance(full, plus_shadow_depth(), distance_level),
+        1.0,
     );
 }
 
@@ -632,7 +631,7 @@ fn vs_node_cell(
     let centre = pane_points(centre_clip);
     let right = pane_points(right_clip) - centre;
     let uv_points = length(right);
-    if box.who.y < 0.5 {
+    if box.who.y < 0.5 && box.who.w <= 0.0 {
         let texel = cell_texel(pane_points(out.clip_pos), box.rect, box.cell, box.cell_map.x);
         out.clip_pos =
             select(no_quad(), cell_clip(texel, u.shadow_target.atlas_texels, out.clip_pos.w), cell_packed(box.cell));
@@ -673,6 +672,13 @@ fn vs_node_cell(
     out.params.w = box.who.y;
     out.strip_row = box.cell_map.y;
     out.ink_carry = box.who.w;
+    if box.who.y < 0.5 {
+        // Expanded Gaussian coverage uses the existing layer fields and cell
+        // quad. The ordinary Gaussian above keeps its original rasterizer.
+        out.params.w = 3.0;
+        out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
+        out.ink_carry = box.who.w / max(uv_points, 1e-6);
+    }
     return out;
 }
 
@@ -1058,6 +1064,12 @@ fn layer_coverage(layer: NodeLayer) -> f32 {
 }
 
 fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
+    if in.params.w > 2.5 {
+        let aa = aa_width(in.strip_row, in.shadow_at.w);
+        let coverage = clamp(layer.level, 0.0, 1.0)
+            * aa_inside(in.ink_carry, layer.sd, aa);
+        return min(field, -coverage);
+    }
     if in.params.w > 1.5 {
         let coverage = clamp(layer.level, 0.0, 1.0) * standoff_coverage(
             layer.sd * abs(in.shadow_at.z), 2.0 * in.strip_row, in.ink_carry,
@@ -2468,8 +2480,7 @@ struct Painted {
     rgb: vec3<f32>,
     /// The picture a person sees, at the Shadow depth's own bar.
     seen: f32,
-    /// The copy the bright pass reads, always at a whole shadow (1). Never the
-    /// smaller of the two: a deeper shadow leaves less of the frame.
+    /// The bright-pass copy: full-depth geometry shadows, no notation shadow.
     bloom: f32,
     /// Ink coverage alone, with receiver visibility already applied.
     ink_alpha: f32,
@@ -2526,7 +2537,7 @@ fn node_paint(in: VsOut) -> Painted {
     let visible_alpha = ink.alpha * visibility;
     let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
     let bloom_alpha = 1.0 - (1.0 - visible_alpha) * bloom_through;
-    if bloom_alpha <= 0.0 {
+    if max(final_alpha, bloom_alpha) <= 0.0 {
         discard;
     }
     // The WASH: the light standing at this pixel, laid over the node's own INK.
@@ -2828,7 +2839,7 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     // No caster to READ — this draw is the one that fills the cell — and the
     // cell's own scale, which is what the cross is cut with here rather than
     // the pane's.
-    out.shadow_box = vec4<f32>(0.0);
+    out.shadow_box = vec4<f32>(u.marker_cell.spread_points / arm_points, 0.0, 0.0, 0.0);
     out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.marker_cell.aa_scale);
     return out;
 }
@@ -2872,6 +2883,22 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
     let share = 1.0 - in.params.w;
     let bloom_ink = vec4<f32>(bloom.ink.rgb * share, bloom.ink.a * min(share, 1.0));
     return SceneOut(seen.other, seen.ink, bloom.other, bloom_ink);
+}
+
+// A foreground node covers the local shadow behind it only where it has
+// visible ink. Its ordinary shadow must never restore this transmittance.
+@fragment
+fn fs_node_transmittance(in: VsOut) -> @location(0) vec4<f32> {
+    let g = node_geom(in, false);
+    if !g.paints {
+        discard;
+    }
+    let ink = node_ink(in, g.d, g.aa, g.oct, false);
+    if ink.alpha < INK_FLOOR {
+        discard;
+    }
+    let a = ink.alpha * node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
+    return vec4<f32>(a, 0.0, 0.0, a);
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -3595,11 +3622,9 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let seen_through = 1.0 - (1.0 - t.seen) * shadow_exposure;
     let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
     let final_alpha = 1.0 - (1.0 - alpha) * seen_through;
-    // The bloom's copy takes the deeper of the two, and the discard reads that
-    // one — the larger alpha, so a shadow only the bright pass can show is not
-    // thrown away with the fragment (`node_paint` states the case in full).
+    // Keep visible shadow-only fragments even though bloom carries ink alone.
     let bloom_alpha = 1.0 - (1.0 - alpha) * bloom_through;
-    if bloom_alpha <= 0.0 {
+    if max(final_alpha, bloom_alpha) <= 0.0 {
         discard;
     }
     // Premultiplied, as every draw in this pass is: the marker IS its own ink
@@ -3634,6 +3659,12 @@ fn plus_paint(in: PlusVsOut) -> Painted {
 @fragment
 fn fs_plus_cell(in: PlusVsOut) -> @location(0) vec4<f32> {
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
+    if in.shadow_box.x > 0.0 {
+        let spread = in.shadow_box.x;
+        let body = aa_inside(spread, plus_sd(in.uv), aa);
+        let taper = plus_taper(max(abs(in.uv) - vec2<f32>(spread), vec2<f32>(0.0)));
+        return vec4<f32>(body * taper, 0.0, 0.0, 0.0);
+    }
     return vec4<f32>(plus_coverage(in.uv, aa), 0.0, 0.0, 0.0);
 }
 
@@ -3655,4 +3686,12 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
         seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen),
         vec4<f32>(paint.rgb, paint.bloom), vec4<f32>(0.0, 0.0, 0.0, paint.bloom),
     );
+}
+
+// Source-over on a scalar target: A + T_back * (1-A) * T_shadow.
+// RGB carries ink coverage while alpha carries ink plus shadow coverage.
+@fragment
+fn fs_plus_transmittance(in: PlusVsOut) -> @location(0) vec4<f32> {
+    let paint = plus_paint(in);
+    return vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.seen);
 }

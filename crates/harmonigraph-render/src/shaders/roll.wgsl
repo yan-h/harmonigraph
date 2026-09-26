@@ -225,7 +225,7 @@ fn vs_shadow_cell(
     out.local = vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
     out.half_extent = half_extent;
     out.shear = shear;
-    out.outline_reach = locals.shadow.w;
+    out.outline_reach = box_who.w;
     out.lead = lead;
     // The cell holds this piece's tapered shape, so its shadow narrows with
     // the ribbon.
@@ -246,7 +246,11 @@ fn vs_shadow_cell(
 @fragment
 fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
     let d = box_distance(in);
-    let coverage = inside(in, d, 0.0) * lead_coverage(in);
+    var source = in;
+    // Only the producer repurposes outline_reach as the expansion radius.
+    // Move the fading lead outward with its source, leaving the visible note.
+    source.local.y += in.outline_reach;
+    let coverage = inside(in, d, in.outline_reach) * lead_coverage(source);
     return vec4<f32>(coverage, 0.0, 0.0, 1.0);
 }
 

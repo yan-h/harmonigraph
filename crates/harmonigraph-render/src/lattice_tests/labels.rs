@@ -469,8 +469,8 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
     );
 }
 
-/// A label is not in the bloom: the light the bloom adds to a frame is the
-/// same whether the names are drawn or not.
+/// Glyph ink is not in the bloom source: with notation shadows disabled,
+/// bloom adds the same light whether the names are drawn or not.
 ///
 /// Two halves, and the second is the one that is easy to miss. A name in the
 /// bloom input GLOWS, which is the obvious half — white type well over the
@@ -518,6 +518,8 @@ fn a_label_adds_no_light_through_the_bloom() {
         // thing that varies is the strength the composite reads.
         let mut scene = one_node_behind_another();
         scene.bloom_strength = bloom;
+        // Isolate emission: local shadows intentionally attenuate finished bloom.
+        scene.shadow.lattice_text.depth = 0.0;
         let cb = LatticeCallback::from_scene(
             &scene,
             LatticeLabels {
@@ -985,17 +987,20 @@ fn a_names_shadow_takes_the_same_share_off_ink_as_off_ground() {
         return;
     };
     shooter.clear = over_grey_clear();
-    // HALF the depth bar, so that both receivers keep a brightness to take a
-    // share of: the node stands its own shadow over the ground beside its band
-    // as much as over the band, and at the top of the bar that ground is black.
+    // Half depth leaves both receivers bright enough to measure their share.
     let mut scene = inked_on_grey(SHADOW, 0.5);
+    // Measure the name alone against a dark-but-readable ink receiver.
+    scene.shadow.lattice_geometry.depth = 0.0;
+    scene.lattice_ground = glam::vec4(0.2, 0.2, 0.2, 1.0);
     // In close, and AIMED at the band's outer edge, so the stroke stands in
     // the middle of the pane with the band's ink to one side and the ground to
     // the other, both tens of pixels wide.
     scene.camera.distance = 4.0;
     scene.camera.target = glam::Vec3::new(scene.outer_outer * scene.marker_unit, 0.0, 0.0);
     let edge = on_screen(&scene, SIZE, scene.camera.target);
-    let rect = [edge.x - NAME_SIZE / 2.0, edge.y - NAME_SIZE / 2.0, NAME_SIZE, NAME_SIZE];
+    // A tall stroke keeps the Gaussian strong enough along the centre row
+    // to measure both receivers after linear local transmittance.
+    let rect = [edge.x - NAME_SIZE / 2.0, edge.y - NAME_SIZE, NAME_SIZE, NAME_SIZE * 2.0];
     let bare = shooter.shot(&scene);
     let named = shooter.shot_with(&scene, a_name(vec![name_glyph(&scene, rect)]));
 

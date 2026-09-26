@@ -300,6 +300,7 @@ impl CallbackTrait for DotShadowCallback {
                 sigma_points: sigma,
                 kernel: style.kernel,
                 falloff: style.falloff,
+                spread_points: style.gaussian_spread_points(sigma),
                 direct_distance: true,
             })
             .collect();
@@ -581,6 +582,75 @@ mod tests {
                 "{shadow:?} allocated a shadow atlas"
             );
         }
+    }
+
+    #[test]
+    fn gaussian_spread_expands_dot_shadow_and_contour_ignores_it() {
+        let Some((device, queue)) = headless_device() else { return };
+        let size = [64, 64];
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0));
+        let draw = |shadow| {
+            let cb = DotShadowCallback {
+                dots: vec![crate::GlowDot { center: [32.0, 32.0], radius: 4.0, color: [255; 4] }],
+                shadow,
+                target_format: wgpu::TextureFormat::Rgba8Unorm,
+                pane_id: 0,
+                shadow_surface_id: 0,
+                pass_nr: 0,
+            };
+            let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
+            let mut resources = CallbackResources::default();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
+            crate::spectral_shadow::finish(
+                &device,
+                &queue,
+                &screen,
+                &mut encoder,
+                &mut resources,
+                0,
+            );
+            queue.submit(buffers.into_iter().chain([encoder.finish()]));
+            let texture = render_to_texture(
+                &device,
+                &queue,
+                size,
+                wgpu::TextureFormat::Rgba8Unorm,
+                wgpu::Color::WHITE,
+                |pass| {
+                    cb.paint(
+                        egui::PaintCallbackInfo {
+                            viewport: rect,
+                            clip_rect: rect,
+                            pixels_per_point: 1.0,
+                            screen_size_px: size,
+                        },
+                        pass,
+                        &resources,
+                    );
+                },
+            );
+            readback(&device, &queue, &texture, size)
+        };
+        let style = harmonigraph_scene::ShadowStyle {
+            kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+            width: 1.0,
+            depth: 1.0,
+            ..Default::default()
+        };
+        let base = draw(style);
+        let grown = draw(harmonigraph_scene::ShadowStyle { spread: 0.5, ..style });
+        let i = (32 * 64 + 42) * 4;
+        assert!(
+            grown[i] < base[i],
+            "spread did not reach beyond the old six-point Gaussian support"
+        );
+        assert_eq!(&grown[..4], &[255; 4], "spread escaped its cell");
+        let contour = harmonigraph_scene::ShadowStyle {
+            kernel: harmonigraph_scene::ShadowKernel::Distance,
+            ..style
+        };
+        assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
     #[test]
