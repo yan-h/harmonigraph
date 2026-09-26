@@ -183,6 +183,7 @@ The table gives the median of the three per-run GPU medians.
 
 GPU timestamps cover the prepare encoder, including scene, label/shadow and bloom work;
 they exclude the final egui composite.
+Issue #1113 later found that the closing beginning-of-pass stamp does not contain the scene passes' fragment work on this GPU, so these medians undercount.
 The [raw results](evidence/generated-shader-assets/gpu-timings.json) retain every run and its p10/p90 spread.
 The spread and first-source-run disturbance are large enough that this does not establish unchanged GPU performance.
 Three of four medians are slightly higher with assets, while one is lower;
