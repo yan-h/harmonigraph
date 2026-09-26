@@ -5,8 +5,8 @@ use std::ops::RangeInclusive;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, elided_name, grip_radius, grip_rect, track_fill, BAR_TEXT_PAD,
-    HANDLE_INSET,
+    bar_radius, bar_width, elided_name, grip_over_text, grip_radius, grip_rect, track_fill,
+    BAR_TEXT_PAD, HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -14,17 +14,6 @@ use crate::theme;
 /// Segments a [`ValueBar::swatch`] track is drawn in: enough that a hue
 /// circle reads as a smooth turn at any column width the pane opens at.
 const SWATCH_SEGMENTS: usize = 72;
-
-/// Segments a [`ValueBar::swatch`] grip's inverted strip is drawn in: it is
-/// a few points wide, so a handful follows the track under it.
-const GRIP_SEGMENTS: usize = 4;
-
-/// `c` with its lightness turned over (see
-/// [`harmonigraph_scene::skin::inverted_lightness`]).
-fn inverted(c: Color32) -> Color32 {
-    let [r, g, b] = harmonigraph_scene::skin::inverted_lightness([c.r(), c.g(), c.b()]);
-    Color32::from_rgb(r, g, b)
-}
 
 /// How many segments a [`ValueBar::curve`] preview is drawn in.
 ///
@@ -508,24 +497,18 @@ impl<'a> ValueBar<'a> {
         painter.galley(label_pos, label.clone(), text_color);
         painter.galley(value_pos, value.clone(), value_color);
         // Over the text, as every handle in the panel is: it is the part
-        // being operated. A swatch grip is the track and text it stands on
-        // with their lightness inverted, rather than a colour of its own:
-        // the track is a colour the theme wears, so no fixed grip colour is
-        // sure to stand off it, and the inverse of what is behind always does.
-        if let Some(colour_of) = self.swatch {
-            let grip = grip_rect(travel.left() + travel.width() * t, rect, scale);
-            let at =
-                |x: f32| colour_of(self.value_at((x - travel.left()) / travel.width().max(1.0)));
-            let corner = f32::from(grip_radius(scale).nw);
-            gradient_strip(painter, grip, GRIP_SEGMENTS, (corner, corner), |p| {
-                inverted(at(grip.left() + grip.width() * p))
-            });
-            let clipped = painter.with_clip_rect(grip);
-            for (pos, galley) in [(label_pos, label), (value_pos, value)] {
-                if grip.intersects(egui::Rect::from_min_size(pos, galley.size())) {
-                    clipped.galley_with_override_text_color(pos, galley, inverted(text_color));
-                }
-            }
+        // being operated, and the text under it is knocked out rather than
+        // hidden (see [`grip_over_text`]). White at rest as well as in hand,
+        // because the track under it is colour rather than the well an unlit
+        // grip is made to stand off.
+        if self.swatch.is_some() {
+            grip_over_text(
+                painter,
+                grip_rect(travel.left() + travel.width() * t, rect, scale),
+                grip_radius(scale),
+                theme::text(),
+                &[(label_pos, label), (value_pos, value)],
+            );
         }
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
@@ -978,38 +961,42 @@ mod tests {
     }
 
     /// A swatch bar's track IS the colours its values make, end to end, and
-    /// its grip is the colour of the value it holds with the lightness turned
-    /// over: the bar reads as a picker only if what the grip inverts is what
-    /// the dial is set to. No accent fill, which would cover the colours it is
-    /// there to show.
+    /// the grip stands on the colour of the value it holds: the bar reads as a
+    /// picker only if what is under the grip is what the dial is set to. No
+    /// accent fill, which would cover the colours it is there to show.
     #[test]
-    fn a_swatch_track_runs_the_values_colours_under_an_inverting_grip() {
-        use crate::widgets::mesh::{band_bounds, band_columns, bands};
+    fn a_swatch_track_runs_the_values_colours_with_the_grip_on_its_own() {
+        use crate::widgets::mesh::{band_columns, bands};
+        use crate::widgets::probe::grips;
         let red = |v: f32| Color32::from_rgb((v * 255.0).round() as u8, 0, 0);
         let mut value = 0.3;
         let shapes = shapes(240.0, |ui| {
             ValueBar::new(&mut value, 0.0..=1.0, "Red").swatch(&red).show(ui);
         });
-        let [track, grip] = bands(&shapes).try_into().expect("a track and a grip");
+        let [track] = bands(&shapes).try_into().expect("one swatch band");
         let columns = band_columns(&track);
         let (first, last) = (columns[0].2, columns[columns.len() - 1].2);
         assert_eq!((first, last), (red(0.0), red(1.0)), "the track spans the whole range");
         assert!(filled_polys(&shapes).is_empty(), "a swatch bar drew an accent fill");
-        assert!(band_bounds(&grip).width() <= super::super::bar::HANDLE_W + 0.01);
-        let grip_columns = band_columns(&grip);
-        let middle = grip_columns[grip_columns.len() / 2].2;
-        let want = inverted(red(0.3));
+        let [(grip, _)] = grips(&shapes).try_into().expect("one grip");
+        let under = columns
+            .iter()
+            .min_by(|a, b| {
+                (a.0.x - grip.center().x).abs().total_cmp(&(b.0.x - grip.center().x).abs())
+            })
+            .unwrap()
+            .2;
         assert!(
-            (i32::from(middle.r()) - i32::from(want.r())).abs() <= 4,
-            "the grip shows {middle:?}, not the inverse of 0.3's colour, {want:?}",
+            (i32::from(under.r()) - i32::from(red(0.3).r())).abs() <= 4,
+            "the grip stands on {under:?}, not on the colour of 0.3",
         );
     }
 
-    /// A swatch bar's grip over its name shows the letters inverted with the
-    /// track, rather than covering them. Near the bottom of the range, so the
-    /// grip lands on the name.
+    /// A swatch bar's grip over its name knocks the letters out in the page
+    /// colour, as every other handle in the panel does, rather than covering
+    /// them. Near the bottom of the range, so the grip lands on the name.
     #[test]
-    fn a_swatch_grip_inverts_the_name_it_stands_on() {
+    fn a_swatch_grip_knocks_out_the_name_it_stands_on() {
         use crate::widgets::probe::knockouts;
         let red = |v: f32| Color32::from_rgb((v * 255.0).round() as u8, 0, 0);
         let mut value = 0.05;
@@ -1017,10 +1004,10 @@ mod tests {
             ValueBar::new(&mut value, 0.0..=1.0, "Redness").swatch(&red).show(ui);
         });
         let knocked = knockouts(&shapes);
-        let want = Some(inverted(theme::well()));
+        let want = Some(theme::panel());
         assert!(
             knocked.iter().any(|(_, _, text, colour)| text == "Redness" && *colour == want),
-            "the name under the grip is not inverted: {knocked:?}",
+            "no knockout of the name under the grip: {knocked:?}",
         );
     }
 

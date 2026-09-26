@@ -118,21 +118,20 @@ pub(super) fn system_pane(
             .on_hover_text(
                 "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
             );
-        // Each colour bar's track is a colour the panel really wears — the
-        // tint's is the labels' dim text, the accent's is the accent — at
-        // every setting of its own dial with the other dials held where they
-        // are, off the same functions the skin is made with. So the colour
-        // under a handle is the one on screen, and a track the other dials
-        // have greyed out is grey because every option on it is.
+        // The hue bars run the Colors tab's fixed rainbow, on the same OKLab
+        // hue axis the skin is mixed on, so a hue reads the same wherever it
+        // is picked. The amount bars' tracks are colours the panel really
+        // wears — the tint's is the labels' dim text, the accent's is the
+        // accent — at every setting of their own dial with the other dials
+        // held where they are, off the same functions the skin is made with.
         let held = *dials;
-        let tint_hue_track = |tint_hue| rgb(skin::text_dim_color(SkinDials { tint_hue, ..held }));
+        let rainbow = crate::widgets::track_hue();
         let tint_track = |tint| rgb(skin::text_dim_color(SkinDials { tint, ..held }));
-        let accent_hue_track = |hue| rgb(skin::accent_color(hue, held.accent_saturation));
         let saturation_track = |saturation| rgb(skin::accent_color(held.accent_hue, saturation));
         ValueBar::new(&mut dials.tint_hue, skin::HUE_RANGE, "Tint hue")
             .unit(1.0, "°")
             .decimals(0)
-            .swatch(&tint_hue_track)
+            .swatch(&rainbow)
             .show(ui)
             .on_hover_text("The hue the interface's greys and text lean toward.");
         ValueBar::new(&mut dials.tint, 0.0..=1.0, "Tint amount")
@@ -145,7 +144,7 @@ pub(super) fn system_pane(
         ValueBar::new(&mut dials.accent_hue, skin::HUE_RANGE, "Accent hue")
             .unit(1.0, "°")
             .decimals(0)
-            .swatch(&accent_hue_track)
+            .swatch(&rainbow)
             .show(ui)
             .on_hover_text("The hue of slider fills, selections and other highlights.");
         ValueBar::new(&mut dials.accent_saturation, 0.0..=1.0, "Accent saturation")

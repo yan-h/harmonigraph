@@ -244,6 +244,7 @@ impl Skin {
 }
 
 /// An sRGB byte triple in OKLab, `[L, a, b]`.
+#[cfg(test)]
 pub(crate) fn oklab(c: [u8; 3]) -> [f32; 3] {
     let lin = |v: u8| {
         let v = f32::from(v) / 255.0;
@@ -289,14 +290,6 @@ fn srgb(lightness: f32, a: f32, b: f32) -> [u8; 3] {
         let v = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
         (v * 255.0).round() as u8
     })
-}
-
-/// `c` with its OKLab lightness turned over — light to dark and back — and
-/// its hue and chroma kept (as far as the gamut allows): the same colour seen
-/// the other way up, for a handle that shows what it stands on inverted.
-pub fn inverted_lightness(c: [u8; 3]) -> [u8; 3] {
-    let [lightness, a, b] = oklab(c);
-    srgb(1.0 - lightness, a, b)
 }
 
 /// `a` moved `t` of the way to `b`, per sRGB byte.
