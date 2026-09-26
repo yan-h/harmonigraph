@@ -138,3 +138,14 @@ so it is the first candidate to evaluate visually.
 D offers more savings at the cost of a more substantial change in density and depth.
 Reduced-resolution RGB compositing remains an unmeasured alternative;
 it would need another target and would soften the finest pinpoints.
+
+## Preserving the nine-neighbor look at the denser defaults
+
+Yan preferred the current nine-neighbor appearance over the four-neighbor prototype at the captured density-10 settings.
+The [second optimization round](evidence/spectrogram-stars/round2/README.md) therefore retains the full halo and all five depths.
+Its falloff lookup was 18–41% slower in paired runs;
+skipping unused immediate-color work with color memory enabled saved only 0.2–3.3%,
+with the longer 4K run nearly tied.
+Neither change is enabled.
+The retained probes implicate the final walk as the dominant remaining cost,
+and preserve patches and measurements so these experiments need not be repeated without a new reason.

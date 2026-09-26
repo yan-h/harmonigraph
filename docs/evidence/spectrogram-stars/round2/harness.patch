@@ -1,0 +1,222 @@
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 75be54d1..9905c030 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -764,7 +764,7 @@ impl CallbackTrait for SpectrogramCallback {
+                         carried_memory,
+                     };
+                     pane.cloud =
+-                        Some(atmosphere::Targets::new(device, cloud, wanted, layout, grid, lut));
++                        Some(atmosphere::Targets::new(device, queue, cloud, wanted, layout, grid, lut));
+                 }
+                 let target = pane.cloud.as_mut().expect("allocated above");
+                 target.update(
+@@ -3905,6 +3905,7 @@ fn cs_wrap_probe() {
+
+     thread_local! {
+         /// Set while a test draws the reference [`pipeline_source`] builds.
++        static PROBE_VARIANT_PATH: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+         static UNWRAPPED_MOSAIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+     }
+
+@@ -3915,6 +3916,7 @@ fn cs_wrap_probe() {
+     /// composite 16 to 21% without ever being taken, so the reference lives
+     /// here instead.
+     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
++        if let Some(path) = PROBE_VARIANT_PATH.with_borrow(Clone::clone).or_else(|| std::env::var("PROBE_SHADER").ok()) { return std::fs::read_to_string(path).unwrap().into(); }
+         if !UNWRAPPED_MOSAIC.get() {
+             return SPECTROGRAM_SRC.into();
+         }
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+index e09e0f1a..fb09706e 100644
+--- a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+@@ -747,6 +747,7 @@ impl Pipelines {
+                 texture(4),
+                 texture(5),
+                 texture(6),
++                texture(10),
+                 wgpu::BindGroupLayoutEntry {
+                     binding: 9,
+                     visibility: wgpu::ShaderStages::FRAGMENT,
+@@ -908,7 +909,10 @@ fn tile_pipeline(
+ ) -> wgpu::RenderPipeline {
+     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+         label: Some("spectrogram_shader"),
+-        source: wgpu::ShaderSource::Wgsl(super::SPECTROGRAM_SRC.into()),
++        source: wgpu::ShaderSource::Wgsl({
++            #[cfg(test)] { super::tests::pipeline_source() }
++            #[cfg(not(test))] { super::SPECTROGRAM_SRC.into() }
++        }),
+     });
+     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+         label: Some("spectral_cloud_tile_pipeline_layout"),
+@@ -1103,6 +1107,7 @@ pub(super) struct Allocation {
+ impl Targets {
+     pub fn new(
+         device: &wgpu::Device,
++        queue: &wgpu::Queue,
+         pipelines: &Pipelines,
+         wanted: Allocation,
+         source_layout: &wgpu::BindGroupLayout,
+@@ -1214,6 +1219,19 @@ impl Targets {
+         // tone target would be, and the tile pass binds one at each tile. The
+         // scratch is the harmless choice — neither `fs_cloud_tone` nor
+         // `fs_cloud_tile` reads any of those three bindings.
++        let falloff = device.create_texture(&wgpu::TextureDescriptor {
++            label: Some("probe_star_falloff"),
++            size: wgpu::Extent3d { width: 4096, height: 1, depth_or_array_layers: 1 },
++            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
++            format: wgpu::TextureFormat::Rg16Float,
++            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
++            view_formats: &[],
++        });
++        let data = std::fs::read("/private/tmp/stars-round2/falloff.rg16").unwrap();
++        queue.write_texture(falloff.as_image_copy(), &data, wgpu::TexelCopyBufferLayout {
++            offset: 0, bytes_per_row: Some(4096 * 4), rows_per_image: Some(1),
++        }, falloff.size());
++        let falloff = falloff.create_view(&Default::default());
+         let cloud_group = |front: &wgpu::TextureView,
+                            tone: &wgpu::TextureView,
+                            tile: [&wgpu::TextureView; 2],
+@@ -1236,6 +1254,7 @@ impl Targets {
+                         resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+                     },
+                     wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
++                    wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&falloff) },
+                     wgpu::BindGroupEntry {
+                         binding: 4,
+                         resource: wgpu::BindingResource::TextureView(tone),
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+index e74e9373..8c51935f 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -94,7 +94,8 @@ const CASES: &[(&str, Option<Turn>)] = &[
+ ];
+
+ struct Case {
+-    name: &'static str,
++    name: String,
++    shader: Option<String>,
+     fill: f32,
+     history_seconds: f32,
+     turn: Option<Turn>,
+@@ -254,6 +255,7 @@ fn cloud_costs_by_style_and_dial() {
+     let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+     eprintln!("pane {}x{} px at {ppp} px/pt, {slabs} slabs of {bins} buckets", size[0], size[1]);
+
++    let variants: Vec<Option<String>> = std::env::var("PROBE_COMPARE").ok().map(|names| names.split(',').map(|s| Some(s.to_owned())).collect()).unwrap_or(vec![None]);
+     let mut cases: Vec<Case> = CASES
+         .iter()
+         .filter(|(name, _)| {
+@@ -265,7 +267,8 @@ fn cloud_costs_by_style_and_dial() {
+         .flat_map(|(name, turn, fill)| {
+             histories.iter().map(move |&history_seconds| (name, turn, fill, history_seconds))
+         })
+-        .map(|(name, turn, fill, history_seconds)| {
++        .flat_map(|(name, turn, fill, history_seconds)| variants.iter().cloned().map(move |variant| (name, turn, fill, history_seconds, variant)))
++        .map(|(name, turn, fill, history_seconds, variant)| {
+             let mut cb = callback(quad(fill), &grid, &read);
+             cb.rect = rect;
+             let mut resources = CallbackResources::default();
+@@ -278,7 +281,8 @@ fn cloud_costs_by_style_and_dial() {
+             }
+             resources.insert(sampling);
+             Case {
+-                name,
++                name: variant.clone().unwrap_or_else(|| name.to_owned()),
++                shader: variant.map(|name| format!("/private/tmp/stars-round2/{name}.wgsl")),
+                 fill,
+                 history_seconds,
+                 turn,
+@@ -312,14 +316,19 @@ fn cloud_costs_by_style_and_dial() {
+                 reversed_old,
+                 cpu_prepare,
+                 name,
++                shader,
+                 history_seconds,
+                 fill,
+                 ..
+             } = case;
++            PROBE_VARIANT_PATH.with_borrow_mut(|path| *path = shader.clone());
+             cb.pass_nr = frame as u64;
+             cb.atmosphere = turn.map(|turn| {
+                 let mut settings = SpectralAtmosphere::default();
+                 turn(&mut settings);
++                if std::env::var("PROBE_NO_MEMORY").is_ok() {settings.color_pickup = 0.0; settings.color_release = 0.0;}
++                if let Some(v) = dial("PROBE_STAR_FRINGE") {settings.star_fringe = v;}
++                if let Some(v) = dial("PROBE_STAR_DENSITY") {settings.star_density = v;}
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -460,3 +469,70 @@ fn cloud_costs_by_style_and_dial() {
+         );
+     }
+ }
++
++#[test]
++#[ignore]
++fn scratch_current_defaults_comparison() {
++    use std::io::Write;
++    let (device, queue) = headless_device().expect("GPU");
++    let root = std::env::var("PROBE_OUTPUT").unwrap();
++    let name = std::env::var("PROBE_NAME").unwrap();
++    let width: u32 = std::env::var("PROBE_WIDTH").ok().map(|x|x.parse().unwrap()).unwrap_or(1920);
++    let height = width * 9 / 16;
++    let frames: u32 = std::env::var("PROBE_FRAMES").ok().map(|x|x.parse().unwrap()).unwrap_or(360);
++    let inputs = std::env::var("PROBE_INPUTS").unwrap_or("take,flat".into());
++    let gradient = harmonigraph_scene::Gradient {
++        hue_start: 302.0, hue_span: -181.224_01, lightness: 50.0,
++        lightness_ramp: 100.0, chroma: 0.794_999_96, chroma_ramp: 0.410_000_03,
++        ..Default::default()
++    };
++    let pixels: Vec<[u8; 4]> = (0..4096).map(|i| {
++        let c = harmonigraph_scene::gradient_color((i as f32 + 0.5)/4096.0, gradient);
++        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
++        [byte(c.x), byte(c.y), byte(c.z), 255]
++    }).collect();
++    for input in inputs.split(',') {
++        let full = std::fs::read(format!("{root}/{input}-levels.u8")).unwrap();
++        let mut cb = cloud_fixture();
++        cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width as f32,height as f32));
++        cb.grid = grid_of(Arc::new(full[..961*1024].to_vec()), 1024, 961, 0);
++        relay_quad(&mut cb, 960);
++        let lo = 69.0 + 12.0 * (70.0_f32/440.0).log2();
++        let span = 12.0 * (9000.0_f32/70.0).log2();
++        cb.read = read_of(lo,span,height);
++        cb.read.spectrum_min_midi = lo;
++        cb.read.bins_per_semitone = 1024.0/span;
++        cb.read.level_per_midi = 0.0;
++        cb.read.level_per_step = 1.0/255.0;
++        cb.shades.lut = Arc::new(pixels.clone());
++        let a = cb.atmosphere.as_mut().unwrap();
++        a.region = cb.rect;
++        a.points_per_cent = height as f32/(span*100.0);
++        a.points_per_ms = width as f32/20000.0;
++        a.settings = SpectralAtmosphere { cloud_style: CloudStyle::Stars, ..Default::default() };
++        eprintln!("{name} {input}: {width}x{height}, settings {:?}", a.settings);
++        let mut resources = CallbackResources::default();
++        let count = if input == "flat" {1} else {frames};
++        let mut video = if count > 1 {
++            Some(std::process::Command::new("ffmpeg").args(["-v","error","-y","-f","rawvideo","-pix_fmt","rgba","-s",&format!("{width}x{height}"),"-r","60","-i","-","-an","-c:v","libx264","-preset","fast","-crf","12","-pix_fmt","yuv420p","-movflags","+faststart",&format!("{root}/{name}-{width}.mp4")]).stdin(std::process::Stdio::piped()).spawn().unwrap())
++        } else {None};
++        for frame in 0..120+count {
++            cb.pass_nr = frame as u64;
++            cb.atmosphere.as_mut().unwrap().now = 1.0 + f64::from(frame)/60.0;
++            if input == "take" {
++                let col = (frame * 48 / 60) as usize;
++                cb.grid.set_bytes(&full[col*1024..(col+961)*1024]);
++                relay_quad(&mut cb, 960);
++                let fraction = (frame * 48 % 60) as f32 / 60.0;
++                for vertex in &mut cb.vertices {vertex.slab += fraction;}
++            }
++            if frame < 120 { prepare_once(&device,&queue,&mut resources,&cb); continue; }
++            let bytes = frame_with(&device,&queue,&mut resources,&cb);
++            let n = frame-120;
++            if n == 0 || n == 180 || n == 359 { std::fs::write(format!("{root}/{name}-{input}-{width}-{n}.rgba"), &bytes).unwrap(); }
++            if let Some(video) = video.as_mut() {video.stdin.as_mut().unwrap().write_all(&bytes).unwrap();}
++            if n % 60 == 0 { eprintln!("{name} {input} {n}/{count}"); }
++        }
++        if let Some(mut video) = video {drop(video.stdin.take());assert!(video.wait().unwrap().success());}
++    }
++}

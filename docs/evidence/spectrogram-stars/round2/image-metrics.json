@@ -1,0 +1,22 @@
+{
+  "cleanup-take": {
+    "max": 0,
+    "mean": 0.0,
+    "changed_pixels_percent": 0.0
+  },
+  "lookup_zero-take": {
+    "max": 1,
+    "mean": 0.0016194058641975308,
+    "changed_pixels_percent": 0.4841820987654321
+  },
+  "cleanup-flat": {
+    "max": 0,
+    "mean": 0.0,
+    "changed_pixels_percent": 0.0
+  },
+  "lookup_zero-flat": {
+    "max": 1,
+    "mean": 0.001421682098765432,
+    "changed_pixels_percent": 0.4254436728395062
+  }
+}

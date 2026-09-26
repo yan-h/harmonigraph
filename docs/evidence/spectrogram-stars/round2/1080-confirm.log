@@ -1,0 +1,17 @@
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 1920x1080 px at 2 px/pt, 1024 slabs of 3828 buckets
+first old-bracket reversal cleanup 10s: [770246138742291, 770246139067416, 770246139004541, 770246139070416, 770246139647250, 770246152962208, 770246139188750, 770246139236958]
+first old-bracket reversal base 10s: [770246211913625, 770246211966166, 770246212187000, 770246212451541, 770246212386458, 770246226458583, 770246212295166, 770246212491541]
+first old-bracket reversal lookup_zero 10s: [770246350841458, 770246350893666, 770246351168416, 770246351363708, 770246351299916, 770246369944291, 770246351258791, 770246351405625]
+case                                    fill   span s    light med/min    paint med/min     wall med/min    end/full  begin/full     old med  rev new/old    CPU prep  source px
+lookup_zero                             1.00     10.0     0.47/   0.00    18.85/   0.04    23.18/  18.51      19.545      19.766       0.000     0/151        0.129  Some([167, 549])
+  lookup_zero 10.0s GPU min/p10/med/p90/max begin/full=15.193/17.806/19.727/22.235/25.460 end/full=15.146/17.594/19.534/21.697/25.407 old=0.000/0.000/0.000/0.078/1.634
+cleanup                                 1.00     10.0     0.52/   0.00    13.27/   0.00    16.32/  12.43      13.866      13.987       0.000     0/158        0.131  Some([167, 549])
+  cleanup 10.0s GPU min/p10/med/p90/max begin/full=10.659/11.941/13.966/16.471/19.342 end/full=10.181/11.791/13.862/16.260/19.315 old=0.000/0.000/0.000/0.097/0.223
+base                                    1.00     10.0     0.47/   0.00    13.69/   0.02    19.08/  12.77      14.350      14.662       0.000     0/175        0.127  Some([167, 549])
+  base 10.0s GPU min/p10/med/p90/max begin/full=10.997/13.251/14.658/17.279/19.667 end/full=10.945/12.657/14.340/16.926/19.646 old=0.000/0.000/0.000/0.063/1.046
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 350 filtered out; finished in 15.51s

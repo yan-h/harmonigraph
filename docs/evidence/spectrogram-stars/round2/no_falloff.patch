@@ -1,0 +1,14 @@
+--- base.wgsl
++++ no_falloff.wgsl
+@@ -1602,9 +1602,9 @@
+     let inverse_sigma = shape.x;
+     // The shape is coverage only: a soft point and a same-colour fringe, the
+     // fringe bounded by nothing but the ring's fade below.
+-    var cover = exp(-0.5 * (dist * inverse_sigma) * (dist * inverse_sigma));
++    var cover = 0.5;
+     if s.fringe > 0.0 {
+-        cover += s.fringe * exp(-0.4 * dist * inverse_sigma);
++        cover += s.fringe * 0.5;
+     }
+     // Zero at the ring's reach, so a star the walk cannot see from this pixel
+     // draws nothing here either and no cell edge shows.

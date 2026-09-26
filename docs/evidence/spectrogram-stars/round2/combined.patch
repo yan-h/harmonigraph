@@ -1,0 +1,56 @@
+--- base.wgsl
++++ combined.wgsl
+@@ -1,3 +1,4 @@
++@group(1) @binding(10) var star_falloff: texture_2d<f32>;
+ // The spectrogram's heatmap, read per fragment out of the aggregator's slab
+ // grid rather than sampled out of a picture something else composed.
+ //
+@@ -1527,7 +1528,8 @@
+     let centre = 0.5 + STAR_JITTER * (a.xy - 0.5);
+     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
+         * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
+-    let level = star_level_at(at);
++    var level = 0.0;
++    if cloud.memory_enabled == 0u { level = star_level_at(at); }
+     // Over silence a star is not drawn at all, so a quiet pane is the floor
+     // exactly rather than the floor with stars of the floor's colour on it.
+     var held = vec4<f32>(0.0);
+@@ -1542,16 +1544,16 @@
+     // spreads stars around the light rather than darkening the field.
+     let c = star_hash(hashed, key + 1u);
+     let randomness = cloud.star_randomness;
+-    // Keep the immediate path's arithmetic intact through packing: moving
+-    // these expressions into a memory branch changes Metal rounding by a byte.
+-    let colour = star_paint(level, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
+     let size = exp((0.3 + 0.9 * randomness) * (c.y - 0.5) * 2.0);
+     let sigma = min(s.sigma * size, s.cap) * s.defocus;
+     // It fades in over the start of its life and out over the end.
+     let fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
+-    var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
++    var tens: vec3<u32>;
+     if cloud.memory_enabled != 0u {
+         tens = vec3<u32>(round(gamma_from_linear_rgb(held.rgb) * 1023.0));
++    } else {
++        let colour = star_paint(level, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
++        tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
+     }
+     return vec4<u32>(
+         bitcast<u32>(centre.x),
+@@ -1602,10 +1604,14 @@
+     let inverse_sigma = shape.x;
+     // The shape is coverage only: a soft point and a same-colour fringe, the
+     // fringe bounded by nothing but the ring's fade below.
+-    var cover = exp(-0.5 * (dist * inverse_sigma) * (dist * inverse_sigma));
++    let u = dist * inverse_sigma;
++    let coord = (min(u, 32.0) * (4095.0 / 32.0) + 0.5) / 4096.0;
++    let shape_curve = textureSampleLevel(star_falloff, cloud_sampler, vec2<f32>(coord, 0.5), 0.0).rg;
++    var cover = shape_curve.x;
+     if s.fringe > 0.0 {
+-        cover += s.fringe * exp(-0.4 * dist * inverse_sigma);
+-    }
++        cover += s.fringe * shape_curve.y;
++    }
++    if u > 32.0 { cover = s.fringe * exp(-0.4 * u); }
+     // Zero at the ring's reach, so a star the walk cannot see from this pixel
+     // draws nothing here either and no cell edge shows.
+     let reach = STAR_REACH * s.cell;

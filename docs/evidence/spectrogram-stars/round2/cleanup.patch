@@ -1,0 +1,33 @@
+--- base.wgsl
++++ cleanup.wgsl
+@@ -1527,7 +1527,8 @@
+     let centre = 0.5 + STAR_JITTER * (a.xy - 0.5);
+     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
+         * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
+-    let level = star_level_at(at);
++    var level = 0.0;
++    if cloud.memory_enabled == 0u { level = star_level_at(at); }
+     // Over silence a star is not drawn at all, so a quiet pane is the floor
+     // exactly rather than the floor with stars of the floor's colour on it.
+     var held = vec4<f32>(0.0);
+@@ -1542,16 +1543,16 @@
+     // spreads stars around the light rather than darkening the field.
+     let c = star_hash(hashed, key + 1u);
+     let randomness = cloud.star_randomness;
+-    // Keep the immediate path's arithmetic intact through packing: moving
+-    // these expressions into a memory branch changes Metal rounding by a byte.
+-    let colour = star_paint(level, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
+     let size = exp((0.3 + 0.9 * randomness) * (c.y - 0.5) * 2.0);
+     let sigma = min(s.sigma * size, s.cap) * s.defocus;
+     // It fades in over the start of its life and out over the end.
+     let fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
+-    var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
++    var tens: vec3<u32>;
+     if cloud.memory_enabled != 0u {
+         tens = vec3<u32>(round(gamma_from_linear_rgb(held.rgb) * 1023.0));
++    } else {
++        let colour = star_paint(level, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness));
++        tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
+     }
+     return vec4<u32>(
+         bitcast<u32>(centre.x),

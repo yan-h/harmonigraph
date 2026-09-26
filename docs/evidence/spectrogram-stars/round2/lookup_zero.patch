@@ -1,0 +1,25 @@
+--- base.wgsl
++++ lookup_zero.wgsl
+@@ -1,3 +1,4 @@
++@group(1) @binding(10) var star_falloff: texture_2d<f32>;
+ // The spectrogram's heatmap, read per fragment out of the aggregator's slab
+ // grid rather than sampled out of a picture something else composed.
+ //
+@@ -1602,10 +1603,14 @@
+     let inverse_sigma = shape.x;
+     // The shape is coverage only: a soft point and a same-colour fringe, the
+     // fringe bounded by nothing but the ring's fade below.
+-    var cover = exp(-0.5 * (dist * inverse_sigma) * (dist * inverse_sigma));
++    let u = dist * inverse_sigma;
++    let coord = (min(u, 32.0) * (4095.0 / 32.0) + 0.5) / 4096.0;
++    let shape_curve = textureSampleLevel(star_falloff, cloud_sampler, vec2<f32>(coord, 0.5), 0.0).rg;
++    var cover = shape_curve.x;
+     if s.fringe > 0.0 {
+-        cover += s.fringe * exp(-0.4 * dist * inverse_sigma);
+-    }
++        cover += s.fringe * shape_curve.y;
++    }
++    cover = select(cover, 0.0, u > 32.0);
+     // Zero at the ring's reach, so a star the walk cannot see from this pixel
+     // draws nothing here either and no cell edge shows.
+     let reach = STAR_REACH * s.cell;
