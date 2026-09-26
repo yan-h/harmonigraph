@@ -151,17 +151,20 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         ),
                     ],
                 );
-                ValueBar::new(
-                    &mut atmosphere.cloud_speed,
-                    CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
-                    "Drift speed",
-                )
-                .unit(1.0, "\u{d7}")
-                .show(ui)
-                .on_hover_text(
-                    "1\u{d7} carries the texture about a pane-height every four minutes, and the \
-                         nearest stars a pane-height in about nine seconds. 0 holds it still.",
-                );
+                // The stars' pace is their own two-ended `Star speed`, so this
+                // would be a bar that did nothing on their page.
+                if atmosphere.cloud_style != CloudStyle::Stars {
+                    ValueBar::new(
+                        &mut atmosphere.cloud_speed,
+                        CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
+                        "Drift speed",
+                    )
+                    .unit(1.0, "\u{d7}")
+                    .show(ui)
+                    .on_hover_text(
+                        "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds it still.",
+                    );
+                }
                 ValueBar::new(
                     &mut atmosphere.cloud_direction,
                     CLOUD_DIRECTION_MIN..=CLOUD_DIRECTION_MAX,
@@ -598,7 +601,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     use harmonigraph_scene::{
         STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_LIFETIME_MAX,
         STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
-        STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
+        STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN, STAR_SPEED_MAX, STAR_SPEED_MIN,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
         .unit(1.0, "\u{d7}")
@@ -647,12 +650,17 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "A faint, wider fringe around every star in the star's own color. 0% draws bare soft points.",
         );
-    ValueBar::new(&mut atmosphere.star_far_speed, 0.0..=1.0, "Far star speed")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How fast the farthest stars drift, as a share of the nearest stars' speed. Lower values deepen the parallax; 100% moves every depth together.",
-        );
+    RangeBar::new(
+        &mut atmosphere.star_speed_min,
+        &mut atmosphere.star_speed_max,
+        STAR_SPEED_MIN..=STAR_SPEED_MAX,
+        "Star speed",
+    )
+    .display(|speed| format!("{speed:.2}\u{d7}"))
+    .show(ui)
+    .on_hover_text(
+        "How fast the farthest stars drift at the low end and the nearest at the high end, with Speed curve deciding how the depths between share it out. 1\u{d7} carries a star a pane-height in about nine seconds; 0 holds it still. A wider range deepens the parallax; equal ends move every depth together.",
+    );
     ValueBar::new(
         &mut atmosphere.star_speed_curve,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,

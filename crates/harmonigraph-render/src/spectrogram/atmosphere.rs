@@ -108,7 +108,7 @@ const STAR_LIFE_PERIOD: f64 = 4096.0;
 /// holds): [`STAR_REACH_CELLS`] less this is 0.5. More would take a 4x4 walk,
 /// which would cost every pixel seven more cells in every slice.
 const STAR_SPREAD_REACH: f32 = 0.7;
-/// How fast the nearest stars travel at `Drift speed` 1, in star pixels (a
+/// How fast a depth at `Star speed` 1 travels, in star pixels (a
 /// 540th of the pane's height) per second: the prototype's `(-60, -14)` px/s
 /// over its 540-pixel pane, which is about a ninth of the pane's height a
 /// second, while the music scrolled at 192 px/s under it.
@@ -186,10 +186,11 @@ fn star_life(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> f32 
     (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
 }
 
-/// A slice's share of the nearest stars' speed: `far + (1 - far) d^curve`.
+/// A slice's speed, as a multiple of [`star_px_per_second`]:
+/// `min + (max - min) d^curve` over `Star speed`'s two ends.
 fn star_speed(settings: harmonigraph_scene::SpectralAtmosphere, k: usize) -> f32 {
-    let far = settings.star_far_speed;
-    far + (1.0 - far) * star_depth(k).powf(settings.star_speed_curve)
+    let (far, near) = (settings.star_speed_min, settings.star_speed_max);
+    far + (near - far) * star_depth(k).powf(settings.star_speed_curve)
 }
 
 /// Every slice's numbers for this frame. Every star lives `Star lifetime`, and
@@ -205,8 +206,8 @@ fn star_slices(
     settings: harmonigraph_scene::SpectralAtmosphere,
     now: f64,
 ) -> [StarSlice; STAR_SLICES] {
-    // Star pixels a second at a speed share of one.
-    let rate = f64::from(settings.cloud_speed) * star_px_per_second();
+    // Star pixels a second at a speed of one.
+    let rate = star_px_per_second();
     let travel = now * rate;
     let (sin, cos) = f64::from(settings.cloud_direction).to_radians().sin_cos();
     let packing = (settings.star_density / 2.0).sqrt();
@@ -1240,9 +1241,9 @@ mod tests {
         let spread = harmonigraph_scene::SpectralAtmosphere {
             star_speed_spread: 1.0,
             star_lifetime: harmonigraph_scene::STAR_LIFETIME_MAX,
-            cloud_speed: harmonigraph_scene::CLOUD_SPEED_MAX,
             cloud_direction: 30.0,
-            star_far_speed: 0.0,
+            star_speed_min: harmonigraph_scene::STAR_SPEED_MIN,
+            star_speed_max: harmonigraph_scene::STAR_SPEED_MAX,
             ..fresh
         };
         let extremes = [
@@ -1335,10 +1336,10 @@ mod tests {
         nearest
     }
 
-    /// Every depth drifts along `Drift direction` at its own share of the
-    /// nearest's speed, and the nearest at the prototype's pace: about a ninth
-    /// of the pane's height a second at `Drift speed` 1. `Far star speed` 1 is
-    /// no parallax at all.
+    /// Every depth drifts along `Drift direction` at its own speed between
+    /// `Star speed`'s ends, and a depth at 1 at the prototype's pace: about a
+    /// ninth of the pane's height a second. Equal ends are no parallax at all,
+    /// and the other textures' `Drift speed` moves no star.
     ///
     /// Read as SCREEN travel, `offset * cell`, which is what the eye sees —
     /// the offsets themselves are in each slice's own cells.
@@ -1348,7 +1349,8 @@ mod tests {
         // stated against, whatever the fresh far speed is.
         let fresh = harmonigraph_scene::SpectralAtmosphere {
             cloud_direction: 0.0,
-            star_far_speed: 0.15,
+            star_speed_min: 0.15,
+            star_speed_max: 1.0,
             ..Default::default()
         };
         let travelled = |settings, now| {
@@ -1363,10 +1365,12 @@ mod tests {
         assert!(moved.iter().all(|m| m[1].abs() < 1e-3));
         assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
         let together = travelled(
-            harmonigraph_scene::SpectralAtmosphere { star_far_speed: 1.0, ..fresh },
+            harmonigraph_scene::SpectralAtmosphere { star_speed_min: 1.0, ..fresh },
             10.0,
         );
         assert!(together.iter().all(|m| (m[0] - near).abs() < 0.01), "{together:?}");
+        let clouds = harmonigraph_scene::SpectralAtmosphere { cloud_speed: 20.0, ..fresh };
+        assert_eq!(travelled(clouds, 10.0), moved);
         // A session left running for days still hands the shader an offset
         // inside one hash period rather than millions of pixels.
         for slice in star_slices(fresh, 3.0e5) {
