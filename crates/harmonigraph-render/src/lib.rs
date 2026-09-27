@@ -1102,11 +1102,10 @@ struct GpuTimer {
     /// Nanoseconds per timestamp tick.
     period: f32,
     state: TimerState,
-    /// Set by the map callback, which the driver may run on another thread.
-    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// 1x1 target for the opening and trailing timestamp passes.
-    /// One pixel, so beginning it costs nothing worth measuring.
-    tail: wgpu::TextureView,
+    /// 0 pending, 1 mapped, 2 failed; written by the map callback.
+    ready: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// 1x1 target carrying the opening timestamp.
+    head: wgpu::TextureView,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -1152,18 +1151,13 @@ impl GpuTimer {
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
-            staging: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("lattice_gpu_timer_staging"),
-                size: TIMER_BYTES,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            staging: Self::staging(device),
             period: queue.get_timestamp_period(),
             state: TimerState::Idle,
-            ready: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            tail: device
+            ready: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            head: device
                 .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("lattice_gpu_timer_tail"),
+                    label: Some("lattice_gpu_timer_head"),
                     size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
                     mip_level_count: 1,
                     sample_count: 1,
@@ -1173,6 +1167,15 @@ impl GpuTimer {
                     view_formats: &[],
                 })
                 .create_view(&Default::default()),
+        })
+    }
+
+    fn staging(device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lattice_gpu_timer_staging"),
+            size: TIMER_BYTES,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         })
     }
 
@@ -1191,9 +1194,7 @@ impl GpuTimer {
                 // the copy being recorded and the submit that performs it.
                 let ready = self.ready.clone();
                 self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-                    if result.is_ok() {
-                        ready.store(true, Ordering::Release);
-                    }
+                    ready.store(if result.is_ok() { 1 } else { 2 }, Ordering::Release);
                 });
                 // Poll, never Wait: a stall here would be the measurement
                 // interfering with what it measures.
@@ -1203,23 +1204,33 @@ impl GpuTimer {
             }
             TimerState::Mapping => {
                 let _ = device.poll(wgpu::PollType::Poll);
-                if !self.ready.swap(false, Ordering::Acquire) {
-                    return None;
+                match self.ready.swap(0, Ordering::Acquire) {
+                    0 => return None,
+                    2 => {
+                        // Like the host draw timer, replace a failed map's
+                        // buffer: wgpu's API and core can disagree about its
+                        // mapping state, so unmapping/retrying it is unsafe.
+                        self.staging = Self::staging(device);
+                        self.state = TimerState::Idle;
+                        return None;
+                    }
+                    _ => {}
                 }
                 let ms = {
                     let view = self.staging.slice(..).get_mapped_range();
                     let ticks: &[u64] = bytemuck::cast_slice(&view);
-                    // Saturating: both timestamps come off the same queue and
-                    // should be ordered, but an out-of-order pair must not
-                    // wrap into an astronomical reading.
-                    let delta = ticks[1].saturating_sub(ticks[0]) as f64;
-                    (delta * self.period as f64 / 1.0e6) as f32
+                    Self::elapsed_ms(ticks[0], ticks[1], self.period)
                 };
                 self.staging.unmap();
                 self.state = TimerState::Idle;
-                Some(ms)
+                ms
             }
         }
+    }
+
+    fn elapsed_ms(begin: u64, end: u64, period: f32) -> Option<f32> {
+        (begin != 0 && end != 0 && end >= begin)
+            .then(|| ((end - begin) as f64 * f64::from(period) / 1.0e6) as f32)
     }
 
     /// Whether this frame should be timed — false while a readback is still
@@ -1228,28 +1239,15 @@ impl GpuTimer {
         self.state == TimerState::Idle
     }
 
-    /// Open before any lattice preparation pass, even when optional stages skip.
-    ///
-    /// Both samples are BEGINNING-of-pass writes. The obvious shape —
-    /// `write_timestamp` on the encoder, or beginning-and-end on one pass —
-    /// does not work here: Metal advertises and grants both
-    /// `TIMESTAMP_QUERY_INSIDE_ENCODERS` and end-of-pass writes, then
-    /// silently records ZERO for them. Only the beginning-of-pass sample
-    /// comes back with a real value, so the bracket is built from two of
-    /// those, the closing one on a pass that exists only to carry it.
+    /// Begin before lattice preparation. The closing stamp belongs to the
+    /// last real preparation pass: scene without bloom, final blur with it.
+    /// A separate tail pass has no dependency on the scene's fragment work
+    /// and can begin before that work finishes on a tile-based GPU.
     fn opening(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.stamp(encoder, 0);
-    }
-
-    fn stamp(&self, encoder: &mut wgpu::CommandEncoder, index: u32) {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(if index == 0 {
-                "lattice_gpu_timer_open_pass"
-            } else {
-                "lattice_gpu_timer_tail_pass"
-            }),
+            label: Some("lattice_gpu_timer_open_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.tail,
+                view: &self.head,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -1260,7 +1258,7 @@ impl GpuTimer {
             depth_stencil_attachment: None,
             timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
                 query_set: &self.set,
-                beginning_of_pass_write_index: Some(index),
+                beginning_of_pass_write_index: Some(0),
                 end_of_pass_write_index: None,
             }),
             occlusion_query_set: None,
@@ -1268,10 +1266,8 @@ impl GpuTimer {
         });
     }
 
-    /// Close the bracket with a beginning-of-pass sample, then stage the
-    /// result for a later frame to map.
+    /// Resolve the completed preparation bracket for a later frame to map.
     fn close(&mut self, encoder: &mut wgpu::CommandEncoder) {
-        self.stamp(encoder, 1);
         encoder.resolve_query_set(&self.set, 0..2, &self.resolve, 0);
         encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.staging, 0, TIMER_BYTES);
         self.state = TimerState::Recorded;
@@ -1630,14 +1626,20 @@ impl BloomChain {
     ///
     /// This is the only place that ordering is written down; the pipelines
     /// themselves are built by each caller.
-    fn run(&self, encoder: &mut wgpu::CommandEncoder, pipelines: BloomPipelines<'_>, label: &str) {
+    fn run(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: BloomPipelines<'_>,
+        label: &str,
+        end_stamp: Option<&wgpu::QuerySet>,
+    ) {
         let steps: [BloomStep; 4] = [
             (pipelines.bright, &self.bright_bind_group, &self.half_view),
             (pipelines.downsample, &self.downsample_bind_group, &self.quarter_a_view),
             (pipelines.blur_h, &self.blur_h_bind_group, &self.quarter_b_view),
             (pipelines.blur_v, &self.blur_v_bind_group, &self.quarter_a_view),
         ];
-        for (pipeline, bind_group, target) in steps {
+        for (index, (pipeline, bind_group, target)) in steps.into_iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(&format!("{label}_bloom_pass")),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1650,7 +1652,13 @@ impl BloomChain {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: end_stamp.filter(|_| index == 3).map(|query_set| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: None,
+                        end_of_pass_write_index: Some(1),
+                    }
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

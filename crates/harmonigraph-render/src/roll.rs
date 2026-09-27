@@ -1056,6 +1056,7 @@ impl CallbackTrait for RollCallback {
                     blur_v: blur_v_pipeline,
                 },
                 "roll",
+                None,
             );
         }
 
