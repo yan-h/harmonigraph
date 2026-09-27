@@ -317,8 +317,8 @@ fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> ShadowThrough
 }
 
 // Whether this caster's shadow is a DISTANCE. A marker uses the answer to
-// choose its exact field instead of a cell; a node uses it to leave that field's
-// existing half-level release alone while masking a Gaussian by its footprint.
+// choose its exact field instead of a cell; a node uses it to remove its ink
+// coverage from that profile while masking a Gaussian by its footprint.
 fn shadow_is_distance(who: f32) -> bool {
     let caster = u32(max(who, 0.0));
     if caster >= arrayLength(&shadow_casters) {
@@ -2494,10 +2494,8 @@ fn seen_of(paint: Painted) -> vec4<f32> {
 }
 
 /// A node supplies its ink and the composite alphas for the background.
-/// Premultiplied blending with alpha `1-(1-A*V)*T` leaves the background
-/// multiplied by `(1-A*V)*T`, exposing it as receiver visibility V falls.
-/// Its own shadow T remains even when its ink is hidden. `node_split` keeps
-/// that multiply off the separate node-ink contribution.
+/// Receiver visibility scales ink independently of its exterior shadow.
+/// `node_split` keeps the shadow off the separate node-ink contribution.
 fn node_paint(in: VsOut) -> Painted {
     let g = node_geom(in, false);
     // The one tap, taken whatever the node paints here — a fragment the ink
@@ -2522,21 +2520,28 @@ fn node_paint(in: VsOut) -> Painted {
     if ink.alpha < INK_FLOOR {
         ink = NodeInk(vec3<f32>(0.0), 0.0, 0.0, 0.0, ink.sd);
     }
-    // A Gaussian's cell contains the caster's fading alpha, then calibrates
-    // thin ink with a gain. Without a footprint mask that amplified blur shows
-    // through the translucent caster and leaves a black shape late in the
-    // release. Keep the blur outside the footprint exactly as sampled, and
-    // leave Distance's half-level contour unchanged.
-    let shadow_exposure = select(1.0 - ink.mask, 1.0, shadow_is_distance(in.shadow_box.x));
-    let seen_through = 1.0 - (1.0 - t.seen) * shadow_exposure;
-    let bloom_through = 1.0 - (1.0 - t.bloom) * shadow_exposure;
     var visibility = 1.0;
     if ink.alpha > 0.0 {
         visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
     }
     let visible_alpha = ink.alpha * visibility;
-    let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
-    let bloom_alpha = 1.0 - (1.0 - visible_alpha) * bloom_through;
+    var final_alpha: f32;
+    var bloom_alpha: f32;
+    if shadow_is_distance(in.shadow_box.x) {
+        // Distance stores an opacity-weighted profile that already includes
+        // the node's ink. Spend only the coverage beyond that ink as shadow,
+        // so a fading layer is not counted twice. This union also lets a new
+        // mark uncover a stronger ring's shadow continuously as it arrives.
+        final_alpha = visible_alpha + max(0.0, 1.0 - t.seen - glow_shadow_depth() * ink.alpha);
+        bloom_alpha = visible_alpha + max(0.0, 1.0 - t.bloom - ink.alpha);
+    } else {
+        // Gaussian's calibrated blur can exceed the ink's opacity. Its
+        // footprint keeps that amplified shadow outside the fading caster.
+        let seen_through = 1.0 - (1.0 - t.seen) * (1.0 - ink.mask);
+        let bloom_through = 1.0 - (1.0 - t.bloom) * (1.0 - ink.mask);
+        final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
+        bloom_alpha = 1.0 - (1.0 - visible_alpha) * bloom_through;
+    }
     if max(final_alpha, bloom_alpha) <= 0.0 {
         discard;
     }
