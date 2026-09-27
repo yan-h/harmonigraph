@@ -13,75 +13,189 @@ fn set_console_collapsed(state: &mut SharedState, collapsed: bool) {
     state.workspace.layout.folded[workspace::Section::Settings as usize] = false;
 }
 
-#[test]
-fn retired_cloud_sampling_preserves_editor_and_recorded_appearance() {
+/// A state dialled away from fresh wherever a retirement below sits, so a
+/// blob that survived is distinguishable from one that sank and reverted to
+/// defaults, and so every live variant the dropped ones are spliced over is in
+/// the blob to splice over.
+fn dialled() -> SharedState {
     let mut state = fresh();
-    state.picture.appearance.camera.distance = 18.0;
+    let appearance = &mut state.picture.appearance;
+    appearance.camera.yaw = 1.23;
+    appearance.camera.distance = 18.0;
+    appearance.camera.cabinet_scale = 0.7;
+    appearance.view.label_scale = 0.7;
+    appearance.view.ring_gap = 0.02;
+    appearance.view.max_sevens = 3;
+    appearance.view.note_animation.order = harmonigraph_scene::AnimationOrder::Circular;
+    appearance.view.note_animation.stagger_spread = 0.63;
+    appearance.view.atmosphere.material = harmonigraph_scene::LatticeMaterial::Contours;
+    appearance.spectrum.orientation = crate::SpectralOrientation::Left;
+    appearance.spectrum.roll_thickness = 1.75;
+    appearance.spectrum.low_midi = 40.5;
+    appearance.render.short_edge = 2160;
+    appearance.render.frame.split = 0.37;
+    appearance.render.spectrogram = crate::SpectrogramRender::Scrolling;
     state.workspace.interaction.ui_scale = 1.25;
+    state
+}
+
+/// Where `key:` opens a pair in `blob` — after a `(` or a `,`, so a key that
+/// merely ends in the same letters (`spectrogram:` inside `x_spectrogram:`) is
+/// not taken for it.
+fn pair_starts(blob: &str, key: &str) -> Vec<usize> {
+    blob.match_indices(&format!("{key}:"))
+        .filter(|(i, _)| *i > 0 && matches!(blob.as_bytes()[i - 1], b'(' | b','))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Every key a retirement has left in saved projects, as `(a live key in the
+/// same struct, the retired pairs as those builds wrote them)`: the retired
+/// pairs are spliced back in ahead of the live key.
+///
+/// The VALUE shapes are the point as much as the names. A number is skipped by
+/// any parser; a bare identifier (`Aurora`, `Pitch`, `DrawAndRetract`) is an
+/// enum token with no type left to parse it into, and a string and `NaN` are
+/// tokens of their own. Retiring a FIELD is safe for every one of them, where
+/// retiring a VARIANT is not — that is [`DROPPED_VARIANTS`].
+///
+/// Retiring another key is a row here, not another test.
+const RETIRED_KEYS: &[(&str, &str)] = &[
+    // The cloud's sampling grid.
+    ("cloud_depth", "cloud_tile:20.0,cloud_pixel:4.0,"),
+    // Node spacing, including a non-finite one.
+    ("label_scale", "spacing:3.0,"),
+    ("label_scale", "spacing:NaN,"),
+    // The independent angular gap. `ring_gap` is the shared one now, and the
+    // dialled 0.02 must not be overwritten by it.
+    ("ring_gap", "octave_gap:0.17,"),
+    // The shimmer, including its two bare enum tokens.
+    (
+        "pitch_gradient",
+        "pulse_octaves:Bands,pulse_marks:Hex,shimmer_speed:1.6,shimmer_width:5.0,\
+         shimmer_intensity:1.0,shimmer_softness:0.8,",
+    ),
+    // The core's paint styles: one that survived to the end, and one only an
+    // alias kept loading.
+    ("pitch_gradient", "node_style:Vortex,"),
+    ("pitch_gradient", "node_style:Pinwheel,"),
+    // The heatmap's enum look, fine-level switch, opacity, contrast and
+    // private dB window.
+    (
+        "spectrogram_gradient",
+        "spectrogram_color:Aurora,spectrogram_fine_levels:true,\
+         spectrogram_opacity:0.85,spectrogram_own_range:true,\
+         spectrogram_floor_db:-60.0,spectrogram_ceiling_db:-20.0,\
+         spectrogram_gamma:1.6,",
+    ),
+    // The hidden renderer override, a string.
+    ("short_edge", "renderer_path:\"/old/renderer\","),
+    // The roll's Gap feature and its Color row.
+    ("roll_thickness", "roll_gap:2.5,"),
+    ("roll_thickness", "roll_color:Pitch,"),
+    // The note transition enum and the view's retired switches.
+    ("label_scale", "note_transition:DrawAndRetract,"),
+    ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,"),
+    // The note animation's own retired fields, inside its struct.
+    ("stagger_spread", "animation:Pop,start_size:0.2,"),
+];
+
+/// A retired key costs nothing: through both doors — the editor's
+/// `load_persist`, and the `AppearanceDocument::parse` that take replay and
+/// explicit export share — the rest of the document loads at the values it
+/// holds, and the key is gone on the next save.
+///
+/// `load_persist` takes the whole `UiPersist` or nothing, so a key that failed
+/// to parse would not degrade: it would discard the dock, the camera and the
+/// view with it. Every retirement rides on serde ignoring what it has no field
+/// for, and this is where that is held.
+#[test]
+fn a_retired_key_is_ignored_and_the_rest_survives() {
+    let state = dialled();
     let saved = state.save_persist();
     let appearance = state.picture.appearance.serialize();
-    for tile in [0, 20, 40] {
-        let retired = format!("cloud_tile:{tile}.0,cloud_pixel:4.0,cloud_depth:");
-        let old = saved.replacen("cloud_depth:", &retired, 1);
-        assert_ne!(old, saved, "the fixture must insert the retired keys");
-        let mut restored = fresh();
-        assert!(restored.load_persist(&old));
-        assert_eq!(restored.save_persist(), saved);
+    for &(anchor, retired) in RETIRED_KEYS {
+        let splice = |blob: &str| {
+            let at = pair_starts(blob, anchor);
+            assert_eq!(at.len(), 1, "{anchor:?} must open exactly one pair in {blob}");
+            format!("{}{retired}{}", &blob[..at[0]], &blob[at[0]..])
+        };
+        // Retired rather than merely renamed: this build writes none of them.
+        for (key, _) in top_level_pairs(&format!("({})", retired.trim_end_matches(','))) {
+            assert!(pair_starts(&saved, &key).is_empty(), "{key:?} is live, not retired");
+        }
 
-        let old = appearance.replacen("cloud_depth:", &retired, 1);
-        assert_ne!(old, appearance);
-        assert_eq!(AppearanceDocument::parse(&old).unwrap().serialize(), appearance);
+        let mut restored = fresh();
+        assert!(restored.load_persist(&splice(&saved)), "{retired} sank the editor blob");
+        assert_eq!(restored.save_persist(), saved, "{retired} changed what the editor loaded");
+
+        let parsed = AppearanceDocument::parse(&splice(&appearance))
+            .unwrap_or_else(|e| panic!("{retired} sank the appearance: {e}"));
+        assert_eq!(parsed.serialize(), appearance, "{retired} changed what the appearance loaded");
     }
 }
 
+/// Every variant a retirement has dropped from a persisted enum, as `(key, a
+/// live variant, the dropped one, whether the key is part of the appearance)`.
+/// The last is `false` for editor-only state, which only the editor door reads.
+///
+/// Retiring another variant is a row here, not another test.
+const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
+    ("orientation", "Left", "Diagonal", true),
+    ("material", "Contours", "Fibres", true),
+    ("material", "Contours", "Liquid", true),
+    ("order", "Circular", "OddEvenStagger", true),
+    ("spectrogram", "Scrolling", "Playhead", true),
+    // The selected settings tab lives in the layout, so removing a tab is a
+    // variant break too.
+    ("settings_tab", "Tuning", "Display", false),
+];
+
+/// A dropped variant refuses the WHOLE document, and says so on the Console.
+///
+/// serde cannot build a partial `UiPersist` around a variant it has no arm for,
+/// and the parse fails BEFORE the version is read, so the floor cannot catch it
+/// however high it is set. That is a break this build accepts rather than
+/// carries an alias for, and what makes it acceptable is that it is loud: the
+/// Console opens on the reason, and nothing else from the blob is applied.
 #[test]
-fn retired_spacing_preserves_appearance_and_workspace() {
-    let mut state = fresh();
-    state.picture.appearance.view.label_scale = 0.7;
-    state.picture.appearance.camera.distance = 18.0;
-    state.workspace.interaction.ui_scale = 1.25;
+fn a_dropped_variant_refuses_the_whole_document_and_says_so() {
+    let state = dialled();
     let saved = state.save_persist();
     let appearance = state.picture.appearance.serialize();
-    assert!(!appearance.contains("spacing:"));
-    for spacing in ["3.0", "0.0", "NaN"] {
-        let old = saved.replacen("view:(", &format!("view:(spacing:{spacing},"), 1);
-        assert_ne!(old, saved, "the fixture must insert the retired key");
+    for &(key, live, dropped, in_appearance) in DROPPED_VARIANTS {
+        let swap = |blob: &str| {
+            let (was, now) = (format!("{key}:{live}"), format!("{key}:{dropped}"));
+            let at: Vec<_> = pair_starts(blob, key)
+                .into_iter()
+                .filter(|&i| blob[i..].starts_with(&was))
+                .collect();
+            assert_eq!(at.len(), 1, "{was} must sit exactly once in {blob}");
+            format!("{}{now}{}", &blob[..at[0]], &blob[at[0] + was.len()..])
+        };
+
         let mut restored = fresh();
-        assert!(restored.load_persist(&old));
-        assert_eq!(restored.save_persist(), saved);
+        let before = restored.save_persist();
+        assert!(!restored.load_persist(&swap(&saved)), "{key}:{dropped} was applied");
+        assert!(!collapsed(&restored, panes::Tab::Console), "{dropped}: the refusal is hidden");
+        assert!(
+            restored
+                .picture
+                .runtime
+                .console
+                .lines()
+                .any(|line| line.contains("did not parse") && line.contains(dropped)),
+            "{dropped}: the refusal does not name it; console holds {:?}",
+            restored.picture.runtime.console.lines().collect::<Vec<_>>(),
+        );
+        set_console_collapsed(&mut restored, true);
+        assert_eq!(restored.save_persist(), before, "{dropped}: more than the report was applied");
 
-        // Take replay and explicit export replacements share this parser.
-        let old = appearance.replacen("view:(", &format!("view:(spacing:{spacing},"), 1);
-        assert_ne!(old, appearance);
-        assert_eq!(AppearanceDocument::parse(&old).unwrap().serialize(), appearance);
+        assert_eq!(!pair_starts(&appearance, key).is_empty(), in_appearance, "{key}: which doors");
+        if in_appearance {
+            assert!(AppearanceDocument::parse(&swap(&appearance)).is_err(), "{dropped} parsed");
+        }
     }
-}
-
-#[test]
-fn retired_octave_gap_preserves_the_shared_gap_and_the_rest_of_the_document() {
-    let mut state = fresh();
-    state.picture.appearance.view.ring_gap = 0.02;
-    state.picture.appearance.camera.distance = 18.0;
-    state.workspace.interaction.ui_scale = 1.25;
-    let saved = state.save_persist();
-    let appearance = state.picture.appearance.serialize();
-    assert!(!saved.contains("octave_gap:"));
-
-    // Old documents carried an independent angular value. The radial value is
-    // now the shared setting, so the retired key is ignored and disappears on
-    // the next save through both persistence doors.
-    let old = saved.replacen("ring_gap:", "octave_gap:0.17,ring_gap:", 1);
-    assert_ne!(old, saved, "the fixture must insert the retired key");
-    let mut restored = fresh();
-    assert!(restored.load_persist(&old));
-    assert_eq!(restored.picture.appearance.view.ring_gap, 0.02);
-    assert_eq!(restored.picture.appearance.camera.distance, 18.0);
-    assert_eq!(restored.workspace.interaction.ui_scale, 1.25);
-    assert_eq!(restored.save_persist(), saved);
-
-    let old = appearance.replacen("ring_gap:", "octave_gap:0.17,ring_gap:", 1);
-    assert_ne!(old, appearance);
-    assert_eq!(AppearanceDocument::parse(&old).unwrap().serialize(), appearance);
 }
 
 #[test]
@@ -707,40 +821,6 @@ fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "the rest of the blob still restores");
 }
 
-/// Retired shimmer fields, including bare enum tokens, must not discard a
-/// saved view or prevent an offline export. They disappear on the next save.
-#[test]
-fn a_blob_with_retired_shimmer_settings_survives() {
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.max_sevens = 3;
-    state.picture.appearance.render.short_edge = 2160;
-    let saved = state.save_persist();
-    let stale = saved.replace(
-        "pitch_gradient:",
-        "pulse_octaves:Bands,pulse_marks:Hex,shimmer_speed:1.6,shimmer_width:5.0,\
-         shimmer_intensity:1.0,shimmer_softness:0.8,pitch_gradient:",
-    );
-    assert_ne!(stale, saved, "the anchor must exist to exercise the retired keys");
-
-    let mut restored = fresh();
-    assert!(restored.load_persist(&stale));
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
-    assert_eq!(restored.picture.appearance.view.max_sevens, 3);
-    assert_eq!(restored.picture.appearance.render.short_edge, 2160);
-    let resaved = restored.save_persist();
-    for key in [
-        "pulse_octaves",
-        "pulse_marks",
-        "shimmer_speed",
-        "shimmer_width",
-        "shimmer_intensity",
-        "shimmer_softness",
-    ] {
-        assert!(!resaved.contains(key), "the retired {key} key must disappear on save");
-    }
-}
-
 /// The render frame round-trips its side and the split beside it, through
 /// editor persistence.
 #[test]
@@ -768,38 +848,15 @@ fn corrupt_persist_is_ignored() {
     assert!(!collapsed(&state, panes::Tab::Console), "the explanation is visible");
 }
 
-/// A refused blob SAYS SO. Both refusals cost the whole document — dock,
+/// A refused blob SAYS SO. A refusal costs the whole document — dock,
 /// camera, view, spectrum and render at once — and a project reopening at
 /// defaults with nothing written anywhere reads as data loss rather than as a
-/// break someone chose.
-///
-/// The variant case is the one worth a test of its own, because it is the one
-/// this build can still meet in the wild: no code reads an older spelling any
-/// more, so a blob naming an orientation or sweep mode that has since been
-/// dropped fails the parse — and it fails BEFORE the version is read, so the
-/// floor cannot catch it however high it is set.
+/// break someone chose. The dropped-variant refusals are
+/// [`a_dropped_variant_refuses_the_whole_document_and_says_so`]; these are the
+/// version floor's and the appearance version's.
 #[test]
 fn a_refused_blob_says_why() {
-    // A dropped enum variant, spliced where a live one sat. The orientation,
-    // the heatmap's look being six numbers rather than an enum — and a number
-    // out of range is repaired rather than refused, which is the other test.
-    let mut state = fresh();
-    state.picture.appearance.spectrum.orientation = crate::SpectralOrientation::Left;
-    let saved = state.save_persist();
-    let dropped = saved.replace("orientation:Left", "orientation:Diagonal");
-    assert_ne!(dropped, saved, "the splice must land for this to test anything");
-
-    let mut restored = fresh();
-    assert!(!restored.load_persist(&dropped), "a dropped variant is not applied");
-    assert!(
-        restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")),
-        "the refusal was silent; console holds {:?}",
-        restored.picture.runtime.console.lines().collect::<Vec<_>>(),
-    );
-    assert!(!collapsed(&restored, panes::Tab::Console), "the parse refusal opens its report");
-
-    // And the floor's own refusal, which is the other way a whole document
-    // goes and must be just as loud.
+    let saved = fresh().save_persist();
     let stale = saved.replacen(
         &format!("version:{UI_PERSIST_VERSION}"),
         &format!("version:{}", UI_PERSIST_VERSION - 1),
@@ -814,6 +871,7 @@ fn a_refused_blob_says_why() {
     assert!(!collapsed(&older, panes::Tab::Console), "the version refusal opens its report");
     let unsupported = saved.replace("appearance:(version:1", "appearance:(version:0");
     assert_ne!(unsupported, saved);
+    let mut restored = fresh();
     set_console_collapsed(&mut restored, true);
     let before = restored.save_persist();
     assert!(!restored.load_persist(&unsupported));
@@ -932,74 +990,6 @@ fn a_persist_blob_predating_the_spectrogram_loads_with_it_on() {
     let mut restored = fresh();
     restored.load_persist(&saved);
     assert!(!restored.picture.appearance.spectrum.show_spectrogram);
-}
-
-/// Splice `spliced` in ahead of the `anchor` key of a real blob and check the
-/// blob still comes through BOTH doors. A key that has since been removed must
-/// not take the whole blob down with it: a blob that fails to parse loses the
-/// entire UI state, not just the stale key, so every settings removal rides on
-/// serde ignoring what it has no field for, and this is where that is held.
-///
-fn a_spliced_blob_survives(anchor: &str, spliced: &str) {
-    let mut state = fresh();
-    // Non-defaults on both sides of the splice, so "the blob survived" is
-    // distinguishable from "it sank and everything reverted": the view is what
-    // the editor door restores, short_edge what the offline door reads.
-    state.picture.appearance.view.max_sevens = 3;
-    state.picture.appearance.render.short_edge = 2160;
-    let saved = state.save_persist();
-    let stale = saved.replace(anchor, &format!("{spliced}{anchor}"));
-    assert_ne!(stale, saved, "the anchor field must have been there to splice onto");
-
-    let mut restored = fresh();
-    restored.load_persist(&stale);
-    assert_eq!(
-        restored.picture.appearance.view.max_sevens, 3,
-        "an unknown key must not sink the blob"
-    );
-
-    assert_eq!(restored.picture.appearance.render.short_edge, 2160);
-}
-
-/// The numeric case. `spectrogram_fine_levels` existed only while the heatmap's
-/// stored precision was being judged by eye; the other five are the heatmap's
-/// opacity, contrast and private dB window, which every project saved before
-/// they were dropped still carries.
-///
-/// `spectrogram_color` rides with them, and it is the case that makes this test
-/// worth more than a sweep of numbers: it is an ENUM TOKEN, so a reader strict
-/// about keys it has no field for would need a type to parse `Aurora` into, and
-/// there is none any more — the heatmap's look is a gradient now. Every project
-/// saved before that carries the key.
-#[test]
-fn a_persist_blob_carrying_a_since_removed_field_still_loads() {
-    // Put the departed fields back, exactly as those builds wrote them.
-    a_spliced_blob_survives(
-        "spectrogram_gradient:",
-        "spectrogram_color:Aurora,spectrogram_fine_levels:true,\
-         spectrogram_opacity:0.85,spectrogram_own_range:true,\
-         spectrogram_floor_db:-60.0,spectrogram_ceiling_db:-20.0,\
-         spectrogram_gamma:1.6,",
-    );
-}
-
-/// The same rule, for the key every project above the version floor carries:
-/// the core's paint was a choice of styles, and `node_style` names whichever of
-/// the seventeen the enum answered to that project was drawn with. It gets its
-/// own case because what it carries is an ENUM TOKEN and not a number — the
-/// shape that would need a type to parse into if the reader were strict about
-/// what it has no field for.
-///
-/// Both tokens run. `Vortex` is a style that survived to the end; `Pinwheel` is
-/// one only an alias kept loading. They are equally unknown now, which is a
-/// claim the pair has to make by BEING run — asserting it in a comment over a
-/// body that splices one of them is how the two drift apart.
-#[test]
-fn a_persist_blob_naming_a_retired_node_style_still_loads() {
-    // Where the key sat, written as those builds wrote it.
-    for token in ["Vortex", "Pinwheel"] {
-        a_spliced_blob_survives("pitch_gradient:", &format!("node_style:{token},"));
-    }
 }
 
 /// The mirror of the case above: a field the blob is MISSING must not sink it
@@ -1142,23 +1132,6 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     let broken_workspace = state.save_persist().replace("Console", "RetiredConsole");
     assert!(!restored.load_persist(&broken_workspace));
     assert_eq!(AppearanceDocument::parse(&appearance).unwrap().serialize(), appearance);
-}
-
-/// Retiring the hidden executable override costs only that key, including in
-/// a whole recorded appearance rather than just a standalone RenderConfig.
-#[test]
-fn an_old_renderer_path_preserves_the_rest_of_the_appearance() {
-    let mut appearance = AppearanceDocument::default();
-    appearance.camera.yaw = 1.23;
-    appearance.view.max_sevens = 3;
-    appearance.render.short_edge = 2160;
-    appearance.render.frame.split = 0.37;
-    let saved = appearance.serialize();
-    let old = saved.replacen("render:(", "render:(renderer_path:\"/old/renderer\",", 1);
-    assert_ne!(old, saved, "fixture must contain the retired key");
-    let restored = AppearanceDocument::parse(&old).unwrap();
-    assert_eq!(restored.serialize(), saved);
-    assert!(!restored.serialize().contains("renderer_path"));
 }
 
 /// Missing groups use their own defaults without costing the other groups.
@@ -1324,45 +1297,6 @@ fn pre_cap_persist_blobs_load_as_uncapped() {
     assert_eq!(restored.picture.appearance.view.max_sevens, 3, "the rest of the blob must survive");
 }
 
-/// A key this build has RETIRED does not cost the blob it sits in.
-///
-/// `load_persist` takes the whole `UiPersist` or nothing (`if let Ok(persist)`),
-/// so a field that fails to parse does not degrade — it silently discards the
-/// dock, the camera and the entire `ViewConfig` along with itself, and the
-/// project opens on defaults with no error anywhere. Retiring a setting is
-/// therefore a persistence change, and this is the guard on it: `roll_gap` went
-/// with the roll's Gap feature and `roll_color` with its Color row, and every
-/// project saved before each still carries its key.
-///
-/// Both SHAPES of value, because they are not the same risk. A retired key
-/// holding a NUMBER is skipped by any parser worth the name. One holding a bare
-/// identifier is the shape that has actually cost a blob here. What separates
-/// the two is that retiring a FIELD is safe where retiring a VARIANT is not —
-/// a blob naming a variant the enum has dropped fails to parse and takes the
-/// whole persist with it, which is a break this build accepts rather than
-/// carries an alias for — and a test that only ever splices a number cannot
-/// tell them apart.
-#[test]
-fn a_retired_setting_does_not_discard_the_blob_it_was_saved_in() {
-    for retired in ["roll_gap:2.5,", "roll_color:Pitch,"] {
-        let mut state = fresh();
-        state.picture.appearance.spectrum.roll_thickness = 1.75;
-        state.picture.appearance.spectrum.low_midi = 40.5;
-        let saved = state.save_persist();
-        // A blob from before the retirement: the key spliced back where it sat.
-        let old = saved.replacen("roll_thickness:", &format!("{retired}roll_thickness:"), 1);
-        assert_ne!(old, saved, "the {retired} splice must land for this to test anything");
-
-        let mut restored = fresh();
-        restored.load_persist(&old);
-        assert_eq!(
-            restored.picture.appearance.spectrum.roll_thickness, 1.75,
-            "the blob carrying {retired} survived",
-        );
-        assert_eq!(restored.picture.appearance.spectrum.low_midi, 40.5);
-    }
-}
-
 /// A blob saved before the control existed loads at the design size. `f32`'s
 /// own serde default is 0.0 — a scale of nothing, and every one of those
 /// projects.
@@ -1505,7 +1439,7 @@ fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
 fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // The refusal is what lets the migrations for older formats be deleted
     // rather than carried forever, and it costs a real project its settings:
-    // the plugin's CLAP/VST3 ids gate everything below version 2, but nothing
+    // the plugin's CLAP id gates everything below version 2, but nothing
     // gates a blob one bump behind, which a project saved by the previous build
     // is. See `load_persist` for why that price is paid rather than shimmed.
     let mut state = fresh();
@@ -2189,7 +2123,7 @@ fn a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach() {
 }
 
 #[test]
-fn animation_controls_round_trip_and_retired_fields_do_not_discard_appearance() {
+fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
     for order in harmonigraph_scene::AnimationOrder::ALL {
         let mut state = fresh();
         state.picture.appearance.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
@@ -2222,130 +2156,11 @@ fn animation_controls_round_trip_and_retired_fields_do_not_discard_appearance() 
         state.picture.appearance.view.note_animation.order,
         harmonigraph_scene::AnimationOrder::Circular
     );
-    let saved = state
-        .save_persist()
-        .replace("note_animation:", "retired_animation_config:")
-        .replacen("view:(", "view:(note_transition:DrawAndRetract,", 1);
-    assert!(saved.contains("note_transition:DrawAndRetract"));
+    let saved = state.save_persist().replace("note_animation:", "retired_animation_config:");
+    assert!(!saved.contains("note_animation:"));
     assert!(state.load_persist(&saved));
     assert_eq!(state.picture.appearance.view.note_animation, Default::default());
     assert_eq!(state.picture.appearance.view.label_scale, 0.7);
-
-    let current = state.save_persist();
-    let retired = current
-        .replacen(
-            "view:(",
-            "view:(show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,",
-            1,
-        )
-        .replacen("note_animation:(", "note_animation:(animation:Pop,start_size:0.2,", 1);
-    assert_ne!(retired, current);
-    assert!(state.load_persist(&retired));
-    assert_eq!(state.save_persist(), current);
-}
-
-#[test]
-fn retired_lattice_materials_refuse_the_entire_editor_and_appearance_document() {
-    let mut state = fresh();
-    state.picture.appearance.view.atmosphere.material =
-        harmonigraph_scene::LatticeMaterial::Contours;
-    let saved = state.save_persist();
-    let appearance = state.picture.appearance.serialize();
-    for retired in ["Fibres", "Liquid"] {
-        let dropped = saved.replace("material:Contours", &format!("material:{retired}"));
-        assert_ne!(saved, dropped, "fixture must carry the retired variant");
-        let mut restored = fresh();
-        let before = restored.save_persist();
-        assert!(!restored.load_persist(&dropped));
-        assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
-        set_console_collapsed(&mut restored, true);
-        assert_eq!(restored.save_persist(), before);
-        assert!(restored
-            .picture
-            .runtime
-            .console
-            .lines()
-            .any(|line| line.contains("did not parse")));
-        let dropped = appearance.replace("material:Contours", &format!("material:{retired}"));
-        assert_ne!(appearance, dropped);
-        assert!(AppearanceDocument::parse(&dropped).is_err());
-    }
-}
-
-#[test]
-fn retired_odd_even_order_refuses_the_entire_editor_and_appearance_document() {
-    let mut state = fresh();
-    state.picture.appearance.view.note_animation.order =
-        harmonigraph_scene::AnimationOrder::Circular;
-    let saved = state.save_persist();
-    let dropped = saved.replace("order:Circular", "order:OddEvenStagger");
-    assert_ne!(saved, dropped, "fixture must carry the retired variant");
-    let mut restored = fresh();
-    let before = restored.save_persist();
-    assert!(!restored.load_persist(&dropped));
-    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
-    set_console_collapsed(&mut restored, true);
-    assert_eq!(restored.save_persist(), before);
-    assert!(restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")));
-
-    let appearance = state.picture.appearance.serialize();
-    let dropped = appearance.replace("order:Circular", "order:OddEvenStagger");
-    assert_ne!(appearance, dropped);
-    assert!(AppearanceDocument::parse(&dropped).is_err());
-}
-
-#[test]
-fn retired_playhead_refuses_the_entire_editor_and_appearance_document() {
-    let mut state = fresh();
-    state.picture.appearance.render.spectrogram = crate::SpectrogramRender::Scrolling;
-    state.picture.appearance.camera.cabinet_scale = 0.7;
-    let saved = state.save_persist();
-    let dropped = saved.replace("spectrogram:Scrolling", "spectrogram:Playhead");
-    assert_ne!(saved, dropped, "fixture must carry the retired variant");
-    let mut restored = fresh();
-    let before = restored.save_persist();
-    assert!(!restored.load_persist(&dropped));
-    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
-    set_console_collapsed(&mut restored, true);
-    assert_eq!(
-        restored.save_persist(),
-        before,
-        "no camera or workspace state beyond the visible report is applied",
-    );
-    assert!(restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")));
-    let appearance = state.picture.appearance.serialize();
-    let dropped = appearance.replace("spectrogram:Scrolling", "spectrogram:Playhead");
-    assert_ne!(appearance, dropped);
-    assert!(AppearanceDocument::parse(&dropped).is_err());
-}
-
-/// A workspace last closed on the retired Display tab is refused whole and
-/// reports why. The selected settings tab is persisted in the layout, so
-/// removing a tab is an enum-variant break: serde cannot build a partial
-/// `UiPersist`, and the version floor is not reached.
-#[test]
-fn a_saved_layout_naming_the_retired_display_tab_is_refused_whole() {
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    let saved = state.save_persist();
-    let dropped = saved.replace("settings_tab:Tuning", "settings_tab:Display");
-    assert_ne!(dropped, saved, "the splice must land for this to test anything");
-
-    let mut restored = fresh();
-    let before = restored.save_persist();
-    assert!(!restored.load_persist(&dropped), "a layout naming Display is not applied");
-    assert!(!collapsed(&restored, panes::Tab::Console), "the refusal opens its report");
-    set_console_collapsed(&mut restored, true);
-    assert_eq!(
-        restored.save_persist(),
-        before,
-        "the camera and workspace go with it apart from the visible report",
-    );
-    assert!(
-        restored.picture.runtime.console.lines().any(|line| line.contains("did not parse")),
-        "the refusal was silent; console holds {:?}",
-        restored.picture.runtime.console.lines().collect::<Vec<_>>(),
-    );
 }
 
 /// Retired dock fields are ignored rather than taking appearance with them.

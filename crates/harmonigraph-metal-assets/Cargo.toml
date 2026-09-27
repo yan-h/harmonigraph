@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+# No doc-tests: each crate's empty rustdoc harness was a run for nothing
+# (#1181). Drop this with the first doc example that should run.
+doctest = false
+
 [build-dependencies]
 serde_json = "1"
 sha2 = "0.10"

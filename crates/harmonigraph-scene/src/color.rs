@@ -15,8 +15,8 @@
 //!
 //! Google's HCT is the same structure over CAM16 rather than Oklab, for a
 //! different reason (predictable WCAG contrast between tones). Oklab is the
-//! cheaper half of that trade and the whole of it that matters here — see
-//! `tests/hue_space.rs`, which measures both and prices them.
+//! cheaper half of that trade and the whole of it that matters here; #222
+//! holds the verdict, and the probes that priced the two live in history.
 
 use crate::style::Gradient;
 use crate::PITCH_LUT_N;

@@ -104,7 +104,7 @@ The focused checks that validated the three selected fixes were part of those fi
 for was made, and none of the animated paints was kept:
 Vortex, Checker and Spiral are gone along with the field machinery behind them (the noise, the sphere mapping, the per-node seed and the swirl gradient).
 `NodeStyle` went with them rather than surviving as a one-variant enum, the way `OuterStyle` and `CoreStyle` did before it:
-a blob's `node_style` is now an ignored unknown field, held by `a_persist_blob_naming_a_retired_node_style_still_loads`.
+a blob's `node_style` is now an ignored unknown field, held by the `node_style` rows of `RETIRED_KEYS` in `crates/harmonigraph-ui/src/tests/persist.rs`.
 The disc they painted is gone too:
 a node is its ring stack read out from an empty middle (`ring_inner`), and what lights that middle is the node glow, in the colours the node itself draws —
 every layer contributing in proportion to the radial width it takes up, through the ink strip.

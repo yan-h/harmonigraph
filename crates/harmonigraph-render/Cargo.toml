@@ -5,6 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+# No doc-tests: each crate's empty rustdoc harness was a run for nothing
+# (#1181). Drop this with the first doc example that should run.
+doctest = false
+
 [features]
 # Dev-only: watch the .wgsl on disk and rebuild the pipeline on change.
 # Enabled by the standalone harness; release plugin bundles are built
@@ -29,7 +34,7 @@ harmonigraph-metal-assets = { workspace = true }
 
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.
-naga = { workspace = true, features = ["wgsl-in", "msl-out"] }
+naga = { workspace = true, features = ["wgsl-in"] }
 # The offscreen-vs-direct parity test builds a Scene literal, whose
 # NodeInstance carries a LatticePos.
 harmonigraph-core = { path = "../harmonigraph-core" }
