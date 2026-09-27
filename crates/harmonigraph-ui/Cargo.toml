@@ -19,4 +19,3 @@ ron = { workspace = true }
 
 [dev-dependencies]
 egui-wgpu = { workspace = true }
-pollster = "0.4"

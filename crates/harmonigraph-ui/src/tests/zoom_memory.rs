@@ -38,7 +38,7 @@ impl Zoom {
         crate::shell::limit_font_atlas(&mut raw);
         let t = self.t;
         let backend = &self.backend;
-        let output = self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t));
+        let output = self.ctx.run_ui(raw, |ui| root_ui(ui, state, backend, t, "test @0123456"));
         AtlasFrame {
             size: self.atlas(),
             fill: self.fill(),

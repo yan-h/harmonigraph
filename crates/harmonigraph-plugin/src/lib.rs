@@ -17,6 +17,10 @@ mod background;
 mod configuration;
 mod editor;
 mod lattice_maps;
+
+/// Identity of this plugin build, supplied to the shared performance overlay.
+pub(crate) const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
+
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;
 // The allocator that makes `configuration::tests`' `assert_no_alloc` blocks

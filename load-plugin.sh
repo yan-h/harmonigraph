@@ -91,12 +91,9 @@ find_dylib() {
 #
 # Read out of the BINARY rather than predicted from a log, because the two
 # disagree routinely and only this one is what the overlay will show.
-# `harmonigraph-perf`'s build.rs stamps the commit the build sat on, and the
-# ordinary session order is edit -> build -> commit -> hand over: the commit
-# lands AFTER the build it is meant to describe, so a tag quoted from the log
-# names a commit the binary has never heard of. An amend or a rebase breaks
-# the prediction the other way, leaving a stamped sha that is no longer an
-# object in the worktree at all.
+# The plugin's build.rs stamps the commit the build sat on. The current HEAD
+# can move after a build (including a rebase), so the log cannot tell us which
+# commit the binary actually carries.
 build_tag() {
   local name="${2#worktree-}"
   strings -a "$1" 2>/dev/null | grep -oE "$name @[0-9a-f]{7,40}" | head -1

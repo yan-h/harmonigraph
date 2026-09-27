@@ -232,7 +232,15 @@ fn kept_focus(ctx: &egui::Context) -> bool {
 /// the same `EditorShared` its drain writes through — so a helper that ran the
 /// feed while holding the state would be holding the backend's own borrow.
 /// Both shells therefore feed first and hand over what they fed.
-pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBackend, now: f64) {
+/// `build_tag` is the identity stamped into that shell's binary; it reaches
+/// only the interactive performance overlay.
+pub fn root_ui(
+    ui: &mut egui::Ui,
+    state: &mut SharedState,
+    params: &dyn ParamBackend,
+    now: f64,
+    build_tag: &str,
+) {
     // Loading frames still receive notes and automation from the shell.
     begin_frame(&mut state.picture, params, now);
     // The skin before anything paints, the loading screen included: every
@@ -371,6 +379,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
             &mut state.workspace.interaction.perf_pos,
             &state.picture.instruments.perf,
             state.picture.appearance.view.show_perf_detail,
+            build_tag,
         );
     }
 }
