@@ -1598,6 +1598,181 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
     }
 }
 
+/// Real host lifecycle: Stop after deactivation must close the exact prefix
+/// without process or destruction, including when activation beats the wake.
+#[test]
+fn deactivated_stop_finishes_without_another_process_callback() {
+    use nice_plug::params::InternalParamMut;
+    let _scope = crate::test_scope::enter();
+    for (resume, stop_before_deactivate, held, source_state) in [
+        (0, false, false, 0),
+        (1, false, false, 0),
+        (2, false, false, 0),
+        (0, true, false, 0),
+        (0, false, true, 0),
+        (0, false, false, 1),
+        (0, false, false, 2),
+    ] {
+        let mut device = Device::new();
+        let left: [f32; 64] = std::array::from_fn(|i| (i + 1) as f32 / 128.0);
+        let right = left.map(|v| -v);
+        device.sidechain.set([left, right]);
+        device.wrapper().test_inspect_plugin(|plugin| {
+            assert!(unsafe {
+                plugin
+                    .params
+                    .analysis_input
+                    ._internal_set_plain_value(crate::AnalysisInputParam::Sidechain)
+            });
+        });
+        device.activate();
+        let mut source = (source_state != 0).then(|| {
+            let mut source = crate::tuning::tune::Tune::new(crate::tuning::setup::Shared::source());
+            source.register();
+            source.activate(48_000.0, 64, 1);
+            source
+        });
+        let dir = std::env::temp_dir().join(format!(
+            "harmonigraph-deactivated-stop-{}-{resume}-{stop_before_deactivate}-{held}-{source_state}",
+            std::process::id()
+        ));
+        let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+        let probe = {
+            let shared = shared.lock();
+            let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
+            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize(), true);
+            probe
+        };
+        let events = if held { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
+        device.run_transport(0, events, false, None, Some(transport(5.0, 0)));
+        assert!(shared.lock().take.has_rolled());
+        if let Some(source) = &mut source {
+            source.begin(nice_plug::wrapper::clap::performance::Callback {
+                steady_time: 0,
+                frames: 64,
+                transport: None,
+                input_status: nice_plug::wrapper::clap::performance::InputStatus::Complete,
+                output_available: true,
+            });
+            if source_state == 1 {
+                source.end();
+            }
+            // State 2 pauses the source before its first copy: the ring is
+            // empty, but this older callback can still publish into the take.
+        }
+        if stop_before_deactivate {
+            shared.lock().take.stop(None);
+            // A main callback while activated must not manufacture closure.
+            unsafe { ((*device.plugin).on_main_thread.unwrap())(device.plugin) };
+            assert!(shared.lock().take.last_take().is_none());
+        }
+        unsafe {
+            ((*device.plugin).stop_processing.unwrap())(device.plugin);
+            ((*device.plugin).deactivate.unwrap())(device.plugin);
+        }
+        device.active = false;
+        if resume == 2 {
+            // Stop lands after activate, before start_processing resets routes.
+            assert!(unsafe { ((*device.plugin).activate.unwrap())(device.plugin, 48000.0, 1, 64) });
+        }
+        if !stop_before_deactivate {
+            let callbacks = device.stats.callbacks.load(Ordering::Relaxed);
+            shared.lock().take.stop(None);
+            assert!(
+                device.stats.callbacks.load(Ordering::Relaxed) > callbacks,
+                "Stop must request host service even with no further audio"
+            );
+        }
+        if resume == 2 {
+            assert!(unsafe { ((*device.plugin).start_processing.unwrap())(device.plugin) });
+            device.active = true;
+        } else if resume == 1 {
+            device.activate();
+        } else {
+            unsafe { ((*device.plugin).on_main_thread.unwrap())(device.plugin) };
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let incomplete = held || source_state == 2;
+        let path = loop {
+            if let Some(path) = shared.lock().take.last_take() {
+                break path;
+            }
+            if incomplete && probe.failed() && !probe.finishing() {
+                break std::fs::read_dir(&dir)
+                    .unwrap()
+                    .map(|p| p.unwrap().path())
+                    .find(|p| p.extension().is_some_and(|e| e == "take"))
+                    .unwrap();
+            }
+            assert!(std::time::Instant::now() < deadline,
+                "take did not finish while alive: {resume}, {stop_before_deactivate}, {held}, {source_state}");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(probe.failed(), incomplete);
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        assert_eq!(take.incomplete.is_some(), incomplete);
+        assert_eq!(take.header.audio_start, Some(5.0));
+        assert_eq!(take.configurations.len(), 1);
+        let expected: Vec<u8> = left
+            .iter()
+            .zip(&right)
+            .flat_map(|(l, r)| [*l, *r])
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let wav = std::fs::read(path.with_extension("wav")).unwrap();
+        assert_eq!(wav.len(), 44 + expected.len());
+        assert_eq!(&wav[44..], expected);
+        if let Some(source) = &mut source {
+            if source_state == 2 {
+                source.input(nice_plug::wrapper::clap::configuration::OwnedInput {
+                    sample: Some(10),
+                    event_index: 0,
+                    offset: 10,
+                    enclosing_start: Some(0),
+                    enclosing_frames: 64,
+                    flush: false,
+                    batch: 0,
+                    value: nice_plug::wrapper::clap::configuration::InputValue::Note {
+                        kind: CLAP_EVENT_NOTE_ON,
+                        note_id: 1,
+                        port: 0,
+                        channel: 0,
+                        key: 60,
+                        velocity: 1.0,
+                        flags: 0,
+                    },
+                });
+                assert_eq!(source.captured, 1, "the late copy really reaches its ring");
+                source.end();
+            }
+            source.retire();
+        }
+        if !incomplete {
+            // Start is accepted before another process; its fresh epoch must
+            // also survive the pending main wake and reactivation.
+            shared.lock().take.start(48_000.0, String::new(), true);
+            assert!(shared.lock().take.is_recording());
+            unsafe { ((*device.plugin).on_main_thread.unwrap())(device.plugin) };
+            assert!(shared.lock().take.is_recording());
+            if resume == 0 {
+                device.activate();
+            }
+            device.run_transport(64, vec![], false, None, Some(transport(6.0, 0)));
+            assert!(shared.lock().take.has_rolled());
+            shared.lock().take.stop(None);
+            device.run_transport(128, vec![], false, None, Some(transport(7.0, 0)));
+        }
+        drop(shared);
+        drop(device);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(probe.finished());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// A note reaches the take through the Hub's publication, so "has this take
 /// captured anything" is answered by what the recorder took in, not by a
 /// count kept anywhere else (#818).

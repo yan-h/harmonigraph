@@ -71,11 +71,14 @@ impl Default for Recording {
     }
 }
 impl Recording {
-    /// Joined destruction is a final boundary at which Stop can be observed:
-    /// no callback still owns an earlier armed intent. Close only the span
-    /// actually registered, leaving both existing frontiers to prove it whole.
-    pub fn observe_retired_disarm(&mut self, recorder: &mut Recorder) {
-        assert!(self.retired_configuration.is_some());
+    pub fn has_pass(&self, epoch: u64) -> bool {
+        self.passes.iter().flatten().any(|pass| pass.address.epoch == epoch)
+    }
+
+    /// A joined callback boundary can observe Stop: no callback still owns an
+    /// earlier armed intent. Close only the span actually registered, leaving
+    /// both existing frontiers to prove it whole.
+    pub fn observe_joined_disarm(&mut self, recorder: &mut Recorder) {
         let intent = recorder.capture_recording_intent();
         if intent & 1 != 0 {
             return;

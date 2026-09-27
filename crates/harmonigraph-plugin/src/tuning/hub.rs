@@ -1228,17 +1228,52 @@ impl Hub {
             sample < through
                 && recording.route(clock, sample, 0.0).is_ok_and(|r| r.address.is_some())
         };
-        let stranded = self.ends.iter_mut().flat_map(|ends| ends.iter_mut().flatten()).any(|end| {
-            // Read without consuming: a cut's own epoch filter still owns them.
-            let slots = end.captures.slots();
-            end.captures.read_chunk(slots).is_ok_and(|chunk| {
-                let (head, tail) = chunk.as_slices();
-                head.iter().chain(tail).any(|c| c.epoch == epoch && recorded(c.sample))
-            })
-        });
+        let stranded =
+            self.ends.iter_mut().flat_map(|ends| ends.iter_mut().enumerate()).any(|(slot, end)| {
+                let Some(end) = end else { return false };
+                let publishing =
+                    session::session().row(slot as u8).capture_epoch.load(Ordering::SeqCst);
+                // Hub stop/reset cuts the session before this proof. A future
+                // callback must adopt that cut; an older callback still publishing
+                // makes the final prefix unprovable, even if its ring is empty.
+                if recording.has_pass(recorder.recording_epoch())
+                    && (publishing == u64::MAX || publishing != 0 && publishing <= epoch)
+                {
+                    return true;
+                }
+                // Read without consuming: a cut's own epoch filter still owns them.
+                let slots = end.captures.slots();
+                end.captures.read_chunk(slots).is_ok_and(|chunk| {
+                    let (head, tail) = chunk.as_slices();
+                    head.iter().chain(tail).any(|c| c.epoch == epoch && recorded(c.sample))
+                })
+            });
         if stranded || owner.recording.source_frontier(self.clock, through).is_err() {
             recorder.fail_configuration();
         }
+    }
+
+    /// Called only at a joined Hub lifecycle boundary. Retain live ownership
+    /// for future takes; unlike destruction this does not retire the producer.
+    pub fn finish_stopped_recording(
+        &mut self,
+        owner: &mut Owner,
+        recorder: &mut Recorder,
+        observation: f64,
+    ) {
+        let intent = recorder.capture_recording_intent();
+        if intent & 1 != 0 {
+            return;
+        }
+        // Fail before any completion entry can release Stop to the writer.
+        if owner.recording.has_pass(intent >> 1) {
+            if self.rows.iter().any(|row| row.state.count() != 0) {
+                recorder.fail_configuration();
+            }
+            self.prove_final_frontier(owner, recorder);
+        }
+        owner.recording.observe_joined_disarm(recorder);
+        owner.finish_recording_publication(recorder, observation);
     }
 
     /// Destruction closes the recorder's own boundaries, here and now. There
@@ -1259,7 +1294,7 @@ impl Hub {
         if held {
             recorder.fail_configuration();
         }
-        owner.recording.observe_retired_disarm(&mut recorder);
+        owner.recording.observe_joined_disarm(&mut recorder);
         owner.recording.dispose_retired_configuration(&mut recorder);
         owner.finish_recording_publication(&mut recorder, observation);
         owner.recording.finish_retired_publication(&mut recorder, held);
