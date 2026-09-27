@@ -1218,17 +1218,22 @@ impl Hub {
     /// before joined destruction: after either, nothing still to come can be
     /// sequenced before it. `publish` stops at a callback's start instead,
     /// because a Tune the host runs after the Hub is a callback behind; a
-    /// record of that kind still in a ring here is one the take never gets,
-    /// so it fails the take rather than being proven absent.
+    /// recorded record of that kind still in a ring here is one the take never
+    /// gets, so it fails the take rather than being proven absent.
     pub fn prove_final_frontier(&mut self, owner: &mut Owner, recorder: &Recorder) {
         let Some(through) = owner.recording.registered_through() else { return };
-        let epoch = self.epoch;
+        let (epoch, clock, recording) = (self.epoch, self.clock, &owner.recording);
+        // Only a record a take was recording can be missing from one.
+        let recorded = |sample| {
+            sample < through
+                && recording.route(clock, sample, 0.0).is_ok_and(|r| r.address.is_some())
+        };
         let stranded = self.ends.iter_mut().flat_map(|ends| ends.iter_mut().flatten()).any(|end| {
             // Read without consuming: a cut's own epoch filter still owns them.
             let slots = end.captures.slots();
             end.captures.read_chunk(slots).is_ok_and(|chunk| {
                 let (head, tail) = chunk.as_slices();
-                head.iter().chain(tail).any(|c| c.epoch == epoch && c.sample < through)
+                head.iter().chain(tail).any(|c| c.epoch == epoch && recorded(c.sample))
             })
         });
         if stranded || owner.recording.source_frontier(self.clock, through).is_err() {

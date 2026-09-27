@@ -992,22 +992,31 @@ fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
 
 /// A cut and joined destruction are where the last callback's end is proven,
 /// since nothing after them can be sequenced before it. A host reset mid-take
-/// keeps the take whole; destruction with a lagging Tune's record still in its
-/// ring cannot claim a take that never saw that record.
+/// keeps the take whole; a lagging Tune's record still in its ring fails only
+/// a take it belonged to, never the recorder when nothing was armed.
 #[test]
 fn the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded() {
-    for (destroy, lagging) in [(false, false), (true, false), (true, true)] {
+    for (destroy, lagging, armed) in [
+        (false, false, true),
+        (false, true, true),
+        (true, false, true),
+        (true, true, true),
+        (false, true, false),
+        (true, true, false),
+    ] {
         let _scope = crate::test_scope::enter();
         let (mut hub, capture) = Device::recorded_hub();
         hub.activate();
         let mut tune = Device::new(true);
         tune.activate();
         let dir = std::env::temp_dir()
-            .join(format!("harmonigraph-cut-{}-{destroy}-{lagging}", std::process::id()));
+            .join(format!("harmonigraph-cut-{}-{destroy}-{lagging}-{armed}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let writer =
             harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"), None);
-        capture.arm();
+        if armed {
+            capture.arm();
+        }
         for raw in [0, 512, 1024] {
             tune.run_format(raw, vec![], None, None, 512);
             hub.run_format(raw, vec![], None, None, 512);
@@ -1026,7 +1035,7 @@ fn the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded() {
         } else {
             hub.host_reset();
         }
-        assert_eq!(writer.failed(), lagging, "destroy={destroy}, lagging={lagging}");
+        assert_eq!(writer.failed(), lagging && armed, "{destroy}, {lagging}, {armed}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
