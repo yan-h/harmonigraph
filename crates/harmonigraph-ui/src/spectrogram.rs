@@ -366,7 +366,7 @@ impl FoldedGrid {
 /// it at the display's density divided by the scale factor — half the resolution
 /// in each axis on a 2x screen, for a heatmap softer than the pane it sits in.
 /// The label glyphs oversample by the same factor for the same reason (see
-/// `text::draw_glyphs`).
+/// [`crate::text::ladder`]).
 pub(crate) struct PaneView {
     /// Physical pixels per egui point.
     pub(crate) ppp: f32,
@@ -1065,7 +1065,7 @@ fn ring_slots(target_cols: usize) -> usize {
 }
 
 /// The level the heatmap's pixels actually go through, for the crate's own
-/// tests — the bridge `the_heatmap_reads_the_curve_s_own_level_scale` holds the
+/// tests — the bridge `quantizing_a_bucket_does_not_move_its_colour` holds the
 /// curve against. It is the color mapping, not the analyzer's height mapping.
 ///
 /// Through the affine the SHADER is handed rather than through
@@ -1662,8 +1662,8 @@ mod tests {
     /// comparison to hold this to.
     ///
     /// What it must equal is batch over the columns AS THEY ARRIVED, which is
-    /// both the finer answer and the one [`crate::WholeSong`] gives the offline
-    /// renderer from its raw, never-merged columns, including the oldest slab.
+    /// the finer answer, from raw, never-merged columns, including the oldest
+    /// slab.
     #[test]
     fn incremental_aggregation_matches_the_raw_columns_across_a_tier_merge() {
         // Buckets 10 and 11 alternate between adjacent columns, so a merged
