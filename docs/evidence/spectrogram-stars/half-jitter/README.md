@@ -1,6 +1,8 @@
 # Half-jitter four-neighbor trial
 
 Measured on M1 Pro / Metal on 2026-09-27.
+This records the fixed half-jitter shader at `e8426e183bb5ff41259a6be4785900e4b12b684b`,
+before Jitter became configurable.
 The baseline is the preceding four-neighbor build at `f4ce0de16f27fb2d6162dc04f07dde95972522ef`.
 The candidate halves positional jitter to 0.3 cell widths and widens the halo window to 0.7–0.85 cells.
 Both retain all five layers and the current defaults,

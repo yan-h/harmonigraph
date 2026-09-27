@@ -77,7 +77,10 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
     const PPP: f32 = 1.25;
     let origin = egui::pos2(7.2, 11.6);
     let mut last_frames = Vec::new();
-    for memory in [false, true] {
+    for (memory, jitter) in [0.0, 0.5, 1.0]
+        .into_iter()
+        .flat_map(|jitter| [false, true].into_iter().map(move |memory| (memory, jitter)))
+    {
         let mut cb = star_fixture([128, 96], origin);
         cb.atmosphere.as_mut().unwrap().region = egui::Rect::from_min_max(
             egui::pos2(origin.x + 13.0, origin.y + 9.0),
@@ -85,6 +88,7 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         );
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 0.65;
+        settings.star_jitter = jitter;
         if memory {
             settings.color_pickup = 0.6;
             settings.color_release = 0.6;
@@ -135,7 +139,7 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             let mean = error as f64 / a.len() as f64;
             assert!(
                 worst <= 2 && mean <= 0.01,
-                "memory={memory}, step={step}: split differs by max {worst}, mean {mean}/255"
+                "memory={memory}, jitter={jitter}, step={step}: split differs by max {worst}, mean {mean}/255"
             );
             if let Some(previous) = first.as_ref() {
                 let changed = a.iter().zip(previous).filter(|(x, y)| x.abs_diff(**y) > 4).count();
@@ -158,9 +162,11 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             }
         }
     }
-    let memory_effect =
-        last_frames[0].iter().zip(&last_frames[1]).filter(|(a, b)| a.abs_diff(**b) > 4).count();
-    assert!(memory_effect > last_frames[0].len() / 100, "memory fixture did not retain color");
+    for pair in last_frames.chunks_exact(2) {
+        let memory_effect =
+            pair[0].iter().zip(&pair[1]).filter(|(a, b)| a.abs_diff(**b) > 4).count();
+        assert!(memory_effect > pair[0].len() / 100, "memory fixture did not retain color");
+    }
 }
 
 #[test]

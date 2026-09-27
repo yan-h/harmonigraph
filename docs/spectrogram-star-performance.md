@@ -194,22 +194,32 @@ The independent opening-pass end stamp used in earlier probes can undercount;
 
 ## Four-neighbor plugin trial
 
-The `codex/stars-four-neighbor` branch enables the four-neighbor half-jitter variant for evaluation in the DAW.
+The `codex/stars-four-neighbor` branch enables four-neighbor Stars with configurable positional jitter for evaluation in the DAW.
 It retains all five depth layers,
 size and speed settings,
 lifetimes and color memory.
 The final walk selects the nearest two cells on each axis,
 reducing 45 candidate evaluations per pixel to 20.
-Positional jitter is halved from 0.6 to 0.3 cell widths,
-moving stars closer to their cell centers.
+The new Jitter slider defaults to 50%,
+halving positional variation from 0.6 to 0.3 cell widths and moving stars closer to their cell centers.
 This permits halos to fade between 0.7 and 0.85 cells,
 about 21% farther than the preceding full-jitter trial's 0.7-cell limit.
 The original nine-neighbor renderer fades from 0.84 to 1.2 cells.
 The full-resolution 2+3 split and its area cutoff remain active.
 
-This branch changes Stars directly for the trial;
-it adds no persisted setting or quality control.
-Existing projects therefore display the new placement and halo window while this build is loaded.
+The Jitter slider runs from regular cell centers at 0% to the original positional variation at 100%.
+The halo window follows it automatically:
+0% fades from 0.8 to 1.0 cells,
+50% from 0.7 to 0.85,
+and 100% from 0.6 to 0.7.
+All positions keep the same four-neighbor walk and five layers.
+Bounds are computed once per frame and shared by the draw and color-memory paths.
+Moving Jitter resets Stars' retained color because the sample positions have changed;
+it does not invalidate other shades' history.
+
+Jitter is saved with the appearance,
+and older documents without the field load at 50%.
+Existing projects therefore display the half-jitter placement and halo window while this build is loaded.
 The Randomness dial still controls brightness and size variation;
 it does not control positional jitter.
 Loading the ordinary build restores the original look from the same saved settings.
@@ -224,4 +234,9 @@ not a claim of the same saving over the current split renderer.
 
 [A paired half-jitter comparison](evidence/spectrogram-stars/half-jitter/README.md) measured 1.1–2.2% more GPU time at 4K than the preceding four-neighbor trial.
 At 1080p the difference was smaller than the variation between identical controls.
-These measurements retain the same five layers and current defaults.
+These measurements retain the same five layers and current defaults,
+but predate the configurable slider and its uniform-driven shader.
+
+[A paired comparison of configurable 50% jitter against fixed half jitter](evidence/spectrogram-stars/configurable-jitter/README.md) finds no clear added GPU cost.
+At 1080p the difference fits inside A/A variation;
+the 4K candidate is slightly faster but the runs do not establish a reliable speedup.

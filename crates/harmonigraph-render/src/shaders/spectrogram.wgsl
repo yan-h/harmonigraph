@@ -302,6 +302,9 @@ struct Cloud {
     // none of the textures above.
     star_randomness: f32,
     star_life: f32,
+    // Jitter width, halo reach, fade-start fraction and padding, computed once
+    // per frame by star_geometry in atmosphere.rs. Lengths are in cells.
+    star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
@@ -1440,12 +1443,6 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // pane at any export resolution, like the other textures' `CLOUD_UNITS`.
 const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
-// How far a centre is hashed off its cell's middle, as a whole width.
-const STAR_JITTER: f32 = 0.3;
-// The ring's reach, in cells: the nearest a star from a cell outside the
-// nearest 2x2 walk can come to a pixel, 1.0 less half the jitter. Coverage is
-// windowed to zero by it (`the_star_ring_holds_every_star_that_reaches_a_pixel`).
-const STAR_REACH: f32 = 0.85;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // atmosphere.rs), and its log.
 const STAR_ATLAS_WIDTH: i32 = 2048;
@@ -1471,12 +1468,6 @@ const STAR_LIFE_PERIOD: u32 = 4096u;
 const STAR_FADE: f32 = 0.2;
 // How far up the palette the brightest-ranked star is lifted past its level.
 const STAR_LIFT: f32 = 0.18;
-// Where, as a share of the ring's reach, a star's light starts fading to the
-// zero it must reach there. See `STAR_REACH` and the test that holds it.
-// Half jitter permits a wider halo with four neighbors: fade from 0.7 to
-// 0.85 cells while still reaching zero before an unvisited star can matter.
-const STAR_RING_FADE: f32 = 0.823529412;
-
 // The level a star sees at pane point `pt`: the Spread-combined light, so
 // how loosely the stars follow the picture is `Wide blur mix` and the two
 // softnesses, as it is for every texture. A Stars-only blur toward the wide
@@ -1524,7 +1515,7 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // alone.
     let a = star_hash(hashed, key);
     let through = fract(age);
-    let centre = 0.5 + STAR_JITTER * (a.xy - 0.5);
+    let centre = 0.5 + cloud.star_geometry.x * (a.xy - 0.5);
     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
         * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at);
@@ -1608,8 +1599,8 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, cut: f32) -> vec4<f32> {
     }
     // Zero at the ring's reach, so a star the walk cannot see from this pixel
     // draws nothing here either and no cell edge shows.
-    let reach = STAR_REACH * s.cell;
-    cover = min(cover, 1.0) * (1.0 - smoothstep(STAR_RING_FADE * reach, reach, dist));
+    let reach = cloud.star_geometry.y * s.cell;
+    cover = min(cover, 1.0) * (1.0 - smoothstep(cloud.star_geometry.z * reach, reach, dist));
     cover *= shape.y;
     return vec4<f32>(colour * cover, cover);
 }
@@ -1648,14 +1639,14 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
         let s = cloud.star_slices[k];
         // A fringe has no window of its own, so with one on only the ring's
         // fade bounds a star.
-        var cut = STAR_REACH * s.cell;
+        var cut = cloud.star_geometry.y * s.cell;
         if s.fringe <= 0.0 {
             cut = min(cut, 5.0 * s.cap * s.defocus);
         }
         let r = sp / s.cell - s.offset;
         // The nearest two cell centres on each axis. Switching the selected
         // pair at a half-cell boundary is invisible because any departing or
-        // arriving star is at least STAR_REACH away and has zero coverage.
+        // arriving star is at least the halo reach away and has zero coverage.
         let o = floor(r - 0.5);
         let f = r - o;
         let local = vec2<i32>(o) - s.origin;
@@ -1718,7 +1709,7 @@ fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
     let life = u32(floor(cloud.star_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
     let a = star_hash(hashed, key);
-    let centre = 0.5 + STAR_JITTER * (a.xy - 0.5);
+    let centre = 0.5 + cloud.star_geometry.x * (a.xy - 0.5);
     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at);
     let rank_draw = star_hash(hashed, key + 1u).x;

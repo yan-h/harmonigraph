@@ -4,7 +4,7 @@
 //! its values under [`memory_key`]. Source pixels refresh every draw, including
 //! paused zooms and palette edits.
 
-use crate::uniforms::{uniform_group, Float2, Int2};
+use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
 use crate::{create_vertex_buffer, wgpu};
@@ -139,7 +139,7 @@ struct StarSlice {
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
-    /// the shader's `STAR_REACH`: `Fringe`, alike at every depth.
+    /// the jitter-dependent halo reach: `Fringe`, alike at every depth.
     fringe: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
@@ -559,6 +559,20 @@ impl TileKey {
     }
 }
 
+/// Placement and halo bounds from the sanitized 0..=1 Jitter dial. Compute
+/// these once per frame, rather than inside each pixel's twenty-star walk.
+/// The nearest excluded cell can approach by 1 minus half the jitter width;
+/// the halo must reach zero there. Fade from 0.8..1 cells at zero jitter to
+/// 0.6..0.7 at full jitter, retaining the half-jitter 0.7..0.85 window at 0.5.
+/// f64 before narrowing keeps the default identical to the old WGSL constants.
+fn star_geometry(jitter: f32) -> Float4 {
+    let jitter = f64::from(jitter);
+    let width = 0.6 * jitter;
+    let reach = 1.0 - width / 2.0;
+    let fade = (0.8 - 0.2 * jitter) / reach;
+    Float4([width as f32, reach as f32, fade as f32, 0.0])
+}
+
 /// The tile this frame wants, or `None` where no cloud is drawn.
 ///
 /// See [`TileKey`] for what is in it and what deliberately is not.
@@ -598,6 +612,7 @@ pub(super) fn tile_key(
         wash_layers: _,      // applied after the tile bake
         star_density: _,     // no tile for Stars
         star_randomness: _,  // no tile for Stars
+        star_jitter: _,      // no tile for Stars
         star_size_min: _,    // no tile for Stars
         star_size_max: _,    // no tile for Stars
         star_size_curve: _,  // no tile for Stars
@@ -677,11 +692,12 @@ struct Uniforms {
     tile_cells: u32,
     /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
-    /// The starfield's one dial the shader reads directly, sanitized, and its
-    /// life clock ([`star_life`]). `star_slices` lands on a 16-byte boundary
-    /// right after them, as the shader's array must.
+    /// The starfield's brightness variation and life clock ([`star_life`]).
+    /// The geometry and slice rows that follow both start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
+    /// Jitter width, halo reach, fade-start fraction and padding; see [`star_geometry`].
+    star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
     memory_valid: u32,
@@ -1129,6 +1145,7 @@ fn memory_key(
         wash_layers,
         star_density,
         star_randomness,
+        star_jitter,
         star_size_min,
         star_size_max,
         star_size_curve,
@@ -1161,6 +1178,7 @@ fn memory_key(
             star_size_max,
             star_size_curve,
             star_randomness,
+            star_jitter,
             star_speed_min,
             star_speed_max,
             star_speed_curve,
@@ -1715,6 +1733,7 @@ impl Targets {
             pitch_vertical: u32::from(pitch_vertical),
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, atmosphere.now),
+            star_geometry: star_geometry(settings.star_jitter),
             // Zeroes where the starfield is not drawn, which the shader never
             // reads then.
             star_slices: slices,
@@ -1817,9 +1836,10 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, retained_size, source_size, star_layout, star_slices, tile_key, tone_size,
-        SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
-        STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP, WASH_CELLS,
+        cloud_drift, retained_size, source_size, star_geometry, star_layout, star_slices, tile_key,
+        tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_ATLAS_WIDTH,
+        STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
+        WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -1850,20 +1870,24 @@ mod tests {
 
     /// The nearest 2x2 walk sees every star whose shortened halo reaches the
     /// pixel. Scan both sides of the half-cell selection boundaries using the
-    /// shader's jitter and reach; all dials retain this same placement bound.
+    /// uploaded jitter and reach throughout the dial's range.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        let (jitter, reach) = (shader_number("STAR_JITTER"), shader_number("STAR_REACH"));
-        assert!((reach - (1.0 - jitter / 2.0)).abs() < 1e-6, "{reach} is not the ring's reach");
-        let nearest = nearest_outside_the_ring(jitter as f32 / 2.0);
-        assert!(
-            nearest >= reach as f32 - 1e-5,
-            "a star outside the ring comes {nearest} cells from the pixel, inside the \
-             {reach} it is windowed to zero at"
-        );
+        // The default must preserve the preceding half-jitter prototype.
+        assert_eq!(star_geometry(0.5).0, [0.3, 0.85, 0.823_529_4, 0.0]);
+        for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let [jitter, reach, fade, _] = star_geometry(dial).0;
+            assert!(fade > 0.0 && fade < 1.0);
+            let nearest = nearest_outside_the_ring(jitter / 2.0);
+            assert!(
+                nearest >= reach - 1e-5,
+                "jitter={dial}: an excluded star comes {nearest} cells from the pixel, \
+                 inside the {reach} it is windowed to zero at"
+            );
+        }
     }
 
     /// The nearest excluded star over a full cell, including the points at

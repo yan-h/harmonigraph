@@ -98,7 +98,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
         cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
         wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
-        star_density, star_randomness, star_fringe,
+        star_density, star_randomness, star_jitter, star_fringe,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_lifetime);
     saved.workspace.interaction.ui_scale = v;
@@ -292,12 +292,12 @@ fn scenarios() -> Vec<Scenario> {
         ..base
     });
     // The starfield's, on the same terms: the three scale bars and the shared
-    // Drift speed off, nine of its own on.
+    // Drift speed off, ten of its own on.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
         enabled: true,
-        visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + 9,
+        visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + 10,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {
@@ -408,6 +408,12 @@ fn check(edge: Edge) {
             saw("Note bloom"),
             scenario.pane == panes::Tab::LatticeSettings
                 || (scenario.pane == panes::Tab::AnalyzerSettings && scenario.enabled)
+        );
+        assert_eq!(
+            saw("Jitter"),
+            scenario.pane == panes::Tab::AnalyzerSettings
+                && scenario.enabled
+                && scenario.style == harmonigraph_scene::CloudStyle::Stars
         );
         assert_eq!(saw("Spiral bloom"), scenario.pane == panes::Tab::AnalyzerSettings);
         assert!(!saw("Bloom base"), "{scenario:?} drew the retired mapping base");

@@ -237,6 +237,35 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
     }
 }
 
+/// Moving star centers changes the sampled material. Reset that history even
+/// while paused, but keep other styles' history when an inactive dial changes.
+#[test]
+fn jitter_edits_reset_only_the_stars_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    for style in [CloudStyle::Stars, CloudStyle::Mosaic, CloudStyle::Watercolor] {
+        let mut cb = fixture(style);
+        let mut resources = CallbackResources::default();
+        cb.grid.fill(255);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let lit = pixels(&device, &queue, memory(&resources));
+        assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+        cb.grid.fill(0);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        assert_eq!(pixels(&device, &queue, memory(&resources)), lit, "paused history changed");
+        cb.atmosphere.as_mut().unwrap().settings.star_jitter = 1.0;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let edited = pixels(&device, &queue, memory(&resources));
+        if style == CloudStyle::Stars {
+            let mut fresh = CallbackResources::default();
+            prepare_once(&device, &queue, &mut fresh, &cb);
+            assert_eq!(edited, pixels(&device, &queue, memory(&fresh)));
+            assert_ne!(edited, lit, "moved stars retained the old light");
+        } else {
+            assert_eq!(edited, lit, "inactive jitter reset {style:?}");
+        }
+    }
+}
+
 /// A low-rate export and a high-rate display integrate the same elapsed time.
 /// Also exercises pickup, paused redraws, interpretation edits, seeks and off.
 #[test]

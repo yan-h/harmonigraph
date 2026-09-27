@@ -334,6 +334,10 @@ pub struct SpectralAtmosphere {
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
     pub star_randomness: f32,
+    /// Positional variation within each cell, from regular centers at 0 to
+    /// the original 0.6-cell jitter width at 1. Lower values allow wider
+    /// halos with the same four neighbors. The half-jitter look is 0.5.
+    pub star_jitter: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
     /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
@@ -442,6 +446,7 @@ impl Default for SpectralAtmosphere {
             // Yan's Stars controls captured from the DAW on 2026-09-26.
             star_density: 10.0,
             star_randomness: 0.080912866,
+            star_jitter: 0.5,
             star_size_min: 2.315533,
             star_size_max: 14.752405,
             star_size_curve: 2.1178954,
@@ -510,6 +515,7 @@ impl SpectralAtmosphere {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
         self.star_size_min =
             clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
         self.star_size_max =
