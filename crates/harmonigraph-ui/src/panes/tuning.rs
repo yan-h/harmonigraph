@@ -839,7 +839,7 @@ fn map_controls(
         }
         crate::widgets::checkbox(ui, &mut state.appearance.view.show_map_indicators, "Show map indicators")
             .on_hover_text(
-                "Show the selected map's assignment rings and MIDI note labels on the lattice. This \
+                "Show a bright dot above each destination in the selected map. This \
                  does not change the map or its tuning.",
             );
         let selected = view.playback.selected;

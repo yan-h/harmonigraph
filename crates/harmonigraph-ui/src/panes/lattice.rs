@@ -213,7 +213,8 @@ pub(crate) fn draw_lattice(
     // so anything meant to sit ON TOP of the names has to be a second batch
     // rather than a later call into this one.
     let mut batch = crate::text::TextBatch::default();
-    draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
+    let assignments = map_assignments(state, &scene, &window, response.is_some());
+    draw_node_labels(ui, rect, &scene, &state.appearance.view, &assignments, &mut batch);
     // The badge is laid out here, before the names are handed over, though it
     // is DRAWN after them. Laying text out is what rasterizes glyphs into
     // egui's font atlas, and an atlas that changes size between the two
@@ -251,9 +252,46 @@ pub(crate) fn draw_lattice(
     }
 }
 
-/// The lattice-map editor's marks over the docked pane: an outline and a MIDI
-/// label on each node the active map assigns, a ring on the destination the
-/// pointer offers while editing, and the map's status line in the corner.
+/// Resolve only ordinary, visible map destinations, using scene indices rather
+/// than window indices because sparse halo owners can precede ordinary nodes.
+/// Preview/export never carries these editor annotations.
+fn map_assignments(
+    state: &PictureState,
+    scene: &harmonigraph_scene::Scene,
+    window: &harmonigraph_scene::DrawnWindow,
+    interactive: bool,
+) -> Vec<usize> {
+    let map = state
+        .runtime
+        .lattice_maps
+        .as_ref()
+        .filter(|maps| {
+            interactive
+                && state.appearance.view.show_map_indicators
+                && maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+        })
+        .and_then(|maps| maps.playback.map);
+    let mut indices: Vec<_> = map
+        .into_iter()
+        .flat_map(|map| (0..12).map(move |midi| map.node(midi)))
+        .filter(|&pos| window.contains(pos))
+        .filter_map(|pos| {
+            scene
+                .nodes
+                .binary_search_by_key(&(pos.threes, pos.fives, pos.sevens), |node| {
+                    let p = node.lattice_pos;
+                    (p.threes, p.fives, p.sevens)
+                })
+                .ok()
+        })
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    indices
+}
+
+/// Edit destination and map status stay above the picture. Assignment dots
+/// belong to the node labels' scene pass, with the same shadows and occlusion.
 fn draw_map_overlay(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -266,56 +304,19 @@ fn draw_map_overlay(
     let maps = state.runtime.lattice_maps.as_ref();
     let engine =
         maps.map_or(harmonigraph_core::lattice_map::TuningEngine::Adaptive, |m| m.playback.engine);
-    let active_map = maps
-        .filter(|_| {
-            engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-                && state.appearance.view.show_map_indicators
-        })
-        .and_then(|m| m.playback.map);
-    let editing = maps.is_some_and(|m| m.editing());
-    // Look up at most twelve map nodes and the hovered one in the scene's
-    // canonical lattice order. Sparse halo owners can precede ordinary nodes,
-    // so a window index is not a scene index. Keep overlay membership in the
-    // ordinary window, then sort actual scene indices to preserve paint order.
-    let mut indices: Vec<usize> = active_map
-        .into_iter()
-        .flat_map(|map| (0..12i64).map(move |midi| map.node(midi)))
-        .chain(state.surfaces.hovered.filter(|_| editing))
-        .filter_map(|pos| {
-            if !window.contains(pos) {
-                return None;
-            }
-            scene
-                .nodes
-                .binary_search_by_key(&(pos.threes, pos.fives, pos.sevens), |node| {
-                    let p = node.lattice_pos;
-                    (p.threes, p.fives, p.sevens)
-                })
-                .ok()
-        })
-        .collect();
-    indices.sort_unstable();
-    indices.dedup();
-    for node in indices.into_iter().map(|i| &scene.nodes[i]) {
-        let assigned =
-            active_map.and_then(|map| (0..12i64).find(|&midi| map.node(midi) == node.lattice_pos));
-        let outlined = assigned.is_some();
-        let candidate = editing && state.surfaces.hovered == Some(node.lattice_pos);
-        if let Some(p) = projector.project(node.world_pos) {
-            let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
-            if outlined {
-                draw_assignment_outline(&painter, center);
-            }
-            if let Some(midi) = assigned {
-                painter.text(
-                    center + egui::vec2(10.0, -10.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    crate::lattice_maps::MIDI_LABELS[midi as usize],
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::LIGHT_BLUE,
-                );
-            }
-            if candidate {
+    if let Some(pos) = state
+        .surfaces
+        .hovered
+        .filter(|pos| maps.is_some_and(|m| m.editing()) && window.contains(*pos))
+    {
+        if let Ok(index) =
+            scene.nodes.binary_search_by_key(&(pos.threes, pos.fives, pos.sevens), |node| {
+                let p = node.lattice_pos;
+                (p.threes, p.fives, p.sevens)
+            })
+        {
+            if let Some(p) = projector.project(scene.nodes[index].world_pos) {
+                let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
                 painter.circle_stroke(center, 12.0, egui::Stroke::new(2.0, egui::Color32::GOLD));
             }
         }
@@ -587,6 +588,7 @@ pub(crate) fn draw_node_labels(
     rect: egui::Rect,
     scene: &harmonigraph_scene::Scene,
     view: &harmonigraph_scene::ViewConfig,
+    assignments: &[usize],
     batch: &mut crate::text::TextBatch,
 ) {
     // The nodes are world-space geometry and their labels are typeset in
@@ -624,7 +626,9 @@ pub(crate) fn draw_node_labels(
         // answer and the two have to be one rule (see
         // `NodeInstance::is_named`). What is left to this pass is where the
         // name lands and what it says.
-        if !node.is_named(view) {
+        let assigned = assignments.binary_search(&index).is_ok();
+        let named = node.is_named(view);
+        if !named && !assigned {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {
@@ -673,6 +677,12 @@ pub(crate) fn draw_node_labels(
             let want = want * node.scale.max(0.6);
             let (scale, magnify) = crate::text::ladder(want, NAME_SIZE, ppp);
             let size = crate::marks::NameSize { scale, magnify };
+            if assigned {
+                draw_assignment_dot(batch, ui.painter(), center, size, label_ink(view, 1.0));
+            }
+            if !named {
+                return;
+            }
             let name_ink =
                 crate::marks::NameInk { fill: ink.gamma_multiply(strength), outline: shadow };
             // What an off-sheet node says, and whether it says anything: its
@@ -736,13 +746,26 @@ pub(crate) fn draw_node_labels(
     }
 }
 
-/// The Lattice Map's saved assignments use one editor annotation style.
-fn draw_assignment_outline(painter: &egui::Painter, center: egui::Pos2) {
-    painter.circle_stroke(
-        center,
-        8.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(115, 190, 225, 160)),
-    );
+/// A period from the name's own face supplies both the visible dot and its
+/// existing distance-field shadow. Keep it in the SAME attached glyph run as
+/// the name: the renderer accepts one run per node. Its ink and shadow never
+/// spend activation, trail strength or the name's visibility.
+fn draw_assignment_dot(
+    batch: &mut crate::text::TextBatch,
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    size: crate::marks::NameSize,
+    ink: egui::Color32,
+) {
+    let font = egui::FontId::monospace(NAME_SIZE * size.scale);
+    // Capital height fixes the anchor even when no name is being drawn.
+    let cap = painter.layout_no_wrap("H".into(), font.clone(), egui::Color32::PLACEHOLDER);
+    let cap_top = cap.mesh_bounds.min.y - cap.size().y / 2.0;
+    let dot = painter_ink(painter, ".", &font);
+    let anchor = center + egui::vec2(-dot.center().x, cap_top - 4.0 * size.scale - dot.max.y);
+    batch.magnified(center, size.magnify, |batch| {
+        batch.text(painter, anchor, egui::Align2::LEFT_TOP, ".".into(), font, ink, LABEL_SHADOW);
+    });
 }
 
 #[cfg(test)]
@@ -803,52 +826,26 @@ mod tests {
         );
         state.runtime.lattice_maps.as_mut().unwrap().playback.engine = TuningEngine::LatticeMap;
         let annotations = |state: &mut PictureState, interactive: bool| {
-            let output = frame_full(&ctx, screen, |ui| {
-                let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-                draw_lattice(
+            let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
+            let scene = compose_scene(state, &window, 1.0, None, 0, 0.0);
+            let assignments = map_assignments(state, &scene, &window, interactive);
+            let mut batch = crate::text::TextBatch::default();
+            let _ = frame_full(&ctx, screen, |ui| {
+                draw_node_labels(
                     ui,
                     rect,
-                    state,
-                    0.0,
-                    0,
-                    glam::Vec4::ZERO,
-                    interactive.then_some(&response),
-                    None,
+                    &scene,
+                    &state.appearance.view,
+                    &assignments,
+                    &mut batch,
                 );
             });
-            let outlines = output
-                .shapes
-                .iter()
-                .filter(|shape| {
-                    matches!(&shape.shape, egui::Shape::Circle(circle) if circle.radius == 8.0)
-                })
-                .count();
-            let labels = output
-                .shapes
-                .iter()
-                .filter(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => crate::lattice_maps::MIDI_LABELS
-                        .iter()
-                        .any(|label| text.galley.text() == *label),
-                    _ => false,
-                })
-                .count();
-            (outlines, labels)
+            batch.pieces().iter().filter(|p| p.text == ".").count()
         };
-        let shown = annotations(&mut state, true);
-        assert!(shown.0 > 0, "the fixture must actually draw map outlines");
-        assert!(shown.1 > 0, "the fixture must actually draw map labels");
-        assert_eq!(
-            annotations(&mut state, false),
-            (0, 0),
-            "preview/export must omit the persisted map annotation"
-        );
+        assert!(annotations(&mut state, true) > 0, "fixture must draw assignment dots");
+        assert_eq!(annotations(&mut state, false), 0, "preview/export must omit dots");
         state.appearance.view.show_map_indicators = false;
-        assert_eq!(
-            annotations(&mut state, true),
-            (0, 0),
-            "hiding map indicators must remove assignment outlines and labels from the interactive lattice"
-        );
+        assert_eq!(annotations(&mut state, true), 0, "the visibility control must hide dots");
     }
 
     #[test]
@@ -924,12 +921,64 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
+        let assignments = map_assignments(&state, &scene, &window, true);
         assert_eq!(
-            positions(8.0),
+            assignments.iter().map(|&i| scene.nodes[i].lattice_pos).collect::<Vec<_>>(),
             expected,
-            "map outlines must name the requested ordinary nodes in scene order"
+            "map dots must name the requested ordinary nodes in scene order"
         );
         assert_eq!(positions(12.0), [hovered], "hover must find its actual scene node");
+    }
+
+    #[test]
+    fn assignment_dot_keeps_sounding_ink_when_silent_and_shares_the_name_run() {
+        let mut state = fresh();
+        state.appearance.view.note_names = NoteNames::Played;
+        let window = state.appearance.view.reach();
+        let mut scene = compose_scene(&mut state, &window, 1.0, None, 0, 0.0);
+        let index = scene
+            .nodes
+            .iter()
+            .position(|n| n.lattice_pos == harmonigraph_core::LatticePos::ORIGIN)
+            .unwrap();
+        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(600.0, 600.0));
+        let draw = |scene: &harmonigraph_scene::Scene, view: &harmonigraph_scene::ViewConfig| {
+            let mut batch = crate::text::TextBatch::default();
+            let _ = painted_full(egui::vec2(700.0, 700.0), |ui| {
+                draw_node_labels(ui, rect, scene, view, &[index], &mut batch);
+            });
+            batch
+        };
+        assert!(
+            !scene.nodes[index].is_named(&state.appearance.view),
+            "fixture must start silent and unnamed"
+        );
+        let silent = draw(&scene, &state.appearance.view);
+        assert_eq!(silent.pieces().len(), 1, "the dot must exist without a name");
+        let dot = &silent.pieces()[0];
+        assert_eq!(dot.text, ".");
+        assert_eq!(dot.fill, egui::Color32::WHITE);
+        let center = scene
+            .projector(glam::Vec2::splat(600.0))
+            .project(scene.nodes[index].world_pos)
+            .unwrap();
+        assert!((dot.ink.center().x - (rect.min.x + center.x)).abs() < 0.01);
+        scene.nodes[index].activation = 1.0;
+        let sounding = draw(&scene, &state.appearance.view);
+        let lit_dot = sounding.pieces().iter().find(|p| p.text == ".").unwrap();
+        assert_eq!(lit_dot.ink, dot.ink, "activity must not move or resize the dot");
+        assert_eq!(lit_dot.fill, dot.fill, "activity must not dim the dot");
+        let name = sounding.pieces().iter().find(|p| p.text == "C").unwrap();
+        assert!(lit_dot.ink.max.y < name.ink.min.y, "dot must clear the name's ink");
+        assert_eq!(
+            sounding.labels().iter().filter(|run| run.node == index as u32).count(),
+            1,
+            "the renderer needs one shared run so neither the dot nor name replaces the other"
+        );
+        state.appearance.view.label_scale *= 2.0;
+        let larger = draw(&scene, &state.appearance.view);
+        let large_dot = larger.pieces().iter().find(|p| p.text == ".").unwrap();
+        assert!(large_dot.ink.width() > lit_dot.ink.width() * 1.7, "dot must follow label size");
     }
 
     /// Draw the labels for a chord, with the camera at `distance`, and
@@ -962,7 +1011,7 @@ mod tests {
         };
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
-            draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
+            draw_node_labels(ui, rect, &scene, &state.appearance.view, &[], &mut batch);
         });
         (batch.pieces().to_vec(), scene)
     }
@@ -1586,7 +1635,7 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
-            draw_node_labels(ui, rect, &scene, &state.appearance.view, &mut batch);
+            draw_node_labels(ui, rect, &scene, &state.appearance.view, &[], &mut batch);
         });
         let pieces = batch.pieces().to_vec();
         let ink = pieces.first().expect("the visited node is named").fill;

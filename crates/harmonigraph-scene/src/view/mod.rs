@@ -199,8 +199,8 @@ pub struct ViewConfig {
     /// [`NoteNames::All`] is the label layer's own answer and carries no
     /// memory at all.
     pub note_names: NoteNames,
-    /// Whether the editor draws the active lattice map's assignment rings and
-    /// MIDI note labels over the lattice. The map and its tuning remain active
+    /// Whether the editor draws the active lattice map's assignment dots above
+    /// the node names. The map and its tuning remain active
     /// when these annotations are hidden.
     pub show_map_indicators: bool,
     // How a sounding node's middle is painted has no field here: what lights
