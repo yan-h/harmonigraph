@@ -1513,6 +1513,7 @@ version = "0.5.0"
 dependencies = [
  "egui",
  "egui-wgpu",
+ "foldhash 0.2.0",
  "glam",
  "harmonigraph-analysis",
  "harmonigraph-core",

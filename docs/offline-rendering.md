@@ -147,7 +147,7 @@ Manual renders use this same captured WAV.
 Yes.
 Recording is not gated on the host's process mode —
 if Record take is on and the transport is moving, the take is captured, offline render or not.
-Set **When** to *Transport stops* and the video renders itself when the export finishes.
+Set **Finish recording** to *Transport stop* and the video renders itself when the export finishes.
 
 Two subtleties are what make it land on the right file.
 

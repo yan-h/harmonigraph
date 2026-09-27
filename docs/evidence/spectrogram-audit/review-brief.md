@@ -10,7 +10,7 @@ do not edit files, start implementation, modify issues, invoke a plugin loader, 
 
 - [Complete proposal, architecture/cache audit, SG1–SG6 component briefs, priorities, dependency checks and acceptance](../../spectrogram-rendering-plan.md).
 - [Evidence methodology and reproduction notes](README.md), all five raw `.txt` logs, and [the exact scratch fixture](probe.patch).
-- [Lattice plan](../../lattice-rendering-plan.md), [offline architecture](../../offline-rendering.md), repository `AGENTS.md`, and the source modules cited by the proposal.
+- The lattice plan (closed not-planned, [#643](https://github.com/yan-h/harmonigraph/issues/643)), [offline architecture](../../offline-rendering.md), repository `AGENTS.md`, and the source modules cited by the proposal.
 - Issue scope owners #654 (tracker) and #655–#660; their complete technical briefs are the SG1–SG6 sections in the repository plan, so network access is not needed for review completeness.
 - `initial-snapshot.sha256` records the exact packet before reviews; the initial proposal commit is the source of truth for that version even if accepted revisions follow.
 

@@ -96,15 +96,19 @@ A branch build is otherwise hidden from Bitwig for two reasons:
 After that one-time bootstrap,
 use the repository scripts for branch builds.
 They copy the executable into the shared bundle slot and re-sign it ad hoc for Apple Silicon.
+The normal path is that a session builds in its own worktree and Yan loads whichever build he wants;
+`update-plugin.sh` is the one-shot for Yan's own checkout,
+building and loading it directly with no worktree session in between.
 
 ```sh
-# Build this checkout and load it in one step.
-./update-plugin.sh
-
-# Load an existing worktree build without building.
+# Load an existing worktree build without building. This is the normal path:
+# a session builds (see AGENTS.md), Yan loads.
 ./load-plugin.sh              # interactive worktree menu
 ./load-plugin.sh --list       # show builds without loading one
 ./load-plugin.sh <branch>     # a unique branch substring is enough
+
+# One-shot for Yan's own checkout: build it and load it in one step.
+./update-plugin.sh
 
 # Bring a pushed PR (e.g. from a cloud session) into a local worktree and build it.
 ./build-pr.sh 1079            # rerun after new pushes to fast-forward and rebuild
@@ -135,6 +139,14 @@ editor reopen or rescan may leave a grouped plugin-host process and its old mapp
 The loader reports the executable identities it can observe in Bitwig's processes;
 the performance overlay's build tag is the final check of what the DAW loaded.
 
+### Debugging a hang
+
+Bitwig SIGKILLs an unresponsive plugin host about thirty seconds after logging "Plug-in host is not responding",
+so the stack is gone by the time anyone looks.
+`./sample-hang.sh &` watches the log and samples the process twice inside that window,
+writing to `~/harmonigraph-hangs/`;
+`pkill -f sample-hang.sh` stops it.
+
 ## Architecture
 
 Dependencies point downward;
@@ -152,19 +164,27 @@ harmonigraph-scene       Per-frame scene derivation, camera, styles, envelopes
 
 harmonigraph-render      wgpu lattice renderer used as an egui paint callback.
 
+harmonigraph-metal-assets  Immutable, verified precompiled Metal shader
+                         libraries embedded at build time; no GPU objects or
+                         graphics-stack dependency.
+
 harmonigraph-perf        Performance instrumentation and build-tag stamping;
                          the UI crate draws its overlay.
 
 harmonigraph-ui          Shared pane shell and controls for Lattice, Tuning,
-                         Display, Console, Spectral, Spiral, Notes and Video.
+                         Analyzer, Mappings, Spectral, Spiral, System, Console
+                         and Video.
 
 harmonigraph-take        Recorded note events, parameter automation and the
                          settings needed to reproduce a visualization.
 
 harmonigraph-record      Realtime-safe take writing and offline-renderer launch.
 
-harmonigraph-offline     Headless take replay, WAV input, audio/MIDI alignment
-                         and frames piped to ffmpeg.
+harmonigraph-offline     Headless take replay, WAV input and frames piped to
+                         ffmpeg.
+
+harmonigraph-golden      The golden-frame gate shared by the renderer's and
+                         the offline renderer's own picture tests.
 
 harmonigraph-standalone  eframe development harness with MIDI input and a mock
                          progression and synth.
@@ -200,7 +220,7 @@ and Settings.
 Settings contains Tuning,
 Lattice,
 Analyzer,
-Colors,
+Mappings,
 Video,
 System and Console tabs;
 those that do not fit the column move into a trailing overflow menu.
@@ -242,9 +262,8 @@ platform scope and upgrade notes live in [`PATCHES.md`](../PATCHES.md).
 formatting,
 build handoff and draft pull requests.
 Almost all implementation is written through LLM coding sessions under Yan's direction and review.
-
-The [long-term maintainability plan](maintainability-plan.md) records the proposed investigation,
-current focus and decisions for work intended to reduce the attention that future maintenance needs from Yan.
+Maintainability and technical-debt work is tracked as ordinary GitHub issues rather than a standing plan document;
+`docs/` holds design and contracts, not dated audits or batch plans.
 
 ## Shared agent skills
 
@@ -269,11 +288,3 @@ start a new agent session to refresh its skill catalog.
 Project-specific skills remain in `.claude/skills`.
 The shared skill is optional for development and CI,
 but must be installed before Yan invokes a merge audit.
-
-When upgrading an existing checkout that still has the old submodule,
-run `git submodule deinit -- .shared-skills` before pulling the removal commit.
-Do not force it if Git reports local changes;
-preserve those changes first.
-This avoids leaving the populated directory behind as untracked files.
-Older worktrees can keep their own pinned copy until they are retired;
-the Git checkout hook and reclaimer still support them.

@@ -113,8 +113,8 @@ fn sweep_the_pane(view: &ViewConfig) {
 /// one per pane from the camera, the reach once for the whole UI — so nothing
 /// structural keeps them in step, and where they part company the picture and
 /// the analyzer contradict each other: a node lit on the lattice while the
-/// analyzer draws its off-lattice band for the same pitch and the Notes pane
-/// shows no node at all. The reach's default is sized on exactly this, which
+/// analyzer draws its off-lattice band for the same pitch and the roll's and
+/// spiral's note names show no node at all. The reach's default is sized on exactly this, which
 /// is why it is checked rather than assumed.
 #[test]
 fn a_cabinet_pane_never_draws_a_node_the_reach_cannot_name() {

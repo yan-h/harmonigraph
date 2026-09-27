@@ -8,11 +8,10 @@ description: When a change owes a regenerated Metal shader corpus, how to check 
 The always-loaded rule and the gate command are in `CLAUDE.md`;
 this file is why the key is wider than `.wgsl`, what not to use as the signal, and how to regenerate.
 
-`crates/harmonigraph-metal-assets/assets` holds precompiled Metal libraries keyed on shader hashes,
-so **editing any `.wgsl` invalidates it, and the edit is not finished until the corpus is regenerated in the SAME commit**.
+`crates/harmonigraph-metal-assets/assets` holds precompiled Metal libraries keyed on the **generated MSL** and the compiler options, not the `.wgsl` text —
+so **a `.wgsl` edit is the common case that invalidates it, but treating `.wgsl` as the whole key is this repo's own too-narrow-key mistake written in prose, and the edit is not finished until the corpus is regenerated in the SAME commit**.
 
-A `.wgsl` edit is the common case rather than the whole key, and treating it as the whole key is this repo's own too-narrow-key mistake written in prose.
-The hash is over the **generated MSL** and the compiler options, which carry `hal::BACKEND_VERSION` —
+The compiler options carry `hal::BACKEND_VERSION`,
 so a bind-group or pipeline-layout change in Rust, a `vendor/wgpu-hal` bump or a `Cargo.lock` move invalidates the corpus with no `.wgsl` anywhere in the diff.
 The workflow's own `paths:` filter already names the real set (`crates/harmonigraph-render/**`, `Cargo.lock`, `vendor/wgpu-hal/**`, `crates/harmonigraph-offline/**` and more);
 read that, not the file extension.

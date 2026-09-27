@@ -274,6 +274,40 @@ fn dividers_follow_the_pointer_in_both_arrangements() {
 }
 
 #[test]
+fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
+    let mut state = split_state();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    region_click(&mut h, &mut state, 1);
+    let requested = state.workspace.take_window_size_change().expect("unfold requests a resize");
+    assert!(requested.x > 30.0, "fixture must request a wider window");
+    // The host refuses that request, so the drawing fits while the saved
+    // layout retains the size the fold just restored.
+    h.settle(&mut state);
+    let saved = state.workspace.layout.right;
+    let [lattice, analyzer, settings] = state.workspace.layout_runtime.rects;
+    assert!(settings.width() < saved.settings - 5.0, "fixture must draw squeezed sizes");
+    let origin = egui::pos2((lattice.right() + analyzer.left()) * 0.5, lattice.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
+    h.frame(&mut state, vec![press(origin, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(origin - egui::vec2(30.0, 0.0))]);
+    h.frame(&mut state, vec![press(origin - egui::vec2(30.0, 0.0), false)]);
+    assert!(state.workspace.layout.right.lattice < saved.lattice, "divider did not move");
+    assert!(
+        (state.workspace.layout_runtime.rects[0].width() - (lattice.width() - 30.0)).abs() < 1.0,
+        "divider did not follow the pointer in the squeezed drawing"
+    );
+    assert!((state.workspace.layout.right.settings - saved.settings).abs() < 0.1);
+    let saved_blob = state.save_persist();
+    let mut reopened = fresh();
+    assert!(reopened.load_persist(&saved_blob));
+    assert!((reopened.workspace.layout.right.settings - saved.settings).abs() < 0.1);
+}
+
+#[test]
 fn stacked_settings_only_is_compact_and_all_sections_can_reopen() {
     let mut state = fresh();
     state.workspace.layout.position = Position::Below;
@@ -902,6 +936,12 @@ fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
     state.workspace.layout.sized = true;
     let mut h = DockHarness::at(egui::vec2(1486.0, 800.0));
     h.settle(&mut state);
+    // What the dock spends between its sections, measured before anything
+    // folds rather than quoted, so the fill below is the same fill.
+    let widths = |state: &SharedState| -> f32 {
+        state.workspace.layout_runtime.rects.iter().map(|rect| rect.width()).sum()
+    };
+    let gutters = h.screen.width() - widths(&state);
     region_click(&mut h, &mut state, 1);
     h.settle_folds(&mut state);
     let lent: f32 = state.workspace.layout.region_widths.iter().sum();
@@ -923,9 +963,8 @@ fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
         assert!((now / saved.lattice - was / folded.lattice).abs() < 0.01, "{saved:?}");
     }
     let rects = state.workspace.layout_runtime.rects;
-    let drawn: f32 = rects.iter().map(|rect| rect.width()).sum();
     assert!(rects.iter().all(|rect| rect.width() > 20.0), "{rects:?}");
-    assert!((drawn + 2.0 * 3.0 - h.screen.width()).abs() < 1.0, "{rects:?}");
+    assert!((widths(&state) + gutters - h.screen.width()).abs() < 1.0, "{rects:?}");
 }
 
 /// Where a region's outer edge survives its fold, Expand appears exactly where

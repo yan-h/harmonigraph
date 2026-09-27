@@ -169,8 +169,8 @@ The loader intentionally preserves that process's old file instead of changing m
 Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
 Match the dylib's mtime to the branch's last commit time to identify it, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
-To rebuild one without cd'ing into the user's checkout:
-`cargo build --release -p harmonigraph-plugin --manifest-path <main>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
+To rebuild one without cd'ing into the branch's own worktree:
+`cargo build --release -p harmonigraph-plugin -p harmonigraph-offline --manifest-path <that-worktree>/Cargo.toml`, then load it the same way and verify via a distinctive string from that branch's diff.
 
 Use the loader rather than overwriting an installed executable by hand.
 Two consecutive ordinary installs produced macOS `CODESIGNING Invalid Page` scanner kills while the on-disk signature still verified ([#705](https://github.com/yan-h/harmonigraph/issues/705)).

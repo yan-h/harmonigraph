@@ -79,7 +79,7 @@ The local machine has Command Line Tools but no `metal` or `metallib` executable
 The existing macOS CI job can obtain Apple's Metal toolchain, as the earlier #704 probe already does.
 No local toolchain installation is required to inspect exported inputs or run downloaded libraries.
 
-From the repository root, use a fresh experiment directory:
+From the repository root, use a fresh experiment directory (historical only — `backend.py` and `exercise.py` no longer exist; `tools/metal-precompile/` now holds only `compile.py`, for the later, separate one-pipeline passthrough probe described in its own `README.md`):
 
 ```sh
 python3 tools/metal-precompile/backend.py prepare /tmp/generated-metal-assets
@@ -98,11 +98,12 @@ strict mode must fail and fallback mode must produce the expected numeric result
 No golden is re-baselined.
 The workflow uploads the libraries, raw logs and `results.json`.
 
-The backend supports three explicit probe modes through `HARMONIGRAPH_METAL_ASSETS`:
+The removed backend supported three explicit probe modes through `HARMONIGRAPH_METAL_ASSETS`:
 `export`, `strict` and `fallback`.
-`HARMONIGRAPH_METAL_ASSET_DIR` supplies the experiment's artifact directory.
-With the mode unset, even the copied backend takes the unchanged source path.
-These environment variables are experimental tooling, not a proposed production API.
+`HARMONIGRAPH_METAL_ASSET_DIR` supplied the experiment's artifact directory.
+With the mode unset, even the copied backend took the unchanged source path.
+Neither environment variable has any effect on the current tree;
+they were experimental tooling for this retired probe, not a production API.
 
 The file bucket uses deterministic FNV64 over source and options, with mandatory exact source/options comparison before loading.
 That comparison prevents a hash collision from selecting mismatched code.

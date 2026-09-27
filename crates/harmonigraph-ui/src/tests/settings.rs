@@ -39,15 +39,16 @@ fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
     // behind it.
     state.workspace.layout.select(pane);
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
-    // The top-right leaf (right of the 0.72 split, above the 0.55 one), from
-    // under its tab bar down. Only shapes clipped to this are the pane's.
-    let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
+    // The pane's own body, read off the laid-out dock rather than quoted from
+    // today's splits. Only shapes clipped inside it are the pane's.
+    h.settle(&mut state);
+    let body = pane_body(&state, &pane).expect("the settings body is visible");
     let texts = |out: &egui::FullOutput| {
         let mut map = std::collections::HashMap::new();
         for cs in &out.shapes {
-            if cs.clip_rect.min.x < body.min.x
-                || cs.clip_rect.min.y < body.min.y
-                || cs.clip_rect.max.y > body.max.y
+            if cs.clip_rect.min.x < body.min.x - 0.5
+                || cs.clip_rect.min.y < body.min.y - 0.5
+                || cs.clip_rect.max.y > body.max.y + 0.5
             {
                 continue;
             }
@@ -61,7 +62,8 @@ fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
         |state: &mut SharedState, events: Vec<egui::Event>| texts(&h.frame(state, events));
     // egui resolves the widget under the pointer from the previous pass, so
     // the pointer has to be there for a frame before the wheel arrives.
-    frame(&mut state, vec![egui::Event::PointerMoved(egui::pos2(860.0, screen_h * 0.22))]);
+    let over = egui::pos2(body.center().x, body.top() + body.height() * 0.2);
+    frame(&mut state, vec![egui::Event::PointerMoved(over)]);
     let before = frame(&mut state, vec![]);
     frame(
         &mut state,
@@ -487,6 +489,9 @@ fn fresh_mappings() -> usize {
 
 #[test]
 fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
+    // How much shorter than the column a mapping's weight bar is, as first
+    // measured — held to be the same at every width rather than quoted.
+    let mut weight_short_by: Option<f32> = None;
     for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
         for &pane in SETTINGS_PANES {
             for &projection in projections_for(pane) {
@@ -508,10 +513,11 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                 // else.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
                 // A mapping's weight bar gives the right end of its row to its
-                // Delete button (52pt and the 8pt item gap), and is counted the
-                // same way: one per mapping the fresh settings carry, all of
-                // them on the Colors page.
-                let weight = width - 60.0;
+                // Delete button, and is counted the same way: one per mapping
+                // the fresh settings carry, all of them on the Colors page. How
+                // wide the button is is the button's business; what is held is
+                // that the bar is short of the column by the SAME amount at
+                // every width, which is the bar narrowing with the column.
                 let mappings = if pane == panes::Tab::Colors { fresh_mappings() } else { 0 };
                 let mut short = 0;
                 let mut weights = 0;
@@ -519,16 +525,18 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                     if (bar - width).abs() < 1.0 {
                         continue;
                     }
-                    if (bar - weight).abs() < 1.0 {
-                        weights += 1;
+                    if (bar - track).abs() < 1.0 {
+                        short += 1;
                         continue;
                     }
-                    short += 1;
+                    weights += 1;
+                    let by = width - bar;
+                    let first = *weight_short_by.get_or_insert(by);
                     assert!(
-                        (bar - track).abs() < 1.0,
-                        "{pane:?}/{projection:?} at {width}pt drew a {bar}pt bar, \
-                         neither the column nor the spectrum track's {track}pt \
-                         (all of {widths:?})"
+                        by > 0.0 && (by - first).abs() < 1.0,
+                        "{pane:?}/{projection:?} at {width}pt drew a {bar}pt bar: not the \
+                         column, not the spectrum track's {track}pt, and not a weight bar \
+                         {first}pt short of the column like the others (all of {widths:?})"
                     );
                 }
                 let want = if pane == panes::Tab::Colors { 2 } else { 0 };
@@ -1209,7 +1217,8 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 /// is the bar's full width in from its right edge however thin it is painted.
 ///
 /// Both readout panes list what has come in, and an empty one has nothing to
-/// scroll, so the fixture gives the Console lines and the Notes pane voices.
+/// scroll, so the fixture gives the Console lines and the Tuning pane's
+/// "Assignments and sounding intervals" list held voices.
 fn scrolling_settings_pane(
     pane: panes::Tab,
     scale: f32,
@@ -1293,6 +1302,21 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         );
         for &pane in SETTINGS_PANES {
             let (shapes, body) = scrolling_settings_pane(pane, scale);
+            // The flip button ends at the column's right edge, which is the
+            // edge of the lane — `SpectrumBar`'s own docs name this test as
+            // what keeps it out. Bars scrolled out of the window paint nothing,
+            // so the pass has to have drawn the button for that to be asked.
+            if pane == panes::Tab::Colors {
+                let flip = crate::widgets::flip_button_width(scale);
+                let drew_flip = shapes.iter().any(|cs| match &cs.shape {
+                    egui::Shape::Rect(r) => {
+                        [crate::theme::widget(), crate::theme::widget_hover()].contains(&r.fill)
+                            && (r.rect.width() - flip).abs() < 0.6
+                    }
+                    _ => false,
+                });
+                assert!(drew_flip, "the Colors pane at {scale} drew no spectrum flip button");
+            }
             // The pane's own shapes are the ones clipped to the tab BODY. The dock's
             // chrome — the leaf fill, the body border, the tab bar and its rule — is
             // clipped to the leaf, which starts a tab bar higher up.

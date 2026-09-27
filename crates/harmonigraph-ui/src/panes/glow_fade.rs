@@ -49,13 +49,18 @@
 //! rounding up makes that rare. The renderer seeds a new texture and any row
 //! whose owner differs from the one actually encoded there.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use harmonigraph_core::LatticePos;
 use harmonigraph_scene::{GlowStep, GlowTiming, Scene, ViewConfig};
 
 use crate::PictureState;
+
+// Fixed-seed, as `NodeMotion` keys the same `LatticePos` identities: nothing
+// here is keyed by input an attacker chooses, SipHash is a per-node cost paid
+// every frame, and a fixed seed makes the order `retain` hands rows back in
+// the same on every run rather than varying between them.
+type HashMap<K, V> = std::collections::HashMap<K, V, foldhash::fast::FixedState>;
 
 static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(1);
 

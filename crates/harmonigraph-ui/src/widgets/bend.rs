@@ -51,14 +51,13 @@ pub struct BendPlot<'a> {
 }
 
 impl<'a> BendPlot<'a> {
-    pub fn new(gradient: &'a mut Gradient) -> Self {
-        BendPlot { gradient, home: Gradient::default() }
-    }
-
-    /// The gradient a double-click takes the corner back to.
-    pub fn home(mut self, home: Gradient) -> Self {
-        self.home = home;
-        self
+    /// A plot over `gradient`, which a double-click takes the corner back to
+    /// `home`'s — the gradient the picture it dials opens on, named by every
+    /// caller for the reason [`SpectrumBar::new`] gives.
+    ///
+    /// [`SpectrumBar::new`]: super::gradient::SpectrumBar::new
+    pub fn new(gradient: &'a mut Gradient, home: Gradient) -> Self {
+        BendPlot { gradient, home }
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -105,6 +104,10 @@ impl<'a> BendPlot<'a> {
             }
         }
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ---- read back after the write, so the handle is under the
         // pointer on the frame it moved.
         let bend = self.gradient.bend.sanitized();
@@ -167,7 +170,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    plot.set(BendPlot::new(g).show(ui).rect);
+                    plot.set(BendPlot::new(g, Gradient::default()).show(ui).rect);
                 },
             );
         };

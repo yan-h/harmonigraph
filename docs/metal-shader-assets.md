@@ -50,21 +50,21 @@ They never replace the tracked corpus, even during deliberate invalid-library co
 Cargo tracks this build input and rebuilds with the checked-in corpus when the variable is absent.
 Do not run other Cargo builds in the same checkout concurrently with validation: a second build could replace a test executable between its build and execution.
 
-With Apple's Metal toolchain available, generate into a fresh directory:
+Regenerate on the runner, never locally, whether or not local Command Line Tools have `metal`/`metallib`:
 
 ```sh
-python3 tools/shader-assets.py generate target/new-metal-assets
-python3 tools/shader-assets.py import target/new-metal-assets
+gh workflow run "Metal shader assets" --ref <branch> -f regenerate=true
 ```
 
-Generation exports exact backend inputs, compiles and verifies them, embeds the candidate corpus in validation binaries, then checks it through the normal production path.
-Only explicit import replaces the checked-in assets.
-Inspect and commit the changed source/options/manifest together with the binary libraries.
-When local Command Line Tools lack `metal`/`metallib`, run the Metal shader assets workflow with `regenerate=true` on the intended branch, then download and import its validated `production-metal-assets` artifact.
+then `python3 tools/shader-assets.py import` its validated `production-metal-assets` artifact.
+Import checks the candidate corpus through the normal production path before replacing the checked-in assets;
+inspect and commit the changed source/options/manifest together with the binary libraries.
 The ordinary PR workflow checks the committed corpus without regenerating it, so generation cannot conceal stale coverage.
 Its path filter covers assets, renderer code, graphics setup and dependencies;
 ordinary tuning implementation edits do not schedule a third macOS job.
 New pushes cancel superseded asset-validation runs.
+
+`python3 tools/shader-assets.py generate target/new-metal-assets` does the same export/compile/verify locally when Apple's Metal toolchain is available, but it rebuilds the renderer eight times over — against the production corpus and then against three deliberately broken variants of it — and is the slow way to learn the runner is the right path; see the `metal-corpus` skill.
 
 ## Diagnostics and measurements
 

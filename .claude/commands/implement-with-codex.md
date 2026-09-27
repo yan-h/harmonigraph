@@ -47,7 +47,8 @@ Use the XML block shape the plugin's bundled `gpt-5-4-prompting` skill prescribe
   What is wrong or missing, at <path>:<line>, and what done looks like.
 </task>
 <completeness_contract>
-  GitHub Actions' Full CI check green; ./ci.sh is its single full gate.
+  mergeStateStatus clean, not just the Full CI check green: Metal shader
+  assets reports separately, and ./ci.sh is Full CI's single full gate.
   If anything plugin-affecting changed:
   cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 </completeness_contract>

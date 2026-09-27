@@ -90,10 +90,13 @@ fn chord_samples(n: usize, phase: &mut f64) -> Vec<f32> {
     out
 }
 
-/// Six voices held down for the whole run: enough to light nodes on the
-/// lattice and give the roll something to scroll.
+/// The voices [`held_chord`] holds down.
+const CHORD: [u8; 6] = [57, 61, 64, 69, 73, 76];
+
+/// Six voices held down for the whole run, on channel 0: enough to light nodes
+/// on the lattice and give the roll something to scroll.
 fn held_chord(state: &mut SharedState, now: f64) {
-    for note in [57u8, 61, 64, 69, 73, 76] {
+    for note in CHORD {
         state.picture.runtime.tracker.handle_event(NoteEvent::on(
             now,
             SourceId::DIRECT,
@@ -137,6 +140,55 @@ struct Load {
     notes_per_frame: usize,
 }
 
+/// How long each of [`Load::notes_per_frame`]'s notes is held.
+const BUSY_HOLD: f64 = 0.25;
+
+/// The busy passage's notes still down, each with the clock its Off is due at.
+///
+/// The Off is delivered on the first frame whose clock has reached it, not up
+/// front: the tracker releases a voice when its Off ARRIVES, whatever the Off
+/// is dated, so an Off handed over beside its On leaves nothing held at all.
+#[derive(Default)]
+struct Busy {
+    down: std::collections::VecDeque<(f64, u8, u8)>,
+    started: usize,
+}
+
+impl Busy {
+    /// Release every note due by `t`, then start this frame's `n`, each on a
+    /// key no other held note shares.
+    ///
+    /// Channel 0 is the held chord's, so a busy note never retriggers one of
+    /// its voices away. Walking the keyboard rather than repeating one note,
+    /// because a name is memoized per pitch class and a stuck note would
+    /// measure one cache hit a frame instead of the naming work. Sixty keys
+    /// per channel before the walk moves to the next channel, so a key comes
+    /// round again only once `BUSY_HOLD` has long released it.
+    fn step(&mut self, state: &mut SharedState, t: f64, n: usize) {
+        while self.down.front().is_some_and(|&(due, _, _)| due <= t) {
+            let (due, channel, note) = self.down.pop_front().unwrap();
+            let off = NoteEvent::off(due, SourceId::DIRECT, channel, note);
+            state.picture.runtime.tracker.handle_event(off);
+        }
+        for _ in 0..n {
+            let k = self.started;
+            self.started += 1;
+            let note = 36 + (k * 7 % 60) as u8;
+            let channel = 1 + (k / 60 % 15) as u8;
+            let on = NoteEvent::on(t, SourceId::DIRECT, channel, note, 0.7);
+            state.picture.runtime.tracker.handle_event(on);
+            self.down.push_back((t + BUSY_HOLD, channel, note));
+        }
+        // What the frame about to run is drawn with: the chord and every busy
+        // note not yet due.
+        assert_eq!(
+            state.picture.runtime.tracker.held_count(),
+            CHORD.len() + self.down.len(),
+            "the busy notes must be held alongside the chord",
+        );
+    }
+}
+
 /// Drive the whole dock for a fixed run and time both halves of every frame.
 fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) {
     const FRAMES: usize = 240;
@@ -151,6 +203,8 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
     let mut phase = 0.0f64;
     let (mut ui_ms, mut tess_ms) = (Vec::new(), Vec::new());
     let (mut shapes, mut verts, mut idx) = (0, 0, 0);
+    let mut busy = Busy::default();
+    let mut held = 0;
 
     for i in 0..(WARMUP + FRAMES) {
         // Everything fed in below is stamped at the clock the frame about to
@@ -159,25 +213,7 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
         let audio = chord_samples(FRAME_SAMPLES, &mut phase);
         let cfg = state.picture.appearance.spectrum;
         state.picture.runtime.spectrum.push_samples(&audio, 1, RATE, t, &cfg);
-        for k in 0..load.notes_per_frame {
-            // Walking the keyboard rather than repeating one note: a name is
-            // memoized per pitch class, so a stuck note would measure one
-            // cache hit a frame instead of the naming work.
-            let note = 36 + ((i * load.notes_per_frame + k) * 7 % 60) as u8;
-            state.picture.runtime.tracker.handle_event(NoteEvent::on(
-                t,
-                SourceId::DIRECT,
-                0,
-                note,
-                0.7,
-            ));
-            state.picture.runtime.tracker.handle_event(NoteEvent::off(
-                t + 0.25,
-                SourceId::DIRECT,
-                0,
-                note,
-            ));
-        }
+        busy.step(&mut state, t, load.notes_per_frame);
 
         let events = load.hover.map(|at| vec![egui::Event::PointerMoved(at)]).unwrap_or_default();
         let (out, ui) = h.frame_timed(&mut state, events);
@@ -193,13 +229,20 @@ fn profile(label: &str, ppp: f32, load: Load, tweak: impl Fn(&mut SharedState)) 
             shapes = n;
             verts = mesh_total(&prims, |m| m.vertices.len());
             idx = mesh_total(&prims, |m| m.indices.len());
+            held = state.picture.runtime.tracker.held_count();
         }
     }
     let (ui_min, ui_med) = stats(ui_ms);
     let (tess_min, tess_med) = stats(tess_ms);
+    // What the docked lattice actually drew, rather than what the variant's
+    // label hopes: the window comes from the camera and the pane's aspect
+    // (`ViewConfig::scrolled`), so a setting that looks like it should grow
+    // the picture may not.
+    let drawn = state.picture.surfaces.drawn.map_or(0, |window| window.count());
     println!(
         "{label:26} ui {ui_min:6.3} (med {ui_med:6.3})  tess {tess_min:6.3} \
-         (med {tess_med:6.3})  shapes {shapes:5}  verts {verts:6}  idx {idx:6}",
+         (med {tess_med:6.3})  shapes {shapes:5}  verts {verts:6}  idx {idx:6}  \
+         nodes {drawn:5}  held {held:3}",
     );
 }
 
@@ -241,20 +284,30 @@ fn profile_frame() {
     profile("idle, hover lattice", 2.0, on_lattice, |_| {});
     profile("idle, hover spectral", 2.0, on_spectral, |_| {});
 
+    // Bigger drawn windows come from the CAMERA and the sheets, not from the
+    // naming extents: `ViewConfig::scrolled` sizes the window to what the
+    // pane shows, and the extents only say how far out a name is hunted for.
+    // The `nodes` column is the count each one really drew.
     println!("-- a bigger lattice: the scene derivation is per NODE --");
-    profile("sevens open (819 nodes)", 2.0, idle, |s| {
+    profile("sevens open", 2.0, idle, |s| {
         s.picture.appearance.view.min_sevens = -1;
         s.picture.appearance.view.max_sevens = 1;
     });
-    profile("3075 nodes", 2.0, idle, |s| {
-        s.picture.appearance.view.extent_threes = 20;
-        s.picture.appearance.view.extent_fives = 12;
-        s.picture.appearance.view.min_sevens = -1;
-        s.picture.appearance.view.max_sevens = 1;
+    profile("zoomed out", 2.0, idle, |s| {
+        s.picture.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
+    });
+    profile("zoomed out, nine sheets", 2.0, idle, |s| {
+        s.picture.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
+        s.picture.appearance.camera.cabinet_scale = 1.0;
+        s.picture.appearance.view.min_sevens = -harmonigraph_scene::SEVENS_LAYER_LIMIT;
+        s.picture.appearance.view.max_sevens = harmonigraph_scene::SEVENS_LAYER_LIMIT;
     });
 
     println!("-- a busy passage: 6 notes a frame, each held a quarter second --");
     profile("busy", 2.0, busy, |_| {});
+    profile("busy, zoomed out", 2.0, busy, |s| {
+        s.picture.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
+    });
     profile("busy, no note names", 2.0, busy, |s| s.picture.appearance.spectrum.note_names = false);
     profile("busy, no roll", 2.0, busy, |s| s.picture.appearance.spectrum.show_roll = false);
     profile("busy, 2 notes a frame", 2.0, Load { notes_per_frame: 2, ..idle }, |_| {});

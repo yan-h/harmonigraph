@@ -17,6 +17,9 @@ The archived source bundle preserves the original experiments after that removal
 
 ## Build and configure
 
+The `tuning-probe` feature and `tools/tuning-probe.py` were deleted in #715;
+the commands below no longer run and are kept only as the historical record of how the apparatus was exercised.
+
 ```
 cargo build --release -p harmonigraph-plugin -p harmonigraph-offline --features harmonigraph-plugin/tuning-probe
 python3 tools/tuning-probe.py prepare --delay 2048 --sources 3
@@ -137,6 +140,8 @@ Overflow or I/O failure invalidates evidence.
 A completed trace has a footer with zero loss and successful I/O;
 a missing footer means the instance is still running or the file is incomplete.
 Full callback tracing perturbs timing, so record that instrumentation configuration when deriving a conservative supported bound.
+
+Historical only, like the build commands above — `tuning-probe.py` and the `tuning-probe` feature are both gone (#715):
 
 ```
 python3 tools/tuning-probe.py analyze --output /tmp/probe-summary.json

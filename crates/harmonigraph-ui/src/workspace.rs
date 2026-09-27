@@ -178,10 +178,10 @@ impl Layout {
         }
     }
 
-    fn resize_region(&mut self, region: usize, width: Option<f32>, rail: f32) {
+    fn resize_region(&mut self, region: usize, width: Option<f32>, min_pane: f32) {
         if let Some(width) = width {
             let removed = if self.position == Position::Right {
-                width.max(0.0).min((self.right.analyzer - rail).max(0.0))
+                width.max(0.0).min((self.right.analyzer - min_pane).max(0.0))
             } else {
                 0.0
             };
@@ -258,13 +258,22 @@ impl Layout {
         }
         match position {
             Position::Right => {
-                // The stored widths fill `free` beside what `repaid` lends
-                // them, which is `lent` capped at their own total: all of it
-                // while that leaves them at least as much, and otherwise an
-                // equal share, so a lend never squeezes the stored sizes out.
+                // Scale the held region widths with the visible sections.
+                // Spiral borrows them back as `repaid`, so that lend must
+                // share the same scale or the fitted widths will not fill
+                // the window after the held widths change.
                 let rails = folded.iter().filter(|&&fold| fold).count() as f32 * rail;
-                let free = area.x - 2.0 * gap - rails;
-                let repaid = lent.min((free * 0.5).max(0.0));
+                let free = (area.x - 2.0 * gap - rails).max(0.0);
+                let shown: f32 = [sizes.lattice, sizes.analyzer, sizes.settings]
+                    .into_iter()
+                    .zip(folded)
+                    .filter(|(_, fold)| !fold)
+                    .map(|(size, _)| size)
+                    .sum();
+                let repay_source = lent.min(shown);
+                let repaid =
+                    if shown > 0.0 { repay_source * free / (shown + repay_source) } else { 0.0 };
+                let before_analyzer = sizes.analyzer;
                 let widths = fit_axis(
                     [sizes.lattice, sizes.analyzer, sizes.settings],
                     folded,
@@ -273,6 +282,12 @@ impl Layout {
                 );
                 [sizes.lattice, sizes.analyzer, sizes.settings] = widths;
                 sizes.cross = area.y;
+                if !folded[Section::Analyzer as usize] && before_analyzer > 0.0 {
+                    let scale = sizes.analyzer / before_analyzer;
+                    for width in &mut self.region_widths {
+                        *width *= scale;
+                    }
+                }
             }
             Position::Below => {
                 let widths =
@@ -352,8 +367,16 @@ pub(crate) struct Runtime {
     before_request: Option<Layout>,
     pub rects: [Rect; 3],
     pub bodies: [Option<(Tab, Rect)>; 3],
-    grip: Option<(usize, f32, Sizes)>,
+    grip: Option<Grip>,
     frame: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct Grip {
+    divider: usize,
+    start: f32,
+    saved: Sizes,
+    pointer_to_saved: f32,
 }
 
 impl Default for Runtime {
@@ -447,7 +470,7 @@ pub(crate) fn show(
     }
     let region_request = viewer.interaction.analyzer_regions.request;
     if let Some(request) = region_request {
-        layout.resize_region(request.region, request.width, rail);
+        layout.resize_region(request.region, request.width, theme::min_pane(scale));
         viewer.interaction.analyzer_regions.land();
     }
     if reset {
@@ -655,7 +678,13 @@ fn settings_link(ui: &egui::Ui, rect: Rect, tab: Tab, open: &mut Option<Tab>) {
     });
 }
 
-fn dividers(ui: &egui::Ui, layout: &mut Layout, runtime: &mut Runtime, drawn: &Layout, scale: f32) {
+fn dividers(
+    ui: &egui::Ui,
+    layout: &mut Layout,
+    runtime: &mut Runtime,
+    drawn: &Layout,
+    ui_scale: f32,
+) {
     let [lattice, analyzer, settings] = runtime.rects;
     let below = drawn.position == Position::Below && !drawn.compact();
     let picture_edge = if below { lattice.right() } else { analyzer.right() };
@@ -713,15 +742,28 @@ fn dividers(ui: &egui::Ui, layout: &mut Layout, runtime: &mut Runtime, drawn: &L
         });
         if response.drag_started() {
             if let Some(at) = ui.input(|input| input.pointer.press_origin()) {
-                runtime.grip = Some((index, if horizontal { at.y } else { at.x }, drawn.sizes()));
+                let saved = layout.sizes();
+                let fitted = drawn.sizes();
+                let (source, target) = if index == 0 {
+                    (saved.lattice, fitted.lattice)
+                } else {
+                    (saved.settings, fitted.settings)
+                };
+                let drag_scale = if target > 1.0 { source / target } else { 1.0 };
+                runtime.grip = Some(Grip {
+                    divider: index,
+                    start: if horizontal { at.y } else { at.x },
+                    saved,
+                    pointer_to_saved: drag_scale,
+                });
             }
         }
-        if let Some((_, start, sizes)) =
-            runtime.grip.filter(|(held, _, _)| *held == index && response.dragged())
+        if let Some(grip) = runtime.grip.filter(|grip| grip.divider == index && response.dragged())
         {
             let Some(at) = ui.input(|input| input.pointer.latest_pos()) else { continue };
-            let delta = if horizontal { at.y } else { at.x } - start;
-            let min = theme::min_pane(scale);
+            let delta = (if horizontal { at.y } else { at.x } - grip.start) * grip.pointer_to_saved;
+            let min = theme::min_pane(ui_scale);
+            let sizes = grip.saved;
             let mut next = sizes;
             if index == 0 {
                 let delta =

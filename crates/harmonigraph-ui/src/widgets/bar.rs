@@ -149,6 +149,27 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
     }
 }
 
+/// The colour a bar's NAME is drawn in: full `text()` while the bar is under
+/// the pointer or being dragged, and `text_dim()` at rest.
+///
+/// Every bar whose name is drawn in the theme's text answers the pointer this
+/// way, and in one place for the reason [`track_fill`] is: a name that lit on a
+/// different condition from its neighbours would be the one row in a pane
+/// answering the same pointer differently. The exception is a [`SpectrumBar`],
+/// whose name is one dark colour at every state because it is drawn to read
+/// against the hue behind it (`span_name_color`). A readout is not a name and
+/// keeps its own rule — most stand at full `text()` throughout, and a
+/// [`SpectrumBar`]'s lights only for a pointer on its track.
+///
+/// [`SpectrumBar`]: super::gradient::SpectrumBar
+pub(super) fn name_color(response: &Response) -> Color32 {
+    if response.hovered() || response.dragged() {
+        theme::text()
+    } else {
+        theme::text_dim()
+    }
+}
+
 /// The colour a thumb is drawn in: full `text()` when it is `lit` and
 /// `text_dim()` when it is not.
 ///
@@ -251,13 +272,13 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// `A ∩ B ∩ run`; that region lies in `run`, so `B` intersects `run` too and
 /// emits its own knockout over the same ground. Painting every fill and then
 /// every knockout is equally correct. A flat ramp puts a [`SpreadBar`]'s two
-/// grips at exactly the same x — the state the MIDI pitch colors group's chroma bar opens
-/// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
-/// corner.
+/// grips at exactly the same x — the state a gradient built from
+/// `Gradient::default()` opens its chroma bar in, and one drag away on any
+/// other — so this is a case that ships, not a corner.
 ///
 /// Their FILLS are another matter once one is lit and the other is not: the
-/// later one is the colour that shows. So a bar whose thumbs can coincide
-/// paints the unlit ones first.
+/// later one is the colour that shows, which is why [`paint_thumbs`] paints the
+/// unlit ones first.
 ///
 /// **The clip is square where the grip is rounded**, so a glyph pixel in a
 /// corner notch lands beside the thumb rather than on it, in the panel colour,
@@ -311,53 +332,91 @@ pub(super) fn grip_over_text(
     }
 }
 
-/// What a drag has hold of: the grab this gesture already settled on, or
-/// `decide` on the first frame it is asked, remembered under `id` for the rest
-/// of the gesture.
+/// Draw a bar's thumbs, each through [`grip_over_text`] over `runs`: `thumbs`
+/// is where each stands across `row` and whether it is lit ([`grip_color`]).
 ///
-/// Deciding ONCE is the whole point, and each of the four bars that ask needs it
-/// for a reason of its own — a range whose ends can be dragged past each other
-/// would hand the gesture to whichever handle is nearest now, a strip that
-/// splits its two gestures on a hard line would change its mind as the pointer
-/// crossed it, and an arc dragged down to nothing would fall into the rotate
-/// branch the moment the handle reached the left edge.
+/// **The unlit ones are painted first**, which is the one ordering here that is
+/// load-bearing. Two thumbs standing on one point — a flat [`SpreadBar`] ramp, a
+/// closed range, home on a [`LayerStrip`]'s end — show whichever fill is painted
+/// last, so a lit thumb painted under an unlit one reads as nothing in hand.
+/// (Their knockouts are right in any order; see [`grip_over_text`].) The sort is
+/// stable, so thumbs lit alike keep the order they were handed in.
 ///
-/// Asked from inside the drag rather than under `drag_started`, so a gesture
-/// whose start frame was missed still does something.
+/// An array rather than a slice, so the sort is done in place with nothing
+/// allocated for it: every bar knows how many thumbs it has.
+///
+/// [`SpreadBar`]: super::gradient::SpreadBar
+/// [`LayerStrip`]: super::layer::LayerStrip
+pub(super) fn paint_thumbs<const N: usize>(
+    painter: &egui::Painter,
+    row: egui::Rect,
+    scale: f32,
+    radius: CornerRadius,
+    mut thumbs: [(f32, bool); N],
+    runs: &[(egui::Pos2, std::sync::Arc<egui::Galley>)],
+) {
+    thumbs.sort_by_key(|&(_, lit)| lit);
+    for (x, lit) in thumbs {
+        grip_over_text(painter, grip_rect(x, row, scale), radius, grip_color(lit), runs);
+    }
+}
+
+/// A drag's bookkeeping, which every bar with more than one thing to take hold
+/// of keeps the same way: on each frame of a drag, what the gesture has hold of
+/// and where the pointer is NOW; `None` on every other frame.
+///
+/// What it has hold of is `decide`'s answer on the first frame it is asked,
+/// remembered in egui's temp store for the rest of the gesture. Deciding ONCE
+/// is the whole point, and each bar needs it for a reason of its own — a range
+/// whose ends can be dragged past each other would hand the gesture to
+/// whichever handle is nearest now, a strip that splits its two gestures on a
+/// hard line would change its mind as the pointer crossed it, and an arc
+/// dragged down to nothing would fall into the rotate branch the moment the
+/// handle reached the left edge. Each bar keeps its own grab type, because what
+/// there is to take hold of differs on purpose.
+///
+/// `decide` is handed where the press LANDED ([`aimed_at`]) rather than the
+/// live position, and asked from inside the drag rather than under
+/// `drag_started`, so a gesture whose start frame was missed still does
+/// something.
+///
+/// Letting go forgets the grab: egui's temp store has no expiry, so a grab left
+/// behind is inherited by the next press
+/// (`a_second_gesture_on_the_strip_chooses_for_itself`). The `Default` bound is
+/// egui's, asked of anything `remove_temp` can remove, and is the whole reason
+/// each grab type derives one.
 ///
 /// Read and write are separate statements on purpose: nesting a `data_mut`
 /// inside a `data` closure takes the context lock twice, and nothing here is
 /// worth risking that on a path only a real pointer reaches.
-///
-/// `decide` is handed the `Ui` rather than closing over it, since all four
-/// answers are asked of [`aimed_at`] and a closure borrowing the same `Ui` this
-/// is reading through has nothing to gain by saying so twice.
-pub(super) fn grabbed<G>(ui: &Ui, id: egui::Id, decide: impl FnOnce(&Ui) -> G) -> G
-where
-    G: Clone + Send + Sync + 'static,
-{
-    let stored = ui.data(|d| d.get_temp::<G>(id));
-    match stored {
-        Some(grab) => grab,
-        None => {
-            let grab = decide(ui);
-            ui.data_mut(|d| d.insert_temp(id, grab.clone()));
-            grab
-        }
-    }
-}
-
-/// Forget it, which is what letting go does: egui's temp store has no expiry, so
-/// a grab left behind is inherited by the next press
-/// (`a_second_gesture_on_the_strip_chooses_for_itself`).
-///
-/// The `Default` bound is egui's, asked of anything `remove_temp` can remove,
-/// and is the whole reason each of the four grabs derives one.
-pub(super) fn release_grab<G>(ui: &Ui, id: egui::Id)
+pub(super) fn drag<G>(
+    ui: &Ui,
+    response: &Response,
+    decide: impl FnOnce(egui::Pos2) -> G,
+) -> Option<(G, egui::Pos2)>
 where
     G: Clone + Send + Sync + Default + 'static,
 {
-    ui.data_mut(|d| d.remove_temp::<G>(id));
+    let id = response.id.with("grab");
+    let held = if response.dragged() {
+        response.interact_pointer_pos().map(|live| {
+            let grab = match ui.data(|d| d.get_temp::<G>(id)) {
+                Some(grab) => grab,
+                None => {
+                    let grab = decide(aimed_at(ui, live));
+                    ui.data_mut(|d| d.insert_temp(id, grab.clone()));
+                    grab
+                }
+            };
+            (grab, live)
+        })
+    } else {
+        None
+    };
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove_temp::<G>(id));
+    }
+    held
 }
 
 /// Where a gesture was AIMED, as against where it has since got to: the point
@@ -382,6 +441,28 @@ where
 /// threshold, so it is the outer half of every reach that misbehaves — which is
 /// what makes the failure intermittent rather than total, and so what let it
 /// stand.
-pub(super) fn aimed_at(ui: &Ui, live: egui::Pos2) -> egui::Pos2 {
+fn aimed_at(ui: &Ui, live: egui::Pos2) -> egui::Pos2 {
     ui.input(|i| i.pointer.press_origin()).unwrap_or(live)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::probe::{grips, shapes};
+
+    /// Thumbs standing on one point show whichever fill is painted last, so a
+    /// lit one is painted after an unlit one whatever order the bar hands them
+    /// over in — the contract every bar with coinciding thumbs leans on, held
+    /// here once rather than per bar.
+    #[test]
+    fn coinciding_thumbs_paint_the_lit_one_last() {
+        for handed in [[(50.0, true), (50.0, false)], [(50.0, false), (50.0, true)]] {
+            let shapes = shapes(300.0, |ui| {
+                let row = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 20.0));
+                paint_thumbs(ui.painter(), row, 1.0, grip_radius(1.0), handed, &[]);
+            });
+            let lit: Vec<bool> = grips(&shapes).iter().map(|&(_, lit)| lit).collect();
+            assert_eq!(lit, [false, true], "handed {handed:?}, the unlit thumb was painted on top");
+        }
+    }
 }

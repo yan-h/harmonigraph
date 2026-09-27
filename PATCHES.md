@@ -144,10 +144,8 @@ ci.sh runs them.
 macOS only.
 - **Upgrade**: download the new crates.io tarball into `vendor/baseview`,
 re-apply the `kCFRunLoop*` lines, the cursor-rect ownership patch, the occlusion-event patch with its per-attachment sampling, the configurable frame timer, the withheld pointer exit, the synthesized release for a stuck button, and the `[workspace]` table that lets the tests run.
-- **Upstreaming**: Patch 1 is a good candidate;
-it is an uncontroversial fix that helps every baseview-based plugin.
-The later patches each need their own upstream decision.
-baseview and nice-plug are both RustAudio projects, so the fix would land in exactly the stack this plugin uses.
+- **Upstreaming**: declined (2026-07-19).
+Kept as a local patch rather than proposed upstream.
 
 ## egui-baseview — vendored at `vendor/egui-baseview/`
 
@@ -167,14 +165,14 @@ always-repaint apps mask it.
 recovery after window occlusion.
 `Renderer::render` now returns whether a frame was actually presented;
 a skipped present (occluded window, outdated/lost surface —
-the wgpu renderer's early-return paths) no longer consumes the repaint request, so rendering retries next tick instead of freezing on the last presented frame.
+the wgpu renderer's early-return paths) no longer consumes the repaint request, so rendering retries instead of freezing on the last presented frame (Patch 17 bounds how often once the refusal is not transient).
 The new `baseview::WindowEvent::Occluded(false)` (see the baseview patch above) schedules an immediate repaint so the first frame after re-expose is fresh.
 - **Patch 4** (2 sites, `src/renderer/wgpu/renderer.rs` `render`): flush
 staged uploads on the surface-not-available early returns.
 `render` uploads egui's per-frame vertex/index/texture data (via `update_buffers` /`update_texture`, i.e. `queue.write_*`) BEFORE it acquires the surface texture;
 those staging buffers live in wgpu's pending writes and are only reclaimed by a `submit()` (through wgpu-core `pre_submit`).
 The Occluded/Timeout and Suboptimal/Outdated/Lost arms returned WITHOUT submitting, stranding that frame's staging buffers.
-Combined with Patch 3 (a skipped present retries every timer tick), a backgrounded plugin window re-ran `render` ~66×/s and accumulated staging buffers into the *gigabytes* within minutes —
+Combined with Patch 3 (a skipped present retried every timer tick, before Patch 17's backoff), a backgrounded plugin window re-ran `render` ~66×/s and accumulated staging buffers into the *gigabytes* within minutes —
 the memory dropped instantly on refocus, when the next presented frame's `submit` finally drained the backlog.
 Fix:
 each early return now submits `user_cmd_bufs` + the upload encoder (no drawable acquired, so nothing presents —
@@ -298,18 +296,30 @@ every settings `ScrollArea` stopped, while the pictures, which also read `zoom_d
 That is the symptom of #501's stranded drag with no drag at all, so `end_stranded_drag` had nothing to end and the Console stayed silent.
 Mouse and key events now both replace all five fields with the event's own set, Cmd as `mac_cmd` and `command` on macOS;
 upstream egui-baseview 0.7 already has this shape.
+- **Patch 17** (`src/window.rs`): stop drawing frames for a surface that
+keeps refusing to present (#989).
+A present refused three times in a row (`REFUSALS_BEFORE_BACKOFF`) is offered another only every 250 ms (`SURFACE_RETRY`) instead of every timer tick, because an occluded window's acquire is refused rather than waited on, and drawing anyway submitted 60-144 unpresented frames a second against 13-37 ms of GPU work with nothing pacing them —
+wgpu reclaims a frame's staged uploads only when its submission completes, so outrunning the device grew the in-flight set into gigabytes within a minute of switching away from the host.
+Keyed on the refusals rather than the occlusion event, since wgpu-hal and baseview read occlusion off different windows and can disagree, and the first present that lands (or an `Occluded(false)`) clears the backoff.
+Texture deltas stay exempt and are checked first, so a frame carrying one is never skipped and glyph coordinates never point into a stale atlas.
+The same change also runs `free_textures` on all three render exits instead of only past the acquire:
+a `free`-only delta on a bailing frame used to drop egui's texture-manager ids permanently, leaking the retired atlas exactly when the backoff above forces a frame through on the strength of consuming that delta.
+`wants_render` and `after_render` are pure functions with their own tests in `vendor/egui-baseview`, which `ci.sh` runs.
+- **`[workspace]` table** (`Cargo.toml`): an empty `[workspace]` table, for the same ancestor-root-exclusion reason `vendor/baseview/Cargo.toml` carries one —
+without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
+`ci.sh` runs `cargo test --manifest-path` against this crate from exactly there.
 - **Upgrade**: use the [published-cohort feasibility map](docs/gui-cohort-feasibility.md) before replacing this package.
 The egui 0.36 publication trigger is met and investigated;
 the current recommendation is to retain the product stack.
 Published egui-baseview 0.7.2 replaces the Queue API and some old patch topologies,
 so do not mechanically reapply every numbered patch.
 The map records retained obligations,
-including pre-input host-size adoption and surface-refusal backoff beyond this numbered inventory,
+including pre-input host-size adoption,
+beyond this numbered inventory,
 and the toolchain,
 wgpu-hal and Metal-corpus costs of a future migration.
-- **Upstreaming**: Patch 1 is a clear-cut bug fix affecting their own `ResizableWindow` helper on any HiDPI display.
-The remaining patches each need separate review.
-Review any upstream work in the RustAudio repo.
+- **Upstreaming**: declined (2026-07-19).
+Kept as local patches rather than proposed upstream.
 
 ## Historical: nih-plug fork (retired)
 

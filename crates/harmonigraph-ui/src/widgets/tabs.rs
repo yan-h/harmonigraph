@@ -134,6 +134,20 @@ mod tests {
 
     const TABS: [(u8, &str); 4] = [(0, "Tuning"), (1, "Lattice"), (2, "Analyzer"), (3, "Colors")];
 
+    /// A strip with room for its first `count` tabs and an unnamed overflow
+    /// button, and no more — measured off the theme rather than quoted, so the
+    /// fixtures below stay short of room whatever the tabs' type and padding.
+    fn room_for(count: usize) -> f32 {
+        let mut room = 0.0;
+        let ctx = crate::tests::probe::themed();
+        crate::tests::probe::frame_full(&ctx, egui::vec2(600.0, 300.0), |ui| {
+            let gap = ui.spacing().item_spacing.x;
+            let tabs: f32 = TABS[..count].iter().map(|(_, l)| option_width(ui, l) + gap).sum();
+            room = tabs + overflow_width(ui, None) + 1.0;
+        });
+        room
+    }
+
     fn drawn(width: f32, selected: u8) -> (Vec<String>, usize) {
         let mut value = selected;
         let shapes = crate::tests::probe::painted_full(egui::vec2(width, 60.0), |ui| {
@@ -156,7 +170,7 @@ mod tests {
     #[test]
     fn a_narrowing_strip_keeps_its_leading_tabs_beside_an_overflow_button() {
         assert_eq!(drawn(600.0, 0), (TABS.map(|(_, label)| label.to_owned()).to_vec(), 0));
-        let (labels, dots) = drawn(150.0, 0);
+        let (labels, dots) = drawn(room_for(2), 0);
         assert!(labels.len() < TABS.len() && !labels.is_empty(), "{labels:?}");
         let leading: Vec<_> = TABS[..labels.len()].iter().map(|(_, l)| l.to_string()).collect();
         assert_eq!(labels, leading);
@@ -167,7 +181,7 @@ mod tests {
     /// current destination is always on the strip.
     #[test]
     fn an_overflowed_selection_names_the_overflow_button() {
-        let (labels, dots) = drawn(150.0, 3);
+        let (labels, dots) = drawn(room_for(2), 3);
         assert_eq!(labels.last().map(String::as_str), Some("Colors"), "{labels:?}");
         assert_eq!(dots, 0, "the named overflow button still drew dots");
     }

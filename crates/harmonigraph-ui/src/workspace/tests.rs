@@ -52,3 +52,34 @@ fn persisted_layout_defaults_and_sanitization_are_local() {
     layout.sanitize();
     assert_eq!(layout.right.analyzer, 80.0, "a legal small live pane must survive reopening");
 }
+
+#[test]
+fn folding_a_region_keeps_the_analyzer_at_its_drag_minimum() {
+    let min = theme::min_pane(1.0);
+    let mut layout = Layout::default();
+    assert!(layout.right.analyzer - 130.0 < min, "fixture must cross the minimum");
+    layout.resize_region(1, Some(130.0), min);
+    assert!(layout.right.analyzer >= min, "fold left an undraggable analyzer");
+}
+
+#[test]
+fn a_window_resize_scales_the_width_held_by_a_folded_region() {
+    let rail = theme::tab_bar_height(1.0);
+    let gap = 3.0;
+    for tab in [Tab::Spectral, Tab::Spiral] {
+        let mut layout = Layout { analyzer_tab: tab, ..Layout::default() };
+        let min = theme::min_pane(1.0);
+        layout.resize_region(1, Some(60.0), min);
+        let before = layout.right.analyzer;
+        let held = layout.region_widths[1];
+        assert!(held > 0.0, "fixture must hold width for the folded region");
+        let area = layout.natural_size(rail, gap) + vec2(300.0, 0.0);
+        layout.fit(area, rail, gap);
+        let scale = layout.right.analyzer / before;
+        assert!(scale > 1.1, "{tab:?}: fixture must enlarge the analyzer");
+        assert!((layout.region_widths[1] - held * scale).abs() < 0.1, "{tab:?}");
+        assert!((layout.natural_size(rail, gap).x - area.x).abs() < 0.1, "{tab:?}");
+        layout.resize_region(1, None, min);
+        assert!((layout.right.analyzer - (before + held) * scale).abs() < 0.1, "{tab:?}");
+    }
+}
