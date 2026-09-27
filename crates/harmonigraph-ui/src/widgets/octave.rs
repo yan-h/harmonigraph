@@ -263,7 +263,7 @@ impl<'a> OctaveStrip<'a> {
         // Lit by what is in hand (see [`grip_color`]). The two are one count
         // mirrored, so they light together: both when a press would take the
         // count, neither when it would take the fringe outside them, which has
-        // no handle of its own. Drawn over the text through `grip_over_text`,
+        // no handle of its own. Drawn over the text through `paint_thumbs`,
         // as every other bar's handles are, so the widest wheel's low handle
         // inverts the name it stands on rather than being written over.
         let in_hand = holding.or_else(|| {

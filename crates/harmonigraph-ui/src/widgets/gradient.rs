@@ -11,9 +11,9 @@ use egui::{Color32, CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PITCH_LUT_N};
 
 use super::bar::{
-    bar_radius, bar_width, drag, elided_name, grip_color, grip_radius, grip_rect, name_color,
-    paint_thumbs, poised, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
-    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -328,7 +328,10 @@ impl GradientPreview {
 /// The readout is held to the stretch RIGHT of the name, exactly as a
 /// [`RangeBar`]'s numbers are, so the two text runs cannot meet however wide
 /// the arc grows. The handle is not: it travels the whole circle, name
-/// included, being the part you operate and drawn over everything.
+/// included, being the part you operate and drawn over everything, and both
+/// runs are knocked out through it ([`paint_thumbs`]) as on every other bar.
+///
+/// [`paint_thumbs`]: super::bar::paint_thumbs
 ///
 /// **The flip is a button because the track cannot carry the gesture.** The arc
 /// is laid out from its own start, so both directions draw the same stretch of
@@ -592,7 +595,8 @@ impl<'a> SpectrumBar<'a> {
         let centered = |galley: &egui::Galley, x: f32| {
             egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
         };
-        painter.galley(centered(&label, track_rect.left() + text_pad), label, span_name_color());
+        let label_pos = centered(&label, track_rect.left() + text_pad);
+        painter.galley(label_pos, label.clone(), span_name_color());
 
         // How far round the circle the arc reaches, read out beside the handle
         // — on the dimmed side, where it sits on flat color, and on the claimed
@@ -619,21 +623,26 @@ impl<'a> SpectrumBar<'a> {
             (track_rect.right() - text_gap - galley.size().x).max(readable_left),
         );
         let at = centered(&galley, left);
-        painter.galley(at, galley, text_color);
+        painter.galley(at, galley.clone(), text_color);
 
         // The handle on top of everything, readout included: it is the part
-        // you operate, and a digit sliding under it beats it disappearing
-        // behind one.
+        // you operate. Both runs are knocked out through it, as on every other
+        // bar, so a letter of the name or a digit it stands in inverts rather
+        // than disappearing behind it — and a short arc stands the handle in
+        // the name.
         //
         // Lit by what is in hand (see [`grip_color`]), and on a bar with one
         // handle that still says something: unlit is a press that would TURN
         // the circle under the handle rather than take it.
         let in_hand = holding.or_else(|| poised(ui, &response).map(|p| grab_at(p, handle_x)));
         let turning = matches!(in_hand, Some(SpectrumGrab::Rotate { .. }));
-        painter.rect_filled(
-            grip_rect(handle_x, track_rect, scale),
+        paint_thumbs(
+            painter,
+            track_rect,
+            scale,
             grip_radius(scale),
-            grip_color(!turning),
+            [(handle_x, !turning)],
+            &[(label_pos, label), (at, galley)],
         );
 
         // ---- The flip button ------------------------------------------------
@@ -1449,11 +1458,14 @@ mod tests {
     /// color it was painted in — the color being a claim of its own here, since
     /// the name and the readout stand on different halves of the track and are
     /// drawn from opposite ends of the palette for it.
+    ///
+    /// Knockouts are passed over, as [`text_boxes`] passes them: a second pass
+    /// over a run the handle stands in, not a run of its own.
     fn spectrum_texts(shapes: &[egui::Shape]) -> Vec<(egui::Rect, String, Color32)> {
         shapes
             .iter()
             .filter_map(|s| match s {
-                egui::Shape::Text(t) => Some((
+                egui::Shape::Text(t) if t.override_text_color.is_none() => Some((
                     egui::Rect::from_min_size(t.pos, t.galley.size()),
                     // The GLYPHS, not `Galley::text()`, which answers with the
                     // string the galley was laid out from and so reads the same
@@ -2022,6 +2034,44 @@ mod tests {
                 "{aimed} ran the readout past the track's end: {readout:?}",
             );
         }
+    }
+
+    /// The handle knocks out a run it stands in, as every other bar's thumbs
+    /// do, rather than covering it — and a short arc stands it in the name.
+    ///
+    /// The arc is derived from where the name was measured, so the handle lands
+    /// on the name's middle whatever the font makes of it.
+    #[test]
+    fn the_spectrum_handle_knocks_out_the_name_it_stands_in() {
+        let home = ViewConfig::default().pitch_gradient;
+        let paint = |span: f32| {
+            let mut g = Gradient { hue_span: span, ..Gradient::default() };
+            let track = std::cell::Cell::new(egui::Rect::NOTHING);
+            let shapes =
+                painted(300.0, |ui| track.set(SpectrumBar::new(&mut g, home).show(ui).rect));
+            (shapes, track.get())
+        };
+        let (shapes, track) = paint(180.0);
+        let flat: Vec<_> = shapes.into_iter().map(|s| s.shape).collect();
+        let (name, written) = text_boxes(&flat).into_iter().next().expect("the bar names itself");
+        assert_eq!(written, SPAN_LABEL);
+        let travel = track.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+        let span = (name.center().x - travel.left()) / travel.width() * FULL_TURN;
+
+        let (shapes, _) = paint(span);
+        let flat: Vec<_> = shapes.iter().map(|s| s.shape.clone()).collect();
+        let grip = handles(&flat)[0];
+        assert!(grip.intersects(name), "an arc of {span} did not stand the handle in the name");
+        let knocked = knockouts(&shapes);
+        assert!(
+            knocked.iter().any(|(clip, at, text, colour)| {
+                *clip == grip
+                    && *at == name
+                    && text == SPAN_LABEL
+                    && *colour == Some(theme::panel())
+            }),
+            "the handle stands in the name and knocks out {knocked:?} instead",
+        );
     }
 
     /// The frame that moves the arc is the frame that DRAWS it moved.
