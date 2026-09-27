@@ -571,6 +571,79 @@ pub(super) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
     pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
 }
 
+const STAR_HALO_GROUPS: usize = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HaloGroup {
+    size: [u32; 2],
+    layers: u32,
+}
+
+/// Allocation identity contains only the actual images and their depth mapping.
+/// Different controls that round to this same layout reuse the same targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StarHaloLayout {
+    groups: [HaloGroup; STAR_HALO_GROUPS],
+    /// [group, array layer] for each far-to-near depth.
+    layers: [[u32; 2]; STAR_SLICES],
+}
+
+impl StarHaloLayout {
+    fn from_sizes(sizes: [[u32; 2]; STAR_SLICES]) -> Self {
+        let mut layout = Self {
+            groups: [HaloGroup { size: [1, 1], layers: 0 }; STAR_HALO_GROUPS],
+            layers: [[0, 0]; STAR_SLICES],
+        };
+        for (depth, size) in sizes.into_iter().enumerate() {
+            let group = layout
+                .groups
+                .iter()
+                .position(|g| g.layers > 0 && g.size == size)
+                .or_else(|| layout.groups.iter().position(|g| g.layers == 0))
+                .expect("halo profiles use at most three different target sizes");
+            layout.layers[depth] = [group as u32, layout.groups[group].layers];
+            layout.groups[group].size = size;
+            layout.groups[group].layers += 1;
+        }
+        layout
+    }
+
+    fn samples(self) -> [StarHaloSample; STAR_SLICES] {
+        self.layers.map(|[group, layer]| StarHaloSample {
+            size: Float2(self.groups[group as usize].size.map(|n| n as f32)),
+            group,
+            layer,
+        })
+    }
+}
+
+/// Presets change only halo sampling; the native cores and material history
+/// have the same identity at every profile.
+pub(super) fn star_halo_layout(
+    pixels: [u32; 2],
+    settings: harmonigraph_scene::SpectralAtmosphere,
+) -> StarHaloLayout {
+    use harmonigraph_scene::StarHaloProfile;
+    let settings = settings.sanitized();
+    let factors = match settings.star_halo_profile {
+        StarHaloProfile::Uniform => [settings.star_halo_resolution; STAR_SLICES],
+        StarHaloProfile::P2 => [0.5, 0.5, 0.8, 1.0, 0.5],
+        StarHaloProfile::P3 => [0.5, 0.5, 1.0, 1.0, 0.6],
+    };
+    StarHaloLayout::from_sizes(factors.map(|factor| star_halo_size(pixels, factor)))
+}
+
+// One 16-byte uniform row: the renderer supplies the allocated size and
+// array address directly, without reproducing float rounding in the shader.
+uniform_group! {
+    #[derive(Debug)]
+    struct StarHaloSample {
+        size: Float2,
+        group: u32,
+        layer: u32,
+    }
+}
+
 /// The tile this frame wants, or `None` where no cloud is drawn.
 ///
 /// See [`TileKey`] for what is in it and what deliberately is not.
@@ -603,6 +676,7 @@ pub(super) fn tile_key(
         star_density: _,         // no tile for Stars
         star_jitter: _,          // no tile for Stars
         star_halo_resolution: _, // no tile for Stars
+        star_halo_profile: _,    // no tile for Stars
         star_randomness: _,      // no tile for Stars
         star_size_min: _,        // no tile for Stars
         star_size_max: _,        // no tile for Stars
@@ -711,10 +785,8 @@ struct Uniforms {
     memory_pad_a: f32,
     memory_extent: Float2,
     previous_slices: [StarSlice; STAR_SLICES],
-    /// Actual rounded halo target dimensions, so sampling agrees with the
-    /// allocation even at odd sizes and fractional display scales.
-    star_halo_size: Float2,
-    star_halo_pad: Float2,
+    /// Actual rounded dimensions and array address for each depth.
+    star_halo_samples: [StarHaloSample; STAR_SLICES],
 }
 }
 
@@ -744,7 +816,9 @@ const _: () = assert!(
 const _: () = assert!(
     std::mem::offset_of!(Uniforms, star_slices).is_multiple_of(16)
         && std::mem::size_of::<StarSlice>().is_multiple_of(16)
-        && std::mem::offset_of!(StarSlice, origin).is_multiple_of(8),
+        && std::mem::offset_of!(StarSlice, origin).is_multiple_of(8)
+        && std::mem::offset_of!(Uniforms, star_halo_samples).is_multiple_of(16)
+        && std::mem::size_of::<StarHaloSample>() == 16,
     "the star slices are not where the shader's 16-byte uniform layout reads them",
 );
 
@@ -851,6 +925,26 @@ impl Pipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -1172,6 +1266,7 @@ fn memory_key(
         star_speed_curve,
         star_lifetime,
         star_halo_resolution: _, // sampling does not change material identity
+        star_halo_profile: _,    // sampling does not change material identity
         star_fringe: _,          // response/coverage changes do not change material identity
         star_defocus: _,         // response/coverage changes do not change material identity
         material_settings:
@@ -1244,41 +1339,47 @@ fn memory_key(
 /// slice's native core has been added. A flattened RGB image would lose the
 /// coverage normalization and depth order.
 struct StarHalos {
-    view: wgpu::TextureView,
+    views: [wgpu::TextureView; STAR_HALO_GROUPS],
     layers: [wgpu::TextureView; STAR_SLICES],
-    size: [u32; 2],
+    layout: StarHaloLayout,
 }
 
 impl StarHalos {
-    fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("spectral_star_halos"),
-            size: wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: STAR_SLICES as u32,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: STAR_FAR_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
+    fn new(device: &wgpu::Device, layout: StarHaloLayout) -> Self {
+        let textures = layout.groups.map(|group| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("spectral_star_halos"),
+                size: wgpu::Extent3d {
+                    width: group.size[0],
+                    height: group.size[1],
+                    // Unused fixed bindings receive a harmless one-texel array.
+                    depth_or_array_layers: group.layers.max(1),
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: STAR_FAR_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
         });
         Self {
-            view: texture.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                ..Default::default()
+            views: std::array::from_fn(|group| {
+                textures[group].create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2Array),
+                    ..Default::default()
+                })
             }),
-            layers: std::array::from_fn(|layer| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
+            layers: layout.layers.map(|[group, layer]| {
+                textures[group as usize].create_view(&wgpu::TextureViewDescriptor {
                     dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer as u32,
+                    base_array_layer: layer,
                     array_layer_count: Some(1),
                     ..Default::default()
                 })
             }),
-            size,
+            layout,
         }
     }
 }
@@ -1334,7 +1435,7 @@ pub(super) struct Allocation {
     pub tile: Option<TileKey>,
     pub carried: Option<Tile>,
     pub stars: Option<[u32; 2]>,
-    pub halos: Option<[u32; 2]>,
+    pub halos: Option<StarHaloLayout>,
     pub memory: Option<[u32; 2]>,
     pub carried_memory: Option<Memory>,
 }
@@ -1354,7 +1455,7 @@ impl Targets {
             tile: tile_key,
             carried,
             stars: star_size,
-            halos: halo_size,
+            halos: halo_layout,
             memory: memory_size,
             carried_memory,
         } = wanted;
@@ -1401,8 +1502,9 @@ impl Targets {
         // What every group that does not read the atlas binds in its place, and
         // what the star pass, which writes it, must.
         let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
-        let halos = halo_size.map(|size| StarHalos::new(device, size));
-        let halo_scratch = StarHalos::new(device, [1, 1]);
+        let halos = halo_layout.map(|layout| StarHalos::new(device, layout));
+        let halo_scratch =
+            StarHalos::new(device, StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES]));
         let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
@@ -1461,65 +1563,74 @@ impl Targets {
         // tone target would be, and the tile pass binds one at each tile. The
         // scratch is the harmless choice — neither `fs_cloud_tone` nor
         // `fs_cloud_tile` reads any of those three bindings.
-        let cloud_group = |front: &wgpu::TextureView,
-                           tone: &wgpu::TextureView,
-                           tile: [&wgpu::TextureView; 2],
-                           stars: &wgpu::TextureView,
-                           memory: &wgpu::TextureView,
-                           halos: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("spectral_cloud_composite_group"),
-                layout: &pipelines.composite_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(front),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&views[2]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                    },
-                    wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::TextureView(tone),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: wgpu::BindingResource::TextureView(tile[0]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: wgpu::BindingResource::TextureView(tile[1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.tile_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 9,
-                        resource: wgpu::BindingResource::TextureView(memory),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 8,
-                        resource: wgpu::BindingResource::TextureView(stars),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 10,
-                        resource: wgpu::BindingResource::TextureView(halos),
-                    },
-                ],
-            })
-        };
+        let cloud_group =
+            |front: &wgpu::TextureView,
+             tone: &wgpu::TextureView,
+             tile: [&wgpu::TextureView; 2],
+             stars: &wgpu::TextureView,
+             memory: &wgpu::TextureView,
+             halos: &[wgpu::TextureView; STAR_HALO_GROUPS]| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("spectral_cloud_composite_group"),
+                    layout: &pipelines.composite_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(front),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&views[2]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
+                        },
+                        wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(tone),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::TextureView(tile[0]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::TextureView(tile[1]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::Sampler(&pipelines.tile_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 9,
+                            resource: wgpu::BindingResource::TextureView(memory),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: wgpu::BindingResource::TextureView(stars),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 10,
+                            resource: wgpu::BindingResource::TextureView(&halos[0]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 11,
+                            resource: wgpu::BindingResource::TextureView(&halos[1]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 12,
+                            resource: wgpu::BindingResource::TextureView(&halos[2]),
+                        },
+                    ],
+                })
+            };
         let scratch_tile = [&views[0], &views[0]];
         let tile_views =
             tile.as_ref().map_or(scratch_tile, |tile| [&tile.views[0], &tile.views[1]]);
         let star_view = stars.as_ref().map_or(&star_scratch, |(view, _)| view);
-        let halo_view = halos.as_ref().map_or(&halo_scratch.view, |halo| &halo.view);
+        let halo_view = halos.as_ref().map_or(&halo_scratch.views, |halo| &halo.views);
         let bake_group =
             cloud_group(&views[1], &views[0], tile_views, star_view, &views[0], halo_view);
         let halo_group = halos.as_ref().map(|_| {
@@ -1529,7 +1640,7 @@ impl Targets {
                 tile_views,
                 star_view,
                 &views[0],
-                &halo_scratch.view,
+                &halo_scratch.views,
             )
         });
         // Reads the baked material the light passes just wrote, and writes the
@@ -1635,8 +1746,8 @@ impl Targets {
         self.stars.as_ref().map(|&(_, size)| size)
     }
 
-    pub fn halo_size(&self) -> Option<[u32; 2]> {
-        self.halos.as_ref().map(|halo| halo.size)
+    pub fn halo_layout(&self) -> Option<StarHaloLayout> {
+        self.halos.as_ref().map(|halo| halo.layout)
     }
 
     /// Writes each depth separately. The group binds a scratch array where
@@ -1890,8 +2001,10 @@ impl Targets {
             memory_pad_a: 0.0,
             memory_extent: Float2(memory_extent.unwrap_or([0; 2]).map(|n| n as f32)),
             previous_slices,
-            star_halo_size: Float2(self.halo_size().unwrap_or([1, 1]).map(|n| n as f32)),
-            star_halo_pad: Float2([0.0; 2]),
+            star_halo_samples: self
+                .halo_layout()
+                .unwrap_or_else(|| StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES]))
+                .samples(),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -2020,6 +2133,36 @@ mod tests {
         {
             assert_eq!(super::star_halo_size([3, 5], resolution), wanted);
             assert_eq!(super::star_halo_size([1, 1], resolution), [1, 1]);
+        }
+    }
+
+    #[test]
+    fn halo_profiles_group_actual_sizes_and_keep_depth_addresses() {
+        use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
+        for (profile, sizes, counts, layers) in [
+            (
+                StarHaloProfile::P2,
+                [[81, 61], [129, 97], [161, 121]],
+                [3, 1, 1],
+                [[0, 0], [0, 1], [1, 0], [2, 0], [0, 2]],
+            ),
+            (
+                StarHaloProfile::P3,
+                [[81, 61], [161, 121], [97, 73]],
+                [2, 2, 1],
+                [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0]],
+            ),
+        ] {
+            let settings = SpectralAtmosphere { star_halo_profile: profile, ..Default::default() };
+            let layout = super::star_halo_layout([161, 121], settings);
+            assert_eq!(layout.groups.map(|g| g.size), sizes);
+            assert_eq!(layout.groups.map(|g| g.layers), counts);
+            assert_eq!(layout.layers, layers);
+            assert_eq!(
+                super::star_halo_layout([1, 1], settings),
+                super::star_halo_layout([1, 1], SpectralAtmosphere::default()),
+                "rounded equivalent targets must share allocation identity",
+            );
         }
     }
 
