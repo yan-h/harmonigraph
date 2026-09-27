@@ -27,6 +27,10 @@ struct WashField {
     float cover;
     char _pad3[4];
 };
+struct Pile {
+    metal::float2 face;
+    metal::float2 to_centre;
+};
 struct StarSlice {
     metal::float2 offset;
     float cell;
@@ -78,10 +82,6 @@ struct Cloud {
     metal::float2 memory_extent;
     type_7 previous_slices;
 };
-struct Pile {
-    metal::float2 face;
-    metal::float2 to_centre;
-};
 struct TileVertex {
     metal::float4 position;
     metal::float2 fraction;
@@ -104,8 +104,6 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
-constant float CLOUD_UNITS = 10.0;
-constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
 constant float DOME_RADIUS_MIN = 0.95;
@@ -115,6 +113,8 @@ constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
+constant float CLOUD_UNITS = 10.0;
+constant float SCALE_CELLS = 2.7272727;
 constant uint STAR_SLICES = 5u;
 constant float STAR_PANE = 540.0;
 constant float STAR_JITTER = 0.6;
@@ -462,7 +462,7 @@ metal::float4 cloud_hash4_(
 Pile dome_octave(
     metal::float2 r_4,
     int period_7,
-    constant Cloud& cloud
+    float variety
 ) {
     float weight = 0.0;
     metal::float2 face = metal::float2(0.0);
@@ -478,12 +478,12 @@ Pile dome_octave(
         if (metal::all(loop_bound_2 == uint2(0u))) { break; }
         loop_bound_2 -= uint2(loop_bound_2.y == 0u, 1u);
         if (!loop_init_2) {
-            int _e106 = j_1;
-            j_1 = as_type<int>(as_type<uint>(_e106) + as_type<uint>(1));
+            int _e98 = j_1;
+            j_1 = as_type<int>(as_type<uint>(_e98) + as_type<uint>(1));
         }
         loop_init_2 = false;
-        int _e13 = j_1;
-        if (_e13 <= 1) {
+        int _e14 = j_1;
+        if (_e14 <= 1) {
         } else {
             break;
         }
@@ -495,26 +495,25 @@ Pile dome_octave(
                 if (metal::all(loop_bound_3 == uint2(0u))) { break; }
                 loop_bound_3 -= uint2(loop_bound_3.y == 0u, 1u);
                 if (!loop_init_3) {
-                    int _e103 = i_1;
-                    i_1 = as_type<int>(as_type<uint>(_e103) + as_type<uint>(1));
+                    int _e95 = i_1;
+                    i_1 = as_type<int>(as_type<uint>(_e95) + as_type<uint>(1));
                 }
                 loop_init_3 = false;
-                int _e18 = i_1;
-                if (_e18 <= 1) {
+                int _e19 = i_1;
+                if (_e19 <= 1) {
                 } else {
                     break;
                 }
                 {
-                    int _e22 = i_1;
-                    int _e23 = j_1;
-                    metal::int2 cell_5 = as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(base_1)) + as_type<metal::uint2>(metal::int2(_e22, _e23)));
-                    metal::int2 _e26 = wrap_cell(cell_5, period_7);
-                    metal::float4 _e27 = cloud_hash4_(_e26);
-                    int _e28 = i_1;
-                    int _e30 = j_1;
-                    metal::float2 centre_1 = ((base_1 + metal::float2(static_cast<float>(_e28), static_cast<float>(_e30))) + metal::float2(0.5)) + ((_e27.xy - metal::float2(0.5)) * DOME_JITTER);
-                    float _e51 = cloud.scale_variety;
-                    float radius_1 = metal::mix(DOME_RADIUS, metal::mix(DOME_RADIUS_MIN, DOME_RADIUS_MAX, _e27.z), _e51);
+                    int _e23 = i_1;
+                    int _e24 = j_1;
+                    metal::int2 cell_5 = as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(base_1)) + as_type<metal::uint2>(metal::int2(_e23, _e24)));
+                    metal::int2 _e27 = wrap_cell(cell_5, period_7);
+                    metal::float4 _e28 = cloud_hash4_(_e27);
+                    int _e29 = i_1;
+                    int _e31 = j_1;
+                    metal::float2 centre_1 = ((base_1 + metal::float2(static_cast<float>(_e29), static_cast<float>(_e31))) + metal::float2(0.5)) + ((_e28.xy - metal::float2(0.5)) * DOME_JITTER);
+                    float radius_1 = metal::mix(DOME_RADIUS, metal::mix(DOME_RADIUS_MIN, DOME_RADIUS_MAX, _e28.z), variety);
                     metal::float2 d = (r_4 - centre_1) / metal::float2(radius_1);
                     float q = 1.0 - metal::dot(d, d);
                     if (q <= 0.0) {
@@ -523,52 +522,60 @@ Pile dome_octave(
                     float root = metal::sqrt(q);
                     float h = q * root;
                     gain = 1.0;
-                    float _e67 = cloud.scale_variety;
-                    if (_e67 > 0.0) {
-                        float _e73 = cloud.scale_variety;
-                        gain = metal::exp2((DOME_VARIETY_GAIN * _e73) * ((2.0 * _e27.w) - 1.0));
+                    if (variety > 0.0) {
+                        gain = metal::exp2((DOME_VARIETY_GAIN * variety) * ((2.0 * _e28.w) - 1.0));
                     }
-                    float _e82 = gain;
-                    float w = _e82 * (metal::exp(DOME_UNION * h) - 1.0);
-                    float _e89 = weight;
-                    weight = _e89 + w;
-                    metal::float2 _e91 = face;
-                    face = _e91 + ((w * -(((DOME_FACE * root) * radius_1))) * d);
-                    metal::float2 _e99 = to_centre;
-                    to_centre = _e99 + (w * (centre_1 - r_4));
+                    float _e74 = gain;
+                    float w = _e74 * (metal::exp(DOME_UNION * h) - 1.0);
+                    float _e81 = weight;
+                    weight = _e81 + w;
+                    metal::float2 _e83 = face;
+                    face = _e83 + ((w * -(((DOME_FACE * root) * radius_1))) * d);
+                    metal::float2 _e91 = to_centre;
+                    to_centre = _e91 + (w * (centre_1 - r_4));
                 }
             }
         }
     }
-    float _e110 = weight;
-    if (_e110 <= 0.0) {
+    float _e102 = weight;
+    if (_e102 <= 0.0) {
         out_4.face = metal::float2(0.0);
         out_4.to_centre = metal::float2(0.0);
-        Pile _e119 = out_4;
-        return _e119;
+        Pile _e111 = out_4;
+        return _e111;
     }
-    metal::float2 _e121 = face;
-    float _e122 = weight;
-    out_4.face = _e121 / metal::float2(_e122);
-    metal::float2 _e126 = to_centre;
-    float _e127 = weight;
-    out_4.to_centre = _e126 / metal::float2(_e127);
-    Pile _e130 = out_4;
-    return _e130;
+    metal::float2 _e113 = face;
+    float _e114 = weight;
+    out_4.face = _e113 / metal::float2(_e114);
+    metal::float2 _e118 = to_centre;
+    float _e119 = weight;
+    out_4.to_centre = _e118 / metal::float2(_e119);
+    Pile _e122 = out_4;
+    return _e122;
+}
+
+Pile mosaic_field(
+    metal::float2 r_5,
+    int period_8,
+    float variety_1
+) {
+    Pile out_5 = {};
+    Pile _e3 = dome_octave(r_5, period_8, variety_1);
+    Pile _e15 = dome_octave((r_5 * DOME_LACUNARITY) + metal::float2(17.3, 5.9), naga_f2i32(metal::rint(DOME_LACUNARITY * static_cast<float>(period_8))), variety_1);
+    out_5.face = (_e3.face + (0.46199998 * _e15.face)) / metal::float2(1.22);
+    out_5.to_centre = _e3.to_centre;
+    Pile _e28 = out_5;
+    return _e28;
 }
 
 Pile cloud_domes(
-    metal::float2 r_5,
-    int period_8,
+    metal::float2 r_6,
+    int period_9,
     constant Cloud& cloud
 ) {
-    Pile out_5 = {};
-    Pile _e2 = dome_octave(r_5, period_8, cloud);
-    Pile _e14 = dome_octave((r_5 * DOME_LACUNARITY) + metal::float2(17.3, 5.9), naga_f2i32(metal::rint(DOME_LACUNARITY * static_cast<float>(period_8))), cloud);
-    out_5.face = (_e2.face + (0.46199998 * _e14.face)) / metal::float2(1.22);
-    out_5.to_centre = _e2.to_centre;
-    Pile _e27 = out_5;
-    return _e27;
+    float _e4 = cloud.scale_variety;
+    Pile _e5 = mosaic_field(r_6, period_9, _e4);
+    return _e5;
 }
 
 struct fs_cloud_tileInput {
@@ -586,7 +593,7 @@ fragment fs_cloud_tileOutput fs_cloud_tile(
     const TileVertex in = { position, varyings.fraction };
     TileBake out = {};
     uint _e3 = cloud.tile_cells;
-    int period_9 = static_cast<int>(_e3);
+    int period_10 = static_cast<int>(_e3);
     uint _e7 = cloud.tile_cells;
     float period_f = static_cast<float>(_e7);
     float time = in.fraction.x * period_f;
@@ -600,11 +607,11 @@ fragment fs_cloud_tileOutput fs_cloud_tile(
     if (_e34 == 1u) {
         float _e39 = cloud.wash_fuzz;
         float _e42 = cloud.wash_lobe;
-        WashField _e43 = wash_field(wash_cell, period_9, _e39, _e42);
+        WashField _e43 = wash_field(wash_cell, period_10, _e39, _e42);
         out.a = metal::float4(_e43.coarse.offset, 0.0, 0.0);
         out.b = metal::float4(_e43.fine.offset, 0.0, _e43.cover);
     } else {
-        Pile _e56 = cloud_domes(mosaic_cell, period_9, cloud);
+        Pile _e56 = cloud_domes(mosaic_cell, period_10, cloud);
         out.a = metal::float4(_e56.face, _e56.to_centre);
     }
     TileBake _e61 = out;

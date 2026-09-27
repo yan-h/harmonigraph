@@ -79,7 +79,7 @@ impl LatticeCallback {
                 n.melody_level,
                 n.bass_level,
                 if atmosphere.material == harmonigraph_scene::LatticeMaterial::Watercolor {
-                    lattice_watercolor::node_seed(
+                    lattice_material::node_seed(
                         n.lattice_pos.fives,
                         n.lattice_pos.threes,
                         n.lattice_pos.sevens,

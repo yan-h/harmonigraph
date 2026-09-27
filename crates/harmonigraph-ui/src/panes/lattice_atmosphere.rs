@@ -35,6 +35,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
     }
     ui.add_enabled_ui(glow_enabled, |ui| {
     crate::widgets::choice_row(ui, "Material", &mut settings.material, &[
+        (LatticeMaterial::Mosaic, "Mosaic", "Soft-edged facets that borrow the notes’ own colors"),
         (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes that borrow the notes’ own colors"),
         (LatticeMaterial::Clouds, "Clouds", "The original softly drifting cloud texture"),
         (LatticeMaterial::Contours, "Contours", "Nested bands following the combined note light"),

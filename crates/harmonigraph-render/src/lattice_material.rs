@@ -1,11 +1,11 @@
-//! Watercolor samples the production note light through reusable pure geometry.
+//! Watercolor and Mosaic sample the production note light through reusable pure geometry.
 //! Tile lifetime belongs to the pane, separately from resize-dependent light.
 use super::*;
 
 const SOURCE: &str = concat!(
-    include_str!("shaders/watercolor_geometry.wgsl"),
+    include_str!("shaders/atmosphere_geometry.wgsl"),
     "\n",
-    include_str!("shaders/lattice_watercolor.wgsl"),
+    include_str!("shaders/lattice_material.wgsl"),
 );
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -22,6 +22,8 @@ pub(super) fn node_seed(fives: i32, threes: i32, sevens: i32) -> f32 {
 #[derive(Clone)]
 pub(super) struct Pipelines {
     bake: wgpu::RenderPipeline,
+    bake_mosaic: wgpu::RenderPipeline,
+    mosaic: wgpu::RenderPipeline,
     material: wgpu::RenderPipeline,
     source_layout: wgpu::BindGroupLayout,
     tile_layout: wgpu::BindGroupLayout,
@@ -48,7 +50,7 @@ impl Pipelines {
             count: None,
         };
         let source_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("watercolor_source_layout"),
+            label: Some("material_source_layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -65,11 +67,11 @@ impl Pipelines {
             ],
         });
         let tile_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("watercolor_tile_layout"),
+            label: Some("lattice_material_tile_layout"),
             entries: &[texture(0), texture(1), sampler],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("lattice_watercolor"),
+            label: Some("lattice_material"),
             source: wgpu::ShaderSource::Wgsl(SOURCE.into()),
         });
         let pipeline =
@@ -115,6 +117,12 @@ impl Pipelines {
             };
         Self {
             bake: pipeline("fs_tile", &[], &[FORMAT, FORMAT]),
+            bake_mosaic: pipeline("fs_mosaic_tile", &[], &[FORMAT]),
+            mosaic: pipeline(
+                "fs_mosaic",
+                &[Some(&source_layout), Some(&tile_layout)],
+                &[LATTICE_COLOR_FORMAT],
+            ),
             material: pipeline(
                 "fs_material",
                 &[Some(&source_layout), Some(&tile_layout)],
@@ -170,23 +178,34 @@ fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachmen
 }
 
 pub(super) struct Tile {
-    /// The only varying bake input: quantized texels per fixed 40-cell period.
-    /// Fuzz .25 and lobe .7 are shader constants. Depth, size, roughness, drift,
-    /// light, camera and layers never change geometry; size affects density only.
+    /// Keyed on material and quantized texels per fixed 40-cell period.
+    /// Watercolor fuzz .25/lobe .7 and Mosaic variety .5 are shader constants.
+    /// Depth, roughness, drift, light and camera never change geometry;
+    /// size affects density only.
     texels: u32,
+    material: u32,
     bind_group: wgpu::BindGroup,
 }
 impl Tile {
+    pub(super) fn is_watercolor(&self) -> bool {
+        self.material == harmonigraph_scene::LatticeMaterial::Watercolor as u32
+    }
     fn new(
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
         texels: u32,
+        material: u32,
     ) -> Self {
-        let a = texture(device, "watercolor_tile_a", [texels; 2], FORMAT);
-        let b = texture(device, "watercolor_tile_b", [texels; 2], FORMAT);
+        let a = texture(device, "lattice_material_tile_a", [texels; 2], FORMAT);
+        let mosaic = material == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
+        let b = if mosaic {
+            a.clone()
+        } else {
+            texture(device, "lattice_material_tile_b", [texels; 2], FORMAT)
+        };
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor_tile"),
+            label: Some("lattice_material_tile"),
             layout: &pipelines.tile_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -203,14 +222,16 @@ impl Tile {
                 },
             ],
         });
+        let attachments =
+            if mosaic { vec![attachment(&a)] } else { vec![attachment(&a), attachment(&b)] };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("watercolor_geometry_bake"),
-            color_attachments: &[attachment(&a), attachment(&b)],
+            label: Some("lattice_material_geometry_bake"),
+            color_attachments: &attachments,
             ..Default::default()
         });
-        pass.set_pipeline(&pipelines.bake);
+        pass.set_pipeline(if mosaic { &pipelines.bake_mosaic } else { &pipelines.bake });
         pass.draw(0..4, 0..1);
-        Self { texels, bind_group }
+        Self { texels, material, bind_group }
     }
 }
 
@@ -221,15 +242,15 @@ pub(super) struct Source {
 }
 impl Source {
     fn new(device: &wgpu::Device, pipelines: &Pipelines, size: [u32; 2]) -> Self {
-        let view = texture(device, "watercolor_light_source", size, LATTICE_COLOR_FORMAT);
+        let view = texture(device, "lattice_material_light_source", size, LATTICE_COLOR_FORMAT);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("watercolor_settings"),
+            label: Some("lattice_material_settings"),
             size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor_source"),
+            label: Some("material_source"),
             layout: &pipelines.source_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
@@ -253,11 +274,15 @@ impl Source {
         output: &wgpu::TextureView,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("watercolor_material"),
+            label: Some("lattice_material_material"),
             color_attachments: &[attachment(output)],
             ..Default::default()
         });
-        pass.set_pipeline(&pipelines.material);
+        pass.set_pipeline(if tile.material == harmonigraph_scene::LatticeMaterial::Mosaic as u32 {
+            &pipelines.mosaic
+        } else {
+            &pipelines.material
+        });
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_bind_group(1, &tile.bind_group, &[]);
         pass.draw(0..4, 0..1);
@@ -274,14 +299,14 @@ pub(super) fn prepare(
 ) {
     let Some(offscreen) = pane.offscreen.as_mut() else { return };
     let Some(glow) = offscreen.glow.as_mut() else {
-        pane.watercolor = None;
+        pane.material_tile = None;
         return;
     };
-    if settings.material != harmonigraph_scene::LatticeMaterial::Watercolor as u32
-        || settings.depth <= 0.0
-    {
-        glow.watercolor_source = None;
-        pane.watercolor = None;
+    let displaced = settings.material == harmonigraph_scene::LatticeMaterial::Watercolor as u32
+        || settings.material == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
+    if !displaced || settings.depth <= 0.0 {
+        glow.material_source = None;
+        pane.material_tile = None;
         return;
     }
     let size = offscreen.size.map(|n| n.div_ceil(2).max(1));
@@ -289,10 +314,14 @@ pub(super) fn prepare(
     // keeps nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
     let cell = size[1] as f32 * (23.0 / 560.0) * settings.scale;
     let texels = ((40.0 * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
-    if pane.watercolor.as_ref().is_none_or(|tile| tile.texels != texels) {
-        pane.watercolor = Some(Tile::new(device, encoder, pipelines, texels));
+    if pane
+        .material_tile
+        .as_ref()
+        .is_none_or(|tile| tile.texels != texels || tile.material != settings.material)
+    {
+        pane.material_tile = Some(Tile::new(device, encoder, pipelines, texels, settings.material));
     }
-    let source = glow.watercolor_source.get_or_insert_with(|| Source::new(device, pipelines, size));
+    let source = glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
     let values = [
         size[0] as f32,
         size[1] as f32,

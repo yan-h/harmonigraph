@@ -1729,7 +1729,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        material: harmonigraph_scene::LatticeMaterial::Watercolor,
+        material: harmonigraph_scene::LatticeMaterial::Mosaic,
         source_roughness: 0.73,
         nebula_depth: 0.45,
         breath_speed: 2.2,

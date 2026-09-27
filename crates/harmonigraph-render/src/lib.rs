@@ -71,8 +71,8 @@ mod dot_shadow;
 /// A halo alone, over marks a pane drew for itself — the third caller of
 /// [`BloomChain`], and the one that draws no picture of its own.
 mod glow;
+mod lattice_material;
 mod lattice_node_glow;
-mod lattice_watercolor;
 pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
@@ -971,7 +971,7 @@ struct CompiledLatticeResources {
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
     glow_statistics_layout: wgpu::BindGroupLayout,
-    watercolor: lattice_watercolor::Pipelines,
+    material: lattice_material::Pipelines,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     bright_layout: wgpu::BindGroupLayout,
@@ -1339,7 +1339,7 @@ struct PaneBuffers {
     /// ink, so resizing must retain these rows rather than reseeding them.
     ink_history: Option<InkStrip>,
     ink_kernel: lattice_node_glow::InkKernel,
-    watercolor: Option<lattice_watercolor::Tile>,
+    material_tile: Option<lattice_material::Tile>,
     offscreen: Option<Offscreen>,
 }
 
@@ -1423,7 +1423,7 @@ struct LatticeBloom {
 /// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
-    watercolor_source: Option<lattice_watercolor::Source>,
+    material_source: Option<lattice_material::Source>,
     statistics: [wgpu::TextureView; 3],
     statistics_bind_group: wgpu::BindGroup,
     /// The descriptor format of `view`.
@@ -1937,7 +1937,7 @@ impl GlowTarget {
         let (statistics, statistics_bind_group) =
             lattice_node_glow::statistics(device, shared.glow_statistics_layout, size);
         GlowTarget {
-            watercolor_source: None,
+            material_source: None,
             statistics,
             statistics_bind_group,
             #[cfg(test)]
@@ -2865,7 +2865,7 @@ impl CompiledLatticeResources {
             blur_h_pipeline,
             blur_v_pipeline,
             glow_statistics_layout,
-            watercolor: lattice_watercolor::Pipelines::new(device),
+            material: lattice_material::Pipelines::new(device),
             bind_group_layout,
             composite_layout,
             bright_layout,
@@ -3039,7 +3039,7 @@ impl LatticeResources {
                 glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
                 ink_history: None,
                 ink_kernel: Default::default(),
-                watercolor: None,
+                material_tile: None,
                 offscreen: None,
             }
         });

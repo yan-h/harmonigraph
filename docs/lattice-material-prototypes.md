@@ -83,7 +83,7 @@ The spectrogram keeps its own scalar light and palette mapping.
 Two half-float tiles bake the expensive cell searches only when quantized texel density changes;
 light, camera, time and source roughness never invalidate them.
 The lattice holds the tile independently of resize-dependent targets and applies the washes with two displaced samples plus the original sample for depth blending.
-This isolates the reusable geometry from the light representation for a later Mosaic material.
+This isolates the reusable geometry from the light representation for both Watercolor and Mosaic.
 
 ### Production comparison and measured cost
 
@@ -128,3 +128,23 @@ Two focused regression tests hold the lone-node source ceiling and prevent sourc
 Temporarily removing each fix makes its test fail;
 the uncapped source reaches alpha 165 where the configured peak rounds to 153.
 The renderer suite and existing offline golden frames pass without blessing, and the persistence sweep covers the new selector and roughness field.
+
+### Mosaic in the production lattice
+
+Mosaic uses the spectrogram’s soft-union dome geometry with variety 0.5 and full centre gathering,
+matching its default flat-facet reading.
+Both materials share `atmosphere_geometry.wgsl` and the lattice’s cached-tile and premultiplied-light resampling machinery.
+The spectrogram keeps its scalar light and palette path;
+the lattice samples all four channels of the existing combined note light together.
+Texture depth, size, speed and breathing retain their lattice meanings.
+Source roughness remains specific to Watercolor.
+Existing saved appearances keep their selected material;
+Mosaic adds a variant without changing defaults or renaming saved keys.
+
+The tile cache is keyed on material and quantized texel density.
+Switching styles rebakes even at equal size,
+while note light, time, depth and camera changes do not invalidate geometry.
+Mosaic allocates one RGBA16F tile instead of Watercolor’s two,
+with a 32 MiB cap per pane at 2048² texels.
+Its warm pass reads the tile once and samples the source light twice;
+it never walks the dome grid per frame.
