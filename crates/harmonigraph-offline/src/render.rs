@@ -940,7 +940,7 @@ mod tests {
         assert_eq!(first.len(), 6);
         assert_eq!(first[1], first[5], "no independent background motion in silence");
         let mut appearance = AppearanceDocument::default();
-        appearance.view.atmosphere.enabled = false;
+        appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
         silent.header.appearance = Some(appearance.serialize());
         let off = render_take(silent, &settings).expect("the same GPU is available");
         assert_eq!(first, off, "atmosphere must not create light without notes");
@@ -950,7 +950,7 @@ mod tests {
         let mut smooth = lit;
         let mut appearance = AppearanceDocument::parse(smooth.header.appearance.as_ref().unwrap())
             .expect("the recorded appearance is valid");
-        appearance.view.atmosphere.nebula_depth = 0.0;
+        appearance.view.atmosphere.texture_depth = 0.0;
         smooth.header.appearance = Some(appearance.serialize());
         let smooth = render_take(smooth, &settings).expect("the same GPU is available");
         assert_ne!(textured[2], smooth[2], "the recorded nebula setting must reach export");

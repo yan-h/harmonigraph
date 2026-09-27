@@ -36,8 +36,10 @@ impl LatticeCallback {
         let camera = scene.camera;
         let atmosphere = scene.atmosphere.sanitized();
         // Reduce the decorative clock in f64 before uploading bounded phases.
-        let nebula_time =
-            scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.nebula_speed);
+        let texture_time =
+            scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
+        let material_time =
+            scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.material_speed);
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -78,7 +80,7 @@ impl LatticeCallback {
                 n.activation,
                 n.melody_level,
                 n.bass_level,
-                if atmosphere.material == harmonigraph_scene::LatticeMaterial::Watercolor {
+                if atmosphere.material_style == harmonigraph_scene::LatticeMaterial::Watercolor {
                     lattice_material::node_seed(
                         n.lattice_pos.fives,
                         n.lattice_pos.threes,
@@ -362,7 +364,6 @@ impl LatticeCallback {
         let breathes = scene.glow_timing.is_some()
             && scene.glow_reach > 0.0
             && scene.glow_strength > 0.0
-            && atmosphere.enabled
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
         for &(_, _, i, ships) in &order {
@@ -492,16 +493,31 @@ impl LatticeCallback {
                 } else {
                     bytemuck::Zeroable::zeroed()
                 },
-                nebula: NebulaParams {
-                    depth: if atmosphere.enabled { atmosphere.nebula_depth } else { 0.0 },
-                    scale: atmosphere.nebula_scale,
+                texture: TextureParams {
+                    depth: if atmosphere.texture != harmonigraph_scene::LatticeTexture::None {
+                        atmosphere.texture_depth
+                    } else {
+                        0.0
+                    },
+                    scale: atmosphere.texture_scale,
                     drift: Float2([
-                        (nebula_time * 0.071).sin() as f32 * 0.9,
-                        (nebula_time * 0.053).cos() as f32 * 0.9,
+                        (texture_time * 0.071).sin() as f32 * 0.9,
+                        (texture_time * 0.053).cos() as f32 * 0.9,
                     ]),
                     target_size: Float2([1.0; 2]),
-                    material: atmosphere.material as u32,
+                    style: atmosphere.texture as u32,
+                    padding: 0.0,
+                },
+                material: MaterialParams {
+                    amount: atmosphere.material_amount,
+                    scale: atmosphere.material_scale,
+                    drift: Float2([
+                        (material_time * 0.071).sin() as f32 * 0.9,
+                        (material_time * 0.053).cos() as f32 * 0.9,
+                    ]),
+                    style: atmosphere.material_style as u32,
                     source_roughness: atmosphere.source_roughness,
+                    padding: Float2([0.0; 2]),
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.

@@ -127,7 +127,7 @@ impl CallbackTrait for LatticeCallback {
             egui_encoder,
             &material,
             pane,
-            &self.uniforms.nebula,
+            &self.uniforms.material,
         );
 
         self.upload_frame(
@@ -493,7 +493,7 @@ impl LatticeCallback {
         // Whether this frame contributes any light to the statistics targets.
         uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {
-            uniforms.nebula.target_size = Float2(target.size.map(|v| v as f32));
+            uniforms.texture.target_size = Float2(target.size.map(|v| v as f32));
         }
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));

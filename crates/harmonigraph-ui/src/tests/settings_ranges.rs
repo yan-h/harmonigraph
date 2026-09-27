@@ -65,7 +65,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
             *source.weight_mut(target) = Some(v);
         }
     }
-    poison!(a.view.atmosphere; source_roughness, nebula_depth, nebula_scale, nebula_speed,
+    poison!(a.view.atmosphere; source_roughness, texture_depth, texture_scale, texture_speed, material_amount, material_scale, material_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -245,7 +245,7 @@ fn scenarios() -> Vec<Scenario> {
         meantone: false,
         marvel: false,
         style: harmonigraph_scene::CloudStyle::Mosaic,
-        material: harmonigraph_scene::LatticeMaterial::Clouds,
+        material: harmonigraph_scene::LatticeMaterial::None,
         visits: 0,
     };
     let mut cases = Vec::new();
@@ -255,9 +255,9 @@ fn scenarios() -> Vec<Scenario> {
             // The pitch colors, then two bases and Thickness max.
             // Mapped source weights are exercised in the enabled scenario.
             panes::Tab::Colors => 2 + 3,
-            // The picture, then the background glow (8) with its texture
+            // The picture, then the background glow and breathing (10) with its texture
             // switched off, then two Gaussian shadow groups of three bars each.
-            panes::Tab::LatticeSettings => 16 + 1 + 8 + 6,
+            panes::Tab::LatticeSettings => 16 + 1 + 10 + 6,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -273,7 +273,7 @@ fn scenarios() -> Vec<Scenario> {
         // spread in each of a page's two groups).
         let visits = match pane {
             panes::Tab::Colors => visits + 8,
-            panes::Tab::LatticeSettings => visits + 5 + 6,
+            panes::Tab::LatticeSettings => visits + 3 + 6,
             // ...the spectrogram's fourteen, the ribbons' five, and the
             // backdrop's height and stripe spacing.
             panes::Tab::AnalyzerSettings => visits + 14 + 5 + 2,
@@ -282,12 +282,19 @@ fn scenarios() -> Vec<Scenario> {
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // Source roughness is visible only for lattice Watercolor: the same
-    // enabled lattice inventory plus its one source control.
+    // enabled lattice inventory plus three material bars and one source control.
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 16 + 1 + 8 + 6 + 5 + 6 + 1,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 1,
+        ..base
+    });
+    cases.push(Scenario {
+        pane: panes::Tab::LatticeSettings,
+        material: harmonigraph_scene::LatticeMaterial::Mosaic,
+        enabled: true,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3,
         ..base
     });
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
@@ -363,8 +370,12 @@ fn check(edge: Edge) {
             if scenario.enabled { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
         a.spectrum.atmosphere.cloud_style = scenario.style;
         a.view.show_perf = scenario.enabled;
-        a.view.atmosphere.enabled = scenario.enabled;
-        a.view.atmosphere.material = scenario.material;
+        a.view.atmosphere.texture = if scenario.enabled {
+            harmonigraph_scene::LatticeTexture::Clouds
+        } else {
+            harmonigraph_scene::LatticeTexture::None
+        };
+        a.view.atmosphere.material_style = scenario.material;
         for style in a.view.shadow.groups_mut() {
             style.kernel =
                 if scenario.enabled { ShadowKernel::Distance } else { ShadowKernel::Gaussian };

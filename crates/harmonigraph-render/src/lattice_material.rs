@@ -187,6 +187,10 @@ pub(super) struct Tile {
     bind_group: wgpu::BindGroup,
 }
 impl Tile {
+    #[cfg(test)]
+    pub(super) fn geometry_binding(&self) -> wgpu::BindGroup {
+        self.bind_group.clone()
+    }
     pub(super) fn is_watercolor(&self) -> bool {
         self.material == harmonigraph_scene::LatticeMaterial::Watercolor as u32
     }
@@ -295,16 +299,16 @@ pub(super) fn prepare(
     encoder: &mut wgpu::CommandEncoder,
     pipelines: &Pipelines,
     pane: &mut PaneBuffers,
-    settings: &NebulaParams,
+    settings: &MaterialParams,
 ) {
     let Some(offscreen) = pane.offscreen.as_mut() else { return };
     let Some(glow) = offscreen.glow.as_mut() else {
         pane.material_tile = None;
         return;
     };
-    let displaced = settings.material == harmonigraph_scene::LatticeMaterial::Watercolor as u32
-        || settings.material == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
-    if !displaced || settings.depth <= 0.0 {
+    let displaced = settings.style == harmonigraph_scene::LatticeMaterial::Watercolor as u32
+        || settings.style == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
+    if !displaced || settings.amount <= 0.0 {
         glow.material_source = None;
         pane.material_tile = None;
         return;
@@ -317,16 +321,16 @@ pub(super) fn prepare(
     if pane
         .material_tile
         .as_ref()
-        .is_none_or(|tile| tile.texels != texels || tile.material != settings.material)
+        .is_none_or(|tile| tile.texels != texels || tile.material != settings.style)
     {
-        pane.material_tile = Some(Tile::new(device, encoder, pipelines, texels, settings.material));
+        pane.material_tile = Some(Tile::new(device, encoder, pipelines, texels, settings.style));
     }
     let source = glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
     let values = [
         size[0] as f32,
         size[1] as f32,
         cell,
-        settings.depth,
+        settings.amount,
         settings.drift.0[0],
         settings.drift.0[1],
         0.0,

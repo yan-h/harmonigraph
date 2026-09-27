@@ -214,8 +214,11 @@ fn atmosphere_costs_by_polyphony() {
                 release: view.glow_release,
             });
             match case {
-                "off" => variant.atmosphere.enabled = false,
-                "no-nebula" => variant.atmosphere.nebula_depth = 0.0,
+                "off" => {
+                    variant.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+                    variant.atmosphere.breath_amount = 0.0;
+                }
+                "no-nebula" => variant.atmosphere.texture_depth = 0.0,
                 "no-breath" => variant.atmosphere.breath_amount = 0.0,
                 "half-scale" => variant.render_scale *= 0.5,
                 "no-glow" => variant.glow_strength = 0.0,

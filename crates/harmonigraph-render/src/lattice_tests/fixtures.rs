@@ -267,7 +267,7 @@ pub(super) fn parity_scene() -> Scene {
         glow_timing: None,
         // These fixtures measure the smooth glow. Texture has its own GPU probe.
         atmosphere: harmonigraph_scene::AtmosphereSettings {
-            nebula_depth: 0.0,
+            texture_depth: 0.0,
             ..Default::default()
         },
     }
