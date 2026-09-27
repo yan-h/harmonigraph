@@ -1090,3 +1090,84 @@ fn failure_accounting_latches_its_marker_io_error() {
     assert!(open.is_none());
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn pump_flushes_buffered_records_in_current_and_retained_files() {
+    let file = path("pump-batched-flush");
+    let status = Mutex::new(String::new());
+    let mut recording =
+        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    recording.next_pass(&status).unwrap();
+    assert_eq!(recording.retained.len(), 1, "the fixture must retain an unfinished prior file");
+    for pass in std::iter::once(&mut recording.current).chain(&mut recording.retained) {
+        pass.writer
+            .param(harmonigraph_take::ParamRecord {
+                t: 0.0,
+                id: ParamKey::ALL[0].id().into(),
+                value: pass.number as f32,
+            })
+            .unwrap();
+        assert!(
+            harmonigraph_take::Take::read(&pass.path).unwrap().params.is_empty(),
+            "a small record stays buffered until the pump flushes"
+        );
+    }
+    let mut pump = Pump { open: Some(recording), ..Default::default() };
+    let (mut producer, mut entries) = rtrb::RingBuffer::<Entry>::new(8);
+    producer.push(Entry::Param { t: 1.0, key: 0, value: 99.0 }).unwrap();
+    let (_audio, mut samples) = rtrb::RingBuffer::<f32>::new(8);
+    let (mut publisher, mut publications) = publication::channel();
+    publisher
+        .note(
+            NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 0.8).into(),
+            publication::Route {
+                address: Some(RecordAddress { epoch: 1, pass: 1 }),
+                time_offset: 0.0,
+            },
+        )
+        .unwrap();
+    let fence = RecordFence::default();
+    fence.intent.store(3, Ordering::Release); // Epoch 1, armed.
+    let pumped = pump.pass(&mut entries, &mut samples, &mut publications, &status, &fence, false);
+    assert!(pumped.finished.is_none(), "neither file needs finalization to publish its bytes");
+    assert!(!fence.failed.load(Ordering::Acquire));
+    let recording = pump.open.as_ref().unwrap();
+    for pass in std::iter::once(&recording.current).chain(&recording.retained) {
+        let take = harmonigraph_take::Take::read(&pass.path).unwrap();
+        assert_eq!(take.params[0].value, pass.number as f32);
+        if pass.number == 2 {
+            assert_eq!(take.params.len(), 2);
+            assert_eq!(take.params[1].value, 99.0, "flush follows the record-lane drain");
+        } else {
+            assert_eq!(take.notes().count(), 1, "flush follows the publication-lane drain too");
+        }
+    }
+    drop(pump);
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn pump_flush_failure_is_accounted_before_stop() {
+    let file = path("pump-flush-failure");
+    let status = Mutex::new(String::new());
+    let mut recording =
+        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    recording.current.writer.make_read_only_for_test(&file).unwrap();
+    let mut pump = Pump { open: Some(recording), ..Default::default() };
+    let (mut producer, mut entries) = rtrb::RingBuffer::<Entry>::new(8);
+    producer.push(Entry::Param { t: 0.0, key: 0, value: 0.5 }).unwrap();
+    let (_audio, mut samples) = rtrb::RingBuffer::<f32>::new(8);
+    let (_publisher, mut publications) = publication::channel();
+    let fence = RecordFence::default();
+    fence.intent.store(3, Ordering::Release); // Epoch 1, armed.
+    let pumped = pump.pass(&mut entries, &mut samples, &mut publications, &status, &fence, false);
+    assert!(pumped.finished.is_none());
+    assert!(fence.failed.load(Ordering::Acquire));
+    assert!(pump.failure.contains(1));
+    assert!(pump.open.is_none(), "the failed file is accounted without waiting for Stop");
+    let cause = fence.failure_message.lock().clone().unwrap();
+    assert!(cause.contains("cannot flush"), "{cause}");
+    assert!(cause.contains(&file.display().to_string()), "{cause}");
+    assert!(cause.contains("Bad file descriptor"), "{cause}");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}

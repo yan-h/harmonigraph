@@ -216,7 +216,9 @@ struct Pumped {
 
 impl Pump {
     /// One cross-lane pass: drain the record ring and the publication lane in
-    /// order, then resolve failure, a ready Stop, and shutdown.
+    /// order, flush every still-owned take file, then resolve failure, a ready
+    /// Stop, and shutdown. A killed process can lose the buffered part of this
+    /// pass; an idle worker checks for the next batch every 20 ms.
     ///
     /// `waiting_for_start` retains this iteration's records for a `Start` that
     /// may already have armed a producer — only the command half above can
@@ -248,6 +250,11 @@ impl Pump {
         let had_publications =
             self.fanout.drain(publications, &mut self.open, fence, &self.failure) != 0;
         pumped.worked = had_records || had_publications;
+        if let Some(recording) = self.open.as_mut() {
+            if let Err(error) = recording.flush_notes() {
+                fence.fail_with_message(error.to_string());
+            }
+        }
         #[cfg(feature = "test-support")]
         if self.pending_stop.is_some() {
             fence.worker_after_stop.reach();
@@ -677,6 +684,21 @@ impl Recording {
         })
     }
 
+    /// Late source/configuration records may still target a retained file.
+    /// Flush all owners, preserving the first error while attempting the rest.
+    fn flush_notes(&mut self) -> std::io::Result<()> {
+        let mut result = Ok(());
+        for pass in std::iter::once(&mut self.current).chain(&mut self.retained) {
+            result = result.and(pass.writer.flush().map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("cannot flush {}: {error}", pass.path.display()),
+                )
+            }));
+        }
+        result
+    }
+
     /// Close both of the current pass's files and hand back the take to render.
     ///
     /// **That is the last VOICED pass, not simply the last one opened.** A take
@@ -1004,7 +1026,21 @@ fn drain_with_audio(
     status: &Mutex<String>,
     fence: Option<&RecordFence>,
 ) -> bool {
-    drain_with_boundaries(consumer, audio, open, status, fence, &FailureAccount::default(), |_| {})
+    let worked = drain_with_boundaries(
+        consumer,
+        audio,
+        open,
+        status,
+        fence,
+        &FailureAccount::default(),
+        |_| {},
+    );
+    // These conversion fixtures drive only the record lane; Pump::pass owns
+    // the production flush and has separate cross-lane/failure coverage.
+    if let Some(recording) = open.as_mut() {
+        recording.flush_notes().unwrap();
+    }
+    worked
 }
 
 fn drain_with_boundaries(
