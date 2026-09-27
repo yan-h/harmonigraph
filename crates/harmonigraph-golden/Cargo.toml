@@ -6,6 +6,11 @@ authors.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+# No doc-tests: each crate's empty rustdoc harness was a run for nothing
+# (#1181). Drop this with the first doc example that should run.
+doctest = false
+
 [dependencies]
 # Reads and writes the golden frames and the contact sheet. Already in the
 # lock file by way of the GUI stack, so this pins no new download.

@@ -5,6 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+# No doc-tests: each crate's empty rustdoc harness was a run for nothing
+# (#1181). Drop this with the first doc example that should run.
+doctest = false
+
 [features]
 # Dev-only: watch the .wgsl on disk and rebuild the pipeline on change.
 # Enabled by the standalone harness; release plugin bundles are built
