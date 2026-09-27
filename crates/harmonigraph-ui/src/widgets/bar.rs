@@ -152,12 +152,14 @@ pub(super) fn track_fill(response: &Response) -> Color32 {
 /// The colour a bar's NAME is drawn in: full `text()` while the bar is under
 /// the pointer or being dragged, and `text_dim()` at rest.
 ///
-/// Every bar with a name answers the pointer this way, and in one place for the
-/// reason [`track_fill`] is: a name that lit on a different condition from its
-/// neighbours would be the one row in a pane answering the same pointer
-/// differently. A readout is not a name and keeps its own rule — most stand at
-/// full `text()` throughout, and a [`SpectrumBar`]'s lights only for a pointer
-/// on its track.
+/// Every bar whose name is drawn in the theme's text answers the pointer this
+/// way, and in one place for the reason [`track_fill`] is: a name that lit on a
+/// different condition from its neighbours would be the one row in a pane
+/// answering the same pointer differently. The exception is a [`SpectrumBar`],
+/// whose name is one dark colour at every state because it is drawn to read
+/// against the hue behind it (`span_name_color`). A readout is not a name and
+/// keeps its own rule — most stand at full `text()` throughout, and a
+/// [`SpectrumBar`]'s lights only for a pointer on its track.
 ///
 /// [`SpectrumBar`]: super::gradient::SpectrumBar
 pub(super) fn name_color(response: &Response) -> Color32 {

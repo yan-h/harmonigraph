@@ -923,7 +923,7 @@ mod tests {
         // frame the bar sees is never at `from`. A harness that jumped straight
         // to its target would hand the bar a first frame at the destination and
         // never put a gap between where the press landed and where the gesture
-        // is read — which is the gap [`aimed_at`] exists for.
+        // is read — which is the gap `drag` exists for.
         let step = 12.0 / bar.width() * (to - from).signum();
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
@@ -1119,7 +1119,7 @@ mod tests {
     /// And emits nothing where no thumb reaches the name, which is where the
     /// bars rest: one pass and no clipped second one. The saving is a shape
     /// rather than a tessellation (epaint would cull the row anyway — see
-    /// [`grip_over_text`]); what it really buys is a paint list in which a
+    /// `bar::grip_over_text`); what it really buys is a paint list in which a
     /// knockout shape means a knockout happened, which is what lets the test
     /// above count them. This holds the guard that keeps it true.
     #[test]
@@ -1143,7 +1143,7 @@ mod tests {
     /// takes the BAR's corner rather than a grip's, which on a 4pt width epaint
     /// holds to a 2pt pill, so the corner notches the clip cannot follow are
     /// the whole of the top and bottom 2pt rather than a sliver — see
-    /// [`grip_over_text`] for why that is a bound worth stating and not a bug
+    /// `bar::grip_over_text` for why that is a bound worth stating and not a bug
     /// worth code. What is asserted here is what the shape list can answer: the
     /// knockout happens, on the thumb, in the panel colour.
     #[test]
@@ -1502,7 +1502,7 @@ mod tests {
     /// end, whichever way the drag then runs.
     ///
     /// [`Grab::at`] is asked on the first frame egui calls the press a drag,
-    /// which is already six points along — see [`aimed_at`]. Asked at the live
+    /// which is already six points along — see `bar::drag`. Asked at the live
     /// position, a press in the outer half of the reach that then runs INWARD
     /// is past the reach by the time the question reaches this bar, so it reads
     /// as a middle grab and slides both ends. That is exactly the mistake

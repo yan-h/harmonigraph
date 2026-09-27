@@ -1301,6 +1301,21 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
         );
         for &pane in SETTINGS_PANES {
             let (shapes, body) = scrolling_settings_pane(pane, scale);
+            // The flip button ends at the column's right edge, which is the
+            // edge of the lane — `SpectrumBar`'s own docs name this test as
+            // what keeps it out. Bars scrolled out of the window paint nothing,
+            // so the pass has to have drawn the button for that to be asked.
+            if pane == panes::Tab::Colors {
+                let flip = crate::widgets::flip_button_width(scale);
+                let drew_flip = shapes.iter().any(|cs| match &cs.shape {
+                    egui::Shape::Rect(r) => {
+                        [crate::theme::widget(), crate::theme::widget_hover()].contains(&r.fill)
+                            && (r.rect.width() - flip).abs() < 0.6
+                    }
+                    _ => false,
+                });
+                assert!(drew_flip, "the Colors pane at {scale} drew no spectrum flip button");
+            }
             // The pane's own shapes are the ones clipped to the tab BODY. The dock's
             // chrome — the leaf fill, the body border, the tab bar and its rule — is
             // clipped to the leaf, which starts a tab bar higher up.

@@ -127,6 +127,13 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// `nothing_is_drawn_under_a_settings_pane_scroll_bar` holds that lane empty.
 const FLIP_W: f32 = 18.0;
 
+/// [`FLIP_W`] at this scale, for the settings sweep that holds the lane the
+/// button ends against empty — and has to know it drew the button to say so.
+#[cfg(test)]
+pub(crate) fn flip_button_width(scale: f32) -> f32 {
+    FLIP_W * scale
+}
+
 /// The name a [`SpectrumBar`] writes along its own track.
 ///
 /// Here rather than handed in by the caller, for the reason [`Spread::label`]
@@ -392,7 +399,7 @@ impl<'a> SpectrumBar<'a> {
         //
         // One rectangle sensed for both would put that on a position check
         // instead: the widget would take the drag and have to decline it by
-        // asking [`aimed_at`] where the press landed, exactly as the preview
+        // asking `drag` where the press landed, exactly as the preview
         // above IS declined. Two rectangles rather than one check because a
         // check can only be reached once egui calls the press a drag, and the
         // frames before that are ones the button spends looking pressed while
@@ -1265,7 +1272,8 @@ mod tests {
         band_bounds, band_colors, band_columns, bands, fades_out_at_its_edges,
     };
     use crate::widgets::probe::{
-        filled_rects, handles, knockouts, painted, painted_in, painted_text, press, text_boxes,
+        after_passes, filled_rects, grips, handles, knockouts, painted, painted_in, painted_text,
+        press, text_boxes,
     };
     use harmonigraph_scene::ViewConfig;
 
@@ -2167,7 +2175,7 @@ mod tests {
     /// drags: a press on it produces no drag hit for the track to inherit, at
     /// any distance. Sensed together, the track takes that press and the only
     /// thing left standing between it and the rotate branch is the same
-    /// [`aimed_at`] check the strip is declined by — a position test doing the
+    /// `bar::drag` check the strip is declined by — a position test doing the
     /// work a rectangle does for free, and doing it a few frames late.
     #[test]
     fn a_drag_begun_on_the_flip_button_turns_nothing() {
@@ -2796,6 +2804,61 @@ mod tests {
         }
     }
 
+    /// Which of a brightness bar's two thumbs are lit, left then right, with the
+    /// pointer resting at `v` on the axis of a bar holding `pair`.
+    fn spread_lit_at(pair: (f32, f32), v: f32) -> Vec<bool> {
+        let mut g = holding(Spread::Brightness, pair);
+        let (min, max) = Spread::Brightness.axis();
+        let shapes = after_passes(
+            300.0,
+            |bar| {
+                let track = bar.shrink2(Vec2::new(HANDLE_INSET, 0.0));
+                let x = track.left() + track.width() * (v - min) / (max - min);
+                vec![vec![egui::Event::PointerMoved(egui::pos2(x, bar.center().y))]; 2]
+            },
+            |ui| spread_bar(Spread::Brightness, &mut g, ui),
+        );
+        let mut thumbs = grips(&shapes);
+        thumbs.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
+        thumbs.into_iter().map(|(_, lit)| lit).collect()
+    }
+
+    /// A pointer resting beside one end lights THAT end and dims the other, at
+    /// a rising ramp and at a falling one — and over the ramp's middle leaves
+    /// both lit, the slide being what a press there takes.
+    ///
+    /// Both signs, because the ends are named for the PITCH they carry and
+    /// which thumb that is flips with the ramp: the left thumb is the low end
+    /// rising and the high end falling. A bar that mapped `Low` and `High` to
+    /// the wrong thumbs, or read the sign backwards, lights the far end at one
+    /// of the two and fails here; the fixture asserts the two ends really are
+    /// the two different grabs before it asks.
+    #[test]
+    fn a_resting_pointer_lights_the_spread_end_it_is_beside() {
+        for spread in [40.0f32, -40.0] {
+            let pair = (50.0, spread);
+            let (left, right) = (30.0, 70.0);
+            let grab = |v: f32| SpreadGrab::at(v, pair, 5.0);
+            let low_is_left = matches!(grab(left - 3.0), SpreadGrab::Low);
+            assert_eq!(
+                low_is_left,
+                spread > 0.0,
+                "{spread}: the fixture's left end is not the grab it should be",
+            );
+            assert!(
+                matches!(grab(right + 3.0), SpreadGrab::Low) != low_is_left,
+                "{spread}: both ends of the fixture are the same grab",
+            );
+            assert_eq!(spread_lit_at(pair, left - 3.0), [true, false], "{spread}: beside the left");
+            assert_eq!(
+                spread_lit_at(pair, right + 3.0),
+                [false, true],
+                "{spread}: beside the right"
+            );
+            assert_eq!(spread_lit_at(pair, 50.0), [true, true], "{spread}: over the middle");
+        }
+    }
+
     /// Paint one bar across a 300pt row and return what it emitted, each shape
     /// still carrying the clip rect it was painted through — which is the only
     /// thing that tells a knockout pass from the run it doubles.
@@ -3234,7 +3297,7 @@ mod tests {
     }
 
     /// A press within an end's reach takes THAT end here too, whichever way the
-    /// drag then runs — the [`aimed_at`] rule on the third of the bars that
+    /// drag then runs — the `bar::drag` rule on the third of the bars that
     /// splits a handle from a middle.
     ///
     /// Both bars, because the two work in axes two orders of magnitude apart

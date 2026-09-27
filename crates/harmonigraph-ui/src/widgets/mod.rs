@@ -58,7 +58,7 @@ pub use value::{progress_bar, ValueBar};
 // Re-exported rather than reached for by module path, so which file a widget
 // lives in stays this module's business.
 #[cfg(test)]
-pub(crate) use gradient::{preview_height, spectrum_track_width};
+pub(crate) use gradient::{flip_button_width, preview_height, spectrum_track_width};
 #[cfg(test)]
 pub(crate) use mesh::{band_bounds, band_columns};
 #[cfg(test)]

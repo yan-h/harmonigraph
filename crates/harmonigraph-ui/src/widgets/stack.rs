@@ -648,7 +648,7 @@ impl<'a> StackBar<'a> {
             rect,
             scale,
             grip_radius(scale),
-            [0, 1, 2, 3].map(|k| (thumbs[k], lit(LAYERS[k]))),
+            LAYERS.map(|layer| (thumbs[layer.index()], lit(layer))),
             &runs,
         );
 
