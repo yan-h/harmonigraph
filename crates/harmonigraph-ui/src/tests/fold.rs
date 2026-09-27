@@ -902,6 +902,12 @@ fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
     state.workspace.layout.sized = true;
     let mut h = DockHarness::at(egui::vec2(1486.0, 800.0));
     h.settle(&mut state);
+    // What the dock spends between its sections, measured before anything
+    // folds rather than quoted, so the fill below is the same fill.
+    let widths = |state: &SharedState| -> f32 {
+        state.workspace.layout_runtime.rects.iter().map(|rect| rect.width()).sum()
+    };
+    let gutters = h.screen.width() - widths(&state);
     region_click(&mut h, &mut state, 1);
     h.settle_folds(&mut state);
     let lent: f32 = state.workspace.layout.region_widths.iter().sum();
@@ -923,9 +929,8 @@ fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
         assert!((now / saved.lattice - was / folded.lattice).abs() < 0.01, "{saved:?}");
     }
     let rects = state.workspace.layout_runtime.rects;
-    let drawn: f32 = rects.iter().map(|rect| rect.width()).sum();
     assert!(rects.iter().all(|rect| rect.width() > 20.0), "{rects:?}");
-    assert!((drawn + 2.0 * 3.0 - h.screen.width()).abs() < 1.0, "{rects:?}");
+    assert!((widths(&state) + gutters - h.screen.width()).abs() < 1.0, "{rects:?}");
 }
 
 /// Where a region's outer edge survives its fold, Expand appears exactly where

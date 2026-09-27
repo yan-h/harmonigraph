@@ -1397,8 +1397,12 @@ mod tests {
     ///
     /// 157pt is the bar a 173pt column gives, and 173 is where the column
     /// floors — one separator drag from the default window, no resize needed.
+    /// The sweep has to reach a width where the name IS elided, or it asks
+    /// nothing of the badge's place; that is checked rather than assumed of
+    /// today's font.
     #[test]
     fn a_badged_bar_says_so_even_when_its_name_is_elided() {
+        let mut elided = 0;
         for width in [157.0f32, 180.0, 200.0, 400.0] {
             let mut value = 386.31;
             let out = painted(width, |ui| {
@@ -1419,7 +1423,11 @@ mod tests {
                 name.to_lowercase().contains("meantone"),
                 "a {width}pt badged bar painted its name as {name:?}, which does not say so"
             );
+            if name.ends_with('\u{2026}') {
+                elided += 1;
+            }
         }
+        assert!(elided > 0, "the badged name was drawn whole at every swept width");
     }
 
     /// The name painted by a bar of `width` holding `value`, as its rendered
