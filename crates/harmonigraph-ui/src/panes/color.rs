@@ -54,12 +54,16 @@ const BEND_HINT: &str = "Where along the range the switched-on channels spend th
                  Double-click straightens it.";
 
 fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    // One preset, the gradient a fresh view opens on, so the shipped look is a
-    // click away after the bars below have wandered off it. Named for its
-    // colors like the audio palettes, not "Default".
+    // The gradient a fresh view opens on, which is where a double-click on any
+    // of the bars below goes home to — the COMPOSED one, not the type's own
+    // `Gradient::default()` (see [`SpectrumBar::new`]).
+    let home = ViewConfig::default().pitch_gradient;
+    // One preset, the same gradient, so the shipped look is a click away after
+    // the bars below have wandered off it. Named for its colors like the audio
+    // palettes, not "Default".
     crate::widgets::preset_row(ui, "Palette", &["Dusk"], |ui, menu| {
         if ui.button("Dusk").on_hover_text("Navy through violet and rose to cream").clicked() {
-            view.pitch_gradient = ViewConfig::default().pitch_gradient;
+            view.pitch_gradient = home;
             if menu {
                 ui.close();
             }
@@ -69,21 +73,21 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // stands, the picture would spend every frame of every drag below it one
     // frame behind the bar being dragged.
     let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut view.pitch_gradient).show(ui).on_hover_text(
+    SpectrumBar::new(&mut view.pitch_gradient, home).show(ui).on_hover_text(
         "Hue range for MIDI notes. \
                  Drag the handle to change its span, the track to rotate it, or the end button to reverse it. \
                  Double-click resets.",
     );
-    SpreadBar::brightness(&mut view.pitch_gradient).show(ui).on_hover_text(
+    SpreadBar::brightness(&mut view.pitch_gradient, home).show(ui).on_hover_text(
         "Brightness at the low and high pitches: 0% is black, 100% is white. \
                  Drag either end; crossing them reverses the brightness ramp. \
                  Double-click resets.",
     );
-    SpreadBar::chroma(&mut view.pitch_gradient).show(ui).on_hover_text(
+    SpreadBar::chroma(&mut view.pitch_gradient, home).show(ui).on_hover_text(
         "Saturation at the low and high pitches: 0% is gray, 100% is the most vivid available color. \
                  Double-click resets.",
     );
-    BendPlot::new(&mut view.pitch_gradient).show(ui).on_hover_text(BEND_HINT);
+    BendPlot::new(&mut view.pitch_gradient, home).show(ui).on_hover_text(BEND_HINT);
     preview
         .show(ui, &view.pitch_gradient)
         .on_hover_text("MIDI note colors from low pitch on the left to high pitch on the right.");
@@ -122,11 +126,10 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
 fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
     use crate::SpectrogramPreset;
 
-    // The gradient a double-click on any of the three goes home to. The fresh
-    // heatmap's, NOT the lattice's, which is what the bars assume when a caller
-    // names none: a heatmap resetting onto the pitch gradient's arc would land
-    // on a picture the spectrogram has never opened on, and the bars carry no
-    // text entry to dial it back with.
+    // The gradient a double-click on any of the bars goes home to. The fresh
+    // heatmap's, NOT the lattice's: a heatmap resetting onto the pitch
+    // gradient's arc would land on a picture the spectrogram has never opened
+    // on, and the bars carry no text entry to dial it back with.
     let home = crate::SpectrumConfig::default().spectrogram_gradient;
     let labels: Vec<_> = SpectrogramPreset::ALL.iter().map(|preset| preset.label()).collect();
     crate::widgets::preset_row(ui, "Palette", &labels, |ui, menu| {
@@ -141,21 +144,21 @@ fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig
     });
     // The row first, the colors last — see [`GradientPreview`].
     let preview = GradientPreview::reserve(ui);
-    SpectrumBar::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
+    SpectrumBar::new(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
         "Hue range for audio levels. \
                  Drag the handle to change its span, the track to rotate it, or the end button to reverse it. \
                  Double-click resets.",
     );
-    SpreadBar::brightness(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
+    SpreadBar::brightness(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
         "Brightness at the low and high audio levels: 0% is black, 100% is white. \
                  A black low end blends into the spectrogram background. \
                  Double-click resets.",
     );
-    SpreadBar::chroma(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(
+    SpreadBar::chroma(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(
         "Saturation at the low and high audio levels: 0% is gray, 100% is the most vivid available color. \
                  Double-click resets.",
     );
-    BendPlot::new(&mut cfg.spectrogram_gradient).home(home).show(ui).on_hover_text(BEND_HINT);
+    BendPlot::new(&mut cfg.spectrogram_gradient, home).show(ui).on_hover_text(BEND_HINT);
     RangeBar::new(
         &mut cfg.volume_floor_db,
         &mut cfg.volume_ceiling_db,

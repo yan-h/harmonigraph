@@ -6,9 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
-    grip_rect, poised, release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
-    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -497,38 +497,27 @@ impl<'a> RangeBar<'a> {
         };
 
         // ---- Interaction ----------------------------------------------------
-        let grab_id = response.id.with("grab");
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
-        let mut holding = None;
         if response.double_clicked() {
             *self.low = min;
             *self.high = max;
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let v = value_at(p.x);
-                let v = if self.integer { v.round() } else { v };
-                // Decided on the first frame of the gesture and remembered for
-                // the rest of it, so dragging one end past the other doesn't
-                // hand the drag to whichever handle is nearest now. Decided
-                // HERE rather than under `drag_started` so a gesture whose
-                // start frame was missed still does something.
-                let grab = grabbed(ui, grab_id, |ui| {
-                    // From where the press LANDED (see `aimed_at`).
-                    Grab::at(aim_at(aimed_at(ui, p).x), (*self.low, *self.high), near)
-                });
-                holding = Some(grab);
-                let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
-                if lo != *self.low || hi != *self.high {
-                    (*self.low, *self.high) = (lo, hi);
-                    response.mark_changed();
-                }
+        // Decided on the first frame of the gesture and remembered for the rest
+        // of it (see `drag`), so dragging one end past the other doesn't hand
+        // the drag to whichever handle is nearest now.
+        let pair = (*self.low, *self.high);
+        let held = drag(ui, &response, |aim| Grab::at(aim_at(aim.x), pair, near));
+        if let Some((grab, p)) = held {
+            let v = value_at(p.x);
+            let v = if self.integer { v.round() } else { v };
+            let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
+            if lo != *self.low || hi != *self.high {
+                (*self.low, *self.high) = (lo, hi);
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<Grab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab);
 
         // Off screen nothing below is needed; see the same line in `ValueBar`.
         if !ui.is_rect_visible(rect) {
@@ -649,11 +638,7 @@ impl<'a> RangeBar<'a> {
         // The name first, in the same place and the same faces a ValueBar puts
         // its own. Values in monospace: digits align and don't wiggle as they
         // change.
-        let text_color = if response.hovered() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        let text_color = name_color(&response);
         let mono = TextStyle::Monospace.resolve(ui.style());
         let text_gap = TEXT_GAP * scale;
         let width_of =
@@ -760,7 +745,7 @@ impl<'a> RangeBar<'a> {
         // Lit by what is in hand (see [`grip_color`]): the end a drag holds or a
         // press would take, both for the span. A closed span stands both thumbs
         // on one point with only the low one in reach, so the unlit one is
-        // painted first and the lit one shows.
+        // painted first and the lit one shows (`paint_thumbs`).
         let in_hand = holding.or_else(|| {
             poised(ui, &response).map(|p| Grab::at(aim_at(p.x), (*self.low, *self.high), near))
         });
@@ -769,18 +754,15 @@ impl<'a> RangeBar<'a> {
             Some(Grab::High) => (false, true),
             Some(Grab::Span { .. }) | None => (true, true),
         };
-        let mut thumbs = [(lgx, low_lit), (hgx, high_lit)];
-        thumbs.sort_by_key(|&(_, lit)| lit);
         let grip_radius = if self.fade_span { CornerRadius::same(r) } else { grip_radius(scale) };
-        for (x, lit) in thumbs {
-            grip_over_text(
-                painter,
-                grip_rect(x, rect, scale),
-                grip_radius,
-                grip_color(lit),
-                &[(label_pos, label.clone())],
-            );
-        }
+        paint_thumbs(
+            painter,
+            rect,
+            scale,
+            grip_radius,
+            [(lgx, low_lit), (hgx, high_lit)],
+            &[(label_pos, label)],
+        );
 
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,

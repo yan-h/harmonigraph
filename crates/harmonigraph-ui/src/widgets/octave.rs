@@ -7,8 +7,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
-    grip_rect, poised, release_grab, track_fill, BAR_TEXT_PAD, HANDLE_W,
+    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
+    track_fill, BAR_TEXT_PAD, HANDLE_W,
 };
 use crate::theme;
 
@@ -163,39 +163,31 @@ impl<'a> OctaveStrip<'a> {
         let out = |x: f32| (x - middle).abs() / slot;
 
         // ---- Interaction ----------------------------------------------------
-        let grab_id = response.id.with("grab");
-        let mut holding = None;
         if response.double_clicked() {
             (*self.count, *self.extras) = reset_wheel();
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let reach = out(p.x);
-                let grab = grabbed(ui, grab_id, |ui| {
-                    // From where the press LANDED (see `aimed_at`), which
-                    // this control needs more than the bars with handles do
-                    // and not differently: it splits its two gestures on a
-                    // hard line rather than on a reach, and half of the
-                    // drawn handle sits inside the six points egui spends
-                    // deciding a press is a drag — so the live position
-                    // hands "grab the handle, pull it outward", which is the
-                    // count, to the fringe.
-                    let start = out(aimed_at(ui, p).x);
-                    StripGrab::at(start, *self.count, *self.extras)
-                });
-                holding = Some(grab);
-                let (count, extras) = grab.apply(reach);
-                if (count, extras) != (*self.count, *self.extras) {
-                    (*self.count, *self.extras) = (count, extras);
-                    response.mark_changed();
-                }
+        // From where the press LANDED (see `drag`), which this control needs
+        // more than the bars with handles do and not differently: it splits its
+        // two gestures on a hard line rather than on a reach, and half of the
+        // drawn handle sits inside the six points egui spends deciding a press
+        // is a drag — so the live position hands "grab the handle, pull it
+        // outward", which is the count, to the fringe.
+        let wheel = (*self.count, *self.extras);
+        let held = drag(ui, &response, |aim| StripGrab::at(out(aim.x), wheel.0, wheel.1));
+        if let Some((grab, p)) = held {
+            let (count, extras) = grab.apply(out(p.x));
+            if (count, extras) != (*self.count, *self.extras) {
+                (*self.count, *self.extras) = (count, extras);
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<StripGrab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab);
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
@@ -230,11 +222,7 @@ impl<'a> OctaveStrip<'a> {
         // spelled out — the fringe, the count, the fringe — because the number
         // that matters depends on which of them is being dragged, and their
         // sum is what the eleven-slot budget is against.
-        let text_color = if response.hovered() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        let text_color = name_color(&response);
         let mono = TextStyle::Monospace.resolve(ui.style());
         let shown = if *self.extras > 0 {
             format!("{}+{}+{}", self.extras, self.count, self.extras)
@@ -281,14 +269,21 @@ impl<'a> OctaveStrip<'a> {
         let in_hand = holding.or_else(|| {
             poised(ui, &response).map(|p| StripGrab::at(out(p.x), *self.count, *self.extras))
         });
-        let fill = grip_color(!matches!(in_hand, Some(StripGrab::Extras { .. })));
+        let lit = !matches!(in_hand, Some(StripGrab::Extras { .. }));
         let inset = 0.5 * HANDLE_W * scale;
-        let runs = [(label_pos, label), (value_pos, value)];
-        for side in [-1.0f32, 1.0] {
+        let thumb = |side: f32| {
             let x = (middle + side * *self.count as f32 * 0.5 * slot)
                 .clamp(rect.left() + inset, rect.right() - inset);
-            grip_over_text(painter, grip_rect(x, rect, scale), grip_radius(scale), fill, &runs);
-        }
+            (x, lit)
+        };
+        paint_thumbs(
+            painter,
+            rect,
+            scale,
+            grip_radius(scale),
+            [thumb(-1.0), thumb(1.0)],
+            &[(label_pos, label), (value_pos, value)],
+        );
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }

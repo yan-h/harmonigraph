@@ -3,18 +3,17 @@
 //! [`SpreadBar`]s that set its brightness and chroma pairs.
 //!
 //! One module because they are one control between them. They write to a single
-//! [`Gradient`], they reset to a single [`default_home`], and the preview is the
-//! only place what the other three compose can be seen at all.
+//! [`Gradient`], they reset to the single home their caller hands each of them,
+//! and the preview is the only place what the other three compose can be seen at
+//! all.
 
 use egui::{Color32, CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
-use harmonigraph_scene::{
-    gradient_color, hue_circle, Gradient, ViewConfig, HUE_CIRCLE_N, PITCH_LUT_N,
-};
+use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PITCH_LUT_N};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
-    grip_rect, poised, release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
-    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    bar_radius, bar_width, drag, elided_name, grip_color, grip_radius, grip_rect, name_color,
+    paint_thumbs, poised, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET,
+    HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -196,29 +195,6 @@ enum SpectrumGrab {
     Outside,
 }
 
-/// The gradient a double-click goes home to when the caller names none: the
-/// lattice's, which a fresh view opens with.
-///
-/// Read off [`ViewConfig::default`] for the reason [`reset_wheel`] is, and
-/// the drift it warns about is live here rather than hypothetical:
-/// `ViewConfig::default` COMPOSES its gradient — a shorter arc over a
-/// shallower brightness ramp — instead of taking `Gradient::default()`,
-/// which is the type's own CIELAB-converted arc. Resetting to the type's
-/// default lands the bar on a pair the plugin has never opened on, and the
-/// bars carry no text entry to dial it back with, so the shipped arc would
-/// be unrecoverable by gesture.
-///
-/// The same argument is why a bar over some OTHER gradient has to say so:
-/// the Spectral pane's heatmap has a default of its own, and a double-click
-/// there landing on the lattice's arc would be that same unrecoverable jump
-/// one pane over. [`SpectrumBar::home`] and [`SpreadBar::home`] are where it
-/// says so.
-///
-/// [`reset_wheel`]: super::octave::reset_wheel
-fn default_home() -> Gradient {
-    ViewConfig::default().pitch_gradient
-}
-
 /// The gradient itself, end to end at a fixed scale: the picture the bars under
 /// it compose, low note (or silence) on the left.
 ///
@@ -278,6 +254,10 @@ impl GradientPreview {
     pub fn show(self, ui: &Ui, gradient: &Gradient) -> Response {
         let scale = theme::ui_scale(ui.ctx());
         let response = ui.interact(self.rect, self.id, Sense::hover());
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(self.rect) {
+            return response;
+        }
         // Read the way every picture reads the table, through `gradient_color`,
         // since a bent gradient's entries are not evenly spaced along the bar
         // (`LutSpacing`). A column per point rather than per entry, so the
@@ -378,17 +358,24 @@ pub struct SpectrumBar<'a> {
 }
 
 impl<'a> SpectrumBar<'a> {
-    pub fn new(gradient: &'a mut Gradient) -> Self {
-        SpectrumBar { gradient, home: default_home() }
-    }
-
-    /// The gradient a double-click on the track takes the ARC home to — only
-    /// its two hue fields, those being the only ones the track sets. Defaults
-    /// to the lattice's; see [`default_home`] for why a bar over any other
-    /// gradient owes its own.
-    pub fn home(mut self, home: Gradient) -> Self {
-        self.home = home;
-        self
+    /// A bar over `gradient`, which a double-click on the track takes the ARC
+    /// home to `home`'s — only its two hue fields, those being the only ones
+    /// the track sets.
+    ///
+    /// `home` is the gradient the picture this bar dials opens on, and every
+    /// caller names it because no default here could be right for all of them.
+    /// Not `Gradient::default()`, which is the type's own CIELAB-converted arc:
+    /// `ViewConfig::default` COMPOSES its gradient instead, and a reset landing
+    /// on the type's default puts the bar on a pair the plugin has never opened
+    /// on — with no text entry to dial the shipped one back. Not the lattice's
+    /// either, since the Spectral pane's heatmap has a default of its own and a
+    /// reset there landing on the lattice's arc is the same unrecoverable jump
+    /// one pane over. Read it off the fresh config rather than restating it,
+    /// for the reason [`reset_wheel`] is.
+    ///
+    /// [`reset_wheel`]: super::octave::reset_wheel
+    pub fn new(gradient: &'a mut Gradient, home: Gradient) -> Self {
+        SpectrumBar { gradient, home }
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -529,8 +516,6 @@ impl<'a> SpectrumBar<'a> {
                 SpectrumGrab::Rotate { held: aimed.hue_start + offset_at(origin.x) }
             }
         };
-        let grab_id = response.id.with("spectrum_grab");
-        let mut holding = None;
         let clicked_track = response.interact_pointer_pos().is_some_and(|p| on_track(&p));
         if response.double_clicked() && clicked_track {
             let home = self.home.sanitized();
@@ -538,46 +523,40 @@ impl<'a> SpectrumBar<'a> {
             self.gradient.hue_span = home.hue_span;
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let grab = grabbed(ui, grab_id, |ui| {
-                    // All three of these are asked of where the press
-                    // LANDED — see [`aimed_at`] — and none of them of where
-                    // the pointer has since got to. Whether the gesture is
-                    // ours, because a press that began on the preview is
-                    // already over the track by the first live frame;
-                    // handle or track, because a press inside the handle's
-                    // reach is already clear of it; and the hue a turn
-                    // holds, because the gesture begins where the hand put
-                    // it down and turning the circle by less than the
-                    // pointer has travelled is a gesture that starts behind
-                    // and stays there.
-                    grab_at(aimed_at(ui, p), handle_x)
-                });
-                holding = Some(grab);
-                let next = match grab {
-                    // The magnitude only. Its SIGN is the flip button's, and
-                    // leaving it there is what lets the handle reach zero
-                    // without the arc turning inside out on the way past.
-                    SpectrumGrab::Span => {
-                        Some(Gradient { hue_span: winding * offset_at(p.x).abs(), ..aimed })
-                    }
-                    SpectrumGrab::Rotate { held } => Some(Gradient {
-                        hue_start: (held - offset_at(p.x)).rem_euclid(FULL_TURN),
-                        ..aimed
-                    }),
-                    SpectrumGrab::Outside => None,
-                };
-                if let Some(next) = next.filter(|next| *next != *self.gradient) {
-                    *self.gradient = next;
-                    response.mark_changed();
+        // All three of the grab's questions are asked of where the press
+        // LANDED — see `drag` — and none of them of where the pointer has since
+        // got to. Whether the gesture is ours, because a press that began on
+        // the preview is already over the track by the first live frame; handle
+        // or track, because a press inside the handle's reach is already clear
+        // of it; and the hue a turn holds, because the gesture begins where the
+        // hand put it down and turning the circle by less than the pointer has
+        // travelled is a gesture that starts behind and stays there.
+        let held = drag(ui, &response, |aim| grab_at(aim, handle_x));
+        if let Some((grab, p)) = held {
+            let next = match grab {
+                // The magnitude only. Its SIGN is the flip button's, and
+                // leaving it there is what lets the handle reach zero without
+                // the arc turning inside out on the way past.
+                SpectrumGrab::Span => {
+                    Some(Gradient { hue_span: winding * offset_at(p.x).abs(), ..aimed })
                 }
+                SpectrumGrab::Rotate { held } => Some(Gradient {
+                    hue_start: (held - offset_at(p.x)).rem_euclid(FULL_TURN),
+                    ..aimed
+                }),
+                SpectrumGrab::Outside => None,
+            };
+            if let Some(next) = next.filter(|next| *next != *self.gradient) {
+                *self.gradient = next;
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<SpectrumGrab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab);
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         // The gradient read BACK, not the snapshot the gesture was aimed at. A
         // drag has just written it, and painting the value from before that
@@ -1115,24 +1094,19 @@ pub struct SpreadBar<'a> {
     home: Gradient,
 }
 
+/// Both constructors take the gradient a double-click takes this bar's PAIR home
+/// to — its own stretch of it, the other left alone. See [`SpectrumBar::new`] for
+/// why every caller names it.
 impl<'a> SpreadBar<'a> {
     /// The `L*` the bottom and the top of the range are drawn at.
-    pub fn brightness(gradient: &'a mut Gradient) -> Self {
-        SpreadBar { gradient, spread: Spread::Brightness, home: default_home() }
+    pub fn brightness(gradient: &'a mut Gradient, home: Gradient) -> Self {
+        SpreadBar { gradient, spread: Spread::Brightness, home }
     }
 
     /// How much of the color available to them the bottom and the top of the
     /// range carry.
-    pub fn chroma(gradient: &'a mut Gradient) -> Self {
-        SpreadBar { gradient, spread: Spread::Chroma, home: default_home() }
-    }
-
-    /// The gradient a double-click takes this bar's PAIR home to — its own
-    /// stretch of it, the other left alone. Defaults to the lattice's; see
-    /// [`default_home`] for why a bar over any other gradient owes its own.
-    pub fn home(mut self, home: Gradient) -> Self {
-        self.home = home;
-        self
+    pub fn chroma(gradient: &'a mut Gradient, home: Gradient) -> Self {
+        SpreadBar { gradient, spread: Spread::Chroma, home }
     }
 
     pub fn show(self, ui: &mut Ui) -> Response {
@@ -1155,35 +1129,29 @@ impl<'a> SpreadBar<'a> {
         let pair = |g: Gradient| self.spread.of(g);
 
         // ---- Interaction ----------------------------------------------------
-        let grab_id = response.id.with("spread_grab");
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
-        let mut holding = None;
         // Reset rather than text entry, the bargain a [`RangeBar`] makes: a bar
         // holding two numbers has no single value to type into it.
         if response.double_clicked() {
             self.spread.set(self.gradient, self.spread.of(self.home.sanitized()));
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let v = value_at(p.x);
-                let aimed = pair(self.gradient.sanitized());
-                let grab = grabbed(ui, grab_id, |ui| {
-                    // From where the press LANDED; see [`aimed_at`].
-                    SpreadGrab::at(value_at(aimed_at(ui, p).x), aimed, near)
-                });
-                holding = Some(grab);
-                let next = self.spread.legal(self.spread.snapped(grab.apply(v, aimed, axis)));
-                if next != pair(*self.gradient) {
-                    self.spread.set(self.gradient, next);
-                    response.mark_changed();
-                }
+        let aimed = pair(self.gradient.sanitized());
+        let held = drag(ui, &response, |aim| SpreadGrab::at(value_at(aim.x), aimed, near));
+        if let Some((grab, p)) = held {
+            let next =
+                self.spread.legal(self.spread.snapped(grab.apply(value_at(p.x), aimed, axis)));
+            if next != pair(*self.gradient) {
+                self.spread.set(self.gradient, next);
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<SpreadGrab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab);
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         // The pair read BACK, not the one the gesture was aimed at: a drag has
         // just written it, and painting the earlier value leaves the handles a
@@ -1210,11 +1178,7 @@ impl<'a> SpreadBar<'a> {
         // is measured off a string that never changes rather than off the pair
         // currently in the bar, so the name cannot re-elide mid-drag. See
         // [`Spread::widest_readout`] for what that string is.
-        let text_color = if response.hovered() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        let text_color = name_color(&response);
         let mono = TextStyle::Monospace.resolve(ui.style());
         let value = painter.layout_no_wrap(
             self.spread.readout((centre, spread)),
@@ -1257,7 +1221,7 @@ impl<'a> SpreadBar<'a> {
         // the PITCH they carry, so which thumb is the low end is the ramp's
         // sign: the left one at a rising ramp, the right one at a falling. A
         // flat ramp stands both on one point, so the unlit one is painted first
-        // and the lit one shows.
+        // and the lit one shows (`paint_thumbs`).
         let in_hand = holding.or_else(|| {
             poised(ui, &response).map(|p| SpreadGrab::at(value_at(p.x), (centre, spread), near))
         });
@@ -1267,17 +1231,14 @@ impl<'a> SpreadBar<'a> {
             Some(SpreadGrab::High) => (!rising, rising),
             Some(SpreadGrab::Middle { .. }) | None => (true, true),
         };
-        let mut thumbs = [(lx, left_lit), (hx, right_lit)];
-        thumbs.sort_by_key(|&(_, lit)| lit);
-        for (x, lit) in thumbs {
-            grip_over_text(
-                painter,
-                grip_rect(x, rect, scale),
-                grip_radius(scale),
-                grip_color(lit),
-                &[(label_pos, label.clone()), (value_pos, value.clone())],
-            );
-        }
+        paint_thumbs(
+            painter,
+            rect,
+            scale,
+            grip_radius(scale),
+            [(lx, left_lit), (hx, right_lit)],
+            &[(label_pos, label), (value_pos, value)],
+        );
 
         // The cursor says which gesture a press would start before committing
         // to it: a handle opens the ramp, the middle picks the whole thing up.
@@ -1297,9 +1258,9 @@ mod tests {
         band_bounds, band_colors, band_columns, bands, fades_out_at_its_edges,
     };
     use crate::widgets::probe::{
-        after_passes, filled_rects, grips, handles, knockouts, painted, painted_in, painted_text,
-        press, text_boxes,
+        filled_rects, handles, knockouts, painted, painted_in, painted_text, press, text_boxes,
     };
+    use harmonigraph_scene::ViewConfig;
 
     /// A [`SpectrumBar`] under a [`GradientPreview`] in a 300pt context,
     /// driven one frame at a time.
@@ -1324,10 +1285,9 @@ mod tests {
         /// The preview above the bar, read back off the frame just drawn.
         preview: egui::Rect,
         t: f64,
-        /// What the bar is told to reset to, or `None` to leave the builder
-        /// alone — which is a caller naming no home, and a different code path
-        /// from one naming the same gradient the default already is.
-        home: Option<Gradient>,
+        /// What the bar is told to reset to: the lattice's, as the pane
+        /// hands it, unless a test says otherwise.
+        home: Gradient,
         /// The chrome scale the bar is drawn at, put back in force on every
         /// frame because that is how a shell holds it — see
         /// [`crate::theme::set_ui_scale`].
@@ -1363,7 +1323,7 @@ mod tests {
                 rect: egui::Rect::NOTHING,
                 preview: egui::Rect::NOTHING,
                 t: 0.0,
-                home: None,
+                home: ViewConfig::default().pitch_gradient,
                 scale,
             };
             // Twice: `set_ui_scale` rebuilds the style, and a `Ui` built from
@@ -1378,8 +1338,8 @@ mod tests {
         /// gradient — the Spectral pane's own case.
         fn settled_with_home(g: &mut Gradient, home: Gradient) -> Spectrum {
             let mut h = Spectrum::settled(g);
-            h.home = Some(home);
-            // Laid out again under the new builder, for the reason `settled`
+            h.home = home;
+            // Laid out again under the new home, for the reason `settled`
             // lays out at all: egui resolves a press against the previous
             // pass's rects.
             h.frame(g, vec![]);
@@ -1406,12 +1366,7 @@ mod tests {
                     // would pass `a_spectrum_drag_draws_the_preview_it_just_set`
                     // against a picture that lags.
                     let slot = GradientPreview::reserve(ui);
-                    let bar = SpectrumBar::new(g);
-                    let bar = match self.home {
-                        Some(home) => bar.home(home),
-                        None => bar,
-                    };
-                    rect.set(bar.show(ui).rect);
+                    rect.set(SpectrumBar::new(g, self.home).show(ui).rect);
                     preview.set(slot.show(ui, g).rect);
                 },
             );
@@ -1880,7 +1835,7 @@ mod tests {
             let mut g = ViewConfig::default().pitch_gradient;
             let seen = std::cell::Cell::new(egui::Rect::NOTHING);
             let out = painted_in(egui::vec2(column, 80.0), |ui| {
-                seen.set(SpectrumBar::new(&mut g).show(ui).rect)
+                seen.set(SpectrumBar::new(&mut g, Gradient::default()).show(ui).rect)
             });
             let track = seen.get();
             let shapes: Vec<egui::Shape> = out.into_iter().map(|s| s.shape).collect();
@@ -2198,10 +2153,10 @@ mod tests {
     /// fail.
     #[test]
     fn the_preview_is_a_picture_and_not_a_control() {
-        // The arc the track's own reset lands on, so the control halves below
-        // read the reset rather than a constant that merely used to match it
-        // (see `a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on`).
-        let home = default_home();
+        // The arc the harness hands the bar as its home, so the double-click
+        // half below reads the reset rather than a constant that merely used to
+        // match it.
+        let home = ViewConfig::default().pitch_gradient;
         let dialled = Gradient { hue_start: 12.0, hue_span: 33.0, ..home };
 
         for up in [0.0f32, 0.05, 0.25, 0.5, 1.0] {
@@ -2233,56 +2188,24 @@ mod tests {
         }
     }
 
-    /// The arc a double-click goes home to is the one a fresh view OPENS on,
-    /// which is not the gradient type's own default.
+    /// A double-click on any of the three bars goes home to the gradient the bar
+    /// was HANDED, which is what lets one set of bars serve two gradients.
     ///
-    /// The same argument [`reset_wheel`] is written out for, one control over:
-    /// a reset that names its own value drifts the moment the fresh look
-    /// moves, and does it silently, because nothing reads out the pair it
-    /// resets to. `ViewConfig::default` composes its gradient rather than
-    /// taking `Gradient::default()` — a shorter arc over a shallower
-    /// brightness ramp — and says at the field that it is free to differ.
-    /// A reset that lands on the type's default therefore puts the bar
-    /// somewhere the plugin has never opened, and the bar has no text entry
-    /// to dial it back with.
-    ///
-    /// [`reset_wheel`]: crate::widgets::octave::reset_wheel
+    /// Every caller names its home ([`SpectrumBar::new`] says why no default
+    /// could serve), so what is left to hold is that the reset branch reads the
+    /// one it was given. The heatmap's is the fixture because it is nothing like
+    /// the type's own default — the one value a bar that ignored its home could
+    /// plausibly land on instead — and both halves are asserted: the gradient
+    /// that WAS reached, and that it is not that default. Without the second, a
+    /// bar that quietly ignored `home` would still pass whenever the two agreed.
     #[test]
-    fn a_double_click_on_the_spectrum_goes_home_to_the_arc_a_fresh_view_opens_on() {
-        let fresh = ViewConfig::default().pitch_gradient;
-        let dialled = Gradient { hue_start: 12.0, hue_span: 33.0, ..fresh };
-
-        let mut g = dialled;
-        let mut h = Spectrum::settled(&mut g);
-        let at = h.track().center();
-        h.double_click(&mut g, at);
-        assert_eq!(
-            (g.hue_start, g.hue_span),
-            (fresh.hue_start, fresh.hue_span),
-            "the reset landed on an arc no fresh view opens on",
-        );
-    }
-
-    /// A bar handed a home of its own resets THERE, which is what lets one set
-    /// of bars serve two gradients.
-    ///
-    /// The Spectral pane's heatmap is the second, and its default arc is
-    /// nothing like the lattice's — so a reset that ignored the builder would
-    /// land a heatmap on the lattice's violet-to-yellow sweep and leave the
-    /// shipped ramp unreachable by gesture, which is the same loss
-    /// [`default_home`] exists to prevent one pane over.
-    ///
-    /// Both halves are asserted: the arc that WAS reached, and that it is not
-    /// the default one. Without the second, a bar that quietly ignored `home`
-    /// would still pass whenever the two happened to agree.
-    #[test]
-    fn a_bar_over_another_gradient_resets_to_the_one_it_was_handed() {
+    fn a_double_click_goes_home_to_the_gradient_the_bar_was_handed() {
         let home = crate::SpectrumConfig::default().spectrogram_gradient;
-        let lattice = default_home();
+        let stray = Gradient::default();
         assert_ne!(
             (home.hue_start, home.hue_span),
-            (lattice.hue_start, lattice.hue_span),
-            "the two homes agree, so this test cannot tell whether `home` was read",
+            (stray.hue_start, stray.hue_span),
+            "the home is the type's default, so this test cannot tell whether it was read",
         );
 
         let mut g = Gradient { hue_start: 12.0, hue_span: 33.0, ..home };
@@ -2297,14 +2220,19 @@ mod tests {
 
         // And the pairs the two spread bars carry, which reset the same way.
         for spread in [Spread::Brightness, Spread::Chroma] {
-            let dialled = Gradient { hue_start: 12.0, hue_span: 33.0, ..Gradient::default() };
+            assert_ne!(
+                spread.of(stray),
+                spread.of(home.sanitized()),
+                "{spread:?}: the home's pair is the type's default, so this cannot tell",
+            );
+            let dialled = holding(spread, spread.snapped((30.0 / spread.per_unit(), 0.0)));
             assert_ne!(
                 spread.of(dialled),
                 spread.of(home.sanitized()),
                 "{spread:?}: the bar already holds the pair it would reset to",
             );
             assert_eq!(
-                double_click_spread(spread, dialled, Some(home)),
+                double_click_spread(spread, dialled, home),
                 spread.of(home.sanitized()),
                 "{spread:?}: the reset ignored the home it was handed",
             );
@@ -2803,47 +2731,6 @@ mod tests {
         );
     }
 
-    /// Where a double-click lands has to BE the pair a fresh view opens with,
-    /// for the reason the wheel's reset does: the bar carries no text entry, so
-    /// a reset that missed would leave the shipped look unreachable by gesture.
-    ///
-    /// The bar a caller names NO home for is the one under test, that being the
-    /// case a caller gets wrong by omission — a bar handed a home of its own
-    /// resets to what it was handed, and
-    /// [`a_bar_over_another_gradient_resets_to_the_one_it_was_handed`] is where
-    /// that half is held.
-    ///
-    /// Through the gesture rather than by comparing `default_home()` to the
-    /// expression `default_home()` is defined as, which is a tautology that
-    /// passes however the widget behaves. What has to be true is that a
-    /// double-click on a bar built WITHOUT `.home(..)` lands on the fresh view's
-    /// pair — three separate things (the default, the builder, and the reset
-    /// branch reading it), only one of which a pure comparison touches.
-    #[test]
-    fn a_double_click_goes_home_to_the_pair_a_fresh_view_opens_with() {
-        let fresh = ViewConfig::default().pitch_gradient;
-        for spread in [Spread::Brightness, Spread::Chroma] {
-            let dialled = holding(spread, spread.snapped((30.0 / spread.per_unit(), 0.0)));
-            assert_ne!(
-                spread.of(dialled),
-                spread.of(fresh.sanitized()),
-                "{spread:?}: the bar already holds the pair it would reset to",
-            );
-            assert_eq!(
-                double_click_spread(spread, dialled, None),
-                spread.of(fresh.sanitized()),
-                "{spread:?}: the reset landed on a pair no fresh view opens with",
-            );
-            assert_ne!(
-                spread.of(fresh),
-                spread.of(Gradient::default()),
-                "{spread:?}: the type's own default and the composed one agree today, so \
-                 this reset cannot tell whether it is reading the one the plugin actually \
-                 opens on",
-            );
-        }
-    }
-
     /// One gradient carrying this pair on this spread and its own defaults
     /// everywhere else.
     fn holding(spread: Spread, pair: (f32, f32)) -> Gradient {
@@ -2856,34 +2743,9 @@ mod tests {
     /// is the only place the two differ to a caller.
     fn spread_bar(spread: Spread, g: &mut Gradient, ui: &mut Ui) -> Response {
         match spread {
-            Spread::Brightness => SpreadBar::brightness(g).show(ui),
-            Spread::Chroma => SpreadBar::chroma(g).show(ui),
+            Spread::Brightness => SpreadBar::brightness(g, Gradient::default()).show(ui),
+            Spread::Chroma => SpreadBar::chroma(g, Gradient::default()).show(ui),
         }
-    }
-
-    /// At a flat ramp both thumbs stand on one point, and a pointer resting
-    /// beside it lights the end on its own side ([`SpreadGrab::at`]) — so the
-    /// lit one has to be painted last, or the unlit one standing on it says
-    /// neither is in hand. The chroma bar opens flat, so this is where a fresh
-    /// pane meets it.
-    #[test]
-    fn at_a_flat_ramp_the_lit_thumb_is_the_one_on_top() {
-        let mut g = holding(Spread::Chroma, (0.5, 0.0));
-        let shapes = after_passes(
-            300.0,
-            |bar| {
-                // Clear of the point's own reach, which at a flat ramp is the
-                // middle's and would light both.
-                let at = egui::pos2(bar.center().x - 3.0 * GRAB_PX, bar.center().y);
-                vec![vec![egui::Event::PointerMoved(at)]; 2]
-            },
-            |ui| spread_bar(Spread::Chroma, &mut g, ui),
-        );
-        let thumbs = grips(&shapes);
-        assert_eq!(thumbs.len(), 2, "{thumbs:?}");
-        assert_eq!(thumbs[0].0, thumbs[1].0, "the flat ramp's thumbs do not stand on one point");
-        let lit: Vec<bool> = thumbs.iter().map(|&(_, lit)| lit).collect();
-        assert_eq!(lit, [false, true], "the unlit thumb is painted over the lit one");
     }
 
     /// Paint one bar across a 300pt row and return what it emitted, each shape
@@ -3216,13 +3078,11 @@ mod tests {
     }
 
     /// Double-click one spread bar and answer the pair it wrote. `home` is what
-    /// the bar is told to reset to, or `None` to leave the builder alone — which
-    /// is a caller naming no home, and a different path from one naming the same
-    /// gradient the default already is.
+    /// the bar is told to reset to.
     ///
     /// Through a real context for the reason [`drag_bar`] is: the reset is a
     /// branch on a `Response`, and nothing synthetic reaches it.
-    fn double_click_spread(spread: Spread, start: Gradient, home: Option<Gradient>) -> (f32, f32) {
+    fn double_click_spread(spread: Spread, start: Gradient, home: Gradient) -> (f32, f32) {
         let ctx = crate::tests::probe::themed();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 100.0));
         let mut g = start;
@@ -3239,12 +3099,8 @@ mod tests {
                 },
                 |ui| {
                     let b = match spread {
-                        Spread::Brightness => SpreadBar::brightness(g),
-                        Spread::Chroma => SpreadBar::chroma(g),
-                    };
-                    let b = match home {
-                        Some(home) => b.home(home),
-                        None => b,
+                        Spread::Brightness => SpreadBar::brightness(g, home),
+                        Spread::Chroma => SpreadBar::chroma(g, home),
                     };
                     bar.set(b.show(ui).rect)
                 },

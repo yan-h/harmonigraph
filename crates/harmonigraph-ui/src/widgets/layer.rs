@@ -5,8 +5,8 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 use harmonigraph_scene::{ViewConfig, SEVENS_LAYER_LIMIT};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
-    grip_rect, poised, release_grab, track_fill, BAR_TEXT_PAD, HANDLE_W,
+    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
+    track_fill, BAR_TEXT_PAD, HANDLE_W,
 };
 use crate::theme;
 
@@ -254,35 +254,29 @@ impl<'a> LayerStrip<'a> {
         let at = |x: f32| (x - rect.left()) / slot - SEVENS_LAYER_LIMIT as f32 - 0.5;
 
         // ---- Interaction ----------------------------------------------------
-        let grab_id = response.id.with("grab");
-        let mut holding = None;
         if response.double_clicked() {
             (*self.low, *self.home, *self.high) = reset_stack();
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let stack = (*self.low, *self.home, *self.high);
-                let grab = grabbed(ui, grab_id, |ui| {
-                    // From where the press LANDED (see `aimed_at`): the first
-                    // frame egui calls a drag is already six points along, and
-                    // a cell is not much wider than that, so the live position
-                    // hands "grab this end and pull it out" to whatever the
-                    // hand was aiming past.
-                    Grab::at(at(aimed_at(ui, p).x), stack)
-                });
-                holding = Some(grab);
-                let next = grab.apply(at(p.x));
-                if next != stack {
-                    (*self.low, *self.home, *self.high) = next;
-                    response.mark_changed();
-                }
+        // From where the press LANDED (see `drag`): the first frame egui calls
+        // a drag is already six points along, and a cell is not much wider than
+        // that, so the live position hands "grab this end and pull it out" to
+        // whatever the hand was aiming past.
+        let stack = (*self.low, *self.home, *self.high);
+        let held = drag(ui, &response, |aim| Grab::at(at(aim.x), stack));
+        if let Some((grab, p)) = held {
+            let next = grab.apply(at(p.x));
+            if next != stack {
+                (*self.low, *self.home, *self.high) = next;
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<Grab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab);
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(bar_radius(scale)), theme::well());
@@ -312,11 +306,7 @@ impl<'a> LayerStrip<'a> {
 
         // Name and readout as a ValueBar wears them, ahead of the handles so a
         // thumb standing on a letter can knock it out.
-        let text_color = if response.hovered() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        let text_color = name_color(&response);
         let mono = TextStyle::Monospace.resolve(ui.style());
         // A stack of one sheet reads out that sheet alone, the way the octave
         // strip drops its fringe from the readout: three copies of one number
@@ -357,27 +347,22 @@ impl<'a> LayerStrip<'a> {
             holding.or_else(|| poised(ui, &response).map(|p| Grab::at(at(p.x), (low, home, high))));
         let (lit_low, lit_home, lit_high) = in_hand.map_or((true, true, true), Grab::holds);
         let (e_low, c_home, e_high) = handle_at(low, home, high);
-        let grips = [(e_low, lit_low), (c_home, lit_home), (e_high, lit_high)];
-        let name_run = [(name_at, label)];
-        // Unlit first: two thumbs coincide whenever home sits on an end, and
-        // the later fill is the colour that shows.
-        for pass in [false, true] {
-            for (i, _) in grips.iter().filter(|(_, lit)| *lit == pass) {
-                // Held inside the bar by half a handle, for the reason
-                // `HANDLE_INSET` holds a range bar's ends off theirs: a stack
-                // filling the axis puts a border on the bar's own edge, and a
-                // handle centered there hangs half its width over the pane,
-                // where the part still on the bar reads as its border.
-                let x = x_of(*i).clamp(rect.left() + inset, rect.right() - inset);
-                grip_over_text(
-                    painter,
-                    grip_rect(x, rect, scale),
-                    grip_radius(scale),
-                    grip_color(pass),
-                    &name_run,
-                );
-            }
-        }
+        // Held inside the bar by half a handle, for the reason `HANDLE_INSET`
+        // holds a range bar's ends off theirs: a stack filling the axis puts a
+        // border on the bar's own edge, and a handle centered there hangs half
+        // its width over the pane, where the part still on the bar reads as its
+        // border.
+        let held_in = |i: f32| x_of(i).clamp(rect.left() + inset, rect.right() - inset);
+        // Unlit first (`paint_thumbs`): two thumbs coincide whenever home sits
+        // on an end, and the later fill is the colour that shows.
+        paint_thumbs(
+            painter,
+            rect,
+            scale,
+            grip_radius(scale),
+            [(held_in(e_low), lit_low), (held_in(c_home), lit_home), (held_in(e_high), lit_high)],
+            &[(name_at, label)],
+        );
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }

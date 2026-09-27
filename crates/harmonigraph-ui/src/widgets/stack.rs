@@ -9,8 +9,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, grabbed, grip_color, grip_over_text, grip_radius, grip_rect,
-    poised, release_grab, track_fill, BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
+    bar_radius, bar_width, drag, grip_radius, name_color, paint_thumbs, poised, track_fill,
+    BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use crate::theme;
 
@@ -452,8 +452,6 @@ impl<'a> StackBar<'a> {
         };
 
         // ---- Interaction ----------------------------------------------------
-        let grab_id = response.id.with("grab");
-        let mut holding = None;
         if response.double_clicked() {
             let fresh = ViewConfig::default();
             for layer in LAYERS {
@@ -461,37 +459,33 @@ impl<'a> StackBar<'a> {
             }
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let rings = self.view.rings();
-                // Decided from where the press LANDED (see `aimed_at`) rather
-                // than from where the pointer has since got to: the first frame
-                // of a drag arrives a click threshold along, which on a bar
-                // whose thumbs can stand a thumb's width apart is enough to
-                // point past two of them.
-                let grab = grabbed(ui, grab_id, |ui| {
-                    let aim = aimed_at(ui, p).x;
-                    let layer = aimed(aim, thumbs_of(&rings), half_thumb);
-                    // Off the boundary's TRUE place rather than the thumb's
-                    // drawn one, so a press on a thumb that was pushed out of a
-                    // pile keeps that push for the gesture instead of jumping
-                    // the layer out by it.
-                    Grab { layer, offset: value_at(aim) - rings.edges()[layer.index()] }
-                });
-                holding = Some(grab.layer);
-                let to = value_at(p.x) - grab.offset;
-                let current = grab.layer.width(self.view);
-                let want = resized(grab.layer.index(), to, &rings, current);
-                if want != current {
-                    grab.layer.set(self.view, want);
-                    response.mark_changed();
-                }
+        let rings = self.view.rings();
+        // Decided from where the press LANDED (see `drag`) rather than from
+        // where the pointer has since got to: the first frame of a drag arrives
+        // a click threshold along, which on a bar whose thumbs can stand a
+        // thumb's width apart is enough to point past two of them.
+        let held = drag(ui, &response, |aim| {
+            let layer = aimed(aim.x, thumbs_of(&rings), half_thumb);
+            // Off the boundary's TRUE place rather than the thumb's drawn one,
+            // so a press on a thumb that was pushed out of a pile keeps that
+            // push for the gesture instead of jumping the layer out by it.
+            Grab { layer, offset: value_at(aim.x) - rings.edges()[layer.index()] }
+        });
+        if let Some((grab, p)) = held {
+            let to = value_at(p.x) - grab.offset;
+            let current = grab.layer.width(self.view);
+            let want = resized(grab.layer.index(), to, &rings, current);
+            if want != current {
+                grab.layer.set(self.view, want);
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<Grab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab.layer);
 
+        // Off screen nothing below is needed; see the same line in `ValueBar`.
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
         // ---- Paint ----------------------------------------------------------
         let rings = self.view.rings();
         let spans = layer_spans(&rings);
@@ -578,11 +572,7 @@ impl<'a> StackBar<'a> {
         // ellipsis costs most of the room a four-letter name needs, and a layer
         // dialled down to a sliver would spend its whole cell saying nothing.
         // What the bar always shows is the picture.
-        let text_color = if response.hovered() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        let text_color = name_color(&response);
         let thumbs = thumbs_of(&rings);
         let body = TextStyle::Body.resolve(ui.style());
         let mut runs: Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)> = Vec::new();
@@ -652,15 +642,15 @@ impl<'a> StackBar<'a> {
         // are painted in does not matter.
         let in_hand =
             holding.or_else(|| poised(ui, &response).map(|p| aimed(p.x, thumbs, half_thumb)));
-        for (layer, x) in LAYERS.into_iter().zip(thumbs) {
-            grip_over_text(
-                painter,
-                grip_rect(x, rect, scale),
-                grip_radius(scale),
-                grip_color(in_hand.is_none_or(|held| held == layer)),
-                &runs,
-            );
-        }
+        let lit = |layer: Layer| in_hand.is_none_or(|held| held == layer);
+        paint_thumbs(
+            painter,
+            rect,
+            scale,
+            grip_radius(scale),
+            [0, 1, 2, 3].map(|k| (thumbs[k], lit(LAYERS[k]))),
+            &runs,
+        );
 
         response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
     }
