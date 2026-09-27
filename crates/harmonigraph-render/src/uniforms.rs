@@ -131,7 +131,7 @@ uniform_group! {
         drift: Float2,
         target_size: Float2,
         material: u32,
-        padding: f32,
+        source_roughness: f32,
     }
 }
 uniform_group! {

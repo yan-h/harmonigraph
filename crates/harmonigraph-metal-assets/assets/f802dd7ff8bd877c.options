@@ -1,0 +1,7 @@
+schema=1
+wgpu-hal=29.0.4
+language=196610
+fast_math=true
+invariance=true
+math_mode=2
+math_functions=0

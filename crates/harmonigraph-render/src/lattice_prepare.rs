@@ -96,6 +96,7 @@ impl CallbackTrait for LatticeCallback {
         let sheet_sizes = resources.sheets.sizes();
 
         let frame = self.prepare_targets(device, screen_descriptor);
+        let watercolor = resources.compiled.watercolor.clone();
         let pane = resources.pane_buffers(
             device,
             self.pane_id,
@@ -118,6 +119,15 @@ impl CallbackTrait for LatticeCallback {
                 occluders: frame.occluders.len(),
             },
             shared_sdf.texture.as_ref(),
+        );
+
+        lattice_watercolor::prepare(
+            device,
+            queue,
+            egui_encoder,
+            &watercolor,
+            pane,
+            &self.uniforms.nebula,
         );
 
         self.upload_frame(

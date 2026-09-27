@@ -72,8 +72,22 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            // `w` carries cell kinds in the shadow pass and is unused here.
-            params: [n.activation, n.melody_level, n.bass_level, 0.0],
+            // The stable lattice identity survives sorting, row reuse and camera rebases.
+            // Shadow-cell draws use their separate instances’ w for cell kinds.
+            params: [
+                n.activation,
+                n.melody_level,
+                n.bass_level,
+                if atmosphere.material == harmonigraph_scene::LatticeMaterial::Watercolor {
+                    lattice_watercolor::node_seed(
+                        n.lattice_pos.fives,
+                        n.lattice_pos.threes,
+                        n.lattice_pos.sevens,
+                    )
+                } else {
+                    0.0
+                },
+            ],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -487,7 +501,7 @@ impl LatticeCallback {
                     ]),
                     target_size: Float2([1.0; 2]),
                     material: atmosphere.material as u32,
-                    padding: 0.0,
+                    source_roughness: atmosphere.source_roughness,
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.

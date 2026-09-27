@@ -587,6 +587,7 @@ pub enum LatticeMaterial {
     Clouds = 0,
     Contours = 1,
     Interference = 2,
+    Watercolor = 3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -594,6 +595,8 @@ pub enum LatticeMaterial {
 pub struct AtmosphereSettings {
     pub enabled: bool,
     pub material: LatticeMaterial,
+    /// Per-node source breakup before watercolor resamples the combined light.
+    pub source_roughness: f32,
     pub nebula_depth: f32,
     pub nebula_scale: f32,
     pub nebula_speed: f32,
@@ -606,6 +609,7 @@ impl Default for AtmosphereSettings {
         Self {
             enabled: true,
             material: LatticeMaterial::Clouds,
+            source_roughness: 0.0,
             nebula_depth: 0.134_627_85,
             nebula_scale: 0.840_435_3,
             nebula_speed: 6.077_757_4,
@@ -625,6 +629,7 @@ impl AtmosphereSettings {
                 fallback
             }
         };
+        self.source_roughness = clamp(self.source_roughness, fresh.source_roughness, 0.0, 1.0);
         self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
         self.nebula_scale =
             clamp(self.nebula_scale, fresh.nebula_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);

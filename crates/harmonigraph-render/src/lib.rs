@@ -72,6 +72,7 @@ mod dot_shadow;
 /// [`BloomChain`], and the one that draws no picture of its own.
 mod glow;
 mod lattice_node_glow;
+mod lattice_watercolor;
 pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
@@ -356,6 +357,7 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "fs_plus_split",
     "vs_glow_splat",
     "fs_glow_splat",
+    "fs_glow_splat_watercolor",
     "vs_glow_resolve",
     "fs_glow_resolve",
     "vs_ink_strip",
@@ -969,6 +971,7 @@ struct CompiledLatticeResources {
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
     glow_statistics_layout: wgpu::BindGroupLayout,
+    watercolor: lattice_watercolor::Pipelines,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     bright_layout: wgpu::BindGroupLayout,
@@ -1336,6 +1339,7 @@ struct PaneBuffers {
     /// ink, so resizing must retain these rows rather than reseeding them.
     ink_history: Option<InkStrip>,
     ink_kernel: lattice_node_glow::InkKernel,
+    watercolor: Option<lattice_watercolor::Tile>,
     offscreen: Option<Offscreen>,
 }
 
@@ -1419,6 +1423,7 @@ struct LatticeBloom {
 /// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
+    watercolor_source: Option<lattice_watercolor::Source>,
     statistics: [wgpu::TextureView; 3],
     statistics_bind_group: wgpu::BindGroup,
     /// The descriptor format of `view`.
@@ -1932,6 +1937,7 @@ impl GlowTarget {
         let (statistics, statistics_bind_group) =
             lattice_node_glow::statistics(device, shared.glow_statistics_layout, size);
         GlowTarget {
+            watercolor_source: None,
             statistics,
             statistics_bind_group,
             #[cfg(test)]
@@ -2558,6 +2564,7 @@ fn create_post_pipeline(
 struct ShaderPipelines {
     scenes: [ScenePipelines; 2],
     glow_splat_pipeline: wgpu::RenderPipeline,
+    glow_watercolor_pipeline: wgpu::RenderPipeline,
     glow_resolve_pipeline: wgpu::RenderPipeline,
     ink_strip_pipeline: wgpu::RenderPipeline,
     ink_blur_pipeline: wgpu::RenderPipeline,
@@ -2588,14 +2595,15 @@ impl ShaderPipelines {
         let (node_cell_pipeline, plus_cell_pipeline) =
             create_cell_pipelines(device, lattice, layouts.scene.uniforms);
         progress(startup::Stage::Lighting);
-        let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
-            device,
-            lattice,
-            LATTICE_COLOR_FORMAT,
-            layouts.scene.uniforms,
-            layouts.strip,
-            layouts.statistics,
-        );
+        let (glow_splat_pipeline, glow_resolve_pipeline, glow_watercolor_pipeline) =
+            create_glow_pipelines(
+                device,
+                lattice,
+                LATTICE_COLOR_FORMAT,
+                layouts.scene.uniforms,
+                layouts.strip,
+                layouts.statistics,
+            );
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
         progress(startup::Stage::Lattice);
@@ -2614,6 +2622,7 @@ impl ShaderPipelines {
             node_cell_pipeline,
             plus_cell_pipeline,
             glow_splat_pipeline,
+            glow_watercolor_pipeline,
             glow_resolve_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
@@ -2856,6 +2865,7 @@ impl CompiledLatticeResources {
             blur_h_pipeline,
             blur_v_pipeline,
             glow_statistics_layout,
+            watercolor: lattice_watercolor::Pipelines::new(device),
             bind_group_layout,
             composite_layout,
             bright_layout,
@@ -3029,6 +3039,7 @@ impl LatticeResources {
                 glyph_sheet_keys: (u64::MAX, u64::MAX, u64::MAX),
                 ink_history: None,
                 ink_kernel: Default::default(),
+                watercolor: None,
                 offscreen: None,
             }
         });
