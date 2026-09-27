@@ -4,14 +4,6 @@ struct Cloud {
     origin: vec2<f32>,
     size: vec2<f32>,
     step: vec2<f32>,
-    ppp: f32,
-    spread: f32,
-    contours: f32,
-    contour_softness: f32,
-    contour_strength: f32,
-    // `tone_baked` in the spectrogram shader's copy; the filters never read it.
-    // The two declarations are one buffer and have to keep one layout.
-    tone_baked: u32,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var linear_sampler: sampler;

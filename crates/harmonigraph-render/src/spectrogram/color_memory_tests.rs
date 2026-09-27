@@ -23,7 +23,7 @@ fn memory(resources: &CallbackResources) -> &Memory {
 }
 
 fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, memory: &Memory) -> Vec<[f32; 4]> {
-    let [width, height] = memory.size;
+    let [width, height] = memory.extent;
     let stride = (width * 16).next_multiple_of(256);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("color_memory_readback"),
@@ -125,7 +125,7 @@ fn material_color_memory_carries_exact_texels_in_both_orientations() {
                 "fixture never crosses a material texel: {shift:?}"
             );
             let held = pixels(&device, &queue, m);
-            let [width, height] = m.size.map(|v| v as i32);
+            let [width, height] = m.extent.map(|v| v as i32);
             let floor = floor(&cb);
             let decay = (-0.25f32 / 0.6).exp();
             let mut carried = 0;
@@ -194,8 +194,8 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let frame = m.frame.as_ref().unwrap();
         if wrap {
             assert!(
-                old_slices[STAR_SLICES - 1].offset[0] > 65530.0
-                    && frame.slices[STAR_SLICES - 1].offset[0] < 5.0,
+                old_slices[STAR_SLICES - 1].offset.0[0] > 65530.0
+                    && frame.slices[STAR_SLICES - 1].offset.0[0] < 5.0,
                 "fixture did not cross the star hash period"
             );
         }
@@ -204,23 +204,23 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let (mut carried, mut new_lives) = (0, 0);
         for (k, s) in frame.slices.iter().enumerate() {
             assert_ne!(s.origin, old_slices[k].origin, "slice {k} did not cross a cell");
-            for y in 0..s.grid[1] {
-                for x in 0..s.grid[0] {
-                    let cell = [s.origin[0] + x, s.origin[1] + y];
+            for y in 0..s.grid.0[1] {
+                for x in 0..s.grid.0[0] {
+                    let cell = [s.origin.0[0] + x, s.origin.0[1] + y];
                     let previous = old_slices[k];
                     let local: [i32; 2] = std::array::from_fn(|a| {
-                        ((cell[a] - previous.origin[a] + 32768) & 65535) - 32768
+                        ((cell[a] - previous.origin.0[a] + 32768) & 65535) - 32768
                     });
                     let hash = stagger(cell, 1002 + 3 * k as u32);
                     let same_life = (frame.life + hash).floor() as u32 & 4095
                         == (old_life + hash).floor() as u32 & 4095;
-                    let actual = held[(s.base + y * s.grid[0] + x) as usize];
+                    let actual = held[(s.base + y * s.grid.0[0] + x) as usize];
                     if same_life
-                        && (0..previous.grid[0]).contains(&local[0])
-                        && (0..previous.grid[1]).contains(&local[1])
+                        && (0..previous.grid.0[0]).contains(&local[0])
+                        && (0..previous.grid.0[1]).contains(&local[1])
                     {
                         let old = prior
-                            [(previous.base + local[1] * previous.grid[0] + local[0]) as usize];
+                            [(previous.base + local[1] * previous.grid.0[0] + local[0]) as usize];
                         close(
                             actual,
                             std::array::from_fn(|c| floor[c] + (old[c] - floor[c]) * decay),
@@ -319,4 +319,81 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
     }
     close(answers[0], answers[1]);
+}
+
+thread_local! {
+    // The same production shaders and logical grid, with the pre-bucketing
+    // physical allocation, provide the image reference for resize coverage.
+    pub(super) static EXACT_ALLOCATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[test]
+fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
+    use crate::spectrogram::tests::frame_with;
+    let Some((device, queue)) = headless_device() else { return };
+    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
+        let mut cb = fixture(style);
+        let mut bucketed = CallbackResources::default();
+        let mut exact = CallbackResources::default();
+        let mut prior = None;
+        let mut reused = 0;
+        let mut replaced = 0;
+        for (frame, (width, pixel_points)) in [
+            (100.0, 0.5),
+            (100.0, 0.5),
+            (101.0, 0.5),
+            (140.0, 0.5),
+            (140.0, 0.5),
+            (145.0, 0.5),
+            (100.0, 0.5),
+            (100.0, 1.1),
+            (100.0, 1.1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            cb.rect = egui::Rect::from_min_size(egui::pos2(11.0, 7.0), egui::vec2(width, 90.0));
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.region = cb.rect;
+            a.now = 100.0 + frame as f64 / 60.0;
+            cb.grid.fill(if frame % 2 == 0 { 255 } else { 0 });
+            for resources in [&mut bucketed, &mut exact] {
+                resources.insert(CloudSampling { pixel_points, ..Default::default() });
+            }
+            let actual = frame_with(&device, &queue, &mut bucketed, &cb);
+            EXACT_ALLOCATION.set(true);
+            let expected = frame_with(&device, &queue, &mut exact, &cb);
+            EXACT_ALLOCATION.set(false);
+            assert_eq!(actual, expected, "{style:?} frame {frame} changed displayed pixels");
+            let held = memory(&bucketed);
+            assert_eq!(
+                pixels(&device, &queue, held),
+                pixels(&device, &queue, memory(&exact)),
+                "{style:?} frame {frame} changed history's logical texels"
+            );
+            assert!(held.extent.iter().zip(held.size).all(|(&n, size)| n <= size && size - n < 64));
+            let texture = held.views[0].texture().clone();
+            if let Some((old_size, old_extent, old_rect, old_texture)) = prior {
+                if frame == 7 {
+                    assert_eq!(old_size, held.size, "sampling fixture changed physical bucket");
+                    assert_eq!(old_rect, cb.rect, "sampling fixture changed pane geometry");
+                    assert_ne!(old_extent, held.extent, "sampling fixture kept its logical grid");
+                }
+                if old_size == held.size {
+                    assert_eq!(texture, old_texture, "same bucket replaced its allocation");
+                    reused += 1;
+                } else {
+                    assert_ne!(texture, old_texture, "bucket boundary did not replace allocation");
+                    replaced += 1;
+                }
+            }
+            prior = Some((held.size, held.extent, cb.rect, texture));
+        }
+        assert!(
+            reused >= 4 && replaced >= 2,
+            "fixture missed allocation transitions: {reused} reused, {replaced} replaced"
+        );
+    }
+    assert_eq!(memory_allocation_size([16383, 16384], 16384), [16384; 2]);
+    assert_eq!(memory_allocation_size([998, 1000], 1000), [1000; 2]);
 }

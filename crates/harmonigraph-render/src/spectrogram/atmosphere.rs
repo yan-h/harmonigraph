@@ -4,6 +4,8 @@
 //! its values under [`memory_key`]. Source pixels refresh every draw, including
 //! paused zooms and palette edits.
 
+use crate::uniforms::{uniform_group, Float2, Int2};
+
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
 use crate::{create_vertex_buffer, wgpu};
 
@@ -108,6 +110,7 @@ pub(super) fn star_px_per_second() -> f64 {
     (60.0f64 * 60.0 + 14.0 * 14.0).sqrt()
 }
 
+uniform_group! {
 /// One depth slice of the starfield, in the shader's `StarSlice` order: read by
 /// OFFSET, so a reordering here swaps values silently.
 ///
@@ -116,12 +119,11 @@ pub(super) fn star_px_per_second() -> f64 {
 /// formulas are the prototype's `drift.slice_params`, with `d` running 0 (far)
 /// to 1 (near); every length is in STAR PIXELS, a 540th of the pane's height,
 /// which was the prototype's pane.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Debug, Default, PartialEq)]
 struct StarSlice {
     /// This slice's drift, in its own cells, reduced modulo
     /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
-    offset: [f32; 2],
+    offset: Float2,
     /// The cell one star is hashed into: `Star size`'s low end at the far end
     /// over the square root of half the density, times the ratio of its ends
     /// raised to `d^Size curve` — at the fresh 2 to 32 and 2, 32 at the near
@@ -143,8 +145,9 @@ struct StarSlice {
     /// takes, counted along the rows, the cell that first one is, and how
     /// many cells it holds across and down. See [`StarLayout`].
     base: i32,
-    origin: [i32; 2],
-    grid: [i32; 2],
+    origin: Int2,
+    grid: Int2,
+}
 }
 
 /// The slice's depth, 0 for the farthest and 1 for the nearest.
@@ -342,15 +345,15 @@ fn star_slices(
         let origin: [i32; 2] =
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
         StarSlice {
-            offset,
+            offset: Float2(offset),
             cell,
             sigma,
             cap,
             defocus,
             fringe: settings.star_fringe,
             base: layout.bases[k] as i32,
-            origin,
-            grid: grid.map(|side| side as i32),
+            origin: Int2(origin),
+            grid: Int2(grid.map(|side| side as i32)),
         }
     })
 }
@@ -438,6 +441,17 @@ pub(super) fn retained_size(
             })
         })
         .unwrap_or(requested)
+}
+
+/// Bucket physical history storage without changing its logical texel grid.
+/// A divider drag then reallocates only at 64-pixel boundaries; at most 63
+/// extra texels per axis are retained, including at the adapter's size limit.
+pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
+    #[cfg(test)]
+    if color_memory_tests::EXACT_ALLOCATION.get() {
+        return extent;
+    }
+    extent.map(|n| n.div_ceil(64).saturating_mul(64).min(limit))
 }
 
 /// The precomposite size, or `None` for the complete per-pixel walk.
@@ -560,16 +574,50 @@ pub(super) fn tile_key(
     if !settings.effects().cloud || settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
         return None;
     }
+    let harmonigraph_scene::SpectralAtmosphere {
+        pitch_softness: _,   // applied after the tile bake
+        time_softness: _,    // applied after the tile bake
+        spread: _,           // applied after the tile bake
+        blur_time_step: _,   // applied after the tile bake
+        contour_strength: _, // applied after the tile bake
+        contours: _,         // applied after the tile bake
+        contour_softness: _, // applied after the tile bake
+        cloud_depth: _,      // does not change the baked cell walk
+        color_pickup: _,     // does not change the baked cell walk
+        color_release: _,    // does not change the baked cell walk
+        cloud_speed: _,      // does not change the baked cell walk
+        cloud_direction: _,  // does not change the baked cell walk
+        scale_size,
+        scale_variety,
+        scale_refract: _, // applied after the tile bake
+        cloud_style,
+        wash_size,
+        wash_fuzz,
+        wash_lobe,
+        wash_refract: _,     // applied after the tile bake
+        wash_layers: _,      // applied after the tile bake
+        star_density: _,     // no tile for Stars
+        star_randomness: _,  // no tile for Stars
+        star_size_min: _,    // no tile for Stars
+        star_size_max: _,    // no tile for Stars
+        star_size_curve: _,  // no tile for Stars
+        star_speed_min: _,   // no tile for Stars
+        star_speed_max: _,   // no tile for Stars
+        star_speed_curve: _, // no tile for Stars
+        star_lifetime: _,    // no tile for Stars
+        star_fringe: _,      // no tile for Stars
+        star_defocus: _,     // no tile for Stars
+    } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
     // live-walk arm was retired because, never taken, it still cost the
     // full-resolution shader 16 to 21% (#1100).
     assert!(period > 0, "a cloud is drawn only out of a tile, so its period cannot be 0");
-    let (style, cells, dials) = match settings.cloud_style {
+    let (style, cells, dials) = match cloud_style {
         harmonigraph_scene::CloudStyle::Mosaic => {
-            (0, SCALE_CELLS / settings.scale_size, [settings.scale_variety, 0.0])
+            (0, SCALE_CELLS / scale_size, [scale_variety, 0.0])
         }
         harmonigraph_scene::CloudStyle::Watercolor => {
-            (1, WASH_CELLS / settings.wash_size, [settings.wash_lobe, settings.wash_fuzz])
+            (1, WASH_CELLS / wash_size, [wash_lobe, wash_fuzz])
         }
         harmonigraph_scene::CloudStyle::Stars => unreachable!("returned above"),
     };
@@ -591,12 +639,11 @@ pub(super) fn tile_key(
     })
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+uniform_group! {
 struct Uniforms {
-    origin: [f32; 2],
-    size: [f32; 2],
-    step: [f32; 2],
+    origin: Float2,
+    size: Float2,
+    step: Float2,
     ppp: f32,
     spread: f32,
     contours: f32,
@@ -611,7 +658,7 @@ struct Uniforms {
     /// way: these are read by OFFSET, not by name, so transposing two `f32`
     /// fields swaps their values silently and nothing in the type system
     /// notices.
-    drift: [f32; 2],
+    drift: Float2,
     cloud_depth: f32,
     scale_size: f32,
     scale_variety: f32,
@@ -640,11 +687,13 @@ struct Uniforms {
     memory_valid: u32,
     pickup_alpha: f32,
     release_alpha: f32,
-    memory_shift: [i32; 2],
-    memory_fraction: [f32; 2],
+    memory_shift: Int2,
+    memory_fraction: Float2,
     previous_life: f32,
-    _memory_pad: [f32; 3],
+    memory_pad_a: f32,
+    memory_extent: Float2,
     previous_slices: [StarSlice; STAR_SLICES],
+}
 }
 
 /// The `Cloud` struct's size in the uniform address space, which WGSL rounds up
@@ -825,9 +874,11 @@ impl Pipelines {
                 cache: None,
             })
         });
+        let spectrogram = super::spectrogram_shader(device);
         Self {
             source: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 FORMAT,
                 source_layout,
                 None,
@@ -836,6 +887,7 @@ impl Pipelines {
             ),
             bake: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 FORMAT,
                 source_layout,
                 Some(&composite_layout),
@@ -844,6 +896,7 @@ impl Pipelines {
             ),
             tone: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 FORMAT,
                 source_layout,
                 Some(&composite_layout),
@@ -852,6 +905,7 @@ impl Pipelines {
             ),
             tile: tile_pipeline(
                 device,
+                &spectrogram,
                 source_layout,
                 &composite_layout,
                 "fs_cloud_tile",
@@ -859,6 +913,7 @@ impl Pipelines {
             ),
             stars: tile_pipeline(
                 device,
+                &spectrogram,
                 source_layout,
                 &composite_layout,
                 "fs_star_bake",
@@ -866,6 +921,7 @@ impl Pipelines {
             ),
             star_far: tile_pipeline(
                 device,
+                &spectrogram,
                 source_layout,
                 &composite_layout,
                 "fs_star_far",
@@ -873,6 +929,7 @@ impl Pipelines {
             ),
             memory: tile_pipeline(
                 device,
+                &spectrogram,
                 source_layout,
                 &composite_layout,
                 "fs_color_memory",
@@ -880,6 +937,7 @@ impl Pipelines {
             ),
             composite: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 format,
                 source_layout,
                 Some(&composite_layout),
@@ -892,6 +950,7 @@ impl Pipelines {
             ),
             backdrop: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 format,
                 source_layout,
                 Some(&composite_layout),
@@ -904,6 +963,7 @@ impl Pipelines {
             ),
             star_composite: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 format,
                 source_layout,
                 Some(&composite_layout),
@@ -916,6 +976,7 @@ impl Pipelines {
             ),
             star_backdrop: create_spectrogram_pipeline(
                 device,
+                &spectrogram,
                 format,
                 source_layout,
                 Some(&composite_layout),
@@ -956,15 +1017,12 @@ impl Pipelines {
 /// bake reads the palette there, and the light and the uniform at group 1.
 fn tile_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     source_layout: &wgpu::BindGroupLayout,
     composite_layout: &wgpu::BindGroupLayout,
     entry: &str,
     formats: &[Option<wgpu::TextureFormat>],
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("spectrogram_shader"),
-        source: wgpu::ShaderSource::Wgsl(super::SPECTROGRAM_SRC.into()),
-    });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectral_cloud_tile_pipeline_layout"),
         bind_group_layouts: &[Some(source_layout), Some(composite_layout)],
@@ -984,13 +1042,13 @@ fn tile_pipeline(
         label: Some(entry),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_cloud_tile"),
             compilation_options: Default::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(entry),
             compilation_options: Default::default(),
             targets: &targets,
@@ -1022,6 +1080,7 @@ pub(super) struct Memory {
     star_groups: [wgpu::BindGroup; 2],
     composite_groups: [wgpu::BindGroup; 2],
     size: [u32; 2],
+    extent: [u32; 2],
     index: usize,
     frame: Option<MemoryFrame>,
 }
@@ -1046,6 +1105,40 @@ fn memory_key(
     read: &SpectrogramUniforms,
 ) -> Vec<u32> {
     use harmonigraph_scene::CloudStyle;
+    let harmonigraph_scene::SpectralAtmosphere {
+        pitch_softness,
+        time_softness,
+        spread,
+        blur_time_step: _, // response/coverage changes do not change material identity
+        contour_strength,
+        contours,
+        contour_softness,
+        cloud_depth: _,   // response/coverage changes do not change material identity
+        color_pickup: _,  // response/coverage changes do not change material identity
+        color_release: _, // response/coverage changes do not change material identity
+        cloud_speed,
+        cloud_direction,
+        scale_size,
+        scale_variety,
+        scale_refract,
+        cloud_style,
+        wash_size,
+        wash_fuzz,
+        wash_lobe,
+        wash_refract,
+        wash_layers,
+        star_density,
+        star_randomness,
+        star_size_min,
+        star_size_max,
+        star_size_curve,
+        star_speed_min,
+        star_speed_max,
+        star_speed_curve,
+        star_lifetime,
+        star_fringe: _,  // response/coverage changes do not change material identity
+        star_defocus: _, // response/coverage changes do not change material identity
+    } = s;
     let mut values = vec![
         size[0],
         size[1],
@@ -1055,45 +1148,45 @@ fn memory_key(
         read.level0,
         read.level_per_step,
         read.level_per_midi,
-        s.pitch_softness,
-        s.time_softness,
-        s.spread,
-        s.cloud_direction,
+        pitch_softness,
+        time_softness,
+        spread,
+        cloud_direction,
     ];
-    match s.cloud_style {
+    match cloud_style {
         CloudStyle::Stars => values.extend([
             2.0,
-            s.star_density,
-            s.star_size_min,
-            s.star_size_max,
-            s.star_size_curve,
-            s.star_randomness,
-            s.star_speed_min,
-            s.star_speed_max,
-            s.star_speed_curve,
-            s.star_lifetime,
+            star_density,
+            star_size_min,
+            star_size_max,
+            star_size_curve,
+            star_randomness,
+            star_speed_min,
+            star_speed_max,
+            star_speed_curve,
+            star_lifetime,
         ]),
         CloudStyle::Mosaic => values.extend([
             0.0,
-            s.cloud_speed,
-            s.scale_size,
-            s.scale_variety,
-            s.scale_refract,
-            s.contours,
-            s.contour_softness,
-            s.contour_strength,
+            cloud_speed,
+            scale_size,
+            scale_variety,
+            scale_refract,
+            contours,
+            contour_softness,
+            contour_strength,
         ]),
         CloudStyle::Watercolor => values.extend([
             1.0,
-            s.cloud_speed,
-            s.wash_size,
-            s.wash_fuzz,
-            s.wash_lobe,
-            s.wash_refract,
-            s.wash_layers,
-            s.contours,
-            s.contour_softness,
-            s.contour_strength,
+            cloud_speed,
+            wash_size,
+            wash_fuzz,
+            wash_lobe,
+            wash_refract,
+            wash_layers,
+            contours,
+            contour_softness,
+            contour_strength,
         ]),
     }
     values.into_iter().map(f32::to_bits).collect()
@@ -1366,6 +1459,7 @@ impl Targets {
             }),
             views: history,
             size: memory_size.unwrap(),
+            extent: memory_size.unwrap(),
             index: memory_index,
             frame: memory_frame,
         });
@@ -1475,6 +1569,7 @@ impl Targets {
         atmosphere: SpectrogramAtmosphere,
         tile: Option<TileKey>,
         stars: Option<StarLayout>,
+        memory_extent: Option<[u32; 2]>,
         palette: std::sync::Arc<Vec<[u8; 4]>>,
         source_end: i64,
     ) {
@@ -1509,8 +1604,8 @@ impl Targets {
             SpectrogramVertex { pos: pane[i].into(), slab: fraction.x, t: fraction.y }
         });
         queue.write_buffer(&self.tone_vertices, 0, bytemuck::cast_slice(&tone_quad));
-        read.origin_points = rect.min.into();
-        read.viewport_points = rect.size().into();
+        read.origin_points = Float2(rect.min.into());
+        read.viewport_points = Float2(rect.size().into());
         let pitch_vertical = atmosphere.pitch_vertical;
         let axis = usize::from(pitch_vertical);
         // A clipped pane can cover only part of the full pitch axis. Keep
@@ -1538,8 +1633,9 @@ impl Targets {
         let mut memory_shift = [0; 2];
         let mut memory_fraction = [0.0; 2];
         if let Some(memory) = self.memory.as_mut() {
+            memory.extent = memory_extent.expect("allocated history has a logical extent");
             let origin = std::array::from_fn(|a| {
-                let offset = drift[a] * rect.height() / CLOUD_UNITS * (memory.size[a] - 2) as f32
+                let offset = drift[a] * rect.height() / CLOUD_UNITS * (memory.extent[a] - 2) as f32
                     / rect.size()[a];
                 let integer = offset.floor();
                 memory_fraction[a] = offset - integer;
@@ -1547,6 +1643,9 @@ impl Targets {
             });
             let mut key = memory_key(settings, rect.size().into(), pitch_vertical, &read);
             key.extend([atmosphere.points_per_ms.to_bits(), atmosphere.points_per_cent.to_bits()]);
+            // Different logical grids can now share one allocation. DPI or
+            // sampling changes must still reset history even in the same bucket.
+            key.extend(memory.extent);
             if let Some(previous) = &memory.frame {
                 let dt = atmosphere.now - previous.now;
                 // Six maximum time constants leave under 0.25% residual;
@@ -1586,16 +1685,16 @@ impl Targets {
             });
         }
         let uniforms = Uniforms {
-            origin: rect.min.into(),
-            size: rect.size().into(),
-            step: [radius[0] / rect.width(), radius[1] / rect.height()],
+            origin: Float2(rect.min.into()),
+            size: Float2(rect.size().into()),
+            step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
             ppp,
             spread: settings.spread,
             contours: settings.contours,
             contour_softness: settings.contour_softness,
             contour_strength: settings.contour_strength,
             tone_baked: u32::from(self.tone.is_some()),
-            drift,
+            drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },
             scale_size: settings.scale_size,
             scale_variety: settings.scale_variety,
@@ -1623,10 +1722,11 @@ impl Targets {
             memory_valid: u32::from(memory_valid),
             pickup_alpha: alphas[0],
             release_alpha: alphas[1],
-            memory_shift,
-            memory_fraction,
+            memory_shift: Int2(memory_shift),
+            memory_fraction: Float2(memory_fraction),
             previous_life,
-            _memory_pad: [0.0; 3],
+            memory_pad_a: 0.0,
+            memory_extent: Float2(memory_extent.unwrap_or([0; 2]).map(|n| n as f32)),
             previous_slices,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
@@ -1661,6 +1761,8 @@ impl Targets {
             })],
             ..Default::default()
         });
+        pass.set_viewport(0.0, 0.0, memory.extent[0] as f32, memory.extent[1] as f32, 0.0, 1.0);
+        pass.set_scissor_rect(0, 0, memory.extent[0], memory.extent[1]);
         pass.set_pipeline(&pipelines.memory);
         pass.set_bind_group(0, &self.source_group, &[]);
         pass.set_bind_group(1, &memory.groups[memory.index], &[]);
@@ -1734,6 +1836,16 @@ mod tests {
             .trim()
             .parse()
             .expect("a number")
+    }
+
+    #[test]
+    fn spectral_uniforms_match_the_bound_shader_layouts() {
+        crate::uniforms::layout::check_binding::<super::Uniforms>(
+            super::super::SPECTROGRAM_SRC,
+            1,
+            3,
+        );
+        crate::uniforms::layout::check_binding_prefix::<super::Uniforms>(super::SOURCE, 0, 2);
     }
 
     /// The 3x3 walk each star slice takes sees every star whose light reaches
@@ -1846,7 +1958,7 @@ mod tests {
                                 for step in [-1, 1] {
                                     let local = cell + step - origin;
                                     assert!(
-                                        (0..slice.grid[axis]).contains(&local),
+                                        (0..slice.grid.0[axis]).contains(&local),
                                         "{aspect}, slice {k}, axis {axis}, offset {offset}: \
                                          cell {local} of {:?}",
                                         slice.grid
@@ -1911,7 +2023,7 @@ mod tests {
         };
         let travelled = |settings, now| {
             slices(settings, now)
-                .map(|slice| [slice.offset[0] * slice.cell, slice.offset[1] * slice.cell])
+                .map(|slice| [slice.offset.0[0] * slice.cell, slice.offset.0[1] * slice.cell])
         };
         let near = super::star_px_per_second() as f32 * 10.0;
         assert!((near / 540.0 / 10.0 - 0.114).abs() < 0.001);
@@ -1930,7 +2042,7 @@ mod tests {
         // A session left running for days still hands the shader an offset
         // inside one hash period rather than millions of pixels.
         for slice in slices(fresh, 3.0e5) {
-            assert!(slice.offset.iter().all(|&o| (0.0..=STAR_HASH_PERIOD as f32).contains(&o)));
+            assert!(slice.offset.0.iter().all(|&o| (0.0..=STAR_HASH_PERIOD as f32).contains(&o)));
         }
     }
 

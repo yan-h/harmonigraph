@@ -313,8 +313,7 @@ struct Cloud {
     memory_fraction: vec2<f32>,
     previous_life: f32,
     memory_pad_a: f32,
-    memory_pad_b: f32,
-    memory_pad_c: f32,
+    memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
 };
 struct StarSlice {
@@ -1772,7 +1771,7 @@ fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
     }
     // The lattice is fixed in material coordinates. Only integer textureLoad
     // copies enter feedback; drift never repeatedly bilinear-blurs held color.
-    let dimensions = vec2<i32>(textureDimensions(color_memory));
+    let dimensions = vec2<i32>(cloud.memory_extent);
     let grid = vec2<f32>(dimensions - 2);
     let pt = (vec2<f32>(texel) + 0.5 - 1.0 - cloud.memory_fraction) / grid * cloud.size;
     let level = cloud_tone_at(pt);
@@ -1785,7 +1784,7 @@ fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
 // RGBA32F history requires no optional float-filtering device feature. Only
 // the final display resamples it; feedback always copies exact lattice texels.
 fn memory_color(uv: vec2<f32>) -> vec3<f32> {
-    let size = vec2<i32>(textureDimensions(color_memory));
+    let size = vec2<i32>(cloud.memory_extent);
     let p = uv * vec2<f32>(size) - 0.5;
     let lo = vec2<i32>(floor(p));
     let f = fract(p);
@@ -1811,9 +1810,12 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
         return vec4<f32>(mix(density_color(level).rgb, star_color(pt), cloud.cloud_depth), 1.0);
     }
     if cloud.memory_enabled != 0u {
-        let dimensions = vec2<f32>(textureDimensions(color_memory));
+        let dimensions = cloud.memory_extent;
         let uv = (pt / cloud.size * (dimensions - 2.0) + 1.0 + cloud.memory_fraction) / dimensions;
         let held = memory_color(uv);
+        if cloud.cloud_depth >= 1.0 {
+            return vec4<f32>(gamma_from_linear_rgb(held), 1.0);
+        }
         // Memory is RGB, so its partial Texture mix is a bounded linear-light
         // blend. Both response times zero retain the original scalar mix below.
         let base = linear_from_gamma_rgb(density_color(level).rgb);
@@ -1833,9 +1835,16 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     // Watercolor Layers cannot introduce RGB blends outside the authored ramp.
     return density_color(mix(level, tone, cloud.cloud_depth));
 }
+// Full material memory replaces the base level, so neither its grid walk nor
+// its blurred sample contributes. Stars keep their separate color composite.
+fn full_material_memory() -> bool {
+    return cloud.memory_enabled != 0u && cloud.cloud_depth >= 1.0 && cloud.cloud_style != 2u;
+}
+
 // Empty history uses the same field and palette with a zero measured core.
 // This quad never samples the grid, so the oldest column cannot be smeared.
 fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
+    if full_material_memory() { return clouded(0.0, position); }
     var level = 0.0;
     if softened() { level = baked_density(position); }
     return clouded(level, position);
@@ -1854,6 +1863,7 @@ fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // rather than blending with it, so reading both and keeping one paid for the
 // walk on every softened frame — which is nearly every frame drawn here.
 fn cloud_color(in: VertexOut) -> vec4<f32> {
+    if full_material_memory() { return clouded(0.0, in.position.xy); }
     var level: f32;
     if softened() {
         level = baked_density(in.position.xy);

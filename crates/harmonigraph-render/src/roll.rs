@@ -33,6 +33,8 @@
 //! Rebuilding per frame keeps the geometry a pure function of `now` — which
 //! is also what keeps the offline render deterministic.
 
+use crate::uniforms::{uniform_group, Float2, Float4};
+
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
 use crate::pass_aged::PassAged;
@@ -341,25 +343,25 @@ struct RollCallback {
     pass_nr: u64,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+uniform_group! {
 struct RollUniforms {
-    origin_points: [f32; 2],
-    viewport_points: [f32; 2],
+    origin_points: Float2,
+    viewport_points: Float2,
     feather: f32,
     /// 1 in the bloom pass, which uses the body's original opacity;
     /// 0 on screen, where per-note opacity mappings apply.
     light: f32,
-    pitch_dir: [f32; 2],
-    depth_dir: [f32; 2],
-    _axis_pad: [f32; 2],
-    shadow: [f32; 4],
-    shadow_atlas_size: [f32; 2],
+    pitch_dir: Float2,
+    depth_dir: Float2,
+    _axis_pad: Float2,
+    shadow: Float4,
+    shadow_atlas_size: Float2,
     /// The group's Shadow falloff, in what was the block's own tail padding —
     /// the distance path's only other per-group number, and one the vertex
     /// stage never reads.
     shadow_falloff: f32,
     _shadow_pad: f32,
+}
 }
 
 fn shadow_uniform(style: harmonigraph_scene::ShadowStyle) -> [f32; 4] {
@@ -478,6 +480,18 @@ const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// hundred notes at the spans this pane is used at.
 const INITIAL_NOTE_CAPACITY: usize = 512;
 
+#[cfg(test)]
+pub(super) fn timing_pipeline_startup(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> std::time::Duration {
+    let mut callbacks = CallbackResources::default();
+    let layouts = crate::spectral_shadow::layouts(device, &mut callbacks);
+    let started = std::time::Instant::now();
+    let _resources = RollResources::new(device, format, &layouts);
+    started.elapsed()
+}
+
 impl RollResources {
     fn is_stale(&self, target_format: wgpu::TextureFormat) -> bool {
         #[cfg(feature = "hot-reload")]
@@ -545,9 +559,14 @@ impl RollResources {
                 },
             ],
         });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("roll_shader"),
+            source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
+        });
         let note_pipeline = |format, layer| {
             create_roll_pipeline(
                 device,
+                &shader,
                 format,
                 target_format.is_srgb(),
                 &layout,
@@ -581,7 +600,7 @@ impl RollResources {
             outline_pipeline: note_pipeline(target_format, "outline"),
             core_pipeline: note_pipeline(target_format, "core"),
             light_pipeline: note_pipeline(BLOOM_FORMAT, "core"),
-            shadow_cell_pipeline: create_shadow_cell_pipeline(device, &layout),
+            shadow_cell_pipeline: create_shadow_cell_pipeline(device, &shader, &layout),
             layout,
             bright_pipeline: filter("fs_bright_coverage"),
             downsample_pipeline: filter("fs_blit"),
@@ -743,8 +762,10 @@ impl RollBloom {
 /// in each instance, independently of the dark outline. `srgb` is whether the
 /// surface the notes end on encodes for itself, which picks the shading; it is
 /// the surface's even where `target_format` is the bloom chain's.
+#[allow(clippy::too_many_arguments)]
 fn create_roll_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     srgb: bool,
     layout: &wgpu::BindGroupLayout,
@@ -752,10 +773,6 @@ fn create_roll_pipeline(
     casters: &wgpu::BindGroupLayout,
     layer: &str,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("roll_shader"),
-        source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
-    });
     let bind_group_layouts = if layer == "outline" {
         vec![Some(layout), None, Some(shadow), Some(casters)]
     } else {
@@ -774,13 +791,13 @@ fn create_roll_pipeline(
         label: Some(&format!("roll_{layer}")),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_note"),
             compilation_options: Default::default(),
             buffers: &[RollInstance::LAYOUT],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(&entry_point),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -802,12 +819,9 @@ fn create_roll_pipeline(
 
 fn create_shadow_cell_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("roll_shadow_cell_shader"),
-        source: wgpu::ShaderSource::Wgsl(crate::roll_source().into()),
-    });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("roll_shadow_cell_pipeline_layout"),
         bind_group_layouts: &[Some(layout)],
@@ -817,13 +831,13 @@ fn create_shadow_cell_pipeline(
         label: Some("roll_shadow_cell"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_shadow_cell"),
             compilation_options: Default::default(),
             buffers: &[RollInstance::LAYOUT, crate::shadow::ShadowBox::BESIDE_ROLL],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some("fs_shadow_coverage"),
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
@@ -908,11 +922,11 @@ impl CallbackTrait for RollCallback {
             .collect();
         let uniforms = RollUniforms {
             // The whole surface, which is the viewport `paint` draws into.
-            origin_points: [0.0, 0.0],
-            viewport_points: [
+            origin_points: Float2([0.0, 0.0]),
+            viewport_points: Float2([
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
                 screen_descriptor.size_in_pixels[1] as f32 / ppp,
-            ],
+            ]),
             // One physical pixel, expressed in the points the geometry is
             // in. Derived rather than sampled from the fragment's
             // derivatives so coverage is a pure function of the uniforms,
@@ -920,13 +934,13 @@ impl CallbackTrait for RollCallback {
             // test rests on.
             feather: 1.0 / ppp,
             light: 0.0,
-            pitch_dir: self.axes.pitch_dir,
-            depth_dir: self.axes.depth_dir,
-            _axis_pad: [0.0; 2],
-            shadow,
+            pitch_dir: Float2(self.axes.pitch_dir),
+            depth_dir: Float2(self.axes.depth_dir),
+            _axis_pad: Float2([0.0; 2]),
+            shadow: Float4(shadow),
             // Patched with the shared target's actual retained allocation by
             // the surface finalizer after every spectral group has arrived.
-            shadow_atlas_size: [1.0; 2],
+            shadow_atlas_size: Float2([1.0; 2]),
             shadow_falloff: style.falloff,
             _shadow_pad: 0.0,
         };
@@ -961,8 +975,11 @@ impl CallbackTrait for RollCallback {
             // exactly the pixels `paint` will lay it over, so the notes in it
             // stand where the notes under it do.
             RollUniforms {
-                origin_points: [viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp],
-                viewport_points: [bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp],
+                origin_points: Float2([
+                    viewport.left_px as f32 / ppp,
+                    viewport.top_px as f32 / ppp,
+                ]),
+                viewport_points: Float2([bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp]),
                 feather: 1.0 / half_ppp,
                 light: 1.0,
                 ..uniforms
@@ -1472,6 +1489,11 @@ mod tests {
     /// tells this crate where the note inside it ends.
     fn led_note(lead: f32, fade: f32, alpha: f32) -> RollInstance {
         RollInstance { lead, lead_fade: fade, lead_alpha: alpha, ..centered_note() }
+    }
+
+    #[test]
+    fn uniforms_match_the_bound_shader_layout() {
+        crate::uniforms::layout::check_binding::<RollUniforms>(&crate::roll_source(), 0, 0);
     }
 
     /// The cap belongs to the outline, so it is never wider than one and never

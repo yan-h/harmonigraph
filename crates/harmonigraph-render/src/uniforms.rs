@@ -1,4 +1,4 @@
-//! Lattice GPU transport. Named scalars carry settings; vectors carry axes,
+//! GPU uniform transport. Named scalars carry settings; vectors carry axes,
 //! colours and coordinates. The declaration also supplies test metadata from
 //! the actual Rust field types and offsets, rather than a parallel schema.
 
@@ -12,19 +12,21 @@ macro_rules! uniform_group {
         }
 
         #[cfg(test)]
-        impl layout::GpuLayout for $name {
-            fn layout() -> layout::Layout {
-                layout::Layout::of::<Self>(layout::Kind::Struct(vec![
-                    $(layout::Field {
+        impl $crate::uniforms::layout::GpuLayout for $name {
+            fn layout() -> $crate::uniforms::layout::Layout {
+                $crate::uniforms::layout::Layout::of::<Self>($crate::uniforms::layout::Kind::Struct(vec![
+                    $($crate::uniforms::layout::Field {
                         name: stringify!($field),
                         offset: std::mem::offset_of!(Self, $field),
-                        layout: <$ty as layout::GpuLayout>::layout(),
+                        layout: <$ty as $crate::uniforms::layout::GpuLayout>::layout(),
                     }),*
                 ]))
             }
         }
     };
 }
+
+pub(crate) use uniform_group;
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -35,8 +37,12 @@ pub(super) struct Float4(pub(super) [f32; 4]);
 pub(super) struct Uint4(pub(super) [u32; 4]);
 
 #[repr(C, align(8))]
-#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct Float2(pub(super) [f32; 2]);
+
+#[repr(C, align(8))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct Int2(pub(super) [i32; 2]);
 
 /// Column-major, matching WGSL's matrix columns and glam's upload order.
 #[repr(C, align(16))]
