@@ -298,8 +298,6 @@ mod tests {
     #[test]
     fn output_frontier_and_recording_routes_read_samples_on_the_adopted_hub_clock() {
         let (mut recorder, capture) = harmonigraph_record::testing::channel();
-        recorder.enable_configuration();
-        recorder.enable_canonical();
         capture.arm();
         recorder.is_armed();
         recorder.observe_transport(20.0, true, 64.0 / 48_000.0);

@@ -174,17 +174,6 @@ impl Bench {
         let mut out = Vec::new();
         while let Ok(entry) = self.entries.pop() {
             out.push(match entry {
-                Entry::Note { t, source, channel, note, kind } => {
-                    let kind = match kind {
-                        NoteEventKind::On { .. } => "on",
-                        NoteEventKind::Off => "off",
-                        NoteEventKind::Tuning { .. } => "tuning",
-                        NoteEventKind::Expression { .. } => "expression",
-                        NoteEventKind::SessionReset => "session-reset",
-                        NoteEventKind::SourceReset => "source-reset",
-                    };
-                    format!("note {note} ch{channel} source{} {kind} @{t}", source.0)
-                }
                 Entry::Param { t, key, value } => format!("param {key}={value} @{t}"),
                 Entry::AudioStart(t) => format!("audio-start @{t}"),
                 Entry::NewPass => "new-pass".to_owned(),
@@ -918,14 +907,11 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
         Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
     assert!(open.is_some(), "the fixture has to actually open a file to write into");
 
-    let note = Entry::Note {
-        t: 0.0,
-        source: SourceId::DIRECT,
-        channel: 0,
-        note: 60,
-        kind: NoteEventKind::On { velocity: 1.0 },
-    };
-    producer.push(note).expect("ring has room");
+    // What a note starting leaves on its pass. The take lane's own drain sets
+    // it (`a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports`);
+    // this is about which pass that makes the take.
+    let voice = |open: &mut Option<Recording>| open.as_mut().unwrap().current.voiced = true;
+    voice(&mut open);
     producer.push(Entry::NewPass).expect("ring has room");
     producer.push(Entry::Param { t: 1.0, key: 0, value: 0.5 }).expect("ring has room");
     drain(&mut consumer, &mut open, &status);
@@ -944,10 +930,10 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
     // case and the reason this cannot just always pick the first pass.
     let mut open =
         Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
-    producer.push(note).expect("ring has room");
+    voice(&mut open);
     producer.push(Entry::NewPass).expect("ring has room");
-    producer.push(note).expect("ring has room");
     drain(&mut consumer, &mut open, &status);
+    voice(&mut open);
     assert_eq!(
         open.expect("still open").take_path(),
         Pass::path_for(&base, 2),
@@ -971,11 +957,8 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
     let base = dir.join("take.take");
     let status = Mutex::new(String::new());
     let mut recording =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status)
+        Recording::create(header_for(48_000.0, String::new()), base.clone(), 4, None, &status)
             .expect("the fixture has to open a real file to roll over from");
-    recording.epoch = 4;
-    recording.configuration_enabled = true;
-    recording.source_enabled = true;
     let marker = harmonigraph_take::IncompleteRecord {
         first_publication: 7,
         last_publication: 9,
@@ -997,8 +980,6 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
         "the fixture must cross the boundary to prove anything"
     );
     assert_eq!(recording.epoch, 4, "the epoch is the recording's");
-    assert!(recording.configuration_enabled, "so is each lane switch");
-    assert!(recording.source_enabled, "so is each lane switch");
     assert_eq!(recording.incomplete, Some(marker), "and so is the incomplete marker (#712)");
     assert_eq!(
         harmonigraph_take::Take::read(&recording.current.path).unwrap().incomplete,
@@ -1008,7 +989,7 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
     assert_eq!(recording.last_voiced.as_deref(), Some(base.as_path()));
     assert_eq!(recording.last_voiced_number, 1);
     assert_eq!(recording.take_path(), base, "so an unvoiced pass 2 renders the one with the music");
-    assert_eq!(recording.retained.len(), 1, "and pass 1 waits for the lanes that are enabled");
+    assert_eq!(recording.retained.len(), 1, "and pass 1 waits for both lanes to release it");
     let second = &recording.current;
     assert!(!second.voiced, "nothing has played in the new file");
     assert!(!second.producer_closed, "and no lane has closed over it");
@@ -1020,48 +1001,10 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// Exercise the actual recorder ring AND writer conversion before parsing.
-#[test]
-fn source_scoped_notes_reach_the_take_with_their_original_times() {
-    let mut b = Bench::new();
-    b.arm();
-    let events = [
-        NoteEvent::on(0.125, SourceId(1), 3, 60, 0.8),
-        NoteEvent::on(0.25, SourceId(2), 3, 60, 0.6),
-        NoteEvent {
-            time: 0.5,
-            source: SourceId(2),
-            channel: 3,
-            note: 60,
-            kind: NoteEventKind::Tuning { semitones: -0.25 },
-        },
-        NoteEvent::off(0.75, SourceId(1), 3, 60),
-        NoteEvent::source_reset(1.0, SourceId(1)),
-        NoteEvent::session_reset(1.25),
-    ];
-    for event in events {
-        b.rec.note(event.time, event.source, event.channel, event.note, event.kind);
-    }
-    let dir = std::env::temp_dir().join(format!("harmonigraph-source-take-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("source.take");
-    let status = Mutex::new(String::new());
-    let mut open =
-        Recording::create(header_for(48_000.0, String::new()), path.clone(), 1, None, &status);
-    assert!(open.is_some(), "fixture must reach the file writer");
-    assert!(drain(&mut b.entries, &mut open, &status));
-    drop(open);
-    let take = harmonigraph_take::Take::read(&path).unwrap();
-    assert!(!take.truncated);
-    assert_eq!(take.notes().map(NoteEvent::from).collect::<Vec<_>>(), events);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
 #[test]
 fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
     for retire in [false, true] {
         let mut b = Bench::new();
-        b.rec.enable_configuration();
         b.rec.fence.intent.store(3, Ordering::Release);
         assert!(b.rec.is_armed());
         let fence = b.rec.fence.clone();
@@ -1076,8 +1019,6 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
             None,
             &status,
         );
-        open.as_mut().unwrap().epoch = 1;
-        open.as_mut().unwrap().configuration_enabled = true;
         assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
         for _ in 1..RECORD_PASSES {
             assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
@@ -1088,6 +1029,9 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
         assert!(!fence.failed.load(Ordering::Acquire));
         if retire {
             b.rec.configuration_pass_complete(RecordAddress { epoch: 1, pass: 1 });
+            // The source lane's release of the same pass, which this drain has
+            // no fanout to deliver.
+            open.as_mut().unwrap().retained[0].source_complete = true;
         }
         assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
         drain_with_audio(&mut b.entries, Some(&mut b.samples), &mut open, &status, Some(&fence));
@@ -1105,7 +1049,6 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
 #[test]
 fn configuration_stop_preserves_the_observed_callback_and_drop_refuses_unclosed_work() {
     let mut b = Bench::new();
-    b.rec.enable_configuration();
     b.rec.fence.intent.store(3, Ordering::Release);
     let observed = b.rec.capture_recording_intent();
     // Main thread stops after the callback captured its intent.
@@ -1128,8 +1071,6 @@ fn configuration_stop_preserves_the_observed_callback_and_drop_refuses_unclosed_
 #[test]
 fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() {
     let (mut recorder, mut capture) = testing::channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     capture.arm();
     assert!(recorder.is_armed());
     let address = recorder.configuration_address().unwrap();
@@ -1181,7 +1122,6 @@ fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() 
 #[test]
 fn configuration_audio_exhaustion_marks_the_recording_incomplete() {
     let mut b = Bench::new();
-    b.rec.enable_configuration();
     b.rec.audio(&mut std::iter::repeat(0.0), 1026);
     assert!(b.rec.fence.failed.load(Ordering::Acquire));
     assert_eq!(b.dropped.load(Ordering::Relaxed), 1);
@@ -1322,7 +1262,6 @@ fn gui_ticks_cannot_hide_a_nondrop_recording_ownership_failure() {
     // shared recorder failure flag must make tick itself publish the error.
     control.status = Arc::new(Mutex::new(String::new()));
     control.recording.store(true, Ordering::Relaxed);
-    recorder.enable_configuration();
     recorder.fail_configuration();
     assert_eq!(control.dropped.load(Ordering::Relaxed), 0);
     for (rolling, events) in [(false, 0), (true, 12), (false, 12)] {
@@ -1373,7 +1312,7 @@ fn stopping_a_take_that_is_not_running_does_nothing() {
 fn the_shipped_rings_have_room_for_what_the_audio_thread_pushes() {
     let (mut rec, ctrl) = channel();
     ctrl.recording.store(true, Ordering::Relaxed);
-    rec.note(0.0, SourceId::DIRECT, 0, 60, NoteEventKind::On { velocity: 1.0 });
+    rec.params(0.0, [0.5; ParamKey::ALL.len()]);
     rec.audio(&mut std::iter::repeat_n(0.0f32, 512), 512);
     ctrl.tick(true, 1);
     assert!(!ctrl.status().contains("DROPPED"), "a shipped ring dropped: {}", ctrl.status());

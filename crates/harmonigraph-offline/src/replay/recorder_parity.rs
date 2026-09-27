@@ -52,16 +52,23 @@ fn parity_path(name: &str) -> std::path::PathBuf {
     directory.join("capture.take")
 }
 
+/// Deltas with no sequence, lifetime or timing, which is what a reset carries:
+/// the take lane's route translates them onto the take's clock, and both lanes
+/// draw the same roll.
 #[test]
-fn ordinary_recorder_display_and_disk_replay_share_note_semantics() {
+fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     use harmonigraph_core::{NoteEvent, NoteEventKind, NoteTracker, SourceId};
+    use harmonigraph_record::configuration::RecordAddress;
+    use harmonigraph_record::publication::Route;
     use harmonigraph_record::testing;
 
     const ORIGIN: f64 = 10.0;
+    let address = RecordAddress { epoch: 1, pass: 1 };
+    let route = Route { address: Some(address), time_offset: -ORIGIN };
     let (mut recorder, mut capture) = testing::channel();
     capture.arm();
     assert!(recorder.is_armed());
-    let path = parity_path("ordinary");
+    let path = parity_path("unsequenced");
     let mut writer = testing::FileWriter::new(&capture, path.clone(), None);
     let live_events = [
         NoteEvent::on(ORIGIN + 0.125, SourceId::DIRECT, 0, 60, 0.8),
@@ -77,17 +84,17 @@ fn ordinary_recorder_display_and_disk_replay_share_note_semantics() {
         NoteEvent::source_reset(ORIGIN + 0.625, SourceId::DIRECT),
     ];
     for live in live_events {
-        // Ordinary MIDI uses separate display publication and take-time input.
-        recorder.publish_note(live.into(), Default::default()).expect_both();
-        recorder.note(live.time - ORIGIN, live.source, live.channel, live.note, live.kind);
+        recorder.publish_note(live.into(), route).expect_both();
     }
 
     let mut direct = NoteTracker::new();
     assert_eq!(capture.display_into(&mut direct, |_, _| {}), live_events.len());
-    recorder.finish_callback();
     capture.stop();
     assert!(!recorder.is_armed());
-    recorder.finish_callback();
+    recorder.configuration_pass_complete(address);
+    recorder.configuration_epoch_complete(1);
+    recorder.source_pass_complete(address, ORIGIN + 1.0);
+    recorder.source_epoch_complete(1, ORIGIN + 1.0);
     writer.stop();
     writer.drain(&mut capture);
     assert!(!writer.failed());
@@ -182,8 +189,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     let address = RecordAddress { epoch: 1, pass: 1 };
     let route = Route { address: Some(address), time_offset: -ORIGIN };
     let (mut recorder, mut capture) = testing::channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     capture.arm();
     assert!(recorder.is_armed());
     let path = parity_path("canonical");
@@ -255,13 +260,12 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
 
     let mut direct = NoteTracker::new();
     assert_eq!(capture.display_into(&mut direct, |_, _| {}), 6);
-    recorder.finish_callback();
     capture.stop();
     assert!(!recorder.is_armed());
     writer.stop();
     writer.drain(&mut capture);
     assert!(!writer.failed());
-    assert!(writer.finished.is_none(), "ordinary closure does not complete configuration/source");
+    assert!(writer.finished.is_none(), "producer closure does not complete configuration/source");
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
     writer.drain(&mut capture);
@@ -269,7 +273,6 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     assert!(writer.finished.is_none(), "configuration closure does not complete the source");
     recorder.source_pass_complete(address, ORIGIN + 0.75);
     recorder.source_epoch_complete(1, ORIGIN + 0.75);
-    recorder.finish_callback();
     writer.drain(&mut capture);
     assert!(!writer.failed());
     assert_eq!(writer.finished.as_ref(), Some(&path));

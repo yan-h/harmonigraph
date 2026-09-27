@@ -1,6 +1,7 @@
 use super::*;
 use harmonigraph_core::canonical::*;
 use harmonigraph_core::confirmed::PitchProvenance;
+use harmonigraph_core::notes::NoteEvent;
 use publication::Lane;
 
 fn path(name: &str) -> std::path::PathBuf {
@@ -68,8 +69,6 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
 #[test]
 fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     let (mut recorder, mut capture) = testing::channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     capture.arm_audio();
     assert!(recorder.is_armed());
     let file = path("delayed");
@@ -168,8 +167,6 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
 #[test]
 fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     let (mut recorder, mut capture) = testing::channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     capture.arm();
     recorder.is_armed();
     let file = path("full");
@@ -224,8 +221,6 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
 fn all_128_passes_need_source_closure_before_the_129th_file() {
     for close_source in [false, true] {
         let (mut recorder, mut capture) = testing::channel();
-        recorder.enable_configuration();
-        recorder.enable_canonical();
         capture.arm();
         recorder.is_armed();
         let file = path(if close_source { "pass-reuse" } else { "pass-full" });
@@ -320,8 +315,6 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             .unwrap()
             .to_path_buf();
         let (mut recorder, control) = channel();
-        recorder.enable_configuration();
-        recorder.enable_canonical();
         *control.fence.test_directory.lock() = Some(directory.clone());
         let fence = control.fence.clone();
         let _resume_on_panic = WorkerPause(fence.clone());
@@ -429,8 +422,6 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
 fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
     let directory = path("worker-overflow-render").parent().unwrap().to_path_buf();
     let (mut recorder, control) = channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
@@ -516,8 +507,6 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
 fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let directory = path("worker-stop").parent().unwrap().to_path_buf();
     let (mut recorder, control) = channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
     let last_take = control.last_take.clone();
@@ -565,8 +554,6 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
 fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() {
     let directory = path("retired-producer").parent().unwrap().to_path_buf();
     let (mut recorder, control) = channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
@@ -670,10 +657,9 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
     );
 
     let status = Mutex::new(String::new());
-    let mut opened =
+    let opened =
         Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
             .unwrap();
-    opened.epoch = 1;
     let mut open = Some(opened);
     fanout.drain(&mut consumer, &mut open, &fence, &failure);
     let sealed = open.take().unwrap().finish().unwrap();
@@ -708,8 +694,6 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
 fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     let directory = path("worker-gap-before-start").parent().unwrap().to_path_buf();
     let (mut recorder, control) = channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
@@ -824,7 +808,6 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     let (mut entries, mut queued) = rtrb::RingBuffer::new(TAKE_RING_CAPACITY);
     entries.push(Entry::NewPass).expect("ring has room");
     let fence = RecordFence::default();
-    fence.enabled.store(true, Ordering::Release);
     let failure = FailureAccount::default();
     let status = Mutex::new(String::new());
     let mut fanout = CanonicalFanout::default();
@@ -845,11 +828,9 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     assert!(!pump(&mut open, &mut queued, &mut consumer, &mut fanout));
 
     let file = path("rollover-gap");
-    let mut opened =
+    let opened =
         Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
             .unwrap();
-    opened.epoch = 1;
-    opened.source_enabled = true;
     open = Some(opened);
     assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
     assert_eq!(
@@ -957,8 +938,6 @@ fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
 fn a_marker_flush_failure_refuses_stop_and_render() {
     let directory = path("marker-flush-failure").parent().unwrap().to_path_buf();
     let (mut recorder, control) = channel();
-    recorder.enable_configuration();
-    recorder.enable_canonical();
     let fence = control.fence.clone();
     *fence.test_directory.lock() = Some(directory.clone());
     *fence.test_marker_failure.lock() = Some(1);
@@ -1029,7 +1008,8 @@ fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
     let file = path("carried-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 3, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    current.current = Pass::create(Default::default(), &file, 3, None, &status).unwrap();
     current.fail_marker_on_pass = Some(3);
     for pass in 1..3 {
         let mut old = Pass::create(Default::default(), &file, pass, None, &status).unwrap();
@@ -1070,7 +1050,6 @@ fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
     let status = Mutex::new(String::new());
     let mut current =
         Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
-    current.epoch = 1;
     current.mark_incomplete(Default::default()).unwrap();
     current.fail_marker_on_pass = Some(2);
     let mut open = Some(current);

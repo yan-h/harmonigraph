@@ -253,11 +253,14 @@ mod tests {
         shared.ui.workspace.interaction.take.recording = true;
         shared.sync_take(48_000.0);
         assert!(shared.take.is_recording());
-        // One note captured, as `process` would on the take's first block.
+        // One note captured, as the Hub publishes one into the take's first pass.
         recorder.is_armed();
-        let on = harmonigraph_core::NoteEventKind::On { velocity: 1.0 };
-        recorder.note(0.0, SourceId::DIRECT, 0, 60, on);
-        recorder.finish_callback();
+        let route = harmonigraph_record::publication::Route {
+            address: recorder.configuration_address(),
+            time_offset: 0.0,
+        };
+        let on = harmonigraph_core::NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
+        let _ = recorder.publish_note(on.into(), route);
         for tick in 0..100 {
             let now = tick as f64 * 0.02;
             shared.input.drain(&mut shared.ui.picture.runtime, &shared.ui.picture.appearance, now);

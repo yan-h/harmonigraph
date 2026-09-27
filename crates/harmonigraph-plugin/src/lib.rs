@@ -939,8 +939,6 @@ impl ClapPlugin for Harmonigraph {
         &mut self,
         handle: Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>,
     ) {
-        self.take.enable_configuration();
-        self.take.enable_canonical();
         let owner = Box::new(configuration::Owner::new(&self.params));
         handle.published.publish(owner.snapshot);
         self.params
