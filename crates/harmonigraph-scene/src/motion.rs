@@ -113,11 +113,14 @@ impl MarkMotion {
             self.target = target;
         }
     }
-    fn advance(&mut self, dt: f64, env: &Envelope) {
-        for i in 0..11 {
+    fn advance(&mut self, dt: f64, env: &Envelope, departure_wait: &[f32; 11]) {
+        for (i, &departure_wait) in departure_wait.iter().enumerate() {
             let target = f32::from(self.target == Some(i));
-            self.levels[i] =
-                approach(self.levels[i], target, (dt - f64::from(self.waits[i])).max(0.0), env);
+            // A whole mark leaves with its octave sector. A mark already
+            // fading after a melody/bass handoff must keep moving instead.
+            let wait =
+                if target == 0.0 && self.levels[i] >= 1.0 { departure_wait } else { self.waits[i] };
+            self.levels[i] = approach(self.levels[i], target, (dt - f64::from(wait)).max(0.0), env);
             self.waits[i] = (self.waits[i] - dt as f32).max(0.0);
         }
     }
@@ -181,6 +184,8 @@ impl Motion {
         if self.at_rest() {
             return;
         }
+        self.melody.advance(dt, env, &self.level_wait);
+        self.bass.advance(dt, env, &self.level_wait);
         // The slice reveal runs the envelope's own length rather than a second
         // duration handed in beside it: `ViewConfig::envelope` puts one time on
         // both ends, so the two were always the same number and a parameter
@@ -228,8 +233,6 @@ impl Motion {
             self.progress = [0.0; 11];
             self.delay = [0.0; 11];
         }
-        self.melody.advance(dt, env);
-        self.bass.advance(dt, env);
     }
 }
 /// The octave slot a held pitch lights on the node at `cents`, inside the
@@ -363,8 +366,8 @@ impl NodeMotion {
                 motion.delay = [0.0; 11];
                 motion.level_wait = [0.0; 11];
                 motion.levels = motion.targets;
-                motion.melody.advance(f64::from(duration + mark_delay(view)), env);
-                motion.bass.advance(f64::from(duration + mark_delay(view)), env);
+                motion.melody.advance(f64::from(duration + mark_delay(view)), env, &[0.0; 11]);
+                motion.bass.advance(f64::from(duration + mark_delay(view)), env, &[0.0; 11]);
             }
         }
         self.read_slots(scene, tuning);
