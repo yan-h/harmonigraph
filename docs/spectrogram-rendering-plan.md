@@ -22,7 +22,7 @@ The three selected repairs landed in [#710](https://github.com/yan-h/harmonigrap
 nothing else proposed below is implemented.
 Tracker:
 [#654](https://github.com/yan-h/harmonigraph/issues/654).
-The method follows [the lattice plan](lattice-rendering-plan.md) and [#643](https://github.com/yan-h/harmonigraph/issues/643), but the dependencies are established independently for this path.
+The method follows the lattice plan ([#643](https://github.com/yan-h/harmonigraph/issues/643), closed not-planned), but the dependencies are established independently for this path.
 
 **Scope decision, 2026-09-06, settled:** Yan was satisfied with spectrogram performance and selected **SG1, SG4A and SG2** for their resource/correctness benefit relative to ongoing maintenance.
 SG3, SG4B/C, SG5 and SG6 were **deferred and not planned**, and their issues closed as not planned.
@@ -434,7 +434,9 @@ The fallback counters count refolds/full uploads but not bytes copied, delta cou
 
 **Smallest useful change:** use targeted temporary CPU scopes for fold/view/diff/LUT/callback staging and text/tessellation;
 record bytes, slots, allocation count, and executed callback count per surface when evaluating SG4/SG5. For GPU timing, first prove a bracket responds to multiplied work and closes after a real dependency, using asynchronous readback and a validated timestamp mechanism.
-Do not replace working beginning-of-pass timestamps with advertised end timestamps without checking actual values.
+The recommendation to keep beginning-of-pass timestamps over end-of-pass ones is now overturned:
+[#1113](https://github.com/yan-h/harmonigraph/issues/1113) measured the beginning-of-pass bracket undercounting the scene passes on a tile-based GPU, and [#1150](https://github.com/yan-h/harmonigraph/issues/1150) tracks the same fix for the live overlay's `GpuTimer`.
+Close the bracket with an end-of-pass stamp on a pass ordered after the scene work instead.
 Coordinate measurement methods with #642, but validate the egui timer independently:
 `DrawGpuTimer` in the vendored renderer and lattice `GpuTimer` in `render/src/lib.rs` are different owners and query sets.
 Landing the lattice bracket change does not establish the spectrogram/egui bracket's validity.

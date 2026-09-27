@@ -1209,7 +1209,8 @@ const SCALES: [f32; 5] = [0.7, 0.9, 1.0, 1.1, 1.5];
 /// is the bar's full width in from its right edge however thin it is painted.
 ///
 /// Both readout panes list what has come in, and an empty one has nothing to
-/// scroll, so the fixture gives the Console lines and the Notes pane voices.
+/// scroll, so the fixture gives the Console lines and the Tuning pane's
+/// "Assignments and sounding intervals" list held voices.
 fn scrolling_settings_pane(
     pane: panes::Tab,
     scale: f32,

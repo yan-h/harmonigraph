@@ -209,7 +209,7 @@ That is where the design gets its edges:
 
 - A 35 ms rebake in one frame is a hitch five frames long, so the rebake has to be spread over the frames before the step it is for, into a second target, and swapped.
 - The key is the snapped drift, the target size, `ppp`, the style and that style's own dials — and NOT `time`, the light, the palette or the softness.
-`Rock` above zero puts `time` into the walk's output and defeats the cache outright; it ships at zero.
+`Rock` above zero puts `time` into the walk's output and defeats the cache outright; it shipped at zero, and both `Rock` and `Grain` are now retired (below).
 - `Cloud speed` reaches 20x, where a step arrives every few frames and the lever has nothing left to give.
 - Whether one-pixel steps in a field this soft are visible is a question for the eye, not the probe.
 
@@ -254,7 +254,7 @@ Measured with `PROBE_CLOUD_TILE` at 3840x2160 and 2 px/pt, light plus paint, med
 The repeated row is 4% under the first, which is the run's noise; the ratios are 4x and 14x.
 The period costs nothing per frame, since the walk is paid once either way.
 Tiled, Watercolor is CHEAPER than Mosaic: what is left per pixel is two light taps for the wash and ten for the mosaic's sun.
-Both held 144 Hz in that original run on a full 4K pane at NATIVE resolution, which `Cloud pixel size` could only buy with softness — so that dial, its target, its pass and its branch are the next retirement candidate once the tile has been judged.
+Both held 144 Hz in that original run on a full 4K pane at NATIVE resolution, which `Cloud pixel size` could only buy with softness — that dial, its target, its pass and its branch, along with `Cloud tile`, were retired once the tile was judged, fixing sampling at 40 cells and 0.5 pt ([#1042](https://github.com/yan-h/harmonigraph/pull/1042)).
 
 The exact rotation was measured again on 2026-09-20 in the same 3840x2160 probe, with `P = 40` and forty frames per case.
 Against the same run's live walk, Mosaic paint fell from 14.23 to 2.66 ms and Watercolor from 37.54 to 3.65 ms: 5.3x and 10.3x.
@@ -442,4 +442,4 @@ then compare candidates against an unchanged interleaved control and check image
 Changing source resolution needs an explicit quality check for narrow transients and pitch detail.
 A CPU cache rewrite is not justified by the measurements here.
 
-[Issue #1015](https://github.com/yan-h/harmonigraph/issues/1015) tracks that remaining optimization work.
+[Issue #1015](https://github.com/yan-h/harmonigraph/issues/1015) tracked that remaining optimization work and was closed completed with no production change retained.

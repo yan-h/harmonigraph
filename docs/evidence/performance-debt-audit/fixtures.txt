@@ -1,9 +1,0 @@
-Audited b26fa162; release build; macOS arm64; Rust 1.92.0.
-held after On at 1.0: 1
-held after immediately delivering Off dated 1.25: 0; live roll notes=0
-default aspect 0.51: drawn=135 DrawnWindow { min: LatticePos { threes: -7, fives: -3, sevens: 0 }, max: LatticePos { threes: 7, fives: 5, sevens: 0 } }; reach=1025
-default aspect 0.821: drawn=195 DrawnWindow { min: LatticePos { threes: -7, fives: -5, sevens: 0 }, max: LatticePos { threes: 7, fives: 7, sevens: 0 } }; reach=1025
-sevens aspect 0.51: drawn=495 DrawnWindow { min: LatticePos { threes: -7, fives: -4, sevens: -1 }, max: LatticePos { threes: 7, fives: 6, sevens: 1 } }; reach=3075
-sevens aspect 0.821: drawn=585 DrawnWindow { min: LatticePos { threes: -7, fives: -5, sevens: -1 }, max: LatticePos { threes: 7, fives: 7, sevens: 1 } }; reach=3075
-3075 label aspect 0.51: drawn=495 DrawnWindow { min: LatticePos { threes: -7, fives: -4, sevens: -1 }, max: LatticePos { threes: 7, fives: 6, sevens: 1 } }; reach=3075
-3075 label aspect 0.821: drawn=585 DrawnWindow { min: LatticePos { threes: -7, fives: -5, sevens: -1 }, max: LatticePos { threes: 7, fives: 7, sevens: 1 } }; reach=3075

@@ -73,7 +73,7 @@ The interposer calls `F_GETPATH` to identify inputs, so its elapsed time is deli
 Reported read bytes are application read calls, not physical disk traffic;
 OS caching was not flushed.
 
-Exports use the normal renderer, GPU and ffmpeg, at 640×360 with `--align off --playhead`:
+Exports use the normal renderer, GPU and ffmpeg, at 640×360 with `--align off --playhead` (both flags below are historical: `--playhead` and separate-WAV `--audio`/`-a` replacement are retired and refused by the current CLI, per `retired_playhead_flag_is_rejected` and `separate_audio_replacement_flags_are_rejected` in `main.rs`):
 
 | Scenario | Source | Render interval | FPS | Video frames |
 | --- | --- | --- | --- | --- |
@@ -111,6 +111,8 @@ for name, rate, seconds in [('short', 48000, 5), ('medium', 192000, 60), ('long'
 (root / 'probe.take').write_text('Header((version:5))\nNote((t:0.0,source:1,channel:0,note:69,kind:On(velocity:0.8)))\nNote((t:4.5,source:1,channel:0,note:69,kind:Off))\n')
 ```
 
+Historical only — `--audio` and `--playhead` no longer parse:
+
 ```sh
 /usr/bin/time -l target/release/harmonigraph-offline /tmp/bounded-audio/probe.take \
   --audio /tmp/bounded-audio/long.wav --align off --size 640x360 \
@@ -120,6 +122,9 @@ for name, rate, seconds in [('short', 48000, 5), ('medium', 192000, 60), ('long'
 Use the table's source, FPS and interval for the other scenarios.
 
 ## Results
+
+Rows below naming alignment, replacement or the playhead/`WholeSong` path measure consumers retired since (#903, #972, #973);
+they are the historical record of the bounded-reader change, not a description of current behavior.
 
 Standalone raw-reader probes, one uninstrumented run per source after fixture generation:
 
@@ -175,6 +180,8 @@ ffmpeg runs in a separate traced PID and has unchanged I/O:
 The renderer's larger full-window read counts are the explicit tradeoff for discarding raw samples between phases, not per-video-frame replay from source zero.
 
 ## Verification
+
+Historical record of the bounded-reader change; the alignment and `WholeSong` tests it describes no longer exist (#903, #972, #973).
 
 Existing scrolling timing tests retain their sample grid across multiple FPS values, late starts and partial final batches.
 The existing alignment polarity/different-rate regressions now use real temporary WAVs.

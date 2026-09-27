@@ -26,7 +26,8 @@ pub struct Visit {
     /// (per-note tuning included, so a bent voice is remembered bent).
     pub pitch: f32,
     pub pitch_class: PitchClass,
-    /// When it last stopped sounding, for the optional memory span.
+    /// When it last stopped sounding, for the eviction order once
+    /// [`NoteHistory::MAX_VISITS`] is exceeded.
     pub last_off: Time,
 }
 
@@ -39,15 +40,14 @@ fn visit_key(pitch: f32) -> i32 {
 
 /// Every pitch played so far, as far back as [`MAX_VISITS`](Self::MAX_VISITS).
 ///
-/// Ordered by key — the pitch in cents — for the reason
-/// [`NoteTracker`](crate::NoteTracker) is: two remembered pitches can match
-/// one node, and where they TIE the trail's `max` keeps the first of them, so
-/// a hashed order would settle that differently per process (#135). The tie is
-/// the ordinary case rather than a corner: `level` is 1.0 for every visit
-/// while the memory span is "never forget", which is the default. Give the
-/// span a value and the fresher visit simply wins on level, order or no order.
-/// `forget_oldest` is the same argument for a tie in `last_off`, which a
-/// chord's notes all share.
+/// Ordered by key — the pitch in cents — for the same reason
+/// [`NoteTracker`](crate::NoteTracker) is: a hashed order would settle
+/// iteration differently per process. `TrailField` (`harmonigraph-scene`)
+/// sorts its own pitch classes rather than relying on this order, so nothing
+/// currently depends on it for correctness, only for determinism.
+/// `forget_oldest`'s tie-break argument still applies: a chord's notes all
+/// share one `last_off`, and the tie resolves to the lowest pitch of the tied
+/// set rather than settling differently per process.
 #[derive(Default)]
 pub struct NoteHistory {
     visits: BTreeMap<i32, Visit>,
@@ -55,8 +55,9 @@ pub struct NoteHistory {
 
 impl NoteHistory {
     /// Distinct pitches remembered. Past this the least recently played is
-    /// forgotten. The bound is on per-frame work — the scene tests every
-    /// visit against every visible node — not on memory.
+    /// forgotten. The bound sizes `TrailField`'s frame-local scratch array
+    /// (`harmonigraph-scene`), which it fills and sorts once per frame and
+    /// then binary-searches per node — not a per-visit-per-node scan.
     pub const MAX_VISITS: usize = 384;
 
     /// Fold a voice the tracker has finished with into history. `now` is
@@ -73,8 +74,9 @@ impl NoteHistory {
             last_off,
         });
         // The freshest visit owns the entry: two playings inside one cent fold
-        // together (see `visit_key`), and the mark is drawn at — and colored
-        // by — the pitch the last of them sounded at.
+        // together (see `visit_key`), and the mark is drawn at the pitch the
+        // last of them sounded at. `TrailField` writes no colour for a trail
+        // mark, only its presence.
         visit.pitch = voice.pitch;
         visit.pitch_class = voice.pitch_class;
         visit.last_off = visit.last_off.max(last_off);
@@ -101,8 +103,9 @@ impl NoteHistory {
     }
 
     /// Every remembered pitch, lowest first. Not the order they were played
-    /// in — the key is the pitch — but a fixed one, which is what the trail
-    /// needs of it.
+    /// in — the key is the pitch — but a fixed, process-independent one.
+    /// `TrailField` re-sorts its own copy regardless, so nothing currently
+    /// depends on this order for correctness.
     pub fn visits(&self) -> impl Iterator<Item = &Visit> {
         self.visits.values()
     }
@@ -175,11 +178,11 @@ mod tests {
         assert_eq!(visits[0].last_off, 10.5, "the freshest visit wins");
     }
 
-    /// The trail keeps the FIRST of several remembered pitches that match
-    /// one node (`max`, and every level is 1.0 while the memory span is
-    /// "never forget"), so this order picks the mark's color. It has to be
-    /// a property of the music rather than of the map — see the same
-    /// argument on `NoteTracker::voices`, and #135.
+    /// `visits()` iterates in pitch order regardless of play order, a
+    /// property of the music rather than of the map — see the same argument
+    /// on `NoteTracker::voices`. Nothing currently depends on this order
+    /// (`TrailField` re-sorts its own copy), but it stays process-independent
+    /// rather than a hashed order settling differently per run.
     ///
     /// Played high to low, so an order inherited from the playing would
     /// come back reversed and only the key order can pass.

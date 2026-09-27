@@ -24,8 +24,10 @@ which is native on 1x and 2x displays,
 so the displaced scalar field is reduced before that lookup only where a point spans more than two device pixels.
 Tile geometry and the Watercolor tile rotation are unchanged.
 
-At zero Refraction the renderer takes the ordinary texture-off path,
+At zero Refraction with Color pickup and Color release also zero the renderer takes the ordinary texture-off path,
 so the picture is byte-identical and no texture work is needed.
+Zero Refraction alone does not reach that path at the shipped defaults:
+Color pickup and Color release are on by default and keep temporal color memory running regardless of Refraction (see [color memory](spectrogram-color-memory.md)).
 Refraction over a constant source cannot invent a pattern;
 half-float intermediate storage and filtering can round the output by one channel byte.
 Contour strength,

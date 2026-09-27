@@ -51,9 +51,13 @@ cargo xtask bundle harmonigraph-plugin --release
 
 Add `<checkout>/target/bundled/` under **Settings → Locations → Plug-in Locations** in Bitwig.
 After that,
-`./update-plugin.sh` builds the current checkout and loads its CLAP/VST3 plugin plus matching offline renderer.
+`./update-plugin.sh` builds this checkout and loads its CLAP/VST3 plugin plus matching offline renderer in one step —
+the one-shot for building and loading your own checkout directly.
 After installing,
 deactivate and reactivate Bitwig's audio engine.
+Working across several branch checkouts instead?
+`./load-plugin.sh <branch>` loads an already-built one without rebuilding;
+see [developing Harmonigraph](docs/development.md).
 
 Install `ffmpeg` with `brew install ffmpeg` when you want encoded video rather than a frame sequence.
 See [developing Harmonigraph](docs/development.md) for test commands,

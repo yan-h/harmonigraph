@@ -7,7 +7,7 @@
 viable with narrower constraints.** In the measured Bitwig graph, complete source intervals, central assignment and accepted delayed output fit a fixed D of 2,048 samples (46.440 ms).
 This establishes a usable host configuration for #615, not a portable CLAP clock guarantee or a finished tuning feature.
 The production transport-stop and late-stream behavior was subsequently accepted in [PR #633](https://github.com/yan-h/harmonigraph/pull/633), and the built mechanics are in [the adaptive tuning design](adaptive-tuning.md).
-[#632](https://github.com/yan-h/harmonigraph/issues/632) remains open for implementation/verification;
+[#632](https://github.com/yan-h/harmonigraph/issues/632), Bitwig acceptance for the resulting Stop behavior, was later closed not-planned;
 those later decisions do not add host measurements to this record.
 The apparatus is in [PR #630](https://github.com/yan-h/harmonigraph/pull/630), and its configuration and limitations are in [tuning-probe.md](tuning-probe.md).
 

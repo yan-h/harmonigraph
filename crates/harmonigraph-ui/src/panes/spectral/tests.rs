@@ -2328,8 +2328,8 @@ fn an_off_lattice_note_gets_a_band_down_the_spectrum() {
 /// window rather than the naming reach. The two are sized apart and the drawn
 /// one is much the wider — at 16:9, fully zoomed out, a perspective pane draws
 /// 73% of its nodes outside the reach — so asking the reach put a red band
-/// down the spectrum for a note lit on screen, with the Notes pane showing no
-/// node for it and the analyzer naming it in equal temperament. That needs a
+/// down the spectrum for a note lit on screen, with the roll's and spiral's
+/// note names showing no node for it and naming it in equal temperament. That needs a
 /// tuning where distinct positions are distinct pitches to see: the default
 /// 12-TET lattice collapses, and a match turns up within six fifths whatever
 /// you play.

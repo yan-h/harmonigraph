@@ -38,7 +38,7 @@ Local retention ceilings refuse input before either scheduling path sees it, and
 
 Stage 8 measured the transport at 3,305 production lines, down from 12,981, and its tests at 1,518 lines, down from 12,040.
 The module is `crates/harmonigraph-plugin/src/tuning/` rather than `performance/`.
-Policy v2 is untouched: the same scorer, the same controls, the same fixtures.
+Policy v3 is untouched: the same scorer, the same controls, the same fixtures.
 
 Yan has used adaptive tuning in an ordinary Bitwig setup and reports that it works as expected.
 That was the pre-stage-8 tree, so it is positive end-to-end evidence for the musical behavior and not for the transport that now carries it.
@@ -561,7 +561,8 @@ This was never a measurement of resulting acoustic pitch either;
 a receiving instrument may ignore, smooth or modulate the expression.
 
 One provenance reaches the take now rather than two.
-`PitchProvenance` keeps both variants so an old take still parses, but every record this build writes carries `AcceptedOutput`.
+`PitchProvenance` keeps both variants because `ObservedDirect` is still live production code, the default provenance for a plain direct-source `NoteEvent` (`NoteDelta::from`, `canonical.rs`), not a compat shim kept for an old take;
+every adaptive-tuning record this build writes carries `AcceptedOutput`.
 Learning is the one consumer that reads something else:
 it is given the **player's** pitch, with the adaptive correction taken back off.
 Every row is tuned now, the Hub's own included, so feeding Learn what was emitted would make it a fixed point that infers the axes it has already chosen.
@@ -588,7 +589,7 @@ Takes are format v5;
 v1–v4 are refused whole with a version error rather than half-read.
 Every record carries a container-level `#[serde(default)]` and none denies unknown fields, which is what makes dropping a field safe without touching the format version —
 and is why a take written today is refused by a pre-prune build rather than misread by one.
-Policy-v2 settings are saved in musical settings and take configuration metadata, and tuned onset pitch is a saved voice fact.
+Policy-v3 settings are saved in musical settings and take configuration metadata, and tuned onset pitch is a saved voice fact.
 Old policy-descriptor fields were removed without aliases or migration shims;
 missing v2 fields use sanitized baseline defaults.
 Replay uses recorded output pitches and never reruns adaptive selection.
@@ -748,12 +749,6 @@ the second is what keeps Learn from becoming a fixed point.
 **Deferred policy choices.** Pedal-aware harmonic holding, a successor to the deliberately temporary bounded recent-note memory, and explicit anchors or additional root and excluded-pitch controls remain unbuilt.
 The shipped policy-v3 controls do not imply those choices were made.
 
-**Filed and open.**
-
-| Issue | What it is |
-|---|---|
-| [#790](https://github.com/yan-h/harmonigraph/issues/790) | Large atomic onset cohorts can exceed the audio-callback budget well below the candidate ceiling; Tune's output delay does not give the Hub more processing time |
-
 **Closed or decided on 2026-09-10.** [#696](https://github.com/yan-h/harmonigraph/issues/696), a fresh late second phrase without seeded neutral CC64/66/69, was closed not-planned:
 the `Wave.shift` / accepted-neutral-pedal mechanism it tested was deleted in #788.
 [#738](https://github.com/yan-h/harmonigraph/issues/738) is decided:
@@ -762,6 +757,8 @@ the `Wave.shift` / accepted-neutral-pedal mechanism it tested was deleted in #78
 see [Pitch output](#pitch-output).
 [#632](https://github.com/yan-h/harmonigraph/issues/632), Bitwig acceptance for Stop, was closed not-planned:
 the Stop cut is on main, and a failure there is a stuck or late note that ordinary playing surfaces at once.
+[#790](https://github.com/yan-h/harmonigraph/issues/790), large atomic onset cohorts exceeding the audio-callback budget well below the candidate ceiling, was closed not-planned:
+Tune's output delay does not give the Hub more processing time either way.
 
 **Closed, recorded here because the record was wrong about them more than once.** [#672](https://github.com/yan-h/harmonigraph/issues/672) was fixed through #669 → #709 and closed on 2026-09-07;
 it was twice described as waiting on later work.

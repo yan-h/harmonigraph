@@ -1,5 +1,9 @@
 # FFT backend evaluation (#743)
 
+**Superseded by [#804](https://github.com/yan-h/harmonigraph/pull/804),** which adopted the RealFFT backend this evaluation recommended;
+see [`realfft-adoption.md`](realfft-adoption.md) for the accepted implementation.
+This document is the evaluation record, not a description of the current backend.
+
 Evaluation date: 2026-09-09.
 Production source: `0c32443a5f23f59c5a4ad7fee21ec49628f8e436` (includes #800).
 This is an experiment and a recommendation, not backend adoption or DSP crate extraction.

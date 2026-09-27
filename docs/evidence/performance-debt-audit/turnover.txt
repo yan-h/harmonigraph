@@ -1,3 +1,0 @@
-turnover retained begin: complete=false voices=192 exact_sources=2,3,4
-turnover reset then begin: complete=true voices=256 exact_sources=1,2,3,4
-turnover current release-first flush then begin: complete=true voices=256 exact_sources=1,2,3,4
