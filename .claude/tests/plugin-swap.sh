@@ -115,7 +115,7 @@ C
 cc -o "$TMP/dlopen" "$TMP/dlopen.c" || exit 1
 check_loads() {
   local caller="$1" expected="$2" ext actual
-  for ext in clap vst3; do
+  for ext in clap; do
     actual=$("$TMP/dlopen" "$repo/target/bundled/$NAME.$ext/Contents/MacOS/$NAME")
     if [ "$?" -ne 0 ] || [ "$actual" != "$expected" ]; then
       echo "✗ $caller $ext dlopen returned '${actual:-no tag}', expected $expected" >&2
@@ -126,7 +126,7 @@ check_loads() {
 
 # The initial signed slot is loaded before replacement, exercising a previously
 # used executable rather than a never-opened file that cannot carry old state.
-for ext in clap vst3; do
+for ext in clap; do
   bundle="$repo/target/bundled/$NAME.$ext"
   mkdir -p "$bundle/Contents/MacOS"
   cp "$TMP/old-bin" "$bundle/Contents/MacOS/$NAME"
@@ -151,13 +151,13 @@ cp "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" "$TMP/old-open-bin"
 # bundle setup happened in a different clock tick.
 cp "$repo/target/bundled/$NAME.clap/Contents/Info.plist" "$TMP/original.plist"
 prime_discovery_metadata() {
-  for ext in clap vst3; do
+  for ext in clap; do
     touch -m -t 200101010000 "$repo/target/bundled/$NAME.$ext/Contents/Info.plist"
   done
 }
 check_discovery_metadata() {
   local caller="$1" ext bundle plist
-  for ext in clap vst3; do
+  for ext in clap; do
     bundle="$repo/target/bundled/$NAME.$ext"
     plist="$bundle/Contents/Info.plist"
     if [ "$(stat -f %m "$plist")" -le "$metadata_before" ]; then
@@ -192,7 +192,7 @@ case "${PLUGIN_SWAP_DIAGNOSTIC_CASE:-closed}" in
   closed) exit 0 ;;
   ps-failed) exit 1 ;;
 esac
-for pid in 7101 7102 7103 7104 7105 7106; do
+for pid in 7101 7102 7103 7104 7105 7106 7107; do
   start="Mon Sep  7 10:40:18 2026"
   if [[ "$1" == -p && "$pid" == 7104 ]]; then
     start="Mon Sep  7 10:41:19 2026"  # PID reused while lsof ran.
@@ -208,32 +208,26 @@ cat > "$TMP/bin/lsof" <<'SH'
 echo lsof >> "$PLUGIN_SWAP_QUERY_LOG"
 # Assert one batch covers only the selected hosts and mapped text. A filename
 # selection would hide precisely the old inode this regression needs to reach.
-[[ "$*" == '-nP -b -a -p 7101,7102,7103,7104,7105,7106 -d txt -FpfDin' ]] || exit 2
+[[ "$*" == '-nP -b -a -p 7101,7102,7103,7104,7105,7106,7107 -d txt -FpfDin' ]] || exit 2
 [[ "$PLUGIN_SWAP_DIAGNOSTIC_CASE" == unavailable ]] && exit 127
 record() {
   printf 'ftxt\nD%s\ni%s\nn%s\n' "${2%:*}" "${2#*:}" "$1"
 }
-for pid in 7101 7102 7103 7104 7105 7106; do
+for pid in 7101 7102 7103 7104 7105 7106 7107; do
   [[ "$pid" == 7105 && "$PLUGIN_SWAP_DIAGNOSTIC_CASE" != no-match ]] && continue
   echo "p$pid"
   record /usr/lib/dyld 0x100000d:1152921500312573255
   [[ "$PLUGIN_SWAP_DIAGNOSTIC_CASE" == no-match ]] && continue
-  for ext in clap vst3; do
-    live="$PLUGIN_SWAP_REPO/target/bundled/Harmonigraph.$ext/Contents/MacOS/Harmonigraph"
-    old=$(cat "$PLUGIN_SWAP_REPO/old-$ext")
-    current=$(stat -f '0x%Xd:%i' "$live")
-    case "$pid" in
-      7101) record "$live" "$old"; record "$live" "$old" ;; # deduplicated
-      7102) record "$live" "$current" ;;
-      7103)
-        if [[ "$ext" == clap ]]; then
-          printf 'ftxt\nn%s\n' "$live"  # no identity: pathname is insufficient
-        else
-          record "$live" "0x999:${current#*:}"  # same inode, different device
-        fi ;;
-      7104) record "$live" "$old" ;;
-    esac
-  done
+  live="$PLUGIN_SWAP_REPO/target/bundled/Harmonigraph.clap/Contents/MacOS/Harmonigraph"
+  old=$(cat "$PLUGIN_SWAP_REPO/old-clap")
+  current=$(stat -f '0x%Xd:%i' "$live")
+  case "$pid" in
+    7101) record "$live" "$old"; record "$live" "$old" ;; # deduplicated
+    7102) record "$live" "$current" ;;
+    7103) printf 'ftxt\nn%s\n' "$live" ;; # no identity: pathname is insufficient
+    7104) record "$live" "$old" ;;
+    7107) record "$live" "0x999:${current#*:}" ;; # same inode, different device
+  esac
 done
 [[ "$PLUGIN_SWAP_DIAGNOSTIC_CASE" == failed ]] && exit 1
 exit 0
@@ -243,7 +237,7 @@ chmod +x "$TMP/bin/ps" "$TMP/bin/lsof"
 # Model a timestamp tick collision deterministically: the first metadata touch
 # per bundle leaves mtime unchanged, just as a repeat install within the same
 # clock tick can. Subsequent calls use the real touch. The direct-loader case
-# must reach the retry and still refresh both fingerprints; no timing race in
+# must reach the retry and still refresh the fingerprint; no timing race in
 # fixture compilation/signing decides whether that branch gets exercised.
 real_touch=$(command -v touch)
 cat > "$TMP/bin/touch" <<'SH'
@@ -262,7 +256,6 @@ export PLUGIN_SWAP_REAL_TOUCH="$real_touch"
 
 # The inodes a host would be holding, read before the swap.
 before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
-before_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
 
 # HOME redirected: the scripts install the offline renderer under
 # ~/Library/Application Support, and a test must not write to the real one.
@@ -281,11 +274,10 @@ fi
 check_discovery_metadata update-plugin.sh
 
 after_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
-after_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
 
-# 1. Both installed paths move to fresh inodes; an old open descriptor keeps
+# 1. The installed path moves to a fresh inode; an old open descriptor keeps
 #    the old bytes intact instead of seeing a different executable underneath.
-if [ "$before_clap" = "$after_clap" ] || [ "$before_vst3" = "$after_vst3" ]; then
+if [ "$before_clap" = "$after_clap" ]; then
   echo "✗ update-plugin.sh reused an executable inode" >&2
   failures=$((failures + 1))
 fi
@@ -306,7 +298,7 @@ fi
 # 3. And the bundle is still valid: an ad-hoc signature that no longer matches
 #    the bytes makes the dynamic loader refuse the binary on Apple Silicon,
 #    which is a different silent failure with the same symptom.
-for ext in clap vst3; do
+for ext in clap; do
   if ! codesign --verify --verbose=1 "$repo/target/bundled/$NAME.$ext" >/dev/null 2>&1; then
     echo "✗ $NAME.$ext does not verify after the swap" >&2
     failures=$((failures + 1))
@@ -344,7 +336,6 @@ if ! printf '%s\n' "$codex_list" | grep -Fq "$codex_branch"; then
 fi
 
 before_clap=$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")
-before_vst3=$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")
 exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
 cp "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" "$TMP/old-open-bin"
 codex_out="$TMP/codex-load.log"
@@ -370,14 +361,13 @@ elif ! grep -Fq "branch=$codex_branch" "$loaded" \
   failures=$((failures + 1))
 fi
 check_discovery_metadata load-plugin.sh
-for ext in clap vst3; do
+for ext in clap; do
   if [ ! -f "$TMP/collisions/$NAME.$ext" ]; then
     echo "✗ the $ext timestamp collision fixture was not reached" >&2
     failures=$((failures + 1))
   fi
 done
-if [ "$before_clap" = "$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")" ] \
-  || [ "$before_vst3" = "$(stat -f %i "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME")" ]; then
+if [ "$before_clap" = "$(stat -f %i "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME")" ]; then
   echo "✗ load-plugin.sh reused an executable inode" >&2
   failures=$((failures + 1))
 fi
@@ -409,13 +399,10 @@ diagnostic_check() {
   fi
 }
 for diagnostic_case in identities no-match failed unavailable ps-failed; do
-  # Keep both old inodes alive as a mapped host would, preventing inode reuse
+  # Keep the old inode alive as a mapped host would, preventing inode reuse
   # from making the fixture claim a different file is the replaced image.
   exec 3< "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME"
-  exec 4< "$repo/target/bundled/$NAME.vst3/Contents/MacOS/$NAME"
-  for ext in clap vst3; do
-    stat -f '0x%Xd:%i' "$repo/target/bundled/$NAME.$ext/Contents/MacOS/$NAME" > "$repo/old-$ext"
-  done
+  stat -f '0x%Xd:%i' "$repo/target/bundled/$NAME.clap/Contents/MacOS/$NAME" > "$repo/old-clap"
   : > "$PLUGIN_SWAP_QUERY_LOG"
   diagnostic_out="$TMP/diagnostic-$diagnostic_case.log"
   prime_discovery_metadata
@@ -437,18 +424,19 @@ for diagnostic_case in identities no-match failed unavailable ps-failed; do
     diagnostic_check 'Snapshot only: unseen mappings and the next load are not verified' 1
     case "$diagnostic_case" in
       identities|failed)
-        diagnostic_check 'PID 7101 \(started Mon Sep 7 10:40:18 2026\): observed old image' 2
-        diagnostic_check 'PID 7102 .*observed current image' 2
-        diagnostic_check 'PID 7103 .*uncertain.*pathname matches' 2
-        diagnostic_check 'PID 7104 \(start unavailable or changed\): uncertain' 2
-        diagnostic_check 'PID 710[12].*uncertain|PID 710[345].*observed (old|current)' 0
+        diagnostic_check 'PID 7101 \(started Mon Sep 7 10:40:18 2026\): observed old image' 1
+        diagnostic_check 'PID 7102 .*observed current image' 1
+        diagnostic_check 'PID 7103 .*uncertain.*pathname matches' 1
+        diagnostic_check 'PID 7104 \(start unavailable or changed\): uncertain' 1
+        diagnostic_check 'PID 7107 .*uncertain.*pathname matches' 1
+        diagnostic_check 'PID 710[12].*uncertain|PID 710[3457].*observed (old|current)' 0
         ;;
       no-match)
         diagnostic_check 'observed old image|observed current image' 0
         diagnostic_check 'No Harmonigraph image observed in the queried Bitwig hosts' 1
         ;;
       unavailable)
-        diagnostic_check 'PID 710[1-6].*uncertain' 6
+        diagnostic_check 'PID 710[1-7].*uncertain' 7
         ;;
     esac
     diagnostic_check 'PID 7105 .*uncertain.*inaccessible or have exited' \
@@ -461,7 +449,7 @@ for diagnostic_case in identities no-match failed unavailable ps-failed; do
     echo "✗ $diagnostic_case did not use the expected bounded process queries" >&2
     failures=$((failures + 1))
   fi
-  exec 3<&- 4<&-
+  exec 3<&-
 done
 
 if [ "$failures" -eq 0 ]; then
