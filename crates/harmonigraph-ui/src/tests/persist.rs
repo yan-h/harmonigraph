@@ -1439,7 +1439,7 @@ fn a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one() {
 fn a_blob_older_than_the_version_floor_is_refused_whole() {
     // The refusal is what lets the migrations for older formats be deleted
     // rather than carried forever, and it costs a real project its settings:
-    // the plugin's CLAP/VST3 ids gate everything below version 2, but nothing
+    // the plugin's CLAP id gates everything below version 2, but nothing
     // gates a blob one bump behind, which a project saved by the previous build
     // is. See `load_persist` for why that price is paid rather than shimmed.
     let mut state = fresh();
