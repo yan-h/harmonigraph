@@ -25,7 +25,7 @@
 //!
 //! Nothing here touches the plugin API. That is what lets the whole
 //! record-and-render path — rings, transport handling, subprocess driver,
-//! stderr parsing — be tested without building a CLAP/VST3 bundle, and reached
+//! stderr parsing — be tested without building a CLAP bundle, and reached
 //! from any shell that wants it rather than only from the plugin.
 //!
 //! # Why this is a button and not automatic

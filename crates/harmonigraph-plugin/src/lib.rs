@@ -6,7 +6,7 @@ use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use harmonigraph_core::notes::{Expression, NoteEvent as CoreNoteEvent, NoteEventKind, SourceId};
+use harmonigraph_core::notes::{NoteEvent as CoreNoteEvent, SourceId};
 use harmonigraph_record::TAKE_CHANNELS;
 use harmonigraph_ui::params::{AnalysisInput, ParamBackend, ParamKey};
 use nice_plug::prelude::*;
@@ -84,6 +84,10 @@ pub(crate) const AUDIO_RING_CAPACITY: usize = 131_072;
 const DEFAULT_SAMPLE_RATE: f64 = 44_100.0;
 
 pub struct Harmonigraph {
+    /// Installed by the CLAP wrapper as it constructs the plugin and taken at
+    /// destruction, so every host callback sees one. Only a test that builds
+    /// the plugin without the wrapper runs `process` with none, and then
+    /// nothing records.
     configuration: Option<Box<configuration::Owner>>,
     aggregation: Option<Box<tuning::hub::Hub>>,
     /// Keeps the spectrogram's history running while the editor window is
@@ -115,26 +119,6 @@ pub struct Harmonigraph {
     /// Take recording (see `harmonigraph_record`). The recorder is always
     /// present; it only writes while the user has armed it from the Video pane.
     take: RecorderSlot,
-    /// What the plain-MIDI arm has sounding: the velocity each channel's key
-    /// was struck at. Kept on every block, armed or not, so each recording run
-    /// can open with the notes already held (#1129). The configured route has
-    /// no use for it — the Hub's rows are its authority on what is sounding.
-    plain_held: Box<[[Option<PlainHeld>; 128]; 16]>,
-    /// The [`recording_run`](harmonigraph_record::Recorder::recording_run)
-    /// the plain arm last opened with `plain_held`.
-    plain_opened: u64,
-    /// The pass that run was in: a new one has seen none of the held notes
-    /// begin, whatever their `recorded` marks say.
-    plain_pass: Option<harmonigraph_record::configuration::RecordAddress>,
-}
-
-/// One key the plain-MIDI arm holds.
-#[derive(Clone, Copy)]
-struct PlainHeld {
-    velocity: f32,
-    /// Whether the current pass already holds an On for it — the key was
-    /// struck while it recorded, or a run of it opened with the key held.
-    recorded: bool,
 }
 
 impl Drop for Harmonigraph {
@@ -551,77 +535,6 @@ fn ring_time(block_start: f64, timing: u32, sample_rate: f64) -> f64 {
     block_start + f64::from(timing) / sample_rate
 }
 
-/// When the same event happened on the TAKE's clock, which hangs off the
-/// transport instead. The two bases differ by wherever the song sat when the
-/// plugin loaded, and a take stamped on the ring's clock lines up with no
-/// bounce of the same song.
-fn take_time(origin: f64, timing: u32, sample_rate: f64) -> f64 {
-    origin + f64::from(timing) / sample_rate
-}
-
-/// One host event, in the terms the lattice draws it in.
-///
-/// Named fields rather than a tuple, because `channel` and `note` are both
-/// `u8` and adjacent: a tuple lets the destructuring site transpose them and
-/// still compile, and every note-on then draws a channel as a pitch. `process`
-/// has no test that would catch it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct MappedNote {
-    timing: u32,
-    channel: u8,
-    note: u8,
-    kind: NoteEventKind,
-}
-
-/// The events the visualization cares about, and what each becomes. A host
-/// sends far more than this; everything unmatched is forwarded untouched and
-/// never reaches the lattice.
-fn mapped_note(event: NoteEvent<()>) -> Option<MappedNote> {
-    match event {
-        NoteEvent::NoteOn { timing, channel, note, velocity, .. } => {
-            Some(MappedNote { timing, channel, note, kind: NoteEventKind::On { velocity } })
-        }
-        NoteEvent::NoteOff { timing, channel, note, .. }
-        | NoteEvent::Choke { timing, channel, note, .. } => {
-            Some(MappedNote { timing, channel, note, kind: NoteEventKind::Off })
-        }
-        // Per-note tuning (CLAP note expression / MPE via the host); v1
-        // supported this as PolyTuning.
-        NoteEvent::PolyTuning { timing, channel, note, tuning, .. } => Some(MappedNote {
-            timing,
-            channel,
-            note,
-            kind: NoteEventKind::Tuning { semitones: tuning },
-        }),
-        NoteEvent::PolyPressure { timing, channel, note, pressure, .. } => {
-            expression(timing, channel, note, Expression::Pressure, pressure)
-        }
-        NoteEvent::PolyVolume { timing, channel, note, gain, .. } => {
-            expression(timing, channel, note, Expression::Gain, gain)
-        }
-        NoteEvent::PolyBrightness { timing, channel, note, brightness, .. } => {
-            expression(timing, channel, note, Expression::Timbre, brightness)
-        }
-        _ => None,
-    }
-}
-
-fn expression(
-    timing: u32,
-    channel: u8,
-    note: u8,
-    expression: Expression,
-    value: f32,
-) -> Option<MappedNote> {
-    let value = expression.accept(value)?;
-    Some(MappedNote {
-        timing,
-        channel,
-        note,
-        kind: NoteEventKind::Expression { expression, value },
-    })
-}
-
 /// Which input plane the take's right channel reads from. A take's WAV is
 /// always stereo, matching AUDIO_IO_LAYOUTS, so a mono input is duplicated
 /// rather than written as half a frame — which would desync every frame after
@@ -696,9 +609,6 @@ impl Default for Harmonigraph {
             samples_processed: 0,
             presentation_seconds: 0.0,
             take: RecorderSlot(Some(take)),
-            plain_held: Box::new([[None; 128]; 16]),
-            plain_opened: 0,
-            plain_pass: None,
             _background,
         }
     }
@@ -728,9 +638,9 @@ impl Plugin for Harmonigraph {
     const VENDOR: &'static str = "Yan Han";
     const URL: &'static str = env!("CARGO_PKG_HOMEPAGE");
     // Empty because a personal address in a public tree is an address in a
-    // scraper's index. VST3's factory info is the only thing that reads this —
-    // CLAP has no email field — and it takes a blank one; contact goes through
-    // the issue tracker that CLAP_SUPPORT_URL points hosts at.
+    // scraper's index. The trait requires it but CLAP has no email field, so
+    // nothing reads it; contact goes through the issue tracker that
+    // CLAP_SUPPORT_URL points hosts at.
     const EMAIL: &'static str = "";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -774,12 +684,6 @@ impl Plugin for Harmonigraph {
         true
     }
 
-    fn deactivate(&mut self) {
-        if self.configuration.is_none() {
-            self.take.finish_callback();
-        }
-    }
-
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
             owner.reset(&self.take);
@@ -796,7 +700,6 @@ impl Plugin for Harmonigraph {
             mailbox.published.publish(owner.snapshot);
         }
         self.samples_processed = 0;
-        *self.plain_held = [[None; 128]; 16];
         self.audio_producer.reset();
         // Reset only observed direct input. The session owner must publish
         // its own explicit source/session controls after lifecycle validation.
@@ -822,10 +725,11 @@ impl Plugin for Harmonigraph {
         // getter: it advances the lifecycle and clears the recorder's per-take
         // state on the arming edge. Skipping it on a disarmed block means the
         // next arm edge never fires and recording silently never resumes.
-        let armed = match self.configuration.as_ref() {
-            Some(owner) => self.take.is_armed_at(owner.recording_intent()),
-            None => self.take.is_armed(),
-        };
+        // Without a configuration owner there is no route to record through.
+        let armed = self
+            .configuration
+            .as_ref()
+            .is_some_and(|owner| self.take.is_armed_at(owner.recording_intent()));
         let take_origin =
             match origin_source(armed, transport.pos_seconds(), block_start, self.sample_rate) {
                 OriginSource::Idle => None,
@@ -860,83 +764,6 @@ impl Plugin for Harmonigraph {
         if let Some(owner) = self.configuration.as_mut() {
             owner.record(&mut self.take, take_origin, self.presentation_seconds);
         }
-        // Each recording run opens with the notes already held that this pass
-        // has not seen begin, at the run's first sample: armed mid-note,
-        // resumed from a pause, or split from the last pass by a loop, it
-        // would otherwise hold only releases and draw nothing for them
-        // (#1129). A note whose On this pass already holds is left alone — a
-        // second On is a retrigger on replay, which would cut its row in two
-        // at every resume.
-        if let Some(origin) = take_origin.filter(|_| self.configuration.is_none()) {
-            let run = self.take.recording_run();
-            if run != self.plain_opened {
-                self.plain_opened = run;
-                // Named for the configured route, but it is simply the pass
-                // this block records into, on either route.
-                let pass = self.take.configuration_address();
-                let new_pass = pass != self.plain_pass;
-                self.plain_pass = pass;
-                for (channel, keys) in self.plain_held.iter_mut().enumerate() {
-                    for (note, held) in keys.iter_mut().enumerate() {
-                        let Some(held) = held else { continue };
-                        if new_pass || !held.recorded {
-                            let on = NoteEventKind::On { velocity: held.velocity };
-                            self.take.note(origin, SourceId::DIRECT, channel as u8, note as u8, on);
-                            held.recorded = true;
-                        }
-                    }
-                }
-            }
-        }
-        while let Some(event) = context.next_event() {
-            // All Notes Off and All Sound Off end whatever the channel holds
-            // without an Off per key; kept, those would open every later run.
-            if let NoteEvent::MidiCC { channel, cc: 120 | 123, .. } = event {
-                if let Some(keys) = self.plain_held.get_mut(usize::from(channel)) {
-                    *keys = [None; 128];
-                }
-            }
-            if let Some(MappedNote { timing, channel, note, kind }) =
-                mapped_note(event).filter(|_| self.configuration.is_none())
-            {
-                if let Some(held) = self
-                    .plain_held
-                    .get_mut(usize::from(channel))
-                    .and_then(|keys| keys.get_mut(usize::from(note)))
-                {
-                    match kind {
-                        NoteEventKind::On { velocity } => {
-                            let recorded = take_origin.is_some();
-                            *held = Some(PlainHeld { velocity, recorded });
-                        }
-                        NoteEventKind::Off => *held = None,
-                        _ => {}
-                    }
-                }
-                let time = ring_time(self.presentation_seconds, timing, self.sample_rate);
-                let event = CoreNoteEvent { source: SourceId::DIRECT, time, channel, note, kind };
-                let delta: harmonigraph_core::canonical::NoteDelta = event.into();
-                // This whole arm is the no-configuration plugin: a Harmonigraph
-                // with a session owner observes and routes its own MIDI through
-                // `Owner::observe` and publishes it from the Hub's merge, so
-                // there is no owner here to take a route or a timing from.
-                let _ = self.take.publish_note(delta, Default::default());
-                if let Some(origin) = take_origin {
-                    self.take.note(
-                        take_time(origin, timing, self.sample_rate),
-                        SourceId::DIRECT,
-                        channel,
-                        note,
-                        kind,
-                    );
-                }
-            }
-            // Behave as a transparent MIDI effect.
-            if self.configuration.is_none() {
-                context.send_event(event);
-            }
-        }
-
         // The selected input for the GUI's spectrum analyzer, INTERLEAVED:
         // it analyzes the channels separately and combines them in the power
         // domain, so a mixdown here would cancel anti-phase content before it
@@ -989,9 +816,6 @@ impl Plugin for Harmonigraph {
         self.samples_processed += block_samples as u64;
         self.presentation_seconds += block_samples as f64 / self.sample_rate;
         self.take.publish_clock(self.presentation_seconds);
-        if self.configuration.is_none() {
-            self.take.finish_callback();
-        }
         ProcessStatus::Normal
     }
 }
@@ -1212,17 +1036,7 @@ impl ClapPlugin for Harmonigraph {
         &[ClapFeature::NoteEffect, ClapFeature::Analyzer, ClapFeature::Utility];
 }
 
-impl Vst3Plugin for Harmonigraph {
-    const VST3_CLASS_ID: [u8; 16] = *b"HarmonigraphYanH";
-    const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] =
-        &[Vst3SubCategory::Fx, Vst3SubCategory::Analyzer];
-}
-
 nice_export_clap!(Harmonigraph, HarmonigraphTune);
-nice_export_vst3!(Harmonigraph);
-
-#[cfg(test)]
-mod recording_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1563,9 +1377,9 @@ mod tests {
     /// Reach the feature through the callback the host actually invokes. The
     /// main and sidechain samples are all distinct, so selecting either wrong
     /// plane or accidentally writing into the pass-through cannot hide behind
-    /// equality. An in-memory recorder arms the real take branch, so its
-    /// captured samples prove that path uses the same selected buffer without
-    /// writing a take into the user's Music directory.
+    /// equality. That the take records the same selected buffer is
+    /// `a_sidechain_selection_reaches_the_armed_takes_audio`, which needs the
+    /// configuration owner only the CLAP wrapper installs.
     #[test]
     fn a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched() {
         let mut plugin = Harmonigraph::default();
@@ -1574,10 +1388,6 @@ mod tests {
         assert!(unsafe {
             plugin.params.analysis_input._internal_set_plain_value(AnalysisInputParam::Sidechain)
         });
-        let (recorder, mut take_capture) = harmonigraph_record::testing::channel();
-        plugin.take = RecorderSlot(Some(recorder));
-        take_capture.arm_audio();
-
         let shared = plugin.editor_shared.clone();
         let mut shared = shared.lock();
         let shared = &mut *shared;
@@ -1608,11 +1418,6 @@ mod tests {
             &expected_sidechain,
             "the live analyzer received Main instead of Sidechain",
         );
-        assert_eq!(
-            take_capture.drain_audio().as_slice(),
-            &expected_sidechain,
-            "the armed take received Main instead of Sidechain",
-        );
         assert_eq!(plugin.samples_processed, expected_main_left.len() as u64);
     }
 
@@ -1636,126 +1441,6 @@ mod tests {
             main,
             "a missing auxiliary buffer has no safe source except Main",
         );
-    }
-
-    /// A note-on carries its velocity through; a note-off and a choke both mean
-    /// "this voice is done" and collapse to the same kind. The fields are
-    /// asserted by name, which is the pairing `MappedNote` exists to keep.
-    #[test]
-    fn the_note_events_the_lattice_draws_keep_their_fields() {
-        let on =
-            NoteEvent::NoteOn { timing: 7, voice_id: None, channel: 2, note: 60, velocity: 0.5 };
-        assert_eq!(
-            mapped_note(on),
-            Some(MappedNote {
-                timing: 7,
-                channel: 2,
-                note: 60,
-                kind: NoteEventKind::On { velocity: 0.5 },
-            })
-        );
-
-        let off =
-            NoteEvent::NoteOff { timing: 9, voice_id: None, channel: 2, note: 60, velocity: 0.0 };
-        assert_eq!(
-            mapped_note(off),
-            Some(MappedNote { timing: 9, channel: 2, note: 60, kind: NoteEventKind::Off })
-        );
-
-        // A choke is a note-off the host will not follow with one.
-        let choke = NoteEvent::Choke { timing: 11, voice_id: None, channel: 3, note: 64 };
-        assert_eq!(
-            mapped_note(choke),
-            Some(MappedNote { timing: 11, channel: 3, note: 64, kind: NoteEventKind::Off })
-        );
-
-        let tuning = NoteEvent::PolyTuning {
-            timing: 13,
-            voice_id: None,
-            channel: 1,
-            note: 67,
-            tuning: -0.25,
-        };
-        assert_eq!(
-            mapped_note(tuning),
-            Some(MappedNote {
-                timing: 13,
-                channel: 1,
-                note: 67,
-                kind: NoteEventKind::Tuning { semitones: -0.25 },
-            })
-        );
-    }
-
-    /// Pressure, gain and timbre reach the lattice as expressions on the note
-    /// they address, clamped into range; a value that is not a number reaches
-    /// nothing.
-    #[test]
-    fn pressure_gain_and_timbre_are_expressions() {
-        let at = |kind| Some(MappedNote { timing: 5, channel: 1, note: 67, kind });
-        let expression = |expression, value| NoteEventKind::Expression { expression, value };
-        let pressure = NoteEvent::PolyPressure {
-            timing: 5,
-            voice_id: None,
-            channel: 1,
-            note: 67,
-            pressure: 0.25,
-        };
-        assert_eq!(mapped_note(pressure), at(expression(Expression::Pressure, 0.25)));
-        let gain =
-            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: 5.0 };
-        assert_eq!(mapped_note(gain), at(expression(Expression::Gain, 5.0)), "past CLAP's +12 dB");
-        let cut =
-            NoteEvent::PolyVolume { timing: 5, voice_id: None, channel: 1, note: 67, gain: -1.0 };
-        assert_eq!(mapped_note(cut), at(expression(Expression::Gain, 0.0)), "clamped to silence");
-        let timbre = NoteEvent::PolyBrightness {
-            timing: 5,
-            voice_id: None,
-            channel: 1,
-            note: 67,
-            brightness: 0.75,
-        };
-        assert_eq!(mapped_note(timbre), at(expression(Expression::Timbre, 0.75)));
-        let nan = NoteEvent::PolyPressure {
-            timing: 5,
-            voice_id: None,
-            channel: 1,
-            note: 67,
-            pressure: f32::NAN,
-        };
-        assert_eq!(mapped_note(nan), None);
-    }
-
-    /// The negatives are where this goes wrong quietly. `MidiConfig::Basic`
-    /// delivers every poly expression below, and each carries the same
-    /// `{ timing, channel, note, .. }` shape as the PolyTuning arm — so each is
-    /// one copy-pasted arm away from drawing notes nobody played, with
-    /// `#[non_exhaustive]` guaranteeing the compiler never points at the
-    /// omission.
-    #[test]
-    fn the_other_poly_expressions_are_not_notes() {
-        let not_notes = [
-            NoteEvent::PolyPan { timing: 5, voice_id: None, channel: 1, note: 67, pan: 0.5 },
-            NoteEvent::PolyVibrato {
-                timing: 5,
-                voice_id: None,
-                channel: 1,
-                note: 67,
-                vibrato: 0.5,
-            },
-            NoteEvent::PolyExpression {
-                timing: 5,
-                voice_id: None,
-                channel: 1,
-                note: 67,
-                expression: 0.5,
-            },
-            // Plugin-to-host: this one cannot arrive on the path at all.
-            NoteEvent::VoiceTerminated { timing: 5, voice_id: None, channel: 1, note: 67 },
-        ];
-        for event in not_notes {
-            assert_eq!(mapped_note(event), None, "{event:?} must not reach the lattice");
-        }
     }
 
     /// The three ways a block decides where its take timestamps start. The
@@ -1933,20 +1618,6 @@ mod tests {
             plugin.presentation_seconds,
         );
         assert_eq!(shared.ui.picture.runtime.spectrum.history().len(), before);
-    }
-
-    #[test]
-    fn an_event_is_stamped_on_two_independent_clocks() {
-        let rate = 48_000.0;
-
-        // Both clocks advance by the event's offset within the block...
-        assert_eq!(ring_time(0.0, 24_000, rate) - ring_time(0.0, 0, rate), 0.5);
-        assert_eq!(take_time(90.0, 24_000, rate) - take_time(90.0, 0, rate), 0.5);
-
-        // ...but only the ring's counts the plugin's own blocks,
-        assert_eq!(ring_time(1.0, 0, rate), 1.0);
-        // and only the take's counts the song position it hangs off.
-        assert_eq!(take_time(90.0, 0, rate), 90.0);
     }
 
     /// A take's WAV is always stereo. A mono host input is DUPLICATED into both

@@ -170,7 +170,7 @@ harmonigraph-standalone  eframe development harness with MIDI input and a mock
                          progression and synth.
 
 harmonigraph-plugin      nice-plug shell, lock-free audio-to-UI ingress,
-                         custom editor and CLAP/VST3 exports.
+                         custom editor and CLAP export.
 ```
 
 In the plugin,

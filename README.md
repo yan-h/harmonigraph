@@ -2,7 +2,7 @@
 
 Harmonigraph is the harmony visualizer I use while composing microtonal music,
 and to turn my pieces into videos.
-It runs as a CLAP or VST3 audio plugin.
+It runs as a CLAP audio plugin.
 
 This is an LLM-written project I direct and review for my personal needs.
 Expect rough edges and breaking changes.
@@ -51,7 +51,7 @@ cargo xtask bundle harmonigraph-plugin --release
 
 Add `<checkout>/target/bundled/` under **Settings → Locations → Plug-in Locations** in Bitwig.
 After that,
-`./update-plugin.sh` builds the current checkout and loads its CLAP/VST3 plugin plus matching offline renderer.
+`./update-plugin.sh` builds the current checkout and loads its CLAP plugin plus matching offline renderer.
 After installing,
 deactivate and reactivate Bitwig's audio engine.
 
@@ -82,5 +82,3 @@ The vendored forks under [`vendor/`](vendor) retain their upstream terms:
 while `nice-plug` is ISC.
 Each keeps its own license files;
 [`PATCHES.md`](PATCHES.md) records the local changes.
-
-VST is a trademark of Steinberg Media Technologies GmbH.

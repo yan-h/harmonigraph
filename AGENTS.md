@@ -1,6 +1,6 @@
 # AGENTS.md
 
-A Rust CLAP/VST3 plugin that draws a harmonic pitch lattice and an audio spectrum, plus an offline renderer for video export.
+A Rust CLAP plugin that draws a harmonic pitch lattice and an audio spectrum, plus an offline renderer for video export.
 Everything below is a gotcha or a contract —
 the rest of the repo explains itself by being read.
 
