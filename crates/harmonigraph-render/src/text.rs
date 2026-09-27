@@ -66,8 +66,6 @@ pub(crate) const TEXT_ENTRY_POINTS: &[&str] = &[
     "vs_shadow_box",
     "fs_shadow_box",
     "fs_shadow_box_plain",
-    "fs_label_transmittance",
-    "fs_glyph_transmittance",
 ];
 
 /// One glyph: where it goes on screen, where it lives in the atlas it is cut
@@ -869,7 +867,7 @@ fn create_spectral_shadow_pipeline(
 /// (`fs_shadow_box`).
 ///
 /// The shadow multiplies both visible components. The bloom sources remain
-/// untouched; the ordered local transmittance pass shadows their finished
+/// untouched; the local transmission attachment shadows their finished
 /// light at composition time. Glyph fill also stays out of the bloom sources.
 ///
 /// Four groups, the second empty: the pane's uniforms, the atlas at group 2 and
@@ -900,12 +898,7 @@ pub(crate) fn create_shadow_box_pipeline(
     target_format: wgpu::TextureFormat,
     bloom: bool,
 ) -> wgpu::RenderPipeline {
-    let target = Some(wgpu::ColorTargetState {
-        format: target_format,
-        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-        write_mask: wgpu::ColorWrites::ALL,
-    });
-    let targets = vec![target; if bloom { 4 } else { 2 }];
+    let targets = crate::scene_targets(target_format, bloom);
     glyph_pipeline(
         device,
         shader,
@@ -914,28 +907,6 @@ pub(crate) fn create_shadow_box_pipeline(
         ("vs_shadow_box", if bloom { "fs_shadow_box" } else { "fs_shadow_box_plain" }),
         &[],
         &targets,
-    )
-}
-
-pub(crate) fn create_local_shadow_pipeline(
-    device: &wgpu::Device,
-    shader: &wgpu::ShaderModule,
-    glyph_layout: &wgpu::BindGroupLayout,
-    layouts: crate::SceneLayouts<'_>,
-    format: wgpu::TextureFormat,
-) -> wgpu::RenderPipeline {
-    glyph_pipeline(
-        device,
-        shader,
-        "label_local_shadow",
-        &[Some(glyph_layout), Some(layouts.glow), Some(layouts.shadow), Some(layouts.casters)],
-        ("vs_shadow_box", "fs_label_transmittance"),
-        &[],
-        &[Some(wgpu::ColorTargetState {
-            format,
-            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-            write_mask: wgpu::ColorWrites::ALL,
-        })],
     )
 }
 
@@ -1293,8 +1264,8 @@ pub(crate) fn blank_sdf_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgp
 /// its own text, so a label composites over the picture identically to the
 /// stamped version it replaces.
 ///
-/// `attachments` is one for ordinary text, two for the lattice's visible
-/// components, or four when its label-free bloom pair is present. Glyph fill
+/// `attachments` is one for ordinary text, three for the lattice's visible
+/// components and transmission, or five with its bloom pair. Glyph fill
 /// covers both visible components and writes nothing to either bloom target,
 /// so a name neither glows nor cuts a hole in the node halo it covers.
 ///
@@ -1326,26 +1297,25 @@ pub(crate) fn create_text_pipeline(
     attachments: usize,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
-    let mut targets = vec![Some(wgpu::ColorTargetState {
-        format: target_format,
-        blend: Some(blend),
-        write_mask: wgpu::ColorWrites::ALL,
-    })];
-    // Lattice labels cover both visible components; neither bloom component
-    // receives glyph color OR coverage. Other text surfaces have one target.
-    assert!(matches!(attachments, 1 | 2 | 4));
-    if attachments >= 2 {
-        targets.push(targets[0].clone());
+    assert!(matches!(attachments, 1 | 3 | 5));
+    let mut targets = if attachments == 1 {
+        vec![Some(wgpu::ColorTargetState {
+            format: target_format,
+            blend: Some(blend),
+            write_mask: wgpu::ColorWrites::ALL,
+        })]
+    } else {
+        crate::scene_targets(target_format, attachments == 5)
+    };
+    // Visible ink uses egui blending; transmission uses premultiplied
+    // source-over to restore T only under visible ink.
+    targets[0].as_mut().unwrap().blend = Some(blend);
+    if attachments > 1 {
+        targets[1].as_mut().unwrap().blend = Some(blend);
     }
-    if attachments == 4 {
-        targets.extend(std::iter::repeat_n(
-            Some(wgpu::ColorTargetState {
-                format: target_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::empty(),
-            }),
-            2,
-        ));
+    for target in targets.iter_mut().skip(3).flatten() {
+        target.blend = None;
+        target.write_mask = wgpu::ColorWrites::empty();
     }
     glyph_pipeline(
         device,
@@ -1494,6 +1464,7 @@ impl CallbackTrait for TextCallback {
                     falloff,
                     spread_points: style.map_or(0.0, |s| s.gaussian_spread_points(sigma)),
                     direct_distance: false,
+                    distance_kind: crate::shadow::DistanceKind::Signed,
                 })
                 .collect();
             let submission = crate::spectral_shadow::Submission {

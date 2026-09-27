@@ -157,7 +157,11 @@ mod tests {
         // The queue is unused now that the compiled resources upload nothing,
         // but it owns half the device handle and must outlive the worker.
         let (device, _queue) =
-            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: crate::device_limits(&adapter),
+                ..Default::default()
+            }))
+            .unwrap();
         let cache = Arc::new(LatticePipelineCache::default());
         let (release, blocked) = std::sync::mpsc::channel();
         let worker_device = device.clone();

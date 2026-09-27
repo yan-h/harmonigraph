@@ -43,6 +43,7 @@ pub(super) fn graphics_config() -> GraphicsConfig {
         let base = setup.device_descriptor.clone();
         setup.device_descriptor = std::sync::Arc::new(move |adapter: &wgpu::Adapter| {
             let mut descriptor = base(adapter);
+            descriptor.required_limits = harmonigraph_render::device_limits(adapter);
             descriptor.required_features |= adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
             descriptor
         });

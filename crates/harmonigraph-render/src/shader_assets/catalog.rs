@@ -15,12 +15,15 @@ fn production_metal_asset_catalog() {
                 required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
                 required_limits: wgpu::Limits {
                     max_texture_dimension_2d: 8192,
-                    ..Default::default()
+                    ..crate::device_limits(&adapter)
                 },
                 ..Default::default()
             }
         } else {
-            wgpu::DeviceDescriptor::default()
+            wgpu::DeviceDescriptor {
+                required_limits: crate::device_limits(&adapter),
+                ..Default::default()
+            }
         };
         // Includes the backend's internal shaders before any pane is created.
         let (device, queue) = pollster::block_on(adapter.request_device(&descriptor)).unwrap();

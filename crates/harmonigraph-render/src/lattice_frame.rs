@@ -258,6 +258,7 @@ impl LatticeCallback {
                 falloff: geometry.falloff,
                 spread_points: geometry_spread,
                 direct_distance: false,
+                distance_kind: crate::shadow::DistanceKind::Coverage,
             };
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
@@ -326,6 +327,7 @@ impl LatticeCallback {
                 falloff: text.falloff,
                 spread_points: text_spread,
                 direct_distance: true,
+                distance_kind: crate::shadow::DistanceKind::Signed,
             });
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
@@ -383,6 +385,7 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
+            glow_blend: scene.glow_blend,
             glyphs,
             casters,
             node_cells,
@@ -451,7 +454,7 @@ impl LatticeCallback {
                     GlowParams {
                         reach: scene.glow_reach,
                         strength: scene.glow_strength,
-                        blend: scene.glow_blend,
+                        padding: 0.0,
                         curve: scene.glow_curve.shape(),
                         wash: scene.glow_wash,
                         row_capacity: scene.glow_rows.max(1) as f32,

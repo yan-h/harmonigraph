@@ -336,7 +336,8 @@ const LATTICE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Flo
 const RENDER_SCALE_RANGE: (f32, f32) = (0.25, 4.0);
 
 /// Entry points a (re)loaded shader must provide. The `_scene` pair is the
-/// four-attachment form with bloom; `_split` writes the visible pair; the bare pair is
+/// five-attachment form with bloom; `_split` writes the visible pair and local
+/// transmission; the bare pair is
 /// the single-attachment one the parity test's reference path uses; the
 /// `glow` entry points rasterize directional halos and resolve overlap statistics;
 /// the `ink` four
@@ -348,8 +349,6 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "vs_main",
     "fs_main",
     "fs_main_scene",
-    "fs_node_transmittance",
-    "fs_plus_transmittance",
     "fs_main_split",
     "vs_plus",
     "fs_plus",
@@ -808,6 +807,7 @@ struct LatticeCallback {
     /// Row owners in exactly the shipped instance order, after sorting and culling.
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
+    glow_blend: f32,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -961,21 +961,14 @@ fn project_onto(
 /// mutable pipeline owner participates in drawing.
 #[derive(Clone)]
 struct CompiledLatticeResources {
-    scenes: [ScenePipelines; 2],
-    local_shadows: OrderedPipelines,
+    shaders: ShaderPipelines,
     composite_pipeline: wgpu::RenderPipeline,
     /// Bloom chain: bright pass, half->quarter downsample, blur x2.
     bright_pipeline: wgpu::RenderPipeline,
     downsample_pipeline: wgpu::RenderPipeline,
     blur_h_pipeline: wgpu::RenderPipeline,
     blur_v_pipeline: wgpu::RenderPipeline,
-    glow_splat_pipeline: wgpu::RenderPipeline,
-    glow_resolve_pipeline: wgpu::RenderPipeline,
     glow_statistics_layout: wgpu::BindGroupLayout,
-    /// The colour it draws in, settled ahead of it: the ink read round every
-    /// node, then blurred (see [`create_ink_strip_pipelines`]).
-    ink_strip_pipeline: wgpu::RenderPipeline,
-    ink_blur_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     bright_layout: wgpu::BindGroupLayout,
@@ -1007,18 +1000,7 @@ struct CompiledLatticeResources {
     /// colour into its neighbour's.
     strip_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// The shadow atlas's three stages (`crate::shadow`): every name's glyphs
-    /// into its cell, the passes that sweep the cells, and the box each name
-    /// multiplies the scene by off its finished cell.
-    glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
-    glyph_spread_cell_pipeline: wgpu::RenderPipeline,
-    glyph_distance_cell_pipeline: wgpu::RenderPipeline,
-    glyph_distance_pad_pipeline: wgpu::RenderPipeline,
     shadow_cell_pipelines: shadow::CellPipelines,
-    /// The other two rasterizers of a cell: a node's ink into its own, and one
-    /// cross into the markers' shared one (see [`create_cell_pipelines`]).
-    node_cell_pipeline: wgpu::RenderPipeline,
-    plus_cell_pipeline: wgpu::RenderPipeline,
     /// A 1x1 atlas in [`shadow_layout`](Self::shadow_layout), standing in at
     /// group 2 wherever this frame packed no cell — the Shadow width or depth
     /// at the bottom of its bar, or nothing in the frame that casts. Every draw
@@ -1389,12 +1371,12 @@ impl PaneBuffers {
 /// fractions of the pane's NATIVE screen size, so the halo's on-screen
 /// width doesn't change with the render-scale setting.
 struct Offscreen {
-    /// The descriptor format shared by all scene attachments.
+    /// The descriptor format shared by the scene's color attachments.
     #[cfg(test)]
     format: wgpu::TextureFormat,
     color_view: wgpu::TextureView,
-    /// Local notation transmittance. Separate from the four RGBA16F scene
-    /// attachments so their 32-byte/sample budget remains portable.
+    /// Local notation transmission, written beside scene ink in painter order.
+    /// Bloom samples this finished field without blurring it.
     local_shadow_view: wgpu::TextureView,
     /// Node and label RGB, spared ordinary node shadows and summed at composite.
     ink_view: wgpu::TextureView,
@@ -2061,13 +2043,42 @@ fn lattice_module(device: &wgpu::Device, shader_src: &str) -> wgpu::ShaderModule
     })
 }
 
+/// The visible pair, local notation transmission, then optional bloom pair.
+fn scene_targets(format: wgpu::TextureFormat, bloom: bool) -> Vec<Option<wgpu::ColorTargetState>> {
+    let target = |format| {
+        Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })
+    };
+    let mut targets = vec![target(format), target(format), target(wgpu::TextureFormat::R16Float)];
+    if bloom {
+        targets.extend([target(format), target(format)]);
+    }
+    targets
+}
+
+/// Request the adapter's limits in every rendering shell. The lattice's four
+/// RGBA16F attachments plus R16F local transmission require 34 bytes/sample;
+/// supported Apple silicon and the measured CI Metal adapter provide at least 64.
+/// Older adapters are unsupported; there is no second shadow pass to fall back to.
+pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let limits = adapter.limits();
+    assert!(
+        limits.max_color_attachment_bytes_per_sample >= 34,
+        "the lattice requires at least 34 color attachment bytes per sample"
+    );
+    limits
+}
+
 /// Build one of the scene pipelines from the module shared by this resource
 /// build. Node and marker pipelines share the module, bind group layout,
 /// blending, and topology; only entry points and vertex layout differ.
 ///
-/// `bloom` selects the second colour attachment, the independent input the
-/// bright pass reads (see [`LatticeBloom::nodes_view`]). The single-attachment
-/// variant serves production with bloom off and the direct parity reference.
+/// The scene writes two visible colors and scalar local transmission, plus
+/// two independent bloom inputs when enabled (see [`LatticeBloom::nodes_view`]).
+/// The single-attachment variant serves only direct rasterization references.
 /// Both rely on painter order and carry no depth state.
 fn create_pipeline(
     device: &wgpu::Device,
@@ -2094,7 +2105,11 @@ fn create_pipeline(
         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         write_mask: wgpu::ColorWrites::ALL,
     };
-    let targets = vec![Some(color_target); attachments];
+    let targets = if attachments == 1 {
+        vec![Some(color_target)]
+    } else {
+        scene_targets(target_format, attachments == 5)
+    };
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         // Name the pipeline after its vertex entry point, so a GPU capture
@@ -2124,8 +2139,8 @@ fn create_pipeline(
     })
 }
 
-/// One target for rasterization references, two for the split visible scene,
-/// four when the label-free bloom pair is also needed.
+/// One target for rasterization references, three for the visible scene plus
+/// local transmission, five when the label-free bloom pair is also needed.
 fn create_pipelines(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,
@@ -2135,8 +2150,8 @@ fn create_pipelines(
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let (node, plus) = match attachments {
         1 => ("fs_main", "fs_plus"),
-        2 => ("fs_main_split", "fs_plus_split"),
-        4 => ("fs_main_scene", "fs_plus_scene"),
+        3 => ("fs_main_split", "fs_plus_split"),
+        5 => ("fs_main_scene", "fs_plus_scene"),
         _ => unreachable!("scene attachment count"),
     };
     (
@@ -2162,7 +2177,7 @@ fn create_pipelines(
 }
 
 /// Attachment-compatible draws for a shared painter-order traversal.
-/// The scene writes its visible/bloom pairs; local shadows write a scalar.
+/// The scene writes its visible/bloom pairs and local shadow transmission.
 #[derive(Clone)]
 struct OrderedPipelines {
     nodes: wgpu::RenderPipeline,
@@ -2193,7 +2208,7 @@ fn create_scene_pipelines(
             lattice_shader,
             LATTICE_COLOR_FORMAT,
             layouts,
-            if bloom { 4 } else { 2 },
+            if bloom { 5 } else { 3 },
         );
         ScenePipelines {
             draws: OrderedPipelines {
@@ -2206,7 +2221,7 @@ fn create_scene_pipelines(
                     glyph_layout,
                     Some(layouts),
                     ("vs_glyph_lit", "fs_fill_lit"),
-                    if bloom { 4 } else { 2 },
+                    if bloom { 5 } else { 3 },
                     EGUI_BLEND,
                 ),
                 shadow_box: text::create_shadow_box_pipeline(
@@ -2229,55 +2244,6 @@ fn create_scene_pipelines(
             ),
         }
     })
-}
-
-/// The local shadow field uses the same painter order as the scene. Ink
-/// restores transmission; notation shadows reduce it. Nothing here is blurred.
-fn create_local_shadow_pipelines(
-    device: &wgpu::Device,
-    lattice_shader: &wgpu::ShaderModule,
-    glyph_shader: &wgpu::ShaderModule,
-    layouts: SceneLayouts<'_>,
-    glyph_layout: &wgpu::BindGroupLayout,
-) -> OrderedPipelines {
-    let format = wgpu::TextureFormat::R16Float;
-    OrderedPipelines {
-        nodes: create_pipeline(
-            device,
-            lattice_shader,
-            format,
-            layouts,
-            ("vs_main", "fs_node_transmittance"),
-            &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
-            1,
-        ),
-        pluses: create_pipeline(
-            device,
-            lattice_shader,
-            format,
-            layouts,
-            ("vs_plus", "fs_plus_transmittance"),
-            &[GpuPlus::LAYOUT],
-            1,
-        ),
-        glyph_fill: text::create_text_pipeline(
-            device,
-            glyph_shader,
-            format,
-            glyph_layout,
-            Some(layouts),
-            ("vs_glyph_lit", "fs_glyph_transmittance"),
-            1,
-            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
-        ),
-        shadow_box: text::create_local_shadow_pipeline(
-            device,
-            glyph_shader,
-            glyph_layout,
-            layouts,
-            format,
-        ),
-    }
 }
 
 /// The two draws that FILL the shadow atlas, from one source: a node's own ink
@@ -2458,12 +2424,8 @@ fn create_glow_over_pipeline(
         bind_group_layouts: &[Some(light_layout)],
         ..Default::default()
     });
-    let target = wgpu::ColorTargetState {
-        format: target_format,
-        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-        write_mask: wgpu::ColorWrites::ALL,
-    };
-    let targets = vec![Some(target); if bloom { 4 } else { 2 }];
+    let mut targets = scene_targets(target_format, bloom);
+    targets[2].as_mut().unwrap().write_mask = wgpu::ColorWrites::empty();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("fs_glow_over"),
         layout: Some(&layout),
@@ -2582,6 +2544,79 @@ fn create_post_pipeline(
     })
 }
 
+/// Every pipeline built from the reloadable lattice/text modules. Construction
+/// and hot reload replace this value through the same complete pipeline list.
+#[derive(Clone)]
+struct ShaderPipelines {
+    scenes: [ScenePipelines; 2],
+    glow_splat_pipeline: wgpu::RenderPipeline,
+    glow_resolve_pipeline: wgpu::RenderPipeline,
+    ink_strip_pipeline: wgpu::RenderPipeline,
+    ink_blur_pipeline: wgpu::RenderPipeline,
+    glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
+    glyph_spread_cell_pipeline: wgpu::RenderPipeline,
+    glyph_distance_cell_pipeline: wgpu::RenderPipeline,
+    glyph_distance_pad_pipeline: wgpu::RenderPipeline,
+    node_cell_pipeline: wgpu::RenderPipeline,
+    plus_cell_pipeline: wgpu::RenderPipeline,
+}
+
+struct ShaderLayouts<'a> {
+    scene: SceneLayouts<'a>,
+    glyph: &'a wgpu::BindGroupLayout,
+    strip: &'a wgpu::BindGroupLayout,
+    statistics: &'a wgpu::BindGroupLayout,
+}
+
+impl ShaderPipelines {
+    fn new(
+        device: &wgpu::Device,
+        lattice: &wgpu::ShaderModule,
+        blit: &wgpu::ShaderModule,
+        glyph: &wgpu::ShaderModule,
+        layouts: ShaderLayouts<'_>,
+        progress: impl Fn(startup::Stage),
+    ) -> Self {
+        let (node_cell_pipeline, plus_cell_pipeline) =
+            create_cell_pipelines(device, lattice, layouts.scene.uniforms);
+        progress(startup::Stage::Lighting);
+        let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
+            device,
+            lattice,
+            LATTICE_COLOR_FORMAT,
+            layouts.scene.uniforms,
+            layouts.strip,
+            layouts.statistics,
+        );
+        let (ink_strip_pipeline, ink_blur_pipeline) =
+            create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
+        progress(startup::Stage::Lattice);
+        let scenes =
+            create_scene_pipelines(device, lattice, blit, glyph, layouts.scene, layouts.glyph);
+        progress(startup::Stage::Labels);
+        let (
+            glyph_coverage_cell_pipeline,
+            glyph_distance_cell_pipeline,
+            glyph_distance_pad_pipeline,
+        ) = text::create_glyph_cell_pipelines(device, glyph, layouts.glyph);
+        let glyph_spread_cell_pipeline =
+            text::create_glyph_sdf_coverage_pipeline(device, glyph, layouts.glyph);
+        Self {
+            scenes,
+            node_cell_pipeline,
+            plus_cell_pipeline,
+            glow_splat_pipeline,
+            glow_resolve_pipeline,
+            ink_strip_pipeline,
+            ink_blur_pipeline,
+            glyph_coverage_cell_pipeline,
+            glyph_spread_cell_pipeline,
+            glyph_distance_cell_pipeline,
+            glyph_distance_pad_pipeline,
+        }
+    }
+}
+
 impl CompiledLatticeResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         Self::new_with_progress(device, target_format, |_| {})
@@ -2647,8 +2682,6 @@ impl CompiledLatticeResources {
         let shader_src = with_common(SHADER_SRC);
         let lattice_shader = lattice_module(device, &shader_src);
         let blit_shader = blit_module(device);
-        let (node_cell_pipeline, plus_cell_pipeline) =
-            create_cell_pipelines(device, &lattice_shader, &bind_group_layout);
         // Unfilterable, because every read of it is a `textureLoad`: a row is a
         // node and a column is an angle, so there is no axis a filter would be
         // interpolating along that the shader does not walk itself.
@@ -2666,17 +2699,26 @@ impl CompiledLatticeResources {
             }],
         });
         let glow_statistics_layout = lattice_node_glow::statistics_layout(device);
-        progress(startup::Stage::Lighting);
-        let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
+        let glyph_layout = text::glyph_bind_group_layout(device);
+        let glyph_shader = text::glyph_shader(device, &text_source());
+        let shaders = ShaderPipelines::new(
             device,
             &lattice_shader,
-            LATTICE_COLOR_FORMAT,
-            &bind_group_layout,
-            &strip_layout,
-            &glow_statistics_layout,
+            &blit_shader,
+            &glyph_shader,
+            ShaderLayouts {
+                scene: SceneLayouts {
+                    uniforms: &bind_group_layout,
+                    glow: &filter_layout,
+                    shadow: &shadow_layout,
+                    casters: &caster_layout,
+                },
+                glyph: &glyph_layout,
+                strip: &strip_layout,
+                statistics: &glow_statistics_layout,
+            },
+            &progress,
         );
-        let (ink_strip_pipeline, ink_blur_pipeline) =
-            create_ink_strip_pipelines(device, &lattice_shader, &bind_group_layout, &strip_layout);
 
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("lattice_composite_bind_group_layout"),
@@ -2734,46 +2776,6 @@ impl CompiledLatticeResources {
             ..Default::default()
         });
 
-        // The label pipelines share both attachment choices with the scene,
-        // preserving each label's place in painter order.
-        let glyph_layout = text::glyph_bind_group_layout(device);
-        // Compiled once for the three pipelines below, as `shader_src` is for
-        // the lattice's.
-        let glyph_shader = text::glyph_shader(device, &text_source());
-        progress(startup::Stage::Lattice);
-        let scenes = create_scene_pipelines(
-            device,
-            &lattice_shader,
-            &blit_shader,
-            &glyph_shader,
-            SceneLayouts {
-                uniforms: &bind_group_layout,
-                glow: &filter_layout,
-                shadow: &shadow_layout,
-                casters: &caster_layout,
-            },
-            &glyph_layout,
-        );
-        progress(startup::Stage::Labels);
-        let local_shadows = create_local_shadow_pipelines(
-            device,
-            &lattice_shader,
-            &glyph_shader,
-            SceneLayouts {
-                uniforms: &bind_group_layout,
-                glow: &filter_layout,
-                shadow: &shadow_layout,
-                casters: &caster_layout,
-            },
-            &glyph_layout,
-        );
-        let (
-            glyph_coverage_cell_pipeline,
-            glyph_distance_cell_pipeline,
-            glyph_distance_pad_pipeline,
-        ) = text::create_glyph_cell_pipelines(device, &glyph_shader, &glyph_layout);
-        let glyph_spread_cell_pipeline =
-            text::create_glyph_sdf_coverage_pipeline(device, &glyph_shader, &glyph_layout);
         progress(startup::Stage::Shadows);
         let shadow_cell_pipelines = shadow::create_cell_pipelines(device, &shadow_layout);
         progress(startup::Stage::Interface);
@@ -2839,18 +2841,13 @@ impl CompiledLatticeResources {
         });
 
         Self {
-            scenes,
-            local_shadows,
+            shaders,
             composite_pipeline,
             bright_pipeline,
             downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
-            glow_splat_pipeline,
-            glow_resolve_pipeline,
             glow_statistics_layout,
-            ink_strip_pipeline,
-            ink_blur_pipeline,
             bind_group_layout,
             composite_layout,
             bright_layout,
@@ -2859,13 +2856,7 @@ impl CompiledLatticeResources {
             bloom_dummy: glow_dummy,
             strip_layout,
             sampler,
-            glyph_coverage_cell_pipeline,
-            glyph_spread_cell_pipeline,
-            glyph_distance_cell_pipeline,
-            glyph_distance_pad_pipeline,
             shadow_cell_pipelines,
-            node_cell_pipeline,
-            plus_cell_pipeline,
             shadow_dummy_bind_group,
             shadow_layout,
             caster_layout,

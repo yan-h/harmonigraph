@@ -37,8 +37,11 @@ pub fn test_gpu_adapter() -> Option<(wgpu::Instance, wgpu::Adapter)> {
 /// `None` only when no adapter is available and GPU tests are optional.
 pub fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let (_, adapter) = test_gpu_adapter()?;
-    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("headless device");
+    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
+        ..Default::default()
+    }))
+    .expect("headless device");
     Some(pair)
 }
 
@@ -171,16 +174,4 @@ pub(crate) fn readback_r16(
             mapped[begin..begin + row_bytes as usize].to_vec()
         })
         .collect()
-}
-
-/// Diagnostic prerequisite for increasing the scene's attachment budget (#1186).
-#[test]
-#[ignore = "prints the CI adapter limit before changing the scene attachment budget"]
-fn report_adapter_limits() {
-    let Some((_, adapter)) = test_gpu_adapter() else { return };
-    eprintln!(
-        "adapter: {:?}; max_color_attachment_bytes_per_sample={}",
-        adapter.get_info(),
-        adapter.limits().max_color_attachment_bytes_per_sample
-    );
 }

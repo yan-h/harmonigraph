@@ -902,6 +902,7 @@ impl CallbackTrait for RollCallback {
                     falloff: style.falloff,
                     spread_points: style.gaussian_spread_points(sigma),
                     direct_distance: true,
+                    distance_kind: crate::shadow::DistanceKind::Signed,
                 }
             })
             .collect();

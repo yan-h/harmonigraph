@@ -134,8 +134,17 @@ pub(crate) struct Caster {
     /// scene draw for no new information. A Gaussian still needs the shared
     /// cell that holds its convolution.
     pub direct_distance: bool,
+    /// Distance cells hold either a signed field or a layer-weighted profile.
+    /// Gaussian cells always hold ink coverage and ignore this choice.
+    pub distance_kind: DistanceKind,
     /// Gaussian source expansion in pane points; ignored by Contour.
     pub spread_points: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DistanceKind {
+    Signed,
+    Coverage,
 }
 
 /// The caster a name's glyphs make: the box round every glyph's rect, the
@@ -168,6 +177,7 @@ pub(crate) fn caster_of(
         falloff,
         spread_points,
         direct_distance: false,
+        distance_kind: crate::shadow::DistanceKind::Signed,
     };
     if !(max[0] > min[0] && max[1] > min[1]) {
         return empty;
@@ -516,7 +526,21 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         // churn when an atlas-only setting changes even though the scene draw
         // cannot read it.
         let (scale, k, sigma_cell, pad) = if direct { (0.0, 0.0, 0.0, 0.0) } else { shape(caster) };
-        let kind = if is_distance(caster) { DISTANCE_KIND } else { 0.0 };
+        let coverage = is_distance(caster) && caster.distance_kind == DistanceKind::Coverage;
+        let kind = if coverage {
+            DISTANCE_COVERAGE_KIND
+        } else if is_distance(caster) {
+            DISTANCE_KIND
+        } else {
+            0.0
+        };
+        // Coverage readers spend the profile in pane points, while signed
+        // fields and Gaussian cells keep their cell-space sampling metadata.
+        let sigma = if coverage { caster.sigma_points } else { sigma_cell };
+        let spread = if coverage { caster.falloff } else { spread_of(caster) };
+        if coverage {
+            entry.shade[1] = kind;
+        }
         let rect = rects[c];
         let [w, h] = sizes[c];
         let [x, y] = placed[c];
@@ -525,8 +549,8 @@ pub(crate) fn pack(casters: &[Caster], px_per_point: f32, max_side: u32) -> Pack
         boxes.push(ShadowBox {
             rect,
             cell,
-            cell_map: [k, sigma_cell, level, scale],
-            who: [c as f32, kind, pad, spread_of(caster)],
+            cell_map: [k, sigma, level, scale],
+            who: [c as f32, kind, pad, spread],
         });
         if whole {
             entry.shade = [level, kind, caster.sigma_points, caster.falloff];
@@ -1178,6 +1202,7 @@ pub(crate) mod tests {
             falloff: 1.0,
             spread_points: 0.0,
             direct_distance: false,
+            distance_kind: crate::shadow::DistanceKind::Signed,
         }
     }
 
@@ -1661,6 +1686,10 @@ pub(crate) mod tests {
             let kind: f32 = shader_const(src, "DISTANCE_KIND").parse().expect("a number");
             assert_eq!(kind, DISTANCE_KIND, "a module reads a different kind than the packer");
         }
+        let coverage: f32 = shader_const(&common, "DISTANCE_COVERAGE_KIND").parse().unwrap();
+        assert_eq!(coverage, DISTANCE_COVERAGE_KIND);
+        let spread: f32 = shader_const(crate::SHADER_SRC, "GAUSSIAN_SPREAD_KIND").parse().unwrap();
+        assert_eq!(spread, 3.0);
         for (name, want) in [
             ("SHADOW_FALLOFF_MAX", harmonigraph_scene::SHADOW_FALLOFF_MAX),
             ("SHADOW_STOP", harmonigraph_scene::SHADOW_STOP),
@@ -1750,6 +1779,7 @@ pub(crate) mod tests {
             falloff: 1.0,
             spread_points: 0.0,
             direct_distance: false,
+            distance_kind: crate::shadow::DistanceKind::Signed,
         };
         // A σ well past `SIGMA_CELL_MAX`, so the floor rather than the
         // target's full resolution or the blur's fit decides the cell.
@@ -1799,6 +1829,7 @@ pub(crate) mod tests {
                 falloff,
                 spread_points: 0.0,
                 direct_distance: false,
+                distance_kind: crate::shadow::DistanceKind::Signed,
             };
             let pad = pack_at(&[caster], sigma, 1.0, 8192, ShadowKernel::Distance).boxes[0].who[2];
             let want = 2.0 * harmonigraph_scene::SHADOW_STOP * sigma;
@@ -1832,6 +1863,7 @@ pub(crate) mod tests {
             falloff: 1.0,
             spread_points: 0.0,
             direct_distance: false,
+            distance_kind: crate::shadow::DistanceKind::Signed,
         };
         let (near, far) = (10.0, 40.0);
         let packed = pack(&[at(near, Distance), at(far, Gaussian)], 1.0, 16384);
@@ -1875,6 +1907,7 @@ pub(crate) mod tests {
             falloff: 1.0,
             spread_points: 0.0,
             direct_distance: true,
+            distance_kind: crate::shadow::DistanceKind::Signed,
         };
         let distance = pack_at(&[caster], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert_eq!(distance.boxes[0].cell, [0.0; 4], "the direct caster packed an atlas cell");
@@ -1888,8 +1921,8 @@ pub(crate) mod tests {
     }
 
     /// A caster whose distance is held in the atlas keeps the cell its scene
-    /// draw samples and marks it as a distance field. Names and nodes share
-    /// that representation.
+    /// draw samples. Nodes hold evaluated coverage in pane points; names hold
+    /// a signed distance field in cell units.
     #[test]
     fn an_atlas_distance_keeps_the_cell_its_scene_draw_samples() {
         use harmonigraph_scene::ShadowKernel;
@@ -1901,10 +1934,14 @@ pub(crate) mod tests {
             falloff: 1.0,
             spread_points: 0.0,
             direct_distance: false,
+            distance_kind: DistanceKind::Coverage,
         };
         let exact = pack_at(&[node], 40.0, 2.0, 4096, ShadowKernel::Distance);
         assert!(exact.boxes[0].cell[2] > 0.0 && exact.boxes[0].cell[3] > 0.0);
-        assert_eq!(exact.boxes[0].who[1], DISTANCE_KIND);
+        assert_eq!(exact.boxes[0].who[1], DISTANCE_COVERAGE_KIND);
+        assert_eq!(exact.boxes[0].cell_map[1], 20.0, "node profile width stays in pane points");
+        assert_eq!(exact.boxes[0].who[3], node.falloff);
+        assert_eq!(exact.casters[0].shade[1], DISTANCE_COVERAGE_KIND);
 
         let name = caster_of(&[crate::text::tests::glyph()], 1.0, ShadowKernel::Distance, 1.0, 0.0);
         let name = pack_at(&[name], 40.0, 2.0, 4096, ShadowKernel::Distance);
