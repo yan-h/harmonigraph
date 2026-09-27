@@ -142,12 +142,12 @@ impl ParamKey {
             ParamKey::Tolerance => 0.5,
             // Both ends of a note, so this is read twice: as an arrival long
             // enough to take the hard edge off a note-on, and as a release
-            // long enough to read as a fade rather than a cut while still
-            // clearing the node before the next one lands at playing tempo.
-            // 0.10 is where those two agree. A whole second keeps released
-            // notes up long enough to blur which of them are still sounding,
-            // and puts a stab's arrival behind the ear by a beat.
-            ParamKey::Fade => 0.1,
+            // long enough to read as a fade rather than a cut. Just under a
+            // third of a second, as captured from the DAW on 2026-09-26. A
+            // whole second keeps released notes up long enough to blur which
+            // of them are still sounding, and puts a stab's arrival behind
+            // the ear by a beat.
+            ParamKey::Fade => 0.292_477_1,
             // C1 to C8, the seven-octave keyboard range. Notes outside it are
             // not lost: the ramp holds its end color past either end, so an
             // outlying note reads as the nearest end rather than wrapping.

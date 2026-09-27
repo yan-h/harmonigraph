@@ -1810,6 +1810,25 @@ mod tests {
                 cloud_depth: 0.0,
                 color_pickup: 0.0,
                 color_release: 0.0,
+                // A blur wide on both axes, spread into the dark around the
+                // ridge, which is what the diffusion probes measure.
+                pitch_softness: 35.0,
+                time_softness: 120.0,
+                spread: 0.25,
+                // The retired Lava style's terraces, for the probes that turn
+                // `contour_strength` up.
+                contours: 7.0,
+                contour_softness: 0.15,
+                // The Mosaic's scales at 1x with a mild bend, for the probes
+                // that turn `cloud_depth` up: a cloud the refraction reaches,
+                // where the fresh Stars would paint a field of their own.
+                cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
+                scale_size: 1.0,
+                scale_refract: 0.3,
+                // And the Watercolor's globs at 1x, for the probes that switch
+                // to it: the fresh globs are too fine for this small pane.
+                wash_size: 1.0,
+                wash_lobe: 0.55,
                 ..Default::default()
             },
             region: cb.rect,

@@ -856,11 +856,16 @@ mod tests {
         let clouded = |wash: bool, speed: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
-            if wash {
-                a.cloud_style = style;
-            }
+            // Against the Mosaic's scales, whatever the fresh style is.
+            a.cloud_style = if wash { style } else { harmonigraph_scene::CloudStyle::Mosaic };
+            // A blur wide on both axes and spread into the dark, so the pane
+            // is mostly lit (see the assert below); the fresh sharp field
+            // leaves half of it on black.
+            a.pitch_softness = 35.0;
+            a.time_softness = 120.0;
+            a.spread = 0.25;
             // Fast enough that a second of render carries the field a visible
-            // way: at the fresh 1x the whole run is a fraction of one glob. The
+            // way: at 1x the whole run is a fraction of one glob. The
             // stars take their own speed, and their nearest at its top is as
             // visible.
             a.cloud_speed = speed;

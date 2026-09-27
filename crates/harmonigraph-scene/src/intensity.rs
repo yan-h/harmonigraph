@@ -85,11 +85,13 @@ pub struct IntensitySettings {
 impl Default for IntensitySettings {
     fn default() -> Self {
         Self {
-            velocity: IntensitySource::default(),
-            gain: IntensitySource::default(),
+            // Velocity and gain both reach opacity from a rest of about a
+            // third, as captured from the DAW on 2026-09-26.
+            velocity: IntensitySource { opacity: Some(0.606_835_6), thickness: None },
+            gain: IntensitySource { opacity: Some(0.511_064_47), thickness: None },
             pressure: IntensitySource::default(),
             timbre: IntensitySource::default(),
-            opacity_rest: 1.0,
+            opacity_rest: 0.302_850_54,
             thickness_base: 1.0,
             thickness_max: 2.0,
         }
@@ -116,7 +118,7 @@ pub struct IntensityReach {
 }
 
 impl IntensityReading {
-    /// The default bases, also used for unlit slots.
+    /// Full opacity at one note width, used for unlit slots.
     pub const REST: Self = Self { opacity: 1.0, thickness: 1.0 };
 
     /// The larger of the two on each display.
@@ -213,6 +215,24 @@ impl IntensitySettings {
 }
 
 #[cfg(test)]
+impl IntensitySettings {
+    /// No source routed anywhere, opacity resting at full and thickness at
+    /// one note width: every note drawn in full whatever it carries. The
+    /// ground a test about something other than intensity pins, so that
+    /// retuning the fresh routes moves only the tests about them.
+    pub(crate) fn unrouted() -> Self {
+        Self {
+            velocity: IntensitySource::default(),
+            gain: IntensitySource::default(),
+            pressure: IntensitySource::default(),
+            timbre: IntensitySource::default(),
+            opacity_rest: 1.0,
+            ..Self::default()
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -226,18 +246,30 @@ mod tests {
         source
     }
 
-    /// Fresh, every display is at rest whatever a note carries, so a project
-    /// that never touches these draws as it did.
+    /// Fresh, velocity and gain lift opacity from a rest of about a third:
+    /// a silent note sits at the rest, a full-velocity note at unity gain
+    /// reaches full opacity, and thickness stays at one note width.
     #[test]
-    fn fresh_settings_draw_every_note_at_rest() {
-        let quiet = Expressions { pressure: 0.0, gain: 0.0, timbre: 0.0 };
-        assert_eq!(IntensitySettings::default().read(0.1, quiet), IntensityReading::REST);
+    fn fresh_settings_lift_opacity_from_a_third_by_velocity_and_gain() {
+        let fresh = IntensitySettings::default();
+        let silent = Expressions { pressure: 0.0, gain: 0.0, timbre: 0.0 };
+        assert_eq!(
+            fresh.read(0.0, silent),
+            IntensityReading { opacity: fresh.opacity_rest, thickness: 1.0 }
+        );
+        assert!((fresh.opacity_rest - 0.3).abs() < 0.01, "{fresh:?}");
+        assert!(fresh.routes_to(IntensityTarget::Opacity));
+        assert!(!fresh.routes_to(IntensityTarget::Thickness));
+        assert_eq!(fresh.read(1.0, gain(1.0)), IntensityReading::REST);
     }
 
     #[test]
     fn bases_apply_without_routes_and_with_zero_weights() {
-        let mut settings =
-            IntensitySettings { opacity_rest: 0.3, thickness_base: 0.4, ..Default::default() };
+        let mut settings = IntensitySettings {
+            opacity_rest: 0.3,
+            thickness_base: 0.4,
+            ..IntensitySettings::unrouted()
+        };
         for target in IntensityTarget::ALL {
             settings.velocity = to(target, 0.0);
             let reading = settings.read(1.0, Expressions::NEUTRAL);
@@ -252,7 +284,7 @@ mod tests {
             pressure: IntensitySource { opacity: Some(0.4), thickness: Some(1.2) },
             opacity_rest: 0.1,
             thickness_base: 0.5,
-            ..Default::default()
+            ..IntensitySettings::unrouted()
         };
         let expression = Expressions { pressure: 0.5, ..Expressions::NEUTRAL };
         let reading = settings.read(0.0, expression);
@@ -272,7 +304,7 @@ mod tests {
             velocity: to(IntensityTarget::Opacity, 1.0),
             timbre: to(IntensityTarget::Thickness, 1.0),
             opacity_rest: 0.2,
-            ..Default::default()
+            ..IntensitySettings::unrouted()
         };
         let pressed = Expressions { pressure: 1.0, timbre: 0.25, ..Expressions::NEUTRAL };
         let reading = settings.read(0.4, pressed);
@@ -293,7 +325,7 @@ mod tests {
             timbre: to(IntensityTarget::Opacity, 0.5),
             gain: to(IntensityTarget::Thickness, 0.25),
             thickness_base: 0.5,
-            ..Default::default()
+            ..IntensitySettings::unrouted()
         };
         assert_eq!(
             settings.reach(IntensityTarget::Opacity),
@@ -324,7 +356,7 @@ mod tests {
             gain: to(IntensityTarget::Thickness, 1.0),
             timbre: to(IntensityTarget::Thickness, 1.0),
             thickness_max: 1.5,
-            ..Default::default()
+            ..IntensitySettings::unrouted()
         };
         let thickness = |velocity, gain, timbre| {
             settings.read(velocity, Expressions { gain, timbre, ..Expressions::NEUTRAL }).thickness
@@ -338,7 +370,8 @@ mod tests {
     #[test]
     fn timbre_endpoints_add_and_subtract_the_whole_weight() {
         for target in IntensityTarget::ALL {
-            let mut settings = IntensitySettings { timbre: to(target, 1.0), ..Default::default() };
+            let mut settings =
+                IntensitySettings { timbre: to(target, 1.0), ..IntensitySettings::unrouted() };
             for (timbre, expected) in
                 [(0.0, 0.0_f32), (0.25, 0.5), (0.5, 1.0), (0.75, 1.5), (1.0, 2.0)]
             {
@@ -372,7 +405,7 @@ mod tests {
         let weighted = |weight| IntensitySettings {
             gain: to(IntensityTarget::Opacity, weight),
             opacity_rest: 0.2,
-            ..Default::default()
+            ..IntensitySettings::unrouted()
         };
         assert_eq!(weighted(0.5).read(1.0, silent).opacity, 0.2);
         assert_eq!(weighted(0.0).read(1.0, silent).opacity, 0.2);
@@ -384,7 +417,7 @@ mod tests {
         let pressed = IntensitySettings {
             pressure: to(IntensityTarget::Thickness, 1.0),
             velocity: to(IntensityTarget::Thickness, 0.5),
-            ..Default::default()
+            ..IntensitySettings::unrouted()
         };
         assert_eq!(pressed.read(1.0, nan).thickness, 1.5);
     }

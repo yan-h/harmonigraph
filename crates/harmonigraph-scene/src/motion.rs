@@ -686,6 +686,16 @@ mod tests {
         motion.step(&mut scene, tracker, &Tuning::default(), view, &env, &fade, now);
         scene
     }
+    /// The fresh view with every note drawn in full and every slice moving
+    /// at once, so a test about timing reads one slice's progress and one
+    /// node's activation without the fresh intensity routes or stagger in
+    /// them. The tests about orders or intensity set their own.
+    fn view() -> ViewConfig {
+        let mut view =
+            ViewConfig { intensity: crate::IntensitySettings::unrouted(), ..ViewConfig::default() };
+        view.note_animation.order = AnimationOrder::Simultaneous;
+        view
+    }
     fn origin(scene: &Scene) -> &crate::NodeInstance {
         scene.nodes.iter().find(|n| n.lattice_pos == LatticePos::ORIGIN).unwrap()
     }
@@ -699,7 +709,7 @@ mod tests {
     #[test]
     fn smooth_slice_motion_uses_the_note_fade_curve_in_both_directions() {
         let sample = |shape: f32| {
-            let view = ViewConfig { fade_shape: shape, ..Default::default() };
+            let view = ViewConfig { fade_shape: shape, ..view() };
             let mut tracker = NoteTracker::new();
             let mut motion = NodeMotion::default();
             tracker.handle_event(on(0.0, 60));
@@ -734,7 +744,7 @@ mod tests {
     #[test]
     fn a_faded_departure_leaves_no_pose_for_the_next_press_to_reverse() {
         for order in AnimationOrder::ALL {
-            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
             view.note_animation.order = order;
             view.note_animation.stagger_spread = 0.9;
             // One press just after the ink runs out, and one well past it.
@@ -779,7 +789,7 @@ mod tests {
     }
     #[test]
     fn late_delivered_short_notes_recover_the_factual_timeline_once() {
-        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         draw(&mut motion, &mut tracker, &view, 0.21, false);
@@ -813,7 +823,7 @@ mod tests {
     }
     #[test]
     fn reopening_a_hidden_surface_bounds_replay_to_the_settle_horizon() {
-        let view = ViewConfig::default();
+        let view = view();
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         draw(&mut motion, &mut tracker, &view, 0.0, false);
@@ -830,7 +840,7 @@ mod tests {
     }
     #[test]
     fn held_nodes_reentering_the_visible_window_do_not_replay_an_entrance() {
-        let view = ViewConfig::default();
+        let view = view();
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.0, 60));
@@ -853,7 +863,7 @@ mod tests {
     }
     #[test]
     fn short_stabs_reverse_pose_and_opacity_at_event_time_across_frame_cadences() {
-        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         for order in AnimationOrder::ALL {
             let mut view = view.clone();
             view.note_animation.order = order;
@@ -893,9 +903,9 @@ mod tests {
         let intensity = crate::IntensitySettings {
             pressure: IntensitySource { opacity: Some(1.0), ..Default::default() },
             opacity_rest: 0.0,
-            ..Default::default()
+            ..crate::IntensitySettings::unrouted()
         };
-        let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, intensity, ..view() };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         let slot = |scene: &Scene| {
@@ -937,9 +947,9 @@ mod tests {
         let intensity = crate::IntensitySettings {
             pressure: IntensitySource { opacity: Some(1.0), ..Default::default() },
             opacity_rest: 0.0,
-            ..Default::default()
+            ..crate::IntensitySettings::unrouted()
         };
-        let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, intensity, ..view() };
         let release = |late: bool| {
             let mut tracker = NoteTracker::new();
             let mut motion = NodeMotion::default();
@@ -975,9 +985,9 @@ mod tests {
         use crate::IntensitySource;
         let intensity = crate::IntensitySettings {
             pressure: IntensitySource { thickness: Some(1.0), ..Default::default() },
-            ..Default::default()
+            ..crate::IntensitySettings::unrouted()
         };
-        let view = ViewConfig { fade_shape: 0.0, intensity, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, intensity, ..view() };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.0, 60));
@@ -1011,7 +1021,7 @@ mod tests {
     }
     #[test]
     fn octaves_and_same_time_replacements_do_not_replay_but_true_disappearance_does() {
-        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.0, 60));
@@ -1040,7 +1050,7 @@ mod tests {
     #[test]
     fn orders_apply_to_settled_departure_and_pending_pieces_cancel_on_interrupt() {
         for order in AnimationOrder::ALL {
-            let mut view = ViewConfig { fade_shape: 0.0, ..Default::default() };
+            let mut view = ViewConfig { fade_shape: 0.0, ..view() };
             view.note_animation.order = order;
             let mut tracker = NoteTracker::new();
             let mut motion = NodeMotion::default();
@@ -1069,7 +1079,7 @@ mod tests {
     }
     #[test]
     fn audio_presence_stays_settled_and_mark_delay_cancels_on_short_notes() {
-        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..view() };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         for now in [0.0, 0.5, 1.5] {
@@ -1090,7 +1100,7 @@ mod tests {
         let layout = crate::octave_layout(4, 60.0, 1, 0.3, 0.7);
         for order in AnimationOrder::ALL {
             for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
-                let mut view = ViewConfig { fade_shape: 0.0, ..Default::default() };
+                let mut view = ViewConfig { fade_shape: 0.0, ..view() };
                 view.note_animation.order = order;
                 view.note_animation.stagger_spread = spread;
                 let ds = view.note_animation.delays(&layout, 350.0, 42, 1.0);
@@ -1150,7 +1160,7 @@ mod tests {
         let step = 0.01f64;
         let spread = 0.9f32;
         for order in AnimationOrder::ALL {
-            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..Default::default() };
+            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
             view.note_animation.order = order;
             view.note_animation.stagger_spread = spread;
             let mut tracker = NoteTracker::new();
@@ -1239,7 +1249,7 @@ mod tests {
     #[test]
     fn tuned_onsets_and_late_observation_use_the_factual_pitch_and_mark_clock() {
         use harmonigraph_core::NoteEventKind;
-        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..view() };
         let tune = |at| NoteEvent {
             time: at,
             source: SourceId::DIRECT,
@@ -1276,7 +1286,7 @@ mod tests {
     }
     #[test]
     fn octave_mark_handoff_keeps_delay_and_releases_the_old_slot() {
-        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..Default::default() };
+        let view = ViewConfig { fade_shape: 0.0, mark_delay: 0.4, ..view() };
         let mut tracker = NoteTracker::new();
         let mut motion = NodeMotion::default();
         tracker.handle_event(on(0.0, 60));

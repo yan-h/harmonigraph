@@ -28,7 +28,10 @@ pub(super) fn scene_of(
 /// [`ViewConfig::default`] with the note envelope pinned flat: a straight-line
 /// curve, so half a duration in reads half way along, and no mark Delay, so a
 /// ring is part of the note's own arrival rather than a layer that answers
-/// later. Its other half is [`plain_frame`], which holds the duration.
+/// later. Its other half is [`plain_frame`], which holds the duration. The
+/// slices move at once, too: an ordered animation stretches a departure to
+/// `1 + stagger_spread` fades, so "the fade has run out" would move with the
+/// spread rather than with the duration these suites name.
 ///
 /// The suites that spread this are about what a SOUNDING note draws — the
 /// gutter it clears, the marker it cuts, the end it marks, what is left of it
@@ -43,7 +46,9 @@ pub(super) fn scene_of(
 /// lives: the curve in `harmonigraph_core::notes`, and its reach into these
 /// layers in `a_fresh_mark_eases_in_with_the_octave_it_links_to`.
 pub(super) fn plain_view() -> ViewConfig {
-    ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() }
+    let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() };
+    view.note_animation.order = AnimationOrder::Simultaneous;
+    view
 }
 
 /// The frame half of the flat fixture: an envelope duration of 0, so a note

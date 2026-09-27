@@ -124,12 +124,14 @@ fn texts(output: &egui::FullOutput, label: &str) -> Vec<egui::Rect> {
 fn dock(h: &mut DockHarness, state: &mut SharedState, position: Position) {
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
     let mut output = h.frame(state, vec![]);
-    // Picture controls above View can put Dock below the viewport.
+    // Picture controls above View can put Dock below the viewport, or leave
+    // it drawn but clipped at the pane's lower edge where a click misses it.
     for _ in 0..12 {
-        if !texts(&output, "Dock").is_empty() {
+        let body = pane_body(state, &panes::Tab::AnalyzerSettings).unwrap();
+        if texts(&output, "Dock").first().is_some_and(|row| body.contains_rect(*row)) {
             break;
         }
-        let at = pane_body(state, &panes::Tab::AnalyzerSettings).unwrap().center();
+        let at = body.center();
         h.frame(
             state,
             vec![
@@ -325,6 +327,16 @@ fn a_discarded_pass_does_not_toggle_a_fold_twice() {
     assert!(state.workspace.take_window_size_change().unwrap().x < -100.0);
 }
 
+/// The fresh state with the analyzer's split at an even three quarters, so
+/// each region is wider than the button rail it folds to by enough for a
+/// fold to show in the window's width. The fresh split leaves the spectrum
+/// only a few points wider than its rail.
+fn split_state() -> SharedState {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.roll_fraction = 0.75;
+    state
+}
+
 fn region_click(h: &mut DockHarness, state: &mut SharedState, index: usize) {
     let id = egui::Id::new(("analyzer region fold", index));
     let at = h.ctx.read_response(id).expect("region control is drawn").rect.center();
@@ -401,7 +413,7 @@ fn collapsed_panes_open_from_the_middle_of_their_rails() {
 fn analyzer_regions_fold_independently_and_restore_the_original_geometry() {
     for orientation in [SpectralOrientation::Left, SpectralOrientation::Right] {
         for first in [0, 1] {
-            let mut state = fresh();
+            let mut state = split_state();
             state.picture.appearance.spectrum.orientation = orientation;
             let mut h = DockHarness::new();
             h.settle(&mut state);
@@ -921,7 +933,7 @@ fn shrinking_the_window_under_a_lent_width_keeps_the_saved_layout() {
 #[test]
 fn a_region_expand_button_takes_the_place_of_its_collapse_button() {
     for (orientation, index) in [(SpectralOrientation::Right, 1), (SpectralOrientation::Left, 0)] {
-        let mut state = fresh();
+        let mut state = split_state();
         state.picture.appearance.spectrum.orientation = orientation;
         let mut h = DockHarness::new();
         h.settle(&mut state);

@@ -34,7 +34,11 @@ pub struct NoteAnimationConfig {
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
-        Self { order: AnimationOrder::Simultaneous, stagger_spread: 0.28, radial_start: 0.0 }
+        Self {
+            order: AnimationOrder::Bidirectional,
+            stagger_spread: 0.538_799_94,
+            radial_start: -0.057_507_753,
+        }
     }
 }
 impl NoteAnimationConfig {

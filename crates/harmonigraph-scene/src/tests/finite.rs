@@ -433,6 +433,8 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     // below and 147 nodes besides.
     let step = crate::NODE_RADIUS_FACTOR;
     let shadow = scene.shadow;
+    // The pose falls back to the fresh one (`NoteAnimationConfig::sanitized`).
+    let fresh = NoteAnimationConfig::default();
     for (site, got, want) in [
         ("node_radius", scene.node_radius, step),
         ("marker_unit", scene.marker_unit, step * 1.8),
@@ -448,8 +450,12 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         ("shadow.lattice_geometry.depth", shadow.lattice_geometry.depth, 0.0),
         ("shadow.lattice_geometry.falloff", shadow.lattice_geometry.falloff, SHADOW_FALLOFF_MIN),
         ("shadow.spectral_text.falloff", shadow.spectral_text.falloff, SHADOW_FALLOFF_MIN),
-        ("note_animation.starting_scale", scene.note_animation.starting_scale(), 1.0),
-        ("note_animation.radial_start", scene.note_animation.radial_start, 0.0),
+        (
+            "note_animation.starting_scale",
+            scene.note_animation.starting_scale(),
+            fresh.starting_scale(),
+        ),
+        ("note_animation.radial_start", scene.note_animation.radial_start, fresh.radial_start),
     ] {
         assert_eq!(got, want, "{site} came out {got}, not the fallback this pass chose");
     }

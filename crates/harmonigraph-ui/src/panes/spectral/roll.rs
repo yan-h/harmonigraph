@@ -1232,12 +1232,15 @@ mod tests {
         let whole = *one(&instances(&state, 1.0));
         assert_eq!((whole.span, whole.fade), (RollInstance::WHOLE, [1.0, 1.0]));
 
-        // From an opacity of 0 at rest, so the fade IS the pressure.
+        // From an opacity of 0 at rest with pressure the only route, so the
+        // fade IS the pressure.
         let fade = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
                 opacity: Some(1.0),
                 ..Default::default()
             },
+            velocity: harmonigraph_scene::IntensitySource::default(),
+            gain: harmonigraph_scene::IntensitySource::default(),
             opacity_rest: 0.0,
             ..Default::default()
         };
@@ -1935,17 +1938,21 @@ mod tests {
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
-        state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
-        state.runtime.tracker.handle_event(NoteEvent::off(4.0, SourceId::DIRECT, 0, 60));
         state.appearance.spectrum.roll_seconds = 10.0;
         let cfg = &state.appearance.spectrum;
         let axes = Axes::new(PANE, cfg);
-        let per_point =
-            10.0 / f64::from(axes.depth_len() * (1.0 - super::super::axes::spectrum_share(cfg)));
+        let now = 14.3;
+        let time =
+            super::super::axes::TimeAxis::new(&state, super::super::axes::spectrum_share(cfg), now);
         let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
         let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
-        // Put the live ink boundary exactly on the note's stop.
-        let ins = instances(&state, 14.0 + f64::from(ink_px) * per_point);
+        // Put the note's stop exactly on the live ink boundary, by the cull's
+        // own arithmetic: solving for `now` from the stop instead lands it an
+        // ulp either side depending on the pane's proportions.
+        let stop = time.oldest() - f64::from(ink_px) * time.seconds_per_point(&axes);
+        state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent::off(stop, SourceId::DIRECT, 0, 60));
+        let ins = instances(&state, now);
         let floored = one(&ins);
         assert!(
             (floored.half_extent[1] - min_half_depth_for(PPP)).abs() < 1e-3,
