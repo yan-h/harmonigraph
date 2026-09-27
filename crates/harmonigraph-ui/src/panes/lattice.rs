@@ -340,13 +340,17 @@ fn draw_map_overlay(
         } else if maps.playback.audition {
             "Audition · next attacks use working map".into()
         } else {
-            format!("Map {} · next attacks", maps.playback.selected + 1)
+            String::new()
         }
     } else {
         String::new()
     };
     let label = if maps.is_some_and(|maps| maps.pending) {
-        format!("{label} · pending audio adoption")
+        if label.is_empty() {
+            "Pending audio adoption".into()
+        } else {
+            format!("{label} · pending audio adoption")
+        }
     } else {
         label
     };
