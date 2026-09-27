@@ -13,9 +13,10 @@ It drains into runtime storage without access to a dock or recording controls.
 Audio producers retain their existing independent, nonblocking contract;
 this change introduces no queue, worker, snapshot, or alternate ingress for #742.
 
-`Workspace` owns the dock, folds, interface preferences, interaction, and shell actions.
-The dock traverses its own tree while `Viewer` borrows the picture and interaction separately.
-Picture panes cannot replace the dock or access recording controls.
+`Workspace` owns the fixed section layout, folds, interface preferences, interaction, and shell actions —
+the arbitrary dock tree was replaced by three independently foldable sections (Lattice, Analyzer/Spiral, Settings) in #1056.
+`Layout` and `Runtime` hold each arrangement's remembered sizes while `Viewer` borrows the picture and interaction separately.
+Picture panes cannot replace the section layout or access recording controls.
 Appearance-only settings panes borrow the appearance document,
 and the console borrows the runtime.
 The reset-layout request is consumed after traversal;

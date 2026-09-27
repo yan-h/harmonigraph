@@ -21,8 +21,9 @@ pub use window::create;
 /// exposed through its API, so we mirror the choice egui-wgpu makes: the
 /// first supported non-sRGB 8-bit format, which is Bgra8Unorm on both Metal
 /// and DX12. If the lattice pane ever panics with a pipeline/surface format
-/// mismatch on some exotic setup, this is the knob (the real fix is
-/// upstreaming RenderState access in egui-baseview).
+/// mismatch on some exotic setup, this is the knob (upstreaming RenderState
+/// access in egui-baseview would remove the need to mirror it, but
+/// upstreaming to this vendored fork is declined; see `PATCHES.md`).
 pub(crate) const ASSUMED_SURFACE_FORMAT: harmonigraph_render::wgpu::TextureFormat =
     harmonigraph_render::wgpu::TextureFormat::Bgra8Unorm;
 

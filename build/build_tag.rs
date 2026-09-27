@@ -1,18 +1,8 @@
-//! Stamps the git branch and commit into the binary as `LATTICE_BUILD_TAG`,
-//! which the performance overlay shows as its `build` row.
-//!
-//! Bitwig loads exactly ONE bundle, and parallel sessions each build into their
-//! own worktree, so "which build am I actually looking at?" is a real question
-//! with a wrong answer available — `load-plugin.sh` swaps binaries that look
-//! identical from inside the DAW. The overlay answering it in the picture is
-//! the only check that cannot be fooled by a swap that didn't take, a
-//! reactivate that didn't happen, or a build that went to a different worktree.
-//!
-//! The tag names the last COMMIT, not the working tree: a build made with
-//! uncommitted edits carries the commit it sits on. That is the same thing
-//! `load-plugin.sh`'s freshness column means, and deliberately so — a "dirty"
-//! marker here could not be kept honest without re-running this script (and so
-//! relinking) on every source edit, and a marker that lies is worse than none.
+// Stamp the git branch and commit in the leaf binaries as `LATTICE_BUILD_TAG`.
+// Interactive shells show it in the performance overlay; the offline renderer
+// rebuilds so load-plugin.sh's HEAD-based freshness check remains accurate.
+// The tag names the last commit, not uncommitted source edits: a dirty marker
+// would require relinking on every edit to stay honest.
 
 use std::process::Command;
 

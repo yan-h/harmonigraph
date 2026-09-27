@@ -441,8 +441,8 @@ pub(crate) fn spectral_pane(
     // this pane is where you would otherwise never learn one was playing, and
     // the band says it in the spectrum's own territory, where there is room
     // for it, instead of recoloring the note and costing you the one thing the
-    // ribbon's color is for. Same match the Notes pane
-    // uses, over the same window.
+    // ribbon's color is for. See `PictureState::shown` (crate::state) for why
+    // this reads `shown` rather than the reach.
     if show_spectrum && split > 0.0 {
         let shown = state.shown();
         let mut voices: Vec<&harmonigraph_core::Voice> = state

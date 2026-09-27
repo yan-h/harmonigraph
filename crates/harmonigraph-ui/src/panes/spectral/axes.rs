@@ -226,19 +226,11 @@ pub(crate) fn loudness_db(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32)
 /// [`loudness_db`] before its 0..1 clamp — AFFINE in `power_db`, with a slope
 /// that does not depend on `midi`.
 ///
-/// That shape is why this is exposed rather than folded into the one caller
-/// that wants it. The heatmap's cells are stored dB bytes, so a row's whole
-/// mapping is `level = row0 + step * byte` for two constants it can lift out of
-/// the pixel loop, and the ramp behind it can then be a table
-/// (`Shades` in the spectrogram) instead of a per-pixel evaluation — measured at
-/// 58% of a full repaint's arithmetic.
-///
-/// The clamp is what makes it a separate function rather than a note on the
-/// existing one: at a stored `0` the level is far below the floor for any
-/// ordinary dB window, so reading the constants out of the CLAMPED mapping
-/// returns 0 for both and flattens the row. Deriving them here keeps one copy of
-/// the formula — `the_shade_table_matches_the_mapping_it_replaces` holds the
-/// table to it byte for byte.
+/// Its only caller is [`loudness_db`], but the unclamped shape is what
+/// [`level_grid`] and the Level depth-drag ([`super::gestures`])
+/// reason about directly: the tilt subtracts a slope per octave from the
+/// window's own dB, which is why a ruling or a drag bound has to read the
+/// affine mapping rather than the clamped display value.
 pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     let (floor, ceiling) = level_window(cfg);
@@ -248,6 +240,19 @@ pub(crate) fn loudness_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32
 /// A bucket's level in the volume-color ramp, before its 0..1 clamp. The
 /// analyzer's Level window still determines the curve and geometry; this
 /// separate window only decides which dB values receive the gradient's ends.
+///
+/// AFFINE in `power_db` for the same reason as [`loudness_raw`]: the
+/// heatmap's cells are stored dB bytes, so a row's whole mapping is
+/// `level = row0 + step * byte` for two constants it can lift out of the
+/// pixel loop, and the ramp behind it can then be a table (`Shades` in the
+/// spectrogram) instead of a per-pixel evaluation — measured at 58% of a full
+/// repaint's arithmetic. The clamp is what makes this a separate function
+/// rather than a note on [`spectrogram_level_db`]: at a stored `0` the level
+/// is far below the floor for any ordinary dB window, so reading the
+/// constants out of the CLAMPED mapping returns 0 for both and flattens the
+/// row. Deriving them here keeps one copy of the formula —
+/// `the_shade_table_matches_the_mapping_it_replaces` holds the table to it
+/// byte for byte.
 pub(crate) fn spectrogram_level_raw(cfg: &crate::SpectrumConfig, power_db: f32, midi: f32) -> f32 {
     let db = power_db - cfg.tilt * (midi - TILT_PIVOT_MIDI) / 12.0;
     let (floor, ceiling) = spectrogram_window(cfg);

@@ -612,12 +612,6 @@ pub(super) fn drag_zoom(
                     cfg.ceiling_db = (cfg.floor_db + window)
                         .min(crate::LEVEL_MAX_DB)
                         .max(cfg.floor_db + crate::LEVEL_RANGE_MIN_SPAN);
-                    // Every frame of this drag restarts the spectrogram's ring:
-                    // the dB window is the heatmap's too, so `ColumnColor` sees
-                    // the change and every column is repainted. That is the
-                    // picture genuinely changing, not the waste `ColumnColor` was
-                    // spelled out field by field to end — and it is the cost the
-                    // pitch drag already pays each frame through `scale_min_bits`.
                 }
             }
             ui.ctx().set_cursor_icon(axes.resize_cursor());

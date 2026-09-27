@@ -274,6 +274,40 @@ fn dividers_follow_the_pointer_in_both_arrangements() {
 }
 
 #[test]
+fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
+    let mut state = split_state();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    region_click(&mut h, &mut state, 1);
+    let requested = state.workspace.take_window_size_change().expect("unfold requests a resize");
+    assert!(requested.x > 30.0, "fixture must request a wider window");
+    // The host refuses that request, so the drawing fits while the saved
+    // layout retains the size the fold just restored.
+    h.settle(&mut state);
+    let saved = state.workspace.layout.right;
+    let [lattice, analyzer, settings] = state.workspace.layout_runtime.rects;
+    assert!(settings.width() < saved.settings - 5.0, "fixture must draw squeezed sizes");
+    let origin = egui::pos2((lattice.right() + analyzer.left()) * 0.5, lattice.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
+    h.frame(&mut state, vec![press(origin, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(origin - egui::vec2(30.0, 0.0))]);
+    h.frame(&mut state, vec![press(origin - egui::vec2(30.0, 0.0), false)]);
+    assert!(state.workspace.layout.right.lattice < saved.lattice, "divider did not move");
+    assert!(
+        (state.workspace.layout_runtime.rects[0].width() - (lattice.width() - 30.0)).abs() < 1.0,
+        "divider did not follow the pointer in the squeezed drawing"
+    );
+    assert!((state.workspace.layout.right.settings - saved.settings).abs() < 0.1);
+    let saved_blob = state.save_persist();
+    let mut reopened = fresh();
+    assert!(reopened.load_persist(&saved_blob));
+    assert!((reopened.workspace.layout.right.settings - saved.settings).abs() < 0.1);
+}
+
+#[test]
 fn stacked_settings_only_is_compact_and_all_sections_can_reopen() {
     let mut state = fresh();
     state.workspace.layout.position = Position::Below;
@@ -313,7 +347,7 @@ fn a_discarded_pass_does_not_toggle_a_fold_twice() {
         ..Default::default()
     };
     let output = ctx.run_ui(raw, |ui| {
-        root_ui(ui, &mut state, &RecordingBackend::default(), 1.0);
+        root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
         if ui.ctx().current_pass_index() == 0 {
             ui.ctx().request_discard("exercise repeated layout pass");
         }
@@ -714,7 +748,7 @@ fn a_discarded_pass_does_not_charge_an_internal_fold_twice() {
             ..Default::default()
         },
         |ui| {
-            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0);
+            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
             if ui.ctx().current_pass_index() == 0 {
                 ui.ctx().request_discard("exercise internal fold repeat");
             }

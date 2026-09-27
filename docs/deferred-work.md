@@ -59,7 +59,7 @@ revisit another alternative only when a concrete musical or hosting requirement 
 
 **State.** The lattice renders through an offscreen colour pass with no depth attachment (`crates/harmonigraph-render/src/lib.rs`).
 Occlusion follows the sheet and per-node painter order materialized by `LatticeCallback::from_scene`.
-The previously unread `Depth32Float` attachment and its pass-through `Always` pipeline state were removed in the [first GPU batch](lattice-gpu-batch.md).
+The previously unread `Depth32Float` attachment and its pass-through `Always` pipeline state were removed in the first GPU batch ([#646](https://github.com/yan-h/harmonigraph/issues/646)).
 
 **The prerequisite.** Reproduce a concrete overlap artifact before proposing depth-based ordering.
 Define which ring, marker, label and shadow should cover which other element, including across sheets, and compare that intended result with the existing painter order.

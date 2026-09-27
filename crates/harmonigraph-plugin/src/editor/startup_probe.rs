@@ -180,6 +180,7 @@ impl WindowHandler for Host {
                     state: &mut shared,
                     params: &Defaults,
                     now: probe.opened.elapsed().as_secs_f64(),
+                    build_tag: crate::BUILD_TAG,
                     window_size: egui::vec2(1000.0, 700.0),
                 }
                 .draw();
