@@ -335,8 +335,8 @@ pub struct SpectralAtmosphere {
     /// behind it, lifted a little.
     pub star_randomness: f32,
     /// Positional variation within each cell, from regular centers at 0 to
-    /// the original 0.6-cell jitter width at 1. Lower values allow wider
-    /// halos with the same four neighbors. The half-jitter look is 0.5.
+    /// the original 0.6-cell jitter width at 1. Halo reach stays independent
+    /// of placement; a separate reduced pass draws the wider light.
     pub star_jitter: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to

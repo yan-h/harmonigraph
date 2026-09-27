@@ -192,9 +192,9 @@ with the smaller-pane fallback effectively unchanged.
 The independent opening-pass end stamp used in earlier probes can undercount;
 [issue #1203](https://github.com/yan-h/harmonigraph/issues/1203) records the measured failure.
 
-## Four-neighbor plugin trial
+## Earlier four-neighbor plugin trial
 
-The `codex/stars-four-neighbor` branch enables four-neighbor Stars with configurable positional jitter for evaluation in the DAW.
+The four-neighbor trial at `4a35083afe12753a9e9264c4a37a2cd9565a867d` enabled configurable positional jitter for evaluation in the DAW.
 It retains all five depth layers,
 size and speed settings,
 lifetimes and color memory.
@@ -240,3 +240,55 @@ but predate the configurable slider and its uniform-driven shader.
 [A paired comparison of configurable 50% jitter against fixed half jitter](evidence/spectrogram-stars/configurable-jitter/README.md) finds no clear added GPU cost.
 At 1080p the difference fits inside A/A variation;
 the 4K candidate is slightly faster but the runs do not establish a reliable speedup.
+
+
+## One-neighbor cores with separate halos
+
+The current prototype on `codex/stars-four-neighbor` keeps one native-resolution core lookup per depth,
+with the rest of each star's response in a half-resolution RGBA16Float image.
+Each of the five depths has its own image;
+its halo coverage and weighted color join the native core before the usual color normalization and far-to-near composition.
+The reduced pass walks the original nine cells and subtracts the compact core,
+so it includes both Fringe and the Gaussian tails outside the core.
+The outer response again fades from 0.84 to 1.2 cells at every Jitter setting.
+The Jitter slider and its 50% default remain;
+100% now combines the original position variation with the original halo reach.
+
+The native core ends at `0.5 - 0.3 * jitter` cells,
+which keeps it wholly inside its own cell.
+Five native candidates plus 45 at quarter pixel count nominally gives 16.25 candidate evaluations per output pixel,
+compared with 20 for the preceding four-neighbor trial.
+That arithmetic excludes five filtered halo reads,
+five additional render passes and their bandwidth.
+At 4K the halo images require about 79.1 MiB beside the retained native two-layer split target's 63.3 MiB.
+Allocation follows pane device pixels and whether Stars is active;
+Jitter changes the drawn values without reallocating these images.
+The halo passes fill the whole pane so clipped regions can filter across their edges without seams.
+
+The intended picture change is a wider,
+smoother glow with softer fine dust.
+Dense small panes change more than large stars;
+the half-resolution response cannot preserve every subpixel Gaussian tail.
+The compact centers remain native resolution.
+Wrapped drift is split into integer and fractional parts before local distance evaluation,
+preventing different passes from rounding a large wrapped coordinate differently.
+
+A native-resolution test compares reconstructed coverage against an independent full nine-neighbor response at Jitter 0%,
+50% and 100%,
+with Fringe zero and maximum.
+It also compares against core-only rendering to require visible halos even with Fringe zero.
+The existing split tests cover fractional scale,
+partial clipping,
+retained color,
+large-pane activation and extreme controls.
+The five Stars-bearing offline goldens change intentionally;
+Watercolor and the lattice retain their prior frames.
+This remains a visual trial for #1142,
+not an accepted replacement.
+
+
+[Paired M1 Pro timings](evidence/spectrogram-stars/separate-halos/README.md) measure 8.3–8.5% lower GPU time at 4K,
+but 3.8–4.0% higher time at 1080p,
+against the preceding configurable four-neighbor build at default 50% jitter.
+The added passes pay off at the larger size in this fixture,
+while the smaller pane pays more for the restored wide response.

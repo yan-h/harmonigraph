@@ -302,7 +302,7 @@ struct Cloud {
     // none of the textures above.
     star_randomness: f32,
     star_life: f32,
-    // Jitter width, halo reach, fade-start fraction and padding, computed once
+    // Jitter width, compact-core reach, fade-start fraction and padding, computed once
     // per frame by star_geometry in atmosphere.rs. Lengths are in cells.
     star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
@@ -359,6 +359,7 @@ struct StarSlice {
 /// it; bound on the same terms as `cloud_tone`. See `star_texel` for the
 /// packing.
 @group(1) @binding(8) var star_atlas: texture_2d<u32>;
+@group(1) @binding(10) var star_halos: texture_2d_array<f32>;
 
 // Scalar display intensity has no gamma transfer function. In particular,
 // the float source target must not take fs_heatmap_linear's RGB conversion.
@@ -1343,13 +1344,15 @@ struct TileVertex {
     // cloud uniform is bound to the fragment stage alone and a vertex read of
     // it would widen every cloud pipeline's layout for this one entry point.
     @location(0) fraction: vec2<f32>,
+    @location(1) @interpolate(flat) layer: u32,
 };
 @vertex
-fn vs_cloud_tile(@builtin(vertex_index) vertex: u32) -> TileVertex {
+fn vs_cloud_tile(@builtin(vertex_index) vertex: u32, @builtin(instance_index) layer: u32) -> TileVertex {
     let uv = vec2<f32>(f32((vertex << 1u) & 2u), f32(vertex & 2u));
     var out: TileVertex;
     out.position = vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
     out.fraction = uv;
+    out.layer = layer;
     return out;
 }
 
@@ -1402,7 +1405,7 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // two-pixel cells, many and faint) to near (32-pixel cells at the fresh `Size
 // range`, few, bright, soft), each sliding at the shared drift times its own
 // parallax factor. The CPU works out every slice's numbers and its drift
-// (`star_slices`); this prototype walks the nearest 2x2 cells in each.
+// (`star_slices`); this prototype reads one native core per slice and a reduced halo image.
 //
 // **Each star is worked out once a frame, not once per pixel.** Everything about
 // a star but its coverage — its life, jitter, the light under it, its
@@ -1410,7 +1413,8 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // every pixel took it again at every pixel in reach: about 500 times a frame for
 // a far star at 4K and 6000 for a near one. So `fs_star_bake` draws every
 // slice's cells on screen into `star_atlas`, a texel a cell, and the pixel's
-// walk reads four texels a slice and does only the distance and the falloff
+// native walk reads one texel a slice. The separate halo pass gathers nine
+// cells at half resolution and keeps each slice's color and coverage separate
 // (#1142).
 //
 // **Lives.** A star lives `Star lifetime`, then its cell draws a new star,
@@ -1443,6 +1447,10 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // pane at any export resolution, like the other textures' `CLOUD_UNITS`.
 const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
+// Original full-jitter halo bounds. The nominal cell and its eight neighbors
+// cover this radius at every Jitter setting; a missing cell starts at 1.2.
+const STAR_HALO_REACH: f32 = 1.2;
+const STAR_HALO_FADE: f32 = 0.7;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // atmosphere.rs), and its log.
 const STAR_ATLAS_WIDTH: i32 = 2048;
@@ -1570,39 +1578,65 @@ fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
     return vec4<u32>(0u);
 }
 
-// The star baked at atlas texel `index`, counted along the rows, if it has one,
-// as its coverage at `f` — the pixel, in cells from the corner of the cell the
-// star is in — in `w` and its one colour times that coverage in `rgb`. `cut` is
-// where nothing of a star here is left: five sigmas of the widest core, or with
-// a fringe the ring's reach, and never past that.
-fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, cut: f32) -> vec4<f32> {
+// One star's premultiplied palette color and coverage. The native path draws
+// only a compact core that fits wholly inside its own cell. The halo path
+// draws the original response MINUS that core, including its clipped outer
+// tails, so their sum neither drops the fringe nor counts the center twice.
+fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     let t = textureLoad(
         star_atlas,
         vec2<i32>(index & (STAR_ATLAS_WIDTH - 1), index >> STAR_ATLAS_SHIFT),
         0,
     );
-    if t.w == 0u {
-        return vec4<f32>(0.0);
-    }
+    if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    if dist >= cut {
+    let reach = cloud.star_geometry.y * s.cell;
+    if dist >= select(reach, STAR_HALO_REACH * s.cell, halo) {
         return vec4<f32>(0.0);
     }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
     let shape = unpack2x16float(t.w);
-    let inverse_sigma = shape.x;
-    // The shape is coverage only: a soft point and a same-colour fringe, the
-    // fringe bounded by nothing but the ring's fade below.
-    var cover = exp(-0.5 * (dist * inverse_sigma) * (dist * inverse_sigma));
-    if s.fringe > 0.0 {
-        cover += s.fringe * exp(-0.4 * dist * inverse_sigma);
+    let d = dist * shape.x;
+    let gaussian = exp(-0.5 * d * d);
+    let core = gaussian * (1.0 - smoothstep(cloud.star_geometry.z * reach, reach, dist));
+    var cover = core;
+    if halo {
+        var full = gaussian;
+        if s.fringe > 0.0 { full += s.fringe * exp(-0.4 * d); }
+        let outer = STAR_HALO_REACH * s.cell;
+        full = min(full, 1.0) * (1.0 - smoothstep(STAR_HALO_FADE * outer, outer, dist));
+        cover = max(full - core, 0.0);
     }
-    // Zero at the ring's reach, so a star the walk cannot see from this pixel
-    // draws nothing here either and no cell edge shows.
-    let reach = cloud.star_geometry.y * s.cell;
-    cover = min(cover, 1.0) * (1.0 - smoothstep(cloud.star_geometry.z * reach, reach, dist));
     cover *= shape.y;
     return vec4<f32>(colour * cover, cover);
+}
+
+// The low-resolution target stores the unnormalized weighted color and
+// coverage of ONE slice. They must join that slice's native core before the
+// usual far-to-near over; flattening all halos would change the depth order.
+const STAR_HALO_SCALE: f32 = 0.5;
+@fragment
+fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
+    let step = cloud.size / ceil(cloud.size * cloud.ppp * STAR_HALO_SCALE);
+    let pt = in.position.xy * step;
+    let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
+    let s = cloud.star_slices[in.layer];
+    // Keep the fractional coordinate small across drift wraps so the two
+    // passes do not round differently while subtracting an offset near 65536.
+    let r = sp / s.cell - fract(s.offset);
+    let o = floor(r);
+    let f = r - o;
+    let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
+    let index = s.base + local.y * s.grid.x + local.x;
+    var halo = vec4<f32>(0.0);
+    for (var y = -1; y <= 1; y += 1) {
+        let row = index + y * s.grid.x;
+        let fy = f.y - f32(y);
+        halo += star_texel(s, vec2<f32>(f.x + 1.0, fy), row - 1, true);
+        halo += star_texel(s, vec2<f32>(f.x, fy), row, true);
+        halo += star_texel(s, vec2<f32>(f.x - 1.0, fy), row + 1, true);
+    }
+    return halo;
 }
 
 // A star's one colour, its brightness spent as a palette position. `rank` is
@@ -1628,33 +1662,20 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
 // it, a cell's stagger at the second.
 //
-// The nearest 2x2 cells preserve star placement and all five depths while
-// reducing the walk from 45 to 20 atlas reads per pixel. The shorter ring is
-// a deliberate visual tradeoff: halos fade before a cell leaves this walk.
-// Both the native and split paths use this same evaluation.
+// One native core per slice, with the remaining coverage gathered into the
+// half-resolution halo array. Both paths use this same per-slice composition.
 fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
     var out = under;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
     for (var k = first; k < last; k += 1u) {
         let s = cloud.star_slices[k];
-        // A fringe has no window of its own, so with one on only the ring's
-        // fade bounds a star.
-        var cut = cloud.star_geometry.y * s.cell;
-        if s.fringe <= 0.0 {
-            cut = min(cut, 5.0 * s.cap * s.defocus);
-        }
-        let r = sp / s.cell - s.offset;
-        // The nearest two cell centres on each axis. Switching the selected
-        // pair at a half-cell boundary is invisible because any departing or
-        // arriving star is at least the halo reach away and has zero coverage.
-        let o = floor(r - 0.5);
+        let r = sp / s.cell - fract(s.offset);
+        let o = floor(r);
         let f = r - o;
-        let local = vec2<i32>(o) - s.origin;
+        let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
         let index = s.base + local.y * s.grid.x + local.x;
-        var slice = star_texel(s, f, index, cut);
-        slice += star_texel(s, f - vec2<f32>(1.0, 0.0), index + 1, cut);
-        slice += star_texel(s, f - vec2<f32>(0.0, 1.0), index + s.grid.x, cut);
-        slice += star_texel(s, f - vec2<f32>(1.0, 1.0), index + s.grid.x + 1, cut);
+        var slice = star_texel(s, f, index, false);
+        slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
         }

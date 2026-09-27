@@ -139,7 +139,7 @@ struct StarSlice {
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
-    /// the jitter-dependent halo reach: `Fringe`, alike at every depth.
+    /// 1.2 cells: `Fringe`, alike at every depth.
     fringe: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
@@ -360,7 +360,7 @@ fn star_slices(
 
 /// The cell at the start of a slice's grid on one axis: the one a pixel at
 /// the pane's leading edge is in, less one conservative neighbor and the
-/// margin. The nearest 2x2 walk stays inside these original three-cell bounds.
+/// margin. This bounds the three-cell halo walk and its one-cell core.
 /// `span` is the pane along the axis in star pixels.
 fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
     let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
@@ -559,18 +559,25 @@ impl TileKey {
     }
 }
 
-/// Placement and halo bounds from the sanitized 0..=1 Jitter dial. Compute
-/// these once per frame, rather than inside each pixel's twenty-star walk.
-/// The nearest excluded cell can approach by 1 minus half the jitter width;
-/// the halo must reach zero there. Fade from 0.8..1 cells at zero jitter to
-/// 0.6..0.7 at full jitter, retaining the half-jitter 0.7..0.85 window at 0.5.
-/// f64 before narrowing keeps the default identical to the old WGSL constants.
+/// Compact core bounds from the sanitized Jitter dial. A one-cell lookup can
+/// only see a core that stays within its own cell, so its reach is the nearest
+/// possible center's distance from the edge: half a cell less half the jitter.
+/// The wider response is reconstructed by the separate nine-cell halo pass.
 fn star_geometry(jitter: f32) -> Float4 {
-    let jitter = f64::from(jitter);
-    let width = 0.6 * jitter;
-    let reach = 1.0 - width / 2.0;
-    let fade = (0.8 - 0.2 * jitter) / reach;
-    Float4([width as f32, reach as f32, fade as f32, 0.0])
+    let width = 0.6 * f64::from(jitter);
+    Float4([width as f32, (0.5 - width / 2.0) as f32, 0.7, 0.0])
+}
+
+/// Halos keep each depth's premultiplied color and coverage at half resolution.
+/// This depends only on pane pixels; jitter and blur edits refill the same
+/// allocation. Tests can use native resolution to isolate reconstruction from
+/// the deliberately coarser sampling.
+pub(super) fn star_halo_size(pixels: [u32; 2]) -> [u32; 2] {
+    #[cfg(not(test))]
+    let divisor = 2;
+    #[cfg(test)]
+    let divisor = super::tests::STAR_HALO_DIVISOR.get();
+    pixels.map(|n| n.div_ceil(divisor))
 }
 
 /// The tile this frame wants, or `None` where no cloud is drawn.
@@ -696,7 +703,7 @@ struct Uniforms {
     /// The geometry and slice rows that follow both start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
-    /// Jitter width, halo reach, fade-start fraction and padding; see [`star_geometry`].
+    /// Jitter width, compact-core reach, fade-start fraction and padding; see [`star_geometry`].
     star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
@@ -769,6 +776,8 @@ pub(super) struct Pipelines {
     /// Native-resolution RGB of the two farthest layers, when splitting the
     /// composite pays for its extra pass.
     pub star_far: wgpu::RenderPipeline,
+    /// One depth's weighted halo color and coverage at half pane resolution.
+    pub star_halo: wgpu::RenderPipeline,
     /// Specialize the final draws so the unsplit shader carries no runtime
     /// split branch (that branch alone regressed intermediate pane sizes).
     pub star_composite: wgpu::RenderPipeline,
@@ -837,6 +846,16 @@ impl Pipelines {
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: false },
                         view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -934,6 +953,14 @@ impl Pipelines {
                 &composite_layout,
                 "fs_star_bake",
                 &[Some(STAR_FORMAT)],
+            ),
+            star_halo: tile_pipeline(
+                device,
+                &spectrogram,
+                source_layout,
+                &composite_layout,
+                "fs_star_halo",
+                &[Some(STAR_FAR_FORMAT)],
             ),
             star_far: tile_pipeline(
                 device,
@@ -1210,6 +1237,49 @@ fn memory_key(
     values.into_iter().map(f32::to_bits).collect()
 }
 
+/// One premultiplied halo image per depth, sampled together only after each
+/// slice's native core has been added. A flattened RGB image would lose the
+/// coverage normalization and depth order.
+struct StarHalos {
+    view: wgpu::TextureView,
+    layers: [wgpu::TextureView; STAR_SLICES],
+    size: [u32; 2],
+}
+
+impl StarHalos {
+    fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("spectral_star_halos"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: STAR_SLICES as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: STAR_FAR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        Self {
+            view: texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            }),
+            layers: std::array::from_fn(|layer| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer as u32,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            }),
+            size,
+        }
+    }
+}
+
 pub(super) struct Targets {
     #[cfg(test)]
     pub encoded_passes: std::sync::atomic::AtomicU32,
@@ -1232,6 +1302,8 @@ pub(super) struct Targets {
     /// The star atlas and its size, `None` unless the starfield is drawn. Part
     /// of the allocation key, sized by [`star_atlas_size`].
     stars: Option<(wgpu::TextureView, [u32; 2])>,
+    halos: Option<StarHalos>,
+    halo_group: Option<wgpu::BindGroup>,
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
@@ -1249,20 +1321,17 @@ pub(super) struct Targets {
     memory: Option<Memory>,
 }
 
-/// What one set of targets is allocated FOR: the light field's size, the reduced
-/// tone's where there is one, and the tile this frame wants beside whatever tile
-/// the previous set held.
-///
-/// The three move independently — the light's size follows the musical radius,
-/// the tone's follows pane pixels and display scale, and the tile's follows how
-/// many cloud cells cross the pane — which is why `SpectrogramCallback::prepare` compares all
-/// three before rebuilding, and why the tile alone is handed back in.
+/// Target shapes for the light field, optional tone/tile, star atlas, halos and
+/// retained color. Each follows its own sampling grid, so `prepare` compares
+/// every shape before rebuilding. Cached tiles and color history can survive
+/// allocation changes in the other fields.
 pub(super) struct Allocation {
     pub size: [u32; 2],
     pub tone: Option<[u32; 2]>,
     pub tile: Option<TileKey>,
     pub carried: Option<Tile>,
     pub stars: Option<[u32; 2]>,
+    pub halos: Option<[u32; 2]>,
     pub memory: Option<[u32; 2]>,
     pub carried_memory: Option<Memory>,
 }
@@ -1282,6 +1351,7 @@ impl Targets {
             tile: tile_key,
             carried,
             stars: star_size,
+            halos: halo_size,
             memory: memory_size,
             carried_memory,
         } = wanted;
@@ -1328,6 +1398,8 @@ impl Targets {
         // What every group that does not read the atlas binds in its place, and
         // what the star pass, which writes it, must.
         let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
+        let halos = halo_size.map(|size| StarHalos::new(device, size));
+        let halo_scratch = StarHalos::new(device, [1, 1]);
         let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
@@ -1390,7 +1462,8 @@ impl Targets {
                            tone: &wgpu::TextureView,
                            tile: [&wgpu::TextureView; 2],
                            stars: &wgpu::TextureView,
-                           memory: &wgpu::TextureView| {
+                           memory: &wgpu::TextureView,
+                           halos: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spectral_cloud_composite_group"),
                 layout: &pipelines.composite_layout,
@@ -1432,6 +1505,10 @@ impl Targets {
                         binding: 8,
                         resource: wgpu::BindingResource::TextureView(stars),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(halos),
+                    },
                 ],
             })
         };
@@ -1439,32 +1516,59 @@ impl Targets {
         let tile_views =
             tile.as_ref().map_or(scratch_tile, |tile| [&tile.views[0], &tile.views[1]]);
         let star_view = stars.as_ref().map_or(&star_scratch, |(view, _)| view);
-        let bake_group = cloud_group(&views[1], &views[0], tile_views, star_view, &views[0]);
+        let halo_view = halos.as_ref().map_or(&halo_scratch.view, |halo| &halo.view);
+        let bake_group =
+            cloud_group(&views[1], &views[0], tile_views, star_view, &views[0], halo_view);
+        let halo_group = halos.as_ref().map(|_| {
+            cloud_group(
+                &source_view,
+                &views[0],
+                tile_views,
+                star_view,
+                &views[0],
+                &halo_scratch.view,
+            )
+        });
         // Reads the baked material the light passes just wrote, and writes the
         // tone target — so that is the one view it stands a scratch in for.
-        let tone_group = tone
-            .as_ref()
-            .map(|_| cloud_group(&source_view, &views[0], tile_views, star_view, &views[0]));
-        let tile_group = tile
-            .as_ref()
-            .map(|_| cloud_group(&source_view, &views[0], scratch_tile, star_view, &views[0]));
+        let tone_group = tone.as_ref().map(|_| {
+            cloud_group(&source_view, &views[0], tile_views, star_view, &views[0], halo_view)
+        });
+        let tile_group = tile.as_ref().map(|_| {
+            cloud_group(&source_view, &views[0], scratch_tile, star_view, &views[0], halo_view)
+        });
         // Reads the finished light as the stars' level, like the tone pass.
-        let star_group = stars
-            .as_ref()
-            .map(|_| cloud_group(&source_view, &views[0], tile_views, &star_scratch, &views[0]));
+        let star_group = stars.as_ref().map(|_| {
+            cloud_group(&source_view, &views[0], tile_views, &star_scratch, &views[0], halo_view)
+        });
         let composite_group = cloud_group(
             &source_view,
             tone.as_ref().map_or(&views[0], |(view, _)| view),
             tile_views,
             star_view,
             &views[0],
+            halo_view,
         );
         let memory = memory_views.map(|history| Memory {
             groups: std::array::from_fn(|i| {
-                cloud_group(&source_view, &views[0], tile_views, &star_scratch, &history[1 - i])
+                cloud_group(
+                    &source_view,
+                    &views[0],
+                    tile_views,
+                    &star_scratch,
+                    &history[1 - i],
+                    halo_view,
+                )
             }),
             star_groups: std::array::from_fn(|i| {
-                cloud_group(&source_view, &views[0], tile_views, &star_scratch, &history[i])
+                cloud_group(
+                    &source_view,
+                    &views[0],
+                    tile_views,
+                    &star_scratch,
+                    &history[i],
+                    halo_view,
+                )
             }),
             composite_groups: std::array::from_fn(|i| {
                 cloud_group(
@@ -1473,6 +1577,7 @@ impl Targets {
                     tile_views,
                     star_view,
                     &history[i],
+                    halo_view,
                 )
             }),
             views: history,
@@ -1501,6 +1606,8 @@ impl Targets {
             tone,
             tile,
             stars,
+            halos,
+            halo_group,
             source_uniform,
             source_group,
             uniform,
@@ -1523,6 +1630,39 @@ impl Targets {
     /// The star atlas's size, for the allocation key.
     pub fn star_size(&self) -> Option<[u32; 2]> {
         self.stars.as_ref().map(|&(_, size)| size)
+    }
+
+    pub fn halo_size(&self) -> Option<[u32; 2]> {
+        self.halos.as_ref().map(|halo| halo.size)
+    }
+
+    /// Writes each depth separately. The group binds a scratch array where
+    /// consumers bind the real one, so no attached layer is also sampled.
+    pub fn draw_halos(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+        let Some(halos) = &self.halos else { return };
+        for (layer, view) in halos.layers.iter().enumerate() {
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_star_halo"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipelines.star_halo);
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_bind_group(1, self.halo_group.as_ref().expect("halo group"), &[]);
+            // A flat instance index chooses the slice without mutating a
+            // uniform shared by passes queued in this same command buffer.
+            pass.draw(0..3, layer as u32..layer as u32 + 1);
+        }
     }
 
     /// The star atlas and the group the pass that fills it binds.
@@ -1868,40 +2008,38 @@ mod tests {
         crate::uniforms::layout::check_binding_prefix::<super::Uniforms>(super::SOURCE, 0, 2);
     }
 
-    /// The nearest 2x2 walk sees every star whose shortened halo reaches the
-    /// pixel. Scan both sides of the half-cell selection boundaries using the
-    /// uploaded jitter and reach throughout the dial's range.
+    /// Both walks include every star that can reach the pixel: one nominal
+    /// cell for the compact core, and a 3x3 ring for the original wide halo.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
+        assert_eq!(shader_number("STAR_HALO_SCALE"), 0.5);
+        assert_eq!(super::star_halo_size([3, 5]), [2, 3]);
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        // The default must preserve the preceding half-jitter prototype.
-        assert_eq!(star_geometry(0.5).0, [0.3, 0.85, 0.823_529_4, 0.0]);
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let [jitter, reach, fade, _] = star_geometry(dial).0;
+            let [jitter, core_reach, fade, _] = star_geometry(dial).0;
             assert!(fade > 0.0 && fade < 1.0);
-            let nearest = nearest_outside_the_ring(jitter / 2.0);
-            assert!(
-                nearest >= reach - 1e-5,
-                "jitter={dial}: an excluded star comes {nearest} cells from the pixel, \
-                 inside the {reach} it is windowed to zero at"
-            );
+            for (radius, reach) in [(0, core_reach), (1, shader_number("STAR_HALO_REACH") as f32)] {
+                let nearest = nearest_outside_the_ring(jitter / 2.0, radius);
+                assert!(nearest >= reach - 1e-5,
+                    "jitter={dial}, ring={radius}: excluded star at {nearest}, inside reach {reach}");
+            }
         }
     }
 
-    /// The nearest excluded star over a full cell, including the points at
-    /// which the nearest 2x2 changes. A centre strays `stray` on each axis.
-    fn nearest_outside_the_ring(stray: f32) -> f32 {
+    /// Scan a full cell and both sides of its selection boundaries. A centre
+    /// strays `stray` on each axis; the walk is centred on floor(pixel).
+    fn nearest_outside_the_ring(stray: f32, radius: i32) -> f32 {
         let mut nearest = f32::INFINITY;
         for step in 0..=64 {
             for other in 0..=64 {
                 let pixel = [step as f32 / 64.0, other as f32 / 64.0];
-                let first = pixel.map(|p| (p - 0.5).floor() as i32);
-                for cx in -2i32..=2 {
-                    for cy in -2i32..=2 {
-                        if (first[0]..=first[0] + 1).contains(&cx)
-                            && (first[1]..=first[1] + 1).contains(&cy)
+                let centre = pixel.map(|p| p.floor() as i32);
+                for cx in -2i32..=3 {
+                    for cy in -2i32..=3 {
+                        if (centre[0] - radius..=centre[0] + radius).contains(&cx)
+                            && (centre[1] - radius..=centre[1] + radius).contains(&cy)
                         {
                             continue;
                         }
@@ -1957,12 +2095,11 @@ mod tests {
                 for axis in 0..2 {
                     let half = f64::from(layout.pane[axis] / 2.0 / slice.cell);
                     // Drifts that put the leading edge, then the trailing one, on
-                    // a selection boundary: `-half - offset - 0.5` and
-                    // `half - offset - 0.5` integers.
-                    let exact =
-                        [0.0, 1000.0, STAR_HASH_PERIOD - 2.0 * half - 8.0].into_iter().flat_map(
-                            |m| [half.ceil() + m - half - 0.5, half - (half.floor() - m) - 0.5],
-                        );
+                    // a selection boundary: `-half - offset` and
+                    // `half - offset` integers.
+                    let exact = [0.0, 1000.0, STAR_HASH_PERIOD - 2.0 * half - 8.0]
+                        .into_iter()
+                        .flat_map(|m| [half.ceil() + m - half, half - (half.floor() - m)]);
                     for exact in exact {
                         let exact = exact as f32;
                         for ulps in -4096i32..=4096 {
@@ -1970,8 +2107,10 @@ mod tests {
                             let origin = super::star_origin(layout.pane[axis], slice.cell, offset);
                             for pt in [0.0, size[axis]] {
                                 let sp = (pt - size[axis] * 0.5) * (STAR_PANE / size[1]);
-                                let cell = (sp / slice.cell - offset - 0.5).floor() as i32;
-                                for step in [0, 1] {
+                                let whole = offset.floor();
+                                let cell = (sp / slice.cell - (offset - whole)).floor() as i32
+                                    - whole as i32;
+                                for step in [-1, 0, 1] {
                                     let local = cell + step - origin;
                                     assert!(
                                         (0..slice.grid.0[axis]).contains(&local),
