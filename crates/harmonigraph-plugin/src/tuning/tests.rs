@@ -1579,3 +1579,35 @@ fn missing_steady_time_rejects_the_callback_before_note_admission() {
     assert!(pair.idle().is_empty(), "the invalid callback did not retain raw output for later");
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
 }
+
+/// #1151. A MIDI channel bend moves every voice held on its channel and has
+/// no note delta of its own, so the snapshot it owes is the only way the move
+/// reaches either lane.
+#[test]
+fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
+    use harmonigraph_core::NoteTracker;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut raw = 0;
+    let mut step = |input: Vec<Input>| {
+        hub.run_format(raw, input, None, None, 512);
+        raw += 512;
+    };
+    step(vec![note(1, 0, 60, 0, true)]);
+    step(vec![]);
+    // 0x50 << 7 is a quarter of the way up the default two-semitone range.
+    step(vec![raw_midi([0xE0, 0, 0x50], 0)]);
+    step(vec![]);
+    let mut display = NoteTracker::new();
+    capture.display_into(&mut display, |_, _| {});
+    let mut take = NoteTracker::new();
+    for record in capture.drain_canonical() {
+        record.apply(&mut take).expect("the take lane stays consistent");
+    }
+    for (lane, tracker) in [("display", &display), ("take", &take)] {
+        let voice = tracker.voices().find(|v| v.note == 60);
+        let voice = voice.unwrap_or_else(|| panic!("the {lane} lane holds the note"));
+        assert_eq!(voice.pitch, 60.5, "the {lane} lane draws the bend");
+    }
+}

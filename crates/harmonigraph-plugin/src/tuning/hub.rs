@@ -920,6 +920,12 @@ impl Hub {
                 assigned.channel_pitch,
             );
         }
+        // A channel bend moves the voices it reaches and produces no delta of
+        // its own, so the snapshot this owes is the only thing that carries the
+        // move to either lane (#1151).
+        if self.rows[index].state.pitch_changed {
+            self.rows[index].repair = publication::Lanes::both(true);
+        }
         let Some(mut delta) = delta else {
             // Defensive cleanup if an onset cannot be retained. Admission
             // above normally refuses it before assignment; policy must not
@@ -938,9 +944,6 @@ impl Hub {
             if delta.pitch_microcents.is_some() {
                 delta.pitch_microcents = Some(voice.pitch_microcents);
             }
-        }
-        if self.rows[index].state.pitch_changed {
-            self.rows[index].repair = publication::Lanes::both(true);
         }
         self.rows[index].applied = self.rows[index].sequence;
         if self.pending.len() < BATCH_EVENTS {

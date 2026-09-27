@@ -19,6 +19,10 @@ pub struct State {
     /// MIDI channel displacement, which is also the attack pitch the policy
     /// scores. Bend and RPN 0 sensitivity both reduce into it.
     pitch: [harmonigraph_core::policy::channel::ChannelPitch; 16],
+    /// Whether the last [`apply`](Self::apply) moved a held voice with no
+    /// delta to say so: a channel bend, or a bend-range change, on a channel
+    /// that has voices on it. A bend on an empty channel changes only the
+    /// pitch later attacks start from, which no snapshot carries.
     pub pitch_changed: bool,
     /// False once a bounded store refused a voice. A source with an incomplete
     /// state publishes no baseline, because a partial one is worse than none.
@@ -260,13 +264,14 @@ impl State {
         if let Event::Midi { port: 0, data, .. } = event {
             let index = usize::from(data[0] & 15);
             let before = self.pitch[index].microcents();
-            self.pitch_changed = self.pitch[index].apply(data);
+            self.pitch[index].apply(data);
             let change = self.pitch[index].microcents() - before;
             if change != 0 {
                 for voice in
                     self.voices.iter_mut().flatten().filter(|v| usize::from(v.channel) == index)
                 {
                     voice.pitch_microcents = voice.pitch_microcents.saturating_add(change);
+                    self.pitch_changed = true;
                 }
             }
         }
