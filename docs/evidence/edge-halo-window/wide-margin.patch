@@ -1,0 +1,27 @@
+diff --git a/crates/harmonigraph-scene/src/view/windowing.rs b/crates/harmonigraph-scene/src/view/windowing.rs
+index 458875a0..764af7e8 100644
+--- a/crates/harmonigraph-scene/src/view/windowing.rs
++++ b/crates/harmonigraph-scene/src/view/windowing.rs
+@@ -98,7 +98,21 @@ impl ViewConfig {
+         // growing at the edge: its own radius, plus a step for the NAME, which
+         // is drawn beside the node and so reaches onto the pane from a node
+         // that is not on it.
+-        let margin = 1.0 + NODE_RADIUS_FACTOR;
++        let mut margin = 1.0 + NODE_RADIUS_FACTOR;
++        let reach = finite_or(self.glow_reach, 0.0).clamp(0.0, GLOW_REACH_MAX);
++        if reach > 0.0 && finite_or(self.glow_strength, 0.0) > 0.0 {
++            let rings = self.rings();
++            let rim = if rings.mark_thickness > 0.0 {
++                rings.outer.max(rings.mark_inner + rings.mark_thickness)
++            } else {
++                rings.outer
++            };
++            // The halo billboard spans (rim + reach) in node UV units.
++            // Include its off-pane owners before deriving the scene, or their
++            // light disappears at the window boundary. Off-home sheets only
++            // shrink nodes, so the home-sheet radius bounds them all.
++            margin = margin.max((rim + reach) * 1.8 * NODE_RADIUS_FACTOR);
++        }
+         // Each end of the rectangle taken on its own, in steps from the WORLD
+         // ORIGIN — which is where `derive_scene` draws the center node, so a
+         // world coordinate IS an offset from the
