@@ -1,6 +1,8 @@
-# Four-neighbor plugin trial, current defaults
+# Four-neighbor full-jitter trial, current defaults
 
 Measured on M1 Pro / Metal on 2026-09-27.
+These measurements describe the full-jitter trial at `f4ce0de16f27fb2d6162dc04f07dde95972522ef`,
+before the branch adopted half jitter and a wider halo window.
 The baseline is `4b102f407f52e2ad00616fb7f1e7a3077334f929`.
 Both variants retain the current defaults,
 color memory and the automatic full-resolution 2+3 split at 4K.
@@ -61,7 +63,8 @@ Visual acceptance remains for the live plugin trial.
 
 ## Reproduce
 
-Use this branch in an owner-managed worktree.
+Use `f4ce0de16f27fb2d6162dc04f07dde95972522ef` in an owner-managed worktree.
+Later branch revisions change positional jitter and do not reproduce this candidate.
 The scratch harness is test-only and is removed before building a plugin.
 
 ```sh

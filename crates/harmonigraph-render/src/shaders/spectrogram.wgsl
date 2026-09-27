@@ -1441,11 +1441,11 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
 // How far a centre is hashed off its cell's middle, as a whole width.
-const STAR_JITTER: f32 = 0.6;
+const STAR_JITTER: f32 = 0.3;
 // The ring's reach, in cells: the nearest a star from a cell outside the
 // nearest 2x2 walk can come to a pixel, 1.0 less half the jitter. Coverage is
 // windowed to zero by it (`the_star_ring_holds_every_star_that_reaches_a_pixel`).
-const STAR_REACH: f32 = 0.7;
+const STAR_REACH: f32 = 0.85;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // atmosphere.rs), and its log.
 const STAR_ATLAS_WIDTH: i32 = 2048;
@@ -1473,8 +1473,9 @@ const STAR_FADE: f32 = 0.2;
 const STAR_LIFT: f32 = 0.18;
 // Where, as a share of the ring's reach, a star's light starts fading to the
 // zero it must reach there. See `STAR_REACH` and the test that holds it.
-// Fade from 0.6 to 0.7 cells, retaining the earlier four-neighbor prototype.
-const STAR_RING_FADE: f32 = 0.857142857;
+// Half jitter permits a wider halo with four neighbors: fade from 0.7 to
+// 0.85 cells while still reaching zero before an unvisited star can matter.
+const STAR_RING_FADE: f32 = 0.823529412;
 
 // The level a star sees at pane point `pt`: the Spread-combined light, so
 // how loosely the stars follow the picture is `Wide blur mix` and the two
