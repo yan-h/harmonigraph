@@ -729,7 +729,7 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
     let outlined: SpectrumConfig = ron::from_str("(keyline_lift:0.9)").unwrap();
     assert_eq!(outlined.keyline_lift, 0.9);
     type Field = fn(&mut SpectrumConfig) -> &mut f32;
-    let fields: [(Field, f32, f32); 9] = [
+    let fields: [(Field, f32, f32); 8] = [
         (|cfg| &mut cfg.tilt, -6.0, 0.0),
         (|cfg| &mut cfg.keyline_lift, 0.0, 1.0),
         (|cfg| &mut cfg.backdrop_strength, 0.0, 1.0),
@@ -738,7 +738,6 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
         (|cfg| &mut cfg.roll_fraction, 0.0, 1.0),
         (|cfg| &mut cfg.roll_seconds, ROLL_SECONDS_MIN, ROLL_SECONDS_MAX),
         (|cfg| &mut cfg.roll_thickness, 0.2, 2.0),
-        (|cfg| &mut cfg.roll_opacity, 0.0, 1.0),
     ];
     for (field, min, max) in fields {
         let default = *field(&mut SpectrumConfig::default());
@@ -1014,7 +1013,7 @@ fn a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob() {
     for key in [
         format!("release:{:?},", defaults.release),
         format!("floor_db:{:?},", defaults.floor_db),
-        format!("roll_opacity:{:?},", defaults.roll_opacity),
+        format!("roll_thickness:{:?},", defaults.roll_thickness),
         format!("volume_floor_db:{:?},", defaults.volume_floor_db),
         format!("window:{:?},", defaults.window),
     ] {

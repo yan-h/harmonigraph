@@ -550,8 +550,8 @@ fn roll_instances_with_floor(
         // and whatever its release has left once it is up. Per note and decided
         // once for it, since every segment of a note releases together.
         //
-        // Separate from `roll_opacity`: release fades the lead without changing
-        // the retained note's color strength.
+        // Separate from the note's own fade: release fades the lead without
+        // changing the retained note's color strength.
         let standing = lead_alpha(note, now, cfg.roll_lead_release);
         if note.end.is_some() && standing > 0.0 && lead_px > 0.0 {
             let pitch = note.end_pitch();
@@ -577,7 +577,7 @@ fn roll_instances_with_floor(
                     lead_fade: lead_fade_px,
                     lead_alpha: standing,
                     cap_reach: 0.0,
-                    core: note_color(state, pitch, cfg.roll_opacity).to_array(),
+                    core: note_color(state, pitch, 1.0).to_array(),
                     outline: outline_color.to_array(),
                     span: RollInstance::WHOLE,
                     ramp: [0.0, 0.0],
@@ -783,10 +783,10 @@ fn roll_instances_with_floor(
             if center_pitch + ink_pitch < 0.0 || center_pitch - ink_pitch > 1.0 {
                 continue;
             }
-            // A flat pitch color with the configured background show-through.
+            // A flat, opaque pitch color; the Opacity mapping fades it (`Look::fade`).
             // Read it only for segments that survive the pitch cull.
             let pitch = (p0 + p1) * 0.5;
-            let core = note_color(state, pitch, cfg.roll_opacity);
+            let core = note_color(state, pitch, 1.0);
             // The lead: the ribbon carried on past the now-line, so a sounding
             // note crosses into the spectrum peak it is making instead of
             // stopping square on the join. Half of it goes on the length and
@@ -1180,25 +1180,6 @@ mod tests {
     fn one(rects: &[RollInstance]) -> &RollInstance {
         assert_eq!(rects.len(), 1, "expected one note segment, got {}", rects.len());
         &rects[0]
-    }
-
-    /// The ribbon body takes its opacity from the Analyzer setting while the
-    /// dark surround keeps its independent full strength.
-    #[test]
-    fn a_note_uses_the_configured_ribbon_opacity() {
-        let mut state = fresh();
-        state.appearance.spectrum.orientation = SpectralOrientation::Left;
-        state.appearance.spectrum.low_midi = 54.0;
-        state.appearance.spectrum.high_midi = 66.0;
-        state.appearance.spectrum.roll_thickness = 2.0;
-        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
-
-        for (opacity, alpha) in [(0.0, 0), (0.25, 64), (0.8, 204), (1.0, 255)] {
-            state.appearance.spectrum.roll_opacity = opacity;
-            let note = *one(&instances(&state, 0.05));
-            assert_eq!(note.core[3], alpha, "opacity {opacity} produced alpha {}", note.core[3]);
-            assert_eq!(note.outline[3], 255, "opacity {opacity} dimmed the surround");
-        }
     }
 
     /// A note whose intensity moves along it is cut into pieces of its one
