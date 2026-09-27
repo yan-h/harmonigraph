@@ -265,10 +265,9 @@ struct Cloud {
     // a style enum: Plain, Blur and Lava are now the blur, the terraces and the
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
-    // 1 when the cloud's scalar tone has been drawn into `cloud_tone` at the
-    // fixed cloud sample spacing (0.5 pt since #1042, `CloudSampling`), so the
-    // composite reads it there instead of walking the cells per pixel. 0 is
-    // the native path, which a spacing at or under one device pixel takes.
+    // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
+    // clouds, or native-resolution RGB of the two far Stars layers. 0 keeps
+    // the complete walk in the final composite.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
     // are the sanitized settings. The filter shader declares only the head of
@@ -1645,10 +1644,10 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
 // inverse sigma saves the repeated divisions too, for 16–20% together.
 // Keep the depth loop: unrolling both loops measured slower than either.
 // See docs/spectrogram-star-performance.md for the paired measurements.
-fn star_color(pt: vec2<f32>) -> vec3<f32> {
-    var out = palette_color(0.0);
+fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
+    var out = under;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
-    for (var k = 0u; k < STAR_SLICES; k += 1u) {
+    for (var k = first; k < last; k += 1u) {
         let s = cloud.star_slices[k];
         // A fringe has no window of its own, so with one on only the ring's
         // fade bounds a star.
@@ -1692,6 +1691,29 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
         }
     }
     return out;
+}
+
+// A native pixel lookup preserves the far stars' grain: no upsampling or
+// filtering. The snapped pane origin puts every sample at a texel centre.
+override STAR_SPLIT: bool = false;
+
+fn star_color(pt: vec2<f32>) -> vec3<f32> {
+    if STAR_SPLIT {
+        let far = textureLoad(cloud_tone, vec2<i32>(pt * cloud.ppp), 0).rgb;
+        return star_layers(pt, 2u, STAR_SLICES, far);
+    }
+    return star_layers(pt, 0u, STAR_SLICES, palette_color(0.0));
+}
+
+@fragment
+fn fs_star_far(in: TileVertex) -> @location(0) vec4<f32> {
+    // Repeat clouded's global-pixel-to-pane-point arithmetic, including its
+    // rounding at fractional display scales and nonzero pane origins.
+    let position = in.position.xy + round(cloud.origin * cloud.ppp);
+    let pt = position / cloud.ppp - cloud.origin;
+    // Layer compositing remains gamma-coded here. Depth mixing and the final
+    // target's color conversion are applied once, in the final composite.
+    return vec4<f32>(star_layers(pt, 0u, 2u, palette_color(0.0)), 1.0);
 }
 
 fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {

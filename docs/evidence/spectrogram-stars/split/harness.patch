@@ -1,0 +1,322 @@
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -794,6 +794,8 @@
+                     {
+                         #[cfg(test)]
+                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
++                        #[cfg(test)]
++                        let probe_query = tests::PROBE_QUERY.with_borrow(Clone::clone);
+                         let mut pass =
+                             egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                 label: Some("spectral_cloud_source"),
+@@ -806,6 +808,14 @@
+                                         store: wgpu::StoreOp::Store,
+                                     },
+                                 })],
++                                #[cfg(test)]
++                                timestamp_writes: probe_query.as_ref().map(|query_set| {
++                                    wgpu::RenderPassTimestampWrites {
++                                        query_set,
++                                        beginning_of_pass_write_index: Some(0),
++                                        end_of_pass_write_index: Some(1),
++                                    }
++                                }),
+                                 ..Default::default()
+                             });
+                         pass.set_pipeline(&cloud.source);
+@@ -3922,6 +3932,8 @@
+     thread_local! {
+         /// Compare both paths without allocating a large pane in every test.
+         pub(super) static STAR_SPLIT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
++        pub(super) static PROBE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
++        static PROBE_VARIANT_PATH: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+         /// Set while a test draws the reference [`pipeline_source`] builds.
+         static UNWRAPPED_MOSAIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+     }
+@@ -3933,6 +3945,9 @@
+     /// composite 16 to 21% without ever being taken, so the reference lives
+     /// here instead.
+     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
++        if let Some(path) = PROBE_VARIANT_PATH.with_borrow(Clone::clone) {
++            return std::fs::read_to_string(path).unwrap().into();
++        }
+         if !UNWRAPPED_MOSAIC.get() {
+             return SPECTROGRAM_SRC.into();
+         }
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -94,7 +94,8 @@
+ ];
+ 
+ struct Case {
+-    name: &'static str,
++    name: String,
++
+     fill: f32,
+     history_seconds: f32,
+     turn: Option<Turn>,
+@@ -123,6 +124,13 @@
+     let ppp: f32 = std::env::var("PROBE_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
+     let frames: usize =
+         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
++    let warmup: usize =
++        std::env::var("PROBE_WARMUP").ok().and_then(|v| v.parse().ok()).unwrap_or(120);
++    let mut random: u64 =
++        std::env::var("PROBE_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(42);
++    let take = std::env::var("PROBE_TAKE").ok().map(|path| std::fs::read(path).unwrap());
++    let clock_hz = if take.is_some() { 60.0 } else { 144.0 };
++    let mut raw = String::from("frame,slot,case,gpu_ms,begin_gpu_ms,wall_ms,cpu_prepare_ms\n");
+     let histories: Vec<f32> = std::env::var("PROBE_HISTORY_SECONDS")
+         .unwrap_or_else(|_| "10".to_owned())
+         .split(',')
+@@ -166,23 +174,57 @@
+ 
+     // A full-size live ring: 1024 slabs plus eight of retention headroom,
+     // read over eight octaves. Smaller runs keep the same allocation.
+-    let slabs: u32 = std::env::var("PROBE_SLABS").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
++    let mut slabs: u32 =
++        std::env::var("PROBE_SLABS").ok().and_then(|v| v.parse().ok()).unwrap_or(1024);
+     assert!((2..=1024).contains(&slabs));
+     // The grid is the whole 20 Hz - 20 kHz spectrum; `span` is how much of it
+     // the pane shows, which decides both the pitch footprint under one pixel
+     // and the points per cent the pitch softness is measured in. The default
+     // shows eight octaves of it; the live pane at full zoom-out shows all
+     // 119.59 semitones.
+-    let span: f32 =
++    let mut span: f32 =
+         std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0);
+-    let bins = 3828u32;
+-    let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
+-    let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
++    let bins = if take.is_some() { 1024u32 } else { 3828u32 };
++    let lo = if take.is_some() {
++        slabs = 961;
++        span = 12.0 * (9000.0_f32 / 70.0).log2();
++        69.0 + 12.0 * (70.0_f32 / 440.0).log2()
++    } else {
++        SPECTRUM_MIN_MIDI + 10.0
++    };
++    let grid = if let Some(bytes) = &take {
++        grid_of(Arc::new(bytes[..(slabs * bins) as usize].to_vec()), bins, slabs, 0)
++    } else {
++        grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0)
++    };
++    let recorded_slabs = take.as_ref().map(|bytes| SpectrogramGrid::slabs_of(bytes, bins as usize));
++    let mut read = read_of(lo, span, size[1]);
++    if take.is_some() {
++        read.spectrum_min_midi = lo;
++        read.bins_per_semitone = bins as f32 / span;
++        read.level_per_midi = 0.0;
++    }
++    let gradient = harmonigraph_scene::Gradient {
++        hue_start: 302.0,
++        hue_span: -181.224_01,
++        lightness: 50.0,
++        lightness_ramp: 100.0,
++        chroma: 0.794_999_96,
++        chroma_ramp: 0.410_000_03,
++        ..Default::default()
++    };
++    let palette: Vec<[u8; 4]> = (0..4096)
++        .map(|i| {
++            let c = harmonigraph_scene::gradient_color((i as f32 + 0.5) / 4096.0, gradient);
++            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
++            [byte(c.x), byte(c.y), byte(c.z), 255]
++        })
++        .collect();
+     read.level_per_step = 1.0 / 255.0;
+     let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
+     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+     let quad = |fill: f32| {
+-        let (w, h, n) = (points.x * fill, points.y, slabs as f32);
++        let (w, h, n) = (points.x * fill, points.y, (slabs - u32::from(take.is_some())) as f32);
+         let v = |x: f32, y: f32| SpectrogramVertex { pos: [x, y], slab: x / w * n, t: 1.0 - y / h };
+         vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
+     };
+@@ -254,6 +296,10 @@
+     let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+     eprintln!("pane {}x{} px at {ppp} px/pt, {slabs} slabs of {bins} buckets", size[0], size[1]);
+ 
++    let variants: Vec<Option<String>> = std::env::var("PROBE_COMPARE")
++        .ok()
++        .map(|names| names.split(',').map(|s| Some(s.to_owned())).collect())
++        .unwrap_or(vec![None]);
+     let mut cases: Vec<Case> = CASES
+         .iter()
+         .filter(|(name, _)| {
+@@ -265,9 +311,19 @@
+         .flat_map(|(name, turn, fill)| {
+             histories.iter().map(move |&history_seconds| (name, turn, fill, history_seconds))
+         })
+-        .map(|(name, turn, fill, history_seconds)| {
++        .flat_map(|(name, turn, fill, history_seconds)| {
++            variants
++                .iter()
++                .cloned()
++                .map(move |variant| (name, turn, fill, history_seconds, variant))
++        })
++        .map(|(name, turn, fill, history_seconds, variant)| {
+             let mut cb = callback(quad(fill), &grid, &read);
+             cb.rect = rect;
++            cb.grid.full_uploads = Arc::default();
++            if take.is_some() {
++                cb.shades.lut = Arc::new(palette.clone());
++            }
+             let mut resources = CallbackResources::default();
+             let mut sampling = atmosphere::CloudSampling::default();
+             if let Some(pixel) = cloud_pixel {
+@@ -278,7 +334,8 @@
+             }
+             resources.insert(sampling);
+             Case {
+-                name,
++                name: variant.clone().unwrap_or_else(|| name.to_owned()),
++
+                 fill,
+                 history_seconds,
+                 turn,
+@@ -298,8 +355,34 @@
+     // INTERLEAVED: one frame of every case per round, so a GPU that another
+     // process is also drawing on, or one that changes its clock mid-run, moves
+     // every case together rather than whichever ran last.
+-    for frame in 0..frames + 10 {
+-        for case in &mut cases {
++    eprintln!(
++        "confidence probe: seed={random}, warmup={warmup}, frames={frames}, recording={}",
++        take.is_some()
++    );
++    fn permutations(values: &mut [usize], at: usize, out: &mut Vec<Vec<usize>>) {
++        if at == values.len() {
++            out.push(values.to_vec());
++            return;
++        }
++        for i in at..values.len() {
++            values.swap(at, i);
++            permutations(values, at + 1, out);
++            values.swap(at, i);
++        }
++    }
++    assert_eq!(cases.len(), 4, "confidence probe expects two baselines and two splits");
++    let mut orders = Vec::new();
++    permutations(&mut (0..cases.len()).collect::<Vec<_>>(), 0, &mut orders);
++    for frame in 0..frames + warmup {
++        // Every 24 rounds includes every order once, shuffled by a fixed seed.
++        if frame % orders.len() == 0 {
++            for i in (1..orders.len()).rev() {
++                random = random.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
++                orders.swap(i, ((random >> 32) as usize) % (i + 1));
++            }
++        }
++        for (slot, &index) in orders[frame % orders.len()].iter().enumerate() {
++            let case = &mut cases[index];
+             let Case {
+                 turn,
+                 cb,
+@@ -312,14 +395,45 @@
+                 reversed_old,
+                 cpu_prepare,
+                 name,
++
+                 history_seconds,
+                 fill,
+                 ..
+             } = case;
++            PROBE_VARIANT_PATH.with_borrow_mut(|path| {
++                *path = if name.starts_with("base") {
++                    Some("/private/tmp/stars-original.wgsl".to_owned())
++                } else {
++                    None
++                }
++            });
++            STAR_SPLIT_OVERRIDE.set(if name == "unsplit" || name.starts_with("base") {
++                Some(false)
++            } else {
++                None
++            });
+             cb.pass_nr = frame as u64;
++            if let Some(slabs_in_take) = &recorded_slabs {
++                let first = frame * 48 / 60;
++                cb.grid.first_key = first as i64;
++                cb.grid.run = (first..first + slabs as usize)
++                    .map(|key| slabs_in_take[key % slabs_in_take.len()].clone())
++                    .collect();
++                cb.vertices = quad(*fill);
++                for vertex in &mut cb.vertices {
++                    vertex.slab += (frame * 48 % 60) as f32 / 60.0;
++                }
++            }
+             cb.atmosphere = turn.map(|turn| {
+                 let mut settings = SpectralAtmosphere::default();
+                 turn(&mut settings);
++                if let Some(density) = dial("PROBE_DENSITY") {
++                    settings.star_density = density;
++                }
++                if let Some(size) = dial("PROBE_STAR_SIZE") {
++                    settings.star_size_min = size;
++                    settings.star_size_max = size;
++                }
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -347,11 +461,11 @@
+                     // fraction, so this is `w / n` and not the pane's width
+                     // over the slab count.
+                     points_per_slab: points.x * *fill / slabs as f32,
+-                    now: 1.0 + frame as f64 / 144.0,
++                    now: 1.0 + frame as f64 / clock_hz,
+                 }
+             });
+             let mut encoder = device.create_command_encoder(&Default::default());
+-            drop(stamped_pass(&mut encoder, &stamp_view, 0));
++            PROBE_QUERY.with_borrow_mut(|q| *q = Some(set.clone()));
+             let prepare_start = std::time::Instant::now();
+             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+             let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
+@@ -381,10 +495,14 @@
+             let ticks: Vec<u64> =
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
+-            if frame >= 10 {
++            if frame >= warmup {
+                 assert!(
+                     ticks.iter().all(|&tick| tick > 0),
+                     "Metal returned a zero timestamp: {ticks:?}"
++                );
++                assert!(
++                    ticks[0] > 0 && ticks[0] <= ticks[1] && ticks[1] <= ticks[5],
++                    "invalid full timing bracket: {ticks:?}"
+                 );
+                 if ticks[5] < ticks[0] || ticks[5] < ticks[1] {
+                     eprintln!("reversed full interval {name} {history_seconds}s: {ticks:?}");
+@@ -403,10 +521,31 @@
+                 gpu_from_open_begin.push(ms(0, 5));
+                 gpu_old_bracket.push(ms(4, 6));
+                 cpu_prepare.push(prepare_ms);
++                use std::fmt::Write;
++                writeln!(
++                    &mut raw,
++                    "{},{},{},{:.9},{:.9},{:.9},{:.9}",
++                    frame - warmup,
++                    slot,
++                    name,
++                    ms(0, 5),
++                    ms(0, 5),
++                    wall_ms,
++                    prepare_ms
++                )
++                .unwrap();
+             }
+         }
+     }
+ 
++    for case in &cases {
++        let full_uploads = case.cb.grid.full_uploads.load(Ordering::Relaxed);
++        assert_eq!(full_uploads, 1, "unexpected full history upload for {}", case.name);
++        eprintln!("{} full history uploads={full_uploads}", case.name);
++    }
++    if let Ok(path) = std::env::var("PROBE_RAW") {
++        std::fs::write(path, raw).unwrap();
++    }
+     // Keep the historical split columns, but prefer the directly measured
+     // total: independent timestamp passes can overlap on a tile-based GPU.
+     // Split minima can be zero and do not establish an uncontended cost.

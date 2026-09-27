@@ -1,0 +1,14 @@
+{
+  "HARMONIGRAPH_SHADER_ASSETS": "source",
+  "PROBE_COMPARE": "base_a,base_b,split,unsplit",
+  "PROBE_CASE": "stars",
+  "PROBE_FILLS": "1",
+  "PROBE_FRAMES": "240",
+  "PROBE_WARMUP": "120",
+  "PROBE_SIZE": "2560x1440",
+  "PROBE_SEED": "137",
+  "PROBE_RAW": "/private/tmp/stars-ordered-split/small-stars-1440-137.csv",
+  "PROBE_HISTORY_SECONDS": "10",
+  "PROBE_PPP": "2",
+  "PROBE_STAR_SIZE": "0.5"
+}

@@ -1,0 +1,22 @@
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 2304x1296 px at 1 px/pt, 961 slabs of 1024 buckets
+confidence probe: seed=101, warmup=120, frames=240, recording=true
+first old-bracket reversal base_b 20s: [775178640593375, 775178646883125, 775178641029375, 775178648210500, 775178641315125, 775178666181750, 775178641294000, 775178652358750]
+first old-bracket reversal unsplit 20s: [775178673117500, 775178673362458, 775178673561083, 775178673596500, 775178674180833, 775178696309833, 775178673663833, 775178673678125]
+first old-bracket reversal split 20s: [775178795415250, 775178798632458, 775178796094750, 775178799218750, 775178796769375, 775178815630000, 775178796170458, 775178799341208]
+first old-bracket reversal base_a 20s: [775178843115000, 775178844746250, 775178844444958, 775178844960083, 775178845764750, 775178866140416, 775178845670208, 775178846092666]
+
+thread 'spectrogram::tests::timing::cloud_costs_by_style_and_dial' (67753125) panicked at crates/harmonigraph-render/src/spectrogram/tests/timing.rs:503:17:
+invalid full timing bracket: [775194973766541, 775194997710458, 775194974128875, 775194997739125, 775194974222125, 775194996447625, 775194974219916, 775194997749625]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    spectrogram::tests::timing::cloud_costs_by_style_and_dial
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 351 filtered out; finished in 31.50s
+
