@@ -122,12 +122,15 @@ fn poisoned_view() -> ViewConfig {
         spiral_bloom: nan,
         glow_reach: nan,
         atmosphere: AtmosphereSettings {
-            enabled: true,
-            material: base.atmosphere.material,
+            texture: base.atmosphere.texture,
+            material_style: base.atmosphere.material_style,
+            material_amount: nan,
+            material_scale: nan,
+            material_speed: nan,
             source_roughness: nan,
-            nebula_depth: nan,
-            nebula_scale: nan,
-            nebula_speed: nan,
+            texture_depth: nan,
+            texture_scale: nan,
+            texture_speed: nan,
             breath_amount: nan,
             breath_speed: nan,
         },
@@ -371,19 +374,25 @@ fn scene_floats(scene: &Scene) -> Floats {
     }
 
     let AtmosphereSettings {
-        enabled: _,
-        material: _,
+        texture: _,
+        material_style: _,
+        material_amount,
+        material_scale,
+        material_speed,
         source_roughness,
-        nebula_depth,
-        nebula_scale,
-        nebula_speed,
+        texture_depth,
+        texture_scale,
+        texture_speed,
         breath_amount,
         breath_speed,
     } = atmosphere;
+    f.one("atmosphere.material_amount", *material_amount);
+    f.one("atmosphere.material_scale", *material_scale);
+    f.one("atmosphere.material_speed", *material_speed);
     f.one("atmosphere.source_roughness", *source_roughness);
-    f.one("atmosphere.nebula_depth", *nebula_depth);
-    f.one("atmosphere.nebula_scale", *nebula_scale);
-    f.one("atmosphere.nebula_speed", *nebula_speed);
+    f.one("atmosphere.texture_depth", *texture_depth);
+    f.one("atmosphere.texture_scale", *texture_scale);
+    f.one("atmosphere.texture_speed", *texture_speed);
     f.one("atmosphere.breath_amount", *breath_amount);
     f.one("atmosphere.breath_speed", *breath_speed);
 

@@ -829,7 +829,7 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // two-pixel cells, many and faint) to near (32-pixel cells at the fresh `Size
 // range`, few, bright, soft), each sliding at the shared drift times its own
 // parallax factor. The CPU works out every slice's numbers and its drift
-// (`star_slices`); this prototype reads one native core per slice and a reduced halo image.
+// (`star_slices`); native composition reads one core per slice and its halo image.
 //
 // **Each star is worked out once a frame, not once per pixel.** Everything about
 // a star but its coverage — its life, jitter, the light under it, its

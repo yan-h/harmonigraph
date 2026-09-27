@@ -7,9 +7,10 @@ use super::section;
 use crate::widgets::{choice_row, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    GlowCurve, ShadowKernel, ShadowStyle, ViewConfig, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
-    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SHADOW_FALLOFF_MAX,
-    SHADOW_FALLOFF_MIN, SPECTRAL_SHADOW_MAX,
+    AtmosphereSettings, GlowCurve, ShadowKernel, ShadowStyle, ViewConfig, BREATH_SPEED_MAX,
+    BREATH_SPEED_MIN, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
+    GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
+    SPECTRAL_SHADOW_MAX,
 };
 
 /// The shadows under the lattice's ink, last in the Light section. They stay
@@ -172,6 +173,19 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      0 ms removes it immediately.",
                 );
         });
+    ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
+        ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
+            .percent().show(ui).on_hover_text("Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.");
+        ValueBar::new(&mut view.atmosphere.breath_speed, BREATH_SPEED_MIN..=BREATH_SPEED_MAX, "Breathing speed")
+            .unit(1.0, "×").show(ui).on_hover_text("1× is the original slow breathing. 0 keeps the halo at its normal brightness.");
+        crate::widgets::button_row(ui, |ui| {
+            if ui.button("Reset breathing").clicked() {
+                let fresh = AtmosphereSettings::default();
+                view.atmosphere.breath_amount = fresh.breath_amount;
+                view.atmosphere.breath_speed = fresh.breath_speed;
+            }
+        });
+    });
 }
 
 fn shadow_group(

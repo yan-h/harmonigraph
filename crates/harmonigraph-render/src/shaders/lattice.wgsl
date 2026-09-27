@@ -65,13 +65,22 @@ struct GlowParams {
     accumulation: f32,
 };
 
-struct NebulaParams {
+struct TextureParams {
     @align(16) depth: f32,
     scale: f32,
     drift: vec2<f32>,
     target_size: vec2<f32>,
-    material: u32,
+    style: u32,
+    padding: f32,
+};
+
+struct MaterialParams {
+    @align(16) amount: f32,
+    scale: f32,
+    drift: vec2<f32>,
+    style: u32,
     source_roughness: f32,
+    padding: vec2<f32>,
 };
 
 struct ShadowParams {
@@ -103,7 +112,8 @@ struct Uniforms {
     octave: OctaveParams,
     spectral: SpectralParams,
     glow: GlowParams,
-    nebula: NebulaParams,
+    texture: TextureParams,
+    material: MaterialParams,
     geometry_shadow: ShadowParams,
     marker_shadow: ShadowParams,
     shadow_target: ShadowTargetParams,
@@ -2913,7 +2923,7 @@ fn glow_level(carried: f32) -> f32 {
 /// Normalized scene position, shared by ring and marker wash. The sampler
 /// clamps edges and the transparent 1x1 stand-in answers zero with glow off.
 fn light_coord(frag_pos: vec2<f32>) -> vec2<f32> {
-    return frag_pos / max(u.nebula.target_size, vec2<f32>(1.0));
+    return frag_pos / max(u.texture.target_size, vec2<f32>(1.0));
 }
 
 /// One layer's angular soft-band width at radius `r`, in the node's uv: the arc
@@ -3357,20 +3367,20 @@ fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
 // their compiled arithmetic as well as their semantics.
 fn watercolor_glow_layer(light: vec2<f32>, uv: vec2<f32>, seed: f32) -> vec4<f32> {
     let original = glow_layer(light, uv);
-    if original.a <= 0.0 || u.nebula.source_roughness <= 0.0 {
+    if original.a <= 0.0 || u.material.source_roughness <= 0.0 {
         return original;
     }
     let d = length(uv);
     let span = max(glow_rim() + max(u.glow.reach, 0.0), 0.1);
     var skirt = GLOW_BASE * glow_curve_at(d, span);
-    if u.nebula.material == 3u && u.nebula.depth > 0.0 && u.nebula.source_roughness > 0.0 {
+    if u.material.style == 1u && u.material.amount > 0.0 && u.material.source_roughness > 0.0 {
         // Node-local domain warp and two scales of breakup, before overlap.
         // The fixed Reach still bounds the source; the last 12% fades any
         // outward warp back to the ordinary edge rather than clipping a quad.
-        let rough = u.nebula.source_roughness * u.nebula.depth;
+        let rough = u.material.source_roughness * u.material.amount;
         let p = uv / span * 4.0;
         let offset = vec2<f32>(seed % 127.0, floor(seed / 127.0) % 127.0);
-        let drift = u.nebula.drift * 2.0;
+        let drift = u.material.drift * 2.0;
         let warp = (nebula_noise(p * 1.8 + offset - drift) - 0.5) * span * 0.25;
         let lobes = sin(atan2(uv.y, uv.x) * 5.0 + (seed % 6283.0) * 0.001 + drift.x) * span * 0.07
             * smoothstep(0.15, 0.5, d / span);
@@ -3440,7 +3450,7 @@ fn glow_gamma(rgb: vec3<f32>) -> vec3<f32> {
 
 // Integer hashing avoids a per-pixel transcendental and keeps spatial noise
 // repeatable. The field is shared across the pane: overlapping halos reveal
-// one material, with no separate texture stamped onto each note.
+// one texture, with no separate pattern stamped onto each note.
 fn nebula_hash(cell: vec2<i32>) -> f32 {
     var n = bitcast<u32>(cell.x) * 0x9e3779b9u ^ bitcast<u32>(cell.y);
     n = (n ^ (n >> 16u)) * 0x7feb352du;
@@ -3460,18 +3470,18 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
     );
 }
 
-fn lattice_material(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32) -> f32 {
+fn lattice_texture(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32) -> f32 {
     let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
     let q = p + (warp - 0.5) * 1.2;
     // One resolve texel in material coordinates, including reduced render scales.
-    let footprint = 5.0 / (u.nebula.scale * f32(textureDimensions(glow_sum).y));
-    if u.nebula.material == 1u {
+    let footprint = 5.0 / (u.texture.scale * f32(textureDimensions(glow_sum).y));
+    if u.texture.style == 1u {
         // Actual light coverage supplies the islands; noise only bends their
         // boundaries. No history means a camera move cannot leave old islands.
-        let phase = sqrt(alpha) * (48.0 / u.nebula.scale)
+        let phase = sqrt(alpha) * (48.0 / u.texture.scale)
             + (warp.x - 0.5) * 2.0 + drift.x * 2.0;
         let terrace = 0.5 + 0.5 * sin(phase);
-        let phase_width = alpha_width * 24.0 / (u.nebula.scale * sqrt(max(alpha, 0.001)));
+        let phase_width = alpha_width * 24.0 / (u.texture.scale * sqrt(max(alpha, 0.001)));
         return 0.15 + 0.85 * mix(terrace * terrace, 0.375, smoothstep(0.7, 2.5, phase_width));
     }
     // Artistic interference: crossed curved wave fronts in a shared medium,
@@ -3484,28 +3494,28 @@ fn lattice_material(p: vec2<f32>, drift: vec2<f32>, alpha: f32, alpha_width: f32
 
 // Keep Clouds in its original function to preserve its Metal arithmetic and
 // byte-exact default frames while the other materials evolve independently.
-fn material_light(light: vec4<f32>, pixel: vec2<f32>, contour: vec2<f32>) -> vec4<f32> {
-    if u.nebula.material == 0u {
+fn texture_light(light: vec4<f32>, pixel: vec2<f32>, contour: vec2<f32>) -> vec4<f32> {
+    if u.texture.style == 0u {
         return nebula_light(light, pixel);
     }
-    if u.nebula.depth <= 0.0 || light.a <= 0.0 || u.nebula.material == 3u || u.nebula.material == 4u {
+    if u.texture.depth <= 0.0 || light.a <= 0.0 {
         return light;
     }
-    let p = (pixel - u.nebula.target_size * 0.5)
-        / u.nebula.target_size.y * (5.0 / u.nebula.scale);
-    let density = lattice_material(p, u.nebula.drift, contour.x, contour.y);
-    return light * mix(1.0, density, u.nebula.depth);
+    let p = (pixel - u.texture.target_size * 0.5)
+        / u.texture.target_size.y * (5.0 / u.texture.scale);
+    let density = lattice_texture(p, u.texture.drift, contour.x, contour.y);
+    return light * mix(1.0, density, u.texture.depth);
 }
 
 fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
-    if u.nebula.depth <= 0.0 || light.a <= 0.0 {
+    if u.texture.depth <= 0.0 || light.a <= 0.0 {
         return light;
     }
     // Aspect-correct pane coordinates, independent of DPI and render scale.
     // Camera rebasing cannot reset this field; notes move through the medium.
-    let p = (pixel - u.nebula.target_size * 0.5)
-        / u.nebula.target_size.y * (5.0 / u.nebula.scale);
-    let drift = u.nebula.drift;
+    let p = (pixel - u.texture.target_size * 0.5)
+        / u.texture.target_size.y * (5.0 / u.texture.scale);
+    let drift = u.texture.drift;
     let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
     let cloud = nebula_noise(p + warp * 1.2 + drift);
     let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
@@ -3513,7 +3523,7 @@ fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
     // and the overlap rule's peak bound. No glow means no nebula light at all.
     // Applying once after the fold also textures dense saturated chords.
-    return light * mix(1.0, density, u.nebula.depth);
+    return light * mix(1.0, density, u.texture.depth);
 }
 
 /// Screen under a fixed full-strength ceiling, independent of note count,
@@ -3587,24 +3597,24 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
         return vec4<f32>(0.0);
     }
     let pixel = vec2<i32>(pos.xy);
-    let scene_pixel = pos.xy * u.nebula.target_size / vec2<f32>(textureDimensions(glow_sum));
+    let scene_pixel = pos.xy * u.texture.target_size / vec2<f32>(textureDimensions(glow_sum));
     let sum = textureLoad(glow_sum, pixel, 0);
     let bounded = textureLoad(glow_screen, pixel, 0).xy;
     let accumulated = textureLoad(glow_accumulated, pixel, 0);
     // The accumulated coverage is the contour field even when the color
     // overlap dial changes. Derivatives are taken before coverage branches.
     var contour = vec2<f32>(0.0);
-    if u.nebula.material == 1u {
+    if u.texture.style == 1u {
         contour = vec2<f32>(accumulated.a, fwidth(accumulated.a));
     }
     // The gamma screen is also the exact sole contribution (up to target
     // quantization), avoiding a nonlinear round trip for isolated notes.
     if sum.w <= 1.0 {
-        return material_light(accumulated, scene_pixel, contour);
+        return texture_light(accumulated, scene_pixel, contour);
     }
     let accumulation = clamp(u.glow.accumulation, 0.0, 1.0);
     if accumulation >= 1.0 {
-        return material_light(accumulated, scene_pixel, contour);
+        return texture_light(accumulated, scene_pixel, contour);
     }
     let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
     let peak_luminance = glow_linear(vec3<f32>(peak)).x;
@@ -3614,7 +3624,7 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
     let total = dot(rgb, GLOW_LUMINANCE);
     let light = min(screen, 1.0) * peak_luminance;
     if total <= 0.0 {
-        return material_light(mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation), scene_pixel, contour);
+        return texture_light(mix(vec4<f32>(0.0, 0.0, 0.0, peak * coverage), accumulated, accumulation), scene_pixel, contour);
     }
     var linear = rgb * (light / total);
     let largest = max(max(linear.x, linear.y), linear.z);
@@ -3624,7 +3634,7 @@ fn fs_glow_resolve(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> 
     }
     let colour = min(glow_gamma(max(linear, vec3<f32>(0.0))), vec3<f32>(peak));
     let alpha = max(peak * coverage, max(max(colour.x, colour.y), colour.z));
-    return material_light(mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation), scene_pixel, contour);
+    return texture_light(mix(vec4<f32>(colour, min(alpha, peak)), accumulated, accumulation), scene_pixel, contour);
 }
 
 /// What a resting marker paints; see [`node_paint`] for why the entry points

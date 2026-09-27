@@ -124,14 +124,24 @@ uniform_group! {
     }
 }
 uniform_group! {
-    /// A shared cloud field modulates the completed glow, never the ink history.
-    struct NebulaParams {
+    /// A shared texture modulates the completed glow, never the ink history.
+    struct TextureParams {
         depth: f32,
         scale: f32,
         drift: Float2,
         target_size: Float2,
-        material: u32,
+        style: u32,
+        padding: f32,
+    }
+}
+uniform_group! {
+    struct MaterialParams {
+        amount: f32,
+        scale: f32,
+        drift: Float2,
+        style: u32,
         source_roughness: f32,
+        padding: Float2,
     }
 }
 uniform_group! {
@@ -171,7 +181,8 @@ uniform_group! {
         octave: OctaveParams,
         spectral: SpectralParams,
         glow: GlowParams,
-        nebula: NebulaParams,
+        texture: TextureParams,
+        material: MaterialParams,
         geometry_shadow: ShadowParams,
         marker_shadow: ShadowParams,
         shadow_target: ShadowTargetParams,

@@ -52,6 +52,11 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
     let Some(glow) = &offscreen.glow else {
         return vec![0; (shooter.size[0] * shooter.size[1] * 4) as usize];
     };
+    read_glow_binding(shooter, &glow.bind_group)
+}
+
+fn read_glow_binding(shooter: &Shooter, binding: &wgpu::BindGroup) -> Vec<u8> {
+    let resources = shooter.resources.get::<LatticeResources>().unwrap();
     let shader = blit_module(&shooter.device);
     let pipeline = create_post_pipeline(
         &shooter.device,
@@ -69,7 +74,7 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
         wgpu::Color::TRANSPARENT,
         |pass| {
             pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &glow.bind_group, &[]);
+            pass.set_bind_group(0, binding, &[]);
             pass.draw(0..4, 0..1);
         },
     );
@@ -96,17 +101,17 @@ fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
     scene.glow_timing.as_mut().unwrap().now = 0.0;
     assert_eq!(steady, glow(&mut shooter, &scene), "zero depth must stop breathing");
     scene.atmosphere.breath_amount = 1.0;
-    scene.atmosphere.enabled = false;
-    assert_eq!(steady, glow(&mut shooter, &scene), "the master switch includes breathing");
+    scene.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+    scene.glow_timing.as_mut().unwrap().now = 4.0;
+    assert_ne!(steady, glow(&mut shooter, &scene), "breathing works with both stages off");
 }
 
 #[test]
-fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
+fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    use harmonigraph_scene::LatticeMaterial;
+    use harmonigraph_scene::LatticeTexture;
     let mut patterns = Vec::new();
-    for material in
-        [LatticeMaterial::Clouds, LatticeMaterial::Contours, LatticeMaterial::Interference]
+    for material in [LatticeTexture::Clouds, LatticeTexture::Contours, LatticeTexture::Interference]
     {
         for (levels, accumulation) in
             [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)]
@@ -120,15 +125,15 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
                 pitch: 0.0,
                 ..Default::default()
             };
-            scene.atmosphere.material = material;
+            scene.atmosphere.texture = material;
             // The glow target is half-resolution: resolve the wave fringes
             // rather than testing their subpixel average at this small size.
-            scene.atmosphere.nebula_scale = 4.0;
+            scene.atmosphere.texture_scale = 4.0;
             scene.atmosphere.breath_amount = 0.0;
             scene.glow_timing =
                 Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
             let smooth = glow(&mut shooter, &scene);
-            scene.atmosphere.nebula_depth = 1.0;
+            scene.atmosphere.texture_depth = 1.0;
             let textured = glow(&mut shooter, &scene);
             if levels.len() == 1 {
                 assert!(
@@ -174,14 +179,14 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
             let later = read_glow(&shooter);
             assert_ne!(textured, later, "materials must drift inside a held glow");
             assert_eq!(later, glow(&mut shooter, &scene), "texture cannot depend on history");
-            scene.atmosphere.nebula_speed = 0.0;
+            scene.atmosphere.texture_speed = 0.0;
             assert_eq!(
                 textured,
                 glow(&mut shooter, &scene),
                 "zero speed freezes the material field"
             );
-            scene.atmosphere.enabled = false;
-            assert_eq!(smooth, glow(&mut shooter, &scene), "master off restores the smooth glow");
+            scene.atmosphere.texture = LatticeTexture::None;
+            assert_eq!(smooth, glow(&mut shooter, &scene), "texture off restores the smooth glow");
         }
     }
 }
@@ -190,15 +195,15 @@ fn materials_texture_the_combined_light_without_creating_or_recoloring_it() {
 fn watercolor_roughness_motion_and_silence_use_the_production_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.material = harmonigraph_scene::LatticeMaterial::Watercolor;
+    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.nebula_depth = 0.0;
-    scene.atmosphere.nebula_scale = 1.0;
-    scene.atmosphere.nebula_speed = 1.0;
+    scene.atmosphere.material_amount = 0.0;
+    scene.atmosphere.material_scale = 1.0;
+    scene.atmosphere.material_speed = 1.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
     let baseline = glow(&mut shooter, &scene);
-    scene.atmosphere.nebula_depth = 1.0;
+    scene.atmosphere.material_amount = 1.0;
     let smooth = glow(&mut shooter, &scene);
     let changed = |a: &[u8], b: &[u8]| {
         a.chunks_exact(4)
@@ -222,17 +227,17 @@ fn watercolor_roughness_motion_and_silence_use_the_production_light() {
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
     assert_ne!(rough, read_glow(&shooter), "held notes still show material motion");
-    scene.atmosphere.nebula_speed = 0.0;
+    scene.atmosphere.material_speed = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(rough, read_glow(&shooter), "zero speed freezes source and washes");
-    scene.atmosphere.nebula_depth = 0.0;
+    scene.atmosphere.material_amount = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "depth zero restores the production smooth source");
-    scene.atmosphere.nebula_depth = 1.0;
-    scene.atmosphere.enabled = false;
+    scene.atmosphere.material_amount = 1.0;
+    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::None;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "disabled material is exact");
-    scene.atmosphere.enabled = true;
+    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
     assert_eq!(rough, read_glow(&shooter));
     for node in &mut scene.nodes {
@@ -250,15 +255,15 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
     use harmonigraph_scene::LatticeMaterial::{Mosaic, Watercolor};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.material = Mosaic;
+    scene.atmosphere.material_style = Mosaic;
     scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.nebula_depth = 0.0;
-    scene.atmosphere.nebula_scale = 1.0;
-    scene.atmosphere.nebula_speed = 1.0;
+    scene.atmosphere.material_amount = 0.0;
+    scene.atmosphere.material_scale = 1.0;
+    scene.atmosphere.material_speed = 1.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
     let baseline = glow(&mut shooter, &scene);
-    scene.atmosphere.nebula_depth = 1.0;
+    scene.atmosphere.material_amount = 1.0;
     let mosaic = glow(&mut shooter, &scene);
     let changed = baseline
         .chunks_exact(4)
@@ -271,12 +276,12 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
         assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
         assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
     }
-    scene.atmosphere.material = Watercolor;
+    scene.atmosphere.material_style = Watercolor;
     shooter.shot_again(&scene);
     let wash = read_glow(&shooter);
     assert_ne!(mosaic, wash, "same-sized tiles must switch geometry");
     assert_eq!(wash, glow(&mut shooter, &scene), "switched wash matches a fresh pane");
-    scene.atmosphere.material = Mosaic;
+    scene.atmosphere.material_style = Mosaic;
     shooter.shot_again(&scene);
     assert_eq!(mosaic, read_glow(&shooter), "switching back must rebake Mosaic");
     scene.atmosphere.source_roughness = 1.0;
@@ -285,17 +290,17 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
     assert_ne!(mosaic, read_glow(&shooter), "held notes show material motion");
-    scene.atmosphere.nebula_speed = 0.0;
+    scene.atmosphere.material_speed = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(mosaic, read_glow(&shooter), "zero speed freezes the facets");
-    scene.atmosphere.nebula_depth = 0.0;
+    scene.atmosphere.material_amount = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "zero depth restores smooth light");
-    scene.atmosphere.nebula_depth = 1.0;
-    scene.atmosphere.enabled = false;
+    scene.atmosphere.material_amount = 1.0;
+    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::None;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "disabled texture restores smooth light");
-    scene.atmosphere.enabled = true;
+    scene.atmosphere.material_style = Mosaic;
     shooter.shot_again(&scene);
     assert_eq!(mosaic, read_glow(&shooter));
     for node in &mut scene.nodes {
@@ -310,10 +315,10 @@ fn a_rough_single_node_cannot_exceed_the_fixed_glow_peak() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
     scene.nodes[0].lattice_pos = harmonigraph_core::LatticePos::new(0, 7, 0);
-    scene.atmosphere.material = harmonigraph_scene::LatticeMaterial::Watercolor;
-    scene.atmosphere.nebula_depth = 1.0;
+    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+    scene.atmosphere.material_amount = 1.0;
     scene.atmosphere.source_roughness = 1.0;
-    scene.atmosphere.nebula_speed = 0.0;
+    scene.atmosphere.material_speed = 0.0;
     scene.atmosphere.breath_amount = 0.0;
     // A flat-topped falloff and this stable seed put the amplified warped
     // source above its nominal peak unless the source itself is capped.
@@ -321,7 +326,7 @@ fn a_rough_single_node_cannot_exceed_the_fixed_glow_peak() {
     shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
         // Keep the material selector to reach the rough splat, but inspect
         // its undisplaced source through the production resolve.
-        cb.uniforms.nebula.scale = 0.0001;
+        cb.uniforms.material.scale = 0.0001;
     });
     let picture = read_glow(&shooter);
     let maximum = picture.chunks_exact(4).map(|p| p[3]).max().unwrap();
@@ -343,6 +348,151 @@ fn rough_source_identity_does_not_become_a_gaussian_shadow_kind() {
         }
     });
     assert_eq!(expected, seeded, "only the splat may read the stable source identity");
+}
+
+#[test]
+fn textures_feed_both_materials_before_displacement() {
+    use harmonigraph_scene::{LatticeMaterial, LatticeTexture};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let changed = |a: &[u8], b: &[u8]| {
+        a.chunks_exact(4)
+            .zip(b.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+            .count()
+    };
+    for texture in [LatticeTexture::Clouds, LatticeTexture::Contours, LatticeTexture::Interference]
+    {
+        for material in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
+            let mut scene = scene(&[1.0, 1.0], 0.75, true);
+            scene.atmosphere.breath_amount = 0.0;
+            scene.atmosphere.texture = texture;
+            scene.atmosphere.texture_depth = 0.85;
+            scene.atmosphere.texture_scale = 4.0;
+            scene.glow_timing =
+                Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+            let texture_only = glow(&mut shooter, &scene);
+            scene.atmosphere.material_style = material;
+            let combined = glow(&mut shooter, &scene);
+            // Read the actual material input, proving order rather than just two visible effects.
+            let resources = shooter.resources.get::<LatticeResources>().unwrap();
+            let source = &resources.panes[&shooter.pane]
+                .offscreen
+                .as_ref()
+                .unwrap()
+                .glow
+                .as_ref()
+                .unwrap()
+                .material_source
+                .as_ref()
+                .unwrap()
+                .view;
+            let source_binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("test_material_input"),
+                layout: &resources.compiled.filter_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+                    },
+                ],
+            });
+            assert_eq!(texture_only, read_glow_binding(&shooter, &source_binding));
+            scene.atmosphere.texture = LatticeTexture::None;
+            let material_only = glow(&mut shooter, &scene);
+            assert!(
+                changed(&combined, &texture_only) > 500,
+                "{texture:?}/{material:?}: visible displacement"
+            );
+            assert!(
+                changed(&combined, &material_only) > 500,
+                "{texture:?}/{material:?}: visible texture"
+            );
+            for pixel in combined.chunks_exact(4) {
+                assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1));
+                assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
+            }
+            scene.atmosphere.texture = texture;
+            for node in &mut scene.nodes {
+                node.glow.level = 0.0;
+            }
+            shooter.shot_again(&scene);
+            assert!(
+                read_glow(&shooter).iter().all(|c| *c == 0),
+                "combined stages must clear in silence"
+            );
+        }
+    }
+}
+
+#[test]
+fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
+    use harmonigraph_scene::{LatticeMaterial, LatticeTexture};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.texture_depth = 0.85;
+    scene.atmosphere.texture_scale = 2.0;
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.source_roughness = 0.7;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.texture_speed = 0.0;
+    scene.atmosphere.material_speed = 0.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+    let still = glow(&mut shooter, &scene);
+    let geometry = |shooter: &Shooter| {
+        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
+            .material_tile
+            .as_ref()
+            .map(|tile| tile.geometry_binding())
+    };
+    let original_tile = geometry(&shooter).unwrap();
+    scene.glow_timing.as_mut().unwrap().now = 8.0;
+    shooter.shot_again(&scene);
+    assert_eq!(still, read_glow(&shooter), "both zero speeds freeze held light");
+    for (texture_speed, material_speed) in [(1.0, 0.0), (0.0, 1.0)] {
+        scene.atmosphere.texture_speed = texture_speed;
+        scene.atmosphere.material_speed = material_speed;
+        shooter.shot_again(&scene);
+        assert_ne!(still, read_glow(&shooter), "each stage moves independently");
+        assert_eq!(
+            Some(original_tile.clone()),
+            geometry(&shooter),
+            "motion does not rebake geometry"
+        );
+    }
+    // Texture edits and positive material amount never invalidate active geometry.
+    scene.atmosphere.texture = LatticeTexture::Interference;
+    scene.atmosphere.texture_scale = 4.0;
+    scene.atmosphere.material_amount = 0.6;
+    shooter.shot_again(&scene);
+    assert_eq!(Some(original_tile), geometry(&shooter));
+    assert_eq!(read_glow(&shooter), glow(&mut shooter, &scene));
+    // Crossing the bypass boundary deliberately releases resources; reactivation is fresh.
+    for (texture, material, amount) in [
+        (LatticeTexture::None, LatticeMaterial::Watercolor, 0.6),
+        (LatticeTexture::Clouds, LatticeMaterial::None, 0.6),
+        (LatticeTexture::Clouds, LatticeMaterial::Watercolor, 0.0),
+        (LatticeTexture::Clouds, LatticeMaterial::Watercolor, 0.6),
+        (LatticeTexture::Clouds, LatticeMaterial::Mosaic, 0.6),
+    ] {
+        scene.atmosphere.texture = texture;
+        scene.atmosphere.material_style = material;
+        scene.atmosphere.material_amount = amount;
+        shooter.shot_again(&scene);
+        assert_eq!(geometry(&shooter).is_some(), material != LatticeMaterial::None && amount > 0.0);
+        assert_eq!(read_glow(&shooter), glow(&mut shooter, &scene));
+    }
+    scene.render_scale = 1.5;
+    shooter.shot_again(&scene);
+    assert_eq!(
+        read_glow(&shooter),
+        glow(&mut shooter, &scene),
+        "resize replaces the material source"
+    );
 }
 
 fn linear(gamma: f64) -> f64 {
@@ -621,7 +771,8 @@ fn dense_faint_overlap_order_precision() {
             .map(|i| if i < count * 500 / 4096 { 0.000382 / 0.8 } else { 0.004165 / 0.8 })
             .collect();
         let mut scene = scene(&levels, 1.0, false);
-        scene.atmosphere.enabled = false;
+        scene.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+        scene.atmosphere.breath_amount = 0.0;
         scene.pitch_lut = std::array::from_fn(|i| {
             if i * 2 < harmonigraph_scene::PITCH_LUT_N {
                 glam::Vec4::new(1.0, 0.15, 0.1, 1.0)

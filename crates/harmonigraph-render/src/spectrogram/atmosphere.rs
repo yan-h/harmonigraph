@@ -220,8 +220,8 @@ impl StarLayout {
     fn at(cells: [f32; STAR_SLICES], floor: f32, aspect: f32) -> Self {
         let cells = cells.map(|cell| cell.max(floor));
         let pane = [STAR_PANE * aspect, STAR_PANE];
-        // Keep the original three-cell bounds for this trial. The nearest
-        // 2x2 walk is contained in them, so atlas ownership stays unchanged.
+        // Retain the padded atlas bounds needed by the halo
+        // pass's 3x3 walk around each pixel's nominal cell.
         let grids = cells.map(|cell| {
             pane.map(|span| ((span / cell).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN))
         });
