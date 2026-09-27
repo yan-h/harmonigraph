@@ -7,8 +7,3 @@ set -euo pipefail
 case "${1:-}" in
   *[!0]* | '') exit 0 ;;
 esac
-
-ROOT=$(git rev-parse --show-toplevel)
-if [ -x "$ROOT/.claude/ensure-shared-skills.sh" ]; then
-  "$ROOT/.claude/ensure-shared-skills.sh" "$ROOT"
-fi

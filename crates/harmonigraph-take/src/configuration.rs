@@ -27,7 +27,7 @@ impl Default for PolicyRecord {
 impl From<PolicyConfig> for PolicyRecord {
     fn from(p: PolicyConfig) -> Self {
         Self {
-            version: p.version,
+            version: 3,
             radius: p.radius,
             axes: p.axes,
             pitch_flexibility: p.pitch_flexibility,
@@ -44,7 +44,6 @@ impl From<PolicyConfig> for PolicyRecord {
 impl From<PolicyRecord> for PolicyConfig {
     fn from(p: PolicyRecord) -> Self {
         Self {
-            version: p.version,
             radius: p.radius,
             axes: p.axes,
             pitch_flexibility: p.pitch_flexibility,

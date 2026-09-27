@@ -102,23 +102,11 @@ pub fn derive_scene_with_extra(
         let world_pos = lattice_to_world(centered);
 
         // The sevens layer: how far off the home sheet this node sits
-        // decides how small it draws and whether it carries a comma.
+        // decides how small it draws.
         // Distance, not signed depth — the home sheet is the ground, and a
         // sheet in front of it is no more the subject than one behind (see
         // `ViewConfig::sevens_size`).
         let sheets = centered.sevens.unsigned_abs();
-        let (scale, comma) = if sheets == 0 {
-            (1.0, 0.0)
-        } else {
-            // The node this one shares a LETTER with, on the home sheet: the
-            // letter walk uses `threes - 2*sevens`, so undoing the sevens
-            // term two fifths at a time lands on the same letter and
-            // accidental. Not the same name — the septimal mark the name now
-            // carries is exactly what separates them.
-            let namesake =
-                LatticePos::new(pos.threes - 2 * centered.sevens, pos.fives, center.sevens);
-            (sevens_size.powi(sheets as i32), wrapped_cents(node_pc, tuning.pitch_class(namesake)))
-        };
         nodes.push(NodeInstance {
             lattice_pos: pos,
             world_pos,
@@ -129,8 +117,7 @@ pub fn derive_scene_with_extra(
             octaves: [0.0; OCTAVE_SLOTS],
             hovered: hovered == Some(pos),
             on_home: pos.sevens == view.center_sevens,
-            scale,
-            comma,
+            scale: sevens_size.powi(sheets as i32),
             cents: node_cents,
             melody_slots: 0,
             bass_slots: 0,
@@ -229,20 +216,6 @@ pub fn derive_scene_with_extra(
         glow_rows: nodes_len,
         glow_timing: None,
         atmosphere: view.atmosphere.sanitized(),
-    }
-}
-
-/// Signed cents from `to` to `from`, folded into ±600 — the short way round
-/// the octave. Pitch classes wrap, so the raw difference between a node and
-/// its namesake can come out an octave off and read as a 1173-cent "comma".
-fn wrapped_cents(from: harmonigraph_core::PitchClass, to: harmonigraph_core::PitchClass) -> f32 {
-    let d = from.to_cents() - to.to_cents();
-    if d > 600.0 {
-        d - 1200.0
-    } else if d < -600.0 {
-        d + 1200.0
-    } else {
-        d
     }
 }
 

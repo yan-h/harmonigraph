@@ -249,7 +249,6 @@ The flags worth knowing (`--help` lists them all):
 | flag | what it does |
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
-| `--align` | where the soundtrack's first sample falls, in seconds of take time; `off` (the default) leaves it where its own clock says |
 | `--layout` | `side-by-side` or `stacked`; omitted uses the captured placement and proportion |
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Resolution, whose fresh short edge is 1440 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
@@ -308,7 +307,7 @@ timing: a 5442-frame export in 774.6 s, 718.9 s of it drawing at 7.6 fps — ui+
 The shares are of the drawing clock;
 the gap between it and the total is setup plus the encoder's backlog after the last frame.
 
-## Recorded audio and manual alignment
+## Recorded audio
 
 The renderer uses the WAV named in the take header, beside the `.take` file, for both spectrum analysis and the soundtrack.
 Keep the two files together when moving a take.
@@ -316,17 +315,8 @@ If the named WAV is missing, the renderer warns and exports without audio or spe
 Separate-WAV replacement is no longer supported;
 `-a` and `--audio` are rejected as unknown options.
 
-The recording's first sample is stamped with its take time in the header, so sound and picture normally align without an offset to work out.
-If manual correction is needed, set the take-time position of that first sample:
-
-```sh
-harmonigraph-offline take.take --align 12.5 --out piece.mp4
-```
-
-This changes placement for both the spectrum and the muxed soundtrack, including when `--start` crops the render.
-`--align off` restores the header's recorded start, or zero if no start was saved.
-Nothing measures the offset for you.
-`--align auto` remains unsupported.
+The recording's first sample is stamped with its take time in the header, so sound and picture align without an offset to work out.
+An unstamped recording starts at zero; manual alignment overrides are no longer supported.
 
 ## Layouts
 

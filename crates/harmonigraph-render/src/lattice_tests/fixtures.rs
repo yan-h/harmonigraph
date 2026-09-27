@@ -83,7 +83,6 @@ pub(super) fn standalone_marker(
         hovered: false,
         on_home: true,
         scale: 1.0,
-        comma: 0.0,
         cents: 0.0,
         melody_slots: 0,
         bass_slots: 0,
@@ -141,7 +140,6 @@ pub(super) fn parity_scene() -> Scene {
             // exercises the scaled billboard as well. What every node here
             // knocks out is `parity_scene`'s own Shadow.
             scale: if i % 2 == 0 { 1.0 } else { 0.55 },
-            comma: if i % 2 == 0 { 0.0 } else { -27.26 },
             cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass, and
             // one wearing both — on its two lit slots, so the pair is drawn as
@@ -521,7 +519,6 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         hovered: false,
         on_home: true,
         scale: 1.0,
-        comma: 0.0,
         cents: 0.0,
         melody_slots,
         bass_slots,

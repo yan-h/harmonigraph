@@ -592,47 +592,6 @@ fn sevens_size_never_enlarges_and_never_vanishes() {
 }
 
 #[test]
-fn the_comma_measures_the_node_against_its_own_namesake() {
-    // `note_name` walks the fifths with `threes + fives*4 - sevens*2`, so a
-    // sevens step lands on the LETTER two fifths down. The comma is the
-    // distance to that node — the septimal comma, 64/63, ~27 cents at just
-    // intonation.
-    let view = ViewConfig { min_sevens: -1, max_sevens: 1, ..ViewConfig::default() };
-    let tuning = Tuning::just();
-    let scene = scene_of(&NoteTracker::new(), &tuning, &view, &plain_frame(), 0.0);
-
-    let seventh = LatticePos::new(0, 0, 1);
-    let namesake = LatticePos::new(-2, 0, 0);
-    // The premise: the two share a letter and an accidental, which is what
-    // makes one the other's namesake. They are no longer the same NAME —
-    // the septimal mark is what tells them apart, and this comma is the
-    // distance that mark stands for.
-    let (a, b) = (seventh.note_name(), namesake.note_name());
-    assert_eq!((a.letter, a.accidental_mark()), (b.letter, b.accidental_mark()));
-    assert_ne!(a.to_string(), b.to_string());
-    let comma = node_at(&scene, seventh).comma;
-    assert!((comma - -27.26).abs() < 0.05, "7/4 sits a septimal comma below 16/9, got {comma}");
-    // The other direction is the same distance the other way, and the home
-    // sheet has no namesake to measure against.
-    let below = node_at(&scene, LatticePos::new(0, 0, -1)).comma;
-    assert!((below - 27.26).abs() < 0.05, "got {below}");
-    assert_eq!(node_at(&scene, LatticePos::ORIGIN).comma, 0.0);
-}
-
-#[test]
-fn the_comma_takes_the_short_way_round_the_octave() {
-    // Pitch classes wrap, so a raw subtraction can come out an octave off
-    // and report a 1173-cent "comma". Two sevens steps land far enough
-    // round the circle to catch it.
-    let view = ViewConfig { min_sevens: -3, max_sevens: 3, ..ViewConfig::default() };
-    let scene = scene_of(&NoteTracker::new(), &Tuning::just(), &view, &plain_frame(), 0.0);
-    for sevens in [-3, -2, -1, 1, 2, 3] {
-        let comma = node_at(&scene, LatticePos::new(0, 0, sevens)).comma;
-        assert!(comma.abs() <= 600.0, "sevens {sevens}: comma {comma} is the long way round");
-    }
-}
-
-#[test]
 fn the_scene_carries_the_ground_the_pane_stands_on() {
     // The ground the lattice pane paints is the skin's picture ground; the
     // scene carries the same colour so that a shell composing its panes

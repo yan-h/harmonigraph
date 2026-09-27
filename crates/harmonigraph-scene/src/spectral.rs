@@ -466,6 +466,7 @@ impl RingGate {
     /// limits names octaves no note can reach, and they are wedges on screen
     /// like any other — a partial the analyzer hears there is a reason to draw
     /// the ring, and a slot the wheel does not draw is not.
+    #[cfg(test)]
     pub fn peak(&self, layout: &OctaveLayout, cents: f32) -> f32 {
         let (low, high) = layout.slots(cents);
         (low..=high)
@@ -493,17 +494,16 @@ impl RingGate {
     /// `>=` inside `opens`, so that a gate at [`SPECTRAL_GATE_MIN`] admits
     /// every node — the floor is the bar's off position and has to give back
     /// the ungated picture, silent rings and all.
+    #[cfg(test)]
     pub fn draws(&self, layout: &OctaveLayout, cents: f32) -> bool {
         RingFade::settled(self).level(layout, cents) > 0.0
     }
 
-    /// Whether a wedge reading bucket `bucket` reaches the gate — the same
-    /// question [`draws`](Self::draws) asks of a whole node, asked of one
-    /// bucket of the grid so that [`RingFade`] can carry the answer across
-    /// frames.
+    /// Whether a wedge reading bucket `bucket` reaches the gate, so that
+    /// [`RingFade`] can carry the answer across frames.
     ///
     /// Read at the bucket's own centre, which is where a wedge sitting on it
-    /// reads: [`level_at`] interpolates between the two buckets a pitch falls
+    /// reads: the ring interpolates between the two buckets a pitch falls
     /// between, and at a centre that blend is the bucket itself.
     ///
     /// `held` is whether this bucket is ALREADY open, which is what makes the
@@ -555,7 +555,7 @@ impl RingGate {
 /// grid: which nodes are in view is the camera's business and changes as it
 /// pans, where the spectrum is the same measurement wherever the lattice is
 /// looked at from. A node's own level is then a read of this grid at each of
-/// its wedges, exactly as [`RingGate::peak`] is.
+/// its wedges, exactly as `RingGate::peak` is.
 ///
 /// What that costs is stated rather than hidden: a wedge landing BETWEEN an
 /// open bucket and a closed one wears a FRACTION of its ring, where the gate's
@@ -570,7 +570,7 @@ impl RingGate {
 /// buys a hard yes-or-no per node at the price of moving the edge by up to half
 /// a bucket and putting the whole of a node's annulus on which side of a centre
 /// its wedge fell. The ring's own reading is interpolated between buckets
-/// ([`level_at`], the shader's `spectrum_color_at`), so a gate that stepped where the
+/// (`level_at`, the shader's `spectrum_color_at`), so a gate that stepped where the
 /// reading ramps would take the ring off a node whose wedge is visibly still
 /// showing the partial that opened it.
 pub struct RingFade {
@@ -616,6 +616,7 @@ impl RingFade {
     /// The envelope cannot reach it, which is what makes this the gate's own
     /// picture and not a fade of one: with no clock behind it every bucket
     /// takes its target outright.
+    #[cfg(test)]
     fn settled(gate: &RingGate) -> RingFade {
         let mut fade = RingFade::default();
         fade.advance(gate, &Envelope { attack_time: 0.0, fade_time: 0.0, shape: 0.0 }, 0.0);
@@ -663,7 +664,7 @@ impl RingFade {
     /// How much of its ring a node of pitch class `cents` wears, 0..=1: the
     /// most open any of its wedges stands.
     ///
-    /// The shape of [`RingGate::peak`] and for the same reasons — every slot
+    /// The shape of `RingGate::peak` and for the same reasons — every slot
     /// the wheel DRAWS and no others, read through the same grid arithmetic the
     /// shader uses — so that what a node wears follows what its own wedges
     /// show.
@@ -741,6 +742,7 @@ fn window_max(levels: &SpectralLevels, half: usize) -> Box<SpectralLevels> {
 /// ([`SpectralPaint::color_levels`]) — so what has to match is the WALK: a
 /// gate landing on a different pair of buckets than the ring paints would hide
 /// a node that is visibly showing the partial that opened it.
+#[cfg(test)]
 fn level_at(grid: &SpectralLevels, pitch: f32) -> f32 {
     let Some((bucket, next, across)) = grid_at(pitch) else {
         return 0.0;
@@ -750,7 +752,7 @@ fn level_at(grid: &SpectralLevels, pitch: f32) -> f32 {
 }
 
 /// [`RingFade`]'s reading of its own grid, which holds a level per bucket
-/// already rather than a byte — the same walk as [`level_at`], so a node's ring
+/// already rather than a byte — the same walk as `level_at`, so a node's ring
 /// comes and goes at the pitch its wedges are gated at.
 fn open_at(grid: &[f32; SPECTRUM_BINS], pitch: f32) -> f32 {
     let Some((bucket, next, across)) = grid_at(pitch) else {

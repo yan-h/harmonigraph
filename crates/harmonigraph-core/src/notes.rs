@@ -7,7 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::canonical::{CanonicalEvent, InvalidCanonical, SourceBaseline, VoiceBaseline};
+#[cfg(test)]
+use crate::canonical::VoiceBaseline;
+use crate::canonical::{CanonicalEvent, InvalidCanonical, SourceBaseline};
 use crate::history::NoteHistory;
 use crate::roll::NoteRoll;
 use crate::tuning::PitchClass;
@@ -483,7 +485,6 @@ pub struct Voice {
     visible_at_release: bool,
     /// Canonical accepted lifetime, absent for ordinary direct observations.
     pub lifetime: Option<u64>,
-    pub assignment: Option<crate::canonical::AssignmentMetadata>,
     pub state: VoiceState,
 }
 
@@ -501,7 +502,6 @@ impl Voice {
             original_onset: on_time,
             visible_at_release: true,
             lifetime: None,
-            assignment: None,
             state: VoiceState::Held,
         };
         voice.set_pitch(f32::from(note));
@@ -673,16 +673,6 @@ impl Certainty {
     }
 }
 
-fn baseline_matches(row: &VoiceBaseline, voice: &Voice) -> bool {
-    row.channel == voice.channel
-        && row.note == voice.note
-        && if row.lifetime == 0 {
-            voice.lifetime.is_none() && row.actual_onset == voice.original_onset
-        } else {
-            voice.lifetime == Some(row.lifetime)
-        }
-}
-
 #[derive(Default)]
 struct CanonicalCursor {
     output: u64,
@@ -749,11 +739,6 @@ impl NoteTracker {
                     return Ok(true);
                 }
                 self.handle_event(delta.display_event());
-                if let Some(voice) = self.held.get_mut(&key) {
-                    if delta.assignment.is_some() {
-                        voice.assignment = delta.assignment;
-                    }
-                }
                 if matches!(delta.event.kind, NoteEventKind::On { .. }) {
                     if let Some(voice) = self.held.get_mut(&key) {
                         voice.lifetime = (delta.lifetime != 0).then_some(delta.lifetime);
@@ -823,7 +808,15 @@ impl NoteTracker {
         self.roll.set_participating(frame.source, frame.participating);
         self.roll.replace_source(frame.source, voices, mapped.time, offset);
         self.held.retain(|key, voice| {
-            key.source != frame.source || voices.iter().any(|row| baseline_matches(row, voice))
+            key.source != frame.source
+                || voices.iter().any(|row| {
+                    row.matches_voice(
+                        frame.source,
+                        voice.key(),
+                        voice.lifetime,
+                        voice.original_onset,
+                    )
+                })
         });
         // The same identity question asked of the released tail, and the reason
         // it has to be asked there too is that a departure can be WITHDRAWN. A
@@ -848,7 +841,15 @@ impl NoteTracker {
         // — which is not worth carrying for a source that has lost contact with
         // the thing telling it what is playing (Yan's call, 2026-09-19).
         self.released.retain(|voice| {
-            voice.source != frame.source || !voices.iter().any(|row| baseline_matches(row, voice))
+            voice.source != frame.source
+                || !voices.iter().any(|row| {
+                    row.matches_voice(
+                        frame.source,
+                        voice.key(),
+                        voice.lifetime,
+                        voice.original_onset,
+                    )
+                })
         });
         for row in voices {
             let onset = self.roll.live_onset(row.key(frame.source)).unwrap();
@@ -861,7 +862,6 @@ impl NoteTracker {
             });
             voice.set_pitch(row.pitch());
             voice.expressions = row.expressions;
-            voice.assignment = row.metadata();
         }
         let cursor = self.canonical.entry(frame.source).or_default();
         cursor.baseline = frame.id;
