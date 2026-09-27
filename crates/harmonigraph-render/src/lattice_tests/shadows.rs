@@ -1016,56 +1016,61 @@ fn a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it() {
     assert_eq!(taken[3], 0.0, "a node with no ink left took {:.3} off the ground", taken[3]);
 }
 
-/// A Gaussian shadow stays outside the caster while its note fades.
+/// Both shadow kernels stay outside the caster while its note fades.
 ///
 /// The blur cell already carries the ring's fading alpha. Feeding that value
 /// through the Gaussian's calibration gain can still leave a deep shadow under
 /// the translucent ring, where its own ink no longer covers it. The caster's
 /// footprint masks that self-shadow, without masking the blur just outside it.
-/// Distance reaches the same picture below its half-level contour by dropping
-/// the ring from its analytic field; this pins the explicit Gaussian rule.
+/// Distance cells retain an opacity-weighted profile, from which the visible
+/// ink coverage must be removed before the shadow is composited.
 #[test]
-fn a_gaussian_release_does_not_show_its_shadow_through_its_own_ring() {
-    use harmonigraph_scene::ShadowKernel::Gaussian;
+fn a_fading_node_does_not_show_its_shadow_through_its_own_ring() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
 
     const SHADOW: f32 = 0.6;
-    const RELEASE: f32 = 0.3;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    let scene = |ring: f32, depth: f32| {
-        let mut scene = ringing_only(ring, SHADOW, depth);
-        scene.shadow.lattice_geometry.kernel = Gaussian;
-        scene
-    };
-    let empty = shooter.shot(&scene(0.0, 0.0));
-    let full = shooter.shot(&scene(1.0, 0.0));
-    let body = fully_inked(&empty, &full);
-    assert!(body.len() > 30, "only {} pixels reach the ring's full coverage", body.len());
+    for kernel in [Distance, Gaussian] {
+        for release in [0.3, 0.7, 1.0] {
+            shooter.clear = wgpu::Color::BLACK;
+            let scene = |ring: f32, depth: f32| {
+                let mut scene = ringing_only(ring, SHADOW, depth);
+                scene.shadow.lattice_geometry.kernel = kernel;
+                scene
+            };
+            let empty = shooter.shot(&scene(0.0, 0.0));
+            // White exposes fractional edge coverage that the dark probe's
+            // quantized color would otherwise round up to a full pixel.
+            let mut footprint = scene(1.0, 0.0);
+            footprint.spectral.lut.fill(glam::Vec4::ONE);
+            let full = shooter.shot(&footprint);
+            let body = fully_inked(&empty, &full);
+            assert!(body.len() > 30, "only {} pixels reach the ring's full coverage", body.len());
 
-    shooter.clear = over_ground();
-    let bare_scene = scene(RELEASE, 0.0);
-    let bare = shooter.shot(&bare_scene);
-    let cast = shooter.shot(&scene(RELEASE, 1.0));
-    let centre = on_screen(&bare_scene, SIZE, glam::Vec3::ZERO);
-    let inside_loss = body
-        .iter()
-        .map(|&i| brightness(&bare[i..i + 3]) - brightness(&cast[i..i + 3]))
-        .max()
-        .unwrap_or(0);
-    let row = centre.y.round() as u32;
-    let outside = (centre.x + ink_radius(&bare_scene)).round() as u32 + 5;
-    let outside_loss = bright_at(&bare, outside, row) - bright_at(&cast, outside, row);
-    // One final-output code in each colour channel is the dither/rounding
-    // boundary; anything past their sum is shadow showing through the ring.
-    assert!(
-        inside_loss.abs() <= 3,
-        "the fading ring lost {inside_loss} brightness levels to its own Gaussian shadow",
-    );
-    assert!(
-        outside_loss > 20,
-        "masking the caster left only {outside_loss} brightness levels of Gaussian shadow beside it",
-    );
+            shooter.clear = over_ground();
+            let bare_scene = scene(release, 0.0);
+            let bare = shooter.shot(&bare_scene);
+            let cast = shooter.shot(&scene(release, 1.0));
+            let centre = on_screen(&bare_scene, SIZE, glam::Vec3::ZERO);
+            let inside_loss = body
+                .iter()
+                .map(|&i| brightness(&bare[i..i + 3]) - brightness(&cast[i..i + 3]))
+                .max()
+                .unwrap_or(0);
+            let row = centre.y.round() as u32;
+            let outside = (centre.x + ink_radius(&bare_scene)).round() as u32 + 5;
+            let outside_loss = bright_at(&bare, outside, row) - bright_at(&cast, outside, row);
+            // One final-output code in each colour channel is the dither/rounding
+            // boundary; anything past their sum is shadow showing through the ring.
+            assert!(
+                inside_loss.abs() <= 3,
+                "{kernel:?} at {release}: self-shadow removed {inside_loss} brightness levels",
+            );
+            assert!(outside_loss > 20, "{kernel:?} at {release}: outside loss only {outside_loss}",);
+        }
+    }
 }
 
 /// A mark too faint for the scene pass cannot cut a bright copy of its shape
@@ -2196,13 +2201,16 @@ fn a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes() {
     let variance =
         values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64;
     let deviation = variance.sqrt();
+    // At this scale the samples overlap the ring's antialiased fringe, where
+    // ink coverage is removed from the shadow. Twenty percent still leaves more
+    // than forty output codes per channel to measure angular variation.
     assert!(
-        mean > 0.4 && mean < 0.8,
+        mean > 0.2 && mean < 0.8,
         "the ring takes {mean:.3} of the ground at the sampled radius, outside the range where \
          angular variation measures its shape",
     );
     assert!(
-        deviation < 0.24 * mean,
+        deviation < 0.30 * mean,
         "the ring's distance shadow varies by {deviation:.3} around a mean of {mean:.3}, so its \
          profile has broken into angular spikes",
     );

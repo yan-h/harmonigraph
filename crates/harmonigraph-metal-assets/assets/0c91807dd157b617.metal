@@ -22,6 +22,13 @@ struct SplitOut {
     metal::float4 ink;
     metal::float4 transmission;
 };
+struct SceneOut {
+    metal::float4 other;
+    metal::float4 ink;
+    metal::float4 transmission;
+    metal::float4 bloom_other;
+    metal::float4 bloom_ink;
+};
 struct CompositeParams {
     float darkest_pitch;
     float brightest_pitch;
@@ -1986,6 +1993,8 @@ Painted node_paint(
 ) {
     NodeInk ink_3 = {};
     float visibility_1 = 1.0;
+    float final_alpha = {};
+    float bloom_alpha = {};
     NodeGeom _e2 = node_geom(in_13, false, u);
     ShadowThrough _e9 = node_shadow_through(in_13.shadow_box.x, in_13.shadow_at.xy, in_13.shadow_at.z, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
     if (!(_e2.paints)) {
@@ -2003,34 +2012,46 @@ Painted node_paint(
         float _e37 = ink_3.sd;
         ink_3 = NodeInk {metal::float3(0.0), 0.0, 0.0, 0.0, _e37};
     }
-    float _e43 = ink_3.mask;
-    bool _e48 = shadow_is_distance(in_13.shadow_box.x, shadow_casters, _buffer_sizes);
-    float shadow_exposure = _e48 ? 1.0 : (1.0 - _e43);
-    float seen_through = 1.0 - ((1.0 - _e9.seen) * shadow_exposure);
-    float bloom_through = 1.0 - ((1.0 - _e9.bloom) * shadow_exposure);
-    float _e66 = ink_3.alpha;
-    if (_e66 > 0.0) {
-        float _e76 = u.geometry_shadow.occlusion;
-        float _e77 = node_visibility(in_13.shadow_box.x, in_13.shadow_at.xy, _e76, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, _buffer_sizes);
-        visibility_1 = _e77;
+    float _e45 = ink_3.alpha;
+    if (_e45 > 0.0) {
+        float _e55 = u.geometry_shadow.occlusion;
+        float _e56 = node_visibility(in_13.shadow_box.x, in_13.shadow_at.xy, _e55, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, _buffer_sizes);
+        visibility_1 = _e56;
     }
-    float _e79 = ink_3.alpha;
-    float _e80 = visibility_1;
-    float visible_alpha = _e79 * _e80;
-    float final_alpha = 1.0 - ((1.0 - visible_alpha) * seen_through);
-    float bloom_alpha = 1.0 - ((1.0 - visible_alpha) * bloom_through);
-    if (metal::max(final_alpha, bloom_alpha) <= 0.0) {
+    float _e58 = ink_3.alpha;
+    float _e59 = visibility_1;
+    float visible_alpha = _e58 * _e59;
+    bool _e65 = shadow_is_distance(in_13.shadow_box.x, shadow_casters, _buffer_sizes);
+    if (_e65) {
+        float _e69 = glow_shadow_depth(u);
+        float _e71 = ink_3.alpha;
+        final_alpha = visible_alpha + metal::max(0.0, (1.0 - _e9.seen) - (_e69 * _e71));
+        float _e81 = ink_3.alpha;
+        bloom_alpha = visible_alpha + metal::max(0.0, (1.0 - _e9.bloom) - _e81);
+    } else {
+        float _e90 = ink_3.mask;
+        float seen_through = 1.0 - ((1.0 - _e9.seen) * (1.0 - _e90));
+        float _e100 = ink_3.mask;
+        float bloom_through = 1.0 - ((1.0 - _e9.bloom) * (1.0 - _e100));
+        final_alpha = 1.0 - ((1.0 - visible_alpha) * seen_through);
+        bloom_alpha = 1.0 - ((1.0 - visible_alpha) * bloom_through);
+    }
+    float _e116 = final_alpha;
+    float _e117 = bloom_alpha;
+    if (metal::max(_e116, _e117) <= 0.0) {
         metal::discard_fragment();
     }
-    metal::float2 _e97 = light_coord(in_13.clip_pos.xy, u);
-    metal::float4 _e98 = glow_light(_e97, glow_tex, glow_sampler);
-    metal::float3 _e100 = ink_3.rgb;
-    float _e102 = ink_3.alpha;
-    float _e104 = glow_wash(u);
-    float _e106 = ink_3.lit;
-    metal::float3 _e109 = wash_over(_e100, _e102, _e98.xyz, metal::mix(1.0, _e104, _e106));
-    float _e110 = visibility_1;
-    return Painted {_e109 * _e110, final_alpha, bloom_alpha, visible_alpha};
+    metal::float2 _e123 = light_coord(in_13.clip_pos.xy, u);
+    metal::float4 _e124 = glow_light(_e123, glow_tex, glow_sampler);
+    metal::float3 _e126 = ink_3.rgb;
+    float _e128 = ink_3.alpha;
+    float _e130 = glow_wash(u);
+    float _e132 = ink_3.lit;
+    metal::float3 _e135 = wash_over(_e126, _e128, _e124.xyz, metal::mix(1.0, _e130, _e132));
+    float _e136 = visibility_1;
+    float _e138 = final_alpha;
+    float _e139 = bloom_alpha;
+    return Painted {_e135 * _e136, _e138, _e139, visible_alpha};
 }
 
 SplitOut node_split(
@@ -2043,7 +2064,7 @@ SplitOut node_split(
     return SplitOut {metal::float4(0.0, 0.0, 0.0, shadow_alpha), metal::float4(paint.rgb, alpha_1), metal::float4(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha)};
 }
 
-struct fs_main_splitInput {
+struct fs_main_sceneInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 params [[user(loc2), center_perspective]];
     metal::uint3 octaves [[user(loc3), flat]];
@@ -2061,13 +2082,15 @@ struct fs_main_splitInput {
     metal::float4 shadow_box [[user(loc10), flat]];
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
-struct fs_main_splitOutput {
+struct fs_main_sceneOutput {
     metal::float4 other [[color(0)]];
     metal::float4 ink [[color(1)]];
     metal::float4 transmission [[color(2)]];
+    metal::float4 bloom_other [[color(3)]];
+    metal::float4 bloom_ink [[color(4)]];
 };
-fragment fs_main_splitOutput fs_main_split(
-  fs_main_splitInput varyings [[stage_in]]
+fragment fs_main_sceneOutput fs_main_scene(
+  fs_main_sceneInput varyings [[stage_in]]
 , metal::float4 clip_pos [[position]]
 , metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
 , metal::sampler glow_sampler [[sampler(0)]]
@@ -2081,6 +2104,7 @@ fragment fs_main_splitOutput fs_main_split(
     const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.thickness, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.swell, varyings.ring, varyings.ink_carry, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = node_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, u, _buffer_sizes);
     SplitOut _e3 = node_split(_e1, _e1.seen, u);
-    const auto _tmp = _e3;
-    return fs_main_splitOutput { _tmp.other, _tmp.ink, _tmp.transmission };
+    SplitOut _e5 = node_split(_e1, _e1.bloom, u);
+    const auto _tmp = SceneOut {_e3.other, _e3.ink, _e3.transmission, _e5.other, _e5.ink};
+    return fs_main_sceneOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom_other, _tmp.bloom_ink };
 }
