@@ -1086,15 +1086,13 @@ impl SpreadGrab {
 /// are knocked out through the thumbs by [`grip_over_text`] and a crossed digit
 /// inverts rather than disappearing.
 ///
-/// How near it comes at REST is worth having straight, because a parked run
-/// invites the wider claim. Swept over the four bars the panes build, at the
-/// pairs they open with, by
-/// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`:
-/// the spectrogram's two rest under their readout on a 300pt row — Aurora
-/// opens them past four fifths of their axes — and stand clear of it by the
-/// ~423pt the settings column opens at. The MIDI pitch colors group's two rest clear at
-/// every width. So at rest this is a narrow-column problem; at a normal width
-/// it is reached by dragging, which is the ordinary use of the control.
+/// Whether a thumb RESTS in a run is decided by the pairs the defaults open
+/// with, which a capture retunes freely, so no width is promised here.
+/// `the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb`
+/// sweeps the four bars the panes build at those pairs and holds the knockout
+/// wherever one does, without pinning where. A high end past about four fifths
+/// of its axis stands in the readout at the width the settings column opens
+/// at, so a fresh look can lean on the knockout as well as a drag.
 ///
 /// [`RangeBar`]: super::range::RangeBar
 pub struct SpreadBar<'a> {
@@ -1222,9 +1220,8 @@ impl<'a> SpreadBar<'a> {
         // these can move. A RangeBar picks a run of clear track for each of its
         // numbers; this bar spells its two ends into ONE readout parked at the
         // right, which buys the pair a single run to read but stands it where a
-        // handle taken past about four fifths of the axis arrives. Which end of
-        // the axis that is depends on the pair — see the type's docs for where
-        // the four bars the panes build actually rest.
+        // handle taken past about four fifths of the axis arrives — see the
+        // type's docs for what that means for a bar at rest.
         //
         // Lit by what is in hand (see [`grip_color`]). The ends are named for
         // the PITCH they carry, so which thumb is the low end is the ramp's
@@ -2855,9 +2852,9 @@ mod tests {
                 // as the reason it knocks out per grip and straight after that
                 // grip's own fill: the second fill covers the first knockout,
                 // and only a second knockout over the same ground repairs it.
-                // Not a contrived pair — `chroma_ramp` is 0.0 in both
-                // `Gradient::default()` and `ViewConfig::default()`, so the
-                // MIDI pitch colors group opens its chroma bar with coincident thumbs.
+                // Not a contrived pair — `chroma_ramp` is 0.0 in
+                // `Gradient::default()`, and any chroma bar dragged flat lands
+                // on it.
                 ((of(0.9), 0.0), "a flat ramp parked under the readout"),
             ] {
                 let shapes = paint_bar_clipped(spread, pair);
@@ -2924,7 +2921,7 @@ mod tests {
     #[test]
     fn the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb() {
         let nodes = harmonigraph_scene::view::ViewConfig::default().pitch_gradient;
-        let spectral = crate::config::SpectrogramPreset::Aurora.gradient();
+        let spectral = crate::SpectrumConfig::default().spectrogram_gradient;
         for (pane, g) in [("nodes", nodes), ("spectral", spectral)] {
             for spread in [Spread::Brightness, Spread::Chroma] {
                 let pair = match spread {

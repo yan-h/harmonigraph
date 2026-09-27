@@ -270,9 +270,9 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// `A ∩ B ∩ run`; that region lies in `run`, so `B` intersects `run` too and
 /// emits its own knockout over the same ground. Painting every fill and then
 /// every knockout is equally correct. A flat ramp puts a [`SpreadBar`]'s two
-/// grips at exactly the same x — the state the MIDI pitch colors group's chroma bar opens
-/// in, since `chroma_ramp` defaults to 0 — so this is a case that ships, not a
-/// corner.
+/// grips at exactly the same x — the state a gradient built from
+/// `Gradient::default()` opens its chroma bar in, and one drag away on any
+/// other — so this is a case that ships, not a corner.
 ///
 /// Their FILLS are another matter once one is lit and the other is not: the
 /// later one is the colour that shows, which is why [`paint_thumbs`] paints the
