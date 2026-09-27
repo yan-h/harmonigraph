@@ -237,6 +237,24 @@ impl Motion {
 fn slot_of(lo: i32, hi: i32, cents: f32, pitch: f32) -> usize {
     (((pitch - cents / 100.0) / 12.0).round() as i32).clamp(lo, hi).clamp(0, 10) as usize
 }
+/// Each slot's reading from the held notes lighting it: the largest each
+/// display gets. A slot none lights keeps its last, so a release fades from
+/// where its note left off.
+#[derive(Default)]
+struct SlotReadings([Option<IntensityReading>; 11]);
+impl SlotReadings {
+    fn add(&mut self, slot: usize, reading: IntensityReading) {
+        let current = &mut self.0[slot];
+        *current = Some(current.map_or(reading, |r| r.max(reading)));
+    }
+    fn apply(self, motion: &mut Motion) {
+        for (slot, reading) in self.0.into_iter().enumerate() {
+            if let Some(reading) = reading {
+                motion.readings[slot] = reading;
+            }
+        }
+    }
+}
 fn delays(
     layout: &OctaveLayout,
     cents: f32,
@@ -271,15 +289,23 @@ impl NodeMotion {
             let mut melody = None;
             let mut bass = None;
             let mut preexisting = false;
+            // The earliest onset among the notes lighting this node, which
+            // seeds a fresh arrival's order below.
+            let mut first_onset = None::<u64>;
+            let mut readings = SlotReadings::default();
+            // The one node x held-note match per step: occupancy, marks and
+            // readings all come out of it, rather than a second pass over
+            // the same pairs for the readings.
             for (id, held) in &self.held {
                 if !tuning.matches(held.class, node_class) {
                     continue;
                 }
                 preexisting |= self.at.is_some_and(|at| f64::from_bits(id.1) < at);
+                first_onset = Some(first_onset.map_or(id.1, |first| first.min(id.1)));
                 let slot = slot_of(lo, hi, node.cents, held.pitch);
-                // Activation measures occupancy; intensity rides beside it,
-                // in `read_slots`.
+                // Activation measures occupancy; intensity rides beside it.
                 motion.targets[slot] = 1.0;
+                readings.add(slot, held.reading);
                 if Some(held.pitch) == high {
                     melody = Some(slot);
                 }
@@ -287,6 +313,7 @@ impl NodeMotion {
                     bass = Some(slot);
                 }
             }
+            readings.apply(motion);
             motion.melody.target(melody, mark_delay(view));
             motion.bass.target(bass, mark_delay(view));
             let gate = motion.targets.iter().any(|&v| v > 0.0);
@@ -317,12 +344,7 @@ impl NodeMotion {
             if gate && !motion.gate && motion.progress.iter().all(|&p| p == 0.0) {
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 node.lattice_pos.hash(&mut hash);
-                self.held
-                    .iter()
-                    .filter(|(_, held)| tuning.matches(held.class, node_class))
-                    .map(|(id, _)| id.1)
-                    .min()
-                    .hash(&mut hash);
+                first_onset.hash(&mut hash);
                 motion.order_seed = hash.finish() as u32;
                 motion.order_delay = delays(
                     &scene.octave_layout,
@@ -367,12 +389,11 @@ impl NodeMotion {
                 motion.bass.advance(f64::from(duration + mark_delay(view)), env);
             }
         }
-        self.read_slots(scene, tuning);
     }
-    /// Each slot's reading from the held notes lighting it: the largest each
-    /// display gets. A slot none lights keeps its last, so a release fades from
-    /// where its note left off. Touches nothing else, so a replay can bring a
-    /// note to its reading at the off without moving any gate.
+    /// Each slot's reading from the held notes lighting it, and nothing else,
+    /// so a replay can bring a note to its reading at the off without moving
+    /// any gate. [`gates`](Self::gates) takes the same readings in its own
+    /// match; this is for the one moment that needs them alone.
     fn read_slots(&mut self, scene: &Scene, tuning: &Tuning) {
         for node in &scene.nodes {
             let Some(motion) = self.nodes.get_mut(&node.lattice_pos) else {
@@ -380,16 +401,11 @@ impl NodeMotion {
             };
             let node_class = PitchClass::from_cents(node.cents);
             let (lo, hi) = scene.octave_layout.slots(node.cents);
-            let mut readings = [None::<IntensityReading>; 11];
+            let mut readings = SlotReadings::default();
             for held in self.held.values().filter(|held| tuning.matches(held.class, node_class)) {
-                let slot = slot_of(lo, hi, node.cents, held.pitch);
-                readings[slot] = Some(readings[slot].map_or(held.reading, |r| r.max(held.reading)));
+                readings.add(slot_of(lo, hi, node.cents, held.pitch), held.reading);
             }
-            for (slot, reading) in readings.into_iter().enumerate() {
-                if let Some(reading) = reading {
-                    motion.readings[slot] = reading;
-                }
-            }
+            readings.apply(motion);
         }
     }
     fn advance(&mut self, dt: f64, env: &Envelope) {
