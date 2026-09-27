@@ -1095,6 +1095,7 @@ impl SpreadGrab {
 /// at, so a fresh look can lean on the knockout as well as a drag.
 ///
 /// [`RangeBar`]: super::range::RangeBar
+/// [`grip_over_text`]: super::bar::grip_over_text
 pub struct SpreadBar<'a> {
     gradient: &'a mut Gradient,
     spread: Spread,

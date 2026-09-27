@@ -311,7 +311,7 @@ pub(super) fn poised(ui: &Ui, response: &Response) -> Option<egui::Pos2> {
 /// [`RangeBar`]: super::range::RangeBar
 /// [`RangeBar::fade_span`]: super::range::RangeBar::fade_span
 /// [`SpreadBar`]: super::gradient::SpreadBar
-fn grip_over_text(
+pub(super) fn grip_over_text(
     painter: &egui::Painter,
     grip: egui::Rect,
     radius: CornerRadius,

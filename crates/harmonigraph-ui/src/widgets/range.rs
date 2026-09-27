@@ -356,6 +356,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 ///
 /// [`ValueBar`]: super::value::ValueBar
 /// [`SpreadBar`]: super::gradient::SpreadBar
+/// [`grip_over_text`]: super::bar::grip_over_text
 pub struct RangeBar<'a> {
     low: &'a mut f32,
     high: &'a mut f32,

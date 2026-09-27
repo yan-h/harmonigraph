@@ -178,6 +178,8 @@ impl Grab {
 
     /// Whether this grab holds the low end, home, and the high end — which is
     /// what [`grip_color`] lights each thumb by. A slide holds all three.
+    ///
+    /// [`grip_color`]: super::bar::grip_color
     fn holds(self) -> (bool, bool, bool) {
         match self {
             Grab::Low { .. } => (true, false, false),
