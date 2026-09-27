@@ -124,6 +124,7 @@ fn poisoned_view() -> ViewConfig {
         atmosphere: AtmosphereSettings {
             enabled: true,
             material: base.atmosphere.material,
+            source_roughness: nan,
             nebula_depth: nan,
             nebula_scale: nan,
             nebula_speed: nan,
@@ -372,12 +373,14 @@ fn scene_floats(scene: &Scene) -> Floats {
     let AtmosphereSettings {
         enabled: _,
         material: _,
+        source_roughness,
         nebula_depth,
         nebula_scale,
         nebula_speed,
         breath_amount,
         breath_speed,
     } = atmosphere;
+    f.one("atmosphere.source_roughness", *source_roughness);
     f.one("atmosphere.nebula_depth", *nebula_depth);
     f.one("atmosphere.nebula_scale", *nebula_scale);
     f.one("atmosphere.nebula_speed", *nebula_speed);

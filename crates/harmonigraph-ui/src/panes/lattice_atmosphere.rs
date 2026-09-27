@@ -35,10 +35,15 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
     }
     ui.add_enabled_ui(glow_enabled, |ui| {
     crate::widgets::choice_row(ui, "Material", &mut settings.material, &[
+        (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes that borrow the notes’ own colors"),
         (LatticeMaterial::Clouds, "Clouds", "The original softly drifting cloud texture"),
         (LatticeMaterial::Contours, "Contours", "Nested bands following the combined note light"),
         (LatticeMaterial::Interference, "Interference", "Curved wave fringes illuminated by the notes"),
     ]);
+    if settings.material == LatticeMaterial::Watercolor {
+        ValueBar::new(&mut settings.source_roughness, 0.0..=1.0, "Source roughness")
+            .percent().show(ui).on_hover_text("Smooth halos at 0%; ragged node-local lobes at 100%, before the watercolor washes. Texture depth scales both effects.");
+    }
     ValueBar::new(&mut settings.nebula_depth, 0.0..=1.0, "Texture depth")
         .percent().show(ui).on_hover_text("Material contrast in the combined background glow. 0% restores smooth halos. Colors come from the notes.");
     multiplier(ui, &mut settings.nebula_scale, "Texture size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
