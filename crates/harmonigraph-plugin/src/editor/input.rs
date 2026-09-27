@@ -445,12 +445,6 @@ mod tests {
             .unwrap();
         assert_eq!(note.start, 12.0);
         assert!(note.history_complete, "baseline retains the matching observed lifetime");
-        assert!(
-            (shared.ui.picture.runtime.tracker.source_baseline(SourceId::DIRECT).unwrap().time
-                - 13.0)
-                .abs()
-                < 1e-9
-        );
         assert_eq!(
             shared
                 .ui
@@ -525,6 +519,12 @@ mod tests {
             (voice.on_time, note.start),
             (12.0, 12.0),
             "accepted lifetime resumes its already-mapped onset after gap"
+        );
+        // The baseline's own time, audio 3.5, is mapped onto the GUI clock too:
+        // the row resumes there.
+        assert!(
+            note.segments(22.3).any(|((start, _), _)| (start - 13.5).abs() < 1e-9),
+            "the resuming baseline lands at GUI 13.5"
         );
     }
 

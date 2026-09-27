@@ -243,7 +243,7 @@ pub fn root_ui(ui: &mut egui::Ui, state: &mut SharedState, params: &dyn ParamBac
     if startup::draw(ui, state) {
         return;
     }
-    if !state.picture.runtime.tracker.publication_gaps().is_empty() {
+    if state.picture.runtime.tracker.history_missing() {
         ui.colored_label(
             egui::Color32::from_rgb(240, 180, 70),
             "Some note history is missing. Current notes may be incomplete until their source recovers.",

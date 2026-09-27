@@ -7,9 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::canonical::{
-    CanonicalEvent, InvalidCanonical, PublicationGap, SourceBaseline, VoiceBaseline,
-};
+use crate::canonical::{CanonicalEvent, InvalidCanonical, SourceBaseline, VoiceBaseline};
 use crate::history::NoteHistory;
 use crate::roll::NoteRoll;
 use crate::tuning::PitchClass;
@@ -568,14 +566,13 @@ impl Voice {
     /// so what it draws is the arrival, then full, then the departure, and a
     /// note is never dimmed for having been short.
     ///
-    /// The single source of truth for how lit a voice is, and the chokepoint
-    /// every layer of a node multiplies through — the core disc, its glow,
-    /// the octave sectors, the gutter it clears, and the piano roll. One
+    /// How lit a voice is for the panes that read voices directly: the
+    /// Spectral pane's note band and the Spiral's sounding pitches. One
     /// function so a note cannot arrive at one rate and leave at another, nor
-    /// have one layer disagree with the next about either.
+    /// have one pane disagree with the other about either.
     ///
-    /// Lattice animation carries its own levels in the scene layer; this
-    /// envelope remains the voice-based reading used by the other consumers.
+    /// The lattice does not read it: its nodes carry their own levels in the
+    /// scene layer's motion state.
     pub fn activation(&self, now: Time, env: &Envelope) -> f32 {
         env.attack(now, self.on_time) * self.release_level(now, env)
     }
@@ -610,8 +607,6 @@ pub struct NoteTracker {
     roll: NoteRoll,
     canonical: BTreeMap<SourceId, CanonicalCursor>,
     hidden_sources: BTreeSet<SourceId>,
-    baselines: BTreeMap<SourceId, SourceBaseline>,
-    gaps: Vec<PublicationGap>,
     certainty: Certainty,
 }
 
@@ -791,10 +786,6 @@ impl NoteTracker {
                 self.release_held(gap.time, |key, _| {
                     gap.source.is_none_or(|source| key.source == source)
                 });
-                self.gaps.push(gap);
-                if self.gaps.len() > NoteRoll::MAX_NOTES {
-                    self.gaps.remove(0);
-                }
             }
         }
         Ok(true)
@@ -875,14 +866,9 @@ impl NoteTracker {
         let cursor = self.canonical.entry(frame.source).or_default();
         cursor.baseline = frame.id;
         cursor.state_cut = frame.output_cut;
-        self.baselines.insert(frame.source, mapped);
         self.certainty.restore(frame.source);
 
         Ok(true)
-    }
-
-    pub fn source_baseline(&self, source: SourceId) -> Option<&SourceBaseline> {
-        self.baselines.get(&source)
     }
 
     /// New note deltas establish individual lifetimes, never completeness of
@@ -891,8 +877,23 @@ impl NoteTracker {
         self.certainty.certain(source)
     }
 
-    pub fn publication_gaps(&self) -> &[PublicationGap] {
-        &self.gaps
+    /// Whether some source's current notes may be incomplete RIGHT NOW: a gap
+    /// put it in doubt and neither its own complete baseline nor a reset has
+    /// answered for it since. This is what the missing-history banner shows,
+    /// so it clears as the sources recover rather than latching (#1195).
+    ///
+    /// After a stream-wide gap that means every source this tracker has heard
+    /// from, and — until the first of them answers — the stream as a whole,
+    /// since what the gap lost may have been a source's first word. A source
+    /// that stopped publishing before the gap never answers, and holds this
+    /// until a session reset speaks for everyone.
+    pub fn history_missing(&self) -> bool {
+        match &self.certainty {
+            Certainty::AllBut(doubted) => !doubted.is_empty(),
+            Certainty::NoneBut(restored) => {
+                restored.is_empty() || self.canonical.keys().any(|s| !restored.contains(s))
+            }
+        }
     }
 
     pub fn handle_event(&mut self, event: NoteEvent) {
@@ -1611,7 +1612,7 @@ mod tests {
 
     /// Publication lost over one source, or over the whole canonical stream.
     fn gap(time: Time, source: Option<SourceId>) -> CanonicalEvent<'static> {
-        CanonicalEvent::Gap(PublicationGap {
+        CanonicalEvent::Gap(crate::canonical::PublicationGap {
             source,
             time,
             through: time,
@@ -1803,24 +1804,33 @@ mod tests {
         assert!(tracker.source_current_certain(a) && tracker.source_current_certain(b));
     }
 
-    /// The gap list is bounded, and what it drops is the OLDEST — the same way
-    /// the roll bounds its own past (`NoteRoll::MAX_NOTES`, which this shares).
-    /// Worth pinning because nothing else can see it: the cap is reached one
-    /// publication outage at a time, and the export warning and the pane badge
-    /// that read `publication_gaps` both take the list as given.
+    /// The banner's condition means "right now": it holds while a source the
+    /// tracker has heard from is in doubt, and clears once each one's complete
+    /// baseline has answered for it. Two sources, so the half-recovered state
+    /// in between is reached rather than skipped.
     #[test]
-    fn the_gap_list_keeps_the_newest_and_forgets_past_its_cap() {
+    fn missing_history_clears_once_every_heard_source_recovers() {
+        let (a, b) = (SourceId(1), SourceId(2));
         let mut tracker = NoteTracker::new();
-        // Past the cap rather than up to it, so the eviction runs more than the
-        // once that an off-by-one would also satisfy.
-        let pushed = NoteRoll::MAX_NOTES + 8;
-        for i in 0..pushed {
-            tracker.handle_canonical(gap(i as Time, Some(SourceId(1)))).unwrap();
-        }
-        let times: Vec<Time> = tracker.publication_gaps().iter().map(|gap| gap.time).collect();
-        assert_eq!(times.len(), NoteRoll::MAX_NOTES);
-        assert_eq!(times.first(), Some(&8.0), "the first eight outages are the ones forgotten");
-        assert_eq!(times.last(), Some(&((pushed - 1) as Time)), "and the newest is still there");
+        // A complete baseline: what each source's recovery publishes, and here
+        // also how each is first heard from.
+        let baseline =
+            |source, id, time| SourceBaseline::new(source, id, time, 0, true, &[]).unwrap();
+        tracker.replace_source(&baseline(a, 1, 0.5)).unwrap();
+        tracker.replace_source(&baseline(b, 1, 0.5)).unwrap();
+        assert!(!tracker.history_missing(), "nothing lost yet");
+
+        tracker.handle_canonical(gap(1.0, None)).unwrap();
+        assert!(tracker.history_missing(), "a stream-wide gap doubts both");
+        assert!(tracker.replace_source(&baseline(a, 2, 2.0)).unwrap());
+        assert!(tracker.history_missing(), "b has not answered for itself");
+        assert!(tracker.replace_source(&baseline(b, 2, 3.0)).unwrap());
+        assert!(!tracker.history_missing(), "both recovered, so the banner clears");
+
+        tracker.handle_canonical(gap(4.0, Some(a))).unwrap();
+        assert!(tracker.history_missing(), "a gap naming one source");
+        assert!(tracker.replace_source(&baseline(a, 3, 5.0)).unwrap());
+        assert!(!tracker.history_missing(), "clears on that source's own recovery");
     }
 
     #[test]
