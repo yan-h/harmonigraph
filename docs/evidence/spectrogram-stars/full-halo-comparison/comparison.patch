@@ -1,0 +1,103 @@
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -84,7 +84,7 @@
+         Some(|s| {
+             s.cloud_style = CloudStyle::Stars;
+             s.star_jitter = 1.0;
+-            s.star_halo_resolution = 1.0 / 3.0;
++            s.star_halo_resolution = 1.0;
+             memory(s);
+         }),
+     ),
+@@ -93,7 +93,7 @@
+         Some(|s| {
+             s.cloud_style = CloudStyle::Stars;
+             s.star_jitter = 1.0;
+-            s.star_halo_resolution = 1.0 / 3.0;
++            s.star_halo_resolution = 1.0;
+             memory(s);
+         }),
+     ),
+@@ -490,13 +490,17 @@
+ fn scratch_take_stars_frames() {
+     use std::io::Write;
+     let (device, queue) = headless_device().expect("GPU");
+-    let root = "/private/tmp/stars-gather-blur";
++    let root = "/private/tmp/stars-full-halo-compare";
+     let pixels: Vec<[u8; 4]> = std::fs::read(format!("{root}/palette.rgba"))
+         .unwrap()
+         .chunks_exact(4)
+         .map(|p| p.try_into().unwrap())
+         .collect();
+-    let variants = "halos,blur";
++    let variants = "full,half,blur";
++    let ppp: f32 =
++        std::env::var("PROBE_IMAGE_PPP").ok().and_then(|s| s.parse().ok()).unwrap_or(2.0);
++    let output = [(960.0 * ppp) as u32, (540.0 * ppp) as u32];
++    let video_size = format!("{}x{}", output[0], output[1]);
+     let frames: u32 =
+         std::env::var("PROBE_VIDEO_FRAMES").ok().map(|n| n.parse().unwrap()).unwrap_or(1);
+     for name in variants.split(',') {
+@@ -529,7 +533,11 @@
+                 } else {
+                     harmonigraph_scene::StarGlow::Halos
+                 },
+-                star_halo_resolution: 1.0 / 3.0,
++                star_halo_resolution: match name {
++                    "full" => 1.0,
++                    "half" => 0.5,
++                    _ => 1.0 / 3.0,
++                },
+                 star_jitter: std::env::var("PROBE_JITTER")
+                     .ok()
+                     .and_then(|v| v.parse().ok())
+@@ -549,7 +557,7 @@
+                             "-pix_fmt",
+                             "rgba",
+                             "-s",
+-                            "960x540",
++                            &video_size,
+                             "-r",
+                             "30",
+                             "-i",
+@@ -572,7 +580,7 @@
+             for frame in 0..frames {
+                 cb.pass_nr = frame as u64;
+                 cb.atmosphere.as_mut().unwrap().now = 3.0 + f64::from(frame) / 30.0;
+-                let bytes = frame_with(&device, &queue, &mut resources, &cb);
++                let bytes = scratch_frame_at_ppp(&device, &queue, &mut resources, &cb, ppp);
+                 if frame == 0 {
+                     std::fs::write(format!("{root}/{name}-{input}.rgba"), &bytes).unwrap();
+                 }
+@@ -587,3 +595,31 @@
+         }
+     }
+ }
++
++fn scratch_frame_at_ppp(
++    device: &wgpu::Device,
++    queue: &wgpu::Queue,
++    resources: &mut CallbackResources,
++    cb: &SpectrogramCallback,
++    ppp: f32,
++) -> Vec<u8> {
++    let size = [(cb.rect.max.x * ppp).ceil() as u32, (cb.rect.max.y * ppp).ceil() as u32];
++    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
++    let mut encoder = device.create_command_encoder(&Default::default());
++    let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
++    queue.submit(bufs.into_iter().chain([encoder.finish()]));
++    let texture =
++        render_to_texture(device, queue, size, cb.target_format, wgpu::Color::BLACK, |pass| {
++            cb.paint(
++                egui::PaintCallbackInfo {
++                    viewport: cb.rect,
++                    clip_rect: cb.rect,
++                    pixels_per_point: ppp,
++                    screen_size_px: size,
++                },
++                pass,
++                resources,
++            );
++        });
++    readback(device, queue, &texture, size)
++}

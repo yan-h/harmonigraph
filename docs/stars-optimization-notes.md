@@ -7,6 +7,10 @@ The current choice is **five layers,
 one native core neighbor per layer,
 and separate analytic halos with adjustable resolution**.
 Yan preferred keeping those halos after comparing per-depth image blur.
+The current visual target is **full-resolution analytic halos**;
+Yan finds one-third resolution unacceptable and half resolution the minimum acceptable compromise.
+The [full-resolution comparison](evidence/spectrogram-stars/full-halo-comparison/README.md) tests gathered blur against that target;
+its visual difference has not been accepted.
 The branch remains a plugin trial;
 that choice does not mean the PR has been merged.
 
@@ -299,6 +303,24 @@ images,
 verification and limitations are preserved in the report.
 Fused seed/filter generation and shared-data analytic compute remain unmeasured ideas.
 
+## Revised quality target: full-resolution halos
+
+Yan clarified that one-third resolution looks unacceptable,
+half resolution is the minimum acceptable compromise,
+and full resolution looks slightly better.
+The next comparison therefore uses **full-resolution analytic halos as the reference**,
+with half-resolution halos alongside the saved seven-tap gathered-blur candidate.
+All variants retain full jitter.
+
+The [comparison report](evidence/spectrogram-stars/full-halo-comparison/README.md) preserves fresh 1080p GPU images,
+a motion-reproduction harness,
+paired timings against both analytic resolutions,
+and their limitations.
+The full-resolution reference reveals that gathered blur loses some distinct rounded halo structure and replaces it with a more even granular glow.
+Half-resolution analytic halos follow the full-resolution shapes more closely in the captured crops.
+The blur candidate has not been accepted as matching the user's quality target;
+its code remains a saved experiment rather than an active plugin option.
+
 ## Reducing halo work without reducing jitter or reach
 
 The selected option is to reduce halo image resolution while leaving all five depths,
@@ -363,7 +385,9 @@ The current draft build can be loaded from the repository with:
 Then deactivate and reactivate Bitwig's audio engine.
 The handoff names the verified overlay tag;
 System → Performance → Performance overlay lets it be checked in the plugin.
-Try Halo resolution around one third against the 50% default while leaving the other controls fixed,
+Compare 100% Halo resolution against the 50% default while leaving other controls fixed,
 and inspect bright band edges,
 fine dust and motion.
+One third is retained as historical performance evidence,
+not a recommended setting for Yan's preferred look.
 The plugin and offline renderer are built together so exports use the same construction.

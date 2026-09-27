@@ -7,6 +7,12 @@ This follows the [quad-seeded blur experiment](../depth-blur/README.md) and info
 the experiment was reverted and the existing analytic halos remain active.** The saved patches are experiments,
 not a supported plugin option.
 
+The later [full-resolution comparison](../full-halo-comparison/README.md) uses the user's revised visual reference.
+It demonstrates a cost saving against full-resolution analytic halos,
+but also makes the change in halo structure clearer;
+the user has not accepted it as a visual match.
+The measurements below retain their original one-third-resolution baseline.
+
 ## Result
 
 The initial version cost 13–14% more GPU time at 1080p and was roughly tied at 4K,
