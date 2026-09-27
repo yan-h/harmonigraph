@@ -927,9 +927,6 @@ impl Default for SpectrumConfig {
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
             roll_thickness: 0.3,
-            // Keep most of the pitch color even over bright spectral bands,
-            // while letting a little heatmap texture through. The surround
-            // has its own full opacity.
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which
