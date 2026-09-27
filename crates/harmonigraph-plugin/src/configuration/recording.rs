@@ -71,6 +71,25 @@ impl Default for Recording {
     }
 }
 impl Recording {
+    /// Joined destruction is a final boundary at which Stop can be observed:
+    /// no callback still owns an earlier armed intent. Close only the span
+    /// actually registered, leaving both existing frontiers to prove it whole.
+    pub fn observe_retired_disarm(&mut self, recorder: &mut Recorder) {
+        assert!(self.retired_configuration.is_some());
+        let intent = recorder.capture_recording_intent();
+        if intent & 1 != 0 {
+            return;
+        }
+        self.captured_intent = intent;
+        recorder.is_armed_at(intent);
+        if let Some(address) = self.current.take() {
+            if let Some(pass) = self.passes.iter_mut().flatten().find(|p| p.address == address) {
+                pass.end = Some(self.registered_through);
+            } else {
+                recorder.fail_configuration();
+            }
+        }
+    }
     pub fn dispose_retired_configuration(&mut self, recorder: &mut Recorder) {
         let unfinished = self.retired_configuration.expect("joined configuration producer");
         // Retain every already-applied change at its original recording route.
