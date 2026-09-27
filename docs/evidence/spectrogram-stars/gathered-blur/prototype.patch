@@ -1,0 +1,1158 @@
+diff --git a/crates/harmonigraph-render/src/shaders/spectrogram.wgsl b/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+index 9a7ebe23..acf46b1d 100644
+--- a/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
++++ b/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+@@ -320,6 +320,7 @@ struct Cloud {
+     previous_slices: array<StarSlice, 5>,
+     star_halo_size: vec2<f32>,
+     star_halo_pad: vec2<f32>,
++    star_halo_uv: array<vec4<f32>, 5>,
+ };
+ struct StarSlice {
+     offset: vec2<f32>,
+@@ -1098,7 +1099,7 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
+         let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
+         let index = s.base + local.y * s.grid.x + local.x;
+         var slice = star_texel(s, f, index, false);
+-        slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);
++        slice += textureSampleLevel(star_halos, cloud_sampler, (pt / cloud.size) * cloud.star_halo_uv[k].xy + cloud.star_halo_uv[k].zw, i32(k), 0.0);
+         if slice.w > 0.0 {
+             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
+         }
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 5dbc2a15..0b20736d 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -784,6 +784,8 @@ impl CallbackTrait for SpectrogramCallback {
+                 let halos = stars.map(|_| {
+                     atmosphere::star_halo_size(pixels, settings.settings.star_halo_resolution)
+                 });
++                let blur = stars.is_some()
++                    && settings.settings.star_glow == harmonigraph_scene::StarGlow::Blur;
+                 let star_size = stars.map(|layout| {
+                     atmosphere::star_atlas_size(
+                         layout.size(),
+@@ -821,6 +823,7 @@ impl CallbackTrait for SpectrogramCallback {
+                         || c.tile_texels() != texels
+                         || c.star_size() != star_size
+                         || c.halo_size() != halos
++                        || c.has_blur() != blur
+                         || c.memory_size() != memory_size
+                 });
+                 if resize {
+@@ -838,6 +841,7 @@ impl CallbackTrait for SpectrogramCallback {
+                         carried,
+                         stars: star_size,
+                         halos,
++                        blur,
+                         memory: memory_size,
+                         carried_memory,
+                     };
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+index e9a17b29..929c7ecf 100644
+--- a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+@@ -4,6 +4,8 @@
+ //! its values under [`memory_key`]. Source pixels refresh every draw, including
+ //! paused zooms and palette edits.
+ 
++mod star_blur;
++
+ use crate::uniforms::{uniform_group, Float2, Float4, Int2};
+ 
+ use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
+@@ -214,6 +216,7 @@ pub(super) struct StarLayout {
+     pane: [f32; 2],
+     /// The texels all of it takes.
+     texels: u64,
++    extra_border: [u32; STAR_SLICES],
+ }
+ 
+ impl StarLayout {
+@@ -233,7 +236,7 @@ impl StarLayout {
+             *base = texels.min(u64::from(u32::MAX)) as u32;
+             texels += u64::from(grid[0]) * u64::from(grid[1]);
+         }
+-        Self { cells, grids, bases, pane, texels }
++        Self { cells, grids, bases, pane, texels, extra_border: [0; STAR_SLICES] }
+     }
+ 
+     fn fits(&self) -> bool {
+@@ -285,7 +288,23 @@ pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Opti
+     let settings = atmosphere.settings.sanitized();
+     let drawn =
+         settings.effects().cloud && settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
+-    drawn.then(|| star_layout(settings, pixels[0] as f32 / pixels[1] as f32))
++    drawn.then(|| {
++        let mut layout = star_layout(settings, pixels[0] as f32 / pixels[1] as f32);
++        if settings.star_glow == harmonigraph_scene::StarGlow::Blur {
++            let limit = star_halo_size(pixels, settings.star_halo_resolution);
++            let slices = star_slices(settings, 0.0, &layout);
++            let mut base = 0;
++            for (k, slice) in slices.iter().enumerate() {
++                let extra = star_blur::border(slice, settings.star_jitter, limit, layout.pane);
++                layout.extra_border[k] = extra;
++                layout.grids[k] = layout.grids[k].map(|n| n + 2 * extra);
++                layout.bases[k] = base;
++                base += layout.grids[k][0] * layout.grids[k][1];
++            }
++            layout.texels = u64::from(base);
++        }
++        layout
++    })
+ }
+ 
+ /// The atlas to allocate for `needed` texels, keeping the one `held` while it
+@@ -342,8 +361,9 @@ fn star_slices(
+         let grid = layout.grids[k];
+         // The cell a pixel at the pane's top left edge is in, as the shader
+         // works it out, with the original conservative neighbor and margin.
+-        let origin: [i32; 2] =
+-            std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
++        let origin: [i32; 2] = std::array::from_fn(|axis| {
++            star_origin(layout.pane[axis], cell, offset[axis]) - layout.extra_border[k] as i32
++        });
+         StarSlice {
+             offset: Float2(offset),
+             cell,
+@@ -623,8 +643,9 @@ pub(super) fn tile_key(
+         star_speed_curve: _,     // no tile for Stars
+         star_lifetime: _,        // no tile for Stars
+         star_halo_resolution: _, // no tile for Stars
+-        star_fringe: _,          // no tile for Stars
+-        star_defocus: _,         // no tile for Stars
++        star_fringe: _,
++        star_glow: _,    // no tile for Stars
++        star_defocus: _, // no tile for Stars
+     } = settings;
+     // The composite reads a cloud out of its tile and nowhere else: its
+     // live-walk arm was retired because, never taken, it still cost the
+@@ -716,6 +737,7 @@ struct Uniforms {
+     /// allocation even at odd sizes and fractional display scales.
+     star_halo_size: Float2,
+     star_halo_pad: Float2,
++    star_halo_uv: [Float4; STAR_SLICES],
+ }
+ }
+ 
+@@ -778,6 +800,7 @@ pub(super) struct Pipelines {
+     pub star_far: wgpu::RenderPipeline,
+     /// One depth's weighted halo color and coverage at the selected resolution.
+     pub star_halo: wgpu::RenderPipeline,
++    star_blur: star_blur::Pipelines,
+     /// Specialize the final draws so the unsplit shader carries no runtime
+     /// split branch (that branch alone regressed intermediate pane sizes).
+     pub star_composite: wgpu::RenderPipeline,
+@@ -954,6 +977,7 @@ impl Pipelines {
+                 "fs_star_bake",
+                 &[Some(STAR_FORMAT)],
+             ),
++            star_blur: star_blur::Pipelines::new(device),
+             star_halo: tile_pipeline(
+                 device,
+                 &spectrogram,
+@@ -1181,8 +1205,9 @@ fn memory_key(
+         star_speed_curve,
+         star_lifetime,
+         star_halo_resolution: _, // sampling does not change material identity
+-        star_fringe: _,          // response/coverage changes do not change material identity
+-        star_defocus: _,         // response/coverage changes do not change material identity
++        star_fringe: _,
++        star_glow: _,    // response/coverage changes do not change material identity
++        star_defocus: _, // response/coverage changes do not change material identity
+     } = s;
+     let mut values = vec![
+         size[0],
+@@ -1305,6 +1330,7 @@ pub(super) struct Targets {
+     stars: Option<(wgpu::TextureView, [u32; 2])>,
+     halos: Option<StarHalos>,
+     halo_group: Option<wgpu::BindGroup>,
++    blur: Option<star_blur::Targets>,
+     source_uniform: wgpu::Buffer,
+     pub source_group: wgpu::BindGroup,
+     uniform: wgpu::Buffer,
+@@ -1333,6 +1359,7 @@ pub(super) struct Allocation {
+     pub carried: Option<Tile>,
+     pub stars: Option<[u32; 2]>,
+     pub halos: Option<[u32; 2]>,
++    pub blur: bool,
+     pub memory: Option<[u32; 2]>,
+     pub carried_memory: Option<Memory>,
+ }
+@@ -1353,6 +1380,7 @@ impl Targets {
+             carried,
+             stars: star_size,
+             halos: halo_size,
++            blur: want_blur,
+             memory: memory_size,
+             carried_memory,
+         } = wanted;
+@@ -1399,8 +1427,21 @@ impl Targets {
+         // What every group that does not read the atlas binds in its place, and
+         // what the star pass, which writes it, must.
+         let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
+-        let halos = halo_size.map(|size| StarHalos::new(device, size));
++        let halos = halo_size.map(|size| {
++            StarHalos::new(
++                device,
++                if want_blur { size.map(|n| n + 2 * star_blur::PAD) } else { size },
++            )
++        });
+         let halo_scratch = StarHalos::new(device, [1, 1]);
++        let blur = want_blur.then(|| {
++            star_blur::Targets::new(
++                device,
++                &pipelines.star_blur,
++                halo_size.expect("Stars halo shape"),
++                &stars.as_ref().expect("Stars atlas").0,
++            )
++        });
+         let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
+         let memory_views = memory_size.map(|size| {
+             carried_memory.as_ref().map_or_else(
+@@ -1609,6 +1650,7 @@ impl Targets {
+             stars,
+             halos,
+             halo_group,
++            blur,
+             source_uniform,
+             source_group,
+             uniform,
+@@ -1634,13 +1676,27 @@ impl Targets {
+     }
+ 
+     pub fn halo_size(&self) -> Option<[u32; 2]> {
+-        self.halos.as_ref().map(|halo| halo.size)
++        self.halos.as_ref().map(|halo| {
++            if self.blur.is_some() {
++                halo.size.map(|n| n - 2 * star_blur::PAD)
++            } else {
++                halo.size
++            }
++        })
++    }
++
++    pub fn has_blur(&self) -> bool {
++        self.blur.is_some()
+     }
+ 
+     /// Writes each depth separately. The group binds a scratch array where
+     /// consumers bind the real one, so no attached layer is also sampled.
+     pub fn draw_halos(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+         let Some(halos) = &self.halos else { return };
++        if let Some(blur) = &self.blur {
++            blur.draw(encoder, &pipelines.star_blur, &halos.layers);
++            return;
++        }
+         for (layer, view) in halos.layers.iter().enumerate() {
+             #[cfg(test)]
+             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+@@ -1784,6 +1840,14 @@ impl Targets {
+         let drift = cloud_drift(settings, atmosphere.now);
+         let slices =
+             stars.map(|layout| star_slices(settings, atmosphere.now, &layout)).unwrap_or_default();
++        if let Some(blur) = &mut self.blur {
++            blur.update(
++                queue,
++                &slices,
++                settings.star_jitter,
++                [540.0 * rect.width() / rect.height(), 540.0],
++            );
++        }
+         let life = star_life(settings, atmosphere.now);
+         let mut memory_valid = false;
+         let mut alphas = [1.0; 2];
+@@ -1890,6 +1954,10 @@ impl Targets {
+             previous_slices,
+             star_halo_size: Float2(self.halo_size().unwrap_or([1, 1]).map(|n| n as f32)),
+             star_halo_pad: Float2([0.0; 2]),
++            star_halo_uv: self
++                .blur
++                .as_ref()
++                .map_or([Float4([1.0, 1.0, 0.0, 0.0]); STAR_SLICES], |b| b.mapping()),
+         };
+         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
+     }
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+index d4291f28..11876077 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -79,6 +79,34 @@ fn memory(s: &mut SpectralAtmosphere) {
+ }
+ 
+ const CASES: &[(&str, Option<Turn>)] = &[
++    (
++        "paired baseline A",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_jitter = 1.0;
++            s.star_halo_resolution = 1.0 / 3.0;
++            memory(s);
++        }),
++    ),
++    (
++        "paired baseline B",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_jitter = 1.0;
++            s.star_halo_resolution = 1.0 / 3.0;
++            memory(s);
++        }),
++    ),
++    (
++        "paired four",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_jitter = 1.0;
++            s.star_halo_resolution = 1.0 / 3.0;
++            s.star_glow = harmonigraph_scene::StarGlow::Blur;
++            memory(s);
++        }),
++    ),
+     ("plain", None),
+     ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
+     ("blur + terraces", Some(|s| s.cloud_depth = 0.0)),
+@@ -311,8 +339,15 @@ fn cloud_costs_by_style_and_dial() {
+     // INTERLEAVED: one frame of every case per round, so a GPU that another
+     // process is also drawing on, or one that changes its clock mid-run, moves
+     // every case together rather than whichever ran last.
+-    for frame in 0..frames + 10 {
+-        for case in &mut cases {
++    assert_eq!(cases.len(), 3);
++    let warmup = 60;
++    let offset: usize =
++        std::env::var("PROBE_ORDER_OFFSET").unwrap_or_default().parse().unwrap_or(0);
++    let orders = [[0, 1, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0], [1, 0, 2], [0, 2, 1]];
++    let mut raw = String::from("frame,slot,case,gpu_ms,wall_ms\n");
++    for frame in 0..frames + warmup {
++        for (slot, index) in orders[(frame + offset) % 6].iter().copied().enumerate() {
++            let case = &mut cases[index];
+             let Case {
+                 turn,
+                 cb,
+@@ -396,9 +431,15 @@ fn cloud_costs_by_style_and_dial() {
+             let ticks: Vec<u64> =
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
+-            if frame >= 10 {
++            if frame >= warmup {
+                 assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                     "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
++                raw.push_str(&format!(
++                    "{},{slot},{name},{},{}\n",
++                    frame - warmup,
++                    (ticks[1] - ticks[0]) as f64 * period / 1.0e6,
++                    wall_ms
++                ));
+                 wall.push(wall_ms);
+                 gpu_total.push((ticks[1] - ticks[0]) as f64 * period / 1.0e6);
+                 cpu_prepare.push(prepare_ms);
+@@ -406,6 +447,7 @@ fn cloud_costs_by_style_and_dial() {
+         }
+     }
+ 
++    std::fs::write(std::env::var("PROBE_RAW").unwrap(), raw).unwrap();
+     for case in &mut cases {
+         case.wall.sort_by(f64::total_cmp);
+         case.gpu_total.sort_by(f64::total_cmp);
+@@ -442,3 +484,106 @@ fn cloud_costs_by_style_and_dial() {
+         }
+     }
+ }
++
++#[test]
++#[ignore]
++fn scratch_take_stars_frames() {
++    use std::io::Write;
++    let (device, queue) = headless_device().expect("GPU");
++    let root = "/private/tmp/stars-gather-blur";
++    let pixels: Vec<[u8; 4]> = std::fs::read(format!("{root}/palette.rgba"))
++        .unwrap()
++        .chunks_exact(4)
++        .map(|p| p.try_into().unwrap())
++        .collect();
++    let variants = "halos,blur";
++    let frames: u32 =
++        std::env::var("PROBE_VIDEO_FRAMES").ok().map(|n| n.parse().unwrap()).unwrap_or(1);
++    for name in variants.split(',') {
++        for input in ["take", "flat"] {
++            if frames > 1 && input == "flat" {
++                continue;
++            }
++            let bytes = Arc::new(std::fs::read(format!("{root}/{input}-levels.u8")).unwrap());
++            let mut cb = cloud_fixture();
++            cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0));
++            cb.grid = grid_of(bytes, 1024, 960, 0);
++            relay_quad(&mut cb, 960);
++            let span = 12.0 * (9000.0_f32 / 70.0).log2();
++            cb.read = read_of(35.0, span, 540);
++            cb.read.spectrum_min_midi = 35.0;
++            cb.read.bins_per_semitone = 1024.0 / span;
++            cb.read.level_per_midi = 0.0;
++            cb.read.level_per_step = 1.0 / 255.0;
++            cb.shades.lut = Arc::new(pixels.clone());
++            let a = cb.atmosphere.as_mut().unwrap();
++            a.region = cb.rect;
++            a.now = 3.0;
++            a.points_per_cent = 540.0 / (span * 100.0);
++            a.points_per_ms = 960.0 / 20000.0;
++            a.settings = SpectralAtmosphere {
++                cloud_style: CloudStyle::Stars,
++                cloud_depth: 1.0,
++                star_glow: if name == "blur" {
++                    harmonigraph_scene::StarGlow::Blur
++                } else {
++                    harmonigraph_scene::StarGlow::Halos
++                },
++                star_halo_resolution: 1.0 / 3.0,
++                star_jitter: std::env::var("PROBE_JITTER")
++                    .ok()
++                    .and_then(|v| v.parse().ok())
++                    .unwrap_or(1.0),
++                ..Default::default()
++            };
++            let mut resources = CallbackResources::default();
++            let mut video = if frames > 1 {
++                Some(
++                    std::process::Command::new("ffmpeg")
++                        .args([
++                            "-v",
++                            "error",
++                            "-y",
++                            "-f",
++                            "rawvideo",
++                            "-pix_fmt",
++                            "rgba",
++                            "-s",
++                            "960x540",
++                            "-r",
++                            "30",
++                            "-i",
++                            "-",
++                            "-c:v",
++                            "libx264",
++                            "-crf",
++                            "16",
++                            "-pix_fmt",
++                            "yuv420p",
++                            &format!("{root}/{name}.mp4"),
++                        ])
++                        .stdin(std::process::Stdio::piped())
++                        .spawn()
++                        .unwrap(),
++                )
++            } else {
++                None
++            };
++            for frame in 0..frames {
++                cb.pass_nr = frame as u64;
++                cb.atmosphere.as_mut().unwrap().now = 3.0 + f64::from(frame) / 30.0;
++                let bytes = frame_with(&device, &queue, &mut resources, &cb);
++                if frame == 0 {
++                    std::fs::write(format!("{root}/{name}-{input}.rgba"), &bytes).unwrap();
++                }
++                if let Some(video) = video.as_mut() {
++                    video.stdin.as_mut().unwrap().write_all(&bytes).unwrap();
++                }
++            }
++            if let Some(mut video) = video {
++                drop(video.stdin.take());
++                assert!(video.wait().unwrap().success());
++            }
++        }
++    }
++}
+diff --git a/crates/harmonigraph-scene/src/atmosphere.rs b/crates/harmonigraph-scene/src/atmosphere.rs
+index d834e9d2..28eab574 100644
+--- a/crates/harmonigraph-scene/src/atmosphere.rs
++++ b/crates/harmonigraph-scene/src/atmosphere.rs
+@@ -39,6 +39,14 @@ pub enum CloudStyle {
+     Stars,
+ }
+ 
++/// How Stars spreads each depth's outer coverage around its sharp cores.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
++pub enum StarGlow {
++    #[default]
++    Halos,
++    Blur,
++}
++
+ /// The band both cloud size dials run over — [`SpectralAtmosphere::scale_size`]
+ /// and [`SpectralAtmosphere::wash_size`], which mean the same thing about two
+ /// different textures and so are worth one pair of numbers rather than two.
+@@ -382,6 +390,8 @@ pub struct SpectralAtmosphere {
+     /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
+     /// Runs to [`STAR_FRINGE_MAX`].
+     pub star_fringe: f32,
++    /// Analytic per-star halos or an image blur shared by each depth.
++    pub star_glow: StarGlow,
+     /// Halo image width and height relative to the pane's device pixels.
+     /// Lower values soften the halo sampling without moving stars or changing
+     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
+@@ -462,6 +472,7 @@ impl Default for SpectralAtmosphere {
+             star_speed_max: 0.16860056,
+             star_speed_curve: 3.179647,
+             star_lifetime: 2.9719827,
++            star_glow: StarGlow::Halos,
+             star_fringe: 0.5,
+             star_halo_resolution: 0.5,
+             star_defocus: 0.35391274,
+diff --git a/crates/harmonigraph-scene/src/lib.rs b/crates/harmonigraph-scene/src/lib.rs
+index f6c20e61..2402c6b5 100644
+--- a/crates/harmonigraph-scene/src/lib.rs
++++ b/crates/harmonigraph-scene/src/lib.rs
+@@ -42,7 +42,7 @@ pub mod trail;
+ pub mod view;
+ 
+ pub use atmosphere::{
+-    AtmosphereSettings, CloudStyle, LatticeMaterial, SpectralAtmosphere, SpectralEffects,
++    AtmosphereSettings, CloudStyle, LatticeMaterial, SpectralAtmosphere, SpectralEffects, StarGlow,
+     BLUR_TIME_STEP_MAX, BREATH_SPEED_MAX, BREATH_SPEED_MIN, CLOUD_DIRECTION_MAX,
+     CLOUD_DIRECTION_MIN, CLOUD_SIZE_MAX, CLOUD_SIZE_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN,
+     CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, NEBULA_SCALE_MAX,
+diff --git a/crates/harmonigraph-ui/src/panes/spectral/settings.rs b/crates/harmonigraph-ui/src/panes/spectral/settings.rs
+index b8e3e410..bdb3bc2f 100644
+--- a/crates/harmonigraph-ui/src/panes/spectral/settings.rs
++++ b/crates/harmonigraph-ui/src/panes/spectral/settings.rs
+@@ -611,6 +611,13 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
+         STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
+         STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN, STAR_SPEED_MAX, STAR_SPEED_MIN,
+     };
++    choice_row(
++        ui, "Glow", &mut atmosphere.star_glow,
++        &[
++            (harmonigraph_scene::StarGlow::Halos, "Halos", "Each star keeps its own halo shape and width."),
++            (harmonigraph_scene::StarGlow::Blur, "Gathered blur", "Blur each depth separately around sharp cores. Stars at one depth share a soft halo width."),
++        ],
++    );
+     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
+         .unit(1.0, "\u{d7}")
+         .show(ui)
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere/star_blur.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere/star_blur.rs
+new file mode 100644
+index 00000000..f335b109
+--- /dev/null
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere/star_blur.rs
+@@ -0,0 +1,546 @@
++//! Alternative Stars coverage: energy-preserving point seeds, filtered one
++//! depth at a time. The two padded scratch images are shared across depths.
++use super::{wgpu, StarSlice, STAR_FAR_FORMAT, STAR_SLICES};
++use crate::uniforms::{uniform_group, Float2, Float4, Int2};
++
++const SOURCE: &str = include_str!("../../shaders/star_blur.wgsl");
++pub(super) const PAD: u32 = 8;
++uniform_group! {
++    struct Uniforms {
++        output_size: Float2,
++        logical_size: Float2,
++        texture_size: Float2,
++        cell: Float2,
++        offset: Float2,
++        grid: Int2,
++        base: i32,
++        mass: f32,
++        padding: Float2,
++        geometry: Float4,
++        weights: [Float4; 4],
++    }
++}
++
++pub(super) struct Pipelines {
++    layout: wgpu::BindGroupLayout,
++    seed: wgpu::RenderPipeline,
++    horizontal: [wgpu::RenderPipeline; 3],
++    vertical: [wgpu::RenderPipeline; 3],
++    sampler: wgpu::Sampler,
++}
++impl Pipelines {
++    pub fn new(device: &wgpu::Device) -> Self {
++        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++            label: Some("star_blur_layout"),
++            entries: &[
++                wgpu::BindGroupLayoutEntry {
++                    binding: 0,
++                    visibility: wgpu::ShaderStages::FRAGMENT,
++                    ty: wgpu::BindingType::Texture {
++                        sample_type: wgpu::TextureSampleType::Uint,
++                        view_dimension: wgpu::TextureViewDimension::D2,
++                        multisampled: false,
++                    },
++                    count: None,
++                },
++                wgpu::BindGroupLayoutEntry {
++                    binding: 1,
++                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
++                    ty: wgpu::BindingType::Buffer {
++                        ty: wgpu::BufferBindingType::Uniform,
++                        has_dynamic_offset: false,
++                        min_binding_size: None,
++                    },
++                    count: None,
++                },
++                wgpu::BindGroupLayoutEntry {
++                    binding: 2,
++                    visibility: wgpu::ShaderStages::FRAGMENT,
++                    ty: wgpu::BindingType::Texture {
++                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                        view_dimension: wgpu::TextureViewDimension::D2,
++                        multisampled: false,
++                    },
++                    count: None,
++                },
++                wgpu::BindGroupLayoutEntry {
++                    binding: 3,
++                    visibility: wgpu::ShaderStages::FRAGMENT,
++                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
++                    count: None,
++                },
++            ],
++        });
++        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
++            label: Some("star_blur"),
++            source: wgpu::ShaderSource::Wgsl(SOURCE.into()),
++        });
++        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
++            label: Some("star_blur_pipeline_layout"),
++            bind_group_layouts: &[Some(&layout)],
++            ..Default::default()
++        });
++        let pipeline = |vertex, fragment, blend, pairs: usize| {
++            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
++                label: Some(fragment),
++                layout: Some(&pipeline_layout),
++                vertex: wgpu::VertexState {
++                    module: &shader,
++                    entry_point: Some(vertex),
++                    compilation_options: Default::default(),
++                    buffers: &[],
++                },
++                fragment: Some(wgpu::FragmentState {
++                    module: &shader,
++                    entry_point: Some(fragment),
++                    compilation_options: wgpu::PipelineCompilationOptions {
++                        constants: &[("BLUR_PAIRS", pairs as f64)],
++                        ..Default::default()
++                    },
++                    targets: &[Some(wgpu::ColorTargetState {
++                        format: STAR_FAR_FORMAT,
++                        blend,
++                        write_mask: wgpu::ColorWrites::ALL,
++                    })],
++                }),
++                primitive: Default::default(),
++                depth_stencil: None,
++                multisample: Default::default(),
++                multiview_mask: None,
++                cache: None,
++            })
++        };
++        Self {
++            seed: pipeline("vs_fullscreen", "fs_seed", None, 1),
++            horizontal: std::array::from_fn(|i| {
++                pipeline("vs_fullscreen", "fs_horizontal", None, i + 1)
++            }),
++            vertical: std::array::from_fn(|i| {
++                pipeline("vs_fullscreen", "fs_vertical", None, i + 1)
++            }),
++            layout,
++            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
++                label: Some("star_blur_sampler"),
++                mag_filter: wgpu::FilterMode::Linear,
++                min_filter: wgpu::FilterMode::Linear,
++                ..Default::default()
++            }),
++        }
++    }
++}
++
++#[derive(Clone, Copy)]
++struct Shape {
++    logical: [u32; 2],
++    mass: f32,
++    cell: [f32; 2],
++    weights: [Float4; 4],
++    pairs: [f32; 2],
++}
++pub(super) struct Targets {
++    size: [u32; 2],
++    scratch: [wgpu::TextureView; 2],
++    uniforms: [wgpu::Buffer; STAR_SLICES],
++    groups: [[wgpu::BindGroup; 2]; STAR_SLICES],
++    shapes: Option<([f32; 28], [Shape; STAR_SLICES])>,
++}
++impl Targets {
++    pub fn new(
++        device: &wgpu::Device,
++        pipelines: &Pipelines,
++        size: [u32; 2],
++        atlas: &wgpu::TextureView,
++    ) -> Self {
++        let scratch = std::array::from_fn(|_| {
++            device
++                .create_texture(&wgpu::TextureDescriptor {
++                    label: Some("star_blur_scratch"),
++                    size: wgpu::Extent3d {
++                        width: size[0] + 2 * PAD,
++                        height: size[1] + 2 * PAD,
++                        depth_or_array_layers: 1,
++                    },
++                    mip_level_count: 1,
++                    sample_count: 1,
++                    dimension: wgpu::TextureDimension::D2,
++                    format: STAR_FAR_FORMAT,
++                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
++                        | wgpu::TextureUsages::TEXTURE_BINDING,
++                    view_formats: &[],
++                })
++                .create_view(&Default::default())
++        });
++        let uniforms = std::array::from_fn(|_| {
++            device.create_buffer(&wgpu::BufferDescriptor {
++                label: Some("star_blur_uniform"),
++                size: std::mem::size_of::<Uniforms>() as u64,
++                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
++                mapped_at_creation: false,
++            })
++        });
++        let groups = std::array::from_fn(|k| {
++            std::array::from_fn(|i| {
++                device.create_bind_group(&wgpu::BindGroupDescriptor {
++                    label: Some("star_blur_group"),
++                    layout: &pipelines.layout,
++                    entries: &[
++                        wgpu::BindGroupEntry {
++                            binding: 0,
++                            resource: wgpu::BindingResource::TextureView(atlas),
++                        },
++                        wgpu::BindGroupEntry {
++                            binding: 1,
++                            resource: uniforms[k].as_entire_binding(),
++                        },
++                        wgpu::BindGroupEntry {
++                            binding: 2,
++                            resource: wgpu::BindingResource::TextureView(&scratch[i]),
++                        },
++                        wgpu::BindGroupEntry {
++                            binding: 3,
++                            resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
++                        },
++                    ],
++                })
++            })
++        });
++        Self { size, scratch, uniforms, groups, shapes: None }
++    }
++    pub fn update(
++        &mut self,
++        queue: &wgpu::Queue,
++        slices: &[StarSlice; STAR_SLICES],
++        jitter: f32,
++        pane: [f32; 2],
++    ) {
++        // Only response geometry changes the kernel. Drift, life and color must
++        // update the seeds without repeating the quadrature or reallocating.
++        let mut key = [0.0; 28];
++        key[26..28].copy_from_slice(&pane);
++        key[0] = jitter;
++        for (k, s) in slices.iter().enumerate() {
++            key[1 + 5 * k..6 + 5 * k]
++                .copy_from_slice(&[s.cell, s.sigma, s.cap, s.defocus, s.fringe]);
++        }
++        if self.shapes.as_ref().is_none_or(|(old, _)| old != &key) {
++            self.shapes =
++                Some((key, std::array::from_fn(|k| shape(&slices[k], jitter, self.size, pane))));
++        }
++        let shapes = &self.shapes.as_ref().unwrap().1;
++        for (k, s) in slices.iter().enumerate() {
++            let p = shapes[k];
++            let offset = std::array::from_fn(|i| {
++                (s.origin.0[i] + s.offset.0[i].floor() as i32) as f32 + s.offset.0[i].fract()
++            });
++            let u = Uniforms {
++                output_size: Float2(self.size.map(|n| n as f32)),
++                logical_size: Float2(p.logical.map(|n| n as f32)),
++                texture_size: Float2(self.size.map(|n| (n + 2 * PAD) as f32)),
++                cell: Float2(p.cell),
++                offset: Float2(offset),
++                grid: s.grid,
++                base: s.base,
++                mass: p.mass,
++                padding: Float2([PAD as f32; 2]),
++                geometry: Float4([0.5 - 0.3 * jitter, 0.5 + 0.3 * jitter, p.pairs[0], p.pairs[1]]),
++                weights: p.weights,
++            };
++            queue.write_buffer(&self.uniforms[k], 0, bytemuck::bytes_of(&u));
++        }
++    }
++    pub fn mapping(&self) -> [Float4; STAR_SLICES] {
++        let shapes = &self.shapes.as_ref().expect("updated before mapping").1;
++        std::array::from_fn(|k| {
++            let tex = self.size.map(|n| (n + 2 * PAD) as f32);
++            Float4([
++                shapes[k].logical[0] as f32 / tex[0],
++                shapes[k].logical[1] as f32 / tex[1],
++                PAD as f32 / tex[0],
++                PAD as f32 / tex[1],
++            ])
++        })
++    }
++    pub fn draw(
++        &self,
++        encoder: &mut wgpu::CommandEncoder,
++        pipelines: &Pipelines,
++        layers: &[wgpu::TextureView; STAR_SLICES],
++    ) {
++        let shapes = &self.shapes.as_ref().expect("updated before drawing").1;
++        for (k, layer) in layers.iter().enumerate() {
++            for (pipeline, target, input) in [
++                (&pipelines.seed, &self.scratch[0], 1),
++                (&pipelines.horizontal[shapes[k].pairs[0] as usize - 1], &self.scratch[1], 0),
++                (&pipelines.vertical[shapes[k].pairs[1] as usize - 1], layer, 1),
++            ]
++            .into_iter()
++            {
++                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                    label: Some("star_blur"),
++                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                        view: target,
++                        depth_slice: None,
++                        resolve_target: None,
++                        ops: wgpu::Operations {
++                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
++                            store: wgpu::StoreOp::Store,
++                        },
++                    })],
++                    ..Default::default()
++                });
++                {
++                    let extent = shapes[k].logical.map(|n| n + 2 * PAD);
++                    pass.set_viewport(0.0, 0.0, extent[0] as f32, extent[1] as f32, 0.0, 1.0);
++                    pass.set_scissor_rect(0, 0, extent[0], extent[1]);
++                }
++                pass.set_pipeline(pipeline);
++                pass.set_bind_group(0, &self.groups[k][input], &[]);
++                pass.draw(0..3, 0..1);
++            }
++        }
++    }
++}
++
++fn smooth(a: f32, b: f32, x: f32) -> f32 {
++    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
++    t * t * (3.0 - 2.0 * t)
++}
++pub(super) fn border(s: &StarSlice, jitter: f32, size: [u32; 2], pane: [f32; 2]) -> u32 {
++    let p = shape(s, jitter, size, pane);
++    (((PAD + 1) as f32 / p.cell[0].min(p.cell[1])).ceil() as u32) + 2
++}
++fn shape(s: &StarSlice, jitter: f32, size: [u32; 2], pane: [f32; 2]) -> Shape {
++    // Integrate the existing outer response, including its cutoff and removal
++    // of the native core. A Gaussian preserves its mass and approximates its
++    // second moment; it cannot reproduce the residual's central hollow.
++    let sigma = s.sigma.min(s.cap) * s.defocus;
++    let outer = 1.2 * s.cell;
++    let core = (0.5 - 0.3 * jitter) * s.cell;
++    let dr = outer / 128.0;
++    let mut mass = 0.0;
++    let mut moment = 0.0;
++    for i in 0..128 {
++        let r = (i as f32 + 0.5) * dr;
++        let d = r / sigma;
++        let g = (-0.5 * d * d).exp();
++        let full =
++            (g + s.fringe * (-0.4 * d).exp()).min(1.0) * (1.0 - smooth(0.7 * outer, outer, r));
++        let residual = (full - g * (1.0 - smooth(0.7 * core, core, r))).max(0.0);
++        let ring = 2.0 * std::f32::consts::PI * r * dr * residual;
++        mass += ring;
++        moment += ring * r * r * 0.5;
++    }
++    let width = (moment / mass.max(1e-20)).sqrt().min(0.35 * s.cell);
++    let logical = std::array::from_fn(|a| {
++        ((pane[a] * 2.0 / width.max(1e-6)).ceil() as u32).clamp(1, size[a])
++    });
++    let scale: [f32; 2] = std::array::from_fn(|a| logical[a] as f32 / pane[a]);
++    let kernels: [[f32; 7]; 2] = std::array::from_fn(|a| {
++        let sigma = ((width * scale[a]).powi(2) - 1.0 / 6.0).max(0.25).sqrt();
++        let radius = 2 * (sigma * 1.5).ceil().clamp(1.0, 3.0) as usize;
++        let mut w = std::array::from_fn(|i| {
++            if i <= radius {
++                (-0.5 * (i as f32 / sigma).powi(2)).exp()
++            } else {
++                0.0
++            }
++        });
++        let sum = w[0] + 2.0 * w[1..].iter().sum::<f32>();
++        w.iter_mut().for_each(|v| *v /= sum);
++        w
++    });
++    let weights = std::array::from_fn(|i| {
++        if i == 0 {
++            return Float4([0.0, kernels[0][0], 0.0, kernels[1][0]]);
++        }
++        let pair = |a: usize| {
++            let j = 2 * i - 1;
++            let w = kernels[a][j] + kernels[a][j + 1];
++            [j as f32 + kernels[a][j + 1] / w.max(1e-20), w]
++        };
++        let x = pair(0);
++        let y = pair(1);
++        Float4([x[0], x[1], y[0], y[1]])
++    });
++    let pairs = std::array::from_fn(|a| {
++        if kernels[a][5] > 0.0 {
++            3.0
++        } else if kernels[a][3] > 0.0 {
++            2.0
++        } else {
++            1.0
++        }
++    });
++    Shape {
++        pairs,
++        logical,
++        mass: mass / (sigma * sigma) * scale[0] * scale[1],
++        cell: scale.map(|v| v * s.cell),
++        weights,
++    }
++}
++
++#[cfg(test)]
++mod probe {
++    use super::*;
++    use crate::gpu_harness::{headless_device, render_to_texture};
++
++    #[test]
++    fn gathered_seeds_match_independent_tent_deposits_through_full_jitter_motion() {
++        let (device, queue) = headless_device().expect("GPU");
++        let pipelines = Pipelines::new(&device);
++        let logical = [9u32, 11u32];
++        let extent = logical.map(|n| n + 2 * PAD);
++        let atlas = device.create_texture(&wgpu::TextureDescriptor {
++            label: Some("seed_probe_atlas"),
++            size: wgpu::Extent3d { width: 2048, height: 2, depth_or_array_layers: 1 },
++            mip_level_count: 1,
++            sample_count: 1,
++            dimension: wgpu::TextureDimension::D2,
++            format: wgpu::TextureFormat::Rgba32Uint,
++            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
++            view_formats: &[],
++        });
++        // Dense cells require more than nine candidates per output texel.
++        // The nonzero base crosses an atlas row; bright sentinels outside the
++        // slice expose accidentally addressing an adjacent row or depth.
++        let base = 2040usize;
++        let grid = [18, 14];
++        let cell = [0.41f32, 0.67];
++        let sentinel = [0.5f32.to_bits(), 0.5f32.to_bits(), 1023 << 20, 0x3c003c00u32];
++        let mut data = vec![sentinel; 4096];
++        for y in 0..grid[1] {
++            for x in 0..grid[0] {
++                let i = base + y * grid[0] + x;
++                let q =
++                    [if x % 2 == 0 { 0.2f32 } else { 0.8 }, if y % 2 == 0 { 0.8f32 } else { 0.2 }];
++                data[i] = [q[0].to_bits(), q[1].to_bits(), 1023 << 20, 0x3c003c00];
++            }
++        }
++        queue.write_texture(
++            atlas.as_image_copy(),
++            bytemuck::cast_slice(&data),
++            wgpu::TexelCopyBufferLayout {
++                offset: 0,
++                bytes_per_row: Some(2048 * 16),
++                rows_per_image: None,
++            },
++            atlas.size(),
++        );
++        let targets =
++            Targets::new(&device, &pipelines, logical, &atlas.create_view(&Default::default()));
++        for phase in 0..17 {
++            let shift = phase as f32 / 16.0;
++            let offset = [-9.0 + shift, -7.0 - shift * 0.71];
++            let mass = 0.05f32;
++            let uniform = Uniforms {
++                output_size: Float2(logical.map(|n| n as f32)),
++                logical_size: Float2(logical.map(|n| n as f32)),
++                texture_size: Float2(extent.map(|n| n as f32)),
++                cell: Float2(cell),
++                offset: Float2(offset),
++                grid: Int2(grid.map(|n| n as i32)),
++                base: base as i32,
++                mass,
++                padding: Float2([PAD as f32; 2]),
++                geometry: Float4([0.2, 0.8, 0.0, 0.0]),
++                weights: [Float4([0.0; 4]); 4],
++            };
++            queue.write_buffer(&targets.uniforms[0], 0, bytemuck::bytes_of(&uniform));
++            let texture = render_to_texture(
++                &device,
++                &queue,
++                extent,
++                STAR_FAR_FORMAT,
++                wgpu::Color::TRANSPARENT,
++                |pass| {
++                    pass.set_pipeline(&pipelines.seed);
++                    pass.set_bind_group(0, &targets.groups[0][1], &[]);
++                    pass.draw(0..3, 0..1);
++                },
++            );
++            let stride = (extent[0] * 8).div_ceil(256) * 256;
++            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
++                label: Some("seed_probe_readback"),
++                size: u64::from(stride * extent[1]),
++                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
++                mapped_at_creation: false,
++            });
++            let mut encoder = device.create_command_encoder(&Default::default());
++            encoder.copy_texture_to_buffer(
++                texture.as_image_copy(),
++                wgpu::TexelCopyBufferInfo {
++                    buffer: &buffer,
++                    layout: wgpu::TexelCopyBufferLayout {
++                        offset: 0,
++                        bytes_per_row: Some(stride),
++                        rows_per_image: None,
++                    },
++                },
++                texture.size(),
++            );
++            queue.submit([encoder.finish()]);
++            let slice = buffer.slice(..);
++            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map seed probe"));
++            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
++            let mapped = slice.get_mapped_range();
++            // Reference scatters every star into its four pixels, independent
++            // of the shader's inverse-coordinate gather bounds.
++            let mut expected = vec![0.0f32; (extent[0] * extent[1]) as usize];
++            for y in 0..grid[1] {
++                for x in 0..grid[0] {
++                    let t = data[base + y * grid[0] + x];
++                    let at = [x as f32, y as f32];
++                    let centre: [f32; 2] = std::array::from_fn(|a| {
++                        (at[a] + offset[a] + f32::from_bits(t[a])) * cell[a]
++                            + logical[a] as f32 * 0.5
++                            + PAD as f32
++                    });
++                    let first = centre.map(|v| (v - 0.5).floor() as i32);
++                    for dy in 0..2 {
++                        for dx in 0..2 {
++                            let xy = [first[0] + dx, first[1] + dy];
++                            assert!(
++                                xy[0] >= 0
++                                    && xy[1] >= 0
++                                    && xy[0] < extent[0] as i32
++                                    && xy[1] < extent[1] as i32,
++                                "fixture star must be wholly inside"
++                            );
++                            let w: [f32; 2] = std::array::from_fn(|a| {
++                                (1.0 - ((xy[a] as f32 + 0.5) - centre[a]).abs()).max(0.0)
++                            });
++                            expected[(xy[1] * extent[0] as i32 + xy[0]) as usize] +=
++                                mass * w[0] * w[1];
++                        }
++                    }
++                }
++            }
++            let mut total = 0.0;
++            for y in 0..extent[1] {
++                for x in 0..extent[0] {
++                    let at = (y * stride + x * 8 + 6) as usize;
++                    let bits = u16::from_le_bytes([mapped[at], mapped[at + 1]]);
++                    let exponent = (bits >> 10) & 31;
++                    let mantissa = bits & 1023;
++                    let actual = if exponent == 0 {
++                        f32::from(mantissa) * 2.0f32.powi(-24)
++                    } else {
++                        f32::from(1024 + mantissa) * 2.0f32.powi(i32::from(exponent) - 25)
++                    };
++                    let want = expected[(y * extent[0] + x) as usize];
++                    assert!(
++                        (actual - want).abs() < 0.0003,
++                        "phase {phase}, ({x},{y}): {actual} != {want}"
++                    );
++                    total += actual;
++                }
++            }
++            let wanted_total = mass * (grid[0] * grid[1]) as f32;
++            assert!(
++                (total - wanted_total).abs() < 0.01,
++                "phase {phase}: mass {total} != {wanted_total}"
++            );
++        }
++    }
++}
+diff --git a/crates/harmonigraph-render/src/shaders/star_blur.wgsl b/crates/harmonigraph-render/src/shaders/star_blur.wgsl
+new file mode 100644
+index 00000000..9d5f3dd9
+--- /dev/null
++++ b/crates/harmonigraph-render/src/shaders/star_blur.wgsl
+@@ -0,0 +1,69 @@
++override BLUR_PAIRS: u32 = 3u;
++struct Uniforms {
++    output_size: vec2<f32>,
++    logical_size: vec2<f32>,
++    texture_size: vec2<f32>,
++    cell: vec2<f32>,
++    offset: vec2<f32>,
++    grid: vec2<i32>,
++    base: i32,
++    mass: f32,
++    padding: vec2<f32>,
++    geometry: vec4<f32>,
++    weights: array<vec4<f32>, 4>,
++}
++@group(0) @binding(0) var atlas: texture_2d<u32>;
++@group(0) @binding(1) var<uniform> u: Uniforms;
++@group(0) @binding(2) var source: texture_2d<f32>;
++@group(0) @binding(3) var linear: sampler;
++// Gather the complete tent footprint, including jitter, into one output texel.
++// Bounds grow when a texel covers multiple cells; never clamp to 3x3.
++@fragment
++fn fs_seed(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
++    let r = (p.xy - u.padding - u.logical_size * 0.5) / u.cell - u.offset;
++    let low = max(vec2<i32>(ceil(r - 1.0 / u.cell - u.geometry.y)), vec2<i32>(0));
++    let high = min(vec2<i32>(floor(r + 1.0 / u.cell - u.geometry.x)), u.grid - 1);
++    var sum = vec4<f32>(0.0);
++    for (var y = low.y; y <= high.y; y += 1) {
++        for (var x = low.x; x <= high.x; x += 1) {
++            let index = u.base + y * u.grid.x + x;
++            let t = textureLoad(atlas, vec2<i32>(index & 2047, index >> 11), 0);
++            if t.w == 0u { continue; }
++            let centre = (vec2<f32>(f32(x), f32(y)) + u.offset + vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * u.cell + u.logical_size * 0.5 + u.padding;
++            let tent = max(vec2(1.0) - abs(p.xy - centre), vec2(0.0));
++            let shape = unpack2x16float(t.w);
++            let mass = u.mass * shape.y / (shape.x * shape.x) * tent.x * tent.y;
++            let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
++            sum += vec4(colour * mass, mass);
++        }
++    }
++    return sum;
++}
++@vertex
++fn vs_fullscreen(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
++    let p = array<vec2<f32>, 3>(vec2(-1.0,-1.0), vec2(3.0,-1.0), vec2(-1.0,3.0));
++    return vec4(p[index], 0.0, 1.0);
++}
++fn sample_at(p: vec2<f32>) -> vec4<f32> {
++    let bounded = clamp(p, vec2(0.5), u.logical_size + 2.0*u.padding - 0.5);
++    return textureSampleLevel(source, linear, bounded / u.texture_size, 0.0);
++}
++@fragment
++fn fs_horizontal(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
++    var sum = sample_at(p.xy) * u.weights[0].y;
++    for (var i = 1u; i <= BLUR_PAIRS; i += 1u) {
++        let w = u.weights[i];
++        sum += (sample_at(p.xy + vec2(w.x,0.0)) + sample_at(p.xy - vec2(w.x,0.0))) * w.y;
++    }
++    return sum;
++}
++@fragment
++fn fs_vertical(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
++    let centre = p.xy;
++    var sum = sample_at(centre) * u.weights[0].w;
++    for (var i = 1u; i <= BLUR_PAIRS; i += 1u) {
++        let w = u.weights[i];
++        sum += (sample_at(centre + vec2(0.0,w.z)) + sample_at(centre - vec2(0.0,w.z))) * w.w;
++    }
++    return sum;
++}

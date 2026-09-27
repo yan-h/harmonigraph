@@ -258,13 +258,46 @@ added filtering passes and scratch images,
 and always ran the final vertical filter at half resolution.
 A seed-draw bypass diagnostic implicated seed production as substantial work,
 but was not an equivalent-picture alternative or an exclusive cost breakdown.
-The report preserves sampling/edge limitations and the untested idea of filtering entirely at each depth's logical resolution before one upsample.
+The report preserves sampling/edge limitations;
+filtering entirely at each depth's logical resolution before one upsample was tested in the follow-up below.
 It does not establish that every possible blur design is slower.
 
 Yan chose **“Let's keep the halos.”** The blur code and experimental selector were removed;
 the implementation patch,
 raw timings,
 images and limitations remain in the evidence folder.
+
+## Follow-up: directly gathered seeds and smaller per-depth filters
+
+The [second blur experiment](evidence/spectrogram-stars/gathered-blur/README.md) removes per-star seed quads and runs both filter directions at each depth's smaller logical resolution,
+then upsamples once during native composition.
+It gathers energy-preserving tent seeds directly from actual jittered centers,
+including every star within the seed footprint.
+The comparison uses **100% jitter against analytic halos at exactly one-third resolution**.
+
+The first version cost **13–14% more total GPU time at 1080p and was roughly tied at 4K**,
+with means about 1% slower.
+Two attempts to trim nearly zero-weight filter taps also failed to beat the baseline;
+the final specialized filters cost **16–19% more at 1080p and 3–5% more at 4K**.
+Load varied between series,
+so their absolute times do not isolate the effect of kernel tuning.
+The report retains the paired controls and all three series.
+
+An independent GPU-versus-CPU seed check passed through full-jitter motion,
+including many tiny stars per output pixel and an atlas-row boundary.
+Thus the measured implementation preserves the tested seeds' energy;
+it does not obtain speed by dropping them.
+Real-take images remain close,
+with somewhat smoother grain and more uniform glow.
+Shared per-depth kernels still approximate the analytic halo shapes.
+
+**The experiment was reverted.** Removing tiny seed triangles and reducing vertical-filter work was insufficient to make this separate seed-plus-two-filter design cheaper than the one-third analytic baseline.
+The scratch implementation also needs bounded atlas padding and cached border planning before any future adoption.
+The patch,
+raw samples,
+images,
+verification and limitations are preserved in the report.
+Fused seed/filter generation and shared-data analytic compute remain unmeasured ideas.
 
 ## Reducing halo work without reducing jitter or reach
 
@@ -298,7 +331,7 @@ The default stays at 50% to preserve the current sampled look.
 
 Other ideas remain unmeasured:
 use four halo neighbors with shorter support,
-use different resolutions for different depths,
+use different resolutions for different analytic-halo depths,
 try different native pass partitions,
 or combine color-memory preparation and star baking.
 Four halo neighbors at half resolution would nominally give two candidates per depth,

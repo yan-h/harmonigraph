@@ -135,7 +135,10 @@ then upsampling once during final composition,
 could reduce the current vertical bandwidth and fix its pairing approximation.
 It requires different target sizing or per-layer coordinate mapping.
 Collapsing silent quads would remove their raster work while retaining their vertex work.
-Neither proposal was implemented or measured.
+At the time of this first experiment,
+neither proposal was implemented or measured.
+The later [gathered-blur experiment](../gathered-blur/README.md) tested per-depth vertical-filter sizing together with directly gathered seeds,
+but did not demonstrate a win over one-third-resolution analytic halos.
 The measured regression does not justify shipping the current added rendering machinery.
 
 A single nominal-cell seed lookup was not used:
@@ -161,7 +164,9 @@ It changed both the algorithm and the appearance.
 
 ## Lower-cost follow-up within the current halo architecture
 
-These options remain unmeasured.
+These were follow-up proposals at the time of this experiment.
+[One-third analytic resolution was subsequently measured](../halo-resolution/README.md) and exposed through the Halo resolution slider;
+the other analytic-halo proposals below remain unmeasured.
 Reducing the nine-neighbor halo image from half width and height to one third retains full jitter and the 1.2-cell halo reach while evaluating 56% fewer halo pixels.
 Nominal core-plus-halo work falls from `1 + 9/4 = 3.25` to `1 + 9/9 = 2` evaluations per depth.
 Quarter width and height would evaluate 75% fewer halo pixels and cost `1 + 9/16 = 1.5625` nominal evaluations.
