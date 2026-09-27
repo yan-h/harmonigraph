@@ -6,7 +6,7 @@ even without nice-plug's zero-based index translation.
 It does not establish how other CLAP hosts behave.
 
 Measured on 2026-09-20 at 44,100 Hz in a separate disposable project.
-The [probe](../../../tools/offset-range-probe/README.md) uses a unique class ID and vendor;
+The [probe](https://github.com/yan-h/harmonigraph/blob/d3ab98ebc01253a0757cce31f48523e5be248b4f/tools/offset-range-probe/README.md) uses a unique class ID and vendor;
 the production Harmonigraph executable and the user's project contents were not modified.
 No plugin editor exists or was opened.
 The test device outputs silence.
@@ -87,7 +87,7 @@ f67fc6624b101a3d0874c18f9779a984d3528f012e597a52baee25b5ab998f40  reopened.log
 
 The private disposable project snapshots are retained locally under `/tmp/harmonigraph-1051-evidence/` as `before-expansion.bwproject` and `after-expansion.bwproject`.
 They are not committed because the project was created from the user's default template and retains unrelated master-track settings.
-The [probe instructions](../../../tools/offset-range-probe/README.md) reproduce the experiment without those files.
+The [probe instructions](https://github.com/yan-h/harmonigraph/blob/d3ab98ebc01253a0757cce31f48523e5be248b4f/tools/offset-range-probe/README.md) reproduce the experiment without those files.
 
 This test does not measure relative automation,
 modulation depth,

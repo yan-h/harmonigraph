@@ -29,7 +29,7 @@ harmonigraph-metal-assets = { workspace = true }
 
 [dev-dependencies]
 # The baked-shader validation test runs without the hot-reload feature.
-naga = { workspace = true, features = ["wgsl-in", "msl-out"] }
+naga = { workspace = true, features = ["wgsl-in"] }
 # The offscreen-vs-direct parity test builds a Scene literal, whose
 # NodeInstance carries a LatticePos.
 harmonigraph-core = { path = "../harmonigraph-core" }
