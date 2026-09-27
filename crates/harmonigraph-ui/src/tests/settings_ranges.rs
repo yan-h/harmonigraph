@@ -65,7 +65,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
             *source.weight_mut(target) = Some(v);
         }
     }
-    poison!(a.view.atmosphere; nebula_depth, nebula_scale, nebula_speed,
+    poison!(a.view.atmosphere; source_roughness, nebula_depth, nebula_scale, nebula_speed,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -232,6 +232,7 @@ struct Scenario {
     /// sharing three bars, so the page has three inventories and only one of
     /// them is the fresh state's.
     style: harmonigraph_scene::CloudStyle,
+    material: harmonigraph_scene::LatticeMaterial,
     visits: usize,
 }
 
@@ -244,6 +245,7 @@ fn scenarios() -> Vec<Scenario> {
         meantone: false,
         marvel: false,
         style: harmonigraph_scene::CloudStyle::Mosaic,
+        material: harmonigraph_scene::LatticeMaterial::Clouds,
         visits: 0,
     };
     let mut cases = Vec::new();
@@ -279,6 +281,15 @@ fn scenarios() -> Vec<Scenario> {
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
+    // Source roughness is visible only for lattice Watercolor: the same
+    // enabled lattice inventory plus its one source control.
+    cases.push(Scenario {
+        pane: panes::Tab::LatticeSettings,
+        material: harmonigraph_scene::LatticeMaterial::Watercolor,
+        enabled: true,
+        visits: 16 + 1 + 8 + 6 + 5 + 6 + 1,
+        ..base
+    });
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
     // section and puts five of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
@@ -353,6 +364,7 @@ fn check(edge: Edge) {
         a.spectrum.atmosphere.cloud_style = scenario.style;
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.enabled = scenario.enabled;
+        a.view.atmosphere.material = scenario.material;
         for style in a.view.shadow.groups_mut() {
             style.kernel =
                 if scenario.enabled { ShadowKernel::Distance } else { ShadowKernel::Gaussian };

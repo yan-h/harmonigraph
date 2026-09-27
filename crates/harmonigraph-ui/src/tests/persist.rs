@@ -1729,7 +1729,8 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        material: harmonigraph_scene::LatticeMaterial::Interference,
+        material: harmonigraph_scene::LatticeMaterial::Mosaic,
+        source_roughness: 0.73,
         nebula_depth: 0.45,
         breath_speed: 2.2,
         ..Default::default()
@@ -1766,11 +1767,13 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
             assert_eq!(&loaded[other], expected, "omitting {key} changed {other}");
         }
     }
+    state.picture.appearance.view.atmosphere.source_roughness = 7.0;
     state.picture.appearance.view.atmosphere.nebula_depth = f32::NAN;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
+    assert_eq!(restored.view.atmosphere.source_roughness, 1.0);
 }
 
 #[test]

@@ -71,7 +71,7 @@ struct NebulaParams {
     drift: vec2<f32>,
     target_size: vec2<f32>,
     material: u32,
-    padding: f32,
+    source_roughness: f32,
 };
 
 struct ShadowParams {
@@ -462,7 +462,7 @@ struct Instance {
     // follow the marked voice rather than this node's activation — each
     // ring eases in over the scene layer's attack when its note takes that
     // end, and drops to 0 the frame the key comes up. w is reserved for
-    // shadow-cell kinds in cell draws.
+    // shadow-cell kinds in cell draws, and a stable lattice seed in node draws.
     @location(2) params: vec4<f32>,
     // Per-octave activation, 8 bits per slot, little-endian packed: how much
     // of that octave is HELD, and nothing else. The analyzer never writes here
@@ -740,7 +740,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     var out: VsOut;
     out.clip_pos = u.camera.view_proj * vec4<f32>(world, 1.0);
     out.uv = corner * margin;
-    out.params = inst.params;
+    out.params = vec4<f32>(inst.params.xyz, 0.0);
     out.octaves = inst.octaves;
     out.thickness = inst.thickness;
     out.motion = inst.motion;
@@ -3353,10 +3353,42 @@ fn glow_layer(light: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(ink.xyz, alpha);
 }
 
+// Separate from the original source function so unselected materials keep
+// their compiled arithmetic as well as their semantics.
+fn watercolor_glow_layer(light: vec2<f32>, uv: vec2<f32>, seed: f32) -> vec4<f32> {
+    let original = glow_layer(light, uv);
+    if original.a <= 0.0 || u.nebula.source_roughness <= 0.0 {
+        return original;
+    }
+    let d = length(uv);
+    let span = max(glow_rim() + max(u.glow.reach, 0.0), 0.1);
+    var skirt = GLOW_BASE * glow_curve_at(d, span);
+    if u.nebula.material == 3u && u.nebula.depth > 0.0 && u.nebula.source_roughness > 0.0 {
+        // Node-local domain warp and two scales of breakup, before overlap.
+        // The fixed Reach still bounds the source; the last 12% fades any
+        // outward warp back to the ordinary edge rather than clipping a quad.
+        let rough = u.nebula.source_roughness * u.nebula.depth;
+        let p = uv / span * 4.0;
+        let offset = vec2<f32>(seed % 127.0, floor(seed / 127.0) % 127.0);
+        let drift = u.nebula.drift * 2.0;
+        let warp = (nebula_noise(p * 1.8 + offset - drift) - 0.5) * span * 0.25;
+        let lobes = sin(atan2(uv.y, uv.x) * 5.0 + (seed % 6283.0) * 0.001 + drift.x) * span * 0.07
+            * smoothstep(0.15, 0.5, d / span);
+        let radial = max(0.0, (d + rough * (warp + lobes)) / mix(1.0, 78.0 / 68.0, rough));
+        let n = 0.72 * nebula_noise(p * 2.5 + offset - drift)
+            + 0.28 * nebula_noise(p * 6.0 + offset + drift * 0.3);
+        let breakup = mix(1.0, 0.12 + 0.88 * smoothstep(0.24, 0.69, n), rough);
+        let warped = GLOW_BASE * glow_curve_at(radial, span) * breakup * mix(1.0, 1.0794, rough);
+        skirt = min(GLOW_BASE, mix(warped, skirt * breakup, smoothstep(0.88, 1.0, d / span)));
+    }
+    return vec4<f32>(original.rgb, clamp(skirt * glow_level(light.x) * max(u.glow.strength, 0.0), 0.0, 1.0));
+}
+
 struct GlowSplatOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) light: vec2<f32>,
+    @location(2) @interpolate(flat) seed: f32,
 };
 
 @vertex
@@ -3365,6 +3397,7 @@ fn vs_glow_splat(@builtin(vertex_index) vertex: u32, inst: Instance) -> GlowSpla
     out.position = vec4<f32>(2.0, 2.0, 0.0, 1.0);
     out.uv = vec2<f32>(0.0);
     out.light = vec2<f32>(inst.glow.x * inst.glow.w, inst.glow.y);
+    out.seed = inst.params.w;
     if inst.glow.x <= 0.0 {
         return out;
     }
@@ -3455,7 +3488,7 @@ fn material_light(light: vec4<f32>, pixel: vec2<f32>, contour: vec2<f32>) -> vec
     if u.nebula.material == 0u {
         return nebula_light(light, pixel);
     }
-    if u.nebula.depth <= 0.0 || light.a <= 0.0 {
+    if u.nebula.depth <= 0.0 || light.a <= 0.0 || u.nebula.material == 3u || u.nebula.material == 4u {
         return light;
     }
     let p = (pixel - u.nebula.target_size * 0.5)
@@ -3517,6 +3550,23 @@ struct GlowStatistics {
 @fragment
 fn fs_glow_splat(in: GlowSplatOut) -> GlowStatistics {
     let halo = glow_layer(in.light, in.uv);
+    if halo.w <= 0.0 {
+        discard;
+    }
+    let incoming = vec4<f32>(halo.xyz * halo.w, halo.w);
+    let peak = clamp(GLOW_BASE * u.glow.strength, 0.0, 1.0);
+    let peak_luminance = glow_linear(vec3<f32>(peak)).x;
+    let linear = glow_linear(incoming.xyz);
+    let share = clamp(dot(linear, GLOW_LUMINANCE) / peak_luminance, 0.0, 1.0);
+    // Sum RGB/count; screen normalized luminance/coverage and gamma RGBA.
+    // All three targets clear to zero. Half-float blend rounding is the only
+    // approximation to the original f32 gather equations.
+    return GlowStatistics(vec4<f32>(linear, 1.0), vec2<f32>(share, halo.w / peak), incoming);
+}
+
+@fragment
+fn fs_glow_splat_watercolor(in: GlowSplatOut) -> GlowStatistics {
+    let halo = watercolor_glow_layer(in.light, in.uv, in.seed);
     if halo.w <= 0.0 {
         discard;
     }

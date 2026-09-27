@@ -28,7 +28,11 @@ use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
-const SPECTROGRAM_SRC: &str = include_str!("shaders/spectrogram.wgsl");
+const SPECTROGRAM_SRC: &str = concat!(
+    include_str!("shaders/atmosphere_geometry.wgsl"),
+    "\n",
+    include_str!("shaders/spectrogram.wgsl"),
+);
 
 mod atmosphere;
 pub use atmosphere::SpectrogramAtmosphere;
