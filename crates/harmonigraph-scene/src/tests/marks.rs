@@ -368,32 +368,33 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
 /// would read as a second thing happening.
 #[test]
 fn a_lone_notes_mark_fades_out_with_it() {
-    let mut motion = NodeMotion::default();
-    let mut tracker = NoteTracker::new();
-    tracker.handle_event(on(0.0, 60));
-    tracker.handle_event(off(1.0, 60));
-    // Simultaneous: under an ordered departure the marks do not yet wait with
-    // their sector (#1204).
-    let view = ViewConfig {
-        note_animation: NoteAnimationConfig {
-            order: AnimationOrder::Simultaneous,
-            ..NoteAnimationConfig::default()
-        },
-        ..delayed_view(0.0)
-    };
-    let frame = attack_frame();
-    let mut at = |now: f64| {
-        let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
-        let n = origin_node(&scene);
-        (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
-    };
-
-    assert_eq!(at(1.0), (1.0, 1.0, 1.0), "at the key-up it is still whole");
-    let (melody, bass, octave) = at(1.0 + ATTACK * 0.5);
-    assert!((melody - 0.5).abs() < 1e-5, "half a fade later, half gone: got {melody}");
-    assert_eq!(melody, bass, "a lone note's two marks leave together");
-    assert_eq!(melody, octave, "and on the sector's own envelope");
-    assert_eq!(at(1.0 + ATTACK), (0.0, 0.0, 0.0), "gone at the end of the fade");
+    for order in AnimationOrder::ALL {
+        let mut motion = NodeMotion::default();
+        let mut tracker = NoteTracker::new();
+        tracker.handle_event(on(0.0, 60));
+        tracker.handle_event(off(1.0, 60));
+        let view = ViewConfig {
+            note_animation: NoteAnimationConfig { order, ..NoteAnimationConfig::default() },
+            ..delayed_view(0.0)
+        };
+        let frame = attack_frame();
+        let mut at = |now: f64| {
+            let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
+            let n = origin_node(&scene);
+            (n.melody_level, n.bass_level, n.octaves[MIDDLE_C_SLOT])
+        };
+        assert_eq!(at(1.0), (1.0, 1.0, 1.0), "{order:?}: whole at key-up");
+        for step in 1..=20 {
+            let now = 1.0 + ATTACK * f64::from(step) / 10.0;
+            let (melody, bass, octave) = at(now);
+            assert_eq!(melody, bass, "{order:?}: both marks at {now}");
+            assert_eq!(melody, octave, "{order:?}: mark and sector at {now}");
+            if order == AnimationOrder::Simultaneous && step == 5 {
+                assert!((melody - 0.5).abs() < 1e-5, "half gone: {melody}");
+            }
+        }
+        assert_eq!(at(1.0 + ATTACK * 2.0), (0.0, 0.0, 0.0), "{order:?}: departed");
+    }
 }
 
 /// A short note reverses its carried level at key-up, with its marks and
@@ -502,14 +503,15 @@ fn an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on() {
         let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);
         let n = origin_node(&scene);
         // 12-TET: a fifth is one step along the threes axis.
-        (n.melody_level, n.bass_level, node_at(&scene, LatticePos::new(1, 0, 0)).melody_level)
+        let leaving = node_at(&scene, LatticePos::new(1, 0, 0));
+        (n.melody_level, n.bass_level, leaving.melody_level, leaving.octaves[MIDDLE_C_SLOT])
     };
-    assert_eq!(at(1.0), (0.0, 1.0, 1.0), "the melody has only just moved");
-    let (melody, bass, leaving) = at(1.0 + ATTACK * 0.5);
+    assert_eq!(at(1.0), (0.0, 1.0, 1.0, 1.0), "the melody has only just moved");
+    let (melody, bass, leaving, sector) = at(1.0 + ATTACK * 0.5);
     assert!((melody - 0.5).abs() < 1e-5, "half way in, got {melody}");
     assert_eq!(bass, 1.0, "the end that never moved does not re-attack");
-    assert!((leaving - 0.5).abs() < 1e-5, "the outgoing mark leaves as the incoming one arrives");
-    assert_eq!(at(1.0 + ATTACK), (1.0, 1.0, 0.0));
+    assert_eq!(leaving, sector, "the outgoing mark keeps its sector's ordered departure");
+    assert_eq!(at(1.0 + ATTACK * 2.0), (1.0, 1.0, 0.0, 0.0));
 }
 
 #[test]
