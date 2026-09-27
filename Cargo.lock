@@ -1412,7 +1412,6 @@ dependencies = [
  "image",
  "pollster",
  "ron",
- "serde",
 ]
 
 [[package]]
@@ -1433,7 +1432,6 @@ dependencies = [
  "egui",
  "egui-baseview",
  "egui-wgpu",
- "getrandom 0.3.4",
  "harmonigraph-core",
  "harmonigraph-perf",
  "harmonigraph-record",
@@ -1528,7 +1526,6 @@ dependencies = [
  "harmonigraph-render",
  "harmonigraph-scene",
  "harmonigraph-take",
- "pollster",
  "ron",
  "serde",
 ]
