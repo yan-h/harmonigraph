@@ -157,14 +157,10 @@ impl Recording {
         Ok(())
     }
 
-    /// The source frontier at joined destruction: everything registered, as
-    /// no capture still to be collected can be sequenced any more.
-    pub fn retired_source_frontier(&mut self, clock: ClockId) -> Result<(), ()> {
-        assert!(self.retired_configuration.is_some());
-        if self.registered_through == i64::MIN {
-            return Ok(());
-        }
-        self.source_frontier(clock, self.registered_through)
+    /// The end of the last segment registered, if any has been since the
+    /// clock was last cut.
+    pub fn registered_through(&self) -> Option<i64> {
+        (self.registered_through != i64::MIN).then_some(self.registered_through)
     }
 
     pub fn route(

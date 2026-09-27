@@ -990,6 +990,47 @@ fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A cut and joined destruction are where the last callback's end is proven,
+/// since nothing after them can be sequenced before it. A host reset mid-take
+/// keeps the take whole; destruction with a lagging Tune's record still in its
+/// ring cannot claim a take that never saw that record.
+#[test]
+fn the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded() {
+    for (destroy, lagging) in [(false, false), (true, false), (true, true)] {
+        let _scope = crate::test_scope::enter();
+        let (mut hub, capture) = Device::recorded_hub();
+        hub.activate();
+        let mut tune = Device::new(true);
+        tune.activate();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-cut-{}-{destroy}-{lagging}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let writer =
+            harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"), None);
+        capture.arm();
+        for raw in [0, 512, 1024] {
+            tune.run_format(raw, vec![], None, None, 512);
+            hub.run_format(raw, vec![], None, None, 512);
+        }
+        let played = vec![note(1, 0, 64, 0, true), note(1, 0, 64, 8, false)];
+        if lagging {
+            hub.run_format(1536, vec![], None, None, 512);
+            tune.run_format(1536, played, None, None, 512);
+        } else {
+            tune.run_format(1536, played, None, None, 512);
+            hub.run_format(1536, vec![], None, None, 512);
+        }
+        if destroy {
+            capture.stop();
+            drop(hub);
+        } else {
+            hub.host_reset();
+        }
+        assert_eq!(writer.failed(), lagging, "destroy={destroy}, lagging={lagging}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// Membership is the epoch. A Tune attaching cuts every paired track, which
 /// is the price of never having a hot-plug reconciliation to get wrong.
 #[test]

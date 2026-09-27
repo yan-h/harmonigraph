@@ -1214,6 +1214,28 @@ impl Hub {
         self.shared.request_main();
     }
 
+    /// Prove the source frontier through the last callback's end, at a cut or
+    /// before joined destruction: after either, nothing still to come can be
+    /// sequenced before it. `publish` stops at a callback's start instead,
+    /// because a Tune the host runs after the Hub is a callback behind; a
+    /// record of that kind still in a ring here is one the take never gets,
+    /// so it fails the take rather than being proven absent.
+    pub fn prove_final_frontier(&mut self, owner: &mut Owner, recorder: &Recorder) {
+        let Some(through) = owner.recording.registered_through() else { return };
+        let epoch = self.epoch;
+        let stranded = self.ends.iter_mut().flat_map(|ends| ends.iter_mut().flatten()).any(|end| {
+            // Read without consuming: a cut's own epoch filter still owns them.
+            let slots = end.captures.slots();
+            end.captures.read_chunk(slots).is_ok_and(|chunk| {
+                let (head, tail) = chunk.as_slices();
+                head.iter().chain(tail).any(|c| c.epoch == epoch && c.sample < through)
+            })
+        });
+        if stranded || owner.recording.source_frontier(self.clock, through).is_err() {
+            recorder.fail_configuration();
+        }
+    }
+
     /// Destruction closes the recorder's own boundaries, here and now. There
     /// is no drain to wait for: everything this Hub sequenced was published in
     /// the callback it was sequenced in, so the only thing left to say is
@@ -1230,13 +1252,6 @@ impl Hub {
         // Stop can finish as soon as all closure entries reach the worker.
         // Publish this failure first, before retirement can release them.
         if held {
-            recorder.fail_configuration();
-        }
-        // The source frontier `publish` proves stops at a callback's start,
-        // because a Tune the host runs after the Hub is a callback behind.
-        // Joined destruction is the one boundary after which nothing still in
-        // a ring can be collected, so the last callback's end is proven here.
-        if owner.recording.retired_source_frontier(self.clock).is_err() {
             recorder.fail_configuration();
         }
         owner.recording.observe_retired_disarm(&mut recorder);
