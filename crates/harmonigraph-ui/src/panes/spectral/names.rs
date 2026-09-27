@@ -1199,7 +1199,6 @@ pub(crate) struct Namer {
     tempered: Tempered,
     reach_nodes: Option<Vec<(LatticePos, PitchClass)>>,
     shown_nodes: Option<Vec<(LatticePos, PitchClass)>>,
-    names: HashMap<PitchClass, NoteName>,
     visible: HashMap<PitchClass, bool>,
 }
 
@@ -1212,7 +1211,6 @@ impl Namer {
             tempered: view.tempered(),
             reach_nodes: None,
             shown_nodes: None,
-            names: HashMap::new(),
             visible: HashMap::new(),
         }
     }
@@ -1224,9 +1222,6 @@ impl Namer {
     pub(crate) fn name(&mut self, midi: f32) -> NoteName {
         // Cents from C, measured from MIDI 0 (which IS a C).
         let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
-        if let Some(&name) = self.names.get(&pc) {
-            return name;
-        }
         let nodes = self.reach_nodes.get_or_insert_with(|| Self::nodes(self.reach, self.tuning));
         let pos = naming_node_from(nodes.iter().copied(), self.tempered, &self.tuning, pc).or_else(
             || {
@@ -1238,12 +1233,10 @@ impl Namer {
                 naming_node_from(nodes.iter().copied(), self.tempered, &self.tuning, pc)
             },
         );
-        let name = match pos {
+        match pos {
             Some(pos) => crate::panes::display_note_name(pos, self.tempered),
             None => equal_tempered_name(midi),
-        };
-        self.names.insert(pc, name);
-        name
+        }
     }
 
     /// Whether the drawn window holds a node for this pitch. Stop on the
