@@ -55,13 +55,15 @@ Map and all six offset lanes do not advertise CLAP additive modulation.
 Assignments and sounding intervals shows all twelve full corrections and exact coordinates,
 plus actual held-note intervals above the lowest sounding voice.
 It does not judge which musical intervals a passage ought to use.
-The lattice outlines the next-attack mapping independently of sounding notes.
-Show map indicators in the Lattice Map controls hides those assignment outlines and MIDI labels without changing the selected map or its tuning;
+The lattice marks the next-attack mapping with a dot above each assigned node,
+independently of sounding notes.
+Dots use the fully sounding lettering's ink and shadow at all times,
+even when a node is silent or its name is hidden.
+Show map indicators in the Lattice Map controls hides those assignment dots without changing the selected map or its tuning;
 the hovered edit destination and map status remain visible while editing.
 Stopped edits and restored maps are visible before audio resumes,
 with a pending-audio indication until adoption.
-Outlines,
-MIDI annotations and edit previews are editor-only;
+Assignment dots and edit previews are editor-only;
 Render preview and offline output exclude them explicitly.
 
 ## Saved identity and geometry

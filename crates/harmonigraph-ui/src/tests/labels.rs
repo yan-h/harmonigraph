@@ -51,7 +51,7 @@ fn pane_labels(
 ) -> crate::text::TextBatch {
     let mut batch = crate::text::TextBatch::default();
     let _ = probe::frame_full(&probe::themed_at(ppp), PANE.size(), |ui| {
-        panes::lattice::draw_node_labels(ui, PANE, scene, view, &mut batch);
+        panes::lattice::draw_node_labels(ui, PANE, scene, view, &[], &mut batch);
     });
     batch
 }
@@ -79,6 +79,7 @@ fn lattice_labels_in(
             rect,
             scene,
             &state.picture.appearance.view,
+            &[],
             &mut batch,
         );
         labels = Some(batch.lattice_labels(ui.painter(), rect, &state.picture));
