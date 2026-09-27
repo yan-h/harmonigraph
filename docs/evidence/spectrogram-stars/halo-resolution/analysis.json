@@ -1,0 +1,38 @@
+{
+  "1080-a": {
+    "means_ms": {
+      "paired baseline A": 7.5016556875000004,
+      "paired baseline B": 7.582713008333333,
+      "paired four": 6.888266475
+    },
+    "reduction_percent": 8.670139083742956,
+    "aa_percent": -1.0805257427156878
+  },
+  "4k-a": {
+    "means_ms": {
+      "paired baseline A": 20.069265279166668,
+      "paired baseline B": 20.01369375,
+      "paired four": 16.457431395833332
+    },
+    "reduction_percent": 17.883151371843798,
+    "aa_percent": 0.2768986726402689
+  },
+  "4k-b": {
+    "means_ms": {
+      "paired four": 16.061197395833332,
+      "paired baseline B": 19.426323270833333,
+      "paired baseline A": 19.548356583333334
+    },
+    "reduction_percent": 17.58137613481242,
+    "aa_percent": 0.6242637941444418
+  },
+  "1080-b": {
+    "means_ms": {
+      "paired four": 7.018719625,
+      "paired baseline B": 7.53781585,
+      "paired baseline A": 7.585681616666666
+    },
+    "reduction_percent": 7.181263587079778,
+    "aa_percent": 0.6310015247871559
+  }
+}

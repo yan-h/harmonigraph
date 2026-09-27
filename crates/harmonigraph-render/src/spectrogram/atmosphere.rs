@@ -568,16 +568,11 @@ fn star_geometry(jitter: f32) -> Float4 {
     Float4([width as f32, (0.5 - width / 2.0) as f32, 0.7, 0.0])
 }
 
-/// Halos keep each depth's premultiplied color and coverage at half resolution.
-/// This depends only on pane pixels; jitter and blur edits refill the same
-/// allocation. Tests can use native resolution to isolate reconstruction from
-/// the deliberately coarser sampling.
-pub(super) fn star_halo_size(pixels: [u32; 2]) -> [u32; 2] {
-    #[cfg(not(test))]
-    let divisor = 2;
-    #[cfg(test)]
-    let divisor = super::tests::STAR_HALO_DIVISOR.get();
-    pixels.map(|n| n.div_ceil(divisor))
+/// Per-depth halo sampling follows pane pixels and the sanitized resolution
+/// dial. The rounded texture shape is the whole allocation key: jitter, halo
+/// width, drift and color edits refill the same targets.
+pub(super) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
+    pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
 }
 
 /// The tile this frame wants, or `None` where no cloud is drawn.
@@ -615,20 +610,21 @@ pub(super) fn tile_key(
         wash_size,
         wash_fuzz,
         wash_lobe,
-        wash_refract: _,     // applied after the tile bake
-        wash_layers: _,      // applied after the tile bake
-        star_density: _,     // no tile for Stars
-        star_randomness: _,  // no tile for Stars
-        star_jitter: _,      // no tile for Stars
-        star_size_min: _,    // no tile for Stars
-        star_size_max: _,    // no tile for Stars
-        star_size_curve: _,  // no tile for Stars
-        star_speed_min: _,   // no tile for Stars
-        star_speed_max: _,   // no tile for Stars
-        star_speed_curve: _, // no tile for Stars
-        star_lifetime: _,    // no tile for Stars
-        star_fringe: _,      // no tile for Stars
-        star_defocus: _,     // no tile for Stars
+        wash_refract: _,         // applied after the tile bake
+        wash_layers: _,          // applied after the tile bake
+        star_density: _,         // no tile for Stars
+        star_randomness: _,      // no tile for Stars
+        star_jitter: _,          // no tile for Stars
+        star_size_min: _,        // no tile for Stars
+        star_size_max: _,        // no tile for Stars
+        star_size_curve: _,      // no tile for Stars
+        star_speed_min: _,       // no tile for Stars
+        star_speed_max: _,       // no tile for Stars
+        star_speed_curve: _,     // no tile for Stars
+        star_lifetime: _,        // no tile for Stars
+        star_halo_resolution: _, // no tile for Stars
+        star_fringe: _,          // no tile for Stars
+        star_defocus: _,         // no tile for Stars
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
     // live-walk arm was retired because, never taken, it still cost the
@@ -716,6 +712,10 @@ struct Uniforms {
     memory_pad_a: f32,
     memory_extent: Float2,
     previous_slices: [StarSlice; STAR_SLICES],
+    /// Actual rounded halo target dimensions, so sampling agrees with the
+    /// allocation even at odd sizes and fractional display scales.
+    star_halo_size: Float2,
+    star_halo_pad: Float2,
 }
 }
 
@@ -776,7 +776,7 @@ pub(super) struct Pipelines {
     /// Native-resolution RGB of the two farthest layers, when splitting the
     /// composite pays for its extra pass.
     pub star_far: wgpu::RenderPipeline,
-    /// One depth's weighted halo color and coverage at half pane resolution.
+    /// One depth's weighted halo color and coverage at the selected resolution.
     pub star_halo: wgpu::RenderPipeline,
     /// Specialize the final draws so the unsplit shader carries no runtime
     /// split branch (that branch alone regressed intermediate pane sizes).
@@ -1180,8 +1180,9 @@ fn memory_key(
         star_speed_max,
         star_speed_curve,
         star_lifetime,
-        star_fringe: _,  // response/coverage changes do not change material identity
-        star_defocus: _, // response/coverage changes do not change material identity
+        star_halo_resolution: _, // sampling does not change material identity
+        star_fringe: _,          // response/coverage changes do not change material identity
+        star_defocus: _,         // response/coverage changes do not change material identity
     } = s;
     let mut values = vec![
         size[0],
@@ -1887,6 +1888,8 @@ impl Targets {
             memory_pad_a: 0.0,
             memory_extent: Float2(memory_extent.unwrap_or([0; 2]).map(|n| n as f32)),
             previous_slices,
+            star_halo_size: Float2(self.halo_size().unwrap_or([1, 1]).map(|n| n as f32)),
+            star_halo_pad: Float2([0.0; 2]),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
@@ -2008,13 +2011,21 @@ mod tests {
         crate::uniforms::layout::check_binding_prefix::<super::Uniforms>(super::SOURCE, 0, 2);
     }
 
+    #[test]
+    fn halo_resolution_rounds_each_axis_without_losing_tiny_targets() {
+        for (resolution, wanted) in
+            [(0.25, [1, 2]), (1.0 / 3.0, [1, 2]), (0.5, [2, 3]), (1.0, [3, 5])]
+        {
+            assert_eq!(super::star_halo_size([3, 5], resolution), wanted);
+            assert_eq!(super::star_halo_size([1, 1], resolution), [1, 1]);
+        }
+    }
+
     /// Both walks include every star that can reach the pixel: one nominal
     /// cell for the compact core, and a 3x3 ring for the original wide halo.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
-        assert_eq!(shader_number("STAR_HALO_SCALE"), 0.5);
-        assert_eq!(super::star_halo_size([3, 5]), [2, 3]);
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {

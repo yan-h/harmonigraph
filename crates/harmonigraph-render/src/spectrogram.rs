@@ -777,7 +777,9 @@ impl CallbackTrait for SpectrogramCallback {
                         .map(|size| if stars { pixels } else { size });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
-                let halos = stars.map(|_| atmosphere::star_halo_size(pixels));
+                let halos = stars.map(|_| {
+                    atmosphere::star_halo_size(pixels, settings.settings.star_halo_resolution)
+                });
                 let star_size = stars.map(|layout| {
                     atmosphere::star_atlas_size(
                         layout.size(),
@@ -4031,8 +4033,6 @@ fn cs_wrap_probe() {
         pub(super) static SOURCE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
         /// Compare both paths without allocating a large pane in every test.
         pub(super) static STAR_SPLIT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-        /// Native halo sampling isolates reconstruction from downsampling.
-        pub(super) static STAR_HALO_DIVISOR: std::cell::Cell<u32> = const { std::cell::Cell::new(2) };
         /// Set while a test draws the reference [`pipeline_source`] builds.
         static UNWRAPPED_MOSAIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }

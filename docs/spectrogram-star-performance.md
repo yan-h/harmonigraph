@@ -1,5 +1,10 @@
 # Stars shader performance
 
+For the current architecture,
+controls and the full discussion/decision record,
+see [Stars optimization notes](stars-optimization-notes.md).
+The dated measurements below preserve their original baselines.
+
 The historical independent-pass timing columns below retain their original meaning.
 Issue #1203 demonstrated that the old `end/full` bracket can reverse or undercount;
 the corrected probe reports `source/full` from the first real source pass to the composite end.
@@ -245,7 +250,9 @@ the 4K candidate is slightly faster but the runs do not establish a reliable spe
 ## One-neighbor cores with separate halos
 
 The current prototype on `codex/stars-four-neighbor` keeps one native-resolution core lookup per depth,
-with the rest of each star's response in a half-resolution RGBA16Float image.
+with the rest of each star's response in a reduced-resolution RGBA16Float image.
+Halo resolution is adjustable from 25% to 100%,
+with the original 50% sampling as its default.
 Each of the five depths has its own image;
 its halo coverage and weighted color join the native core before the usual color normalization and far-to-near composition.
 The reduced pass walks the original nine cells and subtracts the compact core,
@@ -261,7 +268,8 @@ compared with 20 for the preceding four-neighbor trial.
 That arithmetic excludes five filtered halo reads,
 five additional render passes and their bandwidth.
 At 4K the halo images require about 79.1 MiB beside the retained native two-layer split target's 63.3 MiB.
-Allocation follows pane device pixels and whether Stars is active;
+Allocation follows pane device pixels,
+the requested halo dimensions and whether Stars is active;
 Jitter changes the drawn values without reallocating these images.
 The halo passes fill the whole pane so clipped regions can filter across their edges without seams.
 
@@ -283,8 +291,8 @@ retained color,
 large-pane activation and extreme controls.
 The five Stars-bearing offline goldens change intentionally;
 Watercolor and the lattice retain their prior frames.
-This remains a visual trial for #1142,
-not an accepted replacement.
+Yan chose to keep these analytic halos after the [per-depth blur comparison](evidence/spectrogram-stars/depth-blur/README.md).
+The branch remains an unmerged visual trial for #1142.
 
 
 [Paired M1 Pro timings](evidence/spectrogram-stars/separate-halos/README.md) measure 8.3–8.5% lower GPU time at 4K,
@@ -292,3 +300,6 @@ but 3.8–4.0% higher time at 1080p,
 against the preceding configurable four-neighbor build at default 50% jitter.
 The added passes pay off at the larger size in this fixture,
 while the smaller pane pays more for the restored wide response.
+
+The [Halo resolution comparison](evidence/spectrogram-stars/halo-resolution/README.md) measures the newer slider independently:
+one third versus the 50% default saves 17.6–17.9% of total GPU time at 4K and 7.2–8.7% at 1080p in repeated paired runs.

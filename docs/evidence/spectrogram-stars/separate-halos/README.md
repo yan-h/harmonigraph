@@ -101,3 +101,37 @@ cargo test --release -p harmonigraph-render --lib --no-run
 python3 docs/evidence/spectrogram-stars/four-neighbor-current/run.py --binary /path/to/printed/test-executable --output /private/tmp/stars-halo-repeat
 git apply -R docs/evidence/spectrogram-stars/separate-halos/harness.patch
 ```
+
+## Configurable halo resolution
+
+The subsequent Halo resolution slider scales each halo image's width and height from 25% to 100% of the pane's device pixels.
+Its default is 50%,
+which retains the measured configuration above.
+Existing saved appearances missing `star_halo_resolution` also load at 50%.
+Loaded non-finite values fall back to that default;
+finite values clamp to the slider's range.
+The separate analytic halos remain selected:
+the slower per-depth blur experiment is not enabled.
+
+The slider changes sampling density,
+not jitter,
+native core geometry,
+the five depth layers or the 1.2-cell halo reach.
+At 25% it renders one quarter as many halo pixels as the 50% default;
+at 100% it renders four times as many.
+Those are halo pixel counts,
+not measured total-frame savings.
+Changing resolution carries color memory through the target reallocation,
+including paused redraws.
+The shader receives the actual rounded target dimensions so CPU allocation and GPU coordinates agree at odd sizes and fractional display scales.
+
+The split comparison now changes resolution through 50%,
+25%,
+one third and 100% at an odd-sized pane and fractional display scale.
+The native nine-neighbor reconstruction test uses the production 100% control rather than a test-only shader override.
+A paused bright-history/dark-input witness verifies that resolution edits do not erase color memory,
+and that its subsequent time integration matches an unresized control.
+The UI range guard exercises the real added bar and loaded invalid values.
+
+A subsequent [paired resolution comparison](../halo-resolution/README.md) measured 17.6–17.9% lower total GPU time at 4K and 7.2–8.7% lower at 1080p when changing only the halo resolution from 50% to one third.
+The default remains 50%.

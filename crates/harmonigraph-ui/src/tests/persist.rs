@@ -1787,6 +1787,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
         contours: 64.0,
         cloud_direction: 725.0,
         star_jitter: 2.0,
+        star_halo_resolution: 0.1,
         ..Default::default()
     };
     state.picture.appearance.camera.yaw = 1.23;
@@ -1798,6 +1799,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
         contours: 20.0,
         cloud_direction: 5.0,
         star_jitter: 1.0,
+        star_halo_resolution: 0.25,
         ..Default::default()
     };
     assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);

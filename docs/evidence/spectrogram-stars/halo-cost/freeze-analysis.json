@@ -1,0 +1,46 @@
+{
+  "freeze-1080-a": {
+    "means_ms": {
+      "profile full A": 7.236537522222222,
+      "profile full B": 7.319961577777778,
+      "profile frozen halos": 4.8830567333333335
+    },
+    "full_ms": 7.27824955,
+    "halo_update_ms": 2.3951928166666665,
+    "halo_update_percent": 32.90891305955106,
+    "aa_percent": -1.1528172872644404
+  },
+  "freeze-4k-a": {
+    "means_ms": {
+      "profile full A": 15.019036550000001,
+      "profile full B": 15.158972233333333,
+      "profile frozen halos": 10.500358094444444
+    },
+    "full_ms": 15.089004391666666,
+    "halo_update_ms": 4.588646297222223,
+    "halo_update_percent": 30.410530596415185,
+    "aa_percent": -0.9317221039277124
+  },
+  "freeze-4k-b": {
+    "means_ms": {
+      "profile frozen halos": 10.428372744444445,
+      "profile full B": 14.871827561111111,
+      "profile full A": 14.851763416666667
+    },
+    "full_ms": 14.86179548888889,
+    "halo_update_ms": 4.433422744444444,
+    "halo_update_percent": 29.831003580684445,
+    "aa_percent": -0.13509604133559172
+  },
+  "freeze-1080-b": {
+    "means_ms": {
+      "profile frozen halos": 4.208224516666666,
+      "profile full B": 6.262863422222222,
+      "profile full A": 6.2236520833333335
+    },
+    "full_ms": 6.243257752777778,
+    "halo_update_ms": 2.0350332361111114,
+    "halo_update_percent": 32.595694694899876,
+    "aa_percent": -0.6300374500993522
+  }
+}

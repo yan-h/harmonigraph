@@ -81,7 +81,7 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         .into_iter()
         .flat_map(|jitter| [false, true].into_iter().map(move |memory| (memory, jitter)))
     {
-        let mut cb = star_fixture([128, 96], origin);
+        let mut cb = star_fixture([129, 97], origin);
         cb.atmosphere.as_mut().unwrap().region = egui::Rect::from_min_max(
             egui::pos2(origin.x + 13.0, origin.y + 9.0),
             egui::pos2(origin.x + 117.0, origin.y + 87.0),
@@ -98,6 +98,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut first: Option<Vec<u8>> = None;
         for step in 0u64..4 {
             cb.pass_nr = step;
+            let resolution = [0.5, 0.25, 1.0 / 3.0, 1.0][step as usize];
+            cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
             if step == 1 {
                 cb.grid.fill(80);
@@ -131,7 +133,10 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             assert!(target(&native).tone_size().is_none());
             assert_eq!(target(&changing).tone_size().is_some(), split);
             assert_eq!(target(&changing).memory_size().is_some(), memory);
-            assert_eq!(target(&changing).halo_size(), Some([80, 60]));
+            assert_eq!(
+                target(&changing).halo_size(),
+                Some([161u32, 121].map(|n| (n as f32 * resolution).ceil() as u32)),
+            );
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
             // Bound both half-float rounding and aggregate error so a
             // wider spatial mismatch still fails.
@@ -219,14 +224,10 @@ thread_local! {
 
 pub(super) fn reference_source() -> Option<String> {
     let mode = STAR_REFERENCE.get();
-    let mut source = SPECTROGRAM_SRC.to_owned();
-    if STAR_HALO_DIVISOR.get() == 1 {
-        source = source
-            .replace("const STAR_HALO_SCALE: f32 = 0.5;", "const STAR_HALO_SCALE: f32 = 1.0;");
-    }
     if mode == 0 {
-        return (STAR_HALO_DIVISOR.get() != 2).then_some(source);
+        return None;
     }
+    let source = SPECTROGRAM_SRC.to_owned();
     let read = "var slice = star_texel(s, f, index, false);\n        slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);";
     assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Stars read moved");
     let core = "let slice = star_texel(s, f, index, false);";
@@ -260,22 +261,15 @@ fn reference_star(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     )
 }
 
-struct HaloOverride {
-    divisor: u32,
-    reference: u8,
-}
+struct HaloOverride(u8);
 impl HaloOverride {
-    fn set(divisor: u32, reference: u8) -> Self {
-        Self {
-            divisor: STAR_HALO_DIVISOR.replace(divisor),
-            reference: STAR_REFERENCE.replace(reference),
-        }
+    fn set(reference: u8) -> Self {
+        Self(STAR_REFERENCE.replace(reference))
     }
 }
 impl Drop for HaloOverride {
     fn drop(&mut self) {
-        STAR_HALO_DIVISOR.set(self.divisor);
-        STAR_REFERENCE.set(self.reference);
+        STAR_REFERENCE.set(self.0);
     }
 }
 
@@ -289,11 +283,12 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.star_jitter = jitter;
             settings.star_fringe = fringe;
+            settings.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
             for reference in [0, 1, 2] {
                 // Native halo sampling isolates the split's algebra from the
-                // intentional interpolation of the production half-size image.
-                let _halo = HaloOverride::set(1, reference);
+                // intentional interpolation of the default half-size image.
+                let _halo = HaloOverride::set(reference);
                 let mut resources = CallbackResources::default();
                 frames.push(frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0));
                 assert_eq!(target(&resources).halo_size(), Some([385, 217]));

@@ -266,6 +266,46 @@ fn jitter_edits_reset_only_the_stars_color_history() {
     }
 }
 
+/// Resolution changes rebuild halo targets but must carry material history,
+/// including paused redraws whose dark current input would expose a reset.
+#[test]
+fn halo_resolution_changes_carry_stars_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let mut changed = CallbackResources::default();
+    let mut control = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut changed, &cb);
+    prepare_once(&device, &queue, &mut control, &cb);
+    let lit = pixels(&device, &queue, memory(&changed));
+    assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+    cb.grid.fill(0);
+    let mut prior_size = None;
+    for resolution in [0.25, 1.0, 1.0 / 3.0, 0.5] {
+        cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
+        prepare_once(&device, &queue, &mut changed, &cb);
+        let size = changed
+            .get::<SpectrogramResources>()
+            .unwrap()
+            .panes
+            .get(0)
+            .unwrap()
+            .cloud
+            .as_ref()
+            .unwrap()
+            .halo_size();
+        assert_ne!(size, prior_size, "fixture did not resize the halo targets");
+        prior_size = size;
+        assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
+    }
+    cb.atmosphere.as_mut().unwrap().now += 0.05;
+    prepare_once(&device, &queue, &mut changed, &cb);
+    prepare_once(&device, &queue, &mut control, &cb);
+    let advanced = pixels(&device, &queue, memory(&changed));
+    assert_ne!(advanced, lit, "fixture did not exercise carry after the resize");
+    assert_eq!(advanced, pixels(&device, &queue, memory(&control)));
+}
+
 /// A low-rate export and a high-rate display integrate the same elapsed time.
 /// Also exercises pickup, paused redraws, interpretation edits, seeks and off.
 #[test]

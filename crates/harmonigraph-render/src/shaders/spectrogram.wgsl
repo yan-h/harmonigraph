@@ -318,6 +318,8 @@ struct Cloud {
     memory_pad_a: f32,
     memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
+    star_halo_size: vec2<f32>,
+    star_halo_pad: vec2<f32>,
 };
 struct StarSlice {
     offset: vec2<f32>,
@@ -1414,7 +1416,7 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // a far star at 4K and 6000 for a near one. So `fs_star_bake` draws every
 // slice's cells on screen into `star_atlas`, a texel a cell, and the pixel's
 // native walk reads one texel a slice. The separate halo pass gathers nine
-// cells at half resolution and keeps each slice's color and coverage separate
+// cells at the selected resolution and keeps each slice's color and coverage separate
 // (#1142).
 //
 // **Lives.** A star lives `Star lifetime`, then its cell draws a new star,
@@ -1614,10 +1616,9 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
 // The low-resolution target stores the unnormalized weighted color and
 // coverage of ONE slice. They must join that slice's native core before the
 // usual far-to-near over; flattening all halos would change the depth order.
-const STAR_HALO_SCALE: f32 = 0.5;
 @fragment
 fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
-    let step = cloud.size / ceil(cloud.size * cloud.ppp * STAR_HALO_SCALE);
+    let step = cloud.size / cloud.star_halo_size;
     let pt = in.position.xy * step;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
     let s = cloud.star_slices[in.layer];
@@ -1663,7 +1664,7 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
 // it, a cell's stagger at the second.
 //
 // One native core per slice, with the remaining coverage gathered into the
-// half-resolution halo array. Both paths use this same per-slice composition.
+// halo array. Both paths use this same per-slice composition.
 fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
     var out = under;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
