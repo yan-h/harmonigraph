@@ -307,6 +307,31 @@ fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
     assert!((reopened.workspace.layout.right.settings - saved.settings).abs() < 0.1);
 }
 
+/// The drawing carries a lent width at the window's fit ratio while the saved
+/// layout keeps it in saved units, so a window that is not exactly the size
+/// the lend asked for must still leave the dividers draggable.
+#[test]
+fn dividers_drag_while_another_analyzer_tab_borrows_folded_width() {
+    let mut state = fresh();
+    state.picture.appearance.spectrum.orientation = SpectralOrientation::Left;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    region_click(&mut h, &mut state, 1);
+    h.settle_folds(&mut state);
+    click_analyzer_tab(&mut h, &mut state, panes::Tab::Spiral);
+    // The host refuses the width the lend asks for.
+    assert!(state.workspace.take_window_size_change().is_some(), "fixture must lend width");
+    h.settle(&mut state);
+    let saved = state.workspace.layout.right.lattice;
+    let [lattice, analyzer, _] = state.workspace.layout_runtime.rects;
+    let origin = egui::pos2((lattice.right() + analyzer.left()) * 0.5, lattice.center().y);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
+    h.frame(&mut state, vec![press(origin, true)]);
+    h.frame(&mut state, vec![egui::Event::PointerMoved(origin - egui::vec2(30.0, 0.0))]);
+    h.frame(&mut state, vec![press(origin - egui::vec2(30.0, 0.0), false)]);
+    assert!(state.workspace.layout.right.lattice < saved - 10.0, "divider did not move");
+}
+
 #[test]
 fn stacked_settings_only_is_compact_and_all_sections_can_reopen() {
     let mut state = fresh();
@@ -852,7 +877,7 @@ fn a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice() {
 
 /// Choose an analyzer tab by its header label, through the strip's dropdown
 /// when the section is too narrow to list it.
-fn pick_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::Tab) {
+fn click_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::Tab) {
     let label = |out: &egui::FullOutput, state: &SharedState, name: &str| {
         let section = state.workspace.layout_runtime.rects[Section::Analyzer as usize];
         out.shapes.iter().find_map(|cs| match &cs.shape {
@@ -880,6 +905,11 @@ fn pick_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::T
     };
     click_at(h, state, at);
     assert_eq!(state.workspace.layout.analyzer_tab, tab);
+}
+
+/// [`click_analyzer_tab`], with the window it asks for granted.
+fn pick_analyzer_tab(h: &mut DockHarness, state: &mut SharedState, tab: panes::Tab) {
+    click_analyzer_tab(h, state, tab);
     h.settle_folds(state);
 }
 
