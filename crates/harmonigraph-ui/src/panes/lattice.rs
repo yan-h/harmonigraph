@@ -9,7 +9,7 @@ use crate::marks::{
 use crate::{theme, PictureState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
-use harmonigraph_scene::{derive_scene, Camera, NoteNames, Projection, SevensLabel};
+use harmonigraph_scene::{derive_scene_with_extra, Camera, NoteNames, Projection, SevensLabel};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 ///
@@ -93,15 +93,18 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
 pub(crate) fn compose_scene(
     state: &mut PictureState,
     window: &harmonigraph_scene::DrawnWindow,
+    aspect: f32,
     hovered: Option<harmonigraph_core::LatticePos>,
     surface: usize,
     now: f64,
 ) -> harmonigraph_scene::Scene {
-    let mut scene = derive_scene(
+    let extra = super::selective_halo::owners(state, window, aspect, surface, now);
+    let mut scene = derive_scene_with_extra(
         &state.runtime.tracker,
         &state.runtime.tuning,
         &state.appearance.view,
         window,
+        &extra,
         &state.runtime.frame_params,
         state.appearance.camera,
         hovered,
@@ -169,7 +172,8 @@ pub(crate) fn draw_lattice(
     }
     // Only the interactive copy carries the hover picked in this view.
     let hovered = response.and(state.surfaces.hovered);
-    let mut scene = compose_scene(state, &window, hovered, surface, now);
+    let mut scene =
+        compose_scene(state, &window, rect.width() / rect.height().max(1.0), hovered, surface, now);
     // The ground this pass is composited over. Only the shell knows it -- the
     // fill the docked pane just painted here, the render layout's own
     // background offline -- so it is carried in by the caller rather than
@@ -867,7 +871,7 @@ mod tests {
         }
         let scene = {
             let window = state.appearance.view.reach();
-            compose_scene(&mut state, &window, None, 0, 0.05)
+            compose_scene(&mut state, &window, 1.0, None, 0, 0.05)
         };
         let mut batch = crate::text::TextBatch::default();
         let _ = painted_into(egui::vec2(1200.0, 900.0), rect, |ui| {
@@ -1162,7 +1166,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         let scene = {
             let window = state.appearance.view.reach();
-            compose_scene(&mut state, &window, None, 0, 0.05)
+            compose_scene(&mut state, &window, 1.0, None, 0, 0.05)
         };
         let names = state.appearance.view.note_names;
         assert_eq!(
@@ -1191,7 +1195,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = {
             let window = state.appearance.view.reach();
-            compose_scene(&mut state, &window, None, 0, 1.9)
+            compose_scene(&mut state, &window, 1.0, None, 0, 1.9)
         };
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
@@ -1228,7 +1232,7 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60));
         let scene = {
             let window = state.appearance.view.reach();
-            compose_scene(&mut state, &window, None, 0, 1.9)
+            compose_scene(&mut state, &window, 1.0, None, 0, 1.9)
         };
         let names = state.appearance.view.note_names;
         assert_eq!(names, NoteNames::Past, "the reserve is Past's alone");
@@ -1491,7 +1495,7 @@ mod tests {
             .prune(secs, &state.appearance.view.envelope(&state.runtime.frame_params));
         let scene = {
             let window = state.appearance.view.reach();
-            compose_scene(state, &window, None, 0, secs)
+            compose_scene(state, &window, 1.0, None, 0, secs)
         };
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 450.0));
         let mut batch = crate::text::TextBatch::default();

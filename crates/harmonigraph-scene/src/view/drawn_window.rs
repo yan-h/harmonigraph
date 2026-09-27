@@ -32,8 +32,9 @@ pub struct DrawnWindow {
 impl DrawnWindow {
     /// Every position in the block, threes outer and sevens inner.
     ///
-    /// The order is load-bearing: [`index_of`](Self::index_of) inverts it, so
-    /// the renderer can find a neighbour by arithmetic instead of hashing.
+    /// [`index_of`](Self::index_of) inverts this order within the block.
+    /// A scene can also contain sparse light owners outside these bounds,
+    /// so the block index is not an index into `Scene::nodes`.
     pub fn positions(&self) -> impl Iterator<Item = LatticePos> {
         coords::positions_within(
             self.min.threes..=self.max.threes,

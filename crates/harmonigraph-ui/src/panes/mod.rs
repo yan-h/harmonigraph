@@ -20,6 +20,7 @@ pub mod pages;
 /// The offline video frame, composed live so you can preview and adjust it
 /// before rendering. The "Video" tab.
 pub mod render;
+mod selective_halo;
 pub mod spectral;
 // Not a pane — a post-pass the Lattice pane runs — but it is made of two of
 // them, and its own docs say so.
