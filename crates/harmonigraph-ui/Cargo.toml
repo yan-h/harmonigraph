@@ -16,6 +16,7 @@ egui = { workspace = true, features = ["serde"] }
 glam = { workspace = true }
 serde = { workspace = true }
 ron = { workspace = true }
+foldhash = { workspace = true }
 
 [dev-dependencies]
 egui-wgpu = { workspace = true }

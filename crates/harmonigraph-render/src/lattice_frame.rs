@@ -66,16 +66,9 @@ impl LatticeCallback {
         // is the camera's business, not an assumption.
         let eye = camera.eye();
         let forward = (camera.target - eye).normalize_or_zero();
+        //
+        // The sort itself is below, once what each node emits is known.
         let sheet_depth = |n: &harmonigraph_scene::NodeInstance| n.world_pos.z * forward.z;
-        // Carrying the node's INDEX rather than the node itself, because a
-        // label names one and has to be put back beside it after the sort.
-        let mut order: Vec<(f32, f32, usize)> = scene
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (sheet_depth(n), (n.world_pos - eye).dot(forward), i))
-            .collect();
-        order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
@@ -179,6 +172,27 @@ impl LatticeCallback {
                 *slot = (start, taken - start);
             }
         }
+
+        // Carrying the node's INDEX rather than the node itself, because a
+        // label names one and has to be put back beside it after the sort.
+        //
+        // Only the nodes the walk below emits something for are sorted: one
+        // that ships, stands under a cross, or carries a name. Every other
+        // node emits nothing wherever it sorts, and in a dense window it is
+        // most of them. `sort_by` is stable, so the ones kept come out in the
+        // order they held in the full sort. Whether a node ships is asked here,
+        // once, of its packed instance.
+        let mut order: Vec<(f32, f32, usize, bool)> = scene
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| {
+                let ships = paints(&to_gpu(n));
+                (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
+                    .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships))
+            })
+            .collect();
+        order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
 
         // The one walk: every draw the pass makes, emitted in the order it
         // makes them, filling the four buffers as it goes (see [`Draw`]).
@@ -335,9 +349,8 @@ impl LatticeCallback {
             && atmosphere.enabled
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
-        for &(_, _, i) in &order {
+        for &(_, _, i, ships) in &order {
             let mut instance = to_gpu(&scene.nodes[i]);
-            let ships = paints(&instance);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
