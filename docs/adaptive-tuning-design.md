@@ -317,16 +317,16 @@ Proposed presentation: subtle outlines on reachable nodes, distinct from the app
 A faint connecting region and an optional view of each node's input-pitch range are possibilities, not approved UI specifications.
 Context and balance changes may move those ranges and make nodes enter or leave the reachable set.
 
-## Proposed controls
+## Controls
 
 | Control | Intended purpose | Status |
 |---|---|---|
-| Neighbourhood size | Set the maximum permitted harmonic remoteness | Proposed; metric, range and default open |
+| Neighbourhood size | Set the maximum permitted harmonic remoteness | Built as Search radius, 1 to 5 lattice steps along each enabled axis, default 3 |
 | Harmonic preference ↔ Pitch fidelity | Balance eligible candidates' harmonic suitability and input-pitch closeness | Built as Pitch flexibility, 1 to 100 cents, default 100, with an exponential pitch cost (#865) |
-| Reset after silence | Set when context and accumulated drift reset, optionally never | Requested; timing semantics, range and default open |
-| Reset on transport events | Choose whether stopping/restarting playback and looping reset context | Requested; event triggers, one versus separate controls, reset scope and defaults open |
-| Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Requested; UI, combinations and default open |
-| Same-note tolerance | Decide when a new pitch refreshes an existing memory contribution | Suggested by Yan; matching semantics, units, range and default open |
+| Reset after silence | Set when context and accumulated drift reset, optionally never | Built as Silence reset, 0 to 120 s (0: never), default 0 |
+| Reset on transport events | Choose whether stopping/restarting playback and looping reset context | Built as separate Reset context on stop / Reset context on loop-or-seek checkboxes, both off by default |
+| Allowed lattice axes / interval families | Control which harmonic relationships may supply candidates, including whether seventh-based relationships are allowed | Built as Search axes: Fifths, Fifths + thirds, or Fifths + thirds + sevenths, default Fifths + thirds |
+| Same-note tolerance | Decide when a new pitch refreshes an existing memory contribution | Built as Same-note tolerance, 0 to 20 cents, default 0.5 cents |
 | Remembered-note capacity | Set N for the temporary recent-note replacement scheme | Fixed at 24 released entries with no setting (Yan, 2026-09-11) |
 
 The initial memory replacement scheme is intentionally temporary; its successor remains to be designed.

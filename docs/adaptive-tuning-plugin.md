@@ -177,7 +177,7 @@ the onset receives no adaptive correction and the policy fault is reported.
 It never silently truncates the neighborhood or chooses from a partial set.
 This ceiling bounds individual evaluation work, not the total distance of a musical journey.
 Large onset cohorts can exceed the audio-callback budget well below the ceiling;
-[issue #790](https://github.com/yan-h/harmonigraph/issues/790) tracks that measurement.
+[issue #790](https://github.com/yan-h/harmonigraph/issues/790) recorded that measurement and was closed not-planned.
 Tune's output delay and missed-correction counter do not bound the Hub's processing time.
 
 Coordinates travel as signed 32-bit lattice coordinates and correction as signed 64-bit microcents.

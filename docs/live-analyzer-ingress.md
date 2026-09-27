@@ -83,24 +83,11 @@ checks strict timestamp order,
 compares every incremental aggregate with a fresh complete-history fold,
 and covers exact equality with the old tail.
 
-## Cost measurements — 2026-09-09
+## Cost measurements — 2026-09-09 (historical evidence for this design)
 
-A quiet-window native CPU probe ran on an 8-core Apple M1 Pro with Rust 1.92.0.
-Other batch builds and probes were paused;
-Bitwig and WindowServer remained active,
-so this was not an otherwise idle machine.
-The scratch executable used `rustc -O` and the repository's compiled dependencies (dev profile opt-level 2,
-dependencies opt-level 3).
-It compared the old ring publication plus per-sample pop into reusable scratch with the new publication plus bulk copy,
-using mono/stereo callbacks of 32,
-128,
-512 and 2048 frames and one/eight callbacks per drain.
-Queues and scratch were preallocated on both sides to measure steady state.
-Each case ran 10000 iterations;
-a counting allocator observed zero publication/drain allocations in every case.
-These are synthetic in-process CPU costs,
-not host callback scheduling or display latency measurements.
-The original callback's latest-channel atomic store was outside the baseline probe.
+A quiet-window native CPU probe on an 8-core Apple M1 Pro compared the old ring publication plus per-sample pop into reusable scratch against the new publication plus bulk copy.
+Synthetic in-process CPU costs, not host callback scheduling or display latency;
+zero publication/drain allocations observed in every case.
 
 Representative stereo results,
 with eight callbacks per drain:
@@ -110,26 +97,16 @@ with eight callbacks per drain:
 | 128 | 0.333 → 0.343 µs | 0.447 → 0.416 µs | 7.208 → 0.208 µs | 15.041 → 0.292 µs |
 | 512 | 1.291 → 1.333 µs | 3.151 → 2.864 µs | 28.834 → 0.667 µs | 57.083 → 1.416 µs |
 
-The reduced raw drain cost comes from bulk copying instead of per-sample ring pops.
-Copy volume is unchanged:
-one float written to the ring and one copied to scratch per retained channel sample (384000 bytes/s per copy at 48 kHz stereo).
-`size_of::<Block>()` measured 48 bytes,
-so 4096 descriptors add 196608 bytes (192 KiB).
-The sample ring remains 512 KiB;
-scratch now allocates its bounded 512 KiB eagerly instead of growing as before.
-This is additional metadata memory,
-not a memory saving.
+The reduced raw drain cost comes from bulk copying instead of per-sample ring pops;
+copy volume itself is unchanged.
+Scratch now allocates its bounded 512 KiB eagerly instead of growing as before — additional metadata memory, not a memory saving.
 
-A separate probe included the full public analyzer feed after draining,
-so the new per-descriptor analyzer setup was inside the measurement.
-Both sides used the default 8192-frame window,
-stereo power combination and the same continuous source grid at 48 kHz.
-Each case warmed 100 drains and timed 400 further drains.
-Publication,
+A separate probe measured the full public analyzer feed after draining (default 8192-frame window,
+stereo power combination,
+48 kHz),
+excluding publication,
 note mapping,
-window scheduling and rendering were excluded from this second measurement.
-The small single-callback median often contains no FFT;
-the tails and grouped drains are more informative.
+window scheduling and rendering:
 
 | Frames × callbacks per drain | Full drain p50 old → new | Full drain p95 old → new | Full drain p99 old → new |
 | --- | --- | --- | --- |

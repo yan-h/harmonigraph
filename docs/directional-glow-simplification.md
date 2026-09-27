@@ -47,7 +47,7 @@ a newly lit node starts dark when attack is nonzero,
 and keeps its row while approaching its target.
 No persisted controls or settings change.
 
-## Prototype: rasterize directional halos into overlap statistics
+## Shipped in #877: rasterize directional halos into overlap statistics
 
 Option 3 is implemented on `codex/directional-glow-mrt-prototype`,
 starting from the merged simplifications in #876.
@@ -160,9 +160,11 @@ The user accepted this precision tradeoff after visual testing and declined furt
 not-planned follow-up;
 additional precision work is not a merge prerequisite.
 
-## Trial: half-resolution glow and cached angular blur
+## Shipped in #879: half-resolution glow and cached angular blur
 
-Branch `codex/glow-resolution-and-kernel` tries both follow-up optimizations together.
+Branch `codex/glow-resolution-and-kernel`,
+merged as #879,
+tried both follow-up optimizations together.
 All three overlap-statistics textures and the resolved glow texture use half the scene width and height,
 rounded up for odd dimensions.
 Node ink,
