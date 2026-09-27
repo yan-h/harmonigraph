@@ -48,6 +48,7 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "vs_cloud_tile",
     "fs_cloud_tile",
     "fs_star_bake",
+    "fs_star_far",
     "fs_color_memory",
 ];
 
@@ -373,6 +374,7 @@ impl SpectrogramResources {
                 } else {
                     "fs_heatmap_gamma"
                 },
+                false,
             ),
             cloud: None,
             layout,
@@ -424,6 +426,7 @@ fn create_spectrogram_pipeline(
     layout: &wgpu::BindGroupLayout,
     extra_layout: Option<&wgpu::BindGroupLayout>,
     fragment: &str,
+    split_stars: bool,
 ) -> wgpu::RenderPipeline {
     #[cfg(not(test))]
     let source = SPECTROGRAM_SRC.into();
@@ -452,7 +455,10 @@ fn create_spectrogram_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some(fragment),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: if split_stars { &[("STAR_SPLIT", 1.0)] } else { &[] },
+                ..Default::default()
+            },
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: Some(EGUI_BLEND),
@@ -715,7 +721,34 @@ impl CallbackTrait for SpectrogramCallback {
                 );
                 let grid = &pane.grid.as_ref().expect("drawable grid").buffer;
                 let lut = &pane.lut.as_ref().expect("drawable gradient").view;
-                let tone_size = atmosphere::tone_size(pixels, ppp, settings, sampling.pixel_points);
+                // The callback can include the spectrum above the Stars region.
+                // Shade only pixels the backdrop or measured mesh can read.
+                // Include both so clipped/extended data quads stay supported.
+                let stars = settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
+                let star_coverage = stars.then(|| {
+                    let bounds = self.vertices.iter().fold(settings.region, |bounds, v| {
+                        bounds.union(egui::Rect::from_min_max(v.pos.into(), v.pos.into()))
+                    });
+                    let lo = [bounds.left(), bounds.top()];
+                    let hi = [bounds.right(), bounds.bottom()];
+                    let origin = [viewport.left_px, viewport.top_px];
+                    // Conservative raster bounds include fractional edge pixels.
+                    // The pane's own scissor still limits the final paint.
+                    let start: [u32; 2] = std::array::from_fn(|i| {
+                        ((lo[i] * ppp).floor() as i32 - origin[i]).clamp(0, pixels[i] as i32) as u32
+                    });
+                    let end: [u32; 2] = std::array::from_fn(|i| {
+                        ((hi[i] * ppp).ceil() as i32 - origin[i])
+                            .clamp(start[i] as i32, pixels[i] as i32) as u32
+                    });
+                    [start[0], start[1], end[0] - start[0], end[1] - start[1]]
+                });
+                let drawn_pixels = star_coverage.map_or(pixels, |r| [r[2], r[3]]);
+                let tone_size =
+                    atmosphere::tone_size(drawn_pixels, ppp, settings, sampling.pixel_points)
+                        // Keep pane-relative texel addressing; the scissor bounds
+                        // work while the intermediate retains the full pane size.
+                        .map(|size| if stars { pixels } else { size });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
                 let star_size = stars.map(|layout| {
@@ -902,16 +935,15 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_bind_group(1, group, &[]);
                         pass.draw(0..3, 0..1);
                     }
-                    // The cloud's own tone, once per half point of pane
-                    // rather than once per pixel of the composite. After the
-                    // bake because it reads the finished material out of the
-                    // same coverage quad, and only when display scale calls for a
-                    // reduction — at the fresh size there is no target and the
-                    // composite reads the tile under each pixel itself.
+                    // Precompose scalar cloud tone at reduced resolution, or
+                    // the far Stars layers at native resolution. Stars read the
+                    // finished atlas above, including its retained color.
+                    let stars =
+                        settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
                     if let Some(((tone_view, _), tone_group)) = target
                         .tone
                         .as_ref()
-                        .filter(|_| target.memory_size().is_none())
+                        .filter(|_| stars || target.memory_size().is_none())
                         .zip(target.tone_group.as_ref())
                     {
                         #[cfg(test)]
@@ -930,15 +962,19 @@ impl CallbackTrait for SpectrogramCallback {
                                 })],
                                 ..Default::default()
                             });
-                        pass.set_pipeline(&cloud.tone);
+                        pass.set_pipeline(if stars { &cloud.star_far } else { &cloud.tone });
                         pass.set_bind_group(0, &target.source_group, &[]);
                         pass.set_bind_group(1, tone_group, &[]);
-                        // The whole pane, not the region: this target is sized
-                        // and addressed over the whole pane, so anything the
-                        // quad leaves cleared bleeds back in under the
-                        // composite's `Linear` tap. See `Targets::tone_vertices`.
-                        pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
-                        pass.draw(0..6, 0..1);
+                        // Cover the whole intermediate; final painting clips
+                        // it to the region. Stars use a native-pixel triangle.
+                        if stars {
+                            let [x, y, width, height] = star_coverage.expect("Stars coverage");
+                            pass.set_scissor_rect(x, y, width, height);
+                            pass.draw(0..3, 0..1);
+                        } else {
+                            pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
+                            pass.draw(0..6, 0..1);
+                        }
                     }
                 }
                 pane.cloud_ready = true;
@@ -992,12 +1028,21 @@ impl CallbackTrait for SpectrogramCallback {
             // The spectrogram's bed is black, including unwritten history.
             // Color the diffused intensity there first; then the measured mesh
             // replaces its own pixels with the unified core and soft field.
-            render_pass.set_pipeline(&pipelines.backdrop);
+            let split = cloud.star_size().is_some() && cloud.tone.is_some();
+            render_pass.set_pipeline(if split {
+                &pipelines.star_backdrop
+            } else {
+                &pipelines.backdrop
+            });
             render_pass.set_bind_group(0, bind_group, &[]);
             render_pass.set_bind_group(1, cloud.composite_group(), &[]);
             render_pass.set_vertex_buffer(0, cloud.coverage_vertices.slice(..));
             render_pass.draw(0..6, 0..1);
-            render_pass.set_pipeline(&pipelines.composite);
+            render_pass.set_pipeline(if split {
+                &pipelines.star_composite
+            } else {
+                &pipelines.composite
+            });
         } else {
             render_pass.set_pipeline(&resources.pipeline);
         }
@@ -3904,6 +3949,8 @@ fn cs_wrap_probe() {
     }
 
     thread_local! {
+        /// Compare both paths without allocating a large pane in every test.
+        pub(super) static STAR_SPLIT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         /// Set while a test draws the reference [`pipeline_source`] builds.
         static UNWRAPPED_MOSAIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
@@ -4329,6 +4376,7 @@ fn cs_rotation_probe() {
         );
     }
 
+    mod star_split;
     mod timing;
 }
 

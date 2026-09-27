@@ -1,0 +1,14 @@
+{
+  "HARMONIGRAPH_SHADER_ASSETS": "source",
+  "PROBE_COMPARE": "base_a,base_b,split,unsplit",
+  "PROBE_CASE": "stars",
+  "PROBE_FILLS": "1",
+  "PROBE_FRAMES": "240",
+  "PROBE_WARMUP": "120",
+  "PROBE_SIZE": "2560x1440",
+  "PROBE_SEED": "107",
+  "PROBE_RAW": "/private/tmp/stars-ordered-split/recording-1440-107.csv",
+  "PROBE_TAKE": "/private/tmp/stars-round3/take-levels.u8",
+  "PROBE_HISTORY_SECONDS": "20",
+  "PROBE_PPP": "1"
+}
