@@ -63,7 +63,7 @@ Actual local source diff versus checksum-published 0.3.0: egui-baseview src has 
 | nice-plug activation ordering | Still needed if moving to 0.4.2: wrapper marks is_activated inside activation loop (~1781), then drops activate_context only at 1807. |
 | nice-plug production CLAP ownership/configuration/performance/setup | Adaptation if moving; no corresponding custom seams or source modules in 0.4.2. Preserve shared host-input ownership, bounded output, setup/main-thread destruction contracts and exported-factory fixtures. |
 | nice-plug auxiliary descriptor bounds/storage sizing | Still needed if moving: clap/wrapper.rs:2065,2089 still use `>` rather than `>=`; util/buffer_management.rs:295 resizes inside input-present path. |
-| nice-plug VST3 bus arrangement | Still needed if moving: vst3/wrapper.rs:858,876 main/aux offsets remain reversed; 877ff reads main output unconditionally. |
+| nice-plug VST3 bus arrangement | Not needed: Harmonigraph ships only as a CLAP and no longer compiles the VST3 wrapper (#1185). |
 
 Sources: [published CLAP wrapper](https://docs.rs/crate/nice-plug/0.4.2/source/src/wrapper/clap/wrapper.rs) and [VST3 wrapper](https://docs.rs/crate/nice-plug/0.4.2/source/src/wrapper/vst3/wrapper.rs). These are source comparisons, not reruns of the local exported-factory fixtures against 0.4.2.
 

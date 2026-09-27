@@ -152,12 +152,14 @@ impl FileWriter {
     }
     pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
         let status = Mutex::new(String::new());
-        let mut open =
-            Recording::create(harmonigraph_take::Header::default(), path, 1, spec, &status)
-                .unwrap();
-        open.epoch = capture.fence.epoch();
-        open.configuration_enabled = capture.fence.enabled.load(Ordering::Acquire);
-        open.source_enabled = capture.fence.canonical_enabled.load(Ordering::Acquire);
+        let open = Recording::create(
+            harmonigraph_take::Header::default(),
+            path,
+            capture.fence.epoch(),
+            spec,
+            &status,
+        )
+        .unwrap();
         Self {
             pump: Pump { open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),

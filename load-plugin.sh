@@ -237,10 +237,10 @@ load_build() {  # $1 = worktree index
   STAGE="$(mktemp -d)"
 
   local updated=0 ext bundle staged live_bin old_id current_id diagnostic_path
-  for ext in clap vst3; do
+  for ext in clap; do
     bundle="$BUNDLED/$NAME.$ext"
     if [[ ! -d "$bundle" ]]; then
-      echo "WARNING: $bundle missing — create the bundles once from main:" >&2
+      echo "WARNING: $bundle missing — create the bundle once from main:" >&2
       echo "         (cd \"$MAIN\" && cargo xtask bundle $PKG --release)" >&2
       continue
     fi

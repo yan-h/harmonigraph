@@ -24,7 +24,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn ordinary(name: &str) -> Self {
+    fn queued(name: &str) -> Self {
         let directory = std::env::temp_dir()
             .join(format!("harmonigraph-boundary-{}-{name}", std::process::id()));
         let (recorder, control) = channel();
@@ -32,7 +32,7 @@ impl Worker {
         *fence.test_directory.lock() = Some(directory.clone());
         let worker = Self { recorder: Some(recorder), control: Some(control), fence, directory };
         worker.control.as_ref().unwrap().start(48_000.0, String::new(), true);
-        wait_for("ordinary Start", || worker.find_wav().is_some());
+        wait_for("Start", || worker.find_wav().is_some());
         worker.fence.worker_before_commands.enabled.store(true, Ordering::Release);
         wait_for("before command poll", || {
             worker.fence.worker_before_commands.entered.load(Ordering::Acquire)
@@ -40,15 +40,10 @@ impl Worker {
         worker
     }
 
-    fn start(name: &str, fenced: bool, fail_finish: bool, pending_start: bool) -> Self {
-        let directory = std::env::temp_dir().join(format!(
-            "harmonigraph-audio-{}-{name}-{fenced}-{pending_start}",
-            std::process::id()
-        ));
+    fn start(name: &str, fail_finish: bool, pending_start: bool) -> Self {
+        let directory = std::env::temp_dir()
+            .join(format!("harmonigraph-audio-{}-{name}-{pending_start}", std::process::id()));
         let (recorder, control) = channel();
-        if fenced {
-            recorder.enable_configuration();
-        }
         let fence = control.fence.clone();
         *fence.test_directory.lock() = Some(directory.clone());
         *fence.test_wav_limit.lock() = Some(2);
@@ -70,9 +65,6 @@ impl Worker {
             assert!(recorder.is_armed());
             recorder.mark_audio_start(0.25);
             recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
-            if !fenced {
-                recorder.finish_callback();
-            }
         });
         fence.worker_after_empty.enabled.store(false, Ordering::Release);
         // The limit only becomes reachable once the two-frame prefix is on
@@ -95,19 +87,25 @@ impl Worker {
             appearance: None,
             size: [16, 16],
         }));
-        let recorder = self.recorder.as_mut().unwrap();
-        assert_no_alloc(|| {
-            assert!(!recorder.is_armed());
-            if self.fence.enabled.load(Ordering::Acquire) {
-                recorder.configuration_pass_complete(RecordAddress { epoch: 1, pass: 1 });
-                recorder.configuration_epoch_complete(1);
-            } else {
-                recorder.finish_callback();
-            }
-        });
+        assert_no_alloc(|| self.close(1));
         // A failure may already be accounted before Stop. Wait for this
         // command's worker iteration too, so its render request is exercised.
         wait_for("Stop processed", || self.fence.worker_stop_processed.load(Ordering::Acquire));
+    }
+
+    /// What the configuration owner and the Hub publish once a stopped take's
+    /// next callback observes the disarm: every lane closes over the first
+    /// `passes` passes of the one epoch these fixtures record.
+    fn close(&mut self, passes: u32) {
+        let recorder = self.recorder.as_mut().unwrap();
+        assert!(!recorder.is_armed());
+        for pass in 1..=passes {
+            let address = RecordAddress { epoch: 1, pass };
+            recorder.configuration_pass_complete(address);
+            recorder.source_pass_complete(address, 1.0);
+        }
+        recorder.configuration_epoch_complete(1);
+        recorder.source_epoch_complete(1, 1.0);
     }
 
     fn assert_failed(&self, cause: &str) {
@@ -176,24 +174,24 @@ fn wav_samples(path: &std::path::Path) -> Vec<f32> {
 }
 
 #[test]
-fn ordinary_queued_stop_preserves_the_audio_prefix() {
-    let mut worker = Worker::ordinary("queued-stop");
+fn queued_stop_preserves_the_audio_prefix() {
+    let mut worker = Worker::queued("queued-stop");
     let recorder = worker.recorder.as_mut().unwrap();
     assert_no_alloc(|| {
         assert!(recorder.is_armed());
         recorder.mark_audio_start(0.25);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
-        recorder.finish_callback();
     });
     worker.control.as_ref().unwrap().stop(None);
+    worker.close(1);
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
-    wait_for("ordinary Stop", || worker.control.as_ref().unwrap().last_take().is_some());
+    wait_for("queued Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!(wav_samples(&worker.wav()), PREFIX);
 }
 
 #[test]
-fn ordinary_queued_rollover_keeps_each_pass_audio() {
-    let mut worker = Worker::ordinary("queued-rollover");
+fn queued_rollover_keeps_each_pass_audio() {
+    let mut worker = Worker::queued("queued-rollover");
     let first = worker.wav();
     let recorder = worker.recorder.as_mut().unwrap();
     assert_no_alloc(|| {
@@ -201,49 +199,44 @@ fn ordinary_queued_rollover_keeps_each_pass_audio() {
         assert!(recorder.observe_transport(1.0, true, 64.0 / 48_000.0));
         recorder.mark_audio_start(1.0);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
-        recorder.finish_callback();
         assert!(recorder.is_armed());
         assert!(recorder.observe_transport(0.0, true, 64.0 / 48_000.0));
         recorder.mark_audio_start(0.0);
         recorder.audio(&mut [0.75, -0.75].into_iter(), 2);
-        recorder.finish_callback();
     });
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
     let second =
         first.with_file_name(format!("{}-2.wav", first.file_stem().unwrap().to_str().unwrap()));
     wait_for("loop audio written", || std::fs::metadata(&second).is_ok_and(|m| m.len() >= 52));
     worker.control.as_ref().unwrap().stop(None);
+    worker.close(2);
     wait_for("rollover Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!((wav_samples(&first), wav_samples(&second)), (PREFIX.to_vec(), vec![0.75, -0.75]));
 }
 
 #[test]
 fn wav_limit_is_reported_and_never_renders_an_incomplete_take() {
-    for fenced in [false, true] {
-        for pending_start in [false, true] {
-            let mut worker = Worker::start("size-limit", fenced, false, pending_start);
-            assert_no_alloc(|| {
-                worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2)
-            });
-            worker.assert_failed("RIFF size limit");
-            worker.stop_with_render();
-            worker.assert_failed("RIFF size limit");
-            let bytes = std::fs::read(worker.wav()).unwrap();
-            assert_eq!(bytes.len(), 44 + 16);
-            assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 36 + 16);
-            assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 16);
-            worker.assert_prefix();
-            let take = harmonigraph_take::Take::read(worker.wav().with_extension("take")).unwrap();
-            assert_eq!(take.header.audio_start, Some(0.25), "pending Start retains alignment too");
-        }
+    for pending_start in [false, true] {
+        let mut worker = Worker::start("size-limit", false, pending_start);
+        assert_no_alloc(|| {
+            worker.recorder.as_mut().unwrap().audio(&mut [1.0, -1.0].into_iter(), 2)
+        });
+        worker.assert_failed("RIFF size limit");
+        worker.stop_with_render();
+        worker.assert_failed("RIFF size limit");
+        let bytes = std::fs::read(worker.wav()).unwrap();
+        assert_eq!(bytes.len(), 44 + 16);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 36 + 16);
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 16);
+        worker.assert_prefix();
+        let take = harmonigraph_take::Take::read(worker.wav().with_extension("take")).unwrap();
+        assert_eq!(take.header.audio_start, Some(0.25), "pending Start retains alignment too");
     }
 }
 
 #[test]
 fn wav_finalization_failure_is_accounted_without_producer_disconnect() {
-    for fenced in [false, true] {
-        let mut worker = Worker::start("finalize", fenced, true, true);
-        worker.stop_with_render();
-        worker.assert_failed("WAV finalization failure");
-    }
+    let mut worker = Worker::start("finalize", true, true);
+    worker.stop_with_render();
+    worker.assert_failed("WAV finalization failure");
 }

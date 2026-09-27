@@ -453,6 +453,7 @@ mod tests {
         assert_eq!(held_at_gap, Some(2), "the fixture must reach the gap holding both keys");
         assert_eq!(tracker.held_count(), 0, "the gap clears stale held state");
         assert!(!tracker.source_current_certain(SourceId::DIRECT));
+        assert!(tracker.history_missing());
 
         // The refresh restores what is sounding NOW and nothing else: key 60
         // was released while the lane was full and does not come back.
@@ -468,8 +469,8 @@ mod tests {
         assert_eq!(tracker.held_count(), 1);
         let restored = tracker.roll().notes().find(|n| n.note == 72 && n.end.is_none()).unwrap();
         assert_eq!(restored.start, 0.0, "the snapshot restores, it does not re-attack");
-        assert!(!restored.history_complete, "the missing history stays visible");
-        assert_eq!(tracker.publication_gaps().len(), 1);
+        assert!(!restored.history_complete, "the roll records the history it never saw");
+        assert!(!tracker.history_missing(), "and nothing is missing any more");
     }
 
     #[test]

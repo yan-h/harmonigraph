@@ -63,7 +63,9 @@ baseview = "0.1.4"
 
 # Plugin framework: the community continuation of nih-plug. Host->plugin
 # window resizing is supported natively (ResizeHint / Editor::set_size).
-nice-plug = "0.1.10"
+# Its CLAP wrapper is unconditional; the default feature is the VST3 wrapper,
+# and Harmonigraph ships only as a CLAP (#1185).
+nice-plug = { version = "0.1.10", default-features = false }
 nice-plug-xtask = "0.1.1"
 
 # Math / utility

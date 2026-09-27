@@ -12,7 +12,7 @@ This file is the mechanics.
 ## Why the slot is pulled, not pushed
 
 Bitwig loads exactly ONE plugin build:
-the main checkout's `target/bundled/Harmonigraph.{clap,vst3}`.
+the main checkout's `target/bundled/Harmonigraph.clap`.
 A branch or worktree build is invisible in the DAW until its binary is swapped into that slot.
 With parallel sessions that slot is shared, so sessions do NOT fight over it:
 every session builds into its own worktree, and Yan chooses which build goes live.

@@ -153,6 +153,9 @@ struct Device {
     _host: Box<clap_host>,
     stats: Box<Host>,
     active: bool,
+    /// The auxiliary input every block carries: silence unless a fixture
+    /// needs it told apart from the main input.
+    sidechain: std::cell::Cell<[[f32; 64]; 2]>,
 }
 impl Device {
     fn new() -> Self {
@@ -178,7 +181,13 @@ impl Device {
         stats.plugin.store(plugin as usize, Ordering::Relaxed);
         assert!(!plugin.is_null());
         assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
-        let device = Self { plugin, _host: host, stats, active: false };
+        let device = Self {
+            plugin,
+            _host: host,
+            stats,
+            active: false,
+            sidechain: std::cell::Cell::new([[0.0; 64]; 2]),
+        };
         // Retune defaults off for the Hub's own input; these fixtures are
         // about the configuration/policy pipeline the correction runs
         // through, so give it the state that pipeline needs.
@@ -340,8 +349,7 @@ impl Device {
         let mut left = [0.0_f32; 64];
         let mut right = [0.0_f32; 64];
         let mut channels = [left.as_mut_ptr(), right.as_mut_ptr()];
-        let mut side_left = [0.0_f32; 64];
-        let mut side_right = [0.0_f32; 64];
+        let [mut side_left, mut side_right] = self.sidechain.get();
         let mut side_channels = [side_left.as_mut_ptr(), side_right.as_mut_ptr()];
         let mut audio = clap_audio_buffer {
             data32: channels.as_mut_ptr(),
@@ -792,7 +800,7 @@ fn opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner(
     let plugin = crate::Harmonigraph::default();
     assert!(
         plugin.configuration.is_none(),
-        "VST/standalone initialization has no CLAP-only owner or callback work"
+        "construction outside the CLAP wrapper has no CLAP-only owner or callback work"
     );
     assert!(plugin.params.configuration.get().is_none());
 }
@@ -1383,6 +1391,40 @@ fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origi
     device.finish_notes(6 * 64, &[]);
 }
 
+/// The take records the same buffer the analyzer reads. Main is silent and
+/// every sidechain sample distinct, so a take that recorded Main, or the
+/// sidechain's channels in the wrong order, cannot pass.
+#[test]
+fn a_sidechain_selection_reaches_the_armed_takes_audio() {
+    use nice_plug::params::InternalParamMut;
+    let _scope = crate::test_scope::enter();
+    let (mut device, mut capture) = recorded_device();
+    let left: [f32; 64] = std::array::from_fn(|i| 1.0 + i as f32);
+    let right: [f32; 64] = std::array::from_fn(|i| -1.0 - i as f32);
+    device.sidechain.set([left, right]);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        // SAFETY: the fixture sets the parameter between callbacks, as the
+        // host wrapper does, while the parameter object stays alive.
+        assert!(unsafe {
+            plugin
+                .params
+                .analysis_input
+                ._internal_set_plain_value(crate::AnalysisInputParam::Sidechain)
+        });
+    });
+    device.activate();
+    capture.arm_audio();
+    device.run_transport(0, vec![], false, None, Some(transport(5.0, 0)));
+    let expected: Vec<f32> = left.iter().zip(&right).flat_map(|(l, r)| [*l, *r]).collect();
+    assert_eq!(
+        capture.drain_audio(),
+        expected,
+        "the armed take received Main instead of Sidechain"
+    );
+    capture.stop();
+    device.finish_notes(64, &[]);
+}
+
 /// One accepted stopped callback is enough to finish at a restore, with or
 /// without MIDI. The real CLAP path must finalize exactly that audio prefix.
 #[test]
@@ -1476,10 +1518,9 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
     }
 }
 
-/// A CLAP host always installs the configuration owner, and with it installed
-/// a note reaches the take through the Hub's publication rather than the
-/// plain-MIDI arm — so "has this take captured anything" has to be answered by
-/// what the recorder took in, not by a count only that arm kept (#818).
+/// A note reaches the take through the Hub's publication, so "has this take
+/// captured anything" is answered by what the recorder took in, not by a
+/// count kept anywhere else (#818).
 ///
 /// The plugin's own recorder and the editor state wired to it, not an injected
 /// one: the claim is that the editor's frame-counted stop sees a note that

@@ -461,8 +461,10 @@ mod tests {
                 !snapshot[1].7.iter().any(|segment| segment.0 .0 < 0.3 && segment.1 .0 > 0.2),
                 "one recovered lifetime preserves the gap without a duplicate cache identity"
             );
-            assert_eq!(state.runtime.tracker.publication_gaps().len(), 1);
-            assert_eq!(state.runtime.tracker.source_baseline(source).unwrap(), &recovered);
+            assert!(
+                !state.runtime.tracker.history_missing(),
+                "the recovered baseline answers for the gap"
+            );
             if let Some(ref expected) = expected {
                 assert_eq!(&snapshot, expected);
             } else {

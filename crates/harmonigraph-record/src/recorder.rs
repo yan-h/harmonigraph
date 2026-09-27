@@ -23,7 +23,7 @@ pub use writer::channel;
 #[doc(hidden)]
 pub use writer::testing;
 
-use configuration::{RecordAddress, RecordFence, CALLBACK_ACTIVE};
+use configuration::{RecordAddress, RecordFence};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
 /// Ring capacity. Sized for a fast offline render rather than for a
@@ -87,13 +87,6 @@ pub enum Entry {
     ProducerClosed(u64),
     /// Exactly this committed audio prefix belongs at this point in the stream.
     AudioSamples(usize),
-    Note {
-        t: f64,
-        source: SourceId,
-        channel: u8,
-        note: u8,
-        kind: NoteEventKind,
-    },
     /// `key` is an index into [`ParamKey::ALL`] — an id string would mean
     /// allocating on the audio thread.
     Param {
@@ -200,9 +193,9 @@ impl StopAtBar {
 /// gained (#895).
 #[derive(Default)]
 struct TakeLatches {
-    /// Notes that entered the current take, through either the plain-MIDI arm
-    /// or addressed publication. The status line reads this independently of
-    /// transport progress: audio-only takes and delayed notes also roll.
+    /// Notes that entered the current take through addressed publication. The
+    /// status line reads this independently of transport progress: audio-only
+    /// takes and delayed notes also roll.
     captured: AtomicU64,
     /// Whether this take has recorded a block yet, published for the GUI's
     /// Transport-stop countdown (`Control::has_rolled`). Whether an owed split
@@ -316,10 +309,6 @@ impl Recorder {
         self.publication.observe_clock(time);
         self.display.observe_clock(time);
     }
-    pub fn enable_canonical(&self) {
-        self.fence.canonical_enabled.store(true, Ordering::Release);
-    }
-
     /// The same delta on both lanes, with an outcome for each. There is no
     /// combined `Result`: a lane that lost the report owes a snapshot on that
     /// lane alone, and the caller has to say which.
@@ -333,9 +322,9 @@ impl Recorder {
         // that overflowed still returns Err on its own half, so the caller
         // arms a snapshot there, but it must not touch the file.
         self.publication_result(take, route);
-        // A route with an address is a note landing in a pass: with a
-        // configuration owner installed, this is the only way one gets there.
-        // A reset is no note of the take's, whatever route it carries.
+        // A route with an address is a note landing in a pass, and this is the
+        // only way one gets there. A reset is no note of the take's, whatever
+        // route it carries.
         if take.is_ok()
             && route.address.is_some()
             && !matches!(note.event.kind, NoteEventKind::SourceReset | NoteEventKind::SessionReset)
@@ -418,21 +407,10 @@ impl Recorder {
             self.fence.source_closed.store(epoch, Ordering::Release);
         }
     }
-    /// Begin the callback's recording observation. Ordinary callers pair this
-    /// with `finish_callback` after their final publication, even when disarmed.
+    /// [`is_armed_at`](Self::is_armed_at) the intent as it stands now, for a
+    /// caller with no callback boundary of its own to have captured it at.
     pub fn is_armed(&mut self) -> bool {
         self.is_armed_at(self.capture_recording_intent())
-    }
-
-    /// Release ordinary callback ownership after its final publication, or
-    /// after joining callbacks. Stop can then close the prefix even when no
-    /// further callback will run. Configuration/source closures stay separate.
-    pub fn finish_callback(&mut self) {
-        let intent =
-            self.fence.intent.fetch_and(!CALLBACK_ACTIVE, Ordering::AcqRel) & !CALLBACK_ACTIVE;
-        if intent & 1 == 0 {
-            self.is_armed_at(intent);
-        }
     }
 
     /// Use the arm/disarm intent captured at the enclosing callback boundary,
@@ -445,9 +423,7 @@ impl Recorder {
             self.record_pass = 1;
         }
         if !armed && epoch > self.closed_epoch {
-            if self.fence.enabled.load(Ordering::Acquire) {
-                self.push(Entry::ProducerClosed(epoch));
-            }
+            self.push(Entry::ProducerClosed(epoch));
             #[cfg(feature = "test-support")]
             self.fence.producer_close_pause.reach();
             self.closed_epoch = epoch;
@@ -472,17 +448,8 @@ impl Recorder {
     fn push(&mut self, entry: Entry) {
         if self.producer.push(entry).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
-            if self.fence.enabled.load(Ordering::Acquire)
-                || matches!(entry, Entry::AudioSamples(_) | Entry::AudioStart(_) | Entry::NewPass)
-            {
-                self.fence.fail();
-            }
+            self.fence.fail();
         }
-    }
-
-    pub fn note(&mut self, t: f64, source: SourceId, channel: u8, note: u8, kind: NoteEventKind) {
-        self.push(Entry::Note { t, source, channel, note, kind });
-        self.latches.captured.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Which unbroken run of recorded blocks the take is in. It changes when
@@ -495,8 +462,8 @@ impl Recorder {
     /// loop wrapped — would otherwise reach it only as releases, and replay
     /// draws nothing for those (#1129). A caller remembers the run it last
     /// opened and opens again when this differs, so the debt is paid once per
-    /// run however many blocks ask. The plain-MIDI arm pays it with its held
-    /// notes; the configured route with the Hub's snapshot.
+    /// run however many blocks ask. The Hub pays it with a snapshot of every
+    /// row.
     pub fn recording_run(&self) -> u64 {
         self.run
     }
@@ -661,19 +628,11 @@ impl Recorder {
         next.action
     }
 
-    pub fn enable_configuration(&self) {
-        self.fence.enabled.store(true, Ordering::Release);
-    }
-    /// Capture a callback boundary. An ordinary producer must pair this with
-    /// `finish_callback` after its last publication, even for a disarmed block.
+    /// Capture a callback boundary's arm/disarm intent. A Stop after it cannot
+    /// cut off that callback's audio: the producer closes the epoch only when
+    /// a later boundary observes the disarm.
     pub fn capture_recording_intent(&self) -> u64 {
-        let intent = if self.fence.enabled.load(Ordering::Acquire) {
-            self.fence.intent.load(Ordering::Acquire)
-        } else {
-            // A single RMW arbitrates with Stop: either this callback owns
-            // its armed prefix, or it sees disarmed and can publish no audio.
-            self.fence.intent.fetch_or(CALLBACK_ACTIVE, Ordering::AcqRel)
-        } & !CALLBACK_ACTIVE;
+        let intent = self.fence.intent.load(Ordering::Acquire);
         #[cfg(feature = "test-support")]
         self.fence.boundary_pause.reach();
         intent
@@ -733,15 +692,10 @@ impl Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        if !self.fence.enabled.load(Ordering::Acquire) {
-            self.finish_callback();
-        }
         if self.record_epoch != 0
             && (self.closed_epoch < self.record_epoch
-                || (self.fence.enabled.load(Ordering::Acquire)
-                    && self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch)
-                || (self.fence.canonical_enabled.load(Ordering::Acquire)
-                    && self.fence.source_closed.load(Ordering::Acquire) < self.record_epoch))
+                || self.fence.configuration_closed.load(Ordering::Acquire) < self.record_epoch
+                || self.fence.source_closed.load(Ordering::Acquire) < self.record_epoch)
         {
             self.fence.fail();
         }
@@ -914,8 +868,7 @@ impl Control {
         self.dropped.store(0, Ordering::Relaxed);
         self.with_audio.store(audio, Ordering::Relaxed);
         let spec = audio.then_some(AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 });
-        let Some(epoch) =
-            self.fence.epoch().checked_add(1).filter(|epoch| *epoch < CALLBACK_ACTIVE >> 1)
+        let Some(epoch) = self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= u64::MAX >> 1)
         else {
             *self.status.lock() = "recording epoch exhausted".into();
             return;
@@ -930,8 +883,6 @@ impl Control {
         // [`TakeLatches`] for why both ends do it.
         self.latches.clear();
         // Finishing barred Start until every old armed callback retired.
-        // An overlapping idle callback captured disarmed and owns no audio,
-        // so its activity bit cannot carry ownership into this new epoch.
         self.fence.intent.store(epoch << 1 | 1, Ordering::Release);
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }

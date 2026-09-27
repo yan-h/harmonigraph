@@ -1579,3 +1579,114 @@ fn missing_steady_time_rejects_the_callback_before_note_admission() {
     assert!(pair.idle().is_empty(), "the invalid callback did not retain raw output for later");
     assert_eq!(inspect_hub(&pair.hub, |hub| hub.test_context()), 0);
 }
+
+/// #1195. A source that published and then left still answers for itself
+/// after a stream-wide display gap, so the missing-history banner clears.
+/// The Tune plays and releases a note, then is removed; the Hub's own note
+/// floods the display lane past its ring while nothing drains it.
+#[test]
+fn a_departed_source_answers_after_a_display_gap() {
+    use harmonigraph_core::{canonical::CanonicalEvent, NoteTracker, SourceId};
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Some(Device::new(true));
+    tune.as_mut().unwrap().activate();
+    let mut raw = 0;
+    let mut step = |hub: &mut Device, tune: &Option<Device>, input: Vec<Input>| {
+        if let Some(tune) = tune {
+            tune.run(raw, input, None);
+        }
+        hub.run(raw, vec![], None);
+        raw += 512;
+    };
+    let mut display = NoteTracker::new();
+    step(&mut hub, &tune, vec![note(7, 0, 57, 0, true)]);
+    step(&mut hub, &tune, vec![]);
+    step(&mut hub, &tune, vec![note(7, 0, 57, 0, false)]);
+    step(&mut hub, &tune, vec![]);
+    let mut heard = None;
+    capture.display_into(&mut display, |event, _| {
+        if let CanonicalEvent::Note(delta) = event {
+            heard = Some(delta.event.source);
+        }
+    });
+    let departed = heard.expect("the Tune's note reached the display");
+    assert_ne!(departed, SourceId::DIRECT);
+    tune = None;
+    step(&mut hub, &tune, vec![]);
+    capture.display_into(&mut display, |_, _| {});
+
+    // The Hub's own note, and more distinct tunings of it than the display
+    // ring holds, with nothing draining it.
+    hub.run(raw, vec![note(1, 0, 60, 0, true)], None);
+    raw += 512;
+    for block in 0..8 {
+        let bends = (0..512).map(|i| expression(1, (block * 512 + i) as f64 / 8192.0, 0));
+        hub.run(raw, bends.collect(), None);
+        raw += 512;
+    }
+    let mut gaps = 0;
+    let mut answered = false;
+    for _ in 0..4 {
+        hub.run(raw, vec![], None);
+        raw += 512;
+        capture.display_into(&mut display, |event, _| match event {
+            CanonicalEvent::Gap(_) => {
+                gaps += 1;
+                answered = false;
+            }
+            CanonicalEvent::Baseline(frame) if frame.source == departed => answered = true,
+            _ => {}
+        });
+    }
+    assert!(gaps > 0, "the fixture must overflow the display lane");
+    assert!(answered, "the departed source must answer for itself after the last gap");
+    assert!(!display.history_missing(), "every source the display heard from has recovered");
+}
+
+/// #1151. A MIDI channel bend moves every voice held on its channel and has
+/// no delta of its own, so the Hub states each moved voice's new pitch as a
+/// bend. Both lanes must draw it as one: a connected ribbon from the onset
+/// through every step of the sweep. A snapshot would carry the pitch too, but
+/// replaces the row the way a recovery does, breaking the roll before it.
+#[test]
+fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
+    use harmonigraph_core::NoteTracker;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    let mut raw = 0;
+    let mut step = |input: Vec<Input>| {
+        hub.run_format(raw, input, None, None, 512);
+        raw += 512;
+    };
+    step(vec![note(1, 0, 60, 0, true)]);
+    step(vec![]);
+    // A two-step sweep up the default two-semitone range: 0x50 << 7 is a
+    // quarter of the way up, 0x60 << 7 half of it.
+    step(vec![raw_midi([0xE0, 0, 0x50], 0)]);
+    step(vec![]);
+    step(vec![raw_midi([0xE0, 0, 0x60], 0)]);
+    step(vec![]);
+    let mut display = NoteTracker::new();
+    capture.display_into(&mut display, |_, _| {});
+    let mut take = NoteTracker::new();
+    for record in capture.drain_canonical() {
+        record.apply(&mut take).expect("the take lane stays consistent");
+    }
+    for (lane, tracker) in [("display", &display), ("take", &take)] {
+        let voice = tracker.voices().find(|v| v.note == 60);
+        let voice = voice.unwrap_or_else(|| panic!("the {lane} lane holds the note"));
+        assert_eq!(voice.pitch, 61.0, "the {lane} lane draws the whole sweep");
+        let row = tracker.roll().notes().find(|n| n.note == 60).unwrap();
+        assert!(row.history_complete, "the {lane} lane saw a bend, not a recovery");
+        let segments: Vec<_> = row.segments(100.0).collect();
+        let pitches: Vec<_> = segments.iter().map(|((_, p), _)| *p).collect();
+        assert_eq!(pitches, [60.0, 60.5, 61.0], "{lane}: {segments:?}");
+        assert_eq!(segments[0].0 .0, row.start, "{lane}: the ribbon starts at the onset");
+        for pair in segments.windows(2) {
+            assert_eq!(pair[0].1 .0, pair[1].0 .0, "{lane}: the ribbon breaks: {segments:?}");
+        }
+    }
+}

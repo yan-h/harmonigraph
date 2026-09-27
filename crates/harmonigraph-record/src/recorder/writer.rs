@@ -3,7 +3,6 @@
 
 use super::*;
 use configuration::RECORD_PASSES;
-use harmonigraph_core::notes::NoteEvent;
 
 #[cfg(all(test, feature = "test-support"))]
 mod audio_tests;
@@ -55,16 +54,11 @@ pub fn channel() -> (Recorder, Control) {
                     if pump.pending_stop.is_some() {
                         thread_fence.fail();
                     } else {
-                        pump.open =
-                            Recording::create(*header, path, 1, spec, &thread_status).map(|mut open| {
-                                #[cfg(all(test, feature = "test-support"))]
-                                { open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock(); }
-                                open.epoch = epoch;
-                                open.configuration_enabled = thread_fence.enabled.load(Ordering::Acquire);
-                                open.source_enabled =
-                                    thread_fence.canonical_enabled.load(Ordering::Acquire);
-                                open
-                            });
+                        pump.open = Recording::create(*header, path, epoch, spec, &thread_status);
+                        #[cfg(all(test, feature = "test-support"))]
+                        if let Some(open) = pump.open.as_mut() {
+                            open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock();
+                        }
                         #[cfg(feature = "test-support")]
                         if let Some(audio) = pump.open.as_mut().and_then(|o| o.current.audio.as_mut())
                         {
@@ -237,12 +231,6 @@ impl Pump {
         waiting_for_start: bool,
     ) -> Pumped {
         let mut pumped = Pumped::default();
-        // Acquire idle ownership BEFORE draining: the callback's release
-        // follows its last AudioSamples record. A later callback's RMW
-        // sees disarmed, so it cannot extend this prefix behind the drain.
-        if let Some(recording) = self.open.as_mut() {
-            recording.observe_idle_producer(fence);
-        }
         let fanout = &mut self.fanout;
         let failure = &self.failure;
         let had_records = !waiting_for_start
@@ -609,12 +597,6 @@ impl CanonicalFanout {
 /// "the carry list is a list".
 struct Recording {
     epoch: u64,
-    /// Whether the configuration and source lanes publish for this recording,
-    /// read off the fence once at `Start`. They decide whether a rolled-over
-    /// pass is retained until its lane reports complete or finished on the
-    /// spot, so they belong to the recording rather than to any file.
-    configuration_enabled: bool,
-    source_enabled: bool,
     /// The header every pass of this recording opens with. A pass's own copy
     /// names that file's WAV and alignment; this one names neither.
     header: harmonigraph_take::Header,
@@ -634,7 +616,8 @@ struct Recording {
     /// number, so a run of unvoiced passes keeps pointing at the music.
     last_voiced: Option<std::path::PathBuf>,
     last_voiced_number: u32,
-    /// Passes the transport has rolled past that a lane has not released yet.
+    /// Passes the transport has rolled past that the configuration and source
+    /// lanes have not both released yet.
     retained: Vec<Pass>,
     current: Pass,
 }
@@ -674,15 +657,13 @@ impl Recording {
     fn create(
         header: harmonigraph_take::Header,
         base: std::path::PathBuf,
-        pass: u32,
+        epoch: u64,
         spec: Option<AudioSpec>,
         status: &Mutex<String>,
     ) -> Option<Recording> {
-        let current = Pass::create(header.clone(), &base, pass, spec, status)?;
+        let current = Pass::create(header.clone(), &base, 1, spec, status)?;
         Some(Recording {
-            epoch: 0,
-            configuration_enabled: false,
-            source_enabled: false,
+            epoch,
             header,
             base,
             spec,
@@ -722,14 +703,14 @@ impl Recording {
         }
     }
 
-    /// Open the next pass's files and make it `current`, retaining or closing
-    /// the one it replaces.
+    /// Open the next pass's files and make it `current`, retaining the one it
+    /// replaces until both lanes have released it.
     ///
     /// Nothing is copied across the boundary here: everything the new pass
     /// inherits is a field of `self` that neither moved nor was rewritten, so
     /// there is no list to keep in step with the struct.
     fn next_pass(&mut self, status: &Mutex<String>) -> std::io::Result<()> {
-        if self.epoch != 0 && self.retained.len() + 1 >= RECORD_PASSES {
+        if self.retained.len() + 1 >= RECORD_PASSES {
             return Err(std::io::Error::other("recording pass capacity exhausted"));
         }
         let number = self
@@ -768,13 +749,8 @@ impl Recording {
         // not a pass this recording has rolled past.
         let voiced = self.current.voiced.then(|| (self.current.path.clone(), self.current.number));
         // Keep the old owner until the next file and its inherited marker exist.
-        let mut previous = std::mem::replace(&mut self.current, next);
-        if self.configuration_enabled || self.source_enabled {
-            self.retained.push(previous);
-        } else if let Err(error) = previous.finish() {
-            self.current = previous;
-            return Err(error);
-        }
+        let previous = std::mem::replace(&mut self.current, next);
+        self.retained.push(previous);
         if let Some((path, number)) = voiced {
             self.last_voiced = Some(path);
             self.last_voiced_number = number;
@@ -782,26 +758,18 @@ impl Recording {
         Ok(())
     }
 
-    fn observe_idle_producer(&mut self, fence: &RecordFence) {
-        if !self.configuration_enabled && fence.intent.load(Ordering::Acquire) == self.epoch << 1 {
-            self.current.producer_closed = true;
-        }
-    }
-
     fn ready(&self, epoch: u64) -> bool {
         self.epoch == epoch
             && self.current.producer_closed
-            && (!self.configuration_enabled || self.current.configuration_closed)
-            && (!self.source_enabled || self.current.source_closed)
+            && self.current.configuration_closed
+            && self.current.source_closed
             && self.retained.is_empty()
     }
 
     fn finish_completed_passes(&mut self) -> std::io::Result<()> {
         let mut index = 0;
         while index < self.retained.len() {
-            if (!self.configuration_enabled || self.retained[index].configuration_complete)
-                && (!self.source_enabled || self.retained[index].source_complete)
-            {
+            if self.retained[index].configuration_complete && self.retained[index].source_complete {
                 self.retained[index].finish()?;
                 let old = self.retained.remove(index);
                 if old.voiced && old.number > self.last_voiced_number {
@@ -1050,9 +1018,7 @@ fn drain_with_boundaries(
 ) -> bool {
     // Start is a separate off-thread message, published before arming. Retain
     // records if this iteration observed the ring before that command.
-    if open.is_none()
-        && fence.is_some_and(|f| f.enabled.load(Ordering::Acquire) && !failure.contains(f.epoch()))
-    {
+    if open.is_none() && fence.is_some_and(|f| !failure.contains(f.epoch())) {
         return false;
     }
     let fail = || {
@@ -1178,15 +1144,8 @@ fn drain_with_boundaries(
             continue;
         }
         let Some(pass) = open.as_mut().map(|recording| &mut recording.current) else { continue };
-        // A note starting is what makes this pass the one worth rendering.
-        if matches!(entry, Entry::Note { kind: NoteEventKind::On { .. }, .. }) {
-            pass.voiced = true;
-        }
         let writer = &mut pass.writer;
         let result = match entry {
-            Entry::Note { t, source, channel, note, kind } => {
-                writer.note(NoteEvent { time: t, source, channel, note, kind }.into())
-            }
             Entry::Param { t, key, value } => writer.param(harmonigraph_take::ParamRecord {
                 t,
                 id: ParamKey::ALL[key].id().to_string(),
