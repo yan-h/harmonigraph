@@ -240,93 +240,113 @@ pub(crate) fn draw_lattice(
         ),
     );
     if response.is_some() {
-        let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
-        let painter = ui.painter().with_clip_rect(rect);
-        let maps = state.runtime.lattice_maps.as_ref();
-        let engine = maps
-            .map_or(harmonigraph_core::lattice_map::TuningEngine::Adaptive, |m| m.playback.engine);
-        let active_map = maps
-            .filter(|_| {
-                engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
-                    && state.appearance.view.show_map_indicators
-            })
-            .and_then(|m| m.playback.map);
-        for node in &scene.nodes {
-            let assigned = active_map
-                .and_then(|map| (0..12i64).find(|&midi| map.node(midi) == node.lattice_pos));
-            let outlined = assigned.is_some();
-            let candidate = maps.is_some_and(|m| m.editing())
-                && state.surfaces.hovered == Some(node.lattice_pos);
-            if !outlined && !candidate {
-                continue;
-            }
-            if let Some(p) = projector.project(node.world_pos) {
-                let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
-                if outlined {
-                    draw_assignment_outline(&painter, center);
-                }
-                if let Some(midi) = assigned {
-                    painter.text(
-                        center + egui::vec2(10.0, -10.0),
-                        egui::Align2::LEFT_BOTTOM,
-                        crate::lattice_maps::MIDI_LABELS[midi as usize],
-                        egui::FontId::proportional(11.0),
-                        egui::Color32::LIGHT_BLUE,
-                    );
-                }
-                if maps.is_some_and(|m| m.editing())
-                    && state.surfaces.hovered == Some(node.lattice_pos)
-                {
-                    painter.circle_stroke(
-                        center,
-                        12.0,
-                        egui::Stroke::new(2.0, egui::Color32::GOLD),
-                    );
-                }
-            }
-        }
-        let label = if let Some(maps) =
-            maps.filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
-        {
-            if let Some(destination) = state.surfaces.hovered.filter(|_| maps.edit_shape) {
-                let midi =
-                    harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
-                let mut map = maps.playback.map.unwrap_or_default();
-                let old = map.correction(midi, state.runtime.tuning);
-                map.replace(destination);
-                let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
-                format!(
-                    "{} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
-                    crate::lattice_maps::MIDI_LABELS[midi as usize],
-                    cents - old as f64 / 1e6
-                )
-            } else if maps.playback.map.is_none() {
-                "Map unavailable · new attacks pass through".into()
-            } else if maps.playback.audition {
-                "Audition · next attacks use working map".into()
-            } else {
-                format!("Map {} · next attacks", maps.playback.selected + 1)
-            }
-        } else {
-            String::new()
-        };
-        let label = if maps.is_some_and(|maps| maps.pending) {
-            format!("{label} · pending audio adoption")
-        } else {
-            label
-        };
-        if !label.is_empty() {
-            painter.text(
-                rect.left_bottom() + egui::vec2(10.0, -10.0),
-                egui::Align2::LEFT_BOTTOM,
-                label,
-                egui::FontId::proportional(11.0),
-                egui::Color32::LIGHT_BLUE,
-            );
-        }
+        draw_map_overlay(ui, rect, &scene, &window, state);
     }
     if let Some(mut badge) = badge {
         draw_learn_overlay(ui, rect, state, now, surface, &mut badge);
+    }
+}
+
+/// The lattice-map editor's marks over the docked pane: an outline and a MIDI
+/// label on each node the active map assigns, a ring on the destination the
+/// pointer offers while editing, and the map's status line in the corner.
+fn draw_map_overlay(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    scene: &harmonigraph_scene::Scene,
+    window: &harmonigraph_scene::DrawnWindow,
+    state: &PictureState,
+) {
+    let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
+    let painter = ui.painter().with_clip_rect(rect);
+    let maps = state.runtime.lattice_maps.as_ref();
+    let engine =
+        maps.map_or(harmonigraph_core::lattice_map::TuningEngine::Adaptive, |m| m.playback.engine);
+    let active_map = maps
+        .filter(|_| {
+            engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+                && state.appearance.view.show_map_indicators
+        })
+        .and_then(|m| m.playback.map);
+    let editing = maps.is_some_and(|m| m.editing());
+    // The twelve map nodes and the hovered one, looked up in the window
+    // rather than found by testing every drawn node against all twelve:
+    // `derive_scene` draws one node per window position, in order, so a
+    // position's index in the window is its index in `scene.nodes`. Sorted,
+    // so overlapping outlines still paint in the scene's own order.
+    let mut indices: Vec<usize> = active_map
+        .into_iter()
+        .flat_map(|map| (0..12i64).map(move |midi| map.node(midi)))
+        .chain(state.surfaces.hovered.filter(|_| editing))
+        .filter_map(|pos| {
+            let i = window.index_of(pos)?;
+            debug_assert_eq!(scene.nodes.get(i).map(|n| n.lattice_pos), Some(pos));
+            Some(i)
+        })
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    for node in indices.into_iter().map(|i| &scene.nodes[i]) {
+        let assigned =
+            active_map.and_then(|map| (0..12i64).find(|&midi| map.node(midi) == node.lattice_pos));
+        let outlined = assigned.is_some();
+        let candidate = editing && state.surfaces.hovered == Some(node.lattice_pos);
+        if let Some(p) = projector.project(node.world_pos) {
+            let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
+            if outlined {
+                draw_assignment_outline(&painter, center);
+            }
+            if let Some(midi) = assigned {
+                painter.text(
+                    center + egui::vec2(10.0, -10.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    crate::lattice_maps::MIDI_LABELS[midi as usize],
+                    egui::FontId::proportional(11.0),
+                    egui::Color32::LIGHT_BLUE,
+                );
+            }
+            if candidate {
+                painter.circle_stroke(center, 12.0, egui::Stroke::new(2.0, egui::Color32::GOLD));
+            }
+        }
+    }
+    let label = if let Some(maps) =
+        maps.filter(|_| engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap)
+    {
+        if let Some(destination) = state.surfaces.hovered.filter(|_| maps.edit_shape) {
+            let midi = harmonigraph_core::lattice_map::LatticeMap::midi_class(destination) as i64;
+            let mut map = maps.playback.map.unwrap_or_default();
+            let old = map.correction(midi, state.runtime.tuning);
+            map.replace(destination);
+            let cents = map.correction(midi, state.runtime.tuning) as f64 / 1e6;
+            format!(
+                "{} · {cents:+.2}¢ · change {:+.2}¢ · click destination",
+                crate::lattice_maps::MIDI_LABELS[midi as usize],
+                cents - old as f64 / 1e6
+            )
+        } else if maps.playback.map.is_none() {
+            "Map unavailable · new attacks pass through".into()
+        } else if maps.playback.audition {
+            "Audition · next attacks use working map".into()
+        } else {
+            format!("Map {} · next attacks", maps.playback.selected + 1)
+        }
+    } else {
+        String::new()
+    };
+    let label = if maps.is_some_and(|maps| maps.pending) {
+        format!("{label} · pending audio adoption")
+    } else {
+        label
+    };
+    if !label.is_empty() {
+        painter.text(
+            rect.left_bottom() + egui::vec2(10.0, -10.0),
+            egui::Align2::LEFT_BOTTOM,
+            label,
+            egui::FontId::proportional(11.0),
+            egui::Color32::LIGHT_BLUE,
+        );
     }
 }
 
@@ -452,7 +472,7 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
 
 /// What a name hands the LIGHT standing under it: the shadow it holds that
 /// light off by, on the Shadow bars a node's rings and a marker's cross are
-/// held off on (`fs_glyph_glow` in `harmonigraph_render`).
+/// held off on (`fs_shadow_box` in `harmonigraph_render`'s `text.wgsl`).
 ///
 /// No black is painted anywhere. This colour reaches the shader as one number
 /// — its alpha, which the caller spends the name's own strength on — because
