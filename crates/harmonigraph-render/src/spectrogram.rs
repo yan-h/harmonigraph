@@ -781,9 +781,7 @@ impl CallbackTrait for SpectrogramCallback {
                         .map(|size| if stars { pixels } else { size });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
-                let halos = stars.map(|_| {
-                    atmosphere::star_halo_size(pixels, settings.settings.star_halo_resolution)
-                });
+                let halos = stars.map(|_| atmosphere::star_halo_layout(pixels, settings.settings));
                 let star_size = stars.map(|layout| {
                     atmosphere::star_atlas_size(
                         layout.size(),
@@ -820,7 +818,7 @@ impl CallbackTrait for SpectrogramCallback {
                         || c.tone_size() != tone_size
                         || c.tile_texels() != texels
                         || c.star_size() != star_size
-                        || c.halo_size() != halos
+                        || c.halo_layout() != halos
                         || c.memory_size() != memory_size
                 });
                 if resize {

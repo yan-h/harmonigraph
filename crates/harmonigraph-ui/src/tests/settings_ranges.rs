@@ -236,6 +236,7 @@ struct Scenario {
     /// sharing three bars, so the page has three inventories and only one of
     /// them is the fresh state's.
     style: harmonigraph_scene::CloudStyle,
+    halo_profile: harmonigraph_scene::StarHaloProfile,
     material: harmonigraph_scene::LatticeMaterial,
     visits: usize,
 }
@@ -249,6 +250,7 @@ fn scenarios() -> Vec<Scenario> {
         meantone: false,
         marvel: false,
         style: harmonigraph_scene::CloudStyle::Mosaic,
+        halo_profile: harmonigraph_scene::StarHaloProfile::default(),
         material: harmonigraph_scene::LatticeMaterial::None,
         visits: 0,
     };
@@ -312,15 +314,21 @@ fn scenarios() -> Vec<Scenario> {
         visits: 13 + 14 + 5 + 2 + 2 - 3 + 5,
         ..base
     });
-    // The starfield's, on the same terms: the three scale bars and the shared
-    // Drift speed off, eleven of its own on.
-    cases.push(Scenario {
-        pane: panes::Tab::AnalyzerSettings,
-        style: harmonigraph_scene::CloudStyle::Stars,
-        enabled: true,
-        visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + 11,
-        ..base
-    });
+    // Stars replace the scale bars and shared Drift speed. Only the Uniform
+    // override exposes the extra resolution bar; exercise its loaded range too.
+    for (halo_profile, bars) in [
+        (harmonigraph_scene::StarHaloProfile::P3, 10),
+        (harmonigraph_scene::StarHaloProfile::Uniform, 11),
+    ] {
+        cases.push(Scenario {
+            pane: panes::Tab::AnalyzerSettings,
+            style: harmonigraph_scene::CloudStyle::Stars,
+            halo_profile,
+            enabled: true,
+            visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + bars,
+            ..base
+        });
+    }
     for projection in [Projection::Perspective, Projection::Orthographic] {
         cases.push(Scenario {
             pane: panes::Tab::LatticeSettings,
@@ -372,6 +380,7 @@ fn check(edge: Edge) {
         a.spectrum.backdrop_strength =
             if scenario.enabled { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
         a.spectrum.atmosphere.cloud_style = scenario.style;
+        a.spectrum.atmosphere.star_halo_profile = scenario.halo_profile;
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.texture = if scenario.enabled {
             harmonigraph_scene::LatticeTexture::Clouds
@@ -413,6 +422,14 @@ fn check(edge: Edge) {
         });
         assert_eq!(visits.len(), scenario.visits, "{edge:?} {scenario:?}: {visits:?}");
         let saw = |label: &str| visits.iter().any(|visit| visit.label == label);
+        if scenario.pane == panes::Tab::AnalyzerSettings
+            && scenario.style == harmonigraph_scene::CloudStyle::Stars
+        {
+            assert_eq!(
+                saw("Uniform halo resolution"),
+                scenario.halo_profile == harmonigraph_scene::StarHaloProfile::Uniform,
+            );
+        }
         if scenario.pane == panes::Tab::LatticeSettings {
             match scenario.projection {
                 Projection::Cabinet => {

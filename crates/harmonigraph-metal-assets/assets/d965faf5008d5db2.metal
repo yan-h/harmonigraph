@@ -15,8 +15,16 @@ struct StarSlice {
     metal::int2 origin;
     metal::int2 grid;
 };
+struct StarHaloSample {
+    metal::float2 size;
+    uint group;
+    uint layer;
+};
 struct type_7 {
     StarSlice inner[5];
+};
+struct type_8 {
+    StarHaloSample inner[5];
 };
 struct Cloud {
     metal::float2 origin;
@@ -55,8 +63,7 @@ struct Cloud {
     float memory_pad_a;
     metal::float2 memory_extent;
     type_7 previous_slices;
-    metal::float2 star_halo_size;
-    metal::float2 star_halo_pad;
+    type_8 star_halo_samples;
 };
 struct TileVertex {
     metal::float4 position;
@@ -167,12 +174,12 @@ fragment fs_star_haloOutput fs_star_halo(
     metal::float4 halo = metal::float4(0.0);
     int y = -1;
     metal::float2 _e3 = cloud.size;
-    metal::float2 _e6 = cloud.star_halo_size;
-    metal::float2 step = _e3 / _e6;
+    metal::float2 _e9 = cloud.star_halo_samples.inner[metal::min(unsigned(in.layer), 4u)].size;
+    metal::float2 step = _e3 / _e9;
     metal::float2 pt = in.position.xy * step;
-    metal::float2 _e13 = cloud.size;
-    float _e21 = cloud.size.y;
-    metal::float2 sp = (pt - (_e13 * 0.5)) * (STAR_PANE / _e21);
+    metal::float2 _e16 = cloud.size;
+    float _e24 = cloud.size.y;
+    metal::float2 sp = (pt - (_e16 * 0.5)) * (STAR_PANE / _e24);
     StarSlice s_1 = cloud.star_slices.inner[metal::min(unsigned(in.layer), 4u)];
     metal::float2 r = (sp / metal::float2(s_1.cell)) - metal::fract(s_1.offset);
     metal::float2 o = metal::floor(r);
@@ -185,31 +192,31 @@ fragment fs_star_haloOutput fs_star_halo(
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            int _e95 = y;
-            y = as_type<int>(as_type<uint>(_e95) + as_type<uint>(1));
+            int _e98 = y;
+            y = as_type<int>(as_type<uint>(_e98) + as_type<uint>(1));
         }
         loop_init = false;
-        int _e57 = y;
-        if (_e57 <= 1) {
+        int _e60 = y;
+        if (_e60 <= 1) {
         } else {
             break;
         }
         {
-            int _e60 = y;
-            int row = as_type<int>(as_type<uint>(index_1) + as_type<uint>(as_type<int>(as_type<uint>(_e60) * as_type<uint>(s_1.grid.x))));
-            int _e66 = y;
-            float fy = f_1.y - static_cast<float>(_e66);
-            metal::float4 _e69 = halo;
-            metal::float4 _e77 = star_texel(s_1, metal::float2(f_1.x + 1.0, fy), as_type<int>(as_type<uint>(row) - as_type<uint>(1)), true, cloud, star_atlas);
-            halo = _e69 + _e77;
-            metal::float4 _e79 = halo;
-            metal::float4 _e83 = star_texel(s_1, metal::float2(f_1.x, fy), row, true, cloud, star_atlas);
-            halo = _e79 + _e83;
-            metal::float4 _e85 = halo;
-            metal::float4 _e93 = star_texel(s_1, metal::float2(f_1.x - 1.0, fy), as_type<int>(as_type<uint>(row) + as_type<uint>(1)), true, cloud, star_atlas);
-            halo = _e85 + _e93;
+            int _e63 = y;
+            int row = as_type<int>(as_type<uint>(index_1) + as_type<uint>(as_type<int>(as_type<uint>(_e63) * as_type<uint>(s_1.grid.x))));
+            int _e69 = y;
+            float fy = f_1.y - static_cast<float>(_e69);
+            metal::float4 _e72 = halo;
+            metal::float4 _e80 = star_texel(s_1, metal::float2(f_1.x + 1.0, fy), as_type<int>(as_type<uint>(row) - as_type<uint>(1)), true, cloud, star_atlas);
+            halo = _e72 + _e80;
+            metal::float4 _e82 = halo;
+            metal::float4 _e86 = star_texel(s_1, metal::float2(f_1.x, fy), row, true, cloud, star_atlas);
+            halo = _e82 + _e86;
+            metal::float4 _e88 = halo;
+            metal::float4 _e96 = star_texel(s_1, metal::float2(f_1.x - 1.0, fy), as_type<int>(as_type<uint>(row) + as_type<uint>(1)), true, cloud, star_atlas);
+            halo = _e88 + _e96;
         }
     }
-    metal::float4 _e98 = halo;
-    return fs_star_haloOutput { _e98 };
+    metal::float4 _e101 = halo;
+    return fs_star_haloOutput { _e101 };
 }

@@ -96,9 +96,13 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut native = CallbackResources::default();
         let mut changing = CallbackResources::default();
         let mut first: Option<Vec<u8>> = None;
-        for step in 0u64..4 {
+        for step in 0u64..5 {
             cb.pass_nr = step;
-            let resolution = [0.5, 0.25, 1.0 / 3.0, 1.0][step as usize];
+            use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
+            let (profile, resolution) =
+                [(Uniform, 0.5), (Uniform, 0.25), (Uniform, 1.0 / 3.0), (P3, 0.5), (Uniform, 1.0)]
+                    [step as usize];
+            cb.atmosphere.as_mut().unwrap().settings.star_halo_profile = profile;
             cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
             if step == 1 {
@@ -134,8 +138,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             assert_eq!(target(&changing).tone_size().is_some(), split);
             assert_eq!(target(&changing).memory_size().is_some(), memory);
             assert_eq!(
-                target(&changing).halo_size(),
-                Some([161u32, 121].map(|n| (n as f32 * resolution).ceil() as u32)),
+                target(&changing).halo_layout(),
+                Some(atmosphere::star_halo_layout([161, 121], cb.atmosphere.unwrap().settings)),
             );
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
             // Bound both half-float rounding and aggregate error so a
@@ -228,7 +232,15 @@ pub(super) fn reference_source() -> Option<String> {
         return None;
     }
     let source = SPECTROGRAM_SRC.to_owned();
-    let read = "var slice = star_texel(s, f, index, false);\n        slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);";
+    if mode == 3 {
+        let read = "slice += star_halo_at(pt, k);";
+        assert_eq!(source.matches(read).count(), 1, "the Stars read moved");
+        return Some(source.replace(
+            read,
+            "slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);",
+        ));
+    }
+    let read = "var slice = star_texel(s, f, index, false);\n        slice += star_halo_at(pt, k);";
     assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Stars read moved");
     let core = "let slice = star_texel(s, f, index, false);";
     let full = r#"
@@ -283,15 +295,19 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.star_jitter = jitter;
             settings.star_fringe = fringe;
+            settings.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
             settings.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
             for reference in [0, 1, 2] {
                 // Native halo sampling isolates the split's algebra from the
-                // intentional interpolation of the default half-size image.
+                // intentional interpolation of reduced halo images.
                 let _halo = HaloOverride::set(reference);
                 let mut resources = CallbackResources::default();
                 frames.push(frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0));
-                assert_eq!(target(&resources).halo_size(), Some([385, 217]));
+                assert_eq!(
+                    target(&resources).halo_layout(),
+                    Some(atmosphere::star_halo_layout([385, 217], cb.atmosphere.unwrap().settings))
+                );
             }
             let differences: Vec<_> =
                 frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).collect();
@@ -313,4 +329,65 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
             );
         }
     }
+}
+
+#[test]
+fn uniform_halos_preserve_the_original_array_lookup() {
+    let Some((device, queue)) = headless_device() else { return };
+    let _split = SplitOverride::set(Some(false));
+    let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
+    cb.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+        harmonigraph_scene::StarHaloProfile::Uniform;
+    for resolution in [0.25, 0.5, 1.0] {
+        cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
+        let mut frames = Vec::new();
+        for mode in [0, 3] {
+            let _halo = HaloOverride::set(mode);
+            let mut resources = CallbackResources::default();
+            frames.push(frame_at_ppp(&device, &queue, &mut resources, &cb, 1.25));
+        }
+        assert_eq!(frames[0], frames[1], "uniform resolution {resolution}");
+    }
+}
+
+#[test]
+fn halo_profile_transitions_preserve_color_history() {
+    use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
+    let Some((device, queue)) = headless_device() else { return };
+    let _split = SplitOverride::set(Some(false));
+    let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
+    let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+    settings.color_pickup = 0.6;
+    settings.color_release = 0.6;
+    let mut fixed = CallbackResources::default();
+    let mut changing = CallbackResources::default();
+    let mut final_frame = Vec::new();
+    for (step, (profile, resolution, level)) in
+        [(Uniform, 0.5, 220), (P3, 0.5, 0), (Uniform, 0.25, 80), (Uniform, 1.0, 0)]
+            .into_iter()
+            .enumerate()
+    {
+        cb.pass_nr = step as u64;
+        cb.grid.fill(level);
+        let atmosphere = cb.atmosphere.as_mut().unwrap();
+        atmosphere.now = 3.25 + step as f64 * 0.04;
+        atmosphere.settings.star_halo_profile = Uniform;
+        atmosphere.settings.star_halo_resolution = 1.0;
+        let reference = frame_at_ppp(&device, &queue, &mut fixed, &cb, 1.25);
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.star_halo_profile = profile;
+        settings.star_halo_resolution = resolution;
+        final_frame = frame_at_ppp(&device, &queue, &mut changing, &cb, 1.25);
+        assert_eq!(
+            target(&changing).halo_layout(),
+            Some(atmosphere::star_halo_layout([161, 121], cb.atmosphere.unwrap().settings))
+        );
+        if step == 3 {
+            assert_eq!(final_frame, reference, "halo reallocations changed retained color");
+        }
+    }
+    let mut cold = CallbackResources::default();
+    let cold_frame = frame_at_ppp(&device, &queue, &mut cold, &cb, 1.25);
+    let retained = final_frame.iter().zip(&cold_frame).filter(|(a, b)| a.abs_diff(**b) > 4).count();
+    assert!(retained > final_frame.len() / 100, "fixture did not retain color across transitions");
 }

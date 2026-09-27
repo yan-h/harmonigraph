@@ -39,6 +39,16 @@ pub enum CloudStyle {
     Stars,
 }
 
+/// Halo texture resolution across the five star depths. P3 is the selected
+/// optimized profile; `Uniform` uses the adjustable resolution override.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StarHaloProfile {
+    Uniform,
+    /// Layer resolutions [50, 50, 100, 100, 60] percent.
+    #[default]
+    P3,
+}
+
 /// The band both cloud size dials run over — [`MaterialSettings::scale_size`]
 /// and [`MaterialSettings::wash_size`], which mean the same thing about two
 /// different textures and so are worth one pair of numbers rather than two.
@@ -440,6 +450,9 @@ pub struct SpectralAtmosphere {
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
     pub star_halo_resolution: f32,
+    /// Uniform uses `star_halo_resolution`; P3 chooses fixed resolutions
+    /// for the five depths. Saves without a profile use the selected P3 default.
+    pub star_halo_profile: StarHaloProfile,
     /// How much the nearest stars are softened, growing with depth squared.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
@@ -511,6 +524,7 @@ impl Default for SpectralAtmosphere {
             star_lifetime: 2.9719827,
             star_fringe: 0.5,
             star_halo_resolution: 0.5,
+            star_halo_profile: StarHaloProfile::P3,
             star_defocus: 0.35391274,
         }
     }

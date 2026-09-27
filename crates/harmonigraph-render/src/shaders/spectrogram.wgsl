@@ -318,8 +318,12 @@ struct Cloud {
     memory_pad_a: f32,
     memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
-    star_halo_size: vec2<f32>,
-    star_halo_pad: vec2<f32>,
+    star_halo_samples: array<StarHaloSample, 5>,
+};
+struct StarHaloSample {
+    size: vec2<f32>,
+    group: u32,
+    layer: u32,
 };
 struct StarSlice {
     offset: vec2<f32>,
@@ -362,6 +366,8 @@ struct StarSlice {
 /// packing.
 @group(1) @binding(8) var star_atlas: texture_2d<u32>;
 @group(1) @binding(10) var star_halos: texture_2d_array<f32>;
+@group(1) @binding(11) var star_halos_b: texture_2d_array<f32>;
+@group(1) @binding(12) var star_halos_c: texture_2d_array<f32>;
 
 // Scalar display intensity has no gamma transfer function. In particular,
 // the float source target must not take fs_heatmap_linear's RGB conversion.
@@ -1040,7 +1046,7 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
 // usual far-to-near over; flattening all halos would change the depth order.
 @fragment
 fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
-    let step = cloud.size / cloud.star_halo_size;
+    let step = cloud.size / cloud.star_halo_samples[in.layer].size;
     let pt = in.position.xy * step;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
     let s = cloud.star_slices[in.layer];
@@ -1079,6 +1085,19 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
     return palette_color(clamp(level * spread + lift, 0.0, 1.0));
 }
 
+// Each array has its own actual size and edge clamp. The depth index is
+// uniform across fragments, so selecting its array introduces no spatially
+// divergent branch. Uniform sampling retains the original first-array lookup.
+fn star_halo_at(pt: vec2<f32>, k: u32) -> vec4<f32> {
+    let sample = cloud.star_halo_samples[k];
+    let uv = pt / cloud.size;
+    switch sample.group {
+        case 0u: { return textureSampleLevel(star_halos, cloud_sampler, uv, i32(sample.layer), 0.0); }
+        case 1u: { return textureSampleLevel(star_halos_b, cloud_sampler, uv, i32(sample.layer), 0.0); }
+        default: { return textureSampleLevel(star_halos_c, cloud_sampler, uv, i32(sample.layer), 0.0); }
+    }
+}
+
 // The scheme's floor, then every slice laid over it far to near: within a slice
 // the stars' coverages add and their colours average by coverage, and the slice
 // covers what is under it by its summed coverage, capped at one. The salts
@@ -1098,7 +1117,7 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
         let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
         let index = s.base + local.y * s.grid.x + local.x;
         var slice = star_texel(s, f, index, false);
-        slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);
+        slice += star_halo_at(pt, k);
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
         }

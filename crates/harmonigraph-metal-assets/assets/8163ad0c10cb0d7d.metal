@@ -34,8 +34,16 @@ struct StarSlice {
     metal::int2 origin;
     metal::int2 grid;
 };
+struct StarHaloSample {
+    metal::float2 size;
+    uint group;
+    uint layer;
+};
 struct type_7 {
     StarSlice inner[5];
+};
+struct type_8 {
+    StarHaloSample inner[5];
 };
 struct Cloud {
     metal::float2 origin;
@@ -74,8 +82,7 @@ struct Cloud {
     float memory_pad_a;
     metal::float2 memory_extent;
     type_7 previous_slices;
-    metal::float2 star_halo_size;
-    metal::float2 star_halo_pad;
+    type_8 star_halo_samples;
 };
 constant float CLOUD_TILE_ROT_SIN = 0.6;
 constant float CLOUD_TILE_ROT_COS = 0.8;
