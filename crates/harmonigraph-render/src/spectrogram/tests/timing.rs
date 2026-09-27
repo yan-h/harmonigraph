@@ -1,5 +1,11 @@
 //! What the spectrogram's cloud textures cost per frame, on whatever GPU runs
-//! this. `#[ignore]`d — it prints figures and asserts nothing.
+//! this. `#[ignore]`d — it prints figures and asserts timestamp ordering.
+//! The GPU interval starts on the first real source pass (or paint for plain
+//! and terraces-only cases), and ends on the final composite. Historical
+//! `end/full`, `begin/full`, light and paint columns used independent stamp
+//! passes and are not comparable to this `source/full` interval (#1203).
+//! Memory is off except in explicitly named memory cases; Mosaic is selected
+//! explicitly because the production default style can change.
 //!
 //! ```sh
 //! cargo test --release -p harmonigraph-render cloud_costs_by_style_and_dial \
@@ -66,6 +72,12 @@ fn watercolor(s: &mut SpectralAtmosphere) {
     s.cloud_style = CloudStyle::Watercolor;
 }
 
+fn memory(s: &mut SpectralAtmosphere) {
+    let defaults = SpectralAtmosphere::default();
+    s.color_pickup = defaults.color_pickup;
+    s.color_release = defaults.color_release;
+}
+
 const CASES: &[(&str, Option<Turn>)] = &[
     ("plain", None),
     ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
@@ -91,6 +103,21 @@ const CASES: &[(&str, Option<Turn>)] = &[
         }),
     ),
     ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
+    ("mosaic, memory", Some(memory)),
+    (
+        "watercolor, memory",
+        Some(|s| {
+            watercolor(s);
+            memory(s);
+        }),
+    ),
+    (
+        "stars, memory",
+        Some(|s| {
+            s.cloud_style = CloudStyle::Stars;
+            memory(s);
+        }),
+    ),
 ];
 
 struct Case {
@@ -100,18 +127,13 @@ struct Case {
     turn: Option<Turn>,
     cb: SpectrogramCallback,
     resources: CallbackResources,
-    /// Light field, paint, and submit-to-completion, in ms.
-    samples: [Vec<f64>; 3],
+    wall: Vec<f64>,
     gpu_total: Vec<f64>,
-    gpu_from_open_begin: Vec<f64>,
-    gpu_old_bracket: Vec<f64>,
-    reversed_total: usize,
-    reversed_old: usize,
     cpu_prepare: Vec<f64>,
 }
 
 #[test]
-#[ignore = "a probe: prints timings and asserts nothing"]
+#[ignore = "a probe: prints timings and asserts timestamp ordering"]
 fn cloud_costs_by_style_and_dial() {
     let size: [u32; 2] = std::env::var("PROBE_SIZE")
         .ok()
@@ -123,6 +145,7 @@ fn cloud_costs_by_style_and_dial() {
     let ppp: f32 = std::env::var("PROBE_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+    assert!(frames > 0, "PROBE_FRAMES must be positive");
     let histories: Vec<f32> = std::env::var("PROBE_HISTORY_SECONDS")
         .unwrap_or_else(|_| "10".to_owned())
         .split(',')
@@ -190,12 +213,12 @@ fn cloud_costs_by_style_and_dial() {
     let set = device.create_query_set(&wgpu::QuerySetDescriptor {
         label: Some("timing_probe"),
         ty: wgpu::QueryType::Timestamp,
-        count: 8,
+        count: 2,
     });
     let buffer = |label, usage| {
         device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
-            size: 64,
+            size: 16,
             usage,
             mapped_at_creation: false,
         })
@@ -218,38 +241,31 @@ fn cloud_costs_by_style_and_dial() {
             })
             .create_view(&Default::default())
     };
-    let stamp_view = target("timing_stamp", [1, 1]);
     // Held across frames, as a swapchain's is: allocating 33 MB per frame would
     // be the larger half of what a wall clock read.
     let pane_view = target("timing_pane", size);
-    // Paired begin/end samples compare the production timer's old bracket
-    // (paint begin -> independent tail begin) with the proposed full bracket
-    // (opening pass end -> paint end) on the same GPU submissions.
-    let stamped_pass =
-        |encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, index: u32| {
-            encoder
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("timing_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
-                        query_set: &set,
-                        beginning_of_pass_write_index: Some(index),
-                        end_of_pass_write_index: Some(index + 1),
-                    }),
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                })
-                .forget_lifetime()
-        };
+    let stamped_pass = |encoder: &mut wgpu::CommandEncoder, source_stamped: bool| {
+        encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("timing_paint"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &pane_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
+                    query_set: &set,
+                    beginning_of_pass_write_index: (!source_stamped).then_some(0),
+                    end_of_pass_write_index: Some(1),
+                }),
+                ..Default::default()
+            })
+            .forget_lifetime()
+    };
     let period = f64::from(queue.get_timestamp_period());
     let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
     eprintln!("pane {}x{} px at {ppp} px/pt, {slabs} slabs of {bins} buckets", size[0], size[1]);
@@ -284,12 +300,8 @@ fn cloud_costs_by_style_and_dial() {
                 turn,
                 cb,
                 resources,
-                samples: Default::default(),
+                wall: Vec::new(),
                 gpu_total: Vec::new(),
-                gpu_from_open_begin: Vec::new(),
-                gpu_old_bracket: Vec::new(),
-                reversed_total: 0,
-                reversed_old: 0,
                 cpu_prepare: Vec::new(),
             }
         })
@@ -304,12 +316,8 @@ fn cloud_costs_by_style_and_dial() {
                 turn,
                 cb,
                 resources,
-                samples,
+                wall,
                 gpu_total,
-                gpu_from_open_begin,
-                gpu_old_bracket,
-                reversed_total,
-                reversed_old,
                 cpu_prepare,
                 name,
                 history_seconds,
@@ -318,7 +326,12 @@ fn cloud_costs_by_style_and_dial() {
             } = case;
             cb.pass_nr = frame as u64;
             cb.atmosphere = turn.map(|turn| {
-                let mut settings = SpectralAtmosphere::default();
+                let mut settings = SpectralAtmosphere {
+                    cloud_style: CloudStyle::Mosaic,
+                    color_pickup: 0.0,
+                    color_release: 0.0,
+                    ..Default::default()
+                };
                 turn(&mut settings);
                 // After the turn, so each case uses the requested blur step.
                 if let Some(blur_time_step) = blur_time_step {
@@ -351,13 +364,15 @@ fn cloud_costs_by_style_and_dial() {
                 }
             });
             let mut encoder = device.create_command_encoder(&Default::default());
-            drop(stamped_pass(&mut encoder, &stamp_view, 0));
+            SOURCE_QUERY.with_borrow_mut(|query| *query = Some(set.clone()));
             let prepare_start = std::time::Instant::now();
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
-            drop(stamped_pass(&mut encoder, &stamp_view, 2));
+            // The source consumes the query when it actually encodes a pass.
+            // With no source (plain or terraces only), paint owns both stamps.
+            let source_stamped = SOURCE_QUERY.with_borrow_mut(|query| query.take().is_none());
             {
-                let mut pass = stamped_pass(&mut encoder, &pane_view, 4);
+                let mut pass = stamped_pass(&mut encoder, source_stamped);
                 cb.paint(
                     egui::PaintCallbackInfo {
                         viewport: rect,
@@ -369,9 +384,8 @@ fn cloud_costs_by_style_and_dial() {
                     resources,
                 );
             }
-            drop(stamped_pass(&mut encoder, &stamp_view, 6));
-            encoder.resolve_query_set(&set, 0..8, &resolve, 0);
-            encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 64);
+            encoder.resolve_query_set(&set, 0..2, &resolve, 0);
+            encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
             let start = std::time::Instant::now();
             queue.submit(bufs.into_iter().chain([encoder.finish()]));
             let slice = staging.slice(..);
@@ -382,81 +396,48 @@ fn cloud_costs_by_style_and_dial() {
                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
             staging.unmap();
             if frame >= 10 {
-                assert!(
-                    ticks.iter().all(|&tick| tick > 0),
-                    "Metal returned a zero timestamp: {ticks:?}"
-                );
-                if ticks[5] < ticks[0] || ticks[5] < ticks[1] {
-                    eprintln!("reversed full interval {name} {history_seconds}s: {ticks:?}");
-                }
-                if ticks[6] < ticks[4] && *reversed_old == 0 {
-                    eprintln!("first old-bracket reversal {name} {history_seconds}s: {ticks:?}");
-                }
-                *reversed_total += usize::from(ticks[5] < ticks[0]);
-                *reversed_old += usize::from(ticks[6] < ticks[4]);
-                let ms =
-                    |a: usize, b: usize| ticks[b].saturating_sub(ticks[a]) as f64 * period / 1.0e6;
-                samples[0].push(ms(1, 3));
-                samples[1].push(ms(3, 5));
-                samples[2].push(wall_ms);
-                gpu_total.push(ms(1, 5));
-                gpu_from_open_begin.push(ms(0, 5));
-                gpu_old_bracket.push(ms(4, 6));
+                assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                    "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
+                wall.push(wall_ms);
+                gpu_total.push((ticks[1] - ticks[0]) as f64 * period / 1.0e6);
                 cpu_prepare.push(prepare_ms);
             }
         }
     }
 
-    // Keep the historical split columns, but prefer the directly measured
-    // total: independent timestamp passes can overlap on a tile-based GPU.
-    // Split minima can be zero and do not establish an uncontended cost.
-    eprintln!(
-        "{:<38} {:>5} {:>8}  {:>15}  {:>15}  {:>15}  {:>10}  {:>10}  {:>10}  {:>10}  {:>10}  source px",
-        "case",
-        "fill",
-        "span s",
-        "light med/min",
-        "paint med/min",
-        "wall med/min",
-        "end/full",
-        "begin/full",
-        "old med",
-        "rev new/old",
-        "CPU prep"
-    );
     for case in &mut cases {
-        let [light, paint, wall] = case.samples.each_mut().map(|samples| {
-            samples.sort_by(f64::total_cmp);
-            format!("{:>7.2}/{:>7.2}", samples[samples.len() / 2], samples[0])
-        });
+        case.wall.sort_by(f64::total_cmp);
         case.gpu_total.sort_by(f64::total_cmp);
-        case.gpu_from_open_begin.sort_by(f64::total_cmp);
-        case.gpu_old_bracket.sort_by(f64::total_cmp);
         case.cpu_prepare.sort_by(f64::total_cmp);
-        let source = case.cb.atmosphere.map(|a| atmosphere::source_size(size, ppp, a));
-        eprintln!(
-            "{:<38} {:>5.2} {:>8.1}  {light}  {paint}  {wall}  {:>10.3}  {:>10.3}  {:>10.3}  {:>4}/{:<4}  {:>10.3}  {source:?}",
-            case.name,
-            case.fill,
-            case.history_seconds,
-            case.gpu_total[case.gpu_total.len() / 2],
-            case.gpu_from_open_begin[case.gpu_from_open_begin.len() / 2],
-            case.gpu_old_bracket[case.gpu_old_bracket.len() / 2],
-            case.reversed_total,
-            case.reversed_old,
-            case.cpu_prepare[case.cpu_prepare.len() / 2]
-        );
+    }
+    eprintln!("case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median");
+    for case in &cases {
         let spread = |samples: &[f64]| {
             let at = |fraction: usize| samples[(samples.len() - 1) * fraction / 100];
             format!("{:.3}/{:.3}/{:.3}/{:.3}/{:.3}", at(0), at(10), at(50), at(90), at(100))
         };
+        let median = |samples: &[f64]| samples[samples.len() / 2];
+        let source = case.cb.atmosphere.map(|a| atmosphere::source_size(size, ppp, a));
         eprintln!(
-            "  {} {:.1}s GPU min/p10/med/p90/max begin/full={} end/full={} old={}",
+            "{} / {:.2} / {:.1}: {}; wall {:.3}; CPU {:.3}; source px {:?}",
             case.name,
+            case.fill,
             case.history_seconds,
-            spread(&case.gpu_from_open_begin),
             spread(&case.gpu_total),
-            spread(&case.gpu_old_bracket)
+            median(&case.wall),
+            median(&case.cpu_prepare),
+            source
         );
+        let baseline =
+            if case.name.ends_with("memory") { "mosaic, memory" } else { "mosaic, defaults" };
+        if let Some(mosaic) = cases.iter().find(|c| {
+            c.name == baseline && c.fill == case.fill && c.history_seconds == case.history_seconds
+        }) {
+            let mosaic_ms = median(&mosaic.gpu_total);
+            eprintln!(
+                "  {:.3}x Mosaic ({mosaic_ms:.3} ms, {baseline})",
+                median(&case.gpu_total) / mosaic_ms
+            );
+        }
     }
 }

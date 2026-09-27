@@ -190,6 +190,7 @@ run cargo check --release --workspace --all-targets
 # these two share. So this line is load-bearing for all 284, not just for the
 # two the `cfg` deletes — narrowing it to a filter would silently drop the rest.
 run cargo test -p harmonigraph-render
+run cargo test -p harmonigraph-render gpu_harness::report_adapter_limits -- --ignored --exact --nocapture
 
 # ...and the one question none of the runs above can ask: is the committed Metal
 # corpus still valid for THIS tree's shaders? A key the corpus is missing makes

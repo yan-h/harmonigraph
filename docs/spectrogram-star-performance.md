@@ -1,5 +1,11 @@
 # Stars shader performance
 
+The historical independent-pass timing columns below retain their original meaning.
+Issue #1203 demonstrated that the old `end/full` bracket can reverse or undercount;
+the corrected probe reports `source/full` from the first real source pass to the composite end.
+Current probe cases explicitly select Mosaic and turn color memory off except in named memory cases (#1182).
+These changes do not revise the historical values or the later dependency-ordered Stars split measurements.
+
 Measured on an Apple M1 Pro with Metal on 2026-09-26,
 against `b26fa162`.
 The star atlas already bakes each star's position,
