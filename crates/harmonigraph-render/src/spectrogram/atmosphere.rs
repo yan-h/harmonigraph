@@ -156,6 +156,10 @@ fn star_depth(k: usize) -> f32 {
 const STAR_PANE: f32 = 540.0;
 /// The star atlas's texel, one cell's star as the shader's `star_bake` packs it.
 const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
+const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Below this area the extra pass does not consistently pay for itself.
+/// Apply it to drawn device pixels, independent of display scale and star count.
+const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
 /// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
 /// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
 /// million; only the finest `Star size` at a high `Star density`, or a
@@ -436,11 +440,13 @@ pub(super) fn retained_size(
         .unwrap_or(requested)
 }
 
-/// How big the cloud's scalar tone target is, or `None` where the layer is
-/// drawn natively under every pixel of the composite.
+/// The precomposite size, or `None` for the complete per-pixel walk.
 ///
-/// Native is both the no-cloud case and sample spacing at or under one
-/// DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
+/// Stars instead split their far layers into a native RGB target on large
+/// regions. The caller retains a pane-sized allocation for texel addressing,
+/// but scissors this pass to the drawn region on every frame.
+///
+/// Other styles stay native at sample spacing at or under one DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
 /// where a reduced target would be the pane's own resolution or larger and the
 /// extra pass would buy nothing. Above that each axis is divided by the same
 /// number of pixels per sample, so the walk's cost falls with its square.
@@ -451,11 +457,17 @@ pub(super) fn tone_size(
     pixel_points: f32,
 ) -> Option<[u32; 2]> {
     let settings = atmosphere.settings.sanitized();
+    if !settings.effects().cloud {
+        return None;
+    }
+    if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
+        let split = u64::from(pixels[0]) * u64::from(pixels[1]) >= STAR_SPLIT_PIXELS;
+        #[cfg(test)]
+        let split = super::tests::STAR_SPLIT_OVERRIDE.get().unwrap_or(split);
+        return split.then_some(pixels);
+    }
     let pixel = pixel_points * ppp;
-    // The starfield is always native: its target would have to hold colour
-    // rather than one scalar, and a reduced star is a blurred one.
-    let stars = settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
-    if !settings.effects().cloud || pixel <= 1.0 || stars {
+    if pixel <= 1.0 {
         return None;
     }
     Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
@@ -590,8 +602,8 @@ struct Uniforms {
     contours: f32,
     contour_softness: f32,
     contour_strength: f32,
-    /// 1 when the tone target exists and holds this frame's cloud, so the
-    /// composite reads it instead of walking the cells under every pixel.
+    /// 1 when the tone target holds this frame's reduced scalar cloud field
+    /// or native RGB far Stars layers.
     tone_baked: u32,
     /// Cloud-space offset of the cloud texture, reduced from f64 on the CPU.
     ///
@@ -689,6 +701,13 @@ pub(super) struct Pipelines {
     /// Every star on screen into the star atlas, once a frame, for the
     /// composite's walk to read instead of working each star out per pixel.
     pub stars: wgpu::RenderPipeline,
+    /// Native-resolution RGB of the two farthest layers, when splitting the
+    /// composite pays for its extra pass.
+    pub star_far: wgpu::RenderPipeline,
+    /// Specialize the final draws so the unsplit shader carries no runtime
+    /// split branch (that branch alone regressed intermediate pane sizes).
+    pub star_composite: wgpu::RenderPipeline,
+    pub star_backdrop: wgpu::RenderPipeline,
     pub memory: wgpu::RenderPipeline,
     pub composite: wgpu::RenderPipeline,
     pub backdrop: wgpu::RenderPipeline,
@@ -813,6 +832,7 @@ impl Pipelines {
                 source_layout,
                 None,
                 "fs_density_source",
+                false,
             ),
             bake: create_spectrogram_pipeline(
                 device,
@@ -820,6 +840,7 @@ impl Pipelines {
                 source_layout,
                 Some(&composite_layout),
                 "fs_cloud_light",
+                false,
             ),
             tone: create_spectrogram_pipeline(
                 device,
@@ -827,6 +848,7 @@ impl Pipelines {
                 source_layout,
                 Some(&composite_layout),
                 "fs_cloud_tone",
+                false,
             ),
             tile: tile_pipeline(
                 device,
@@ -841,6 +863,13 @@ impl Pipelines {
                 &composite_layout,
                 "fs_star_bake",
                 &[Some(STAR_FORMAT)],
+            ),
+            star_far: tile_pipeline(
+                device,
+                source_layout,
+                &composite_layout,
+                "fs_star_far",
+                &[Some(STAR_FAR_FORMAT)],
             ),
             memory: tile_pipeline(
                 device,
@@ -859,6 +888,7 @@ impl Pipelines {
                 } else {
                     "fs_cloud_gamma"
                 },
+                false,
             ),
             backdrop: create_spectrogram_pipeline(
                 device,
@@ -870,6 +900,31 @@ impl Pipelines {
                 } else {
                     "fs_cloud_backdrop_gamma"
                 },
+                false,
+            ),
+            star_composite: create_spectrogram_pipeline(
+                device,
+                format,
+                source_layout,
+                Some(&composite_layout),
+                if format.is_srgb() || format == wgpu::TextureFormat::Rgba16Float {
+                    "fs_cloud_linear"
+                } else {
+                    "fs_cloud_gamma"
+                },
+                true,
+            ),
+            star_backdrop: create_spectrogram_pipeline(
+                device,
+                format,
+                source_layout,
+                Some(&composite_layout),
+                if format.is_srgb() || format == wgpu::TextureFormat::Rgba16Float {
+                    "fs_cloud_backdrop_linear"
+                } else {
+                    "fs_cloud_backdrop_gamma"
+                },
+                true,
             ),
             filter_layout,
             composite_layout,
@@ -1057,8 +1112,9 @@ pub(super) struct Targets {
     /// draws a dark seam. The original data mesh still bounds measured sound.
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
-    /// The reduced tone target and its size, `None` where the cloud is drawn
-    /// natively. Part of the allocation key beside [`Self::size`] — see
+    /// The precomposite and its size: reduced scalar cloud tone or native RGB
+    /// of the two far Stars layers. None draws the full walk in the composite.
+    /// Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
     tile: Option<Tile>,
@@ -1150,7 +1206,12 @@ impl Targets {
             view("spectral_cloud_close"),
             view("spectral_cloud_wide"),
         ];
-        let tone = tone_size.map(|size| (sized("spectral_cloud_tone", size), size));
+        // Star presence is already part of the allocation key, so a style
+        // change also replaces the tone's format even at identical sizes.
+        let tone = tone_size.map(|size| {
+            let format = if star_size.is_some() { STAR_FAR_FORMAT } else { FORMAT };
+            (formatted("spectral_cloud_tone", size, format), size)
+        });
         let stars =
             star_size.map(|size| (formatted("spectral_star_atlas", size, STAR_FORMAT), size));
         // What every group that does not read the atlas binds in its place, and
@@ -1341,7 +1402,7 @@ impl Targets {
         }
     }
 
-    /// The reduced tone target's size, for the allocation key to compare
+    /// The precomposite target's size, for the allocation key to compare
     /// against what this frame's settings ask for.
     pub fn tone_size(&self) -> Option<[u32; 2]> {
         self.tone.as_ref().map(|&(_, size)| size)
