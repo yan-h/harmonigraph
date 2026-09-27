@@ -136,6 +136,10 @@ pub const STAR_DENSITY_MAX: f32 = 10.0;
 /// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
 /// dense slice add up to a flat wash of its average colour.
 pub const STAR_FRINGE_MAX: f32 = 0.5;
+/// Bounds for the per-axis resolution of the Stars halo images.
+pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
+pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
+
 /// The top of [`SpectralAtmosphere::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// Bounds shared by the two ends of the `Star size` control
@@ -388,6 +392,10 @@ pub struct SpectralAtmosphere {
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
     pub star_randomness: f32,
+    /// Positional variation within each cell, from regular centers at 0 to
+    /// the original 0.6-cell jitter width at 1. Halo reach stays independent
+    /// of placement; a separate reduced pass draws the wider light.
+    pub star_jitter: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
     /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
@@ -428,6 +436,10 @@ pub struct SpectralAtmosphere {
     /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
     /// Runs to [`STAR_FRINGE_MAX`].
     pub star_fringe: f32,
+    /// Halo image width and height relative to the pane's device pixels.
+    /// Lower values soften the halo sampling without moving stars or changing
+    /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
+    pub star_halo_resolution: f32,
     /// How much the nearest stars are softened, growing with depth squared.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
@@ -489,6 +501,7 @@ impl Default for SpectralAtmosphere {
             // Yan's Stars controls captured from the DAW on 2026-09-26.
             star_density: 10.0,
             star_randomness: 0.080912866,
+            star_jitter: 0.5,
             star_size_min: 2.315533,
             star_size_max: 14.752405,
             star_size_curve: 2.1178954,
@@ -497,6 +510,7 @@ impl Default for SpectralAtmosphere {
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
             star_fringe: 0.5,
+            star_halo_resolution: 0.5,
             star_defocus: 0.35391274,
         }
     }
@@ -549,6 +563,7 @@ impl SpectralAtmosphere {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
         self.star_size_min =
             clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
         self.star_size_max =
@@ -581,6 +596,12 @@ impl SpectralAtmosphere {
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
+        self.star_halo_resolution = clamp(
+            self.star_halo_resolution,
+            fresh.star_halo_resolution,
+            STAR_HALO_RESOLUTION_MIN,
+            STAR_HALO_RESOLUTION_MAX,
+        );
         self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
         self
     }

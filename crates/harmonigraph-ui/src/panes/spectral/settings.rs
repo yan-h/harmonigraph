@@ -561,6 +561,22 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .on_hover_text(
             "How much stars differ from each other in brightness and size. A star's brightness is a position on the palette: dim stars take the palette's lower colors, bright ones its higher colors. 0% colors every star from the sound behind it; 100% makes a few bright stars among many faint ones. The field's average brightness stays the same at every setting.",
         );
+    ValueBar::new(&mut atmosphere.star_jitter, 0.0..=1.0, "Jitter")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Halos keep their full reach at every setting. Brightness and size variation are controlled by Randomness.",
+        );
+    ValueBar::new(
+        &mut atmosphere.star_halo_resolution,
+        harmonigraph_scene::STAR_HALO_RESOLUTION_MIN..=harmonigraph_scene::STAR_HALO_RESOLUTION_MAX,
+        "Halo resolution",
+    )
+    .percent()
+    .show(ui)
+    .on_hover_text(
+        "Halo image width and height relative to the pane. 50% is the current look and uses one quarter of the pixels; lower values reduce work and soften the glow. 100% uses native resolution. Star positions, sharp cores and halo reach stay the same.",
+    );
     ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
         .percent()
         .show(ui)

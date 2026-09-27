@@ -77,14 +77,18 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
     const PPP: f32 = 1.25;
     let origin = egui::pos2(7.2, 11.6);
     let mut last_frames = Vec::new();
-    for memory in [false, true] {
-        let mut cb = star_fixture([128, 96], origin);
+    for (memory, jitter) in [0.0, 0.5, 1.0]
+        .into_iter()
+        .flat_map(|jitter| [false, true].into_iter().map(move |memory| (memory, jitter)))
+    {
+        let mut cb = star_fixture([129, 97], origin);
         cb.atmosphere.as_mut().unwrap().region = egui::Rect::from_min_max(
             egui::pos2(origin.x + 13.0, origin.y + 9.0),
             egui::pos2(origin.x + 117.0, origin.y + 87.0),
         );
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 0.65;
+        settings.star_jitter = jitter;
         if memory {
             settings.color_pickup = 0.6;
             settings.color_release = 0.6;
@@ -94,6 +98,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut first: Option<Vec<u8>> = None;
         for step in 0u64..4 {
             cb.pass_nr = step;
+            let resolution = [0.5, 0.25, 1.0 / 3.0, 1.0][step as usize];
+            cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
             if step == 1 {
                 cb.grid.fill(80);
@@ -127,8 +133,19 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             assert!(target(&native).tone_size().is_none());
             assert_eq!(target(&changing).tone_size().is_some(), split);
             assert_eq!(target(&changing).memory_size().is_some(), memory);
+            assert_eq!(
+                target(&changing).halo_size(),
+                Some([161u32, 121].map(|n| (n as f32 * resolution).ceil() as u32)),
+            );
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
-            assert!(worst <= 1, "memory={memory}, step={step}: split differs by {worst}/255");
+            // Bound both half-float rounding and aggregate error so a
+            // wider spatial mismatch still fails.
+            let error: usize = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y) as usize).sum();
+            let mean = error as f64 / a.len() as f64;
+            assert!(
+                worst <= 2 && mean <= 0.01,
+                "memory={memory}, jitter={jitter}, step={step}: split differs by max {worst}, mean {mean}/255"
+            );
             if let Some(previous) = first.as_ref() {
                 let changed = a.iter().zip(previous).filter(|(x, y)| x.abs_diff(**y) > 4).count();
                 assert!(changed > a.len() / 100, "memory={memory}: fixture did not evolve");
@@ -150,9 +167,11 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             }
         }
     }
-    let memory_effect =
-        last_frames[0].iter().zip(&last_frames[1]).filter(|(a, b)| a.abs_diff(**b) > 4).count();
-    assert!(memory_effect > last_frames[0].len() / 100, "memory fixture did not retain color");
+    for pair in last_frames.chunks_exact(2) {
+        let memory_effect =
+            pair[0].iter().zip(&pair[1]).filter(|(a, b)| a.abs_diff(**b) > 4).count();
+        assert!(memory_effect > pair[0].len() / 100, "memory fixture did not retain color");
+    }
 }
 
 #[test]
@@ -195,4 +214,103 @@ fn star_split_activates_at_the_real_size_threshold() {
         frame_at_ppp(&device, &queue, &mut native, &cb, 1.0)
     };
     assert_eq!(partial, reference);
+}
+
+// An independent native nine-neighbor response checks the decomposition; the
+// split/unsplit test alone would compare two consumers of the same halo bug.
+thread_local! {
+    static STAR_REFERENCE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn reference_source() -> Option<String> {
+    let mode = STAR_REFERENCE.get();
+    if mode == 0 {
+        return None;
+    }
+    let source = SPECTROGRAM_SRC.to_owned();
+    let read = "var slice = star_texel(s, f, index, false);\n        slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);";
+    assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Stars read moved");
+    let core = "let slice = star_texel(s, f, index, false);";
+    let full = r#"
+        var slice = vec4<f32>(0.0);
+        for (var y = -1; y <= 1; y += 1) {
+            for (var x = -1; x <= 1; x += 1) {
+                slice += reference_star(s, f - vec2<f32>(f32(x), f32(y)), index + y * s.grid.x + x);
+            }
+        }
+    "#;
+    Some(
+        source.replace(read, if mode == 1 { full } else { core })
+            + r#"
+// The original full response, without any compact-core subtraction.
+fn reference_star(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
+    let t = textureLoad(star_atlas, atlas_texel(index), 0);
+    if t.w == 0u { return vec4<f32>(0.0); }
+    let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
+    let reach = 1.2 * s.cell;
+    if dist >= reach { return vec4<f32>(0.0); }
+    let rgb = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
+    let shape = unpack2x16float(t.w);
+    let d = dist * shape.x;
+    var cover = exp(-0.5 * d * d);
+    if s.fringe > 0.0 { cover += s.fringe * exp(-0.4 * d); }
+    cover = min(cover, 1.0) * shape.y * (1.0 - smoothstep(0.7 * reach, reach, dist));
+    return vec4<f32>(rgb * cover, cover);
+}
+"#,
+    )
+}
+
+struct HaloOverride(u8);
+impl HaloOverride {
+    fn set(reference: u8) -> Self {
+        Self(STAR_REFERENCE.replace(reference))
+    }
+}
+impl Drop for HaloOverride {
+    fn drop(&mut self) {
+        STAR_REFERENCE.set(self.0);
+    }
+}
+
+#[test]
+fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
+    let Some((device, queue)) = headless_device() else { return };
+    let _split = SplitOverride::set(Some(false));
+    let mut cb = star_fixture([385, 217], egui::Pos2::ZERO);
+    for jitter in [0.0, 0.5, 1.0] {
+        for fringe in [0.0, harmonigraph_scene::STAR_FRINGE_MAX] {
+            let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+            settings.star_jitter = jitter;
+            settings.star_fringe = fringe;
+            settings.star_halo_resolution = 1.0;
+            let mut frames = Vec::new();
+            for reference in [0, 1, 2] {
+                // Native halo sampling isolates the split's algebra from the
+                // intentional interpolation of the default half-size image.
+                let _halo = HaloOverride::set(reference);
+                let mut resources = CallbackResources::default();
+                frames.push(frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0));
+                assert_eq!(target(&resources).halo_size(), Some([385, 217]));
+            }
+            let differences: Vec<_> =
+                frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).collect();
+            let max = *differences.iter().max().unwrap();
+            let mean =
+                differences.iter().map(|&d| f64::from(d)).sum::<f64>() / differences.len() as f64;
+            assert!(
+                max <= 1 && mean <= 0.03,
+                "jitter={jitter}, fringe={fringe}: reconstruction max={max}, mean={mean}"
+            );
+            let halo_pixels = frames[0]
+                .chunks_exact(4)
+                .zip(frames[2].chunks_exact(4))
+                .filter(|(a, b)| a[..3].iter().zip(&b[..3]).any(|(x, y)| x.abs_diff(*y) > 4))
+                .count();
+            assert!(
+                halo_pixels > 500,
+                "jitter={jitter}, fringe={fringe}: halo witness only {halo_pixels} pixels"
+            );
+        }
+    }
 }
