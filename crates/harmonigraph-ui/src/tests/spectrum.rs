@@ -7,7 +7,9 @@ use crate::*;
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
     let mut spectrum = AudioSpectrum::default();
-    let config = SpectrumConfig::default();
+    // The 8192-sample window, whose bins resolve A4 to within a bucket; the
+    // 4096-sample one draws it on its nearest bin, about 21¢ sharp.
+    let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..SpectrumConfig::default() };
     assert!(spectrum.display(0.0).is_none(), "no audio yet");
 
     // A 440 Hz sine, long enough to fill the analysis window.

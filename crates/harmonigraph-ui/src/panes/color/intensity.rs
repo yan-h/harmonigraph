@@ -339,8 +339,11 @@ mod tests {
     #[test]
     fn target_menus_add_independent_weights_and_delete_only_that_mapping() {
         let ctx = crate::tests::probe::themed();
+        // Velocity to opacity is the only mapping: the fresh gain route would
+        // add a third Delete and move the menus this counts.
         let mut settings = IntensitySettings {
             velocity: IntensitySource { opacity: Some(0.4), ..Default::default() },
+            gain: IntensitySource::default(),
             ..Default::default()
         };
         let out = frame(&ctx, &mut settings, vec![]);

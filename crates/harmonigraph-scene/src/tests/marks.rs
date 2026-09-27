@@ -372,7 +372,15 @@ fn a_lone_notes_mark_fades_out_with_it() {
     let mut tracker = NoteTracker::new();
     tracker.handle_event(on(0.0, 60));
     tracker.handle_event(off(1.0, 60));
-    let view = delayed_view(0.0);
+    // Simultaneous: under an ordered departure the marks do not yet wait with
+    // their sector (#1204).
+    let view = ViewConfig {
+        note_animation: NoteAnimationConfig {
+            order: AnimationOrder::Simultaneous,
+            ..NoteAnimationConfig::default()
+        },
+        ..delayed_view(0.0)
+    };
     let frame = attack_frame();
     let mut at = |now: f64| {
         let scene = motion_scene(&mut motion, &tracker, &Tuning::default(), &view, &frame, now);

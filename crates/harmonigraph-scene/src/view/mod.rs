@@ -1552,7 +1552,7 @@ const DEFAULT_RING_GROUND: f32 = 6.0;
 /// The `L*` a fresh [`ViewConfig::marker_ink`] opens on. Kept beside the ring
 /// ground because the accessors repair the two independently without building
 /// a fresh view to read either field.
-const DEFAULT_MARKER_INK: f32 = 32.0;
+const DEFAULT_MARKER_INK: f32 = 19.0;
 
 /// The look a fresh view starts in, and the single source of every field's
 /// fallback: the container-level `#[serde(default)]` on the struct means a
@@ -1662,9 +1662,9 @@ impl Default for ViewConfig {
             // Dark ground captured from the DAW on 2026-09-13. The ring and
             // resting marker ink stay separate from the editor chrome.
             lattice_ground: DEFAULT_RING_GROUND,
-            // Well above the ring ground — 26 `L*` clear of it — so the
-            // resting positions stay legible through the broad glow without
-            // competing with a sounding node's white name.
+            // 13 `L*` clear of the ring ground, as captured from the DAW on
+            // 2026-09-26: the resting positions stay legible through the glow
+            // while sitting further back than a sounding node's white name.
             marker_ink: DEFAULT_MARKER_INK,
             // Seven full-size octaves to the turn with middle C straight up —
             // the keyboard's C0..C6 span in the DAW's numbering, with no
@@ -1715,11 +1715,11 @@ impl Default for ViewConfig {
             fade_shape: 0.313_509_55,
             note_animation: NoteAnimationConfig::default(),
             intensity: crate::IntensitySettings::default(),
-            note_bloom: 0.633_927_7,
-            // A shallow step past the band — about a third of the band's own
-            // width, so a mark reads as its slice carrying on rather than as a
-            // second ring around everything.
-            mark_thickness: 0.067_234_814,
+            note_bloom: 1.022_367_7,
+            // A hairline step past the band — about an eighth of the band's
+            // own width, so a mark reads as its slice carrying on rather than
+            // as a second ring around everything.
+            mark_thickness: 0.024_035_156,
             // Just past a passing sixteenth (125ms at 120bpm), and well off
             // the bar's 0 floor: a mark outlives its key (see
             // `mark_delay`), and at 0 every momentary crowning fades its way
@@ -1729,12 +1729,12 @@ impl Default for ViewConfig {
             // Arms reaching about half way from the crossing to the ring stack
             // (`ring_inner`, in the same UV): the resting lattice reads as
             // separate crosses with ground between them rather than as a
-            // near-continuous mesh. Captured from the DAW on 2026-09-07, with
+            // near-continuous mesh. Captured from the DAW on 2026-09-26, with
             // the taper below.
-            plus_arm: 0.305_142_85,
+            plus_arm: 0.312_866_33,
             // About two thirds of each arm is taper, so the marker arrives at
             // a fine point rather than carrying its width to the tip.
-            plus_taper: 0.195_142_84,
+            plus_taper: 0.202_866_32,
             // The fresh 12-TET tuning satisfies both comma identities, so the
             // spelling locks open on the tuning's own equivalences rather than
             // showing duplicate comma spellings.
@@ -1751,8 +1751,8 @@ impl Default for ViewConfig {
             spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, at just over half strength as captured
-            // from the DAW on 2026-09-13.
-            glow_reach: 4.795_308,
+            // from the DAW on 2026-09-26.
+            glow_reach: 6.001_968_4,
             atmosphere: AtmosphereSettings::default(),
             glow_strength: 0.570_992_95,
             glow_curve: GlowCurve::default(),

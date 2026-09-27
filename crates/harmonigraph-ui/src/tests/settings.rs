@@ -474,6 +474,17 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
 /// pass whether a bar clamped itself or not; 100 and 80, where the record button
 /// and the Options field have nowhere left to go, are where the clamp is the
 /// only thing holding the bars level.
+/// How many source-to-display mappings a fresh view carries, each drawn as a
+/// weight bar in the Colors page's Mappings section.
+fn fresh_mappings() -> usize {
+    let fresh = harmonigraph_scene::IntensitySettings::default();
+    [fresh.velocity, fresh.gain, fresh.pressure, fresh.timbre]
+        .iter()
+        .flat_map(|source| [source.opacity, source.thickness])
+        .filter(Option::is_some)
+        .count()
+}
+
 #[test]
 fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
     for width in [400.0f32, 240.0, 160.0, 120.0, 100.0, 80.0] {
@@ -496,9 +507,20 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                 // the same three bars over the same type — and none anywhere
                 // else.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
+                // A mapping's weight bar gives the right end of its row to its
+                // Delete button (52pt and the 8pt item gap), and is counted the
+                // same way: one per mapping the fresh settings carry, all of
+                // them on the Colors page.
+                let weight = width - 60.0;
+                let mappings = if pane == panes::Tab::Colors { fresh_mappings() } else { 0 };
                 let mut short = 0;
+                let mut weights = 0;
                 for bar in &widths {
                     if (bar - width).abs() < 1.0 {
+                        continue;
+                    }
+                    if (bar - weight).abs() < 1.0 {
+                        weights += 1;
                         continue;
                     }
                     short += 1;
@@ -514,6 +536,11 @@ fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
                     short, want,
                     "{pane:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
                      (all of {widths:?})"
+                );
+                assert_eq!(
+                    weights, mappings,
+                    "{pane:?}/{projection:?} at {width}pt drew {weights} weight bars, not \
+                     {mappings} (all of {widths:?})"
                 );
             }
         }

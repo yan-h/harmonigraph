@@ -1908,10 +1908,6 @@ mod tests {
         };
         close(second, first);
         close(at(220.0, 0.0, 10_000.0), phase);
-        close(
-            travelled(harmonigraph_scene::SpectralAtmosphere::default().cloud_direction),
-            [1.0, -0.625],
-        );
     }
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
@@ -1983,8 +1979,10 @@ mod tests {
                 [1920, 1081],
                 ppp,
                 SpectrogramAtmosphere {
+                    // A cloud that reduces at all: the starfield never does.
                     settings: harmonigraph_scene::SpectralAtmosphere {
                         cloud_depth,
+                        cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
                         ..Default::default()
                     },
                     region: egui::Rect::ZERO,

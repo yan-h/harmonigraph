@@ -410,9 +410,12 @@ impl SpectralEffects {
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
-            pitch_softness: 35.0,
-            time_softness: 120.0,
-            spread: 0.25,
+            // The Stars look captured from the DAW on 2026-09-26: a sharp
+            // field with no time blur or spread, and the Mosaic and Wash
+            // controls below riding inert at their captured values.
+            pitch_softness: 6.726_529_6,
+            time_softness: 0.0,
+            spread: 0.0,
             // One texel a slab: Yan judged it live at a 600 s Span (2026-09-20),
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
@@ -420,41 +423,34 @@ impl Default for SpectralAtmosphere {
             // Full strength is what the `Lava` style drew, and that style was
             // the fresh one.
             contour_strength: 1.0,
-            contours: 7.0,
-            contour_softness: 0.15,
+            contours: 17.0,
+            contour_softness: 0.492_202_6,
             cloud_depth: 1.0,
-            color_pickup: 0.08,
-            color_release: 0.6,
-            cloud_speed: 1.0,
-            // The visible direction of the former drift's steady component.
-            cloud_direction: 147.994_61,
-            // 1.0x now draws what `cloud_scale` 0.5 against `scale_size` 2.2
-            // drew, because `SCALE_CELLS` carries the retired dial's default.
-            scale_size: 1.0,
+            color_pickup: 0.043_984_346,
+            color_release: 0.711_714_74,
+            cloud_speed: 4.242_738_7,
+            cloud_direction: 174.0,
+            scale_size: 0.153_937_07,
             scale_variety: 0.5,
-            scale_refract: 0.30,
-            cloud_style: CloudStyle::Mosaic,
-            // J2 "dissolved" from the prototype's sheet J, translated: globs
-            // about two harmonic lines across and the rim fully dissolved. Its
-            // third term was a `Ragged` rim wobble, retired once `Fuzz` 1 was
-            // found to mask it; the radius band carries the size it added.
-            wash_size: 1.0,
+            scale_refract: -1.0,
+            cloud_style: CloudStyle::Stars,
+            wash_size: 0.181_260_21,
             wash_fuzz: 1.0,
-            wash_lobe: 0.55,
-            wash_refract: 0.85,
+            wash_lobe: 1.0,
+            wash_refract: 0.950_153_47,
             wash_layers: 0.5,
             // Yan's Stars controls captured from the DAW on 2026-09-26.
             star_density: 10.0,
             star_randomness: 0.080912866,
-            star_size_min: 1.0045346,
-            star_size_max: 11.529175,
-            star_size_curve: 1.462137,
+            star_size_min: 2.315533,
+            star_size_max: 14.752405,
+            star_size_curve: 2.1178954,
             star_speed_min: 0.08931082,
             star_speed_max: 0.16860056,
             star_speed_curve: 3.179647,
-            star_lifetime: 0.8390586,
-            star_fringe: 0.13554634,
-            star_defocus: 0.6669314,
+            star_lifetime: 2.9719827,
+            star_fringe: 0.5,
+            star_defocus: 0.35391274,
         }
     }
 }
@@ -610,10 +606,10 @@ impl Default for AtmosphereSettings {
         Self {
             enabled: true,
             material: LatticeMaterial::Clouds,
-            nebula_depth: 0.139_642_13,
-            nebula_scale: 0.581_716_2,
-            nebula_speed: 1.0,
-            breath_amount: 0.582_938_5,
+            nebula_depth: 0.134_627_85,
+            nebula_scale: 0.840_435_3,
+            nebula_speed: 6.077_757_4,
+            breath_amount: 0.429_406_55,
             breath_speed: 1.813_457_6,
         }
     }
