@@ -821,9 +821,19 @@ impl CallbackTrait for SpectrogramCallback {
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                        #[cfg(test)]
+                        let source_query = tests::SOURCE_QUERY.with_borrow_mut(Option::take);
                         let mut pass =
                             egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("spectral_cloud_source"),
+                                #[cfg(test)]
+                                timestamp_writes: source_query.as_ref().map(|query_set| {
+                                    wgpu::RenderPassTimestampWrites {
+                                        query_set,
+                                        beginning_of_pass_write_index: Some(0),
+                                        end_of_pass_write_index: None,
+                                    }
+                                }),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                     view: &target.source_view,
                                     depth_slice: None,
@@ -3968,6 +3978,8 @@ fn cs_wrap_probe() {
     }
 
     thread_local! {
+        /// Consumed only when the timing probe's first real source pass runs.
+        pub(super) static SOURCE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
         /// Compare both paths without allocating a large pane in every test.
         pub(super) static STAR_SPLIT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         /// Set while a test draws the reference [`pipeline_source`] builds.

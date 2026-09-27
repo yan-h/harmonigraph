@@ -22,14 +22,53 @@
 //! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names
 //! ```
 //! `PROBE_OCCLUSION=0` compares the same shader with receiver fading disabled.
+//! `PROBE_LOCAL_SHADOW=0` disables only the local notation-shadow pass.
+//! Probe scenes now use `scrolled()` at the rendered default camera and square
+//! aspect. Historical `reach()` figures over-counted off-pane instances (#1182).
+//! Synthetic audio-ring and dense-animation grids remain explicitly synthetic.
 
 use super::fixtures::*;
-use super::golden::{the_live_view, the_live_view_on_the_distance_row};
 use crate::*;
 
 /// Wide enough that the names are about the size the lattice typesets them.
 const SIZE: [u32; 2] = [768, 768];
 const FRAMES: usize = 120;
+
+// These are probe scenes, independent of the close-up golden fixtures. Derive
+// at the camera actually rendered, through the same window as the live pane.
+fn the_live_view() -> Scene {
+    use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
+    use harmonigraph_scene::{Camera, FrameParams, ShadowKernel, ViewConfig};
+    let mut view = ViewConfig { center_threes: 1, ..Default::default() };
+    for style in view.shadow.groups_mut() {
+        style.kernel = ShadowKernel::Gaussian;
+        style.width = 0.196_915_06;
+        style.depth = 1.0;
+    }
+    let mut tracker = NoteTracker::new();
+    for note in [55, 60, 64, 67, 71] {
+        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+    }
+    let camera = Camera::default();
+    animated_snapshot(
+        &tracker,
+        &Tuning::default(),
+        &view,
+        &view.scrolled(&camera, 1.0),
+        &FrameParams { fade_time: 0.0, ..Default::default() },
+        camera,
+        None,
+        1.0,
+    )
+}
+
+fn the_live_view_on_the_distance_row() -> Scene {
+    let mut scene = the_live_view();
+    for style in scene.shadow.groups_mut() {
+        style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+    }
+    scene
+}
 
 #[test]
 #[ignore = "a probe: prints a timing and asserts nothing"]
@@ -91,6 +130,7 @@ fn a_frame_of_audio_rings_costs_this_much() {
     for lit in [false, true] {
         let mut scene =
             ringing_node(None, Some(harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0), PROBE_RANGE);
+        scene.camera.distance = harmonigraph_scene::Camera::default().distance;
         let mut node = scene.nodes[0];
         node.activation = 0.0;
         node.octaves.fill(0.0);
@@ -159,7 +199,7 @@ fn atmosphere_costs_by_polyphony() {
                 &tracker,
                 &Tuning::default(),
                 &view,
-                &view.reach(),
+                &view.scrolled(&Camera::default(), 1.0),
                 &FrameParams { fade_time: 0.0, ..Default::default() },
                 Camera::default(),
                 None,
@@ -216,7 +256,7 @@ fn animation_costs_by_pose_and_density() {
                     &tracker,
                     &Tuning::default(),
                     &view,
-                    &view.reach(),
+                    &view.scrolled(&Camera::default(), 1.0),
                     &FrameParams { fade_time: 0.0, ..Default::default() },
                     Camera::default(),
                     None,
@@ -294,9 +334,6 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     }))
     .expect("a device with timestamps");
 
-    // The default distance rather than the golden's close one, so the pane
-    // holds a lattice's worth of nodes and names.
-    scene.camera.distance = harmonigraph_scene::Camera::default().distance;
     let pane = glam::Vec2::new(size[0] as f32, size[1] as f32);
     let projector = scene.projector(pane);
     let unit = scene.node_radius * scene.camera.points_per_world(size[1] as f32);
@@ -418,9 +455,17 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         if frame == 0 {
             let target = size.map(|v| (v as f32 * cb.render_scale).round() as u32);
             let lit = cb.instances.iter().filter(|node| node.glow[0] > 0.0).count();
-            eprintln!("{what}: target {target:?}, {lit} lit halo instances");
+            let landed = cb
+                .casters
+                .iter()
+                .filter(|c| c.level > 0.0 && c.rect[2] > 0.0 && c.rect[3] > 0.0)
+                .count();
+            eprintln!("{what}: target {target:?}, {} shipped instances, {lit} lit halo instances, {landed} casters landed", cb.instances.len());
         }
         cb.uniforms.geometry_shadow.occlusion = occlusion;
+        if let Ok(depth) = std::env::var("PROBE_LOCAL_SHADOW") {
+            cb.uniforms.marker_shadow.depth = depth.parse().expect("PROBE_LOCAL_SHADOW is a depth");
+        }
         let mut encoder = device.create_command_encoder(&Default::default());
         drop(stamped_pass(&mut encoder, &stamp_view, Some(0), None));
         let cpu_start = std::time::Instant::now();

@@ -172,3 +172,15 @@ pub(crate) fn readback_r16(
         })
         .collect()
 }
+
+/// Diagnostic prerequisite for increasing the scene's attachment budget (#1186).
+#[test]
+#[ignore = "prints the CI adapter limit before changing the scene attachment budget"]
+fn report_adapter_limits() {
+    let Some((_, adapter)) = test_gpu_adapter() else { return };
+    eprintln!(
+        "adapter: {:?}; max_color_attachment_bytes_per_sample={}",
+        adapter.get_info(),
+        adapter.limits().max_color_attachment_bytes_per_sample
+    );
+}

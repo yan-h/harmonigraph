@@ -1,5 +1,11 @@
 # Spectrogram cloud performance audit
 
+The historical independent-pass timing columns below retain their original meaning.
+Issue #1203 demonstrated that the old `end/full` bracket can reverse or undercount;
+the corrected probe reports `source/full` from the first real source pass to the composite end.
+Current probe cases explicitly select Mosaic and turn color memory off except in named memory cases (#1182).
+These changes do not revise the historical values or the later dependency-ordered Stars split measurements.
+
 Audit of `8b4edf4e` on 2026-09-19, prompted by the Mosaic and Watercolor textures dropping a 4K pane from 144 fps to 60-100 while the plain spectrogram holds 144.
 It adds a repeatable probe and ranks the levers; it changes no shader.
 
