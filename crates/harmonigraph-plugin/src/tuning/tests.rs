@@ -16,6 +16,8 @@ use clap_sys::{
 };
 use event::Event;
 
+#[path = "confirmed_tests.rs"]
+mod confirmed_tests;
 #[path = "control_tests.rs"]
 mod control_tests;
 #[path = "map_tests.rs"]
