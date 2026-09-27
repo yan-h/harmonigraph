@@ -1189,13 +1189,6 @@ impl Hub {
         if self.callback.is_some() {
             self.snapshots(owner, recorder);
         }
-        // Forced publication above accounts for every input in this callback,
-        // including delayed output. A later callback need not arrive to prove
-        // this prefix when Stop is followed immediately by destruction.
-        let through = callback.steady_time.saturating_add(i64::from(callback.frames));
-        if owner.recording.source_frontier(self.clock, through).is_err() {
-            recorder.fail_configuration();
-        }
         self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);
@@ -1224,8 +1217,8 @@ impl Hub {
     /// Destruction closes the recorder's own boundaries, here and now. There
     /// is no drain to wait for: everything this Hub sequenced was published in
     /// the callback it was sequenced in, so the only thing left to say is
-    /// whether any voice was still sounding — which is a take the renderer
-    /// warns about rather than a fact this can go and establish.
+    /// whether any voice was still sounding — which fails the take rather
+    /// than being a fact this can go and establish.
     pub fn retire_publication(
         &mut self,
         mut owner: Box<Owner>,
@@ -1237,6 +1230,13 @@ impl Hub {
         // Stop can finish as soon as all closure entries reach the worker.
         // Publish this failure first, before retirement can release them.
         if held {
+            recorder.fail_configuration();
+        }
+        // The source frontier `publish` proves stops at a callback's start,
+        // because a Tune the host runs after the Hub is a callback behind.
+        // Joined destruction is the one boundary after which nothing still in
+        // a ring can be collected, so the last callback's end is proven here.
+        if owner.recording.retired_source_frontier(self.clock).is_err() {
             recorder.fail_configuration();
         }
         owner.recording.observe_retired_disarm(&mut recorder);

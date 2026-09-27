@@ -964,6 +964,32 @@ fn a_record_arriving_after_its_sample_was_sequenced_is_still_assigned() {
     );
 }
 
+/// The same lag against the take: a Tune the host runs after the Hub is a
+/// callback behind, so its record routes through the segment the Hub's
+/// previous callback left open. Proving a callback's end complete as it ends
+/// would retire that segment under it and fail the recorder for the session.
+#[test]
+fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
+    let _scope = crate::test_scope::enter();
+    let (mut hub, capture) = Device::recorded_hub();
+    hub.activate();
+    let mut tune = Device::new(true);
+    tune.activate();
+    let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"), None);
+    // The Tune runs first, then after the Hub, at the same block boundary.
+    tune.run_format(0, vec![], None, None, 512);
+    hub.run_format(0, vec![], None, None, 512);
+    hub.run_format(512, vec![], None, None, 512);
+    tune.run_format(512, vec![note(1, 0, 60, 0, true)], None, None, 512);
+    hub.run_format(1024, vec![], None, None, 512);
+    tune.run_format(1024, vec![], None, None, 512);
+    assert_eq!(inspect_hub(&hub, |h| h.test_held(0)), 1, "the late copy is sequenced");
+    assert!(!writer.failed(), "a routine lag must not fail the recorder");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Membership is the epoch. A Tune attaching cuts every paired track, which
 /// is the price of never having a hot-plug reconciliation to get wrong.
 #[test]
