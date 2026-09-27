@@ -37,8 +37,11 @@ pub fn test_gpu_adapter() -> Option<(wgpu::Instance, wgpu::Adapter)> {
 /// `None` only when no adapter is available and GPU tests are optional.
 pub fn headless_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let (_, adapter) = test_gpu_adapter()?;
-    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-        .expect("headless device");
+    let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
+        ..Default::default()
+    }))
+    .expect("headless device");
     Some(pair)
 }
 

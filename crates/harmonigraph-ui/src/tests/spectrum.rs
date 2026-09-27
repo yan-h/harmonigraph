@@ -690,7 +690,7 @@ fn fold_is_shared_by_real_dock_preview_and_discarded_passes() {
             egui::Grid::new("runtime-discarded-pass").show(ui, |ui| {
                 ui.label("Force a real sizing pass");
             });
-            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0);
+            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
             if passes == 0 {
                 state.picture.appearance.camera.yaw += 0.2;
                 state.picture.appearance.view.pitch_gradient =

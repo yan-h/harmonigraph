@@ -368,9 +368,10 @@ impl Hub {
         // into the epoch bump this callback then adopts.
         self.tune.begin(callback);
         self.adopt();
-        // A cut or a departed Tune clears a row with no delta to carry that to
-        // Learn, so every row is republished here rather than flagged at each
-        // place that clears one.
+        // Learn consumes one complete snapshot at this callback boundary.
+        // Rebuild from empty so earlier sources cannot collide with obsolete
+        // later-source rows at capacity. Cuts and departures need no delta.
+        owner.confirmed.reset();
         for (source, row) in self.rows.iter().enumerate() {
             Self::confirm(row, identity(source as u8), &mut owner.confirmed);
         }
@@ -998,7 +999,6 @@ impl Hub {
             if outcome.take.is_ok() && outcome.display.is_ok() {
                 self.published += 1;
             }
-            Self::confirm(&self.rows[index], identity(item.source), &mut owner.confirmed);
         }
         // Compact in place. Taking the vector would leave an empty one behind
         // and the reserve that refilled it would allocate, on audio.
@@ -1013,7 +1013,7 @@ impl Hub {
         source: SourceId,
         confirmed: &mut harmonigraph_core::confirmed::ConfirmedPitches,
     ) {
-        let _ = row.state.publish_confirmed(source, row.state.complete, confirmed);
+        let _ = row.state.publish_confirmed(source, confirmed);
     }
 
     fn presentation(&self, sample: i64) -> f64 {

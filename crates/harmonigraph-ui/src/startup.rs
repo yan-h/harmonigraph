@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(state.picture.runtime.tracker.voices().count(), 3);
         begin_editor_loading(&ctx);
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            crate::root_ui(ui, &mut state, &Defaults, 5.0);
+            crate::root_ui(ui, &mut state, &Defaults, 5.0, "test @0123456");
         });
         assert!(matches!(editor_loading_status(&ctx), Some(Status::Preparing(_))));
         let remaining: Vec<_> =
@@ -186,7 +186,7 @@ mod tests {
             };
             for _ in 0..3 {
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    crate::root_ui(ui, &mut state, &Defaults, 0.0);
+                    crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");
                 });
                 assert!(!loading_text(&output), "hidden panes do not request preparation");
             }
@@ -194,7 +194,7 @@ mod tests {
             state.workspace.layout.select(tab);
             state.workspace.layout.folded[workspace::Section::of(tab) as usize] = false;
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                crate::root_ui(ui, &mut state, &Defaults, 0.0);
+                crate::root_ui(ui, &mut state, &Defaults, 0.0, "test @0123456");
             });
             assert!(loading_text(&output), "first reveal enters asynchronous preparation");
             assert!(output

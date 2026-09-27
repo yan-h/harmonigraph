@@ -57,7 +57,7 @@ struct SpectralParams {
 struct GlowParams {
     @align(16) reach: f32,
     strength: f32,
-    blend: f32,
+    padding: f32,
     curve: f32,
     wash: f32,
     row_capacity: f32,
@@ -672,7 +672,7 @@ fn vs_node_cell(
     if box.who.y < 0.5 {
         // Expanded Gaussian coverage uses the existing layer fields and cell
         // quad. The ordinary Gaussian above keeps its original rasterizer.
-        out.params.w = 3.0;
+        out.params.w = GAUSSIAN_SPREAD_KIND;
         out.strip_row = 1.0 / max(box.cell_map.x * uv_points, 1e-6);
         out.ink_carry = box.who.w / max(uv_points, 1e-6);
     }
@@ -1051,6 +1051,8 @@ struct NodeLayer {
     coverage: f32,
 }
 
+// Expanded Gaussian cells evaluate coverage through the analytic layer walk.
+const GAUSSIAN_SPREAD_KIND: f32 = 3.0;
 // The contour threshold the exact field treats as ink. The marker uses the
 // same half-level in `plus_shadow_sd` below.
 const DISTANCE_LEVEL_FLOOR: f32 = 0.5;
@@ -1061,13 +1063,13 @@ fn layer_coverage(layer: NodeLayer) -> f32 {
 }
 
 fn layer_distance(field: f32, layer: NodeLayer, in: VsOut) -> f32 {
-    if in.params.w > 2.5 {
+    if in.params.w > GAUSSIAN_SPREAD_KIND - 0.5 {
         let aa = aa_width(in.strip_row, in.shadow_at.w);
         let coverage = clamp(layer.level, 0.0, 1.0)
             * aa_inside(in.ink_carry, layer.sd, aa);
         return min(field, -coverage);
     }
-    if in.params.w > 1.5 {
+    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
         let coverage = clamp(layer.level, 0.0, 1.0) * standoff_coverage(
             layer.sd * abs(in.shadow_at.z), 2.0 * in.strip_row, in.ink_carry,
         );
@@ -1804,19 +1806,6 @@ fn drawn_marks(
         coverage = max(coverage, layer.coverage);
     }
     return NodeLayer(sd, strip.level, coverage);
-}
-
-// Distance from `uv` to the filled wedge between `edges` (`oct_sector`'s pair,
-// counter-clockwise edge first) out to radius `r`: negative inside it, and
-// outside it the distance to the nearest point of it.
-//
-// A PIE — apex at the node's center, closed by an arc — where the layer that
-// wedge belongs to is drawn as an annular sector. Its two callers each cut the
-// pie back to the strip themselves, by intersecting this with everything past
-// the strip's inner edge; what is shared is the ANGULAR half of the shape,
-// which is the part with a case in it.
-fn sector_distance(uv: vec2<f32>, edges: vec2<f32>, r: f32) -> f32 {
-    return sector_pie(sector_fold(uv, edges), r);
 }
 
 // One wedge's own frame, which both readings below are taken in.
@@ -2587,7 +2576,7 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
-    if in.params.w > 1.5 {
+    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
         return vec4<f32>(clamp(-ink.sd, 0.0, 1.0), 0.0, 0.0, 0.0);
     }
     if analytic {
@@ -2854,7 +2843,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 fn node_split(paint: Painted, shadow_alpha: f32) -> SplitOut {
     // Zero keeps the pre-prototype reference available to GPU A/B probes.
     let alpha = mix(shadow_alpha, paint.ink_alpha, clamp(u.geometry_shadow.occlusion, 0.0, 1.0));
-    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha));
+    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
 }
 
 @fragment
@@ -2868,23 +2857,7 @@ fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
     let seen = node_split(paint, paint.seen);
     let bloom = node_split(paint, paint.bloom);
-    return SceneOut(seen.other, seen.ink, bloom.other, bloom.ink);
-}
-
-// A foreground node covers the local shadow behind it only where it has
-// visible ink. Its ordinary shadow must never restore this transmittance.
-@fragment
-fn fs_node_transmittance(in: VsOut) -> @location(0) vec4<f32> {
-    let g = node_geom(in, false);
-    if !g.paints {
-        discard;
-    }
-    let ink = node_ink(in, g.d, g.aa, g.oct, false);
-    if ink.alpha < INK_FLOOR {
-        discard;
-    }
-    let a = ink.alpha * node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
-    return vec4<f32>(a, 0.0, 0.0, a);
+    return SceneOut(seen.other, seen.ink, seen.transmission, bloom.other, bloom.ink);
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -3712,7 +3685,7 @@ fn fs_plus(in: PlusVsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_plus_split(in: PlusVsOut) -> SplitOut {
     let paint = plus_paint(in);
-    return SplitOut(seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen));
+    return SplitOut(seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.seen));
 }
 
 @fragment
@@ -3720,14 +3693,7 @@ fn fs_plus_scene(in: PlusVsOut) -> SceneOut {
     let paint = plus_paint(in);
     return SceneOut(
         seen_of(paint), vec4<f32>(0.0, 0.0, 0.0, paint.seen),
+        vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.seen),
         vec4<f32>(paint.rgb, paint.bloom), vec4<f32>(0.0, 0.0, 0.0, paint.bloom),
     );
-}
-
-// Source-over on a scalar target: A + T_back * (1-A) * T_shadow.
-// RGB carries ink coverage while alpha carries ink plus shadow coverage.
-@fragment
-fn fs_plus_transmittance(in: PlusVsOut) -> @location(0) vec4<f32> {
-    let paint = plus_paint(in);
-    return vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.seen);
 }

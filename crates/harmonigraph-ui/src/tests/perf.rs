@@ -83,15 +83,15 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
     //
     // Wrapping means the tag can span two galleys, so this looks for the
     // branch name rather than the whole line.
-    let branch =
-        harmonigraph_perf::BUILD_TAG.split(" @").next().unwrap_or(harmonigraph_perf::BUILD_TAG);
+    let build_tag = "shell-tag-fixture @0123456";
+    let branch = build_tag.split(" @").next().unwrap_or(build_tag);
     assert!(
         output.shapes.iter().any(|clipped| matches!(
             &clipped.shape,
             egui::Shape::Text(text) if text.galley.text().contains(branch)
         )),
         "the overlay should name the build it is ({}), so a reload can be checked",
-        harmonigraph_perf::BUILD_TAG,
+        build_tag,
     );
 }
 

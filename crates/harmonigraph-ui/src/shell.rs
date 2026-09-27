@@ -104,6 +104,8 @@ pub struct Frame<'a> {
     /// Seconds on the shell's clock, and the same clock that stamped the
     /// events fed above: an envelope is the difference between the two.
     pub now: f64,
+    /// Identity stamped into this interactive shell at build time.
+    pub build_tag: &'a str,
     /// Actual window size agreed to by the host, in logical points.
     pub window_size: egui::Vec2,
 }
@@ -112,7 +114,7 @@ impl Frame<'_> {
     /// Draw first, then return a one-shot, floored window size request.
     #[must_use = "a fold is spent by resizing the window"]
     pub fn draw(self) -> Option<egui::Vec2> {
-        crate::root_ui(self.ui, self.state, self.params, self.now);
+        crate::root_ui(self.ui, self.state, self.params, self.now, self.build_tag);
         let change = self.state.workspace.take_window_size_change()?;
         Some((self.window_size + change).max(self.state.workspace.min_window_size))
     }
@@ -152,8 +154,16 @@ mod tests {
             ..Default::default()
         };
         let _ = ctx.run_ui(raw, |ui| {
-            ask =
-                Frame { ui, state, params: &Defaults, now: 1.0, window_size: size }.draw().or(ask);
+            ask = Frame {
+                ui,
+                state,
+                params: &Defaults,
+                now: 1.0,
+                build_tag: "test @0123456",
+                window_size: size,
+            }
+            .draw()
+            .or(ask);
         });
         ask
     }

@@ -20,6 +20,7 @@ use harmonigraph_ui::SharedState;
 // buy nothing. Copying the old app.ron across does NOT recover it — the key
 // inside it is the old one too.
 const UI_STATE_STORAGE_KEY: &str = "harmonigraph-ui-state";
+const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
 
 fn main() -> eframe::Result {
     harmonigraph_render::shader_assets::initialize();
@@ -35,6 +36,7 @@ fn main() -> eframe::Result {
             std::sync::Arc::new(move |adapter: &harmonigraph_render::wgpu::Adapter| {
                 use harmonigraph_render::wgpu::Features;
                 let mut descriptor = base(adapter);
+                descriptor.required_limits = harmonigraph_render::device_limits(adapter);
                 descriptor.required_features |= adapter.features() & Features::TIMESTAMP_QUERY;
                 descriptor
             });
@@ -606,6 +608,7 @@ impl eframe::App for App {
             state: &mut self.state,
             params: &self.params,
             now,
+            build_tag: BUILD_TAG,
             window_size: window,
         }
         .draw();

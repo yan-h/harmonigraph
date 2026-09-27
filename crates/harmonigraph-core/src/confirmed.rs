@@ -1,12 +1,10 @@
 //! Reusable confirmed-pitch state for the hub. Callers validate protocol identity,
 //! admission and complete source intervals before feeding actual-output batches.
-//! Direct input is explicitly observed input, never claimed accepted forwarding.
 
-use crate::{LearnedTuning, NoteEvent, NoteEventKind, PitchClass, SourceId, VoiceKey};
+use crate::{LearnedTuning, PitchClass, SourceId, VoiceKey};
 
 pub const HELD_SESSION: usize = 256;
 pub const HELD_PER_SOURCE: usize = 64;
-pub const MAX_LEARNING_PAIRS: usize = HELD_SESSION * (HELD_SESSION - 1) / 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PitchProvenance {
@@ -17,12 +15,9 @@ pub enum PitchProvenance {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConfirmedPitch {
     pub key: VoiceKey,
-    /// Supplied by the validated source owner; absent for today's direct input.
+    /// Supplied by the validated source owner when available.
     pub lifetime: Option<u64>,
-    /// CLAP address metadata, independent of the source/key identity.
-    pub host_note_id: Option<i32>,
     pub pitch_microcents: i64,
-    pub onset_sample: i64,
     pub provenance: PitchProvenance,
 }
 
@@ -54,7 +49,9 @@ impl ConfirmedPitches {
         !self.unknown_incomplete && self.incomplete.iter().all(Option::is_none)
     }
 
-    fn invalidate(&mut self, source: SourceId) -> ConfirmedError {
+    /// Mark a source whose complete state is unavailable. Only authoritative
+    /// replacement or reset may restore learning from it.
+    pub fn invalidate(&mut self, source: SourceId) {
         if !self.incomplete.contains(&Some(source)) {
             if let Some(cell) = self.incomplete.iter_mut().find(|cell| cell.is_none()) {
                 *cell = Some(source);
@@ -62,54 +59,9 @@ impl ConfirmedPitches {
                 self.unknown_incomplete = true;
             }
         }
-        ConfirmedError::Capacity
     }
 
-    pub fn on(&mut self, row: ConfirmedPitch) -> Result<(), ConfirmedError> {
-        if row.key.channel >= 16
-            || row.key.note >= 128
-            || (row.provenance == PitchProvenance::ObservedDirect
-                && row.key.source != SourceId::DIRECT)
-        {
-            self.invalidate(row.key.source);
-            return Err(ConfirmedError::InvalidBatch);
-        }
-        if let Some(cell) =
-            self.rows.iter_mut().find(|cell| cell.is_some_and(|old| old.key == row.key))
-        {
-            *cell = Some(row);
-            return Ok(());
-        }
-        if self.rows().filter(|old| old.key.source == row.key.source).count() >= HELD_PER_SOURCE {
-            return Err(self.invalidate(row.key.source));
-        }
-        if let Some(cell) = self.rows.iter_mut().find(|cell| cell.is_none()) {
-            *cell = Some(row);
-            Ok(())
-        } else {
-            Err(self.invalidate(row.key.source))
-        }
-    }
-
-    /// A supplied lifetime must match. Protocol admission and old-incarnation
-    /// rejection remain the session adapter's responsibility.
-    pub fn pitch(&mut self, key: VoiceKey, lifetime: Option<u64>, microcents: i64) {
-        if let Some(row) =
-            self.rows.iter_mut().flatten().find(|row| row.key == key && row.lifetime == lifetime)
-        {
-            row.pitch_microcents = microcents;
-        }
-    }
-
-    pub fn release(&mut self, key: VoiceKey, lifetime: Option<u64>) {
-        for cell in &mut self.rows {
-            if cell.is_some_and(|row| row.key == key && row.lifetime == lifetime) {
-                *cell = None;
-            }
-        }
-    }
-
-    pub fn clear_source(&mut self, source: SourceId) {
+    fn clear_source(&mut self, source: SourceId) {
         for cell in &mut self.rows {
             if cell.is_some_and(|row| row.key.source == source) {
                 *cell = None;
@@ -138,7 +90,8 @@ impl ConfirmedPitches {
             || rows.len() + self.rows().filter(|row| row.key.source != source).count()
                 > HELD_SESSION
         {
-            return Err(self.invalidate(source));
+            self.invalidate(source);
+            return Err(ConfirmedError::Capacity);
         }
         for (i, row) in rows.iter().enumerate() {
             if row.key.source != source
@@ -152,53 +105,11 @@ impl ConfirmedPitches {
             }
         }
         self.clear_source(source);
-        for &row in rows {
-            self.on(row)?;
+        // The complete batch and available capacity were validated above.
+        for (cell, &row) in self.rows.iter_mut().filter(|cell| cell.is_none()).zip(rows) {
+            *cell = Some(row);
         }
         Ok(())
-    }
-
-    /// Feed mapped input before the lossy display ring. Learning is invoked by
-    /// the caller only after the whole same-sample group, including initial tuning.
-    pub fn observe_direct(&mut self, event: NoteEvent, sample: i64) -> Result<(), ConfirmedError> {
-        if event.source != SourceId::DIRECT {
-            return Err(ConfirmedError::InvalidBatch);
-        }
-        let key = event.key();
-        match event.kind {
-            NoteEventKind::On { .. } => self.on(ConfirmedPitch {
-                key,
-                lifetime: None,
-                host_note_id: None,
-                onset_sample: sample,
-                pitch_microcents: i64::from(event.note) * 100_000_000,
-                provenance: PitchProvenance::ObservedDirect,
-            }),
-            NoteEventKind::Tuning { semitones } => {
-                if !semitones.is_finite() {
-                    self.invalidate(SourceId::DIRECT);
-                    return Err(ConfirmedError::InvalidBatch);
-                }
-                let pitch =
-                    ((f64::from(event.note) + f64::from(semitones)) * 100_000_000.0).round() as i64;
-                self.pitch(key, None, pitch);
-                Ok(())
-            }
-            NoteEventKind::Off => {
-                self.release(key, None);
-                Ok(())
-            }
-            // Pitch confirmation reads pitch alone.
-            NoteEventKind::Expression { .. } => Ok(()),
-            NoteEventKind::SourceReset => {
-                self.clear_source(SourceId::DIRECT);
-                Ok(())
-            }
-            NoteEventKind::SessionReset => {
-                self.reset();
-                Ok(())
-            }
-        }
     }
 
     pub fn classes<'a>(
@@ -281,26 +192,25 @@ mod tests {
     #[test]
     fn complete_maximum_rows_reach_all_32640_pairs_and_cache_exact_classes() {
         let mut confirmed = ConfirmedPitches::default();
-        for i in 0..HELD_SESSION {
-            confirmed
-                .on(ConfirmedPitch {
+        for source in 0..HELD_SESSION / HELD_PER_SOURCE {
+            let rows: [_; HELD_PER_SOURCE] = std::array::from_fn(|note| {
+                let i = source * HELD_PER_SOURCE + note;
+                ConfirmedPitch {
                     key: VoiceKey {
-                        source: SourceId(1 + (i / 64) as u64),
+                        source: SourceId(1 + source as u64),
                         channel: 0,
-                        note: (i % 64) as u8,
+                        note: note as u8,
                     },
                     lifetime: Some(i as u64),
-                    host_note_id: None,
-                    onset_sample: 0,
                     pitch_microcents: (i as i64) * 4_687_499,
                     provenance: PitchProvenance::AcceptedOutput,
-                })
-                .unwrap();
+                }
+            });
+            confirmed.replace_source(SourceId(1 + source as u64), &rows).unwrap();
         }
         let mut learning = LearningState::default();
         let result = learning.infer(&confirmed, true).unwrap().unwrap();
         assert_eq!(learning.last_pair_visits, 32640);
-        assert_eq!(MAX_LEARNING_PAIRS, 32640);
         let mut classes = [PitchClass::from_midi_note(0); HELD_SESSION];
         let classes = confirmed.classes(&mut classes).unwrap();
         assert_eq!(classes.len(), 256);
@@ -310,22 +220,24 @@ mod tests {
     }
 
     #[test]
-    fn direct_exhaustion_disables_learning_until_complete_replacement() {
+    fn incomplete_source_requires_authoritative_replacement_or_reset() {
         let mut confirmed = ConfirmedPitches::default();
-        for note in 0..64 {
-            confirmed
-                .observe_direct(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0), 0)
-                .unwrap();
-        }
+        let rows: [_; HELD_PER_SOURCE + 1] = std::array::from_fn(|note| ConfirmedPitch {
+            key: VoiceKey { source: SourceId::DIRECT, channel: 0, note: note as u8 },
+            lifetime: None,
+            pitch_microcents: i64::try_from(note).unwrap() * 100_000_000,
+            provenance: PitchProvenance::ObservedDirect,
+        });
         assert_eq!(
-            confirmed.observe_direct(NoteEvent::on(0.0, SourceId::DIRECT, 0, 64, 1.0), 0),
+            confirmed.replace_source(SourceId::DIRECT, &rows),
             Err(ConfirmedError::Capacity)
         );
         let mut learning = LearningState::default();
         assert_eq!(learning.infer(&confirmed, true), Err(ConfirmedError::Incomplete));
-        confirmed.observe_direct(NoteEvent::off(0.0, SourceId::DIRECT, 0, 0), 0).unwrap();
-        assert!(!confirmed.is_complete(), "a release cannot repair truncated state");
         confirmed.replace_source(SourceId::DIRECT, &[]).unwrap();
         assert_eq!(learning.infer(&confirmed, true), Ok(None));
+        confirmed.invalidate(SourceId::DIRECT);
+        confirmed.reset();
+        assert!(confirmed.is_complete());
     }
 }

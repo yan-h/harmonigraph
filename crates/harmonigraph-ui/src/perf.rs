@@ -9,10 +9,8 @@
 //!
 //! The picture is the whole of this module: which rows the HUD shows, and how
 //! they are painted. Everything the numbers are MADE of — the windows and
-//! their peaks, the stage table, the memory read, the build tag — is
-//! `harmonigraph-perf`, and so are the `libc` dependency and the `build.rs`
-//! that the last two of those need, neither of which anything else in this
-//! crate has a use for.
+//! their peaks, the stage table, and the memory read — is
+//! `harmonigraph-perf`. The shell supplies its build tag when it draws.
 //!
 //! What a frame COSTS lives one checkbox further in, under `show_perf_detail`
 //! (see [`draw_overlay`]). The headline list carries the frame interval and
@@ -26,7 +24,7 @@
 //! ever runs on its (deterministic) draw path — no wall-clock read reaches a
 //! recorded frame.
 
-use harmonigraph_perf::{memory_readout, PerfStats, Stage, BUILD_TAG, STAGES};
+use harmonigraph_perf::{memory_readout, PerfStats, Stage, STAGES};
 
 /// Points between the overlay and the editor's corner it opens in.
 const OVERLAY_INSET: f32 = 8.0;
@@ -133,7 +131,7 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
 /// The build row, laid out to `width` — the HUD's own grid width, so naming
 /// the build cannot widen the HUD.
 ///
-/// Split out to take the tag as an ARGUMENT: `BUILD_TAG` is stamped from the
+/// Split out to take the tag as an ARGUMENT: the shell stamps it from the
 /// branch this compiles on, so the wrap is only exercised at all on a branch
 /// whose name happens to be long. Nothing about the layout is decided here,
 /// which is why it can be handed a tag nobody would ever build under.
@@ -161,6 +159,7 @@ pub(crate) fn draw_overlay(
     pos: &mut Option<egui::Pos2>,
     perf: &PerfStats,
     detail: bool,
+    build_tag: &str,
 ) {
     let fps = perf.fps();
     // Only flag a low rate while something is actually animating — an idle
@@ -281,7 +280,7 @@ pub(crate) fn draw_overlay(
         .iter()
         .map(|parts| parts.iter().map(|(x, g)| x + g.rect.width()).fold(0.0f32, f32::max))
         .fold(0.0f32, f32::max);
-    lines.push(vec![(0.0, tag_line(ctx, BUILD_TAG, &mono, dim, grid_width))]);
+    lines.push(vec![(0.0, tag_line(ctx, build_tag, &mono, dim, grid_width))]);
 
     let row_gap = 1.0 * scale;
     let width = lines
@@ -618,7 +617,7 @@ mod tests {
     /// A branch name is arbitrarily long and the tag is the one row not sized
     /// by the grid, so it is the one line that can push the HUD out to a slab
     /// across the picture. Held with a tag far longer than anything that would
-    /// really be built, because the real [`BUILD_TAG`] is whatever branch this
+    /// really be built, because the real build tag is whatever branch this
     /// compiles on: pinned against that, the assertion passes on a short name
     /// whether or not the wrap is there at all, which is how this stopped
     /// being checked.
@@ -699,7 +698,7 @@ mod tests {
             ctx.run_ui(
                 egui::RawInput { screen_rect: Some(area), ..Default::default() },
                 // Detail on: the widest case.
-                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true),
+                |ui| draw_overlay(ui.ctx(), area, &mut pos, &perf, true, "test @0123456"),
             )
         };
         frame();

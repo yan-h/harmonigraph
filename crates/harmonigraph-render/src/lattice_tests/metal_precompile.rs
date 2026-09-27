@@ -216,6 +216,7 @@ fn precompiled_shadow_blur_probe() {
         .expect("Metal GPU required");
     assert_eq!(adapter.get_info().backend, wgpu::Backend::Metal);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
         required_features: wgpu::Features::PASSTHROUGH_SHADERS,
         ..Default::default()
     }))

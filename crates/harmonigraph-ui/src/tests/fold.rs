@@ -313,7 +313,7 @@ fn a_discarded_pass_does_not_toggle_a_fold_twice() {
         ..Default::default()
     };
     let output = ctx.run_ui(raw, |ui| {
-        root_ui(ui, &mut state, &RecordingBackend::default(), 1.0);
+        root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
         if ui.ctx().current_pass_index() == 0 {
             ui.ctx().request_discard("exercise repeated layout pass");
         }
@@ -714,7 +714,7 @@ fn a_discarded_pass_does_not_charge_an_internal_fold_twice() {
             ..Default::default()
         },
         |ui| {
-            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0);
+            root_ui(ui, &mut state, &RecordingBackend::default(), 1.0, "test @0123456");
             if ui.ctx().current_pass_index() == 0 {
                 ui.ctx().request_discard("exercise internal fold repeat");
             }

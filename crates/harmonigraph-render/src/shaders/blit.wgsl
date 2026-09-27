@@ -219,8 +219,8 @@ struct GlowSplitOut {
 struct GlowOverOut {
     @location(0) other: vec4<f32>,
     @location(1) ink: vec4<f32>,
-    @location(2) bloom_other: vec4<f32>,
-    @location(3) bloom_ink: vec4<f32>,
+    @location(3) bloom_other: vec4<f32>,
+    @location(4) bloom_ink: vec4<f32>,
 };
 
 @fragment

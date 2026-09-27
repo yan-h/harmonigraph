@@ -138,7 +138,7 @@ impl DockHarness {
         let mut ui_ms = 0.0;
         let output = self.ctx.run_ui(raw, |ui| {
             let start = std::time::Instant::now();
-            root_ui(ui, state, backend, t);
+            root_ui(ui, state, backend, t, "shell-tag-fixture @0123456");
             ui_ms = start.elapsed().as_secs_f64() * 1000.0;
         });
         (output, ui_ms)

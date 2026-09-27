@@ -242,96 +242,27 @@ impl LatticeCallback {
             });
             match checked {
                 Ok(()) => {
-                    let source = &reloaded.lattice;
-                    let lattice_shader = lattice_module(device, source);
+                    let lattice_shader = lattice_module(device, &reloaded.lattice);
                     let blit_shader = blit_module(device);
-                    // ...and the two draws that fill the atlas the pair above
-                    // reads: a node's shadow is a blur of the same ink an edit
-                    // just changed, so the cell has to be rasterized by the
-                    // same build that draws the node.
-                    let (node_cell_pipeline, plus_cell_pipeline) = create_cell_pipelines(
-                        device,
-                        &lattice_shader,
-                        &resources.compiled.bind_group_layout,
-                    );
-                    // The glow off the same source, so an edit to a node's
-                    // layers reaches the light around it in the same reload —
-                    // they are one shader drawing one node, and reloading half
-                    // of it is a halo of the previous build.
-                    let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
-                        device,
-                        &lattice_shader,
-                        LATTICE_COLOR_FORMAT,
-                        &resources.compiled.bind_group_layout,
-                        &resources.compiled.strip_layout,
-                        &resources.compiled.glow_statistics_layout,
-                    );
-                    // ...and the strip the light is coloured out of, on the
-                    // same argument one step further back: an edit to what a
-                    // layer paints is an edit to what the halo is made of.
-                    let (ink_strip_pipeline, ink_blur_pipeline) = create_ink_strip_pipelines(
-                        device,
-                        &lattice_shader,
-                        &resources.compiled.bind_group_layout,
-                        &resources.compiled.strip_layout,
-                    );
-                    resources.compiled.node_cell_pipeline = node_cell_pipeline;
-                    resources.compiled.plus_cell_pipeline = plus_cell_pipeline;
-                    resources.compiled.glow_splat_pipeline = glow_splat_pipeline;
-                    resources.compiled.glow_resolve_pipeline = glow_resolve_pipeline;
-                    resources.compiled.ink_strip_pipeline = ink_strip_pipeline;
-                    resources.compiled.ink_blur_pipeline = ink_blur_pipeline;
-
-                    // The NAMES, off the other module the same edit changed.
-                    // All three of their pipelines: the fill is the ink
-                    // standing in the light, the cell is the ink its shadow is
-                    // blurred from, and the box is where that shadow is spent —
-                    // one shader drawing one name, on the same argument the
-                    // glow's rebuild above is made on.
                     let glyph_shader = text::glyph_shader(device, &reloaded.text);
-                    resources.compiled.scenes = create_scene_pipelines(
+                    resources.compiled.shaders = ShaderPipelines::new(
                         device,
                         &lattice_shader,
                         &blit_shader,
                         &glyph_shader,
-                        SceneLayouts {
-                            uniforms: &resources.compiled.bind_group_layout,
-                            glow: &resources.compiled.filter_layout,
-                            shadow: &resources.compiled.shadow_layout,
-                            casters: &resources.compiled.caster_layout,
+                        ShaderLayouts {
+                            scene: SceneLayouts {
+                                uniforms: &resources.compiled.bind_group_layout,
+                                glow: &resources.compiled.filter_layout,
+                                shadow: &resources.compiled.shadow_layout,
+                                casters: &resources.compiled.caster_layout,
+                            },
+                            glyph: &resources.compiled.glyph_layout,
+                            strip: &resources.compiled.strip_layout,
+                            statistics: &resources.compiled.glow_statistics_layout,
                         },
-                        &resources.compiled.glyph_layout,
+                        |_| {},
                     );
-                    resources.compiled.local_shadows = create_local_shadow_pipelines(
-                        device,
-                        &lattice_shader,
-                        &glyph_shader,
-                        SceneLayouts {
-                            uniforms: &resources.compiled.bind_group_layout,
-                            glow: &resources.compiled.filter_layout,
-                            shadow: &resources.compiled.shadow_layout,
-                            casters: &resources.compiled.caster_layout,
-                        },
-                        &resources.compiled.glyph_layout,
-                    );
-                    let (
-                        glyph_coverage_cell_pipeline,
-                        glyph_distance_cell_pipeline,
-                        glyph_distance_pad_pipeline,
-                    ) = text::create_glyph_cell_pipelines(
-                        device,
-                        &glyph_shader,
-                        &resources.compiled.glyph_layout,
-                    );
-                    resources.compiled.glyph_spread_cell_pipeline =
-                        text::create_glyph_sdf_coverage_pipeline(
-                            device,
-                            &glyph_shader,
-                            &resources.compiled.glyph_layout,
-                        );
-                    resources.compiled.glyph_coverage_cell_pipeline = glyph_coverage_cell_pipeline;
-                    resources.compiled.glyph_distance_cell_pipeline = glyph_distance_cell_pipeline;
-                    resources.compiled.glyph_distance_pad_pipeline = glyph_distance_pad_pipeline;
 
                     // And the text CALLBACK's own glyph pipelines, in an entry
                     // of the map this one cannot reach: publishing raises the
@@ -548,7 +479,7 @@ impl LatticeCallback {
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
-        uniforms.ink_kernel = pane.ink_kernel.weights(uniforms.glow.blend);
+        uniforms.ink_kernel = pane.ink_kernel.weights(self.glow_blend);
         // Whether this frame contributes any light to the statistics targets.
         uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {
@@ -613,17 +544,7 @@ impl LatticeCallback {
         // device's times the render scale, which is the term #496 found missing
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let mut packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
-        // Node cells keep one representation throughout a fade, including its
-        // opaque endpoint: each layer's opacity-weighted Distance profile.
-        if self.shadow.lattice_geometry.kernel.is_distance() {
-            for &cell in &self.node_cells {
-                packed.boxes[cell as usize].who[1] = shadow::DISTANCE_COVERAGE_KIND;
-                packed.boxes[cell as usize].who[3] = self.casters[cell as usize].falloff;
-                packed.boxes[cell as usize].cell_map[1] = self.casters[cell as usize].sigma_points;
-                packed.casters[cell as usize].shade[1] = shadow::DISTANCE_COVERAGE_KIND;
-            }
-        }
+        let packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
         // Every receiver, including a label with its own shadow disabled, is
         // occluded by the node casters after it in painter order whose box
         // holds the point. Names immediately follow their owner, so that owner
@@ -676,13 +597,13 @@ impl LatticeCallback {
         if let Some(atlas) = atlas {
             let mut pass = atlas.ink_pass(egui_encoder);
             if let Some(glyphs) = pane.glyph_bind_group.as_ref().filter(|_| pane.glyph_count > 0) {
-                pass.set_pipeline(&compiled.glyph_distance_pad_pipeline);
+                pass.set_pipeline(&compiled.shaders.glyph_distance_pad_pipeline);
                 pass.set_bind_group(0, glyphs, &[]);
                 pass.set_vertex_buffer(0, pane.box_buffer.slice(..));
                 pass.draw(0..4, 0..pane.box_count);
             }
             if pane.instance_count > 0 {
-                pass.set_pipeline(&compiled.node_cell_pipeline);
+                pass.set_pipeline(&compiled.shaders.node_cell_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
@@ -694,7 +615,7 @@ impl LatticeCallback {
             let marker_has_cells =
                 packed.boxes.first().is_some_and(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
             if pane.plus_count > 0 && self.marker_arm_points > 0.0 && marker_has_cells {
-                pass.set_pipeline(&compiled.plus_cell_pipeline);
+                pass.set_pipeline(&compiled.shaders.plus_cell_pipeline);
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.draw(0..4, 0..1);
             }
@@ -706,11 +627,11 @@ impl LatticeCallback {
                 // pipeline for the whole run — where a NODE's fill branches
                 // per box, its own cell draw serving both kinds.
                 pass.set_pipeline(if self.shadow.lattice_text.kernel.is_distance() {
-                    &compiled.glyph_distance_cell_pipeline
+                    &compiled.shaders.glyph_distance_cell_pipeline
                 } else if self.shadow.lattice_text.gaussian_spread_points(1.0) > 0.0 {
-                    &compiled.glyph_spread_cell_pipeline
+                    &compiled.shaders.glyph_spread_cell_pipeline
                 } else {
-                    &compiled.glyph_coverage_cell_pipeline
+                    &compiled.shaders.glyph_coverage_cell_pipeline
                 });
                 pass.draw(0..4, 0..pane.glyph_count);
             }
@@ -787,7 +708,7 @@ impl LatticeCallback {
                 // light is carried FROM (see [`InkStrip`]).
                 pass.set_bind_group(1, strip.carried(), &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.set_pipeline(&compiled.ink_strip_pipeline);
+                pass.set_pipeline(&compiled.shaders.ink_strip_pipeline);
                 pass.draw(0..4, 0..pane.instance_count);
                 drop(pass);
 
@@ -810,7 +731,7 @@ impl LatticeCallback {
                 pass.set_bind_group(0, &pane.bind_group, &[]);
                 pass.set_bind_group(1, strip.written(), &[]);
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                pass.set_pipeline(&compiled.ink_blur_pipeline);
+                pass.set_pipeline(&compiled.shaders.ink_blur_pipeline);
                 pass.draw(0..4, 0..pane.instance_count);
             }
 
@@ -824,8 +745,9 @@ impl LatticeCallback {
         pane: &PaneBuffers,
         offscreen: &Offscreen,
         egui_encoder: &mut wgpu::CommandEncoder,
+        has_light: bool,
     ) {
-        let scene = &compiled.scenes[usize::from(offscreen.bloom.is_some())];
+        let scene = &compiled.shaders.scenes[usize::from(offscreen.bloom.is_some())];
         let attachment = |view| {
             Some(wgpu::RenderPassColorAttachment {
                 view,
@@ -840,12 +762,21 @@ impl LatticeCallback {
         let attachments = [
             attachment(&offscreen.color_view),
             attachment(&offscreen.ink_view),
+            Some(wgpu::RenderPassColorAttachment {
+                view: &offscreen.local_shadow_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            }),
             offscreen.bloom.as_ref().and_then(|b| attachment(&b.nodes_view)),
             offscreen.bloom.as_ref().and_then(|b| attachment(&b.ink_view)),
         ];
         let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_scene_pass"),
-            color_attachments: &attachments[..if offscreen.bloom.is_some() { 4 } else { 2 }],
+            color_attachments: &attachments[..if offscreen.bloom.is_some() { 5 } else { 3 }],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
@@ -862,46 +793,13 @@ impl LatticeCallback {
         // With bloom on it writes both attachments, so the bloom's
         // bright pass reads the light exactly as it reads the nodes: it is
         // light the nodes emit, and it blooms with the rest of them.
-        if let Some(glow) = offscreen.glow.as_ref() {
+        if let Some(glow) = offscreen.glow.as_ref().filter(|_| has_light) {
             pass.set_pipeline(&scene.glow_over);
             pass.set_bind_group(0, &glow.bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
 
         self.draw_ordered(&mut pass, &scene.draws, compiled, pane, offscreen);
-    }
-
-    fn encode_local_shadows(
-        &self,
-        compiled: &CompiledLatticeResources,
-        pane: &PaneBuffers,
-        offscreen: &Offscreen,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("lattice_local_shadows"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &offscreen.local_shadow_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        // Width/depth zero must also clear last frame's shadow. They never
-        // key an allocation, and the empty field needs no geometry draws.
-        if self.uniforms.marker_shadow.width > 0.0
-            && self.uniforms.marker_shadow.depth > 0.0
-            && (pane.glyph_count > 0 || pane.plus_count > 0)
-        {
-            self.draw_ordered(&mut pass, &compiled.local_shadows, compiled, pane, offscreen);
-        }
     }
 
     fn draw_ordered(
@@ -1025,8 +923,7 @@ impl LatticeCallback {
 
             self.encode_node_glow(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
 
-            self.encode_scene(&resources.compiled, pane, offscreen, egui_encoder);
-            self.encode_local_shadows(&resources.compiled, pane, offscreen, egui_encoder);
+            self.encode_scene(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
 
             if let Some(bloom) = &offscreen.bloom {
                 bloom.chain.run(egui_encoder, Self::bloom_pipelines(resources), "lattice");
