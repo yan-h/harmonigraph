@@ -1,0 +1,137 @@
+--- a/crates/harmonigraph-render/src/spectrogram/tests/research.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/research.rs
+@@ -81,6 +81,17 @@
+ }
+ 
+ const CASES: &[(&str, Option<Turn>)] = &[
++    ("full-complete", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-mix4", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-mix5", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-complete-v100_100_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-complete-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-complete-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-complete-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-complete-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++
+     ("full-grouped-v100_100_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
+     ("full-grouped-v50_50_50_50_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
+     ("full-grouped-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
+@@ -738,7 +749,7 @@
+     let mut specs = CASES.to_vec();
+     for name in requested.split(',').map(str::trim) {
+         if specs.iter().any(|(known, _)| *known == name) { continue; }
+-        assert!(name.starts_with("full-l") || name.starts_with("full-v") || name.starts_with("full-separate-v") || name.starts_with("full-grouped-v"), "unknown research case {name}");
++        assert!(name.starts_with("full-l") || name.starts_with("full-v") || name.starts_with("full-separate-v") || name.starts_with("full-grouped-v") || complete_mode(name), "unknown research case {name}");
+         let _ = factors(name);
+         specs.push((name, Some(research_full as Turn)));
+     }
+@@ -1035,7 +1046,7 @@
+ }
+ 
+ pub(in crate::spectrogram) fn grouped_halos() -> bool {
+-    ACTIVE.with_borrow(|name| name.starts_with("full-grouped-v"))
++    ACTIVE.with_borrow(|name| name.starts_with("full-grouped-v") || name.starts_with("full-grouped-complete-v"))
+ }
+ 
+ pub(in crate::spectrogram) struct ResearchHaloGroups {
+@@ -1047,7 +1058,7 @@
+ 
+ pub(in crate::spectrogram) fn grouped_halo_plan() -> ResearchHaloGroups {
+     ACTIVE.with_borrow(|name| {
+-        assert!(name.starts_with("full-grouped-v"));
++        assert!(name.starts_with("full-grouped-v") || name.starts_with("full-grouped-complete-v"));
+         let mut result = ResearchHaloGroups {
+             factors: Vec::new(), counts: Vec::new(), group: [0; 5], layer: [0; 5],
+         };
+@@ -1071,8 +1082,77 @@
+ }
+ 
+ pub(in crate::spectrogram) fn separate_halos() -> bool {
+-    ACTIVE.with_borrow(|name| name.starts_with("full-separate-v"))
+-}
++    ACTIVE.with_borrow(|name| name.starts_with("full-separate-v") || name.starts_with("full-separate-complete-v"))
++}
++fn complete_mode(name: &str) -> bool {
++    name.starts_with("full-complete") || name.starts_with("full-grouped-complete-v")
++        || name.starts_with("full-separate-complete-v")
++}
++
++fn complete_source(mut source: String, name: &str) -> String {
++    assert_eq!(compute_mode(), 0, "complete response prototype is fragment-only");
++    assert!(!fused() && u8_range(name).is_none());
++    let native = factors(name).iter().map(|&f| if f == 1.0 { "true" } else { "false" }).collect::<Vec<_>>().join(",");
++    let mut helper = std::fs::read_to_string(
++        "/private/tmp/stars-investigation/complete-proposal/complete.wgsl"
++    ).unwrap();
++    assert_eq!(helper.matches("__COMPLETE_DEPTHS__").count(), 1);
++    helper = helper.replace("__COMPLETE_DEPTHS__", &native);
++    let load = if grouped_halos() {
++        r#"let layer = RESEARCH_HALO_LAYERS[k];
++    switch RESEARCH_HALO_GROUPS[k] {
++        case 0u: { return textureLoad(research_halo_group_0, texel, layer, 0); }
++        case 1u: { return textureLoad(research_halo_group_1, texel, layer, 0); }
++        default: { return textureLoad(research_halo_group_2, texel, layer, 0); }
++    }"#.to_owned()
++    } else if separate_halos() {
++        r#"switch k {
++        case 0u: { return textureLoad(research_halo_0, texel, 0); }
++        case 1u: { return textureLoad(research_halo_1, texel, 0); }
++        case 2u: { return textureLoad(research_halo_2, texel, 0); }
++        case 3u: { return textureLoad(research_halo_3, texel, 0); }
++        default: { return textureLoad(research_halo_4, texel, 0); }
++    }"#.to_owned()
++    } else {
++        "return textureLoad(star_halos, texel, i32(k), 0);".to_owned()
++    };
++    assert_eq!(helper.matches("__LOAD_RESPONSE__").count(), 1);
++    helper = helper.replace("__LOAD_RESPONSE__", &load);
++
++    // Reuse the original halo pass coordinates, index, draw, and nine-add order.
++    // Only the native branch chooses a complete response with no core taper.
++    let halo = "    var halo = vec4<f32>(0.0);\n";
++    assert_eq!(source.matches(halo).count(), 1, "halo accumulator moved");
++    let walk = std::fs::read_to_string(
++        "/private/tmp/stars-investigation/complete-proposal/complete_walk.wgsl"
++    ).unwrap();
++    source = source.replace(halo, &format!("{halo}{walk}"));
++
++    // Keep the already-rewritten reduced-layer sample expression verbatim.
++    // Move all native-core geometry/loading inside the fallback arm so complete
++    // depths really skip it, rather than merely ignoring its result afterward.
++    let layers = source.find("fn star_layers(").expect("star_layers");
++    let begin = layers + source[layers..].find("        let s = cloud.star_slices[k];").expect("slice geometry");
++    let end = begin + source[begin..].find("        if slice.w > 0.0 {").expect("slice composition");
++    let fallback = &source[begin..end];
++    let old = "var slice = star_texel(s, f, index, false);";
++    assert_eq!(fallback.matches(old).count(), 1);
++    let read = if grouped_halos() { "research_grouped_halo(" }
++        else if separate_halos() { "research_separate_halo(" }
++        else { "textureSampleLevel(star_halos" };
++    assert_eq!(fallback.matches(read).count(), 1);
++    let fallback = fallback.replace(old, "slice = star_texel(s, f, index, false);");
++    let replacement = format!(r#"        var slice = vec4<f32>(0.0);
++        if research_complete_layer(k) {{
++            slice = research_complete_load(pt, k);
++        }} else {{
++{fallback}        }}
++"#);
++    source.replace_range(begin..end, &replacement);
++    source.push_str(&helper);
++    source
++}
++
+ fn activate(name: &str) {
+     ACTIVE.with_borrow_mut(|v| *v = name.into());
+     STAR_SPLIT_OVERRIDE.set(if name.contains("nosplit") { Some(false) } else { None });
+@@ -1179,6 +1259,9 @@
+         }
+     }
+ 
++    if complete_mode(name) {
++        source = complete_source(source, name);
++    }
+     SOURCE.with_borrow_mut(|s| *s = Some(source));
+ }
+ fn orders(n: usize) -> Vec<Vec<usize>> {

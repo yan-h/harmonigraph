@@ -1,0 +1,343 @@
+{
+  "comparisons": {
+    "full-a": {
+      "flat": {
+        "vs_half-a": {
+          "different_fraction": 0.8748813657407407,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 1.8028584747942387,
+          "p99_absolute_rgb": 11.0
+        }
+      },
+      "take": {
+        "vs_half-a": {
+          "different_fraction": 0.7983125964506173,
+          "max_absolute_rgb": 82,
+          "mean_absolute_rgb": 1.430071534207819,
+          "p99_absolute_rgb": 11.0
+        }
+      }
+    },
+    "full-core": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.009372106481481481,
+          "max_absolute_rgb": 1,
+          "mean_absolute_rgb": 0.0031746720679012345,
+          "p99_absolute_rgb": 0.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8748871527777777,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 1.802869888117284,
+          "p99_absolute_rgb": 11.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.0074826388888888885,
+          "max_absolute_rgb": 1,
+          "mean_absolute_rgb": 0.002535204475308642,
+          "p99_absolute_rgb": 0.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7982855902777778,
+          "max_absolute_rgb": 82,
+          "mean_absolute_rgb": 1.4300755529835392,
+          "p99_absolute_rgb": 11.0
+        }
+      }
+    },
+    "full-direct": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.056961323302469134,
+          "max_absolute_rgb": 1,
+          "mean_absolute_rgb": 0.019363747427983538,
+          "p99_absolute_rgb": 1.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8743378665123457,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 1.8022546939300412,
+          "p99_absolute_rgb": 11.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.04496768904320988,
+          "max_absolute_rgb": 1,
+          "mean_absolute_rgb": 0.015323591820987654,
+          "p99_absolute_rgb": 1.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7979340277777778,
+          "max_absolute_rgb": 82,
+          "mean_absolute_rgb": 1.429412294238683,
+          "p99_absolute_rgb": 11.0
+        }
+      }
+    },
+    "full-f16": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.06126880787037037,
+          "max_absolute_rgb": 1,
+          "mean_absolute_rgb": 0.02094457304526749,
+          "p99_absolute_rgb": 1.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8746556712962963,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 1.8019675925925926,
+          "p99_absolute_rgb": 11.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.04858072916666667,
+          "max_absolute_rgb": 1,
+          "mean_absolute_rgb": 0.01664818029835391,
+          "p99_absolute_rgb": 1.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7980729166666667,
+          "max_absolute_rgb": 82,
+          "mean_absolute_rgb": 1.4294184027777779,
+          "p99_absolute_rgb": 11.0
+        }
+      }
+    },
+    "full-mix1": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.8530232445987654,
+          "max_absolute_rgb": 61,
+          "mean_absolute_rgb": 1.602402745627572,
+          "p99_absolute_rgb": 11.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.30646556712962963,
+          "max_absolute_rgb": 37,
+          "mean_absolute_rgb": 0.37097527649176953,
+          "p99_absolute_rgb": 4.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.7780946180555556,
+          "max_absolute_rgb": 85,
+          "mean_absolute_rgb": 1.2822952031893005,
+          "p99_absolute_rgb": 11.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.2629253472222222,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 0.27585117669753084,
+          "p99_absolute_rgb": 4.0
+        }
+      }
+    },
+    "full-mix2": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.8737263695987655,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 1.788739872685185,
+          "p99_absolute_rgb": 11.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.0655348186728395,
+          "max_absolute_rgb": 29,
+          "mean_absolute_rgb": 0.04771428112139918,
+          "p99_absolute_rgb": 1.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.7972260802469135,
+          "max_absolute_rgb": 82,
+          "mean_absolute_rgb": 1.419154610339506,
+          "p99_absolute_rgb": 11.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.051981095679012344,
+          "max_absolute_rgb": 27,
+          "mean_absolute_rgb": 0.0349633487654321,
+          "p99_absolute_rgb": 1.0
+        }
+      }
+    },
+    "half-a": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.8748813657407407,
+          "max_absolute_rgb": 59,
+          "mean_absolute_rgb": 1.8028584747942387,
+          "p99_absolute_rgb": 11.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.7983125964506173,
+          "max_absolute_rgb": 82,
+          "mean_absolute_rgb": 1.430071534207819,
+          "p99_absolute_rgb": 11.0
+        }
+      }
+    },
+    "half-core": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.8798451967592592,
+          "max_absolute_rgb": 66,
+          "mean_absolute_rgb": 1.9942251800411523,
+          "p99_absolute_rgb": 13.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.2806925154320988,
+          "max_absolute_rgb": 21,
+          "mean_absolute_rgb": 0.3094450874485597,
+          "p99_absolute_rgb": 4.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.8035715663580247,
+          "max_absolute_rgb": 88,
+          "mean_absolute_rgb": 1.5737321566358025,
+          "p99_absolute_rgb": 13.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.23807243441358025,
+          "max_absolute_rgb": 34,
+          "mean_absolute_rgb": 0.23504983281893005,
+          "p99_absolute_rgb": 4.0
+        }
+      }
+    },
+    "half-wide": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.8542230902777778,
+          "max_absolute_rgb": 60,
+          "mean_absolute_rgb": 1.589792952674897,
+          "p99_absolute_rgb": 8.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.9095225694444444,
+          "max_absolute_rgb": 58,
+          "mean_absolute_rgb": 2.5092997685185185,
+          "p99_absolute_rgb": 13.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.7822945601851852,
+          "max_absolute_rgb": 53,
+          "mean_absolute_rgb": 1.3084897440843621,
+          "p99_absolute_rgb": 9.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8258482831790124,
+          "max_absolute_rgb": 81,
+          "mean_absolute_rgb": 1.961964056069959,
+          "p99_absolute_rgb": 14.0
+        }
+      }
+    },
+    "r625": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.7983299575617284,
+          "max_absolute_rgb": 51,
+          "mean_absolute_rgb": 1.2686913258744856,
+          "p99_absolute_rgb": 9.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7874768518518519,
+          "max_absolute_rgb": 50,
+          "mean_absolute_rgb": 1.206979648919753,
+          "p99_absolute_rgb": 9.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.7192790316358024,
+          "max_absolute_rgb": 74,
+          "mean_absolute_rgb": 0.9995270704732511,
+          "p99_absolute_rgb": 9.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7073466435185185,
+          "max_absolute_rgb": 70,
+          "mean_absolute_rgb": 0.9428785686728395,
+          "p99_absolute_rgb": 8.0
+        }
+      }
+    },
+    "r750": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.7516280864197531,
+          "max_absolute_rgb": 47,
+          "mean_absolute_rgb": 0.999306037808642,
+          "p99_absolute_rgb": 7.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8101152584876543,
+          "max_absolute_rgb": 55,
+          "mean_absolute_rgb": 1.2568079668209877,
+          "p99_absolute_rgb": 8.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.6722622492283951,
+          "max_absolute_rgb": 63,
+          "mean_absolute_rgb": 0.7847444058641976,
+          "p99_absolute_rgb": 7.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7315634645061728,
+          "max_absolute_rgb": 65,
+          "mean_absolute_rgb": 0.9885190007716049,
+          "p99_absolute_rgb": 8.0
+        }
+      }
+    },
+    "r875": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.6902647569444444,
+          "max_absolute_rgb": 49,
+          "mean_absolute_rgb": 0.7989144483024692,
+          "p99_absolute_rgb": 6.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8240244020061729,
+          "max_absolute_rgb": 53,
+          "mean_absolute_rgb": 1.3362533757716049,
+          "p99_absolute_rgb": 9.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.6116806520061728,
+          "max_absolute_rgb": 64,
+          "mean_absolute_rgb": 0.6253189300411522,
+          "p99_absolute_rgb": 6.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.7461955054012346,
+          "max_absolute_rgb": 64,
+          "mean_absolute_rgb": 1.0563160686728394,
+          "p99_absolute_rgb": 9.0
+        }
+      }
+    }
+  },
+  "directory": "/private/tmp/stars-investigation/images-main",
+  "height": 1080,
+  "width": 1920
+}

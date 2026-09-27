@@ -1,0 +1,93 @@
+{
+  "aa_noise": {
+    "full-a/full-b": {
+      "mean_ratio_b_over_a": 1.0039195737608557,
+      "mean_savings_percent": -0.39195737608557213
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "full-a": {
+      "mean_gpu_ms": 8.6193045625,
+      "median_gpu_ms": 8.488437999999999,
+      "n": 240
+    },
+    "full-b": {
+      "mean_gpu_ms": 8.6530885625,
+      "median_gpu_ms": 8.516375,
+      "n": 240
+    },
+    "full-mix4": {
+      "mean_gpu_ms": 7.603830375,
+      "median_gpu_ms": 7.4087505,
+      "n": 240
+    },
+    "full-mix5": {
+      "mean_gpu_ms": 8.212029,
+      "median_gpu_ms": 8.0072085,
+      "n": 240
+    }
+  },
+  "comparisons": {
+    "full-mix4": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          11.089707956569901,
+          12.809528700684616
+        ],
+        "mean_variant_over_control_ratio": 0.8804605499621524,
+        "paired_mean_savings_percent": 11.95394500378476
+      }
+    },
+    "full-mix5": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          3.9196700073219097,
+          5.906026605919498
+        ],
+        "mean_variant_over_control_ratio": 0.9508849110334269,
+        "paired_mean_savings_percent": 4.911508896657313
+      }
+    }
+  },
+  "frames": 240,
+  "input": "/private/tmp/stars-investigation/timings/take-confirm/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "full-a",
+      "full-b"
+    ]
+  ],
+  "slot_histograms": {
+    "full-a": {
+      "0": 60,
+      "1": 60,
+      "2": 60,
+      "3": 60
+    },
+    "full-b": {
+      "0": 60,
+      "1": 60,
+      "2": 60,
+      "3": 60
+    },
+    "full-mix4": {
+      "0": 60,
+      "1": 60,
+      "2": 60,
+      "3": 60
+    },
+    "full-mix5": {
+      "0": 60,
+      "1": 60,
+      "2": 60,
+      "3": 60
+    }
+  },
+  "slot_positions_balanced": true
+}

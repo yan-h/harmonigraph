@@ -1,0 +1,69 @@
+   Compiling harmonigraph-take v0.5.0 (/Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-take)
+   Compiling pxfm v0.1.30
+   Compiling byteorder-lite v0.1.0
+   Compiling harmonigraph-offline v0.5.0 (/Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-offline)
+   Compiling harmonigraph-render v0.5.0 (/Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-render)
+   Compiling rtrb v0.3.5
+   Compiling moxcms v0.8.1
+   Compiling image v0.25.10
+   Compiling harmonigraph-record v0.5.0 (/Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-record)
+   Compiling harmonigraph-perf v0.5.0 (/Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-perf)
+   Compiling harmonigraph-ui v0.5.0 (/Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-ui)
+    Finished `release` profile [optimized] target(s) in 29.50s
+     Running unittests src/main.rs (target/release/deps/harmonigraph_offline-daa29ec1d0a1e642)
+
+running 8 tests
+test golden::a_short_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_tall_pane_zoomed_out_draws_the_frame_on_record ... FAILED
+test golden::a_zoomed_in_pane_draws_the_frame_on_record ... FAILED
+test golden::mixed_spectral_shadows_draw_the_frame_on_record ... FAILED
+test golden::the_starfield_draws_the_frame_on_record ... FAILED
+test golden::the_watercolour_wash_draws_the_frame_on_record ... ok
+test golden::what_the_heatmap_costs_a_frame ... ignored
+test golden::what_the_spectral_shadow_routes_cost_a_frame ... ignored
+
+failures:
+
+---- golden::a_tall_pane_zoomed_out_draws_the_frame_on_record stdout ----
+
+thread 'golden::a_tall_pane_zoomed_out_draws_the_frame_on_record' (71041572) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-tall-pane moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-tall-pane.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- golden::a_zoomed_in_pane_draws_the_frame_on_record stdout ----
+
+thread 'golden::a_zoomed_in_pane_draws_the_frame_on_record' (71041575) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-zoomed-in moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-zoomed-in.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+
+---- golden::mixed_spectral_shadows_draw_the_frame_on_record stdout ----
+
+thread 'golden::mixed_spectral_shadows_draw_the_frame_on_record' (71041578) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-spectral-shadows-mixed moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-spectral-shadows-mixed.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+
+---- golden::the_starfield_draws_the_frame_on_record stdout ----
+
+thread 'golden::the_starfield_draws_the_frame_on_record' (71041580) panicked at crates/harmonigraph-golden/src/lib.rs:121:13:
+spectrogram-starfield moved: mean 0.000/255, max 1/255
+expected | actual | difference at 8x: /Users/yan/.codex/worktrees/stars-investigation/harmonigraph/crates/harmonigraph-offline/../../target/golden-diff/spectrogram-starfield.png
+If the change is intended, re-baseline and say what moved in the PR body:
+HARMONIGRAPH_BLESS=1 cargo test --workspace golden
+
+
+failures:
+    golden::a_tall_pane_zoomed_out_draws_the_frame_on_record
+    golden::a_zoomed_in_pane_draws_the_frame_on_record
+    golden::mixed_spectral_shadows_draw_the_frame_on_record
+    golden::the_starfield_draws_the_frame_on_record
+
+test result: FAILED. 2 passed; 4 failed; 2 ignored; 0 measured; 71 filtered out; finished in 1.22s
+
+error: test failed, to rerun pass `-p harmonigraph-offline --bin harmonigraph-offline`

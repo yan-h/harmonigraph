@@ -1,0 +1,38 @@
+{
+  "full-complete-take": {
+    "mae_rgb": 0.010461998456790123,
+    "mse_rgb": 0.010461998456790123,
+    "max_rgb": 1,
+    "changed_channel_fraction": 0.010461998456790123
+  },
+  "full-complete-flat": {
+    "mae_rgb": 0.013027263374485596,
+    "mse_rgb": 0.013027263374485596,
+    "max_rgb": 1,
+    "changed_channel_fraction": 0.013027263374485596
+  },
+  "full-grouped-complete-v50_50_80_100_50-take": {
+    "mae_rgb": 0.006314300411522634,
+    "mse_rgb": 0.006314300411522634,
+    "max_rgb": 1,
+    "changed_channel_fraction": 0.006314300411522634
+  },
+  "full-grouped-complete-v50_50_80_100_50-flat": {
+    "mae_rgb": 0.007928562242798354,
+    "mse_rgb": 0.007928562242798354,
+    "max_rgb": 1,
+    "changed_channel_fraction": 0.007928562242798354
+  },
+  "full-grouped-complete-v50_50_100_100_60-take": {
+    "mae_rgb": 0.006953285751028807,
+    "mse_rgb": 0.006953285751028807,
+    "max_rgb": 1,
+    "changed_channel_fraction": 0.006953285751028807
+  },
+  "full-grouped-complete-v50_50_100_100_60-flat": {
+    "mae_rgb": 0.008769129372427983,
+    "mse_rgb": 0.008769129372427983,
+    "max_rgb": 1,
+    "changed_channel_fraction": 0.008769129372427983
+  }
+}

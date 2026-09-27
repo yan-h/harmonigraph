@@ -1,0 +1,133 @@
+{
+  "comparisons": {
+    "full-a": {
+      "flat": {
+        "vs_half-a": {
+          "different_fraction": 0.9750173611111111,
+          "max_absolute_rgb": 103,
+          "mean_absolute_rgb": 5.074465663580247,
+          "p99_absolute_rgb": 29.0
+        }
+      },
+      "take": {
+        "vs_half-a": {
+          "different_fraction": 0.8788459683641975,
+          "max_absolute_rgb": 119,
+          "mean_absolute_rgb": 3.946146154835391,
+          "p99_absolute_rgb": 28.0
+        }
+      }
+    },
+    "full-mix4": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.8539202353395061,
+          "max_absolute_rgb": 104,
+          "mean_absolute_rgb": 3.6417672968106998,
+          "p99_absolute_rgb": 26.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.9177801890432099,
+          "max_absolute_rgb": 90,
+          "mean_absolute_rgb": 2.3521784979423868,
+          "p99_absolute_rgb": 18.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.7491927083333333,
+          "max_absolute_rgb": 116,
+          "mean_absolute_rgb": 2.8291708461934157,
+          "p99_absolute_rgb": 25.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8086101466049382,
+          "max_absolute_rgb": 99,
+          "mean_absolute_rgb": 1.8257902520576132,
+          "p99_absolute_rgb": 17.0
+        }
+      }
+    },
+    "full-mix5": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.6908338155864198,
+          "max_absolute_rgb": 118,
+          "mean_absolute_rgb": 2.369862879372428,
+          "p99_absolute_rgb": 22.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.9695949074074074,
+          "max_absolute_rgb": 102,
+          "mean_absolute_rgb": 3.8550596386316873,
+          "p99_absolute_rgb": 23.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.5882923418209877,
+          "max_absolute_rgb": 121,
+          "mean_absolute_rgb": 1.8487635030864198,
+          "p99_absolute_rgb": 20.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8691613618827161,
+          "max_absolute_rgb": 114,
+          "mean_absolute_rgb": 2.980630787037037,
+          "p99_absolute_rgb": 22.0
+        }
+      }
+    },
+    "half-a": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.9750173611111111,
+          "max_absolute_rgb": 103,
+          "mean_absolute_rgb": 5.074465663580247,
+          "p99_absolute_rgb": 29.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.8788459683641975,
+          "max_absolute_rgb": 119,
+          "mean_absolute_rgb": 3.946146154835391,
+          "p99_absolute_rgb": 28.0
+        }
+      }
+    },
+    "r750": {
+      "flat": {
+        "vs_full-a": {
+          "different_fraction": 0.9405242091049383,
+          "max_absolute_rgb": 118,
+          "mean_absolute_rgb": 3.483895640432099,
+          "p99_absolute_rgb": 24.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.9557364004629629,
+          "max_absolute_rgb": 96,
+          "mean_absolute_rgb": 3.825309284979424,
+          "p99_absolute_rgb": 23.0
+        }
+      },
+      "take": {
+        "vs_full-a": {
+          "different_fraction": 0.828440875771605,
+          "max_absolute_rgb": 129,
+          "mean_absolute_rgb": 2.689119888117284,
+          "p99_absolute_rgb": 23.0
+        },
+        "vs_half-a": {
+          "different_fraction": 0.8518287037037037,
+          "max_absolute_rgb": 111,
+          "mean_absolute_rgb": 2.9734717399691357,
+          "p99_absolute_rgb": 22.0
+        }
+      }
+    }
+  },
+  "directory": "/private/tmp/stars-investigation/profiles-fringe-zero",
+  "height": 1080,
+  "width": 1920
+}

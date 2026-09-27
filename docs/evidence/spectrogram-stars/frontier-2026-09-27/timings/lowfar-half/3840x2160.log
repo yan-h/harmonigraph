@@ -1,0 +1,15 @@
+
+running 1 test
+test spectrogram::tests::research::stars_research_timings ... research profile: default
+adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 3840x2160 px at 2 px/pt, 960 slabs of 1024 buckets
+input: recorded take, cyclic scrolling one slab/frame, clock advancing 1/48 second/slab; 960 visible slabs in 1032 slots
+case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median
+half-low2 / 1.00 / 20.0: 13.491/14.347/14.959/16.425/69.851; wall 16.965; CPU 0.152; source px Some([960, 2160])
+half-low3 / 1.00 / 20.0: 13.170/13.606/14.343/15.846/31.601; wall 16.414; CPU 0.148; source px Some([960, 2160])
+half-a / 1.00 / 20.0: 13.779/14.342/14.950/16.598/28.234; wall 17.003; CPU 0.154; source px Some([960, 2160])
+half-b / 1.00 / 20.0: 13.712/14.480/15.184/16.599/21.933; wall 17.137; CPU 0.150; source px Some([960, 2160])
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 368 filtered out; finished in 25.81s
+

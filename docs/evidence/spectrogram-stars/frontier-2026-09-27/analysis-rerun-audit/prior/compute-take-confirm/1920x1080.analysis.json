@@ -1,0 +1,69 @@
+{
+  "aa_noise": {
+    "half-a/half-b": {
+      "mean_ratio_b_over_a": 1.01228161638138,
+      "mean_savings_percent": -1.2281616381379923
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "half-a": {
+      "mean_gpu_ms": 6.699036791666667,
+      "median_gpu_ms": 6.041708,
+      "n": 240
+    },
+    "half-b": {
+      "mean_gpu_ms": 6.781311791666667,
+      "median_gpu_ms": 6.096083500000001,
+      "n": 240
+    },
+    "half-compute-raw": {
+      "mean_gpu_ms": 6.095115479166667,
+      "median_gpu_ms": 5.371124999999999,
+      "n": 240
+    }
+  },
+  "comparisons": {
+    "half-compute-raw": {
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          7.551949487169971,
+          11.461314296497003
+        ],
+        "mean_variant_over_control_ratio": 0.9042964195603176,
+        "paired_mean_savings_percent": 9.570358043968241
+      }
+    }
+  },
+  "frames": 240,
+  "input": "/private/tmp/stars-investigation/timings/compute-take-confirm/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "half-a",
+      "half-b"
+    ]
+  ],
+  "slot_histograms": {
+    "half-a": {
+      "0": 80,
+      "1": 80,
+      "2": 80
+    },
+    "half-b": {
+      "0": 80,
+      "1": 80,
+      "2": 80
+    },
+    "half-compute-raw": {
+      "0": 80,
+      "1": 80,
+      "2": 80
+    }
+  },
+  "slot_positions_balanced": true
+}

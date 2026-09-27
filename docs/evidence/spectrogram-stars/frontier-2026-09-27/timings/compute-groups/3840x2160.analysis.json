@@ -1,0 +1,119 @@
+{
+  "aa_noise": {
+    "half-a/half-b": {
+      "mean_ratio_b_over_a": 0.9958300407997425,
+      "mean_savings_percent": 0.41699592002575336
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "half-a": {
+      "mean_gpu_ms": 14.973429875,
+      "median_gpu_ms": 14.484229,
+      "n": 120
+    },
+    "half-b": {
+      "mean_gpu_ms": 14.910991283333333,
+      "median_gpu_ms": 14.540229,
+      "n": 120
+    },
+    "half-compute-raw": {
+      "mean_gpu_ms": 15.638178516666667,
+      "median_gpu_ms": 15.3125415,
+      "n": 120
+    },
+    "half-compute-raw-g16": {
+      "mean_gpu_ms": 15.408133633333334,
+      "median_gpu_ms": 14.965603999999999,
+      "n": 120
+    },
+    "half-compute-raw-g4": {
+      "mean_gpu_ms": 23.237500025,
+      "median_gpu_ms": 22.5961455,
+      "n": 120
+    }
+  },
+  "comparisons": {
+    "half-compute-raw": {
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -5.890259229681459,
+          -3.414214881047305
+        ],
+        "mean_variant_over_control_ratio": 1.0465773075417877,
+        "paired_mean_savings_percent": -4.657730754178768
+      }
+    },
+    "half-compute-raw-g16": {
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -4.108528185399829,
+          -2.1107800174712685
+        ],
+        "mean_variant_over_control_ratio": 1.0311816683146124,
+        "paired_mean_savings_percent": -3.1181668314612443
+      }
+    },
+    "half-compute-raw-g4": {
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -56.53019133603703,
+          -54.29027033342072
+        ],
+        "mean_variant_over_control_ratio": 1.555158114114596,
+        "paired_mean_savings_percent": -55.5158114114596
+      }
+    }
+  },
+  "frames": 120,
+  "input": "/private/tmp/stars-investigation/timings/compute-groups/3840x2160.csv",
+  "paired_control_cases": [
+    [
+      "half-a",
+      "half-b"
+    ]
+  ],
+  "slot_histograms": {
+    "half-a": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "half-b": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "half-compute-raw": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "half-compute-raw-g16": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "half-compute-raw-g4": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    }
+  },
+  "slot_positions_balanced": true
+}

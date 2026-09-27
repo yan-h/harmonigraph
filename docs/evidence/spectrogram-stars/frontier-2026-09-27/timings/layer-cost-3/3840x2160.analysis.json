@@ -1,0 +1,119 @@
+{
+  "aa_noise": {
+    "full-a/full-b": {
+      "mean_ratio_b_over_a": 1.0033474843714059,
+      "mean_savings_percent": -0.3347484371405862
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "full-a": {
+      "mean_gpu_ms": 27.678966666666668,
+      "median_gpu_ms": 27.079208,
+      "n": 120
+    },
+    "full-b": {
+      "mean_gpu_ms": 27.771621575,
+      "median_gpu_ms": 27.0969375,
+      "n": 120
+    },
+    "full-l3r50": {
+      "mean_gpu_ms": 26.180629516666666,
+      "median_gpu_ms": 25.4143545,
+      "n": 120
+    },
+    "full-l3r70": {
+      "mean_gpu_ms": 26.74728719166667,
+      "median_gpu_ms": 26.1861045,
+      "n": 120
+    },
+    "full-l3r90": {
+      "mean_gpu_ms": 27.639342366666668,
+      "median_gpu_ms": 27.1713545,
+      "n": 120
+    }
+  },
+  "comparisons": {
+    "full-l3r50": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          4.419087782129719,
+          6.548764048905429
+        ],
+        "mean_variant_over_control_ratio": 0.9442868090980511,
+        "paired_mean_savings_percent": 5.571319090194892
+      }
+    },
+    "full-l3r70": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          2.6164604730512404,
+          4.529780784265059
+        ],
+        "mean_variant_over_control_ratio": 0.9647251017462868,
+        "paired_mean_savings_percent": 3.5274898253713216
+      }
+    },
+    "full-l3r90": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -0.5068729395195654,
+          1.163027263606654
+        ],
+        "mean_variant_over_control_ratio": 0.9968998794461089,
+        "paired_mean_savings_percent": 0.31001205538910837
+      }
+    }
+  },
+  "frames": 120,
+  "input": "/private/tmp/stars-investigation/timings/layer-cost-3/3840x2160.csv",
+  "paired_control_cases": [
+    [
+      "full-a",
+      "full-b"
+    ]
+  ],
+  "slot_histograms": {
+    "full-a": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-b": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-l3r50": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-l3r70": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-l3r90": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    }
+  },
+  "slot_positions_balanced": true
+}

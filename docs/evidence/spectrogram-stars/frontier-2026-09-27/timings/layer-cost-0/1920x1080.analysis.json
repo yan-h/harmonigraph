@@ -1,0 +1,119 @@
+{
+  "aa_noise": {
+    "full-a/full-b": {
+      "mean_ratio_b_over_a": 0.9928841454300136,
+      "mean_savings_percent": 0.7115854569986424
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "full-a": {
+      "mean_gpu_ms": 12.578567683333333,
+      "median_gpu_ms": 11.962396,
+      "n": 120
+    },
+    "full-b": {
+      "mean_gpu_ms": 12.489060425,
+      "median_gpu_ms": 12.451,
+      "n": 120
+    },
+    "full-l0r50": {
+      "mean_gpu_ms": 11.94720935,
+      "median_gpu_ms": 11.3974375,
+      "n": 120
+    },
+    "full-l0r70": {
+      "mean_gpu_ms": 11.824338525,
+      "median_gpu_ms": 11.3243335,
+      "n": 120
+    },
+    "full-l0r90": {
+      "mean_gpu_ms": 12.242734433333334,
+      "median_gpu_ms": 11.8456455,
+      "n": 120
+    }
+  },
+  "comparisons": {
+    "full-l0r50": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          2.0882853883048775,
+          7.226983063774256
+        ],
+        "mean_variant_over_control_ratio": 0.9531982282781943,
+        "paired_mean_savings_percent": 4.680177172180566
+      }
+    },
+    "full-l0r70": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          3.8572627594895352,
+          8.042478908019989
+        ],
+        "mean_variant_over_control_ratio": 0.9433950810104117,
+        "paired_mean_savings_percent": 5.66049189895883
+      }
+    },
+    "full-l0r90": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -1.2580215664236543,
+          6.612042773720583
+        ],
+        "mean_variant_over_control_ratio": 0.9767764529156576,
+        "paired_mean_savings_percent": 2.3223547084342377
+      }
+    }
+  },
+  "frames": 120,
+  "input": "/private/tmp/stars-investigation/timings/layer-cost-0/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "full-a",
+      "full-b"
+    ]
+  ],
+  "slot_histograms": {
+    "full-a": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-b": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-l0r50": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-l0r70": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    },
+    "full-l0r90": {
+      "0": 24,
+      "1": 24,
+      "2": 24,
+      "3": 24,
+      "4": 24
+    }
+  },
+  "slot_positions_balanced": true
+}

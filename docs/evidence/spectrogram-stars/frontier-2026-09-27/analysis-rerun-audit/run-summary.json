@@ -1,0 +1,571 @@
+{
+  "a_a_noise_ranked_by_absolute_mean_savings_percent": [
+    {
+      "control": "full-a/full-b",
+      "file": "separate-control/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0909436320064172,
+      "mean_savings_percent": -9.09436320064172,
+      "run": "separate-control",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-half/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0318762839027755,
+      "mean_savings_percent": -3.1876283902775526,
+      "run": "compute-half",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-groups/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0250453691622365,
+      "mean_savings_percent": -2.504536916223654,
+      "run": "compute-groups",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "calibration/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.023581741967849,
+      "mean_savings_percent": -2.3581741967849013,
+      "run": "calibration",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "separate-control/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.02355077242356,
+      "mean_savings_percent": -2.3550772423559962,
+      "run": "separate-control",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "separate-control/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9764538495717946,
+      "mean_savings_percent": 2.3546150428205403,
+      "run": "separate-control",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-1/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9777968828369836,
+      "mean_savings_percent": 2.2203117163016373,
+      "run": "layer-cost-1",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "separate-frontier/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0178261138768774,
+      "mean_savings_percent": -1.782611387687738,
+      "run": "separate-frontier",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "mixed-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9829263540662936,
+      "mean_savings_percent": 1.7073645933706416,
+      "run": "mixed-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "fusion-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9841234026265346,
+      "mean_savings_percent": 1.5876597373465362,
+      "run": "fusion-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "format-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0153646258849776,
+      "mean_savings_percent": -1.5364625884977556,
+      "run": "format-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "precision-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0153399727324603,
+      "mean_savings_percent": -1.533997273246035,
+      "run": "precision-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "fusion-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9850379271854094,
+      "mean_savings_percent": 1.496207281459061,
+      "run": "fusion-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "format-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9850639888760871,
+      "mean_savings_percent": 1.4936011123912851,
+      "run": "format-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "compute-full/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9862853542051392,
+      "mean_savings_percent": 1.3714645794860814,
+      "run": "compute-full",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "take-confirm/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9869571649621077,
+      "mean_savings_percent": 1.3042835037892275,
+      "run": "take-confirm",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-1/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0129333300393162,
+      "mean_savings_percent": -1.2933330039316182,
+      "run": "layer-cost-1",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "weighted-mixed/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9873211150622323,
+      "mean_savings_percent": 1.2678884937767698,
+      "run": "weighted-mixed",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-take-confirm/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.01228161638138,
+      "mean_savings_percent": -1.2281616381379923,
+      "run": "compute-take-confirm",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "fusion-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9884318792272957,
+      "mean_savings_percent": 1.1568120772704304,
+      "run": "fusion-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "combined-half/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9887177670414985,
+      "mean_savings_percent": 1.1282232958501504,
+      "run": "combined-half",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "half-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0110514372060355,
+      "mean_savings_percent": -1.105143720603552,
+      "run": "half-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "precision-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0107350892700302,
+      "mean_savings_percent": -1.0735089270030196,
+      "run": "precision-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-sparse/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.989434430370852,
+      "mean_savings_percent": 1.0565569629148008,
+      "run": "compute-sparse",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-half/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9897105809235639,
+      "mean_savings_percent": 1.0289419076436102,
+      "run": "compute-half",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "full-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9898234841362755,
+      "mean_savings_percent": 1.0176515863724478,
+      "run": "full-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "reversed-mixed/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.990631080513699,
+      "mean_savings_percent": 0.936891948630103,
+      "run": "reversed-mixed",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-3/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0089223568177226,
+      "mean_savings_percent": -0.8922356817722576,
+      "run": "layer-cost-3",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "format-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9914254270949681,
+      "mean_savings_percent": 0.8574572905031941,
+      "run": "format-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "half-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0084929675538696,
+      "mean_savings_percent": -0.8492967553869635,
+      "run": "half-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-2/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9920461482054924,
+      "mean_savings_percent": 0.7953851794507583,
+      "run": "layer-cost-2",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "combined-half/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9922206647239353,
+      "mean_savings_percent": 0.777933527606467,
+      "run": "combined-half",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-4/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0076589368178186,
+      "mean_savings_percent": -0.7658936817818596,
+      "run": "layer-cost-4",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "fusion-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9926743885130387,
+      "mean_savings_percent": 0.7325611486961314,
+      "run": "fusion-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-4/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.00715702505718,
+      "mean_savings_percent": -0.7157025057179967,
+      "run": "layer-cost-4",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-0/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9928841454300136,
+      "mean_savings_percent": 0.7115854569986424,
+      "run": "layer-cost-0",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-half-repeat/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.992952088604889,
+      "mean_savings_percent": 0.7047911395110962,
+      "run": "compute-half-repeat",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "separate-frontier/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9932483081187017,
+      "mean_savings_percent": 0.6751691881298316,
+      "run": "separate-frontier",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "lowfar-half/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0065675845367477,
+      "mean_savings_percent": -0.6567584536747662,
+      "run": "lowfar-half",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "format-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0065220266975983,
+      "mean_savings_percent": -0.6522026697598271,
+      "run": "format-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "mixed-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9937055530759864,
+      "mean_savings_percent": 0.6294446924013597,
+      "run": "mixed-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "separate-control/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9941964388965873,
+      "mean_savings_percent": 0.5803561103412735,
+      "run": "separate-control",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "weighted-mixed/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0051576583793602,
+      "mean_savings_percent": -0.5157658379360219,
+      "run": "weighted-mixed",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-groups/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9958300407997425,
+      "mean_savings_percent": 0.41699592002575336,
+      "run": "compute-groups",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "core-screen/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0040893978002265,
+      "mean_savings_percent": -0.40893978002265463,
+      "run": "core-screen",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "allocated-area/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9959679277118051,
+      "mean_savings_percent": 0.403207228819491,
+      "run": "allocated-area",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "take-confirm/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0039195737608557,
+      "mean_savings_percent": -0.39195737608557213,
+      "run": "take-confirm",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "lowfar-half/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.003518108346165,
+      "mean_savings_percent": -0.3518108346165061,
+      "run": "lowfar-half",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "allocated-area/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.003508661004332,
+      "mean_savings_percent": -0.3508661004332003,
+      "run": "allocated-area",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-3/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0033474843714059,
+      "mean_savings_percent": -0.3347484371405862,
+      "run": "layer-cost-3",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "full-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.996854644446664,
+      "mean_savings_percent": 0.3145355553335949,
+      "run": "full-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "compute-full/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9969395783294064,
+      "mean_savings_percent": 0.3060421670593616,
+      "run": "compute-full",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "frontier/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0027803211764656,
+      "mean_savings_percent": -0.278032117646565,
+      "run": "frontier",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "core-screen/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0027506384513774,
+      "mean_savings_percent": -0.2750638451377352,
+      "run": "core-screen",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-g16-confirm/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9975706326554329,
+      "mean_savings_percent": 0.24293673445671127,
+      "run": "compute-g16-confirm",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "allocated-area/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.99758780008719,
+      "mean_savings_percent": 0.24121999128100535,
+      "run": "allocated-area",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "calibration/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9980837769738797,
+      "mean_savings_percent": 0.19162230261202673,
+      "run": "calibration",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-2/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9983253375277303,
+      "mean_savings_percent": 0.16746624722696613,
+      "run": "layer-cost-2",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "allocated-area/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0016008878549763,
+      "mean_savings_percent": -0.16008878549762517,
+      "run": "allocated-area",
+      "size": "1920x1080"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-dense/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 0.9985026308685204,
+      "mean_savings_percent": 0.14973691314795756,
+      "run": "compute-dense",
+      "size": "1920x1080"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "layer-cost-0/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9991083910955673,
+      "mean_savings_percent": 0.08916089044327391,
+      "run": "layer-cost-0",
+      "size": "3840x2160"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "reversed-mixed/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9991662321155914,
+      "mean_savings_percent": 0.08337678844085872,
+      "run": "reversed-mixed",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-g16-confirm/2560x1440.analysis.json",
+      "mean_ratio_b_over_a": 1.0008123663761135,
+      "mean_savings_percent": -0.08123663761134825,
+      "run": "compute-g16-confirm",
+      "size": "2560x1440"
+    },
+    {
+      "control": "full-a/full-b",
+      "file": "frontier/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 0.9998750685663506,
+      "mean_savings_percent": 0.012493143364944448,
+      "run": "frontier",
+      "size": "3840x2160"
+    }
+  ],
+  "a_a_screening_flags": [
+    {
+      "control": "full-a/full-b",
+      "file": "separate-control/3840x2160.analysis.json",
+      "mean_ratio_b_over_a": 1.0909436320064172,
+      "mean_savings_percent": -9.09436320064172,
+      "run": "separate-control",
+      "size": "3840x2160"
+    },
+    {
+      "control": "half-a/half-b",
+      "file": "compute-half/1920x1080.analysis.json",
+      "mean_ratio_b_over_a": 1.0318762839027755,
+      "mean_savings_percent": -3.1876283902775526,
+      "run": "compute-half",
+      "size": "1920x1080"
+    }
+  ],
+  "a_a_screening_threshold_abs_percent": 3.0,
+  "aa_comparison_rows": 64,
+  "all_analysis_interval_fields": "block_bootstrap_95pct_interval_savings_percent; endpoints are percent as stored",
+  "analysis_failures": [],
+  "analysis_files": 55,
+  "bootstrap_intervals_checked": 142,
+  "csvs_reanalyzed": 55,
+  "expected_incomplete_calibration_4k": "Expected collection gap, not an analyzer failure: manifest exists, but no calibration 3840x2160 CSV/log/analysis was acquired.",
+  "incomplete_artifact_records": [
+    {
+      "case": "half-a",
+      "inventory_notes": "csv;log;analysis",
+      "run": "calibration",
+      "size": "3840x2160"
+    },
+    {
+      "case": "half-b",
+      "inventory_notes": "csv;log;analysis",
+      "run": "calibration",
+      "size": "3840x2160"
+    },
+    {
+      "case": "full-a",
+      "inventory_notes": "csv;log;analysis",
+      "run": "calibration",
+      "size": "3840x2160"
+    },
+    {
+      "case": "full-b",
+      "inventory_notes": "csv;log;analysis",
+      "run": "calibration",
+      "size": "3840x2160"
+    }
+  ],
+  "paired_comparison_rows": 142,
+  "saving_unit_checks_failed": 0,
+  "slot_histograms_unbalanced": []
+}

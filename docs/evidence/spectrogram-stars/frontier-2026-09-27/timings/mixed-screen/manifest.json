@@ -1,0 +1,20 @@
+{
+  "label": "mixed-screen",
+  "cases": "full-a,full-b,full-mix1,full-mix2",
+  "frames": 120,
+  "warmup": 60,
+  "sizes": "1920x1080,3840x2160",
+  "offset": 0,
+  "jitter": "1",
+  "base": "fd7c8f9f9fccb2a55f79f8ee87c25e2d5afd8d40",
+  "shaders": {
+    "direct-f16.wgsl": "1162a1be4030036e811e32cc543c2c873ead3d943f66113027c525461270ff45",
+    "wide.wgsl": "40d46420bedb3213e4941885c97d2ccf58d3a3621e713e23878a990f347afdb0",
+    "direct.wgsl": "311bdc26792eca871970c5edb55872da9f1cba6d278e45978c9fc1864f550a2e",
+    "f16.wgsl": "3b402555a92c00d840a291959324f56ad6dada6f5eaca3f0efbf838c370e89fe",
+    "f16exp.wgsl": "52385219c9b907889988e66794c564151205752911ef3f8abc98c03b6ff26e2b",
+    "direct-f16exp.wgsl": "26dd77d7c3b8123db1d267c6dc23ab5bafd55e631ce001a7d54f1b1993e9ed9a",
+    "baseline.wgsl": "32f6b437f4ec99051ce4c50272a1110487752ddd037ea4e90172eca99327c449",
+    "core.wgsl": "fdbffb5f120274f9b5460f119bc34925227dd778f2c05587c02bedeb7fd8818a"
+  }
+}

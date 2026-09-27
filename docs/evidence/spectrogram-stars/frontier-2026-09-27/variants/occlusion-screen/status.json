@@ -1,0 +1,13 @@
+{
+  "status": "stopped_at_wall_budget",
+  "budget_seconds": 25,
+  "resolution": [1920, 1080],
+  "layers": [3, 4],
+  "chunk_rows": 32,
+  "numpy_thread_limit": 1,
+  "fringe": 0.5,
+  "fringe_provenance": "Parent confirmed default capture star_fringe=.5 untouched, PROBE_JITTER=.5, take image time3.",
+  "whole_frame_counts_available": false,
+  "reason": "The bounded NumPy run exceeded its25-second wall budget before finishing both layers. It exited without reporting incomplete counts as whole-frame results. No retry or enlarged CPU budget was attempted.",
+  "conclusion": "No quantitative opacity ceiling was established; this run neither supports nor rules out occlusion skipping."
+}

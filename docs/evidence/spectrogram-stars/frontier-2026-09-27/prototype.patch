@@ -1,0 +1,2511 @@
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 22524c50..71832b84 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -784,6 +784,8 @@ impl CallbackTrait for SpectrogramCallback {
+                 let halos = stars.map(|_| {
+                     atmosphere::star_halo_size(pixels, settings.settings.star_halo_resolution)
+                 });
++                #[cfg(test)]
++                let halos = halos.filter(|_| !tests::research::direct());
+                 let star_size = stars.map(|layout| {
+                     atmosphere::star_atlas_size(
+                         layout.size(),
+@@ -869,16 +871,25 @@ impl CallbackTrait for SpectrogramCallback {
+                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                         #[cfg(test)]
+                         let source_query = tests::SOURCE_QUERY.with_borrow_mut(Option::take);
++                        #[cfg(test)]
++                        let stage_query = tests::research::stage_query();
+                         let mut pass =
+                             egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                 label: Some("spectral_cloud_source"),
+                                 #[cfg(test)]
+-                                timestamp_writes: source_query.as_ref().map(|query_set| {
+-                                    wgpu::RenderPassTimestampWrites {
+-                                        query_set,
+-                                        beginning_of_pass_write_index: Some(0),
+-                                        end_of_pass_write_index: None,
+-                                    }
++                                timestamp_writes: tests::research::stage_writes(
++                                    stage_query.as_ref(),
++                                    0,
++                                    2,
++                                )
++                                .or_else(|| {
++                                    source_query.as_ref().map(|query_set| {
++                                        wgpu::RenderPassTimestampWrites {
++                                            query_set,
++                                            beginning_of_pass_write_index: Some(0),
++                                            end_of_pass_write_index: None,
++                                        }
++                                    })
+                                 }),
+                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                     view: &target.source_view,
+@@ -966,30 +977,44 @@ impl CallbackTrait for SpectrogramCallback {
+                             target.tile_baked(key);
+                         }
+                     }
+-                    target.remember(egui_encoder, cloud);
+-                    // Every star on screen this frame, after the material
+-                    // pass because each reads the finished light under it.
+-                    if let Some((view, group)) = target.star_pass() {
+-                        #[cfg(test)]
+-                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+-                        let mut pass =
+-                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+-                                label: Some("spectral_star_bake"),
+-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+-                                    view,
+-                                    depth_slice: None,
+-                                    resolve_target: None,
+-                                    ops: wgpu::Operations {
+-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+-                                        store: wgpu::StoreOp::Store,
+-                                    },
+-                                })],
+-                                ..Default::default()
+-                            });
+-                        pass.set_pipeline(&cloud.stars);
+-                        pass.set_bind_group(0, &target.source_group, &[]);
+-                        pass.set_bind_group(1, group, &[]);
+-                        pass.draw(0..3, 0..1);
++                    #[cfg(test)]
++                    let fused_stars = target.research_fused_stars(egui_encoder, cloud);
++                    #[cfg(not(test))]
++                    let fused_stars = false;
++                    if !fused_stars {
++                        target.remember(egui_encoder, cloud);
++                        // Every star on screen this frame, after the material
++                        // pass because each reads the finished light under it.
++                        if let Some((view, group)) = target.star_pass() {
++                            #[cfg(test)]
++                            target.encoded_passes.fetch_add(1, Ordering::Relaxed);
++                            #[cfg(test)]
++                            let stage_query = tests::research::stage_query();
++                            let mut pass =
++                                egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                                    label: Some("spectral_star_bake"),
++                                    #[cfg(test)]
++                                    timestamp_writes: tests::research::stage_writes(
++                                        stage_query.as_ref(),
++                                        5,
++                                        6,
++                                    ),
++                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                                        view,
++                                        depth_slice: None,
++                                        resolve_target: None,
++                                        ops: wgpu::Operations {
++                                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
++                                            store: wgpu::StoreOp::Store,
++                                        },
++                                    })],
++                                    ..Default::default()
++                                });
++                            pass.set_pipeline(&cloud.stars);
++                            pass.set_bind_group(0, &target.source_group, &[]);
++                            pass.set_bind_group(1, group, &[]);
++                            pass.draw(0..3, 0..1);
++                        }
+                     }
+                     // Keep every slice's halo separate until its native core
+                     // is combined with it. Fill beyond partial regions so
+@@ -1008,9 +1033,17 @@ impl CallbackTrait for SpectrogramCallback {
+                     {
+                         #[cfg(test)]
+                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
++                        #[cfg(test)]
++                        let stage_query = tests::research::stage_query();
+                         let mut pass =
+                             egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                 label: Some("spectral_cloud_tone"),
++                                #[cfg(test)]
++                                timestamp_writes: tests::research::stage_writes(
++                                    stage_query.as_ref(),
++                                    17,
++                                    18,
++                                ),
+                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                     view: tone_view,
+                                     depth_slice: None,
+@@ -4051,6 +4084,9 @@ fn cs_wrap_probe() {
+     /// composite 16 to 21% without ever being taken, so the reference lives
+     /// here instead.
+     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
++        if let Some(source) = research::source() {
++            return source.into();
++        }
+         if let Some(source) = star_split::reference_source() {
+             return source.into();
+         }
+@@ -4468,6 +4504,7 @@ fn cs_rotation_probe() {
+         );
+     }
+ 
++    pub(super) mod research;
+     mod star_split;
+     mod timing;
+ }
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+index 5391e99f..f2d0bc00 100644
+--- a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+@@ -156,6 +156,15 @@ const STAR_PANE: f32 = 540.0;
+ /// The star atlas's texel, one cell's star as the shader's `star_bake` packs it.
+ const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
+ const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
++
++// Test-only format experiments preserve the native far-layer intermediate.
++fn star_halo_format() -> wgpu::TextureFormat {
++    #[cfg(test)]
++    { super::tests::research::halo_format() }
++    #[cfg(not(test))]
++    { STAR_FAR_FORMAT }
++}
++
+ /// Below this area the extra pass does not consistently pay for itself.
+ /// Apply it to drawn device pixels, independent of display scale and star count.
+ const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
+@@ -772,6 +781,8 @@ pub(super) struct Pipelines {
+     /// Every star on screen into the star atlas, once a frame, for the
+     /// composite's walk to read instead of working each star out per pixel.
+     pub stars: wgpu::RenderPipeline,
++    #[cfg(test)]
++    research_fused_stars: Option<wgpu::RenderPipeline>,
+     /// Native-resolution RGB of the two farthest layers, when splitting the
+     /// composite pays for its extra pass.
+     pub star_far: wgpu::RenderPipeline,
+@@ -829,9 +840,7 @@ impl Pipelines {
+             label: Some("spectral_cloud_filter_layout"),
+             entries: &[texture(0), sampler_entry(1), uniform(2)],
+         });
+-        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+-            label: Some("spectral_cloud_composite_layout"),
+-            entries: &[
++        let mut composite_entries = vec![
+                 texture(0),
+                 texture(1),
+                 sampler_entry(2),
+@@ -870,7 +879,35 @@ impl Pipelines {
+                     },
+                     count: None,
+                 },
+-            ],
++
++        ];
++        #[cfg(test)]
++        if super::tests::research::separate_halos() {
++            // Existing group1 has eight textures; group0 has one LUT. Five
++            // added textures make fourteen total, not nineteen array layers.
++            assert!(device.limits().max_sampled_textures_per_shader_stage >= 14);
++            composite_entries.extend((11..16).map(texture));
++        }
++
++        #[cfg(test)]
++        if super::tests::research::grouped_halos() {
++            // Eight original group1 textures + three arrays + group0 LUT.
++            assert!(device.limits().max_sampled_textures_per_shader_stage >= 12);
++            composite_entries.extend((11..14).map(|binding| wgpu::BindGroupLayoutEntry {
++                binding,
++                visibility: wgpu::ShaderStages::FRAGMENT,
++                ty: wgpu::BindingType::Texture {
++                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                    view_dimension: wgpu::TextureViewDimension::D2Array,
++                    multisampled: false,
++                },
++                count: None,
++            }));
++        }
++
++        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
++            label: Some("spectral_cloud_composite_layout"),
++            entries: &composite_entries,
+         });
+         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+             label: Some("spectral_cloud_filter"),
+@@ -945,6 +982,11 @@ impl Pipelines {
+                 "fs_cloud_tile",
+                 &[Some(TILE_FORMAT), Some(TILE_FORMAT)],
+             ),
++            #[cfg(test)]
++            research_fused_stars: super::tests::research::fused().then(|| tile_pipeline(
++                device, &spectrogram, source_layout, &composite_layout,
++                "fs_research_fused_star", &[Some(STAR_FORMAT), Some(MEMORY_FORMAT)],
++            )),
+             stars: tile_pipeline(
+                 device,
+                 &spectrogram,
+@@ -959,7 +1001,7 @@ impl Pipelines {
+                 source_layout,
+                 &composite_layout,
+                 "fs_star_halo",
+-                &[Some(STAR_FAR_FORMAT)],
++                &[Some(star_halo_format())],
+             ),
+             star_far: tile_pipeline(
+                 device,
+@@ -1251,6 +1293,98 @@ struct StarHalos {
+ 
+ impl StarHalos {
+     fn new(device: &wgpu::Device, size: [u32; 2]) -> Self {
++        #[cfg(test)]
++        if super::tests::research::grouped_halos() {
++            let plan = super::tests::research::grouped_halo_plan();
++            let arrays = plan.factors.iter().enumerate().map(|(group, &factor)| {
++                let extent = size.map(|n| (n as f32 * factor).ceil().max(1.0) as u32);
++                device.create_texture(&wgpu::TextureDescriptor {
++                    label: Some("research_grouped_halos"),
++                    size: wgpu::Extent3d {
++                        width: extent[0], height: extent[1], depth_or_array_layers: plan.counts[group],
++                    },
++                    mip_level_count: 1,
++                    sample_count: 1,
++                    dimension: wgpu::TextureDimension::D2,
++                    format: STAR_FAR_FORMAT,
++                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
++                    view_formats: &[],
++                })
++            }).collect::<Vec<_>>();
++            let layers = std::array::from_fn(|k| {
++                arrays[plan.group[k]].create_view(&wgpu::TextureViewDescriptor {
++                    dimension: Some(wgpu::TextureViewDimension::D2),
++                    base_array_layer: plan.layer[k],
++                    array_layer_count: Some(1),
++                    ..Default::default()
++                })
++            });
++            let dummy = device.create_texture(&wgpu::TextureDescriptor {
++                label: Some("research_grouped_dummy_array"),
++                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: STAR_SLICES as u32 },
++                mip_level_count: 1,
++                sample_count: 1,
++                dimension: wgpu::TextureDimension::D2,
++                format: STAR_FAR_FORMAT,
++                usage: wgpu::TextureUsages::TEXTURE_BINDING,
++                view_formats: &[],
++            });
++            return Self {
++                view: dummy.create_view(&wgpu::TextureViewDescriptor {
++                    dimension: Some(wgpu::TextureViewDimension::D2Array),
++                    ..Default::default()
++                }),
++                layers,
++                size,
++            };
++        }
++
++        #[cfg(test)]
++        if super::tests::research::separate_halos() {
++            let dummy = device.create_texture(&wgpu::TextureDescriptor {
++                label: Some("research_halo_dummy_array"),
++                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: STAR_SLICES as u32 },
++                mip_level_count: 1,
++                sample_count: 1,
++                dimension: wgpu::TextureDimension::D2,
++                format: STAR_FAR_FORMAT,
++                usage: wgpu::TextureUsages::TEXTURE_BINDING,
++                view_formats: &[],
++            });
++            let layers = std::array::from_fn(|layer| {
++                let extent = super::tests::research::halo_extent(size, layer);
++                device.create_texture(&wgpu::TextureDescriptor {
++                    label: Some("research_separate_halo"),
++                    size: wgpu::Extent3d { width: extent[0], height: extent[1], depth_or_array_layers: 1 },
++                    mip_level_count: 1,
++                    sample_count: 1,
++                    dimension: wgpu::TextureDimension::D2,
++                    format: STAR_FAR_FORMAT,
++                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
++                    view_formats: &[],
++                }).create_view(&wgpu::TextureViewDescriptor {
++                    dimension: Some(wgpu::TextureViewDimension::D2),
++                    ..Default::default()
++                })
++            });
++            return Self {
++                view: dummy.create_view(&wgpu::TextureViewDescriptor {
++                    dimension: Some(wgpu::TextureViewDimension::D2Array),
++                    ..Default::default()
++                }),
++                layers,
++                // Base dimensions still feed research_halo_size's constants.
++                size,
++            };
++        }
++
++        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
++        #[cfg(test)]
++        let usage = if super::tests::research::compute_mode() > 0 {
++            usage | wgpu::TextureUsages::STORAGE_BINDING
++        } else {
++            usage
++        };
+         let texture = device.create_texture(&wgpu::TextureDescriptor {
+             label: Some("spectral_star_halos"),
+             size: wgpu::Extent3d {
+@@ -1261,8 +1395,8 @@ impl StarHalos {
+             mip_level_count: 1,
+             sample_count: 1,
+             dimension: wgpu::TextureDimension::D2,
+-            format: STAR_FAR_FORMAT,
+-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
++            format: star_halo_format(),
++            usage,
+             view_formats: &[],
+         });
+         Self {
+@@ -1284,6 +1418,8 @@ impl StarHalos {
+ }
+ 
+ pub(super) struct Targets {
++    #[cfg(test)]
++    research_atlas_metadata: String,
+     #[cfg(test)]
+     pub encoded_passes: std::sync::atomic::AtomicU32,
+     pub size: [u32; 2],
+@@ -1306,6 +1442,8 @@ pub(super) struct Targets {
+     /// of the allocation key, sized by [`star_atlas_size`].
+     stars: Option<(wgpu::TextureView, [u32; 2])>,
+     halos: Option<StarHalos>,
++    #[cfg(test)]
++    halo_compute: Option<ResearchHaloCompute>,
+     halo_group: Option<wgpu::BindGroup>,
+     source_uniform: wgpu::Buffer,
+     pub source_group: wgpu::BindGroup,
+@@ -1466,11 +1604,8 @@ impl Targets {
+                            tile: [&wgpu::TextureView; 2],
+                            stars: &wgpu::TextureView,
+                            memory: &wgpu::TextureView,
+-                           halos: &wgpu::TextureView| {
+-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+-                label: Some("spectral_cloud_composite_group"),
+-                layout: &pipelines.composite_layout,
+-                entries: &[
++                           halos: (&wgpu::TextureView, &[wgpu::TextureView; STAR_SLICES])| {
++            let mut entries = vec![
+                     wgpu::BindGroupEntry {
+                         binding: 0,
+                         resource: wgpu::BindingResource::TextureView(front),
+@@ -1510,16 +1645,56 @@ impl Targets {
+                     },
+                     wgpu::BindGroupEntry {
+                         binding: 10,
+-                        resource: wgpu::BindingResource::TextureView(halos),
++                        resource: wgpu::BindingResource::TextureView(halos.0),
+                     },
+-                ],
++
++            ];
++            #[cfg(test)]
++            if super::tests::research::separate_halos() {
++                entries.extend(halos.1.iter().enumerate().map(|(layer, view)| wgpu::BindGroupEntry {
++                    binding: 11 + layer as u32,
++                    resource: wgpu::BindingResource::TextureView(view),
++                }));
++            }
++
++            #[cfg(test)]
++            let grouped_views: Option<[wgpu::TextureView; 3]> =
++                super::tests::research::grouped_halos().then(|| {
++                    let plan = super::tests::research::grouped_halo_plan();
++                    std::array::from_fn(|slot| {
++                        // Unused fixed bindings alias group zero. The shader's
++                        // constant map cannot select them, but bindings are valid.
++                        let group = if slot < plan.counts.len() { slot } else { 0 };
++                        let representative = plan.group.iter().position(|&g| g == group).unwrap();
++                        let texture = halos.1[representative].texture();
++                        assert_eq!(texture.size().depth_or_array_layers, plan.counts[group]);
++                        texture.create_view(&wgpu::TextureViewDescriptor {
++                            dimension: Some(wgpu::TextureViewDimension::D2Array),
++                            base_array_layer: 0,
++                            array_layer_count: Some(plan.counts[group]),
++                            ..Default::default()
++                        })
++                    })
++                });
++            #[cfg(test)]
++            if let Some(views) = grouped_views.as_ref() {
++                entries.extend(views.iter().enumerate().map(|(group, view)| wgpu::BindGroupEntry {
++                    binding: 11 + group as u32,
++                    resource: wgpu::BindingResource::TextureView(view),
++                }));
++            }
++
++            device.create_bind_group(&wgpu::BindGroupDescriptor {
++                label: Some("spectral_cloud_composite_group"),
++                layout: &pipelines.composite_layout,
++                entries: &entries,
+             })
+         };
+         let scratch_tile = [&views[0], &views[0]];
+         let tile_views =
+             tile.as_ref().map_or(scratch_tile, |tile| [&tile.views[0], &tile.views[1]]);
+         let star_view = stars.as_ref().map_or(&star_scratch, |(view, _)| view);
+-        let halo_view = halos.as_ref().map_or(&halo_scratch.view, |halo| &halo.view);
++        let halo_view = halos.as_ref().map_or((&halo_scratch.view, &halo_scratch.layers), |halo| (&halo.view, &halo.layers));
+         let bake_group =
+             cloud_group(&views[1], &views[0], tile_views, star_view, &views[0], halo_view);
+         let halo_group = halos.as_ref().map(|_| {
+@@ -1529,7 +1704,7 @@ impl Targets {
+                 tile_views,
+                 star_view,
+                 &views[0],
+-                &halo_scratch.view,
++                (&halo_scratch.view, &halo_scratch.layers),
+             )
+         });
+         // Reads the baked material the light passes just wrote, and writes the
+@@ -1589,6 +1764,19 @@ impl Targets {
+             index: memory_index,
+             frame: memory_frame,
+         });
++        #[cfg(test)]
++        let halo_compute =
++            if super::tests::research::compute_mode() > 0 && stars.is_some() && halos.is_some() {
++                Some(ResearchHaloCompute::new(
++                    device,
++                    &uniform,
++                    star_view,
++                    &halos.as_ref().unwrap().view,
++                    super::tests::research::compute_mode(),
++                ))
++            } else {
++                None
++            };
+         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
+         Self {
+             #[cfg(test)]
+@@ -1610,7 +1798,11 @@ impl Targets {
+             tile,
+             stars,
+             halos,
++            #[cfg(test)]
++            halo_compute,
+             halo_group,
++            #[cfg(test)]
++            research_atlas_metadata: String::new(),
+             source_uniform,
+             source_group,
+             uniform,
+@@ -1643,11 +1835,25 @@ impl Targets {
+     /// consumers bind the real one, so no attached layer is also sampled.
+     pub fn draw_halos(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+         let Some(halos) = &self.halos else { return };
++        #[cfg(test)]
++        if let Some(compute) = &self.halo_compute {
++            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            compute.draw(encoder, halos.size);
++            return;
++        }
+         for (layer, view) in halos.layers.iter().enumerate() {
+             #[cfg(test)]
+             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            #[cfg(test)]
++            let stage_query = super::tests::research::stage_query();
+             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                 label: Some("spectral_star_halo"),
++                #[cfg(test)]
++                timestamp_writes: super::tests::research::stage_writes(
++                    stage_query.as_ref(),
++                    7 + 2 * layer as u32,
++                    8 + 2 * layer as u32,
++                ),
+                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                     view,
+                     depth_slice: None,
+@@ -1660,6 +1866,19 @@ impl Targets {
+                 ..Default::default()
+             });
+             pass.set_pipeline(&pipelines.star_halo);
++            #[cfg(test)]
++            {
++                let extent = if super::tests::research::separate_halos() || super::tests::research::grouped_halos() {
++                    let actual = view.texture().size();
++                    let expected = super::tests::research::halo_extent(halos.size, layer);
++                    assert_eq!([actual.width, actual.height], expected);
++                    [actual.width, actual.height]
++                } else {
++                    super::tests::research::halo_extent(halos.size, layer)
++                };
++                pass.set_viewport(0.0, 0.0, extent[0] as f32, extent[1] as f32, 0.0, 1.0);
++                pass.set_scissor_rect(0, 0, extent[0], extent[1]);
++            }
+             pass.set_bind_group(0, &self.source_group, &[]);
+             pass.set_bind_group(1, self.halo_group.as_ref().expect("halo group"), &[]);
+             // A flat instance index chooses the slice without mutating a
+@@ -1668,6 +1887,55 @@ impl Targets {
+         }
+     }
+ 
++    /// Scratch MRT path; update() already advanced the current history index.
++    /// Return false before encoding anything whenever the ordinary path is needed.
++    #[cfg(test)]
++    pub fn research_fused_stars(
++        &self,
++        encoder: &mut wgpu::CommandEncoder,
++        pipelines: &Pipelines,
++    ) -> bool {
++        if !super::tests::research::fused() { return false; }
++        let pipeline = pipelines.research_fused_stars.as_ref().expect("active fused pipeline");
++        let (stars, size) = self.stars.as_ref().expect("fused star atlas");
++        let Some(memory) = &self.memory else { return false; };
++        // Stars currently share this exact allocation and logical extent.
++        // A future different allocation must fall back, not draw mismatched MRTs.
++        assert_eq!(*size, memory.size, "fused allocation");
++        assert_eq!(*size, memory.extent, "fused extent");
++        self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        let attachment = |view| Some(wgpu::RenderPassColorAttachment {
++            view,
++            depth_slice: None,
++            resolve_target: None,
++            ops: wgpu::Operations {
++                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
++                store: wgpu::StoreOp::Store,
++            },
++        });
++        // Diagnostic bake_ms spans this combined pass; memory_ms is absent.
++        // It is never an exclusive cost estimate or summed with other passes.
++        let query = super::tests::research::stage_query();
++        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++            label: Some("research_fused_star_memory_bake"),
++            color_attachments: &[
++                attachment(stars),
++                attachment(&memory.views[memory.index]),
++            ],
++            timestamp_writes: super::tests::research::stage_writes(query.as_ref(), 5, 6),
++            ..Default::default()
++        });
++        pass.set_pipeline(pipeline);
++        pass.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
++        pass.set_scissor_rect(0, 0, size[0], size[1]);
++        pass.set_bind_group(0, &self.source_group, &[]);
++        // groups[index] reads history[1-index] and binds the scratch star atlas.
++        // star_groups[index] would alias the attached CURRENT history and is wrong.
++        pass.set_bind_group(1, &memory.groups[memory.index], &[]);
++        pass.draw(0..3, 0..1);
++        true
++    }
++
+     /// The star atlas and the group the pass that fills it binds.
+     pub fn star_pass(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
+         Some((
+@@ -1893,6 +2161,20 @@ impl Targets {
+             star_halo_size: Float2(self.halo_size().unwrap_or([1, 1]).map(|n| n as f32)),
+             star_halo_pad: Float2([0.0; 2]),
+         };
++
++        #[cfg(test)]
++        if std::env::var_os("RESEARCH_ATLAS_DUMP").is_some() && self.stars.is_some() {
++            let slices_json = uniforms.star_slices.iter().map(|s| format!(
++                "{{\"cell\":{},\"offset\":{:?},\"origin\":{:?},\"grid\":{:?},\"base\":{}}}",
++                s.cell, s.offset.0, s.origin.0, s.grid.0, s.base,
++            )).collect::<Vec<_>>().join(",");
++            self.research_atlas_metadata = format!(
++                "{{\"atlas_size\":{:?},\"pane_size\":{:?},\"halo_size\":{:?},\"memory_enabled\":{},\"memory_valid\":{},\"release_alpha\":{},\"life\":{},\"now\":{},\"slices\":[{}]}}",
++                self.star_size().unwrap(), uniforms.size.0, self.halo_size().unwrap(),
++                uniforms.memory_enabled, uniforms.memory_valid, uniforms.release_alpha,
++                uniforms.star_life, atmosphere.now, slices_json,
++            );
++        }
+         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
+     }
+ 
+@@ -1912,8 +2194,12 @@ impl Targets {
+         let Some(memory) = &self.memory else {
+             return;
+         };
++        #[cfg(test)]
++        let stage_query = super::tests::research::stage_query();
+         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+             label: Some("spectral_color_memory"),
++            #[cfg(test)]
++            timestamp_writes: super::tests::research::stage_writes(stage_query.as_ref(), 3, 4),
+             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                 view: &memory.views[memory.index],
+                 depth_slice: None,
+@@ -2437,3 +2723,158 @@ mod tests {
+ #[cfg(test)]
+ #[path = "color_memory_tests.rs"]
+ mod color_memory_tests;
++
++// SCRATCH PROPOSAL ONLY. Intended in atmosphere.rs, all behind cfg(test).
++// No repository edit, compilation or GPU validation has been performed.
++// Constructor source is the generator's compute.wgsl snapshot, not an f16 or
++// per-layer-resolution research source. Build each case's resources under its
++// stable research mode; do not flip modes on existing Targets without a key.
++
++#[cfg(test)]
++pub(super) struct ResearchHaloCompute {
++    workgroup: [u32; 2],
++    pipeline: wgpu::ComputePipeline,
++    empty: wgpu::BindGroup,
++    group: wgpu::BindGroup,
++}
++
++#[cfg(test)]
++impl ResearchHaloCompute {
++    // mode: 1=gather, 2=shared raw, 3=shared decoded. 0 is original render pass.
++    pub fn new(
++        device: &wgpu::Device,
++        uniform: &wgpu::Buffer,
++        atlas: &wgpu::TextureView,
++        output: &wgpu::TextureView,
++        mode: u32,
++    ) -> Self {
++        assert!((1..=3).contains(&mode));
++        let workgroup = super::tests::research::compute_group(mode);
++        let source = std::fs::read_to_string(&format!(
++            "/private/tmp/stars-investigation/compute-proposal/compute-{mode}.wgsl"
++        )).unwrap();
++        let source = super::tests::research::compute_group_source(source, workgroup);
++        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
++            label: Some("research_star_halo_compute"),
++            source: wgpu::ShaderSource::Wgsl(source.into()),
++        });
++        let constants = [
++            ("GROUP_SHARED", if mode >= 2 { 1.0 } else { 0.0 }),
++            ("GROUP_DECODED", if mode == 3 { 1.0 } else { 0.0 }),
++        ];
++        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
++            label: Some("research_star_halo_compute"),
++            layout: None,
++            module: &module,
++            entry_point: Some("cs_star_halo"),
++            compilation_options: wgpu::PipelineCompilationOptions {
++                constants: &constants,
++                zero_initialize_workgroup_memory: false,
++                ..Default::default()
++            },
++            cache: None,
++        });
++        let empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
++            label: Some("research_star_halo_compute_empty"),
++            layout: &pipeline.get_bind_group_layout(0),
++            entries: &[],
++        });
++        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
++            label: Some("research_star_halo_compute_group"),
++            layout: &pipeline.get_bind_group_layout(1),
++            entries: &[
++                wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
++                wgpu::BindGroupEntry {
++                    binding: 8,
++                    resource: wgpu::BindingResource::TextureView(atlas),
++                },
++                wgpu::BindGroupEntry {
++                    binding: 11,
++                    resource: wgpu::BindingResource::TextureView(output),
++                },
++            ],
++        });
++        Self { pipeline, empty, group, workgroup }
++    }
++
++    pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, size: [u32; 2]) {
++        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
++            label: Some("research_star_halo_compute"),
++            timestamp_writes: None,
++        });
++        pass.set_pipeline(&self.pipeline);
++        pass.set_bind_group(0, &self.empty, &[]);
++        pass.set_bind_group(1, &self.group, &[]);
++        pass.dispatch_workgroups(size[0].div_ceil(self.workgroup[0]), size[1].div_ceil(self.workgroup[1]), STAR_SLICES as u32);
++    }
++}
++
++// Required wiring, sequentially:
++// 1. Add #[cfg(test)] halo_compute: Option<ResearchHaloCompute> to Targets.
++// 2. Extend StarHalos::new with an extra usage argument, or a private helper:
++//    actual active compute output adds STORAGE_BINDING to its usage;
++//    render cases and halo_scratch retain original usage. No format change.
++// 3. After uniform and star_view exist in Targets::new:
++//    let halo_compute = (research_mode != 0).then(|| {
++//        ResearchHaloCompute::new(device, &uniform, star_view,
++//            &halos.as_ref().unwrap().view, research_mode)
++//    });
++//    Only construct when Stars+halos exist. Store in Self initializer.
++// 4. At start of draw_halos, after obtaining halos:
++//    #[cfg(test)] if let Some(compute) = &self.halo_compute {
++//        self.encoded_passes.fetch_add(1, Ordering::Relaxed);
++//        compute.draw(encoder, halos.size);
++//        return;
++//    }
++// 5. Select ordinary f32 source for these three research modes. Run full and
++//    half-resolution separately; no per-layer halo_extent overrides apply.
++// 6. Existing outer source/full timestamp interval needs no new query slots.
++//    It already encloses source -> atlas -> compute -> far/composite dependency.
++//    If adding inner timestamps, give this ONE pass its OWN fresh begin/end pair,
++//    not five reused render-layer pairs. Optional instrumentation is not needed
++//    to compare whole frame totals.
++
++// Append to atmosphere.rs; scratch-only image-probe helper.
++#[cfg(test)]
++impl Targets {
++    pub(in crate::spectrogram) fn research_export_atlas(
++        &self,
++        device: &wgpu::Device,
++        queue: &wgpu::Queue,
++        prefix: &str,
++    ) {
++        let (view, size) = self.stars.as_ref().expect("Stars atlas");
++        let row = size[0] * 16;
++        let padded = row.div_ceil(256) * 256;
++        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
++            label: Some("research_atlas_readback"),
++            size: u64::from(padded) * u64::from(size[1]),
++            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
++            mapped_at_creation: false,
++        });
++        let mut encoder = device.create_command_encoder(&Default::default());
++        encoder.copy_texture_to_buffer(
++            view.texture().as_image_copy(),
++            wgpu::TexelCopyBufferInfo {
++                buffer: &buffer,
++                layout: wgpu::TexelCopyBufferLayout {
++                    offset: 0,
++                    bytes_per_row: Some(padded),
++                    rows_per_image: Some(size[1]),
++                },
++            },
++            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
++        );
++        queue.submit([encoder.finish()]);
++        buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("atlas map"));
++        device.poll(wgpu::PollType::wait_indefinitely()).expect("atlas poll");
++        let mapped = buffer.slice(..).get_mapped_range();
++        let mut packed = Vec::with_capacity(row as usize * size[1] as usize);
++        for bytes in mapped.chunks_exact(padded as usize) {
++            packed.extend_from_slice(&bytes[..row as usize]);
++        }
++        std::fs::write(format!("{prefix}.rgba32u"), packed).unwrap();
++        assert!(!self.research_atlas_metadata.is_empty(), "enable RESEARCH_ATLAS_DUMP before drawing");
++        std::fs::write(format!("{prefix}.json"), &self.research_atlas_metadata).unwrap();
++    }
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/research.rs b/crates/harmonigraph-render/src/spectrogram/tests/research.rs
+new file mode 100644
+index 00000000..4ccb5e51
+--- /dev/null
++++ b/crates/harmonigraph-render/src/spectrogram/tests/research.rs
+@@ -0,0 +1,1719 @@
++//! What the spectrogram's cloud textures cost per frame, on whatever GPU runs
++//! this. `#[ignore]`d — it prints figures and asserts timestamp ordering.
++//! The GPU interval starts on the first real source pass (or paint for plain
++//! and terraces-only cases), and ends on the final composite. Historical
++//! `end/full`, `begin/full`, light and paint columns used independent stamp
++//! passes and are not comparable to this `source/full` interval (#1203).
++//! Memory is off except in explicitly named memory cases; Mosaic is selected
++//! explicitly because the production default style can change.
++//!
++//! ```sh
++//! cargo test --release -p harmonigraph-render cloud_costs_by_style_and_dial \
++//!   -- --ignored --nocapture --test-threads=1
++//! ```
++//!
++//! `PROBE_SIZE=WxH` (pixels, default 3840x2160), `PROBE_PPP` (default 2),
++//! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (comma-separated substrings of
++//! the case names, any of which selects a case) narrow it, and `PROBE_FILLS`
++//! replaces the pair of coverages below.
++//! `docs/spectrogram-cloud-performance.md` holds the readings.
++//! `PROBE_HISTORY_SECONDS` (default 10; take default 20) is the visible span, not elapsed age;
++//! it controls the time-softness scale, without changing the supplied grid.
++//! Comma-separated values interleave multiple history durations in one run.
++//! `PROBE_SLABS` (default 1024, range 2..=1024) controls the synthetic grid width.
++//! `PROBE_INPUT=take` replays the 960-slab recording fixture with one slab
++//! entering per frame, a 20-second history by default, and a clock advancing 1/48 second per slab.
++//! Each case receives the same cyclic run; this measures scrolling separately
++//! from the clock animation of the static image fixture.
++//! The fixture uses a live-sized 1032-slot ring. Fill changes rasterized area,
++//! not slab count: it is a coverage comparison, not simulated history growth.
++//! Callback CPU time excludes aggregation, egui, submission and polling;
++//! the synthetic grid has no steady-state dirty uploads, while the take
++//! enters one new slab per frame. Synchronous GPU waits mean these
++//! durations are not end-to-end DAW frame times.
++//!
++//! `PROBE_SPAN_SEMITONES` (synthetic default 96; take fixed to its recorded
++//! range) is how much of the spectrum the pane
++//! shows, and `PROBE_PITCH_SOFTNESS`, `PROBE_TIME_SOFTNESS` and `PROBE_SPREAD`
++//! replace the light field's own dials in every case that draws one — which is
++//! what replays a SAVED pane's settings instead of the fresh ones. They
++//! override a case's `turn`, so a control that works by turning a softness to
++//! zero is not one under them; `plain` still is.
++//!
++//! `PROBE_CLOUD_PIXEL` (points per cloud sample), `PROBE_CLOUD_TILE` (the
++//! walk's period in cells, never 0 since #1100 retired the composite's live
++//! walk) and `PROBE_BLUR_TIME_STEP`
++//! (slabs per source texel on the light field's time axis, 0 for off), each
++//! defaulting to the production values (0.5 pt, 40 cells and the saved blur
++//! default), apply to EVERY case after its own `turn`, so one run reads the whole table at one setting
++//! and two runs are what that setting is worth. They are probe controls rather than
++//! cases because the question is how much each of the rows above falls, not how
++//! one of them does — and they stack, which is the other thing two runs cannot
++//! show.
++//!
++//! `PROBE_BLUR_TIME_STEP` now defaults to a step of ONE, so every case runs
++//! with the light field's time axis capped unless the run says
++//! `PROBE_BLUR_TIME_STEP=0`. Every figure in
++//! `docs/spectrogram-cloud-performance.md` and in issue #1015 was taken before
++//! that default landed, which is to say uncapped, and a fresh run is only
++//! comparable to them at 0.
++//!
++//! `PROBE_BLUR_TIME_STEP` is measured against the slab width `quad` actually
++//! lays out, `points.x * fill / PROBE_SLABS`, rather than against the whole
++//! pane's: the fixture puts every slab inside the filled fraction, so at a fill
++//! below one the data really is finer per point than the pane and the dial is
++//! right to bound nothing. At `PROBE_FILLS=1` the two are the same number.
++
++use super::*;
++use harmonigraph_scene::{CloudStyle, SpectralAtmosphere};
++
++type Turn = fn(&mut SpectralAtmosphere);
++
++/// How much of the pane's time axis the measured history covers. The rest is
++/// the backdrop's alone, so the pair of fills separates what the backdrop
++/// costs UNDER the history from what the texture costs at all.
++const FILLS: [f32; 2] = [1.0, 0.02];
++
++fn memory(s: &mut SpectralAtmosphere) {
++    let defaults = SpectralAtmosphere::default();
++    s.color_pickup = defaults.color_pickup;
++    s.color_release = defaults.color_release;
++}
++
++const CASES: &[(&str, Option<Turn>)] = &[
++    ("full-complete", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-mix4", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-mix5", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-complete-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-complete-v100_100_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-complete-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-complete-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-complete-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-complete-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++
++    ("full-grouped-v100_100_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-v50_50_50_50_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-v50_50_100_100_60", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-v50_50_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-grouped-v25_25_50_50_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++
++    ("full-separate-v100_100_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-v50_50_50_50_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-v50_50_50_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-v50_50_100_100_100", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-separate-v50_50_80_100_50", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++
++    ("half-low2", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("half-low3", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("half-compute-raw-fused-g16", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("half-compute-raw-g4", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("half-compute-raw-g16", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++
++    ("half-u8r4", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("half-u8r9", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("full-u8r4", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-u8r9", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++
++    ("half-compute-raw-fused", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 0.5; memory(s); })),
++    ("full-fused-mix4", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    ("full-fused-mix5", Some(|s| { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); })),
++    (
++        "half-compute-gather",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "half-compute-raw",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "half-compute-decoded",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "full-compute-gather",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-compute-raw",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-compute-decoded",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-mix4",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-mix5",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-mix6",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-mix7",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l0half",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l0third",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l1half",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l1third",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l2half",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l2third",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l3half",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l3third",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l4half",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-l4third",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-mix1",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-mix2",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "half-mix3",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "full-direct-f16",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-direct-f16exp",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "r625-f16",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.625;
++            memory(s);
++        }),
++    ),
++    (
++        "r750-f16",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.75;
++            memory(s);
++        }),
++    ),
++    (
++        "r875-f16",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.875;
++            memory(s);
++        }),
++    ),
++    (
++        "half-wide",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "r625-wide",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.625;
++            memory(s);
++        }),
++    ),
++    (
++        "r750-wide",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.75;
++            memory(s);
++        }),
++    ),
++    (
++        "full-core",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "half-a",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "half-b",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "full-a",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-b",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "half-nosplit",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "full-nosplit",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "half-f16",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "full-f16",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-direct",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "full-direct-nosplit",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "r625",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.625;
++            memory(s);
++        }),
++    ),
++    (
++        "r750",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.75;
++            memory(s);
++        }),
++    ),
++    (
++        "r875",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.875;
++            memory(s);
++        }),
++    ),
++    (
++        "half-f16exp",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "full-f16exp",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 1.0;
++            memory(s);
++        }),
++    ),
++    (
++        "half-core",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.5;
++            memory(s);
++        }),
++    ),
++    (
++        "r625-core",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.625;
++            memory(s);
++        }),
++    ),
++    (
++        "r750-core",
++        Some(|s| {
++            s.cloud_style = CloudStyle::Stars;
++            s.star_halo_resolution = 0.75;
++            memory(s);
++        }),
++    ),
++    ("half-fused", Some(|s| {
++        s.cloud_style = CloudStyle::Stars;
++        s.star_halo_resolution = 0.5;
++        memory(s);
++    })),
++    ("full-fused", Some(|s| {
++        s.cloud_style = CloudStyle::Stars;
++        s.star_halo_resolution = 1.0;
++        memory(s);
++    })),
++];
++
++struct Case<'a> {
++    name: &'a str,
++    fill: f32,
++    history_seconds: f32,
++    turn: Option<Turn>,
++    cb: SpectrogramCallback,
++    resources: CallbackResources,
++    wall: Vec<f64>,
++    gpu_total: Vec<f64>,
++    cpu_prepare: Vec<f64>,
++}
++
++#[test]
++#[ignore = "a probe: prints timings and asserts timestamp ordering"]
++fn stars_research_timings() {
++    let profile = research_profile();
++    let size: [u32; 2] = std::env::var("PROBE_SIZE")
++        .ok()
++        .map(|v| {
++            let (w, h) = v.split_once('x').expect("PROBE_SIZE is WxH");
++            [w.parse().expect("width in pixels"), h.parse().expect("height in pixels")]
++        })
++        .unwrap_or([3840, 2160]);
++    let ppp: f32 = std::env::var("PROBE_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
++    let frames: usize =
++        std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
++    assert!(frames > 0, "PROBE_FRAMES must be positive");
++    let take = match std::env::var("PROBE_INPUT").ok().as_deref() {
++        None | Some("synthetic") => false,
++        Some("take") => true,
++        Some(other) => panic!("unknown PROBE_INPUT {other:?}"),
++    };
++    let histories: Vec<f32> = std::env::var("PROBE_HISTORY_SECONDS")
++        .unwrap_or_else(|_| if take { "20" } else { "10" }.to_owned())
++        .split(',')
++        .map(|v| {
++            let seconds: f32 = v.trim().parse().expect("history duration in seconds");
++            assert!(seconds.is_finite() && seconds > 0.0);
++            seconds
++        })
++        .collect();
++    let fills: Vec<f32> = std::env::var("PROBE_FILLS")
++        .ok()
++        .map(|v| v.split(',').map(|v| v.trim().parse().expect("a fill fraction")).collect())
++        .unwrap_or_else(|| FILLS.to_vec());
++    assert_eq!(fills.len(), 1, "research CSV requires one fill");
++    assert_eq!(histories.len(), 1, "research CSV requires one history duration");
++    let dial =
++        |name: &str| -> Option<f32> { std::env::var(name).ok().and_then(|v| v.parse().ok()) };
++    let cloud_pixel = dial("PROBE_CLOUD_PIXEL");
++    let cloud_tile = dial("PROBE_CLOUD_TILE");
++    let blur_time_step = dial("PROBE_BLUR_TIME_STEP");
++    let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
++    let time_softness = dial("PROBE_TIME_SOFTNESS");
++    let spread = dial("PROBE_SPREAD");
++    crate::shader_assets::initialize();
++    let instance = wgpu::Instance::default();
++    let Ok(adapter) =
++        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
++    else {
++        eprintln!("no GPU adapter; nothing timed");
++        return;
++    };
++    eprintln!("adapter: {:?}", adapter.get_info());
++    let features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::SHADER_F16;
++    if !adapter.features().contains(features) {
++        eprintln!("the adapter carries no timestamps; nothing timed");
++        return;
++    }
++    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
++        required_limits: crate::device_limits(&adapter),
++        required_features: features,
++        ..Default::default()
++    }))
++    .expect("a device with timestamps");
++
++    // Both fixtures use a live-sized ring with retention headroom. The take
++    // contains exactly 960 slabs of 1024 bins; keep every one visible.
++    let slabs: u32 = std::env::var("PROBE_SLABS")
++        .ok()
++        .and_then(|v| v.parse().ok())
++        .unwrap_or(if take { 960 } else { 1024 });
++    if take {
++        assert_eq!(slabs, 960, "the take fixture has exactly 960 visible slabs");
++    } else {
++        assert!((2..=1024).contains(&slabs));
++    }
++    let take_span = 12.0 * (9000.0_f32 / 70.0).log2();
++    let span: f32 = if take {
++        take_span
++    } else {
++        std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0)
++    };
++    let bins = if take { 1024 } else { 3828 };
++    let take_slabs = take.then(|| {
++        let bytes = std::fs::read("/private/tmp/stars-full-halo-compare/take-levels.u8")
++            .expect("recorded spectrogram levels");
++        assert_eq!(bytes.len(), 960 * 1024, "take fixture size");
++        SpectrogramGrid::slabs_of(&bytes, bins as usize)
++    });
++    let take_palette = take.then(|| {
++        let bytes = std::fs::read("/private/tmp/stars-full-halo-compare/palette.rgba")
++            .expect("recorded spectrogram palette");
++        assert_eq!(bytes.len(), 4096 * 4, "take palette size");
++        Arc::new(
++            bytes.chunks_exact(4).map(|rgba| rgba.try_into().unwrap()).collect::<Vec<[u8; 4]>>(),
++        )
++    });
++    let grid = if let Some(run) = &take_slabs {
++        SpectrogramGrid {
++            capacity: 1032,
++            bins,
++            first_key: 0,
++            run: run.clone(),
++            full_uploads: Arc::default(),
++        }
++    } else {
++        grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0)
++    };
++    let mut read = read_of(if take { 35.0 } else { SPECTRUM_MIN_MIDI + 10.0 }, span, size[1]);
++    read.level_per_step = 1.0 / 255.0;
++    if take {
++        read.spectrum_min_midi = 35.0;
++        read.bins_per_semitone = 1024.0 / span;
++        read.level_per_midi = 0.0;
++    }
++    let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
++    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
++    let quad = |fill: f32| {
++        let (w, h, n) = (points.x * fill, points.y, slabs as f32);
++        let v = |x: f32, y: f32| SpectrogramVertex { pos: [x, y], slab: x / w * n, t: 1.0 - y / h };
++        vec![v(0.0, 0.0), v(w, 0.0), v(w, h), v(0.0, 0.0), v(w, h), v(0.0, h)]
++    };
++
++    // Extra timestamps can perturb scheduling. Keep all ordinary measurements
++    // on the original two-query path; stage durations are diagnostics only.
++    let stages = std::env::var("PROBE_STAGES").as_deref() == Ok("1");
++    let query_count = if stages { 20 } else { 2 };
++    let query_bytes = u64::from(query_count) * 8;
++    if stages {
++        eprintln!(
++            "stage diagnostics enabled: durations can overlap; never sum them as total GPU cost"
++        );
++    }
++    let set = device.create_query_set(&wgpu::QuerySetDescriptor {
++        label: Some("timing_probe"),
++        ty: wgpu::QueryType::Timestamp,
++        count: query_count,
++    });
++    let buffer = |label, usage| {
++        device.create_buffer(&wgpu::BufferDescriptor {
++            label: Some(label),
++            size: query_bytes,
++            usage,
++            mapped_at_creation: false,
++        })
++    };
++    let resolve =
++        buffer("timing_resolve", wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC);
++    let staging =
++        buffer("timing_staging", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
++    let target = |label, size: [u32; 2]| {
++        device
++            .create_texture(&wgpu::TextureDescriptor {
++                label: Some(label),
++                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
++                mip_level_count: 1,
++                sample_count: 1,
++                dimension: wgpu::TextureDimension::D2,
++                format: FORMAT,
++                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
++                view_formats: &[],
++            })
++            .create_view(&Default::default())
++    };
++    // Held across frames, as a swapchain's is: allocating 33 MB per frame would
++    // be the larger half of what a wall clock read.
++    let pane_view = target("timing_pane", size);
++    let stamped_pass = |encoder: &mut wgpu::CommandEncoder, source_stamped: bool| {
++        encoder
++            .begin_render_pass(&wgpu::RenderPassDescriptor {
++                label: Some("timing_paint"),
++                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                    view: &pane_view,
++                    depth_slice: None,
++                    resolve_target: None,
++                    ops: wgpu::Operations {
++                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
++                        store: wgpu::StoreOp::Store,
++                    },
++                })],
++                timestamp_writes: stage_writes(
++                    stages.then_some(&set),
++                    if source_stamped { 19 } else { 0 },
++                    1,
++                )
++                .or_else(|| {
++                    Some(wgpu::RenderPassTimestampWrites {
++                        query_set: &set,
++                        beginning_of_pass_write_index: (!source_stamped).then_some(0),
++                        end_of_pass_write_index: Some(1),
++                    })
++                }),
++                ..Default::default()
++            })
++            .forget_lifetime()
++    };
++    let period = f64::from(queue.get_timestamp_period());
++    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
++    eprintln!("pane {}x{} px at {ppp} px/pt, {slabs} slabs of {bins} buckets", size[0], size[1]);
++    if take {
++        eprintln!("input: recorded take, cyclic scrolling one slab/frame, clock advancing 1/48 second/slab; 960 visible slabs in 1032 slots");
++    }
++
++    let requested = std::env::var("RESEARCH_CASES").expect("explicit bounded RESEARCH_CASES");
++    let mut specs = CASES.to_vec();
++    for name in requested.split(',').map(str::trim) {
++        if specs.iter().any(|(known, _)| *known == name) { continue; }
++        assert!(name.starts_with("full-l") || name.starts_with("full-v") || name.starts_with("full-separate-v") || name.starts_with("full-grouped-v") || complete_mode(name), "unknown research case {name}");
++        let _ = factors(name);
++        specs.push((name, Some(research_full as Turn)));
++    }
++    let mut cases: Vec<Case<'_>> = specs
++        .iter()
++        .filter(|(name, _)| {
++            std::env::var("RESEARCH_CASES")
++                .ok()
++                .is_none_or(|v| v.split(',').any(|v| *name == v.trim()))
++        })
++        .flat_map(|&(name, turn)| fills.clone().into_iter().map(move |fill| (name, turn, fill)))
++        .flat_map(|(name, turn, fill)| {
++            histories.iter().map(move |&history_seconds| (name, turn, fill, history_seconds))
++        })
++        .map(|(name, turn, fill, history_seconds)| {
++            let mut cb = callback(quad(fill), &grid, &read);
++            cb.rect = rect;
++            if let Some(palette) = &take_palette {
++                cb.shades.lut = palette.clone();
++            }
++            let mut resources = CallbackResources::default();
++            let mut sampling = atmosphere::CloudSampling::default();
++            if let Some(pixel) = cloud_pixel {
++                sampling.pixel_points = pixel;
++            }
++            if let Some(period) = cloud_tile {
++                sampling.tile_cells = period as u32;
++            }
++            resources.insert(sampling);
++            Case {
++                name,
++                fill,
++                history_seconds,
++                turn,
++                cb,
++                resources,
++                wall: Vec::new(),
++                gpu_total: Vec::new(),
++                cpu_prepare: Vec::new(),
++            }
++        })
++        .collect();
++
++    // INTERLEAVED: one frame of every case per round, so a GPU that another
++    // process is also drawing on, or one that changes its clock mid-run, moves
++    // every case together rather than whichever ran last.
++    let warmup: usize =
++        std::env::var("PROBE_WARMUP").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
++    let offset: usize =
++        std::env::var("PROBE_ORDER_OFFSET").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
++    let orders = orders(cases.len());
++    let mut raw = String::from("frame,slot,case,gpu_ms,wall_ms");
++    if stages {
++        raw.push_str(",source_ms,memory_ms,bake_ms,halo0_ms,halo1_ms,halo2_ms,halo3_ms,halo4_ms,far_ms,paint_ms");
++    }
++    raw.push('\n');
++    for frame in 0..frames + warmup {
++        // All cases in this round see the same run. Sharing each slab's Arc
++        // with the preceding run makes only the entering key a dirty upload.
++        let frame_grid = take_slabs.as_ref().map(|source| {
++            let run: Arc<[SpectrogramSlab]> =
++                (0..slabs as usize).map(|j| source[(frame + j) % source.len()].clone()).collect();
++            SpectrogramGrid { first_key: frame as i64, run, ..grid.clone() }
++        });
++        for (slot, index) in orders[(frame + offset) % orders.len()].iter().copied().enumerate() {
++            let case = &mut cases[index];
++            activate(case.name);
++            let Case {
++                turn,
++                cb,
++                resources,
++                wall,
++                gpu_total,
++                cpu_prepare,
++                name,
++                history_seconds,
++                fill,
++                ..
++            } = case;
++            cb.pass_nr = frame as u64;
++            if let Some(frame_grid) = &frame_grid {
++                cb.grid = frame_grid.clone();
++            }
++            cb.atmosphere = turn.map(|turn| {
++                let mut settings = SpectralAtmosphere {
++                    cloud_style: CloudStyle::Mosaic,
++                    color_pickup: 0.0,
++                    color_release: 0.0,
++                    ..Default::default()
++                };
++                turn(&mut settings);
++                settings.star_jitter =
++                    std::env::var("PROBE_JITTER").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
++                apply_research_profile(&mut settings, &profile);
++                // After the turn, so each case uses the requested blur step.
++                if let Some(blur_time_step) = blur_time_step {
++                    settings.blur_time_step = blur_time_step;
++                }
++                // The light field's own dials, for replaying a saved pane's
++                // settings rather than the fresh ones. A case that turns a
++                // softness to zero to BE a control loses that here, so a run
++                // with these set wants `plain` as its control.
++                if let Some(pitch_softness) = pitch_softness {
++                    settings.pitch_softness = pitch_softness;
++                }
++                if let Some(time_softness) = time_softness {
++                    settings.time_softness = time_softness;
++                }
++                if let Some(spread) = spread {
++                    settings.spread = spread;
++                }
++                SpectrogramAtmosphere {
++                    settings,
++                    region: rect,
++                    pitch_vertical: true,
++                    points_per_cent: points.y / (span * 100.0),
++                    points_per_ms: points.x / (*history_seconds * 1000.0),
++                    // What `quad` lays out: every slab inside the filled
++                    // fraction, so this is `w / n` and not the pane's width
++                    // over the slab count.
++                    points_per_slab: points.x * *fill / slabs as f32,
++                    now: 1.0 + frame as f64 / if take { 48.0 } else { 144.0 },
++                }
++            });
++            let mut encoder = device.create_command_encoder(&Default::default());
++            SOURCE_QUERY.with_borrow_mut(|query| *query = Some(set.clone()));
++            STAGE_QUERY.with_borrow_mut(|query| *query = stages.then(|| set.clone()));
++            STAGE_WRITTEN.set(0);
++            let prepare_start = std::time::Instant::now();
++            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
++            let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
++            // The source consumes the query when it actually encodes a pass.
++            // With no source (plain or terraces only), paint owns both stamps.
++            let source_stamped = SOURCE_QUERY.with_borrow_mut(|query| query.take().is_none());
++            {
++                let mut pass = stamped_pass(&mut encoder, source_stamped);
++                cb.paint(
++                    egui::PaintCallbackInfo {
++                        viewport: rect,
++                        clip_rect: rect,
++                        pixels_per_point: ppp,
++                        screen_size_px: size,
++                    },
++                    &mut pass,
++                    resources,
++                );
++            }
++            STAGE_QUERY.with_borrow_mut(|query| *query = None);
++            encoder.resolve_query_set(&set, 0..query_count, &resolve, 0);
++            encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, query_bytes);
++            let start = std::time::Instant::now();
++            queue.submit(bufs.into_iter().chain([encoder.finish()]));
++            let slice = staging.slice(..);
++            slice.map_async(wgpu::MapMode::Read, |r| r.expect("map"));
++            device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
++            let wall_ms = start.elapsed().as_secs_f64() * 1000.0;
++            let ticks: Vec<u64> =
++                bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
++            staging.unmap();
++            if frame >= warmup {
++                assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
++                    "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
++                raw.push_str(&format!(
++                    "{},{},{},{:.9},{:.9}",
++                    frame - warmup,
++                    slot,
++                    name,
++                    (ticks[1] - ticks[0]) as f64 * period / 1.0e6,
++                    wall_ms
++                ));
++                if stages {
++                    // Missing passes must be blank: query slots may still carry
++                    // values written by a previous variant in this shared set.
++                    let written = STAGE_WRITTEN.get();
++                    for (begin, end) in [
++                        (0, 2),
++                        (3, 4),
++                        (5, 6),
++                        (7, 8),
++                        (9, 10),
++                        (11, 12),
++                        (13, 14),
++                        (15, 16),
++                        (17, 18),
++                        (if source_stamped { 19 } else { 0 }, 1),
++                    ] {
++                        raw.push(',');
++                        let mask = (1u32 << begin) | (1u32 << end);
++                        if written & mask == mask {
++                            let duration = ticks[end]
++                                .checked_sub(ticks[begin])
++                                .expect("reversed stage interval");
++                            assert!(ticks[begin] > 0, "zero stage timestamp");
++                            raw.push_str(&format!("{:.9}", duration as f64 * period / 1.0e6));
++                        }
++                    }
++                }
++                raw.push('\n');
++                wall.push(wall_ms);
++                gpu_total.push((ticks[1] - ticks[0]) as f64 * period / 1.0e6);
++                cpu_prepare.push(prepare_ms);
++            }
++        }
++    }
++
++    if let Ok(path) = std::env::var("PROBE_RAW") {
++        std::fs::write(path, raw).unwrap();
++    }
++    activate("");
++    for case in &mut cases {
++        case.wall.sort_by(f64::total_cmp);
++        case.gpu_total.sort_by(f64::total_cmp);
++        case.cpu_prepare.sort_by(f64::total_cmp);
++    }
++    eprintln!("case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median");
++    for case in &cases {
++        let spread = |samples: &[f64]| {
++            let at = |fraction: usize| samples[(samples.len() - 1) * fraction / 100];
++            format!("{:.3}/{:.3}/{:.3}/{:.3}/{:.3}", at(0), at(10), at(50), at(90), at(100))
++        };
++        let median = |samples: &[f64]| samples[samples.len() / 2];
++        let source = case.cb.atmosphere.map(|a| atmosphere::source_size(size, ppp, a));
++        eprintln!(
++            "{} / {:.2} / {:.1}: {}; wall {:.3}; CPU {:.3}; source px {:?}",
++            case.name,
++            case.fill,
++            case.history_seconds,
++            spread(&case.gpu_total),
++            median(&case.wall),
++            median(&case.cpu_prepare),
++            source
++        );
++        let baseline =
++            if case.name.ends_with("memory") { "mosaic, memory" } else { "mosaic, defaults" };
++        if let Some(mosaic) = cases.iter().find(|c| {
++            c.name == baseline && c.fill == case.fill && c.history_seconds == case.history_seconds
++        }) {
++            let mosaic_ms = median(&mosaic.gpu_total);
++            eprintln!(
++                "  {:.3}x Mosaic ({mosaic_ms:.3} ms, {baseline})",
++                median(&case.gpu_total) / mosaic_ms
++            );
++        }
++    }
++}
++
++thread_local! {
++    static STAGE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
++    static STAGE_WRITTEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
++    static ACTIVE: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
++    static SOURCE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
++}
++// Fixed scratch slots: source 0/2, memory 3/4, bake 5/6, five halos
++// 7..=16, far 17/18, paint 19/1. Slots 0/1 retain the real total bracket.
++pub(in crate::spectrogram) fn stage_query() -> Option<wgpu::QuerySet> {
++    STAGE_QUERY.with_borrow(Clone::clone)
++}
++pub(in crate::spectrogram) fn stage_writes(
++    query: Option<&wgpu::QuerySet>,
++    begin: u32,
++    end: u32,
++) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
++    query.map(|query_set| {
++        let mask = (1u32 << begin) | (1u32 << end);
++        assert_eq!(STAGE_WRITTEN.get() & mask, 0, "stage encoded twice in one frame");
++        STAGE_WRITTEN.set(STAGE_WRITTEN.get() | mask);
++        wgpu::RenderPassTimestampWrites {
++            query_set,
++            beginning_of_pass_write_index: Some(begin),
++            end_of_pass_write_index: Some(end),
++        }
++    })
++}
++pub(in crate::spectrogram) fn fused() -> bool {
++    ACTIVE.with_borrow(|s| s.contains("fused"))
++}
++pub(in crate::spectrogram) fn direct() -> bool {
++    ACTIVE.with_borrow(|s| s.contains("direct"))
++}
++pub(in crate::spectrogram) fn source() -> Option<String> {
++    SOURCE.with_borrow(Clone::clone)
++}
++
++pub(in crate::spectrogram) fn halo_format() -> wgpu::TextureFormat {
++    ACTIVE.with_borrow(|name| {
++        if name.contains("-u8r") { wgpu::TextureFormat::Rgba8Unorm }
++        else { wgpu::TextureFormat::Rgba16Float }
++    })
++}
++fn u8_range(name: &str) -> Option<f32> {
++    if name.contains("-u8r4") { Some(4.0) }
++    else if name.contains("-u8r9") { Some(9.0) }
++    else { None }
++}
++
++pub(in crate::spectrogram) fn grouped_halos() -> bool {
++    ACTIVE.with_borrow(|name| name.starts_with("full-grouped-v") || name.starts_with("full-grouped-complete-v"))
++}
++
++pub(in crate::spectrogram) struct ResearchHaloGroups {
++    pub factors: Vec<f32>,
++    pub counts: Vec<u32>,
++    pub group: [usize; 5],
++    pub layer: [u32; 5],
++}
++
++pub(in crate::spectrogram) fn grouped_halo_plan() -> ResearchHaloGroups {
++    ACTIVE.with_borrow(|name| {
++        assert!(name.starts_with("full-grouped-v") || name.starts_with("full-grouped-complete-v"));
++        let mut result = ResearchHaloGroups {
++            factors: Vec::new(), counts: Vec::new(), group: [0; 5], layer: [0; 5],
++        };
++        for (k, factor) in factors(name).into_iter().enumerate() {
++            // Scratch targets are 1x1 at every factor, so grouping by their
++            // rounded extent would silently disagree with the shader's map.
++            let group = if let Some(group) = result.factors.iter().position(|f| f.to_bits() == factor.to_bits()) {
++                group
++            } else {
++                result.factors.push(factor);
++                result.counts.push(0);
++                result.factors.len() - 1
++            };
++            result.group[k] = group;
++            result.layer[k] = result.counts[group];
++            result.counts[group] += 1;
++        }
++        assert!(result.factors.len() <= 3, "grouped experiment supports at most three distinct factors");
++        result
++    })
++}
++
++pub(in crate::spectrogram) fn separate_halos() -> bool {
++    ACTIVE.with_borrow(|name| name.starts_with("full-separate-v") || name.starts_with("full-separate-complete-v"))
++}
++fn complete_mode(name: &str) -> bool {
++    name.starts_with("full-complete") || name.starts_with("full-grouped-complete-v")
++        || name.starts_with("full-separate-complete-v")
++}
++
++fn complete_source(mut source: String, name: &str) -> String {
++    assert_eq!(compute_mode(), 0, "complete response prototype is fragment-only");
++    assert!(!fused() && u8_range(name).is_none());
++    let native = factors(name).iter().map(|&f| if f == 1.0 { "true" } else { "false" }).collect::<Vec<_>>().join(",");
++    let mut helper = std::fs::read_to_string(
++        "/private/tmp/stars-investigation/complete-proposal/complete.wgsl"
++    ).unwrap();
++    assert_eq!(helper.matches("__COMPLETE_DEPTHS__").count(), 1);
++    helper = helper.replace("__COMPLETE_DEPTHS__", &native);
++    let load = if grouped_halos() {
++        r#"let layer = RESEARCH_HALO_LAYERS[k];
++    switch RESEARCH_HALO_GROUPS[k] {
++        case 0u: { return textureLoad(research_halo_group_0, texel, layer, 0); }
++        case 1u: { return textureLoad(research_halo_group_1, texel, layer, 0); }
++        default: { return textureLoad(research_halo_group_2, texel, layer, 0); }
++    }"#.to_owned()
++    } else if separate_halos() {
++        r#"switch k {
++        case 0u: { return textureLoad(research_halo_0, texel, 0); }
++        case 1u: { return textureLoad(research_halo_1, texel, 0); }
++        case 2u: { return textureLoad(research_halo_2, texel, 0); }
++        case 3u: { return textureLoad(research_halo_3, texel, 0); }
++        default: { return textureLoad(research_halo_4, texel, 0); }
++    }"#.to_owned()
++    } else {
++        "return textureLoad(star_halos, texel, i32(k), 0);".to_owned()
++    };
++    assert_eq!(helper.matches("__LOAD_RESPONSE__").count(), 1);
++    helper = helper.replace("__LOAD_RESPONSE__", &load);
++
++    // Reuse the original halo pass coordinates, index, draw, and nine-add order.
++    // Only the native branch chooses a complete response with no core taper.
++    let halo = "    var halo = vec4<f32>(0.0);\n";
++    assert_eq!(source.matches(halo).count(), 1, "halo accumulator moved");
++    let walk = std::fs::read_to_string(
++        "/private/tmp/stars-investigation/complete-proposal/complete_walk.wgsl"
++    ).unwrap();
++    source = source.replace(halo, &format!("{halo}{walk}"));
++
++    // Keep the already-rewritten reduced-layer sample expression verbatim.
++    // Move all native-core geometry/loading inside the fallback arm so complete
++    // depths really skip it, rather than merely ignoring its result afterward.
++    let layers = source.find("fn star_layers(").expect("star_layers");
++    let begin = layers + source[layers..].find("        let s = cloud.star_slices[k];").expect("slice geometry");
++    let end = begin + source[begin..].find("        if slice.w > 0.0 {").expect("slice composition");
++    let fallback = &source[begin..end];
++    let old = "var slice = star_texel(s, f, index, false);";
++    assert_eq!(fallback.matches(old).count(), 1);
++    let read = if grouped_halos() { "research_grouped_halo(" }
++        else if separate_halos() { "research_separate_halo(" }
++        else { "textureSampleLevel(star_halos" };
++    assert_eq!(fallback.matches(read).count(), 1);
++    let fallback = fallback.replace(old, "slice = star_texel(s, f, index, false);");
++    let replacement = format!(r#"        var slice = vec4<f32>(0.0);
++        if research_complete_layer(k) {{
++            slice = research_complete_load(pt, k);
++        }} else {{
++{fallback}        }}
++"#);
++    source.replace_range(begin..end, &replacement);
++    source.push_str(&helper);
++    source
++}
++
++fn activate(name: &str) {
++    ACTIVE.with_borrow_mut(|v| *v = name.into());
++    STAR_SPLIT_OVERRIDE.set(if name.contains("nosplit") { Some(false) } else { None });
++    let variant = if name.contains("f16exp") {
++        "f16exp"
++    } else if name.contains("f16") {
++        "f16"
++    } else if name.contains("direct") {
++        "direct"
++    } else if name.contains("core") {
++        "core"
++    } else {
++        "baseline"
++    };
++    let variant = if name.contains("direct-f16exp") {
++        "direct-f16exp"
++    } else if name.contains("direct-f16") {
++        "direct-f16"
++    } else if name.contains("wide") {
++        "wide"
++    } else {
++        variant
++    };
++    let mut source =
++        std::fs::read_to_string(format!("/private/tmp/stars-investigation/shaders/{variant}.wgsl"))
++            .unwrap();
++    if factors(name) != [1.0; 5] || name == "full-identity" || separate_halos() || grouped_halos() {
++        let values = factors(name).iter().map(|f| format!("{f:.9}")).collect::<Vec<_>>().join(",");
++        source += &format!("\nfn research_halo_size(k:u32)->vec2<f32> {{ let factors=array<f32,5>({values}); return max(ceil(cloud.star_halo_size*factors[k]),vec2<f32>(1.0)); }}\n");
++        source = source.replace(
++            "let step = cloud.size / cloud.star_halo_size;",
++            "let step = cloud.size / research_halo_size(in.layer);",
++        );
++        if !separate_halos() && !grouped_halos() { source = source.replace("pt / cloud.size, i32(k), 0.0)", "clamp(pt / cloud.size * research_halo_size(k) / cloud.star_halo_size, vec2<f32>(0.5) / cloud.star_halo_size, (research_halo_size(k) - 0.5) / cloud.star_halo_size), i32(k), 0.0)"); }
++    }
++
++    if separate_halos() {
++        assert_eq!(compute_mode(), 0, "separate textures are fragment-only");
++        assert!(!fused() && u8_range(name).is_none());
++        let old = "textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0)";
++        assert_eq!(source.matches(old).count(), 1, "halo sample moved");
++        source = source.replace(old, "research_separate_halo(pt / cloud.size, k)");
++        source.push_str(&std::fs::read_to_string(
++            "/private/tmp/stars-investigation/separate-proposal/separate.wgsl"
++        ).unwrap());
++    }
++
++    if grouped_halos() {
++        assert_eq!(compute_mode(), 0, "grouped textures are fragment-only");
++        assert!(!fused() && u8_range(name).is_none());
++        let plan = grouped_halo_plan();
++        let groups = plan.group.iter().map(|g| format!("{g}u")).collect::<Vec<_>>().join(",");
++        let layers = plan.layer.iter().map(|k| format!("{k}i")).collect::<Vec<_>>().join(",");
++        let mut helper = std::fs::read_to_string(
++            "/private/tmp/stars-investigation/grouped-proposal/grouped.wgsl"
++        ).unwrap();
++        assert_eq!(helper.matches("__GROUPS__").count(), 1);
++        assert_eq!(helper.matches("__LAYERS__").count(), 1);
++        helper = helper.replace("__GROUPS__", &groups).replace("__LAYERS__", &layers);
++        let old = "textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0)";
++        assert_eq!(source.matches(old).count(), 1, "halo sample moved");
++        source = source.replace(old, "research_grouped_halo(pt / cloud.size, k)");
++        source.push_str(&helper);
++    }
++
++    if fused() {
++        source.push_str(&std::fs::read_to_string(
++            "/private/tmp/stars-investigation/fusion-proposal/fused.wgsl",
++        ).unwrap());
++    }
++
++    if let Some(range) = u8_range(name) {
++        assert!(!name.contains("compute") && !fused(), "u8 experiment is fragment-only");
++        let original_return = "    return halo;\n}";
++        assert_eq!(source.matches(original_return).count(), 1, "halo return changed");
++        let clipping_diagnostic = name.ends_with("-clip");
++        let write = if clipping_diagnostic {
++            // Binary R8 mask of any channel outside the chosen legal range.
++            // RGB<=coverage analytically; checking all four also catches a bug.
++            format!("    let clipped = any(halo > vec4<f32>({range:.1}));\n    return vec4<f32>(select(0.0, 1.0, clipped), 0.0, 0.0, 1.0);\n}}")
++        } else {
++            format!("    return halo / {range:.1};\n}}")
++        };
++        source = source.replace(original_return, &write);
++        let read = "slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);";
++        assert_eq!(source.matches(read).count(), 1, "halo read changed");
++        source = source.replace(read, &format!("slice += {range:.1} * textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);"));
++        if clipping_diagnostic {
++            // A dedicated image diagnostic, not a timing variant or usable look.
++            // Disable split so its independent native target cannot hide a mask.
++            STAR_SPLIT_OVERRIDE.set(Some(false));
++            let read = "return star_layers(pt, 0u, STAR_SLICES, palette_color(0.0));";
++            assert_eq!(source.matches(read).count(), 1, "star_color changed");
++            source = source.replace(read, "return research_u8_clipping(pt);");
++            source.push_str(r#"
++fn research_u8_clipping(pt: vec2<f32>) -> vec3<f32> {
++    var peak = 0.0;
++    for (var k = 0u; k < STAR_SLICES; k += 1u) {
++        peak = max(peak, textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0).r);
++    }
++    return vec3<f32>(peak, 0.0, 0.0);
++}
++"#);
++        }
++    }
++
++    if complete_mode(name) {
++        source = complete_source(source, name);
++    }
++    SOURCE.with_borrow_mut(|s| *s = Some(source));
++}
++fn orders(n: usize) -> Vec<Vec<usize>> {
++    fn perm(v: &mut Vec<usize>, at: usize, out: &mut Vec<Vec<usize>>) {
++        if at == v.len() {
++            out.push(v.clone());
++            return;
++        }
++        for i in at..v.len() {
++            v.swap(at, i);
++            perm(v, at + 1, out);
++            v.swap(at, i);
++        }
++    }
++    let mut out = Vec::new();
++    if n <= 4 {
++        perm(&mut (0..n).collect(), 0, &mut out);
++    } else {
++        for reverse in [false, true] {
++            for offset in 0..n {
++                out.push(
++                    (0..n)
++                        .map(|i| if reverse { (offset + n - i) % n } else { (offset + i) % n })
++                        .collect(),
++                );
++            }
++        }
++    }
++    out
++}
++fn research_device() -> (wgpu::Device, wgpu::Queue) {
++    let (_, adapter) = crate::gpu_harness::test_gpu_adapter().expect("GPU required");
++    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
++        required_limits: crate::device_limits(&adapter),
++        required_features: wgpu::Features::SHADER_F16,
++        ..Default::default()
++    }))
++    .expect("f16 device")
++}
++#[test]
++#[ignore]
++fn stars_research_images() {
++    use std::io::Write;
++    let profile = research_profile();
++    let (device, queue) = research_device();
++    let root = "/private/tmp/stars-full-halo-compare";
++    let out = std::env::var("RESEARCH_OUTPUT")
++        .unwrap_or_else(|_| "/private/tmp/stars-investigation/images".into());
++    std::fs::create_dir_all(&out).unwrap();
++    let ppp: f32 =
++        std::env::var("PROBE_IMAGE_PPP").ok().and_then(|s| s.parse().ok()).unwrap_or(2.0);
++    let image_time: f64 = std::env::var("PROBE_IMAGE_TIME").ok().map(|v| v.parse().unwrap()).unwrap_or(3.0);
++    let dimensions = format!("{}x{}", (960.0 * ppp) as u32, (540.0 * ppp) as u32);
++    let pixels: Vec<[u8; 4]> = std::fs::read(format!("{root}/palette.rgba"))
++        .unwrap()
++        .chunks_exact(4)
++        .map(|p| p.try_into().unwrap())
++        .collect();
++    let variants = std::env::var("RESEARCH_CASES").unwrap();
++    let frames: u32 =
++        std::env::var("PROBE_VIDEO_FRAMES").ok().map(|n| n.parse().unwrap()).unwrap_or(1);
++    for name in variants.split(',') {
++        activate(name);
++        for input in ["take", "flat"] {
++            if frames > 1 && input == "flat" {
++                continue;
++            }
++            let bytes = Arc::new(std::fs::read(format!("{root}/{input}-levels.u8")).unwrap());
++            let mut cb = cloud_fixture();
++            cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0));
++            cb.grid = grid_of(bytes, 1024, 960, 0);
++            relay_quad(&mut cb, 960);
++            let span = 12.0 * (9000.0_f32 / 70.0).log2();
++            cb.read = read_of(35.0, span, 540);
++            cb.read.spectrum_min_midi = 35.0;
++            cb.read.bins_per_semitone = 1024.0 / span;
++            cb.read.level_per_midi = 0.0;
++            cb.read.level_per_step = 1.0 / 255.0;
++            cb.shades.lut = Arc::new(pixels.clone());
++            let a = cb.atmosphere.as_mut().unwrap();
++            a.region = cb.rect;
++            a.now = 3.0;
++            a.points_per_cent = 540.0 / (span * 100.0);
++            a.points_per_ms = 960.0 / 20000.0;
++            a.settings = SpectralAtmosphere {
++                cloud_style: CloudStyle::Stars,
++                cloud_depth: 1.0,
++                star_halo_resolution: match name.split('-').next().unwrap() {
++                    "half" => 0.5,
++                    "r625" => 0.625,
++                    "r750" => 0.75,
++                    "r875" => 0.875,
++                    _ => 1.0,
++                },
++                star_jitter: std::env::var("PROBE_JITTER")
++                    .ok()
++                    .and_then(|v| v.parse().ok())
++                    .unwrap_or(1.0),
++                ..Default::default()
++            };
++            apply_research_profile(&mut a.settings, &profile);
++            let mut resources = CallbackResources::default();
++            let mut video = if frames > 1 {
++                Some(
++                    std::process::Command::new("ffmpeg")
++                        .args([
++                            "-v",
++                            "error",
++                            "-y",
++                            "-f",
++                            "rawvideo",
++                            "-pix_fmt",
++                            "rgba",
++                            "-s",
++                            &dimensions,
++                            "-r",
++                            "30",
++                            "-i",
++                            "-",
++                            "-c:v",
++                            "libx264",
++                            "-crf",
++                            "16",
++                            "-pix_fmt",
++                            "yuv420p",
++                            &format!("{out}/{name}.mp4"),
++                        ])
++                        .stdin(std::process::Stdio::piped())
++                        .spawn()
++                        .unwrap(),
++                )
++            } else {
++                None
++            };
++            for warm in 0..60 {
++                cb.pass_nr = warm;
++                cb.atmosphere.as_mut().unwrap().now = image_time - 2.0 + warm as f64 / 30.0;
++                let _ = scratch_frame_at_ppp(&device, &queue, &mut resources, &cb, ppp);
++            }
++            for frame in 0..frames {
++                cb.pass_nr = 60 + frame as u64;
++                cb.atmosphere.as_mut().unwrap().now = image_time + f64::from(frame) / 30.0;
++                let bytes = scratch_frame_at_ppp(&device, &queue, &mut resources, &cb, ppp);
++                if input == "take" && std::env::var_os("RESEARCH_ATLAS_DUMP").is_some() {
++                    let target = resources.get::<SpectrogramResources>().unwrap()
++                        .panes.get(0).unwrap().cloud.as_ref().unwrap();
++                    target.research_export_atlas(&device, &queue,
++                        &format!("{out}/{name}-{input}-atlas-{frame:04}"));
++                }
++
++                if frame == 0 {
++                    std::fs::write(format!("{out}/{name}-{input}.rgba"), &bytes).unwrap();
++                }
++                if let Some(video) = video.as_mut() {
++                    video.stdin.as_mut().unwrap().write_all(&bytes).unwrap();
++                }
++            }
++            if let Some(mut video) = video {
++                drop(video.stdin.take());
++                assert!(video.wait().unwrap().success());
++            }
++        }
++    }
++}
++
++fn scratch_frame_at_ppp(
++    device: &wgpu::Device,
++    queue: &wgpu::Queue,
++    resources: &mut CallbackResources,
++    cb: &SpectrogramCallback,
++    ppp: f32,
++) -> Vec<u8> {
++    let size = [(cb.rect.max.x * ppp).ceil() as u32, (cb.rect.max.y * ppp).ceil() as u32];
++    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
++    let mut encoder = device.create_command_encoder(&Default::default());
++    let bufs = cb.prepare(device, queue, &screen, &mut encoder, resources);
++    queue.submit(bufs.into_iter().chain([encoder.finish()]));
++    let texture =
++        render_to_texture(device, queue, size, cb.target_format, wgpu::Color::BLACK, |pass| {
++            cb.paint(
++                egui::PaintCallbackInfo {
++                    viewport: cb.rect,
++                    clip_rect: cb.rect,
++                    pixels_per_point: ppp,
++                    screen_size_px: size,
++                },
++                pass,
++                resources,
++            );
++        });
++    readback(device, queue, &texture, size)
++}
++
++fn factors(name: &str) -> [f32; 5] {
++    let mut f = [1.0; 5];
++    if let Some(tail) = name.strip_prefix("full-l") {
++        let k = tail[0..1].parse::<usize>().unwrap();
++        f[k] = if let Some(percent) = tail[1..].strip_prefix("r") { percent.parse::<f32>().unwrap() / 100.0 } else if tail.ends_with("third") { 1.0 / 3.0 } else { 0.5 };
++    }
++    if let Some((_, values)) = name.split_once("-v") {
++        let values = values.split('_').map(|v| v.parse::<f32>().unwrap() / 100.0).collect::<Vec<_>>();
++        f = values.try_into().expect("five layer resolutions");
++        assert!(f.iter().all(|r| (0.25..=1.0).contains(r)));
++    }
++    if name == "half-low2" { f = [0.5,0.5,1.0,1.0,1.0]; }
++    if name == "half-low3" { f = [0.5,0.5,0.5,1.0,1.0]; }
++    if name.ends_with("mix1") {
++        f = [1.0, 1.0, 1.0, 0.5, 0.5];
++    }
++    if name.ends_with("mix2") {
++        f = [1.0, 1.0, 0.5, 0.5, 0.5];
++    }
++    if name.ends_with("mix3") {
++        f = [1.0, 1.0, 1.0, 1.0, 0.5];
++    }
++    if name.ends_with("mix4") {
++        f = [0.5, 0.5, 0.5, 1.0, 1.0];
++    }
++    if name.ends_with("mix5") {
++        f = [0.5, 0.5, 1.0, 1.0, 1.0];
++    }
++    if name.ends_with("mix6") {
++        f = [0.5, 0.5, 0.75, 1.0, 0.75];
++    }
++    if name.ends_with("mix7") {
++        f = [0.5, 0.5, 0.5, 1.0, 0.5];
++    }
++    f
++}
++pub(in crate::spectrogram) fn halo_extent(size: [u32; 2], layer: usize) -> [u32; 2] {
++    let factor = ACTIVE.with_borrow(|n| factors(n)[layer]);
++    size.map(|n| (n as f32 * factor).ceil().max(1.0) as u32)
++}
++
++
++// One source of dimensions for WGSL declaration/addressing/loading and dispatch.
++// Capture this once in the pipeline object; never reread ACTIVE during draw.
++pub(in crate::spectrogram) fn compute_group(mode: u32) -> [u32; 2] {
++    ACTIVE.with_borrow(|name| {
++        let group = if name.ends_with("-g4") { [4, 4] }
++            else if name.ends_with("-g16") { [16, 8] }
++            else { [8, 8] };
++        if group != [8, 8] { assert_eq!(mode, 2, "group experiment requires raw shared"); }
++        group
++    })
++}
++
++pub(in crate::spectrogram) fn compute_group_source(mut source: String, group: [u32; 2]) -> String {
++    if group == [8, 8] { return source; } // Preserve exact source for the control.
++    assert!(group == [4, 4] || group == [16, 8]);
++    let [x, y] = group;
++    let replacements = [
++        ("@compute @workgroup_size(8, 8, 1)".to_owned(),
++         format!("@compute @workgroup_size({x}, {y}, 1)")),
++        ("let base_pixel = wid.xy * vec2<u32>(8u);".to_owned(),
++         format!("let base_pixel = wid.xy * vec2<u32>({x}u, {y}u);")),
++        ("let last_pixel = min(base_pixel + vec2<u32>(7u), size - vec2<u32>(1u));".to_owned(),
++         format!("let last_pixel = min(base_pixel + vec2<u32>({}u, {}u), size - vec2<u32>(1u));", x - 1, y - 1)),
++        ("for (var n = lane; n < count; n += 64u)".to_owned(),
++         format!("for (var n = lane; n < count; n += {}u)", x * y)),
++    ];
++    for (before, after) in replacements {
++        assert_eq!(source.matches(before.as_str()).count(), 1, "compute group anchor changed: {before}");
++        source = source.replace(before.as_str(), after.as_str());
++    }
++    source
++}
++
++pub(in crate::spectrogram) fn compute_mode() -> u32 {
++    ACTIVE.with_borrow(|s| {
++        if s.contains("compute-gather") {
++            1
++        } else if s.contains("compute-raw") {
++            2
++        } else if s.contains("compute-decoded") {
++            3
++        } else {
++            0
++        }
++    })
++}
++
++// A few deliberately different stress pictures, not a parameter factorial.
++// Profiles preserve each case's halo resolution/shader and override PROBE_JITTER
++// only when named; `default` retains the existing harness controls verbatim.
++fn research_profile() -> String {
++    let profile = std::env::var("PROBE_PROFILE").unwrap_or_else(|_| "default".into());
++    assert!(matches!(profile.as_str(), "default" | "small-dense" | "large-sparse"
++        | "wide-range" | "fringe-zero" | "memory-off"), "unknown PROBE_PROFILE {profile}");
++    eprintln!("research profile: {profile}");
++    profile
++}
++
++fn apply_research_profile(s: &mut SpectralAtmosphere, profile: &str) {
++    use harmonigraph_scene::atmosphere::{STAR_DENSITY_MIN, STAR_DENSITY_MAX,
++        STAR_SIZE_MIN, STAR_SIZE_MAX};
++    if profile == "default" { return; }
++    // The timing and image initializers both use defaults for these fields;
++    // assign them here so named profiles state the same complete experiment.
++    let fresh = SpectralAtmosphere::default();
++    s.star_density = fresh.star_density;
++    s.star_size_min = fresh.star_size_min;
++    s.star_size_max = fresh.star_size_max;
++    s.star_fringe = fresh.star_fringe;
++    s.star_jitter = 1.0;
++    s.color_pickup = fresh.color_pickup;
++    s.color_release = fresh.color_release;
++    match profile {
++        "small-dense" => {
++            s.star_size_min = STAR_SIZE_MIN;
++            s.star_size_max = 2.0;
++            s.star_density = STAR_DENSITY_MAX;
++        }
++        "large-sparse" => {
++            s.star_size_min = 16.0;
++            s.star_size_max = STAR_SIZE_MAX;
++            s.star_density = STAR_DENSITY_MIN;
++            s.star_jitter = 0.5;
++        }
++        "wide-range" => {
++            s.star_size_min = STAR_SIZE_MIN;
++            s.star_size_max = STAR_SIZE_MAX;
++            s.star_density = STAR_DENSITY_MAX;
++            s.star_jitter = 0.5;
++        }
++        "fringe-zero" => s.star_fringe = 0.0,
++        "memory-off" => {
++            s.star_jitter = 0.5;
++            s.color_pickup = 0.0;
++            s.color_release = 0.0;
++        }
++        _ => unreachable!("validated by research_profile"),
++    }
++}
++
++// Lossless transition checks; this is a scratch probe, not a timing benchmark.
++fn fusion_parity_fixture(profile: &str) -> SpectrogramCallback {
++    let root = "/private/tmp/stars-full-halo-compare";
++    let mut cb = cloud_fixture();
++    cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 540.0));
++    let levels = std::fs::read(format!("{root}/take-levels.u8")).unwrap();
++    assert_eq!(levels.len(), 960 * 1024);
++    cb.grid = grid_of(Arc::new(levels), 1024, 960, 0);
++    relay_quad(&mut cb, 960);
++    let span = 12.0 * (9000.0_f32 / 70.0).log2();
++    cb.read = read_of(35.0, span, 540);
++    cb.read.spectrum_min_midi = 35.0;
++    cb.read.bins_per_semitone = 1024.0 / span;
++    cb.read.level_per_midi = 0.0;
++    cb.read.level_per_step = 1.0 / 255.0;
++    cb.shades.lut = Arc::new(std::fs::read(format!("{root}/palette.rgba")).unwrap()
++        .chunks_exact(4).map(|p| p.try_into().unwrap()).collect());
++    let a = cb.atmosphere.as_mut().unwrap();
++    a.region = cb.rect;
++    a.points_per_cent = 540.0 / (span * 100.0);
++    a.points_per_ms = 960.0 / 20000.0;
++    a.settings = SpectralAtmosphere {
++        cloud_style: CloudStyle::Stars, cloud_depth: 1.0,
++        star_halo_resolution: 1.0, star_jitter: 1.0, ..Default::default()
++    };
++    apply_research_profile(&mut a.settings, profile);
++    assert!(a.settings.color_pickup > 0.0 || a.settings.color_release > 0.0,
++        "fusion parity requires retained memory; memory-off only exercises fallback");
++    cb
++}
++
++#[test]
++#[ignore = "scratch lossless fusion parity, requires GPU and private take fixture"]
++fn stars_research_fusion_parity() {
++    let profile = research_profile();
++    let (device, queue) = research_device();
++    let out = std::env::var("RESEARCH_OUTPUT")
++        .unwrap_or_else(|_| format!("/private/tmp/stars-investigation/fusion-parity/{profile}"));
++    std::fs::create_dir_all(&out).unwrap();
++    // Native 960x540 RGBA frames. The atlas geometry is pane-relative and unchanged.
++    let mut cases = [
++        ("full-a", fusion_parity_fixture(&profile), CallbackResources::default()),
++        ("full-fused", fusion_parity_fixture(&profile), CallbackResources::default()),
++    ];
++    let lifetime = f64::from(cases[0].1.atmosphere.unwrap().settings.star_lifetime);
++    assert!(lifetime < 3.25, "the bounded silent-life fixture must cross every cell's lifetime");
++    assert!(31.0 > 6.0 * f64::from(harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX));
++    let mut schedule = Vec::new();
++    for i in 0..=20 {
++        schedule.push((1.0 + f64::from(i) * 0.1,
++            if i == 0 { "cold" } else if i == 20 { "warm" } else { "" }, false));
++    }
++    for i in 1..=12 {
++        schedule.push((3.0 + f64::from(i) * 0.25, if i == 12 { "life" } else { "" }, false));
++    }
++    schedule.extend([(37.0, "reset", false), (37.1, "recovery", false), (37.2, "release", true)]);
++    for i in 1..=13 {
++        schedule.push((37.2 + f64::from(i) * 0.25, if i == 13 { "silent-life" } else { "" }, false));
++    }
++    let mut failures = Vec::new();
++    let mut log = String::from("frame,time,checkpoint,different_bytes,max_byte_difference\n");
++    let mut release = Vec::new();
++    let mut last = Vec::new();
++    for (frame, (now, checkpoint, silence)) in schedule.iter().copied().enumerate() {
++        let mut rendered = Vec::new();
++        for (name, cb, resources) in &mut cases {
++            activate(name);
++            if silence {
++                // New grid identity triggers an upload; same dimensions and source
++                // end preserve memory validity, so this exercises release, not reset.
++                cb.grid = grid_of(Arc::new(vec![0; 960 * 1024]), 1024, 960, 0);
++            }
++            cb.pass_nr = frame as u64 + 1;
++            cb.atmosphere.as_mut().unwrap().now = now;
++            let rgba = scratch_frame_at_ppp(&device, &queue, resources, cb, 1.0);
++            if silence {
++                assert_eq!(cb.grid.full_uploads.load(Ordering::Relaxed), 1,
++                    "the silence transition must actually replace the uploaded light grid");
++            }
++            if !checkpoint.is_empty() {
++                std::fs::write(format!("{out}/{checkpoint}-{name}.rgba"), &rgba).unwrap();
++            }
++            rendered.push(rgba);
++        }
++        let differences = rendered[0].iter().zip(&rendered[1]).filter(|(a,b)| a != b).count();
++        let maximum = rendered[0].iter().zip(&rendered[1]).map(|(a,b)| a.abs_diff(*b)).max().unwrap();
++        log.push_str(&format!("{frame},{now:.9},{checkpoint},{differences},{maximum}\n"));
++        if differences != 0 { failures.push(format!("frame {frame} t={now:.3}: {differences} bytes, max {maximum}")); }
++        if checkpoint == "reset" {
++            // The 31s jump reaches update()'s invalid-history branch. Fresh
++            // resources provide an independent cold-start image at the same time.
++            activate("full-a");
++            let mut fresh = fusion_parity_fixture(&profile);
++            fresh.pass_nr = 1;
++            fresh.atmosphere.as_mut().unwrap().now = now;
++            let cold = scratch_frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &fresh, 1.0);
++            std::fs::write(format!("{out}/reset-cold-reference.rgba"), &cold).unwrap();
++            if cold != rendered[0] { failures.push("reset baseline differs from cold reference".into()); }
++            if cold != rendered[1] { failures.push("reset fused differs from cold reference".into()); }
++        }
++        if checkpoint == "release" { release = rendered[0].clone(); }
++        last = rendered;
++    }
++    activate("full-a");
++    let mut silent = fusion_parity_fixture(&profile);
++    silent.grid = grid_of(Arc::new(vec![0; 960 * 1024]), 1024, 960, 0);
++    silent.pass_nr = 1;
++    silent.atmosphere.as_mut().unwrap().now = schedule.last().unwrap().0;
++    let floor = scratch_frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &silent, 1.0);
++    std::fs::write(format!("{out}/silent-cold-reference.rgba"), &floor).unwrap();
++    if release == floor { failures.push("silent transition never reached retained visible color".into()); }
++    for (i, image) in last.iter().enumerate() {
++        if image != &floor { failures.push(format!("{} retained stars after every silent life reset", cases[i].0)); }
++    }
++    std::fs::write(format!("{out}/parity.csv"), log).unwrap();
++    activate("");
++    assert!(failures.is_empty(), "fusion parity failed:\n{}", failures.join("\n"));
++}
++
++fn research_full(s: &mut SpectralAtmosphere) { s.cloud_style = CloudStyle::Stars; s.star_halo_resolution = 1.0; memory(s); }

@@ -1,0 +1,151 @@
+{
+  "aa_noise": {
+    "full-a/full-b": {
+      "mean_ratio_b_over_a": 0.9926743885130387,
+      "mean_savings_percent": 0.7325611486961314
+    },
+    "half-a/half-b": {
+      "mean_ratio_b_over_a": 0.9850379271854094,
+      "mean_savings_percent": 1.496207281459061
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "full-a": {
+      "mean_gpu_ms": 29.223098583333332,
+      "median_gpu_ms": 26.986583500000002,
+      "n": 120
+    },
+    "full-b": {
+      "mean_gpu_ms": 29.009021516666667,
+      "median_gpu_ms": 27.116333,
+      "n": 120
+    },
+    "full-fused": {
+      "mean_gpu_ms": 28.7662187,
+      "median_gpu_ms": 26.788249999999998,
+      "n": 120
+    },
+    "half-a": {
+      "mean_gpu_ms": 15.577924566666667,
+      "median_gpu_ms": 14.472375499999998,
+      "n": 120
+    },
+    "half-b": {
+      "mean_gpu_ms": 15.344846525,
+      "median_gpu_ms": 14.4435415,
+      "n": 120
+    },
+    "half-fused": {
+      "mean_gpu_ms": 15.097185383333333,
+      "median_gpu_ms": 14.1744165,
+      "n": 120
+    }
+  },
+  "comparisons": {
+    "full-fused": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          0.062084161379609155,
+          2.277677485511237
+        ],
+        "mean_variant_over_control_ratio": 0.9879845916858521,
+        "paired_mean_savings_percent": 1.2015408314147935
+      },
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -87.9403000360703,
+          -83.90135037226283
+        ],
+        "mean_variant_over_control_ratio": 1.8605201076401698,
+        "paired_mean_savings_percent": -86.05201076401698
+      }
+    },
+    "half-fused": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          47.04546742243678,
+          49.671731598969
+        ],
+        "mean_variant_over_control_ratio": 0.5185174559129038,
+        "paired_mean_savings_percent": 48.148254408709626
+      },
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          0.48525627158549245,
+          4.958475241802216
+        ],
+        "mean_variant_over_control_ratio": 0.9764445326442204,
+        "paired_mean_savings_percent": 2.3555467355779625
+      }
+    }
+  },
+  "frames": 120,
+  "input": "/private/tmp/stars-investigation/timings/fusion-screen/3840x2160.csv",
+  "paired_control_cases": [
+    [
+      "half-a",
+      "half-b"
+    ],
+    [
+      "full-a",
+      "full-b"
+    ]
+  ],
+  "slot_histograms": {
+    "full-a": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "full-b": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "full-fused": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "half-a": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "half-b": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "half-fused": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    }
+  },
+  "slot_positions_balanced": true
+}

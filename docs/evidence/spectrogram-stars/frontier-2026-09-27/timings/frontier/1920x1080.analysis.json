@@ -1,0 +1,147 @@
+{
+  "aa_noise": {
+    "full-a/full-b": {
+      "mean_ratio_b_over_a": 1.0027803211764656,
+      "mean_savings_percent": -0.278032117646565
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "full-a": {
+      "mean_gpu_ms": 8.541702016666667,
+      "median_gpu_ms": 8.399604,
+      "n": 120
+    },
+    "full-b": {
+      "mean_gpu_ms": 8.565450691666667,
+      "median_gpu_ms": 8.4589375,
+      "n": 120
+    },
+    "half-a": {
+      "mean_gpu_ms": 6.198132341666667,
+      "median_gpu_ms": 6.046250000000001,
+      "n": 120
+    },
+    "r625": {
+      "mean_gpu_ms": 6.179026033333333,
+      "median_gpu_ms": 6.0711665,
+      "n": 120
+    },
+    "r750": {
+      "mean_gpu_ms": 6.7340941,
+      "median_gpu_ms": 6.62775,
+      "n": 120
+    },
+    "r875": {
+      "mean_gpu_ms": 7.6176396,
+      "median_gpu_ms": 7.450813,
+      "n": 120
+    }
+  },
+  "comparisons": {
+    "half-a": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          25.99211436138116,
+          28.910491574626807
+        ],
+        "mean_variant_over_control_ratio": 0.7246246581580343,
+        "paired_mean_savings_percent": 27.537534184196566
+      }
+    },
+    "r625": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          26.887144821389448,
+          28.549029992484577
+        ],
+        "mean_variant_over_control_ratio": 0.7223909365494084,
+        "paired_mean_savings_percent": 27.760906345059155
+      }
+    },
+    "r750": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          20.194583586013344,
+          22.29298048939474
+        ],
+        "mean_variant_over_control_ratio": 0.787284034323216,
+        "paired_mean_savings_percent": 21.271596567678397
+      }
+    },
+    "r875": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          9.711664362939814,
+          12.021811635827362
+        ],
+        "mean_variant_over_control_ratio": 0.8905794821471665,
+        "paired_mean_savings_percent": 10.942051785283347
+      }
+    }
+  },
+  "frames": 120,
+  "input": "/private/tmp/stars-investigation/timings/frontier/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "full-a",
+      "full-b"
+    ]
+  ],
+  "slot_histograms": {
+    "full-a": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "full-b": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "half-a": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "r625": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "r750": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    },
+    "r875": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20
+    }
+  },
+  "slot_positions_balanced": true
+}

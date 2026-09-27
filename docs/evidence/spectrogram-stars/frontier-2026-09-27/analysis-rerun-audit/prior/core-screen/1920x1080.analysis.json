@@ -1,0 +1,93 @@
+{
+  "aa_noise": {
+    "half-a/half-b": {
+      "mean_ratio_b_over_a": 1.0027506384513774,
+      "mean_savings_percent": -0.2750638451377352
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "half-a": {
+      "mean_gpu_ms": 6.140401691666667,
+      "median_gpu_ms": 6.0394375,
+      "n": 120
+    },
+    "half-b": {
+      "mean_gpu_ms": 6.157291716666666,
+      "median_gpu_ms": 6.0767915,
+      "n": 120
+    },
+    "half-core": {
+      "mean_gpu_ms": 6.237409983333333,
+      "median_gpu_ms": 6.142958500000001,
+      "n": 120
+    },
+    "half-wide": {
+      "mean_gpu_ms": 10.928659066666667,
+      "median_gpu_ms": 10.873292,
+      "n": 120
+    }
+  },
+  "comparisons": {
+    "half-core": {
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -2.740361906249602,
+          -0.30358290912380576
+        ],
+        "mean_variant_over_control_ratio": 1.014403234204335,
+        "paired_mean_savings_percent": -1.440323420433498
+      }
+    },
+    "half-wide": {
+      "half-a/half-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -79.45676526668187,
+          -76.11596878529163
+        ],
+        "mean_variant_over_control_ratio": 1.7773510371076637,
+        "paired_mean_savings_percent": -77.73510371076637
+      }
+    }
+  },
+  "frames": 120,
+  "input": "/private/tmp/stars-investigation/timings/core-screen/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "half-a",
+      "half-b"
+    ]
+  ],
+  "slot_histograms": {
+    "half-a": {
+      "0": 30,
+      "1": 30,
+      "2": 30,
+      "3": 30
+    },
+    "half-b": {
+      "0": 30,
+      "1": 30,
+      "2": 30,
+      "3": 30
+    },
+    "half-core": {
+      "0": 30,
+      "1": 30,
+      "2": 30,
+      "3": 30
+    },
+    "half-wide": {
+      "0": 30,
+      "1": 30,
+      "2": 30,
+      "3": 30
+    }
+  },
+  "slot_positions_balanced": true
+}

@@ -1,0 +1,16 @@
+{
+  "binary_sha256": "cbde24d4b018eafd13da4b7be0a5e83bc26fcf1c1535af3a3d770c95cc0d2682",
+  "started": 1790548010.4917881,
+  "runs": [
+    {
+      "name": "live-take-1920x1080",
+      "size": "1920x1080",
+      "ppp": "2"
+    },
+    {
+      "name": "live-take-3840x2160",
+      "size": "3840x2160",
+      "ppp": "4"
+    }
+  ]
+}

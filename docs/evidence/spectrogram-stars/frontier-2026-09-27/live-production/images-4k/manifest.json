@@ -1,0 +1,1 @@
+{"fixture":"frozen-research-default","ppp":4,"size":[3840,2160],"cases":["Half","Full","P2","P3"],"inputs":["take","flat"],"frames":1,"warmup":60,"fps":30,"time":3,"jitter":0.5,"format":"Rgba8Unorm","shader":"production"}

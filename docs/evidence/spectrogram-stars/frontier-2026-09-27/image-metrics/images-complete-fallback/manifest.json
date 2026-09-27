@@ -1,0 +1,9 @@
+{
+  "cases": [
+    "full-a",
+    "full-complete"
+  ],
+  "ppp": 1.25,
+  "frames": 1,
+  "jitter": 0.5
+}
