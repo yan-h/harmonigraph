@@ -588,6 +588,7 @@ pub enum LatticeMaterial {
     Contours = 1,
     Interference = 2,
     Watercolor = 3,
+    Mosaic = 4,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

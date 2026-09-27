@@ -3488,7 +3488,7 @@ fn material_light(light: vec4<f32>, pixel: vec2<f32>, contour: vec2<f32>) -> vec
     if u.nebula.material == 0u {
         return nebula_light(light, pixel);
     }
-    if u.nebula.depth <= 0.0 || light.a <= 0.0 || u.nebula.material == 3u {
+    if u.nebula.depth <= 0.0 || light.a <= 0.0 || u.nebula.material == 3u || u.nebula.material == 4u {
         return light;
     }
     let p = (pixel - u.nebula.target_size * 0.5)

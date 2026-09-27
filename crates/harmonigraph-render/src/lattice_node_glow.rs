@@ -164,11 +164,13 @@ impl GlowTarget {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(if self.watercolor_source.is_some() {
-                &compiled.shaders.glow_watercolor_pipeline
-            } else {
-                &compiled.shaders.glow_splat_pipeline
-            });
+            pass.set_pipeline(
+                if pane.material_tile.as_ref().is_some_and(|tile| tile.is_watercolor()) {
+                    &compiled.shaders.glow_watercolor_pipeline
+                } else {
+                    &compiled.shaders.glow_splat_pipeline
+                },
+            );
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
@@ -177,7 +179,7 @@ impl GlowTarget {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("directional_glow_resolve"),
             color_attachments: &[attachment(
-                self.watercolor_source.as_ref().map_or(&self.view, |source| &source.view),
+                self.material_source.as_ref().map_or(&self.view, |source| &source.view),
             )],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -191,8 +193,8 @@ impl GlowTarget {
             pass.draw(0..4, 0..1);
         }
         drop(pass);
-        if let (Some(source), Some(tile)) = (&self.watercolor_source, &pane.watercolor) {
-            source.draw(encoder, &compiled.watercolor, tile, &self.view);
+        if let (Some(source), Some(tile)) = (&self.material_source, &pane.material_tile) {
+            source.draw(encoder, &compiled.material, tile, &self.view);
         }
     }
 }

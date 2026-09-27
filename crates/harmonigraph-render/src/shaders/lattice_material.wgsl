@@ -46,3 +46,21 @@ fn fs_material(in: Vertex) -> @location(0) vec4<f32> {
     let second = textureSampleLevel(source, source_sampler, in.uv + fine, 0.0);
     return mix(raw, mix(first, second, 0.5 * b.w), settings.depth);
 }
+
+// Same soft-union geometry and flat-centre reading as spectrogram Mosaic.
+// Its one RGBA tile carries both face and centre offsets; no second tile is needed.
+@fragment
+fn fs_mosaic_tile(in: Vertex) -> @location(0) vec4<f32> {
+    let pile = mosaic_field(in.uv * PERIOD, i32(PERIOD), 0.5);
+    return vec4<f32>(pile.face, pile.to_centre);
+}
+@fragment
+fn fs_mosaic(in: Vertex) -> @location(0) vec4<f32> {
+    let p = (in.uv * settings.size - settings.size * 0.5) / settings.cell;
+    let uv = (p + settings.drift * 4.0) / PERIOD;
+    let tile = textureSampleLevel(tile_a, tile_sampler, uv, 0.0);
+    let offset = tile.zw * settings.cell / settings.size;
+    let raw = textureSampleLevel(source, source_sampler, in.uv, 0.0);
+    let facet = textureSampleLevel(source, source_sampler, in.uv + offset, 0.0);
+    return mix(raw, facet, settings.depth);
+}

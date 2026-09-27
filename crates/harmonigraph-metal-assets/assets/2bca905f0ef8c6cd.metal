@@ -261,6 +261,7 @@ metal::float4 material_light(
 ) {
     bool local_1 = {};
     bool local_2 = {};
+    bool local_3 = {};
     uint _e6 = u.nebula.material;
     if (_e6 == 0u) {
         metal::float4 _e9 = nebula_light(light_1, pixel_1, u);
@@ -280,17 +281,24 @@ metal::float4 material_light(
         local_2 = true;
     }
     bool _e34 = local_2;
-    if (_e34) {
+    if (!(_e34)) {
+        uint _e41 = u.nebula.material;
+        local_3 = _e41 == 4u;
+    } else {
+        local_3 = true;
+    }
+    bool _e45 = local_3;
+    if (_e45) {
         return light_1;
     }
-    metal::float2 _e38 = u.nebula.target_size;
-    float _e46 = u.nebula.target_size.y;
-    float _e52 = u.nebula.scale;
-    metal::float2 p_3 = ((pixel_1 - (_e38 * 0.5)) / metal::float2(_e46)) * (5.0 / _e52);
-    metal::float2 _e59 = u.nebula.drift;
-    float _e62 = lattice_material(p_3, _e59, contour_1.x, contour_1.y, u, glow_sum);
-    float _e66 = u.nebula.depth;
-    return light_1 * metal::mix(1.0, _e62, _e66);
+    metal::float2 _e49 = u.nebula.target_size;
+    float _e57 = u.nebula.target_size.y;
+    float _e63 = u.nebula.scale;
+    metal::float2 p_3 = ((pixel_1 - (_e49 * 0.5)) / metal::float2(_e57)) * (5.0 / _e63);
+    metal::float2 _e70 = u.nebula.drift;
+    float _e73 = lattice_material(p_3, _e70, contour_1.x, contour_1.y, u, glow_sum);
+    float _e77 = u.nebula.depth;
+    return light_1 * metal::mix(1.0, _e73, _e77);
 }
 
 struct fs_glow_resolveInput {

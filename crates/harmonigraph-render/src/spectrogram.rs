@@ -29,7 +29,7 @@ use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const SPECTROGRAM_SRC: &str = concat!(
-    include_str!("shaders/watercolor_geometry.wgsl"),
+    include_str!("shaders/atmosphere_geometry.wgsl"),
     "\n",
     include_str!("shaders/spectrogram.wgsl"),
 );

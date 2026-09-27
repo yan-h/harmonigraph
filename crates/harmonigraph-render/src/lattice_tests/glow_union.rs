@@ -246,6 +246,66 @@ fn watercolor_roughness_motion_and_silence_use_the_production_light() {
 }
 
 #[test]
+fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles() {
+    use harmonigraph_scene::LatticeMaterial::{Mosaic, Watercolor};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.material = Mosaic;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.nebula_depth = 0.0;
+    scene.atmosphere.nebula_scale = 1.0;
+    scene.atmosphere.nebula_speed = 1.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+    let baseline = glow(&mut shooter, &scene);
+    scene.atmosphere.nebula_depth = 1.0;
+    let mosaic = glow(&mut shooter, &scene);
+    let changed = baseline
+        .chunks_exact(4)
+        .zip(mosaic.chunks_exact(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+        .count();
+    assert!(changed > 500, "fixture must reach Mosaic displacement: {changed} pixels");
+    assert!(mosaic.chunks_exact(4).any(|p| p[3] > 30));
+    for pixel in mosaic.chunks_exact(4) {
+        assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
+        assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
+    }
+    scene.atmosphere.material = Watercolor;
+    shooter.shot_again(&scene);
+    let wash = read_glow(&shooter);
+    assert_ne!(mosaic, wash, "same-sized tiles must switch geometry");
+    assert_eq!(wash, glow(&mut shooter, &scene), "switched wash matches a fresh pane");
+    scene.atmosphere.material = Mosaic;
+    shooter.shot_again(&scene);
+    assert_eq!(mosaic, read_glow(&shooter), "switching back must rebake Mosaic");
+    scene.atmosphere.source_roughness = 1.0;
+    shooter.shot_again(&scene);
+    assert_eq!(mosaic, read_glow(&shooter), "Watercolor roughness cannot reach Mosaic");
+    scene.glow_timing.as_mut().unwrap().now = 8.0;
+    shooter.shot_again(&scene);
+    assert_ne!(mosaic, read_glow(&shooter), "held notes show material motion");
+    scene.atmosphere.nebula_speed = 0.0;
+    shooter.shot_again(&scene);
+    assert_eq!(mosaic, read_glow(&shooter), "zero speed freezes the facets");
+    scene.atmosphere.nebula_depth = 0.0;
+    shooter.shot_again(&scene);
+    assert_eq!(baseline, read_glow(&shooter), "zero depth restores smooth light");
+    scene.atmosphere.nebula_depth = 1.0;
+    scene.atmosphere.enabled = false;
+    shooter.shot_again(&scene);
+    assert_eq!(baseline, read_glow(&shooter), "disabled texture restores smooth light");
+    scene.atmosphere.enabled = true;
+    shooter.shot_again(&scene);
+    assert_eq!(mosaic, read_glow(&shooter));
+    for node in &mut scene.nodes {
+        node.glow.level = 0.0;
+    }
+    shooter.shot_again(&scene);
+    assert!(read_glow(&shooter).iter().all(|b| *b == 0), "silence clears displaced light");
+}
+
+#[test]
 fn a_rough_single_node_cannot_exceed_the_fixed_glow_peak() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);

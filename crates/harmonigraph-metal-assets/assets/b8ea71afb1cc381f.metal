@@ -13,6 +13,10 @@ struct WashField {
     float cover;
     char _pad3[4];
 };
+struct Pile {
+    metal::float2 face;
+    metal::float2 to_centre;
+};
 struct VertexOut {
     metal::float4 position;
     float slab;
@@ -70,10 +74,6 @@ struct Cloud {
     metal::float2 memory_extent;
     type_10 previous_slices;
 };
-struct Pile {
-    metal::float2 face;
-    metal::float2 to_centre;
-};
 constant float CLOUD_TILE_ROT_SIN = 0.6;
 constant float CLOUD_TILE_ROT_COS = 0.8;
 constant int WASH_RING = 2;
@@ -87,8 +87,6 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
-constant float CLOUD_UNITS = 10.0;
-constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
 constant float DOME_RADIUS_MIN = 0.95;
@@ -98,6 +96,8 @@ constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
+constant float CLOUD_UNITS = 10.0;
+constant float SCALE_CELLS = 2.7272727;
 constant uint STAR_SLICES = 5u;
 constant float STAR_PANE = 540.0;
 constant float STAR_JITTER = 0.6;
@@ -109,7 +109,7 @@ constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
 constant float STAR_RING_FADE = 0.7;
-constant bool STAR_SPLIT = false;
+constant bool STAR_SPLIT = true;
 
 metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
@@ -688,15 +688,15 @@ metal::float4 backdrop_color(
     return _e9;
 }
 
-struct fs_cloud_backdrop_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
-  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
 , metal::float4 position_3 [[position]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> color_memory [[texture(7)]]
@@ -711,5 +711,6 @@ fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
 ) {
     const VertexOut in = { position_3, varyings.slab, varyings.t };
     metal::float4 _e3 = backdrop_color(in.position.xy, lut, color_memory, close_light, cloud_sampler, cloud, cloud_tone, cloud_tile_a, cloud_tile_b, tile_sampler, star_atlas);
-    return fs_cloud_backdrop_gammaOutput { _e3 };
+    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

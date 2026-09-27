@@ -17,6 +17,10 @@ struct WashField {
     float cover;
     char _pad3[4];
 };
+struct Pile {
+    metal::float2 face;
+    metal::float2 to_centre;
+};
 struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
@@ -37,7 +41,7 @@ struct Locals {
     uint _pad1_;
     uint _pad2_;
 };
-typedef uint type_6[1];
+typedef uint type_7[1];
 struct VertexOut {
     metal::float4 position;
     float slab;
@@ -95,10 +99,6 @@ struct Cloud {
     metal::float2 memory_extent;
     type_11 previous_slices;
 };
-struct Pile {
-    metal::float2 face;
-    metal::float2 to_centre;
-};
 constant float CLOUD_TILE_ROT_SIN = 0.6;
 constant float CLOUD_TILE_ROT_COS = 0.8;
 constant int WASH_RING = 2;
@@ -112,8 +112,6 @@ constant float WASH_WARP = 0.45;
 constant float WASH_WARP_SCALE = 0.9;
 constant float WASH_FBM_FINE = 2.07;
 constant float WASH_FBM_FINE_TILED = 2.0;
-constant float CLOUD_UNITS = 10.0;
-constant float SCALE_CELLS = 2.7272727;
 constant float DOME_RADIUS = 1.15;
 constant float DOME_JITTER = 0.3;
 constant float DOME_RADIUS_MIN = 0.95;
@@ -123,6 +121,8 @@ constant float DOME_VARIETY_GAIN = 5.0;
 constant float DOME_FACE = 1.5122874;
 constant float DOME_LACUNARITY = 2.1;
 constant float DOME_FINE_GAIN = 0.22;
+constant float CLOUD_UNITS = 10.0;
+constant float SCALE_CELLS = 2.7272727;
 constant uint STAR_SLICES = 5u;
 constant float STAR_PANE = 540.0;
 constant float STAR_JITTER = 0.6;
@@ -134,7 +134,7 @@ constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
 constant float STAR_RING_FADE = 0.7;
-constant bool STAR_SPLIT = true;
+constant bool STAR_SPLIT = false;
 
 metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
@@ -158,7 +158,7 @@ uint stored(
     uint slot,
     uint bucket,
     constant Locals& locals,
-    device type_6 const& grid,
+    device type_7 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.stride;
@@ -190,7 +190,7 @@ float bucket_level(
     uint b,
     bool density,
     constant Locals& locals,
-    device type_6 const& grid,
+    device type_7 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float _e5 = locals.spectrum_min_midi;
@@ -219,7 +219,7 @@ float read_level(
     float t_1,
     bool density_1,
     constant Locals& locals,
-    device type_6 const& grid,
+    device type_7 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float sum = 0.0;
@@ -293,7 +293,7 @@ float field_level(
     VertexOut in_1,
     bool density_2,
     constant Locals& locals,
-    device type_6 const& grid,
+    device type_7 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.run_slabs;
@@ -317,7 +317,7 @@ float field_level(
 float heatmap_level(
     VertexOut in_2,
     constant Locals& locals,
-    device type_6 const& grid,
+    device type_7 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
@@ -853,7 +853,7 @@ bool full_material_memory(
 metal::float4 cloud_color(
     VertexOut in_3,
     constant Locals& locals,
-    device type_6 const& grid,
+    device type_7 const& grid,
     metal::texture2d<float, metal::access::sample> lut,
     metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -896,7 +896,7 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
   fs_cloud_gammaInput varyings [[stage_in]]
 , metal::float4 position_2 [[position]]
 , constant Locals& locals [[buffer(0)]]
-, device type_6 const& grid [[buffer(1)]]
+, device type_7 const& grid [[buffer(1)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> color_memory [[texture(7)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
