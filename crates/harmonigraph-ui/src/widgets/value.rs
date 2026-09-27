@@ -5,7 +5,7 @@ use std::ops::RangeInclusive;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, elided_name, grip_over_text, grip_radius, grip_rect, track_fill,
+    bar_radius, bar_width, elided_name, grip_radius, name_color, paint_thumbs, track_fill,
     BAR_TEXT_PAD, HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
@@ -482,11 +482,9 @@ impl<'a> ValueBar<'a> {
             ));
         }
 
-        let lit = response.hovered() || response.dragged();
-        let (text_color, value_color) = match (self.swatch, lit) {
-            (Some(_), _) => (theme::well(), theme::well()),
-            (None, true) => (theme::text(), theme::text()),
-            (None, false) => (theme::text_dim(), theme::text()),
+        let (text_color, value_color) = match self.swatch {
+            Some(_) => (theme::well(), theme::well()),
+            None => (name_color(&response), theme::text()),
         };
         // The value is laid out first and the name takes what is left, elided.
         // The number is what the bar is FOR — a name that runs over it, or out
@@ -533,15 +531,16 @@ impl<'a> ValueBar<'a> {
         painter.galley(value_pos, value.clone(), value_color);
         // Over the text, as every handle in the panel is: it is the part
         // being operated, and the text under it is knocked out rather than
-        // hidden (see [`grip_over_text`]). White at rest as well as in hand,
-        // because the track under it is colour rather than the well an unlit
-        // grip is made to stand off.
+        // hidden (see `paint_thumbs`). Lit at rest as well as in hand, because
+        // the track under it is colour rather than the well an unlit grip is
+        // made to stand off.
         if self.swatch.is_some() {
-            grip_over_text(
+            paint_thumbs(
                 painter,
-                grip_rect(travel.left() + travel.width() * t, rect, scale),
+                rect,
+                scale,
                 grip_radius(scale),
-                theme::text(),
+                [(travel.left() + travel.width() * t, true)],
                 &[(label_pos, label), (value_pos, value)],
             );
         }
@@ -1398,8 +1397,12 @@ mod tests {
     ///
     /// 157pt is the bar a 173pt column gives, and 173 is where the column
     /// floors — one separator drag from the default window, no resize needed.
+    /// The sweep has to reach a width where the name IS elided, or it asks
+    /// nothing of the badge's place; that is checked rather than assumed of
+    /// today's font.
     #[test]
     fn a_badged_bar_says_so_even_when_its_name_is_elided() {
+        let mut elided = 0;
         for width in [157.0f32, 180.0, 200.0, 400.0] {
             let mut value = 386.31;
             let out = painted(width, |ui| {
@@ -1420,7 +1423,11 @@ mod tests {
                 name.to_lowercase().contains("meantone"),
                 "a {width}pt badged bar painted its name as {name:?}, which does not say so"
             );
+            if name.ends_with('\u{2026}') {
+                elided += 1;
+            }
         }
+        assert!(elided > 0, "the badged name was drawn whole at every swept width");
     }
 
     /// The name painted by a bar of `width` holding `value`, as its rendered

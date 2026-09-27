@@ -6,9 +6,9 @@ use std::ops::RangeInclusive;
 use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    aimed_at, bar_radius, bar_width, elided_name, grabbed, grip_color, grip_over_text, grip_radius,
-    grip_rect, poised, release_grab, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX,
-    HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W, TEXT_GAP,
+    bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
+    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
+    TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -303,8 +303,8 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// The pair does NOT park together at the right, the way [`SpreadBar`]
 /// spells its two ends into one readout, and the reason is the thumb rather
 /// than the room: a parked run is crossed by any handle dragged past about
-/// four fifths of the bar, which is where the Level range bar's ceiling and the Band
-/// bar's outer radius both sit at rest. A number goes in a run of CLEAR bar
+/// four fifths of the bar, and the pitch color range's high end rests at nine
+/// tenths of its axis. A number goes in a run of CLEAR bar
 /// instead, which is what keeps a thumb's own width between it and every thumb;
 /// swept with the pitch range's `hz_readout`, the widest readout any pane asks
 /// for, no thumb stands in a number at 300pt or above, and the settings column
@@ -336,17 +336,17 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 ///
 /// Most bars only reach it while the low end is DRAGGED there: a bar that
 /// opens at the full axis stands its low handle a point clear of the name, and
-/// the Level range bar opens at 40% of its axis. The two
-/// [`fade_span`](RangeBar::fade_span) bars rest inside it, and the Clearance
-/// does so at a fresh install — its low end is where the gap stops being solid,
-/// which on a nearly-fully-soft default is 1.4% of the axis, so the thumb
-/// stands on the "C".
+/// the pitch and level color ranges open at a fifth and a third of their axes.
+/// The two [`fade_span`](RangeBar::fade_span) bars, Cross length and Held-note
+/// extension, rest inside it at a fresh install — each one's low end is where
+/// its edge stops being solid, which on Held-note extension's nearly-fully-soft
+/// default is 4% of the axis, so the thumb stands on the name's first letter.
 ///
 /// **That costs no letter**, and it is why the fresh look does not have to be
 /// chosen around it. The name is painted a second time clipped to the thumb, in
 /// the panel colour, so its letters cross the grip in reverse rather than
 /// disappearing under it ([`grip_over_text`]). Nothing moves and the thumb
-/// keeps its full width; the "G" changes colour for as long as the handle
+/// keeps its full width; the letter changes colour for as long as the handle
 /// stands on it. A look picked to keep a handle off a letter would be the
 /// picture paying for the panel, and this is what buys it back.
 ///
@@ -356,6 +356,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 ///
 /// [`ValueBar`]: super::value::ValueBar
 /// [`SpreadBar`]: super::gradient::SpreadBar
+/// [`grip_over_text`]: super::bar::grip_over_text
 pub struct RangeBar<'a> {
     low: &'a mut f32,
     high: &'a mut f32,
@@ -497,38 +498,27 @@ impl<'a> RangeBar<'a> {
         };
 
         // ---- Interaction ----------------------------------------------------
-        let grab_id = response.id.with("grab");
         let near = GRAB_PX / track.width().max(1.0) * (max - min);
-        let mut holding = None;
         if response.double_clicked() {
             *self.low = min;
             *self.high = max;
             response.mark_changed();
         }
-        if response.dragged() {
-            if let Some(p) = response.interact_pointer_pos() {
-                let v = value_at(p.x);
-                let v = if self.integer { v.round() } else { v };
-                // Decided on the first frame of the gesture and remembered for
-                // the rest of it, so dragging one end past the other doesn't
-                // hand the drag to whichever handle is nearest now. Decided
-                // HERE rather than under `drag_started` so a gesture whose
-                // start frame was missed still does something.
-                let grab = grabbed(ui, grab_id, |ui| {
-                    // From where the press LANDED (see `aimed_at`).
-                    Grab::at(aim_at(aimed_at(ui, p).x), (*self.low, *self.high), near)
-                });
-                holding = Some(grab);
-                let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
-                if lo != *self.low || hi != *self.high {
-                    (*self.low, *self.high) = (lo, hi);
-                    response.mark_changed();
-                }
+        // Decided on the first frame of the gesture and remembered for the rest
+        // of it (see `drag`), so dragging one end past the other doesn't hand
+        // the drag to whichever handle is nearest now.
+        let pair = (*self.low, *self.high);
+        let held = drag(ui, &response, |aim| Grab::at(aim_at(aim.x), pair, near));
+        if let Some((grab, p)) = held {
+            let v = value_at(p.x);
+            let v = if self.integer { v.round() } else { v };
+            let (lo, hi) = grab.apply(v, (*self.low, *self.high), (min, max), self.min_span);
+            if lo != *self.low || hi != *self.high {
+                (*self.low, *self.high) = (lo, hi);
+                response.mark_changed();
             }
         }
-        if response.drag_stopped() {
-            release_grab::<Grab>(ui, grab_id);
-        }
+        let holding = held.map(|(grab, _)| grab);
 
         // Off screen nothing below is needed; see the same line in `ValueBar`.
         if !ui.is_rect_visible(rect) {
@@ -649,11 +639,7 @@ impl<'a> RangeBar<'a> {
         // The name first, in the same place and the same faces a ValueBar puts
         // its own. Values in monospace: digits align and don't wiggle as they
         // change.
-        let text_color = if response.hovered() || response.dragged() {
-            theme::text()
-        } else {
-            theme::text_dim()
-        };
+        let text_color = name_color(&response);
         let mono = TextStyle::Monospace.resolve(ui.style());
         let text_gap = TEXT_GAP * scale;
         let width_of =
@@ -755,12 +741,12 @@ impl<'a> RangeBar<'a> {
         // numbers out too would give the placement somewhere soft to fail into
         // and cost that check its teeth. The name has no such option: it is
         // pinned to the left of the bar and a thumb comes to rest on it — which
-        // for the two `fade_span` bars and a fresh Clearance is where they OPEN.
+        // for the two `fade_span` bars is where they OPEN.
         //
         // Lit by what is in hand (see [`grip_color`]): the end a drag holds or a
         // press would take, both for the span. A closed span stands both thumbs
         // on one point with only the low one in reach, so the unlit one is
-        // painted first and the lit one shows.
+        // painted first and the lit one shows (`paint_thumbs`).
         let in_hand = holding.or_else(|| {
             poised(ui, &response).map(|p| Grab::at(aim_at(p.x), (*self.low, *self.high), near))
         });
@@ -769,18 +755,15 @@ impl<'a> RangeBar<'a> {
             Some(Grab::High) => (false, true),
             Some(Grab::Span { .. }) | None => (true, true),
         };
-        let mut thumbs = [(lgx, low_lit), (hgx, high_lit)];
-        thumbs.sort_by_key(|&(_, lit)| lit);
         let grip_radius = if self.fade_span { CornerRadius::same(r) } else { grip_radius(scale) };
-        for (x, lit) in thumbs {
-            grip_over_text(
-                painter,
-                grip_rect(x, rect, scale),
-                grip_radius,
-                grip_color(lit),
-                &[(label_pos, label.clone())],
-            );
-        }
+        paint_thumbs(
+            painter,
+            rect,
+            scale,
+            grip_radius,
+            [(lgx, low_lit), (hgx, high_lit)],
+            &[(label_pos, label)],
+        );
 
         // The cursor says which of the two gestures a press would start, so the
         // difference is visible BEFORE committing to a drag: an end resizes,
@@ -940,7 +923,7 @@ mod tests {
         // frame the bar sees is never at `from`. A harness that jumped straight
         // to its target would hand the bar a first frame at the destination and
         // never put a gap between where the press landed and where the gesture
-        // is read — which is the gap [`aimed_at`] exists for.
+        // is read — which is the gap `drag` exists for.
         let step = 12.0 / bar.width() * (to - from).signum();
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(from + step))]);
         frame(&mut lo, &mut hi, vec![egui::Event::PointerMoved(at(to))]);
@@ -1136,7 +1119,7 @@ mod tests {
     /// And emits nothing where no thumb reaches the name, which is where the
     /// bars rest: one pass and no clipped second one. The saving is a shape
     /// rather than a tessellation (epaint would cull the row anyway — see
-    /// [`grip_over_text`]); what it really buys is a paint list in which a
+    /// `bar::grip_over_text`); what it really buys is a paint list in which a
     /// knockout shape means a knockout happened, which is what lets the test
     /// above count them. This holds the guard that keeps it true.
     #[test]
@@ -1153,19 +1136,20 @@ mod tests {
 
     /// A [`RangeBar::fade_span`] bar is knocked out like any other, and it is
     /// the one that needs it most: the two of them rest with a thumb inside the
-    /// name's own share of the bar, and a fresh Clearance stands its low end on
-    /// the "C". Every other bar has to be dragged there.
+    /// name's own share of the bar, a fresh Held-note extension standing its low
+    /// end on the name's first letters. Every other bar has to be dragged there.
     ///
     /// It is also the bar that stretches the square clip furthest. Its thumb
     /// takes the BAR's corner rather than a grip's, which on a 4pt width epaint
     /// holds to a 2pt pill, so the corner notches the clip cannot follow are
     /// the whole of the top and bottom 2pt rather than a sliver — see
-    /// [`grip_over_text`] for why that is a bound worth stating and not a bug
+    /// `bar::grip_over_text` for why that is a bound worth stating and not a bug
     /// worth code. What is asserted here is what the shape list can answer: the
     /// knockout happens, on the thumb, in the panel colour.
     #[test]
     fn a_fade_span_bars_name_is_knocked_out_where_its_thumb_rests_on_it() {
-        // A low end just inside the name, the way a fresh Clearance opens.
+        // A low end just inside the name, the way a fresh Held-note extension
+        // opens.
         let (mut lo, mut hi) = (AXIS.0 + 3.0, AXIS.0 + 20.0);
         let out = painted(300.0, |ui| {
             RangeBar::new(&mut lo, &mut hi, AXIS.0..=AXIS.1, NAME)
@@ -1351,9 +1335,8 @@ mod tests {
     /// [`SpreadBar`]'s are: the thumb is drawn in the same near-white as the
     /// digits, so a crossing swallows a character whichever of the two paints
     /// last, and "-60 dB" reading "-60 B" is the concrete thing this holds
-    /// off. The Level range bar's ceiling and the Pitch range's high end both
-    /// rest past four fifths of their axes, which is where a parked run is
-    /// crossed.
+    /// off. The pitch color range's high end rests at nine tenths of its axis,
+    /// past the four fifths where a parked run is crossed.
     ///
     /// SWEPT, not sampled at the resting spans, and that is the point of it:
     /// sampled at the three placements the panes open at, this passed while a
@@ -1519,7 +1502,7 @@ mod tests {
     /// end, whichever way the drag then runs.
     ///
     /// [`Grab::at`] is asked on the first frame egui calls the press a drag,
-    /// which is already six points along — see [`aimed_at`]. Asked at the live
+    /// which is already six points along — see `bar::drag`. Asked at the live
     /// position, a press in the outer half of the reach that then runs INWARD
     /// is past the reach by the time the question reaches this bar, so it reads
     /// as a middle grab and slides both ends. That is exactly the mistake
