@@ -126,3 +126,36 @@ zero spare node capacity,
 an outgoing MIDI pan with nonzero attack,
 and short between-frame pitch bends surviving only in bounded roll history.
 The GPU and CPU measurement harness stays in this evidence patch rather than adding benchmark-sized fixtures to normal coverage.
+
+## Actual GPU cost
+
+After rebasing onto the one-pass renderer at `505529af`,
+a separate timestamp probe compares the old 210-node window with the 241-node selective scene at camera X 0.25.
+Both use the fresh view's bloom strength 1.0223677 and the same held chord.
+The opening timestamp precedes callback preparation command buffers;
+the closing timestamp ends the dependent pane-composite pass.
+The bracket therefore includes the full lattice GPU workload rather than an empty closing pass.
+
+Apply `gpu-cost.patch` and run:
+
+```sh
+HARMONIGRAPH_REQUIRE_GPU=1 cargo test -p harmonigraph-ui --lib scratch_selective_gpu_cost -- --nocapture
+```
+
+Two isolated runs alternate old and selective order on each frame,
+discard 20 warm-up frames,
+and retain 80 samples per variant and size.
+Values below are GPU milliseconds:
+
+| Size | Run | Old p10 / median / p90 | Selective p10 / median / p90 |
+|---|---:|---:|---:|
+| 512×512 | 1 | 1.3793 / 1.8078 / 2.4557 | 1.4710 / 1.7864 / 2.4841 |
+| 512×512 | 2 | 1.3747 / 1.7766 / 2.2314 | 1.2935 / 1.7143 / 2.2451 |
+| 1536×1536 | 1 | 5.2475 / 5.7236 / 6.0477 | 5.2655 / 5.6903 / 6.0622 |
+| 1536×1536 | 2 | 5.2467 / 5.5630 / 5.9074 | 5.2972 / 5.5350 / 6.0050 |
+
+No consistent regression is distinguishable from this measurement noise.
+The slightly lower selective medians are not evidence of a speedup:
+the lower and upper quantiles move in both directions,
+and most of each added halo lies outside the pane.
+These measurements support the bounded selective design but do not promise zero cost on other scenes or hardware.
