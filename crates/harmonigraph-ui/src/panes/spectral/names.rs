@@ -273,7 +273,7 @@ struct Occupancy {
 /// Both are left standing because every local repair measured worse, and the
 /// two obvious ones badly: sizing the grid at the lane's CENTRE pitch names a
 /// pitch nobody plays, which in any non-equal tuning is almost never within
-/// tolerance of a node and so takes `note_name`'s equal-tempered fallback —
+/// tolerance of a node and so takes `Namer::name`'s equal-tempered fallback —
 /// 171 of the 361 lane centres between MIDI 48 and 84 have no node at all
 /// under `Tuning::just()`. The cell then has nothing to do with its material
 /// in either direction, and where it reads narrower than its notes, `room`

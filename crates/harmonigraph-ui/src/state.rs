@@ -779,16 +779,16 @@ impl PictureState {
     /// The block of lattice the picture is currently showing, which is what
     /// every "is this pitch on the lattice" question has to be asked of.
     ///
-    /// Three readers ask it: the analyzer's red band says a sounding note has
-    /// no node by comparing directly against this, and the roll's and the
-    /// spiral's note names both ask through [`note_name`](crate::panes::spectral::names::note_name).
+    /// Three readers ask it through [`Namer`](crate::panes::spectral::names::Namer):
+    /// the analyzer's red band checks for a matching node, while the roll's
+    /// and the spiral's note names choose a spelling.
     /// Asking the view's REACH instead — which the band used to do — makes it
     /// contradict what the lattice is drawing, because the drawn window is
     /// the camera's and runs wider than the reach under everything but
     /// cabinet: at 16:9, fully zoomed out, perspective draws 73% of its nodes
     /// outside it, so a lit node could wear a red band down the spectrum.
     ///
-    /// `note_name`'s readers ask differently on purpose — the reach first,
+    /// The name readers ask differently on purpose — the reach first,
     /// this only where the reach comes up empty — so a name does not move
     /// under a pan. The two answers are allowed to differ, and where they do
     /// the picture is what wears the band: a pitch the reach can spell but the
