@@ -192,13 +192,14 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
 }
 
 #[test]
-fn watercolor_roughness_motion_and_silence_use_the_production_light() {
+fn watercolor_motion_and_silence_use_the_production_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
     scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.material_amount = 0.0;
-    scene.atmosphere.material_scale = 1.0;
+    scene.atmosphere.material_settings.wash_size = 2.0;
+    scene.atmosphere.material_settings.scale_size = 1.0;
     scene.atmosphere.material_speed = 1.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
@@ -212,24 +213,16 @@ fn watercolor_roughness_motion_and_silence_use_the_production_light() {
             .count()
     };
     assert!(changed(&baseline, &smooth) > 500, "fixture must reach the displacement pass");
-    scene.atmosphere.source_roughness = 0.5;
-    let middle = glow(&mut shooter, &scene);
-    scene.atmosphere.source_roughness = 1.0;
-    let rough = glow(&mut shooter, &scene);
-    assert!(changed(&smooth, &middle) > 500 && changed(&middle, &rough) > 500);
-    for picture in [&smooth, &middle, &rough] {
-        assert!(picture.chunks_exact(4).any(|p| p[3] > 30), "measure visible light");
-        for pixel in picture.chunks_exact(4) {
-            assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
-            assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
-        }
+    for pixel in smooth.chunks_exact(4) {
+        assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
+        assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
     }
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
-    assert_ne!(rough, read_glow(&shooter), "held notes still show material motion");
+    assert_ne!(smooth, read_glow(&shooter), "held notes still show material motion");
     scene.atmosphere.material_speed = 0.0;
     shooter.shot_again(&scene);
-    assert_eq!(rough, read_glow(&shooter), "zero speed freezes source and washes");
+    assert_eq!(smooth, read_glow(&shooter), "zero speed freezes washes");
     scene.atmosphere.material_amount = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "depth zero restores the production smooth source");
@@ -239,7 +232,7 @@ fn watercolor_roughness_motion_and_silence_use_the_production_light() {
     assert_eq!(baseline, read_glow(&shooter), "disabled material is exact");
     scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
-    assert_eq!(rough, read_glow(&shooter));
+    assert_eq!(smooth, read_glow(&shooter));
     for node in &mut scene.nodes {
         node.glow.level = 0.0;
     }
@@ -258,7 +251,8 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
     scene.atmosphere.material_style = Mosaic;
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.material_amount = 0.0;
-    scene.atmosphere.material_scale = 1.0;
+    scene.atmosphere.material_settings.wash_size = 1.0;
+    scene.atmosphere.material_settings.scale_size = 1.0;
     scene.atmosphere.material_speed = 1.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
@@ -284,9 +278,6 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
     scene.atmosphere.material_style = Mosaic;
     shooter.shot_again(&scene);
     assert_eq!(mosaic, read_glow(&shooter), "switching back must rebake Mosaic");
-    scene.atmosphere.source_roughness = 1.0;
-    shooter.shot_again(&scene);
-    assert_eq!(mosaic, read_glow(&shooter), "Watercolor roughness cannot reach Mosaic");
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
     assert_ne!(mosaic, read_glow(&shooter), "held notes show material motion");
@@ -311,46 +302,6 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
 }
 
 #[test]
-fn a_rough_single_node_cannot_exceed_the_fixed_glow_peak() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[1.0], 0.75, false);
-    scene.nodes[0].lattice_pos = harmonigraph_core::LatticePos::new(0, 7, 0);
-    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
-    scene.atmosphere.material_amount = 1.0;
-    scene.atmosphere.source_roughness = 1.0;
-    scene.atmosphere.material_speed = 0.0;
-    scene.atmosphere.breath_amount = 0.0;
-    // A flat-topped falloff and this stable seed put the amplified warped
-    // source above its nominal peak unless the source itself is capped.
-    scene.glow_curve.shape = -8.0;
-    shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
-        // Keep the material selector to reach the rough splat, but inspect
-        // its undisplaced source through the production resolve.
-        cb.uniforms.material.scale = 0.0001;
-    });
-    let picture = read_glow(&shooter);
-    let maximum = picture.chunks_exact(4).map(|p| p[3]).max().unwrap();
-    assert!(maximum > 145, "the fixture must actually reach the full-strength source: {maximum}");
-    assert!(maximum <= 154, "roughness exceeded the 0.8 * 0.75 peak: {maximum}");
-}
-
-#[test]
-fn rough_source_identity_does_not_become_a_gaussian_shadow_kind() {
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[1.0], 0.75, false);
-    scene.shadow.lattice_geometry.kernel = harmonigraph_scene::ShadowKernel::Gaussian;
-    scene.shadow.lattice_geometry.width = 0.1;
-    scene.shadow.lattice_geometry.depth = 1.0;
-    let expected = shooter.shot(&scene);
-    let seeded = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
-        for instance in &mut cb.instances {
-            instance.params[3] = 12345.0;
-        }
-    });
-    assert_eq!(expected, seeded, "only the splat may read the stable source identity");
-}
-
-#[test]
 fn textures_feed_both_materials_before_displacement() {
     use harmonigraph_scene::{LatticeMaterial, LatticeTexture};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
@@ -371,6 +322,8 @@ fn textures_feed_both_materials_before_displacement() {
             scene.glow_timing =
                 Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
             let texture_only = glow(&mut shooter, &scene);
+            scene.atmosphere.material_settings.wash_size = 1.0;
+            scene.atmosphere.material_settings.scale_size = 1.0;
             scene.atmosphere.material_style = material;
             let combined = glow(&mut shooter, &scene);
             // Read the actual material input, proving order rather than just two visible effects.
@@ -436,7 +389,6 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     scene.atmosphere.texture_depth = 0.85;
     scene.atmosphere.texture_scale = 2.0;
     scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-    scene.atmosphere.source_roughness = 0.7;
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.texture_speed = 0.0;
     scene.atmosphere.material_speed = 0.0;
@@ -493,6 +445,85 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         glow(&mut shooter, &scene),
         "resize replaces the material source"
     );
+}
+
+#[test]
+fn material_controls_change_light_and_only_geometry_controls_rebake() {
+    use harmonigraph_scene::{LatticeMaterial, MaterialSettings};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut base = scene(&[1.0, 1.0], 0.75, true);
+    base.atmosphere.breath_amount = 0.0;
+    base.atmosphere.texture_depth = 0.8;
+    base.atmosphere.material_speed = 0.0;
+    base.atmosphere.material_settings = MaterialSettings {
+        wash_size: 2.0,
+        scale_size: 2.0,
+        wash_fuzz: 0.5,
+        wash_lobe: 0.5,
+        wash_refract: 1.0,
+        ..Default::default()
+    };
+    let tile = |shooter: &Shooter| {
+        shooter.resources.get::<LatticeResources>().unwrap().panes[&shooter.pane]
+            .material_tile
+            .as_ref()
+            .unwrap()
+            .geometry_binding()
+    };
+    type Turn = fn(&mut MaterialSettings);
+    for (style, label, rebake, turn) in [
+        (
+            LatticeMaterial::Watercolor,
+            "feathering",
+            true,
+            (|s: &mut MaterialSettings| s.wash_fuzz = 0.0) as Turn,
+        ),
+        (LatticeMaterial::Watercolor, "warp", true, |s| s.wash_lobe = 0.0),
+        (LatticeMaterial::Watercolor, "refraction", false, |s| s.wash_refract = 0.0),
+        (LatticeMaterial::Watercolor, "fine layer", false, |s| s.wash_layers = 0.0),
+        (LatticeMaterial::Mosaic, "variety", true, |s| s.scale_variety = 1.0),
+        (LatticeMaterial::Mosaic, "outward refraction", false, |s| s.scale_refract = 1.0),
+        (LatticeMaterial::Mosaic, "zero refraction", false, |s| s.scale_refract = 0.0),
+    ] {
+        let mut scene = scene(&[1.0, 1.0], 0.75, true);
+        scene.atmosphere = base.atmosphere;
+        scene.atmosphere.material_style = style;
+        let before = glow(&mut shooter, &scene);
+        let before_tile = tile(&shooter);
+        turn(&mut scene.atmosphere.material_settings);
+        shooter.shot_again(&scene);
+        let after = read_glow(&shooter);
+        assert_eq!(before_tile != tile(&shooter), rebake, "{style:?}/{label}: tile invalidation");
+        let changed = before
+            .chunks_exact(4)
+            .zip(after.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+            .count();
+        assert!(
+            changed > 100,
+            "{style:?}/{label}: fixture must reach the effect ({changed} pixels)"
+        );
+        assert_eq!(
+            after,
+            glow(&mut shooter, &scene),
+            "{style:?}/{label}: carried and fresh panes agree"
+        );
+    }
+    // The inactive style must neither change the picture nor rebake the tile.
+    for style in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
+        base.atmosphere.material_style = style;
+        let before = glow(&mut shooter, &base);
+        let before_tile = tile(&shooter);
+        if style == LatticeMaterial::Watercolor {
+            base.atmosphere.material_settings.scale_variety = 0.0;
+        } else {
+            base.atmosphere.material_settings.wash_fuzz = 0.0;
+            base.atmosphere.material_settings.wash_lobe = 0.0;
+        }
+        shooter.shot_again(&base);
+        assert_eq!(before, read_glow(&shooter));
+        assert_eq!(before_tile, tile(&shooter));
+    }
 }
 
 fn linear(gamma: f64) -> f64 {

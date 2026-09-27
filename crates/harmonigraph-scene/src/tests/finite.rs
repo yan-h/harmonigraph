@@ -125,9 +125,18 @@ fn poisoned_view() -> ViewConfig {
             texture: base.atmosphere.texture,
             material_style: base.atmosphere.material_style,
             material_amount: nan,
-            material_scale: nan,
+            material_settings: crate::MaterialSettings {
+                scale_size: nan,
+                scale_variety: nan,
+                scale_refract: nan,
+                wash_size: nan,
+                wash_fuzz: nan,
+                wash_lobe: nan,
+                wash_refract: nan,
+                wash_layers: nan,
+            },
             material_speed: nan,
-            source_roughness: nan,
+            material_direction: nan,
             texture_depth: nan,
             texture_scale: nan,
             texture_speed: nan,
@@ -377,9 +386,9 @@ fn scene_floats(scene: &Scene) -> Floats {
         texture: _,
         material_style: _,
         material_amount,
-        material_scale,
+        material_settings,
         material_speed,
-        source_roughness,
+        material_direction,
         texture_depth,
         texture_scale,
         texture_speed,
@@ -387,9 +396,27 @@ fn scene_floats(scene: &Scene) -> Floats {
         breath_speed,
     } = atmosphere;
     f.one("atmosphere.material_amount", *material_amount);
-    f.one("atmosphere.material_scale", *material_scale);
+    let crate::MaterialSettings {
+        scale_size,
+        scale_variety,
+        scale_refract,
+        wash_size,
+        wash_fuzz,
+        wash_lobe,
+        wash_refract,
+        wash_layers,
+    } = material_settings;
+    f.one("atmosphere.material_settings.scale_size", *scale_size);
+    f.one("atmosphere.material_settings.scale_variety", *scale_variety);
+    f.one("atmosphere.material_settings.scale_refract", *scale_refract);
+    f.one("atmosphere.material_settings.wash_size", *wash_size);
+    f.one("atmosphere.material_settings.wash_fuzz", *wash_fuzz);
+    f.one("atmosphere.material_settings.wash_lobe", *wash_lobe);
+    f.one("atmosphere.material_settings.wash_refract", *wash_refract);
+    f.one("atmosphere.material_settings.wash_layers", *wash_layers);
+
     f.one("atmosphere.material_speed", *material_speed);
-    f.one("atmosphere.source_roughness", *source_roughness);
+    f.one("atmosphere.material_direction", *material_direction);
     f.one("atmosphere.texture_depth", *texture_depth);
     f.one("atmosphere.texture_scale", *texture_scale);
     f.one("atmosphere.texture_speed", *texture_speed);

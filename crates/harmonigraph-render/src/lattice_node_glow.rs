@@ -62,7 +62,7 @@ pub(super) fn create_glow_pipelines(
     uniforms: &wgpu::BindGroupLayout,
     strip: &wgpu::BindGroupLayout,
     statistics: &wgpu::BindGroupLayout,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
     let blend = |dst_factor| {
         let component = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
@@ -129,9 +129,7 @@ pub(super) fn create_glow_pipelines(
             write_mask: wgpu::ColorWrites::ALL,
         })],
     );
-    let watercolor =
-        make("vs_glow_splat", "fs_glow_splat_watercolor", strip, &[GpuInstance::LAYOUT], &targets);
-    (splat, resolve, watercolor)
+    (splat, resolve)
 }
 
 impl GlowTarget {
@@ -164,13 +162,7 @@ impl GlowTarget {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(
-                if pane.material_tile.as_ref().is_some_and(|tile| tile.is_watercolor()) {
-                    &compiled.shaders.glow_watercolor_pipeline
-                } else {
-                    &compiled.shaders.glow_splat_pipeline
-                },
-            );
+            pass.set_pipeline(&compiled.shaders.glow_splat_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));

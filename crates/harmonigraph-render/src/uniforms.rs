@@ -140,7 +140,11 @@ uniform_group! {
         scale: f32,
         drift: Float2,
         style: u32,
-        source_roughness: f32,
+        fuzz: f32,
+        lobe: f32,
+        variety: f32,
+        refract: f32,
+        layers: f32,
         padding: Float2,
     }
 }

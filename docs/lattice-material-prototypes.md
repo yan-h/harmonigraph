@@ -1,5 +1,10 @@
 # Lattice material prototypes
 
+This document records the original prototype experiments and measurements.
+The current controls and rendering contract are in [Independent lattice texture and material](design/lattice-texture-material.md).
+Source roughness has since been removed,
+and Watercolor/Mosaic now share the spectrogram’s geometry controls.
+
 Clouds, Contours, Interference and Watercolor are the selectable materials in **Lattice → Light → Background glow texture and breathing → Material**.
 They texture the combined note light;
 the note rings and labels retain their existing drawing.
