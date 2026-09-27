@@ -28,7 +28,7 @@ fn dialled() -> SharedState {
     appearance.view.max_sevens = 3;
     appearance.view.note_animation.order = harmonigraph_scene::AnimationOrder::Circular;
     appearance.view.note_animation.stagger_spread = 0.63;
-    appearance.view.atmosphere.material = harmonigraph_scene::LatticeMaterial::Contours;
+    appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::Contours;
     appearance.spectrum.orientation = crate::SpectralOrientation::Left;
     appearance.spectrum.roll_thickness = 1.75;
     appearance.spectrum.low_midi = 40.5;
@@ -88,6 +88,9 @@ const RETIRED_KEYS: &[(&str, &str)] = &[
          spectrogram_floor_db:-60.0,spectrogram_ceiling_db:-20.0,\
          spectrogram_gamma:1.6,",
     ),
+    // The entire combined lattice material key is retired, including its old variants.
+    ("material_style", "material:Fibres,"),
+    ("material_style", "material:Liquid,"),
     // The hidden renderer override, a string.
     ("short_edge", "renderer_path:\"/old/renderer\","),
     // The roll's Gap feature and its Color row.
@@ -142,8 +145,6 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
 /// Retiring another variant is a row here, not another test.
 const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     ("orientation", "Left", "Diagonal", true),
-    ("material", "Contours", "Fibres", true),
-    ("material", "Contours", "Liquid", true),
     ("order", "Circular", "OddEvenStagger", true),
     ("spectrogram", "Scrolling", "Playhead", true),
     // The selected settings tab lives in the layout, so removing a tab is a
@@ -1729,9 +1730,13 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        material: harmonigraph_scene::LatticeMaterial::Mosaic,
+        texture: harmonigraph_scene::LatticeTexture::Interference,
+        material_style: harmonigraph_scene::LatticeMaterial::Mosaic,
+        material_amount: 0.63,
+        material_scale: 1.7,
+        material_speed: 0.8,
         source_roughness: 0.73,
-        nebula_depth: 0.45,
+        texture_depth: 0.45,
         breath_speed: 2.2,
         ..Default::default()
     };
@@ -1767,13 +1772,37 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
             assert_eq!(&loaded[other], expected, "omitting {key} changed {other}");
         }
     }
+    // Retired keys are ignored rather than parsed as the new stage enums.
+    let old = replace_pair(&saved, "atmosphere", &full,
+        "(enabled:false,material:Watercolor,nebula_depth:0.9,nebula_scale:2.0,nebula_speed:3.0,breath_amount:0.6,breath_speed:1.5,source_roughness:0.7)");
+    let mut restored = fresh();
+    assert!(restored.load_persist(&old));
+    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
+    assert_eq!(
+        restored.picture.appearance.view.atmosphere,
+        AtmosphereSettings {
+            breath_amount: 0.6,
+            breath_speed: 1.5,
+            source_roughness: 0.7,
+            ..Default::default()
+        }
+    );
+    state.picture.appearance.view.atmosphere.material_amount = 7.0;
+    state.picture.appearance.view.atmosphere.material_scale = f32::NAN;
+    state.picture.appearance.view.atmosphere.material_speed = -2.0;
     state.picture.appearance.view.atmosphere.source_roughness = 7.0;
-    state.picture.appearance.view.atmosphere.nebula_depth = f32::NAN;
+    state.picture.appearance.view.atmosphere.texture_depth = f32::NAN;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    assert_eq!(restored.view.atmosphere.nebula_depth, AtmosphereSettings::default().nebula_depth);
+    assert_eq!(restored.view.atmosphere.texture_depth, AtmosphereSettings::default().texture_depth);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
     assert_eq!(restored.view.atmosphere.source_roughness, 1.0);
+    assert_eq!(restored.view.atmosphere.material_amount, 1.0);
+    assert_eq!(
+        restored.view.atmosphere.material_scale,
+        AtmosphereSettings::default().material_scale
+    );
+    assert_eq!(restored.view.atmosphere.material_speed, 0.0);
 }
 
 #[test]

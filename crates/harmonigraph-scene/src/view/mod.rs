@@ -841,7 +841,7 @@ pub struct ViewConfig {
     /// bright end blooms. This strength belongs to the lattice. Glow is a layer of the lattice's nodes, drawn from the
     /// same octave colours their discs are.
     pub glow_reach: f32,
-    /// Experimental glow texture and breathing, shared by editor and exports.
+    /// Glow texture, material and breathing, shared by editor and exports.
     pub atmosphere: AtmosphereSettings,
     /// How much light the node glow lays down. Inert while
     /// [`glow_reach`](Self::glow_reach) is 0.

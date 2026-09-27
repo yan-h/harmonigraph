@@ -170,12 +170,12 @@ pub const STAR_LIFETIME_MIN: f32 = 0.5;
 /// See [`STAR_LIFETIME_MIN`].
 pub const STAR_LIFETIME_MAX: f32 = 20.0;
 
-/// Bounds shared by the [`AtmosphereSettings::nebula_scale`] control and sanitizer.
+/// Bounds shared by the lattice texture/material size controls and sanitizer.
 pub const NEBULA_SCALE_MIN: f32 = 0.25;
 /// See [`NEBULA_SCALE_MIN`].
 pub const NEBULA_SCALE_MAX: f32 = 4.0;
 
-/// Bounds shared by the [`AtmosphereSettings::nebula_speed`] control and sanitizer.
+/// Bounds shared by the lattice texture/material speed controls and sanitizer.
 pub const NEBULA_SPEED_MIN: f32 = 0.0;
 /// See [`NEBULA_SPEED_MIN`].
 pub const NEBULA_SPEED_MAX: f32 = 20.0;
@@ -576,31 +576,42 @@ impl SpectralAtmosphere {
     }
 }
 
-/// A material in the combined lattice light, independent of note ink and history.
-/// Discriminants are the shader's material selector.
-/// Retired Fibres and Liquid variants reject the saved document whole;
-/// documents without a material field default to Clouds.
+/// A pattern applied to combined note light before material displacement.
+/// Discriminants are the shader's texture selector.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
-pub enum LatticeMaterial {
+pub enum LatticeTexture {
     #[default]
     Clouds = 0,
     Contours = 1,
     Interference = 2,
-    Watercolor = 3,
-    Mosaic = 4,
+    None = 3,
+}
+
+/// A displacement of the textured glow; None bypasses the material pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[repr(u32)]
+pub enum LatticeMaterial {
+    #[default]
+    None = 0,
+    Watercolor = 1,
+    Mosaic = 2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
-    pub enabled: bool,
-    pub material: LatticeMaterial,
+    pub texture: LatticeTexture,
+    /// Replaces the retired combined `material` key, which serde ignores.
+    pub material_style: LatticeMaterial,
+    pub material_amount: f32,
+    pub material_scale: f32,
+    pub material_speed: f32,
     /// Per-node source breakup before watercolor resamples the combined light.
     pub source_roughness: f32,
-    pub nebula_depth: f32,
-    pub nebula_scale: f32,
-    pub nebula_speed: f32,
+    pub texture_depth: f32,
+    pub texture_scale: f32,
+    pub texture_speed: f32,
     pub breath_amount: f32,
     pub breath_speed: f32,
 }
@@ -608,12 +619,15 @@ pub struct AtmosphereSettings {
 impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
-            enabled: true,
-            material: LatticeMaterial::Clouds,
+            texture: LatticeTexture::Clouds,
+            material_style: LatticeMaterial::None,
+            material_amount: 1.0,
+            material_scale: 1.0,
+            material_speed: 1.0,
             source_roughness: 0.0,
-            nebula_depth: 0.134_627_85,
-            nebula_scale: 0.840_435_3,
-            nebula_speed: 6.077_757_4,
+            texture_depth: 0.134_627_85,
+            texture_scale: 0.840_435_3,
+            texture_speed: 6.077_757_4,
             breath_amount: 0.429_406_55,
             breath_speed: 1.813_457_6,
         }
@@ -630,12 +644,17 @@ impl AtmosphereSettings {
                 fallback
             }
         };
+        self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
+        self.material_scale =
+            clamp(self.material_scale, fresh.material_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
+        self.material_speed =
+            clamp(self.material_speed, fresh.material_speed, NEBULA_SPEED_MIN, NEBULA_SPEED_MAX);
         self.source_roughness = clamp(self.source_roughness, fresh.source_roughness, 0.0, 1.0);
-        self.nebula_depth = clamp(self.nebula_depth, fresh.nebula_depth, 0.0, 1.0);
-        self.nebula_scale =
-            clamp(self.nebula_scale, fresh.nebula_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
-        self.nebula_speed =
-            clamp(self.nebula_speed, fresh.nebula_speed, NEBULA_SPEED_MIN, NEBULA_SPEED_MAX);
+        self.texture_depth = clamp(self.texture_depth, fresh.texture_depth, 0.0, 1.0);
+        self.texture_scale =
+            clamp(self.texture_scale, fresh.texture_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
+        self.texture_speed =
+            clamp(self.texture_speed, fresh.texture_speed, NEBULA_SPEED_MIN, NEBULA_SPEED_MAX);
         self.breath_amount = clamp(self.breath_amount, fresh.breath_amount, 0.0, 1.0);
         self.breath_speed =
             clamp(self.breath_speed, fresh.breath_speed, BREATH_SPEED_MIN, BREATH_SPEED_MAX);
@@ -645,7 +664,7 @@ impl AtmosphereSettings {
     /// Identity comes from the lattice coordinates, which survive a camera
     /// rebase. The modulation never feeds back into the carried glow history.
     pub fn breath(self, position: LatticePos, now: f64) -> f32 {
-        if !self.enabled || self.breath_amount == 0.0 || self.breath_speed == 0.0 {
+        if self.breath_amount == 0.0 || self.breath_speed == 0.0 {
             return 1.0;
         }
         let phase = f64::from(position.fives) * 2.173
