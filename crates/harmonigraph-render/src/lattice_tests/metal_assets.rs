@@ -12,7 +12,11 @@ use wgpu::util::DeviceExt;
 fn generated_metal_assets_preserve_storage_binding_lengths() {
     let (_, adapter) = crate::test_gpu_adapter().expect("Metal adapter required");
     assert_eq!(adapter.get_info().backend, wgpu::Backend::Metal);
-    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
+        ..Default::default()
+    }))
+    .unwrap();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("metal_asset_binding_lengths"),
         source: wgpu::ShaderSource::Wgsl(

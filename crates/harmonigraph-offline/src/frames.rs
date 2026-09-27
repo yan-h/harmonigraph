@@ -84,7 +84,11 @@ impl Renderer {
                 instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
             )
             .ok()?;
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: harmonigraph_render::device_limits(&adapter),
+                ..Default::default()
+            }))
+            .ok()?
         };
 
         // `predictable_texture_filtering` makes glyph sampling identical

@@ -162,7 +162,7 @@ impl GlowTarget {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&compiled.glow_splat_pipeline);
+            pass.set_pipeline(&compiled.shaders.glow_splat_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_bind_group(1, &strip.blurred_bind_group, &[]);
             pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
@@ -177,7 +177,7 @@ impl GlowTarget {
             multiview_mask: None,
         });
         if has_light {
-            pass.set_pipeline(&compiled.glow_resolve_pipeline);
+            pass.set_pipeline(&compiled.shaders.glow_resolve_pipeline);
             pass.set_bind_group(0, &pane.bind_group, &[]);
             pass.set_bind_group(1, &self.statistics_bind_group, &[]);
             pass.draw(0..4, 0..1);

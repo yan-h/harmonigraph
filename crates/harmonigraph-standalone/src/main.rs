@@ -35,6 +35,7 @@ fn main() -> eframe::Result {
             std::sync::Arc::new(move |adapter: &harmonigraph_render::wgpu::Adapter| {
                 use harmonigraph_render::wgpu::Features;
                 let mut descriptor = base(adapter);
+                descriptor.required_limits = harmonigraph_render::device_limits(adapter);
                 descriptor.required_features |= adapter.features() & Features::TIMESTAMP_QUERY;
                 descriptor
             });

@@ -182,6 +182,7 @@ fn cloud_costs_by_style_and_dial() {
         return;
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
         required_features: features,
         ..Default::default()
     }))

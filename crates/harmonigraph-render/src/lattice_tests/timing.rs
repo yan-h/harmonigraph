@@ -23,6 +23,7 @@
 //! ```
 //! `PROBE_OCCLUSION=0` compares the same shader with receiver fading disabled.
 //! `PROBE_LOCAL_SHADOW=0` disables only the local notation-shadow pass.
+//! `PROBE_OCTAVES=1` bounds the cost of the default seven-slot shader walks.
 //! Probe scenes now use `scrolled()` at the rendered default camera and square
 //! aspect. Historical `reach()` figures over-counted off-pane instances (#1182).
 //! Synthetic audio-ring and dense-animation grids remain explicitly synthetic.
@@ -309,6 +310,11 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         .map(|v| [v.parse::<u32>().expect("PROBE_SIZE is pixels"); 2])
         .unwrap_or(SIZE);
     crate::shader_assets::initialize();
+    if let Ok(value) = std::env::var("PROBE_OCTAVES") {
+        let count = value.parse().expect("PROBE_OCTAVES is a count");
+        scene.octave_layout =
+            harmonigraph_scene::octave_layout(count, scene.octave_layout.center, 0, 1.0, 0.0);
+    }
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
         scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
     }
@@ -329,6 +335,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         return;
     }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
         required_features: features,
         ..Default::default()
     }))
@@ -544,8 +551,11 @@ fn timing_editor_pipeline_startup() {
         let started = std::time::Instant::now();
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: crate::device_limits(&adapter),
+            ..Default::default()
+        }))
+        .unwrap();
         eprintln!("opening {opening}: device {:?}", started.elapsed());
         let started = std::time::Instant::now();
         let resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);

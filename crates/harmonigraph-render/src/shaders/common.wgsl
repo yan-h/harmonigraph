@@ -313,13 +313,15 @@ fn cell_clip(texel: vec2<f32>, size: vec2<f32>, w: f32) -> vec4<f32> {
 struct SplitOut {
     @location(0) other: vec4<f32>,
     @location(1) ink: vec4<f32>,
+    @location(2) transmission: vec4<f32>,
 };
 
 struct SceneOut {
     @location(0) other: vec4<f32>,
     @location(1) ink: vec4<f32>,
-    @location(2) bloom_other: vec4<f32>,
-    @location(3) bloom_ink: vec4<f32>,
+    @location(2) transmission: vec4<f32>,
+    @location(3) bloom_other: vec4<f32>,
+    @location(4) bloom_ink: vec4<f32>,
 };
 
 // Lattice ink, including names, fades through the same foreground-node field.

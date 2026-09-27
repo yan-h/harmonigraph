@@ -159,7 +159,11 @@ fn a_node_distance_profile_matches_the_cpu_reference() {
     let packed =
         shadow::pack(&cb.casters, cb.render_scale, device.limits().max_texture_dimension_2d);
     let cell = packed.boxes[cb.node_cells[0] as usize];
-    assert_eq!(cell.who[1], shadow::DISTANCE_KIND, "the node did not pack a distance cell");
+    assert_eq!(
+        cell.who[1],
+        shadow::DISTANCE_COVERAGE_KIND,
+        "the node did not pack a distance coverage cell"
+    );
 
     let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };

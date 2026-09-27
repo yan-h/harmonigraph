@@ -107,7 +107,7 @@ uniform_group! {
     struct GlowParams {
         reach: f32,
         strength: f32,
-        blend: f32,
+        padding: f32,
         curve: f32,
         wash: f32,
         /// Allocated row capacity, independent of this frame's instance count.

@@ -543,6 +543,7 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
     return SplitOut(
         vec4<f32>(0.0, 0.0, 0.0, alpha),
         vec4<f32>(wash_over(ink.rgb, ink.a, light.rgb, 1.0) * visibility, alpha),
+        vec4<f32>(alpha, 0.0, 0.0, alpha),
     );
 }
 
@@ -739,6 +740,7 @@ fn fs_shadow_box(in: BoxOut) -> SceneOut {
     return SceneOut(
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
+        vec4<f32>(0.0, 0.0, 0.0, 1.0 - t),
         vec4<f32>(0.0),
         vec4<f32>(0.0),
     );
@@ -750,20 +752,5 @@ fn fs_shadow_box_plain(in: BoxOut) -> SplitOut {
     let full = shadow_kernel(in.who, in.at);
     let t = local_shadow_transmittance(full, locals.shadow_depth, in.level);
     let shadow = vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
-    return SplitOut(shadow, shadow);
-}
-
-// The same shadow on the scalar transmittance target. Source-over multiplies
-// what is behind by T; this target is never sent through the bloom blur.
-@fragment
-fn fs_label_transmittance(in: BoxOut) -> @location(0) vec4<f32> {
-    let t = local_shadow_transmittance(shadow_kernel(in.who, in.at), locals.shadow_depth, in.level);
-    return vec4<f32>(0.0, 0.0, 0.0, 1.0 - t);
-}
-
-@fragment
-fn fs_glyph_transmittance(in: VertexOut) -> @location(0) vec4<f32> {
-    let a = coverage(in, in.texel) * in.fill.a
-        * node_visibility(in.who, in.points, locals.node_occlusion);
-    return vec4<f32>(a, 0.0, 0.0, a);
+    return SplitOut(shadow, shadow, shadow);
 }

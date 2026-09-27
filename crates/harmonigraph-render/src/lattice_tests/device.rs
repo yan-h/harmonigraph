@@ -31,6 +31,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     (shooter.device, shooter.queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: crate::device_limits(&adapter),
             required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             ..Default::default()
         }))
@@ -48,7 +49,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
         window.panes.values().all(|pane| pane.ink_history.is_some()),
         "the populated context must own temporal history"
     );
-    let pipeline = window.compiled.scenes[0].draws.nodes.clone();
+    let pipeline = window.compiled.shaders.scenes[0].draws.nodes.clone();
     let atlas = FontAtlas {
         image: std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::WHITE)),
         key: 99,
@@ -64,7 +65,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     assert!(reset.panes.is_empty());
     assert!(reset.sheets.atlas.view().is_none() && reset.sheets.marks.view().is_none());
     assert_eq!(reset.sheets.sdf_key, 0);
-    assert_eq!(reset.compiled.scenes[0].draws.nodes, pipeline);
+    assert_eq!(reset.compiled.shaders.scenes[0].draws.nodes, pipeline);
     if let Some(timer) = &window.timer {
         let fresh = reset.timer.as_ref().expect("same timestamp-capable device");
         assert_ne!(fresh.set, timer.set);
@@ -81,7 +82,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     let reopened = cache.resources(&instance, &shooter.device, &shooter.queue, shooter.format);
     eprintln!("cached lattice reopen: {:?}", started.elapsed());
     assert_eq!(
-        reopened.compiled.scenes[0].draws.nodes, pipeline,
+        reopened.compiled.shaders.scenes[0].draws.nodes, pipeline,
         "reopening recompiled the pipeline"
     );
     drop(reopened);
@@ -93,7 +94,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     });
     assert_eq!(differing_pixels(&first, &second), 0, "reopening changed the picture");
     assert_eq!(
-        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].draws.nodes,
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.shaders.scenes[0].draws.nodes,
         pipeline
     );
 }
@@ -108,7 +109,11 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     (shooter.device, shooter.queue) =
-        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: crate::device_limits(&adapter),
+            ..Default::default()
+        }))
+        .unwrap();
     let scene = parity_scene();
     let synchronous = shooter.shot(&scene);
     shooter.resources = CallbackResources::default();
@@ -136,13 +141,14 @@ fn startup_worker_preserves_pixels_and_reuses_its_completed_pipelines() {
             other => panic!("unexpected startup result: {other:?}"),
         }
     }
-    let pipeline = cache.compiled.lock().unwrap().as_ref().unwrap().2.scenes[0].draws.nodes.clone();
+    let pipeline =
+        cache.compiled.lock().unwrap().as_ref().unwrap().2.shaders.scenes[0].draws.nodes.clone();
     let asynchronous = shooter.draw_modified(&scene, LatticeLabels::default(), |callback| {
         callback.pipeline_cache = Some(cache.clone());
     });
     assert_eq!(differing_pixels(&synchronous, &asynchronous), 0);
     assert_eq!(
-        shooter.resources.get::<LatticeResources>().unwrap().compiled.scenes[0].draws.nodes,
+        shooter.resources.get::<LatticeResources>().unwrap().compiled.shaders.scenes[0].draws.nodes,
         pipeline
     );
     shooter.resources = CallbackResources::default();
@@ -159,23 +165,38 @@ fn pipeline_cache_rebuilds_for_another_device_or_format() {
     let Some((instance, adapter)) = crate::test_gpu_adapter() else {
         return;
     };
-    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
+        ..Default::default()
+    }))
+    .unwrap();
     let cache = LatticePipelineCache::default();
     let rgba = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Rgba8Unorm);
     let bgra = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
     assert_ne!(rgba.compiled.composite_pipeline, bgra.compiled.composite_pipeline);
     assert_eq!(bgra.compiled.target_format, wgpu::TextureFormat::Bgra8Unorm);
     let (other, other_queue) =
-        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: crate::device_limits(&adapter),
+            ..Default::default()
+        }))
+        .unwrap();
     let replaced =
         cache.resources(&instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
-    assert_ne!(bgra.compiled.scenes[0].draws.nodes, replaced.compiled.scenes[0].draws.nodes);
+    assert_ne!(
+        bgra.compiled.shaders.scenes[0].draws.nodes,
+        replaced.compiled.shaders.scenes[0].draws.nodes
+    );
 
     // Separate instances can mint equal device IDs. Test that case explicitly.
     let _ = cache.resources(&instance, &device, &queue, wgpu::TextureFormat::Bgra8Unorm);
     let (other_instance, adapter) = crate::test_gpu_adapter().expect("second GPU instance");
     let (other, other_queue) =
-        pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: crate::device_limits(&adapter),
+            ..Default::default()
+        }))
+        .unwrap();
     assert_eq!(device, other, "this fixture must exercise colliding native device IDs");
     let _ = cache.resources(&other_instance, &other, &other_queue, wgpu::TextureFormat::Bgra8Unorm);
     let retained = cache.compiled.lock().unwrap();
@@ -195,6 +216,7 @@ fn headless_device_with_timestamps() -> Option<(wgpu::Device, wgpu::Queue)> {
         return None;
     }
     let pair = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_limits: crate::device_limits(&adapter),
         required_features: wgpu::Features::TIMESTAMP_QUERY,
         ..Default::default()
     }))
