@@ -156,7 +156,9 @@ impl ViewConfig {
     }
 
     /// Maximum world radius of the glow billboard, shared by candidate bounds.
-    /// Matches the renderer's fixed ring/mark rim and 1.8 UV-to-node scale.
+    /// Matches `lattice.wgsl::vs_glow_splat`: fixed ring/mark rim plus reach,
+    /// multiplied by the node radius and 1.8 UV-to-node scale. Per-sheet scale
+    /// (with the shader's 0.05 floor) is applied by the candidate selector.
     pub fn halo_radius(&self) -> f32 {
         let rings = self.rings();
         let rim = rings.outer.max(if rings.mark_thickness > 0.0 {

@@ -40,6 +40,8 @@ pub fn derive_scene(
 
 /// Build the regular window and selected off-pane light owners in lattice order.
 /// Extra owners share the ordinary node derivation and animation path.
+/// The caller supplies unique positions outside `window`, within its remaining
+/// node budget; this constructor sorts them but does not deduplicate them.
 #[allow(clippy::too_many_arguments)]
 pub fn derive_scene_with_extra(
     tracker: &NoteTracker,
