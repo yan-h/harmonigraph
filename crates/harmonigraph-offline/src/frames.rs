@@ -408,6 +408,22 @@ mod tests {
         }
     }
 
+    /// The five-note chord (G3 C4 E4 G4 B4) most probes here are read under.
+    const CHORD: [u8; 5] = [55, 60, 64, 67, 71];
+
+    /// Hold `notes` down from t = 0 at full velocity.
+    fn hold(state: &mut PictureState, notes: &[u8]) {
+        for &note in notes {
+            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
+                0.0,
+                harmonigraph_core::SourceId::DIRECT,
+                0,
+                note,
+                1.0,
+            ));
+        }
+    }
+
     /// Which of the ring's readings a shot is of: none of them (the MIDI
     /// picture alone), the raw spectrum at a given Range, the fold, or the fold
     /// at a stated Gate — how loud a node's loudest wedge must read for that
@@ -484,15 +500,7 @@ mod tests {
         // halo part way through its attack is a shot of the ballistics.
         state.appearance.view.glow_attack = 0.0;
         state.appearance.view.glow_release = 0.0;
-        for note in [55u8, 60, 64, 67, 71] {
-            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                0.0,
-                harmonigraph_core::SourceId::DIRECT,
-                0,
-                note,
-                1.0,
-            ));
-        }
+        hold(&mut state, &CHORD);
 
         let fresh = harmonigraph_scene::ViewConfig::default();
         let shots: Vec<(f32, f32)> = vec![
@@ -555,15 +563,7 @@ mod tests {
         state.appearance.view.glow_release = 0.0;
         state.appearance.view.glow_reach = 2.0;
         state.appearance.view.glow_strength = 1.0;
-        for note in [55u8, 60, 64, 67, 71] {
-            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                0.0,
-                harmonigraph_core::SourceId::DIRECT,
-                0,
-                note,
-                1.0,
-            ));
-        }
+        hold(&mut state, &CHORD);
 
         let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
 
@@ -655,15 +655,7 @@ mod tests {
             state.set_background((24, 25, 29));
             state.runtime.frame_params.fade_time = 0.0;
             if chord {
-                for note in [55u8, 60, 64, 67, 71] {
-                    state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                        0.0,
-                        harmonigraph_core::SourceId::DIRECT,
-                        0,
-                        note,
-                        1.0,
-                    ));
-                }
+                hold(&mut state, &CHORD);
             }
             state.appearance.camera.zoom_by(2.5);
             state.appearance.view.plus_arm = size;
@@ -723,15 +715,7 @@ mod tests {
             state.appearance.view.note_names = harmonigraph_scene::NoteNames::Played;
             state.set_background((24, 25, 29));
             state.runtime.frame_params.fade_time = 0.0;
-            for note in [55u8, 60, 64, 67, 71] {
-                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                    0.0,
-                    harmonigraph_core::SourceId::DIRECT,
-                    0,
-                    note,
-                    1.0,
-                ));
-            }
+            hold(&mut state, &CHORD);
             state.appearance.camera.zoom_by(2.0);
             for style in state.appearance.view.shadow.groups_mut() {
                 style.width = shadow;
@@ -799,15 +783,7 @@ mod tests {
             // missing light under the node measurable at this wide reach.
             state.appearance.view.glow_curve.shape = 2.75;
             const NOTES: [u8; 4] = [60, 64, 67, 70];
-            for note in NOTES {
-                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                    0.0,
-                    harmonigraph_core::SourceId::DIRECT,
-                    0,
-                    note,
-                    1.0,
-                ));
-            }
+            hold(&mut state, &NOTES);
             state.appearance.camera.zoom_by(2.0);
             let _ = sheet.frame(&mut state, 0.0);
             for note in NOTES {
@@ -910,13 +886,7 @@ mod tests {
         // Fully lit at once: an envelope would put the MIDI half of the
         // picture part way through its arrival.
         state.runtime.frame_params.fade_time = 0.0;
-        state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-            0.0,
-            harmonigraph_core::SourceId::DIRECT,
-            0,
-            48,
-            1.0,
-        ));
+        hold(&mut state, &[48]);
         let cfg = state.appearance.spectrum;
         state.runtime.spectrum.push_samples(&sawtooth(48.0, RATE), 1, RATE, NOW, &cfg);
 
@@ -1071,13 +1041,7 @@ mod tests {
                 style.depth = depth;
             }
             state.appearance.camera.zoom_by(2.0);
-            state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                0.0,
-                harmonigraph_core::SourceId::DIRECT,
-                0,
-                60,
-                1.0,
-            ));
+            hold(&mut state, &[60]);
             let mut released = false;
             let mut now = 0.0f64;
             let mut shot = 0usize;
@@ -1150,15 +1114,7 @@ mod tests {
             let mut state = PictureState::new(FORMAT);
             state.set_background((24, 25, 29));
             state.runtime.frame_params.fade_time = 0.0;
-            for note in [55u8, 60, 64, 67, 71] {
-                state.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
-                    0.0,
-                    harmonigraph_core::SourceId::DIRECT,
-                    0,
-                    note,
-                    1.0,
-                ));
-            }
+            hold(&mut state, &CHORD);
             state.appearance.camera.projection = if tag == "cabinet" {
                 harmonigraph_scene::Projection::Cabinet
             } else {

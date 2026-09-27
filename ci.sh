@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Canonical full CI gate: formatting, markdown clause breaks and local links, workspace clippy with warnings denied,
-# workspace tests with harmonigraph-render excluded, the plugin package check, the release all-targets check, harmonigraph-render's own tests,
-# the adaptive-tuning Node model, the committed Metal corpus under strict resolution,
-# vendored GUI crates' tests, the optional CLAP probe fixture and the gated startup-probe example, doc links, the harmonigraph-core dependency
-# guard, the security-audit trigger split, the CI group split, worktree reclaim
-# safety, and the registered-worktree bundle swap.
+# Canonical full CI gate. Each `run` line below is one gate, plus the two
+# `if in_group` blocks, and the comment above each says what it guards; the
+# file is the list, so there is no second copy of it here to drift.
+# `grep -nE '^run |^if in_group' ci.sh` prints it.
 #
 # GitHub Actions invokes this script on the toolchain pinned by
 # rust-toolchain.toml, once per GROUP below. It remains available locally when a
@@ -33,7 +31,7 @@ cd "$(dirname "$0")"
 # The split is along the seam the comments below already describe: `workspace`
 # is what the workspace's own feature unification covers, `isolated` is every
 # gate that exists precisely BECAUSE that unification hides something — the
-# plugin resolved on its own dependency edge, the optional probe feature,
+# plugin resolved on its own dependency edge, the gated startup-probe example,
 # harmonigraph-render's own tests, and the `exclude`d vendored crates.
 #
 # Since #922 that seam is exclusive rather than merely descriptive: the
@@ -98,9 +96,9 @@ run python3 -B .claude/tests/markdown-links.py
 run node --test tools/adaptive-tuning-simulator/model.test.mjs
 
 run cargo clippy --workspace --all-targets -- -D warnings
-# Guard the existing production performance scenarios at their exported callbacks.
-# The isolated configuration filter below does not reach them; enabling the
-# guard here keeps those expensive scenarios to one run.
+# Guard the existing production performance scenarios at their exported
+# callbacks, and the CLAP configuration owner's allocation-free paths
+# (`configuration::tests`), which this is the only run of.
 #
 # harmonigraph-render is EXCLUDED because this run was the SECOND of two copies
 # of its tests and the wrong one to keep: 282 of them here in 47.7s, 284 of them
@@ -129,16 +127,13 @@ group isolated
 # dependency edge, so it builds the same configuration the bundle does.
 run cargo check -p harmonigraph-plugin
 
-# The default CLAP configuration owner is exercised without enabling the probe.
-run cargo test -p harmonigraph-plugin --features nice-plug/assert_process_allocs configuration::tests::
-
-# ...and this is the probe ON, which no other gate here reaches: `startup-probe`
-# is off by default and `editor-startup` carries it as a `required-features`, so
-# every check above — including the `--all-targets` release one — skips the
-# example entirely. That is how #875 happened: three state accesses in
-# `startup_probe.rs` went stale across two refactors of `SharedState` and the
-# tree stayed green, and the probe was found broken at the moment it was wanted,
-# which is the only moment anyone runs it. The cost of a native editor timing
+# ...and the same package with its startup probe ON, which no other gate here
+# reaches: `startup-probe` is off by default and `editor-startup` carries it as
+# a `required-features`, so every check above — including the `--all-targets`
+# release one — skips the example entirely. That is how #875 happened: three
+# state accesses in `startup_probe.rs` went stale across two refactors of
+# `SharedState` and the tree stayed green, and the probe was found broken at the
+# moment it was wanted, which is the only moment anyone runs it. The cost of a native editor timing
 # nobody could take is what this 37s is buying.
 #
 # `check` rather than `build`, and the example rather than the package: the
@@ -383,7 +378,7 @@ sccache --show-stats 2>/dev/null \
 
 echo
 if [ "$CI_GROUP" = all ]; then
-  echo "✅ full CI passed (fmt + markdown breaks + markdown links + adaptive-tuning model + workspace clippy + workspace tests + plugin check + startup probe + release check + render tests + strict Metal corpus + vendored tests + doc links + harmonigraph-core dep guard + audit triggers + CI groups + reclaim safety + plugin swap)"
+  echo "✅ full CI passed — every group: ${CI_GROUPS[*]}"
 else
   echo "✅ CI group '$CI_GROUP' passed — one of: ${CI_GROUPS[*]}"
 fi

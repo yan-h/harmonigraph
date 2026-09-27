@@ -6,11 +6,12 @@ description: How review, squashing, and agent definitions work in this repo. Use
 # Review happens at the merge boundary, not on the branch
 
 GitHub Actions runs `ci.sh` as the automatic full gate for pull requests and pushes to `main`, one job per gate group (`./ci.sh <group>`), reported as a single `Full CI` check.
-It checks formatting, markdown clause breaks and local links, workspace clippy, workspace tests with harmonigraph-render excluded, the plugin package check, the release all-targets check, harmonigraph-render's own tests, the adaptive-tuning Node model, the committed Metal corpus under strict resolution, the three vendored crates, the optional CLAP probe fixture and the gated startup-probe example, rustdoc links, the `harmonigraph-core` dependency guard, the security-audit trigger split, the CI group split, worktree-reclaim safety, and the registered-worktree bundle swap —
+It runs every gate `ci.sh` lists —
+formatting, lints, the workspace, render and vendored tests, the committed Metal corpus, doc links and the script guards —
 not judgement.
 The Metal corpus entry is the one worth knowing by name:
 since #965 a stale corpus fails `Full CI` itself, so the older habit of treating `Full CI` as silent on the shaders is now wrong in the direction that lets a stale corpus through.
-`ci.sh`'s own header is the list to copy when this one looks stale.
+`ci.sh` itself is the list, one `run` line per gate: `grep -nE '^run |^if in_group' ci.sh`.
 The tracked pre-push hook checks formatting only, keeping compilation off the local push path.
 
 **A session can run the ordinary review itself:** invoke `code-review` through the Skill tool, which is neither a typed slash command nor a Bash route to one.

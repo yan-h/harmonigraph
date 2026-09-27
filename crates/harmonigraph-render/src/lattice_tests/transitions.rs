@@ -13,6 +13,12 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
     for kernel in
         [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
     {
+        // Distance asserts every step. Gaussian asserts only its mass — the
+        // peak, and for `marks` the rise over step 0 — so unless the frames are
+        // being dumped it draws step 0 and the settled endpoint, where every
+        // slice, octave and ring is fully arrived, rather than 103 steps of
+        // two draws per case that nothing reads (#1181).
+        let sweep = root.is_some() || kernel == harmonigraph_scene::ShadowKernel::Distance;
         for (name, grow, order, spread) in [
             ("plain", false, AnimationOrder::Simultaneous, 0.28),
             ("grow", true, AnimationOrder::Simultaneous, 0.28),
@@ -56,7 +62,7 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
             let mut initial_mass = 0i64;
             // The final substeps isolate the opaque endpoint from a full
             // frame of geometry movement; the cell representation stays fixed.
-            for step in 0..=102 {
+            for step in (0..=102).filter(|&step| sweep || step == 0 || step == 102) {
                 let p = match step {
                     100 => 0.999,
                     101 => 0.99999,

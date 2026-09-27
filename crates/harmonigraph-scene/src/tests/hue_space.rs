@@ -1,10 +1,9 @@
-//! The two spaces the ramp is authored in: real checks that the chroma knob
-//! leaves the hue alone and that the join keeps `L*`'s promise at the edges,
-//! plus the probes behind #222's decision to move the ramp onto Oklab.
+//! The two spaces the ramp is authored in: checks that the chroma knob leaves
+//! the hue alone and that the join keeps `L*`'s promise at the edges.
 //!
-//! Everything `#[ignore]`d here asserts nothing and prints measurements. Run
-//! them with
-//! `cargo test -p harmonigraph-scene hue_space -- --nocapture --ignored`.
+//! The measurements behind #222's decision to move the ramp onto Oklab, and
+//! the pricing of a move on to CAM16, were printing probes here until #1181;
+//! the issues hold their verdicts, and the history holds the probes.
 
 use crate::style::Gradient;
 use glam::Vec4;
@@ -39,23 +38,13 @@ fn hue_delta(a: f64, b: f64) -> f64 {
     (b - a + 540.0).rem_euclid(360.0) - 180.0
 }
 
-/// CAM16's name for a drawn color's hue, read off `hct-cam16` through the same
-/// byte quantization a screen applies. Only the crate's HUE is ever leaned on —
-/// [`the_crate_222_names_does_not_work`] is why.
-fn cam16_hue(c: Vec4) -> f64 {
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    hct_cam16::Hct::from_rgb(q(c.x), q(c.y), q(c.z)).hue()
-}
-
-/// The eleven deciles of `t`, which is where every table below samples.
+/// The eleven deciles of `t`.
 fn deciles() -> impl Iterator<Item = f64> {
     (0..=10).map(|k| f64::from(k) / 10.0)
 }
 
 /// The CIELAB arc the shipped defaults are a conversion OF, in CIELAB degrees.
-/// Named once because three things below have to agree about it: the test that
-/// holds the defaults to it, and the two probes that measure what the
-/// conversion does to a sweep.
+/// Named once, beside the test that holds the defaults to it.
 const RETIRED_ARC_START: f64 = 260.0;
 const RETIRED_ARC_SPAN: f64 = 190.0;
 
@@ -76,27 +65,10 @@ fn sample(t: f64, gradient: Gradient) -> Vec4 {
     crate::color::designed_pitch_ramp(t, gradient)
 }
 
-/// One color of the shipped curve by its coordinates: an `L*`, an Oklab hue,
-/// and a chroma fraction. A gradient of no span, read at its middle.
-fn at(l_star: f64, hue: f64, chroma_fraction: f64) -> Vec4 {
-    sample(
-        0.5,
-        Gradient {
-            hue_start: hue as f32,
-            hue_span: 0.0,
-            lightness: l_star as f32,
-            lightness_ramp: 0.0,
-            chroma: chroma_fraction as f32,
-            chroma_ramp: 0.0,
-            ..Gradient::default()
-        },
-    )
-}
-
 /// The guarantee the whole two-space design buys: turning the CHROMA knob does
-/// not move the hue. A real check and not a probe — it is the promise
-/// `Gradient::hue_start` makes, and the reason the ramp's hue is not
-/// simply a CIELAB angle like its lightness is an `L*`.
+/// not move the hue. It is the promise `Gradient::hue_start` makes, and the
+/// reason the ramp's hue is not simply a CIELAB angle like its lightness is an
+/// `L*`.
 ///
 /// Measured in Oklch off the drawn sRGB, which is a round trip rather than a
 /// restatement: the curve names an Oklab hue, and this reads back what
@@ -228,187 +200,6 @@ fn the_hybrid_at_the_edges() {
     }
 }
 
-/// The evenness the move to Oklab buys: equal steps of hue ANGLE should be
-/// equal steps of the picture. Measured as how far each decile has come along
-/// the arc, against the share of the arc it names.
-///
-/// The angles stepped through here are CIELAB's, over the arc the defaults were
-/// converted from (260, span 190) — which is the only way the question has an
-/// answer. Stepping Oklab angles and reading Oklab hues back measures a space
-/// against itself and reports 1.0x by construction, whatever either space is
-/// like; what can be compared is one space's even steps seen through the other.
-#[test]
-#[ignore = "a probe: prints measurements, asserts nothing"]
-fn equal_lab_steps_are_uneven_in_oklch() {
-    for chroma in [0.2, 0.5, 1.0] {
-        let arc = Gradient { chroma, ..Gradient::default() };
-        println!("\n=== default arc at chroma {:.0}%: evenness of the sweep ===", chroma * 100.0);
-        println!("   t  Lab h   ok h     step   share of arc   (even would be)");
-        // The retired arc's own angles, at the lightness this ramp puts each
-        // decile at — a CIELAB hue's color moves with lightness, so the two
-        // have to be read together.
-        let lab_hue = |t: f64| RETIRED_ARC_START + t * RETIRED_ARC_SPAN;
-        let hues: Vec<f64> = deciles()
-            .map(|t| {
-                let l = arc.lightness_and_hue(t).0;
-                f64::from(oklab_hue_of_retired_lab_hue(l, lab_hue(t), f64::from(chroma)))
-            })
-            .collect();
-        // Unwrapped as it goes, so an arc crossing 0 stays monotone and the
-        // shares below are cumulative distance rather than an angle.
-        let mut walked = vec![0.0];
-        for k in 1..hues.len() {
-            let step = hue_delta(hues[k - 1], hues[k]);
-            walked.push(walked[k - 1] + step);
-        }
-        let total = *walked.last().expect("eleven samples");
-        let (mut min_step, mut max_step) = (f64::MAX, f64::MIN);
-        for (k, t) in deciles().enumerate() {
-            let lab_h = lab_hue(t);
-            let step = if k == 0 { 0.0 } else { walked[k] - walked[k - 1] };
-            if k > 0 {
-                min_step = min_step.min(step);
-                max_step = max_step.max(step);
-            }
-            println!(
-                "{t:4.1}  {lab_h:6.1}  {:6.1}  {step:7.2}  {:11.3}   {t:14.3}",
-                hues[k],
-                walked[k] / total,
-            );
-        }
-        println!(
-            "steps run {min_step:.2}..{max_step:.2} degrees of Oklch hue per equal Lab step \
-             ({:.1}x)",
-            max_step / min_step,
-        );
-    }
-}
-
-/// What the CIELAB axis makes of the circle the ramp now walks directly, so the
-/// compression and stretch it introduces have somewhere to be read off. The
-/// retired arc's own region (CIELAB 260 round to 90) is what #222 was about.
-///
-/// A stretch of 1.0 everywhere would mean the two axes name the same circle and
-/// the move bought nothing; the reason this is worth printing is that they do
-/// not. Both columns must therefore come from different spaces — feeding an
-/// Oklab hue in and reading an Oklab hue back is the identity function, and
-/// would print 1.000 down the page whatever the spaces were like.
-#[test]
-#[ignore = "a probe: prints measurements, asserts nothing"]
-fn the_hue_circle_in_both_spaces() {
-    println!("\n=== CIELAB hue -> Oklch hue at L* 64, chroma 50% ===");
-    println!("  Lab h   ok h    local stretch (deg ok per deg Lab)");
-    let hue_of = |h: f64| f64::from(oklab_hue_of_retired_lab_hue(64.0, h, 0.5));
-    for step in 0..36 {
-        let h = f64::from(step) * 10.0;
-        let stretch = hue_delta(hue_of(h - 5.0), hue_of(h + 5.0)) / 10.0;
-        let on_arc = h >= RETIRED_ARC_START || h <= RETIRED_ARC_START + RETIRED_ARC_SPAN - 360.0;
-        let marker = if on_arc { " <- retired arc" } else { "" };
-        println!("{h:7.1}  {:6.1}  {stretch:8.3}{marker}", hue_of(h));
-    }
-}
-
-/// Whether the Oklab hybrid above and Google's HCT are the same picture.
-///
-/// They are the same STRUCTURE — tone from CIELAB `L*`, hue and chroma from a
-/// space with good hue constancy — and differ only in which space that is:
-/// CAM16 for HCT (`cam16_hue_chroma_from_argb` + `lstar_from_argb`, read off
-/// the crate), Oklab here. So the question is not which is better designed but
-/// whether their hue axes agree, since one costs a CAM16 conversion per
-/// bisection step and the other does not.
-///
-/// Measured through CAM16's own eyes, which is the harshest way round: if a
-/// hybrid that never mentions CAM16 holds a CAM16 hue still, the two agree.
-/// Only the crate's HUE is leaned on here, and
-/// [`the_crate_222_names_does_not_work`] is why — its chroma is broken, but
-/// hue falls out of `atan2` on the opponent signals before the chroma formula
-/// runs, so the two failures are not the same failure.
-///
-/// Neither column is ground truth. A space measured in its own coordinates
-/// always reads perfect (the hybrid drifts 0.0001 degrees in Oklch, by
-/// construction), so what this can settle is whether the two DISAGREE, not
-/// which is right.
-#[test]
-#[ignore = "a probe: prints measurements, asserts nothing"]
-fn the_oklab_hybrid_against_googles_hct() {
-    let arc = Gradient::default();
-
-    println!("\n=== CAM16 hue drift over the shipped chroma knob (20% -> 100%) ===");
-    println!("   t   L*    Oklab hue held    CAM16 drift");
-    let mut worst = 0.0f64;
-    for t in deciles() {
-        let (l, h) = arc.lightness_and_hue(t);
-        let drift = hue_delta(cam16_hue(at(l, h, 0.2)), cam16_hue(at(l, h, 1.0)));
-        worst = worst.max(drift.abs());
-        println!("{t:4.1} {l:5.1} {h:16.1} {drift:+14.2}");
-    }
-    println!(
-        "worst: {worst:.2} deg — the retired CIELAB curve measured 13.65 here, \n\
-         and 0.0001 in Oklch's own coordinates, which is why neither is ground truth",
-    );
-
-    println!("\n=== where the two hue axes sit, around the circle at L* 64 ===");
-    println!("  ok h    CAM16 h    difference");
-    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
-    for step in 0..24 {
-        let h_ok = f64::from(step) * 15.0;
-        let gap = hue_delta(h_ok, cam16_hue(at(64.0, h_ok, 0.6)));
-        lo = lo.min(gap);
-        hi = hi.max(gap);
-        println!("{h_ok:6.1} {:10.1} {gap:13.1}", h_ok + gap);
-    }
-    // The VARIATION and not the gap itself: a constant rotation between two hue
-    // axes renames every hue and bends no arc, so only the spread can change a
-    // picture.
-    println!("gap runs {lo:.1}..{hi:.1} deg — a spread of {:.1}", hi - lo);
-}
-
-/// Why the crate #222 names as "the exact piece `max_chroma` hand-rolls"
-/// cannot play that part: `hct-cam16` 0.1.0's chroma is wrong, and its
-/// HCT->sRGB solver does not round-trip.
-///
-/// Three checks that need no reference values to read. Tone is fine and hue
-/// looks right; it is chroma and the solver that fail, which matters here
-/// because chroma and the solver are precisely the piece the issue proposes to
-/// take from it.
-#[test]
-#[ignore = "a probe: prints measurements, asserts nothing"]
-fn the_crate_222_names_does_not_work() {
-    println!("\n=== hct-cam16 0.1.0: the most colorful colors sRGB has ===");
-    println!("(the crate documents chroma as [0, ~150]; CAM16 puts sRGB red near 110)");
-    for (name, hex) in [
-        ("red", "#FF0000"),
-        ("green", "#00FF00"),
-        ("blue", "#0000FF"),
-        ("magenta", "#FF00FF"),
-        ("cyan", "#00FFFF"),
-        ("yellow", "#FFFF00"),
-        ("mid grey", "#808080"),
-        ("M3 seed", "#6750A4"),
-    ] {
-        let c = hct_cam16::Hct::from_hex(hex).expect("literal hex");
-        println!("  {name:9} {hex}  h {:6.2}  c {:6.2}  t {:6.2}", c.hue(), c.chroma(), c.tone());
-    }
-
-    println!("\n=== and asking for a color's own coordinates does not return it ===");
-    for hex in ["#FF0000", "#00FF00", "#6750A4"] {
-        let a = hct_cam16::Hct::from_hex(hex).expect("literal hex");
-        let b = hct_cam16::Hct::new(a.hue(), a.chroma(), a.tone());
-        println!(
-            "  {hex} reads h{:.1} c{:.1} t{:.1}, and that asked for again is {} (c{:.1})",
-            a.hue(),
-            a.chroma(),
-            a.tone(),
-            b.to_hex(),
-            b.chroma(),
-        );
-    }
-    println!(
-        "\nTone is right and hue is plausible: hue is atan2 on the opponent signals,\n\
-         computed before the chroma formula, so the two do not fail together.",
-    );
-}
-
 /// The Oklab hue that names the color a CIELAB hue angle used to draw — the
 /// RETIRED curve, kept only so the defaults can be checked against the arc
 /// they were converted from.
@@ -466,8 +257,8 @@ fn retired_arc(lab_start: f64, lab_span: f64, g: Gradient) -> (f32, f32) {
 }
 
 /// The defaults are the CIELAB arc the gradient used to open on, converted —
-/// not a new arc someone chose. Real rather than a probe, because the numbers
-/// `default_hue_start` and `default_hue_span` quote have no other source.
+/// not a new arc someone chose. The numbers `default_hue_start` and
+/// `default_hue_span` quote have no other source.
 #[test]
 fn the_defaults_are_the_retired_arc_converted() {
     let now = Gradient::default();
@@ -499,58 +290,6 @@ fn the_default_arcs_chroma_ceiling_is_what_the_docs_say() {
     assert!(
         (lo - 0.115).abs() < 0.001 && (hi - 0.320).abs() < 0.001,
         "Gradient::chroma quotes 0.115..0.320 across the default arc; it is {lo:.4}..{hi:.4}",
-    );
-}
-
-/// What moving on again — from Oklab to CAM16, i.e. to Google's HCT proper —
-/// would actually change about the default arc.
-///
-/// Not the hue NAMES, which differ by up to 5.3 degrees around the circle and
-/// cost nothing: a constant rotation between two hue axes renames every hue
-/// and bends no arc. What a viewer could see is the SHAPE — whether the sweep
-/// that is even in Oklab arrives somewhere else at the same fraction of the
-/// pitch range under CAM16.
-///
-/// Measured as: how far along the arc each decile has come by each space's
-/// reckoning, differenced. Leans only on the crate's hue, for the reason
-/// [`the_crate_222_names_does_not_work`] gives.
-#[test]
-#[ignore = "a probe: prints measurements, asserts nothing"]
-fn what_going_on_to_cam16_would_buy() {
-    let arc = Gradient::default();
-    // Unwrapped as it goes, so an arc crossing 0 stays monotone and the shares
-    // below are cumulative distance rather than an angle.
-    let samples: Vec<f64> = (0..=100)
-        .map(|k| {
-            let (l, h) = arc.lightness_and_hue(f64::from(k) / 100.0);
-            cam16_hue(at(l, h, f64::from(arc.chroma)))
-        })
-        .collect();
-    let mut walked = vec![0.0f64];
-    for k in 1..samples.len() {
-        let step = hue_delta(samples[k - 1], samples[k]);
-        walked.push(walked[k - 1] + step);
-    }
-    let total = *walked.last().expect("101 samples");
-
-    println!("\n=== the default arc, walked by each space's own hue ===");
-    println!("   t   share of arc: Oklab   CAM16    difference (of the pitch range)");
-    let mut worst = 0.0f64;
-    for k in (0..=100).step_by(10) {
-        // Oklab's own reckoning is `t` exactly: the sweep is linear in the hue
-        // the curve names, which is what makes it even.
-        let t = k as f64 / 100.0;
-        let share = walked[k] / total;
-        let diff = share - t;
-        worst = worst.max(diff.abs());
-        println!("{t:4.1} {t:23.3} {share:8.3} {:13.1}%", diff * 100.0);
-    }
-    println!(
-        "worst disagreement about where a pitch sits in the sweep: {:.1}% of the range\n\
-         (the retired CIELAB curve was off by 4.8% at this chroma and 5.8% at full,\n\
-         so what is left is about a third of what the move to Oklab already fixed —\n\
-         and unlike that, it is two good spaces disagreeing rather than a defect)",
-        worst * 100.0,
     );
 }
 
