@@ -1399,7 +1399,7 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // two-pixel cells, many and faint) to near (32-pixel cells at the fresh `Size
 // range`, few, bright, soft), each sliding at the shared drift times its own
 // parallax factor. The CPU works out every slice's numbers and its drift
-// (`star_slices`); this walks the 3x3 cells round the pixel in each.
+// (`star_slices`); this prototype walks the nearest 2x2 cells in each.
 //
 // **Each star is worked out once a frame, not once per pixel.** Everything about
 // a star but its coverage — its life, jitter, the light under it, its
@@ -1407,7 +1407,7 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
 // every pixel took it again at every pixel in reach: about 500 times a frame for
 // a far star at 4K and 6000 for a near one. So `fs_star_bake` draws every
 // slice's cells on screen into `star_atlas`, a texel a cell, and the pixel's
-// walk reads nine texels a slice and does only the distance and the falloff
+// walk reads four texels a slice and does only the distance and the falloff
 // (#1142).
 //
 // **Lives.** A star lives `Star lifetime`, then its cell draws a new star,
@@ -1442,10 +1442,10 @@ const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
 // How far a centre is hashed off its cell's middle, as a whole width.
 const STAR_JITTER: f32 = 0.6;
-// The ring's reach, in cells: the nearest a star from a cell outside the 3x3
-// walk can come to a pixel, 1.5 less half the jitter. Every star's coverage is
+// The ring's reach, in cells: the nearest a star from a cell outside the
+// nearest 2x2 walk can come to a pixel, 1.0 less half the jitter. Coverage is
 // windowed to zero by it (`the_star_ring_holds_every_star_that_reaches_a_pixel`).
-const STAR_REACH: f32 = 1.2;
+const STAR_REACH: f32 = 0.7;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // atmosphere.rs), and its log.
 const STAR_ATLAS_WIDTH: i32 = 2048;
@@ -1473,7 +1473,8 @@ const STAR_FADE: f32 = 0.2;
 const STAR_LIFT: f32 = 0.18;
 // Where, as a share of the ring's reach, a star's light starts fading to the
 // zero it must reach there. See `STAR_REACH` and the test that holds it.
-const STAR_RING_FADE: f32 = 0.7;
+// Fade from 0.6 to 0.7 cells, retaining the earlier four-neighbor prototype.
+const STAR_RING_FADE: f32 = 0.857142857;
 
 // The level a star sees at pane point `pt`: the Spread-combined light, so
 // how loosely the stars follow the picture is `Wide blur mix` and the two
@@ -1635,14 +1636,10 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
 // it, a cell's stagger at the second.
 //
-// The 3x3 walk is three rows of three reads. When every cell was hashed here, a
-// flat loop of nine measured fastest on an M1 Pro at 4K (44 ms, against 57 for
-// the nine written out and about 14 more for two nested loops); with the stars
-// baked, the flat loop's per-cell index arithmetic was most of what was left.
-// Writing out only the three rows removes another 8–12% on that GPU; baking
-// inverse sigma saves the repeated divisions too, for 16–20% together.
-// Keep the depth loop: unrolling both loops measured slower than either.
-// See docs/spectrogram-star-performance.md for the paired measurements.
+// The nearest 2x2 cells preserve star placement and all five depths while
+// reducing the walk from 45 to 20 atlas reads per pixel. The shorter ring is
+// a deliberate visual tradeoff: halos fade before a cell leaves this walk.
+// Both the native and split paths use this same evaluation.
 fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
     var out = under;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
@@ -1655,36 +1652,17 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
             cut = min(cut, 5.0 * s.cap * s.defocus);
         }
         let r = sp / s.cell - s.offset;
-        let o = floor(r);
-        // The pixel from its own cell's corner, so every distance below is
-        // taken between numbers of order one rather than of the hash period.
+        // The nearest two cell centres on each axis. Switching the selected
+        // pair at a half-cell boundary is invisible because any departing or
+        // arriving star is at least STAR_REACH away and has zero coverage.
+        let o = floor(r - 0.5);
         let f = r - o;
-        // The walk's first cell, the pixel's up and left, in the slice's
-        // grid; the CPU sizes the grid a cell past anything this reaches, so
-        // the rows below never leave it. A row's cells are consecutive texels.
-        let local = vec2<i32>(o) - 1 - s.origin;
-        var index = s.base + local.y * s.grid.x + local.x;
-        var slice = vec4<f32>(0.0);
-        {
-            let g = f - vec2<f32>(0.0, -1.0);
-            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
-            slice += star_texel(s, g, index + 1, cut);
-            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
-            index += s.grid.x;
-        }
-        {
-            let g = f - vec2<f32>(0.0, 0.0);
-            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
-            slice += star_texel(s, g, index + 1, cut);
-            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
-            index += s.grid.x;
-        }
-        {
-            let g = f - vec2<f32>(0.0, 1.0);
-            slice += star_texel(s, g + vec2<f32>(1.0, 0.0), index, cut);
-            slice += star_texel(s, g, index + 1, cut);
-            slice += star_texel(s, g - vec2<f32>(1.0, 0.0), index + 2, cut);
-        }
+        let local = vec2<i32>(o) - s.origin;
+        let index = s.base + local.y * s.grid.x + local.x;
+        var slice = star_texel(s, f, index, cut);
+        slice += star_texel(s, f - vec2<f32>(1.0, 0.0), index + 1, cut);
+        slice += star_texel(s, f - vec2<f32>(0.0, 1.0), index + s.grid.x, cut);
+        slice += star_texel(s, f - vec2<f32>(1.0, 1.0), index + s.grid.x + 1, cut);
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
         }

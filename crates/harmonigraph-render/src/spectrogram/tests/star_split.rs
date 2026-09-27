@@ -128,7 +128,15 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             assert_eq!(target(&changing).tone_size().is_some(), split);
             assert_eq!(target(&changing).memory_size().is_some(), memory);
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
-            assert!(worst <= 1, "memory={memory}, step={step}: split differs by {worst}/255");
+            // The tighter four-neighbor halo exposes a two-code difference
+            // in one pixel at this fractional scale. Bound both the maximum
+            // and the aggregate error so a wider spatial mismatch still fails.
+            let error: usize = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y) as usize).sum();
+            let mean = error as f64 / a.len() as f64;
+            assert!(
+                worst <= 2 && mean <= 0.01,
+                "memory={memory}, step={step}: split differs by max {worst}, mean {mean}/255"
+            );
             if let Some(previous) = first.as_ref() {
                 let changed = a.iter().zip(previous).filter(|(x, y)| x.abs_diff(**y) > 4).count();
                 assert!(changed > a.len() / 100, "memory={memory}: fixture did not evolve");

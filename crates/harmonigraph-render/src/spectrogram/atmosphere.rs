@@ -220,8 +220,8 @@ impl StarLayout {
     fn at(cells: [f32; STAR_SLICES], floor: f32, aspect: f32) -> Self {
         let cells = cells.map(|cell| cell.max(floor));
         let pane = [STAR_PANE * aspect, STAR_PANE];
-        // The walk reaches from `floor(r) - 1` at the pane's one edge to
-        // `floor(r) + 1` at the other, which is at most `ceil(span) + 3` cells.
+        // Keep the original three-cell bounds for this trial. The nearest
+        // 2x2 walk is contained in them, so atlas ownership stays unchanged.
         let grids = cells.map(|cell| {
             pane.map(|span| ((span / cell).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN))
         });
@@ -341,7 +341,7 @@ fn star_slices(
         let offset = [shift(cos), shift(sin)];
         let grid = layout.grids[k];
         // The cell a pixel at the pane's top left edge is in, as the shader
-        // works it out, less the one the walk steps back and the margin.
+        // works it out, with the original conservative neighbor and margin.
         let origin: [i32; 2] =
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
         StarSlice {
@@ -359,9 +359,9 @@ fn star_slices(
 }
 
 /// The cell at the start of a slice's grid on one axis: the one a pixel at
-/// the pane's leading edge is in, as the shader works it out, less the one the
-/// walk steps back and the margin. `span` is the pane along the axis in star
-/// pixels.
+/// the pane's leading edge is in, less one conservative neighbor and the
+/// margin. The nearest 2x2 walk stays inside these original three-cell bounds.
+/// `span` is the pane along the axis in star pixels.
 fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
     let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
     edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
@@ -1848,28 +1848,16 @@ mod tests {
         crate::uniforms::layout::check_binding_prefix::<super::Uniforms>(super::SOURCE, 0, 2);
     }
 
-    /// The 3x3 walk each star slice takes sees every star whose light reaches
-    /// the pixel.
-    ///
-    /// A centre strays `STAR_JITTER / 2` from its cell's middle, so the nearest
-    /// a star from a cell OUTSIDE the ring can come to a pixel is the shader's
-    /// `STAR_REACH` — and the shader fades every star to zero by then. That
-    /// makes the walk exact rather than "close enough": the prototype's reach was 0.85 of a cell at its V3, and
-    /// its own defocus multiplies past the cell cap, so at the fourth depth the
-    /// biggest cores are 0.39 of a cell wide and would have left a tenth of
-    /// their peak on the far side of a cell edge without the fade.
-    ///
-    /// Measured by scanning the geometry rather than trusting the one-line
-    /// formula, with the jitter, reach, slice count and periods read off the
-    /// shipped shader. No dial moves a star off its jittered place, so one
-    /// scan covers every setting.
+    /// The nearest 2x2 walk sees every star whose shortened halo reaches the
+    /// pixel. Scan both sides of the half-cell selection boundaries using the
+    /// shader's jitter and reach; all dials retain this same placement bound.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
         let (jitter, reach) = (shader_number("STAR_JITTER"), shader_number("STAR_REACH"));
-        assert!((reach - (1.5 - jitter / 2.0)).abs() < 1e-6, "{reach} is not the ring's reach");
+        assert!((reach - (1.0 - jitter / 2.0)).abs() < 1e-6, "{reach} is not the ring's reach");
         let nearest = nearest_outside_the_ring(jitter as f32 / 2.0);
         assert!(
             nearest >= reach as f32 - 1e-5,
@@ -1878,17 +1866,19 @@ mod tests {
         );
     }
 
-    /// The nearest a star from a cell outside the 3x3 walk round cell (0, 0) can
-    /// come to a pixel inside it, when a centre strays `stray` either way on
-    /// each axis from its cell's middle.
+    /// The nearest excluded star over a full cell, including the points at
+    /// which the nearest 2x2 changes. A centre strays `stray` on each axis.
     fn nearest_outside_the_ring(stray: f32) -> f32 {
         let mut nearest = f32::INFINITY;
         for step in 0..=64 {
             for other in 0..=64 {
                 let pixel = [step as f32 / 64.0, other as f32 / 64.0];
+                let first = pixel.map(|p| (p - 0.5).floor() as i32);
                 for cx in -2i32..=2 {
                     for cy in -2i32..=2 {
-                        if cx.abs() < 2 && cy.abs() < 2 {
+                        if (first[0]..=first[0] + 1).contains(&cx)
+                            && (first[1]..=first[1] + 1).contains(&cy)
+                        {
                             continue;
                         }
                         let toward = |c: i32, p: f32| {
@@ -1943,10 +1933,12 @@ mod tests {
                 for axis in 0..2 {
                     let half = f64::from(layout.pane[axis] / 2.0 / slice.cell);
                     // Drifts that put the leading edge, then the trailing one, on
-                    // a whole cell: `-half - offset` and `half - offset` integers.
-                    let exact = [0.0, 1000.0, STAR_HASH_PERIOD - 2.0 * half - 8.0]
-                        .into_iter()
-                        .flat_map(|m| [half.ceil() + m - half, half - (half.floor() - m)]);
+                    // a selection boundary: `-half - offset - 0.5` and
+                    // `half - offset - 0.5` integers.
+                    let exact =
+                        [0.0, 1000.0, STAR_HASH_PERIOD - 2.0 * half - 8.0].into_iter().flat_map(
+                            |m| [half.ceil() + m - half - 0.5, half - (half.floor() - m) - 0.5],
+                        );
                     for exact in exact {
                         let exact = exact as f32;
                         for ulps in -4096i32..=4096 {
@@ -1954,8 +1946,8 @@ mod tests {
                             let origin = super::star_origin(layout.pane[axis], slice.cell, offset);
                             for pt in [0.0, size[axis]] {
                                 let sp = (pt - size[axis] * 0.5) * (STAR_PANE / size[1]);
-                                let cell = (sp / slice.cell - offset).floor() as i32;
-                                for step in [-1, 1] {
+                                let cell = (sp / slice.cell - offset - 0.5).floor() as i32;
+                                for step in [0, 1] {
                                     let local = cell + step - origin;
                                     assert!(
                                         (0..slice.grid.0[axis]).contains(&local),

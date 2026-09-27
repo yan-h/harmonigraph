@@ -191,3 +191,27 @@ They confirm approximately 14–17% savings at dense defaults from 1440p through
 with the smaller-pane fallback effectively unchanged.
 The independent opening-pass end stamp used in earlier probes can undercount;
 [issue #1203](https://github.com/yan-h/harmonigraph/issues/1203) records the measured failure.
+
+## Four-neighbor plugin trial
+
+The `codex/stars-four-neighbor` branch enables prototype B for evaluation in the DAW.
+All five depth layers retain their existing positions,
+size and speed settings,
+lifetimes and color memory.
+The final walk selects the nearest two cells on each axis,
+reducing 45 candidate evaluations per pixel to 20.
+Halos fade between 0.6 and 0.7 cells instead of 0.84 and 1.2;
+this deliberately gives the field tighter halos and more space between stars.
+The full-resolution 2+3 split and its area cutoff remain active.
+
+This branch changes Stars directly for the trial;
+it adds no persisted setting or quality control.
+Existing projects therefore display the tighter-halo version while this build is loaded.
+Loading the ordinary build restores the original look from the same saved settings.
+The earlier prototype timings above are historical,
+not a claim of the same saving over the current split renderer.
+Visual acceptance remains Yan's decision in #1142.
+
+[Current-default paired measurements](evidence/spectrogram-stars/four-neighbor-current/README.md) find 35.5–36.3% lower GPU time at 1080p and 39.6–39.8% at 4K on M1 Pro,
+with color memory and the automatic split enabled.
+These synthetic offscreen comparisons do not establish live Bitwig frame-time savings.
