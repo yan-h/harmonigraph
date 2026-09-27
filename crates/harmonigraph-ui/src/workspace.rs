@@ -462,7 +462,12 @@ pub(crate) fn show(
         layout.select(tab);
         layout.folded[Section::Settings as usize] = false;
     }
-    dividers(ui, layout, runtime, &drawn, scale);
+    // Compared in saved units: `drawn` carries a lent width at the window's
+    // fit ratio, which differs from the saved one whenever the window is not
+    // exactly the size the lend asked for.
+    let unchanged = (before.position, before.folded, before.repaid())
+        == (layout.position, layout.folded, layout.repaid());
+    dividers(ui, layout, runtime, &drawn, unchanged, scale);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
     if repeated {
         viewer.interaction.analyzer_regions.request = None;
@@ -683,6 +688,7 @@ fn dividers(
     layout: &mut Layout,
     runtime: &mut Runtime,
     drawn: &Layout,
+    unchanged: bool,
     ui_scale: f32,
 ) {
     let [lattice, analyzer, settings] = runtime.rects;
@@ -705,8 +711,6 @@ fn dividers(
             pos2(settings.left(), settings.bottom()),
         ),
     ];
-    let unchanged = (layout.position, layout.folded, layout.repaid())
-        == (drawn.position, drawn.folded, drawn.repaid());
     let enabled = [
         unchanged && !drawn.folded[0] && !drawn.folded[1],
         unchanged && !drawn.folded[2] && (!drawn.folded[0] || !drawn.folded[1]),

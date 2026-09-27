@@ -101,7 +101,7 @@ the serde field names are in the binary, so `roll_lead` answers "does this rende
 The performance overlay's bottom line reads `build  <branch> @<sha>` —
 a Claude branch has its `worktree-` prefix stripped, while a Codex branch keeps its `codex/` prefix.
 The result is exactly the argument `./load-plugin.sh <branch>` takes.
-It is stamped at compile time by `crates/harmonigraph-perf/build.rs`.
+It is stamped at compile time by `build/build_tag.rs`, which each leaf binary's own `build.rs` includes (plugin, offline, standalone).
 The overlay carrying it ships OFF, so reading the tag takes one tick first:
 **System tab → Performance → Performance overlay**.
 System is a tab of the Settings column, and may sit in that strip's overflow menu when the column is narrow.

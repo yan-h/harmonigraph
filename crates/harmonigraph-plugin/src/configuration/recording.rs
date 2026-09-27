@@ -157,6 +157,12 @@ impl Recording {
         Ok(())
     }
 
+    /// The end of the last segment registered, if any has been since the
+    /// clock was last cut.
+    pub fn registered_through(&self) -> Option<i64> {
+        (self.registered_through != i64::MIN).then_some(self.registered_through)
+    }
+
     pub fn route(
         &self,
         clock: ClockId,

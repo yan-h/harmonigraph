@@ -691,6 +691,9 @@ impl Plugin for Harmonigraph {
 
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
+            if let Some(hub) = &mut self.aggregation {
+                hub.prove_final_frontier(owner, &self.take);
+            }
             owner.reset(&self.take);
             if let Some(hub) = &mut self.aggregation {
                 hub.stop();
@@ -852,12 +855,12 @@ impl ClapPlugin for Harmonigraph {
     /// Hub is gone from the same slot it learned the Hub was here.
     fn clap_main_destroy(&mut self) {
         let mut hub = self.aggregation.take().unwrap();
+        let mut owner = self.configuration.take().unwrap();
+        let recorder = self.take.0.take().unwrap();
+        // Before `retire` gives the rings back, while they can still be read.
+        hub.prove_final_frontier(&mut owner, &recorder);
         hub.retire();
-        hub.retire_publication(
-            self.configuration.take().unwrap(),
-            self.take.0.take().unwrap(),
-            self.presentation_seconds,
-        );
+        hub.retire_publication(owner, recorder, self.presentation_seconds);
     }
     fn clap_performance_stop(&mut self) {
         self.aggregation.as_mut().unwrap().stop();

@@ -1189,13 +1189,6 @@ impl Hub {
         if self.callback.is_some() {
             self.snapshots(owner, recorder);
         }
-        // Forced publication above accounts for every input in this callback,
-        // including delayed output. A later callback need not arrive to prove
-        // this prefix when Stop is followed immediately by destruction.
-        let through = callback.steady_time.saturating_add(i64::from(callback.frames));
-        if owner.recording.source_frontier(self.clock, through).is_err() {
-            recorder.fail_configuration();
-        }
         self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);
@@ -1221,11 +1214,38 @@ impl Hub {
         self.shared.request_main();
     }
 
+    /// Prove the source frontier through the last callback's end, at a cut or
+    /// before joined destruction: after either, nothing still to come can be
+    /// sequenced before it. `publish` stops at a callback's start instead,
+    /// because a Tune the host runs after the Hub is a callback behind; a
+    /// recorded record of that kind still in a ring here is one the take never
+    /// gets, so it fails the take rather than being proven absent.
+    pub fn prove_final_frontier(&mut self, owner: &mut Owner, recorder: &Recorder) {
+        let Some(through) = owner.recording.registered_through() else { return };
+        let (epoch, clock, recording) = (self.epoch, self.clock, &owner.recording);
+        // Only a record a take was recording can be missing from one.
+        let recorded = |sample| {
+            sample < through
+                && recording.route(clock, sample, 0.0).is_ok_and(|r| r.address.is_some())
+        };
+        let stranded = self.ends.iter_mut().flat_map(|ends| ends.iter_mut().flatten()).any(|end| {
+            // Read without consuming: a cut's own epoch filter still owns them.
+            let slots = end.captures.slots();
+            end.captures.read_chunk(slots).is_ok_and(|chunk| {
+                let (head, tail) = chunk.as_slices();
+                head.iter().chain(tail).any(|c| c.epoch == epoch && recorded(c.sample))
+            })
+        });
+        if stranded || owner.recording.source_frontier(self.clock, through).is_err() {
+            recorder.fail_configuration();
+        }
+    }
+
     /// Destruction closes the recorder's own boundaries, here and now. There
     /// is no drain to wait for: everything this Hub sequenced was published in
     /// the callback it was sequenced in, so the only thing left to say is
-    /// whether any voice was still sounding — which is a take the renderer
-    /// warns about rather than a fact this can go and establish.
+    /// whether any voice was still sounding — which fails the take rather
+    /// than being a fact this can go and establish.
     pub fn retire_publication(
         &mut self,
         mut owner: Box<Owner>,
