@@ -38,8 +38,20 @@ impl LatticeCallback {
         // Reduce the decorative clock in f64 before uploading bounded phases.
         let texture_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
-        let material_time =
-            scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.material_speed);
+        let watercolor =
+            atmosphere.material_style == harmonigraph_scene::LatticeMaterial::Watercolor;
+        let material_scale = if watercolor {
+            atmosphere.material_settings.wash_size
+        } else {
+            atmosphere.material_settings.scale_size
+        };
+        let cells = if watercolor { 5.25 } else { 6.0 / 2.2 };
+        let material_drift = harmonigraph_scene::MaterialSettings::drift(
+            atmosphere.material_speed,
+            atmosphere.material_direction,
+            scene.glow_timing.map_or(0.0, |clock| clock.now),
+        )
+        .map(|offset| (offset * f64::from(cells / material_scale)).rem_euclid(40.0) as f32);
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -74,22 +86,7 @@ impl LatticeCallback {
 
         let to_gpu = |n: &harmonigraph_scene::NodeInstance| GpuInstance {
             world_pos: n.world_pos.to_array(),
-            // The stable lattice identity survives sorting, row reuse and camera rebases.
-            // Shadow-cell draws use their separate instances’ w for cell kinds.
-            params: [
-                n.activation,
-                n.melody_level,
-                n.bass_level,
-                if atmosphere.material_style == harmonigraph_scene::LatticeMaterial::Watercolor {
-                    lattice_material::node_seed(
-                        n.lattice_pos.fives,
-                        n.lattice_pos.threes,
-                        n.lattice_pos.sevens,
-                    )
-                } else {
-                    0.0
-                },
-            ],
+            params: [n.activation, n.melody_level, n.bass_level, 0.0],
             octaves: pack_octaves(&n.octaves),
             motion: {
                 let mut packed = [0u32; 4];
@@ -510,13 +507,20 @@ impl LatticeCallback {
                 },
                 material: MaterialParams {
                     amount: atmosphere.material_amount,
-                    scale: atmosphere.material_scale,
-                    drift: Float2([
-                        (material_time * 0.071).sin() as f32 * 0.9,
-                        (material_time * 0.053).cos() as f32 * 0.9,
-                    ]),
+                    scale: material_scale,
+                    drift: Float2(material_drift),
                     style: atmosphere.material_style as u32,
-                    source_roughness: atmosphere.source_roughness,
+                    fuzz: atmosphere.material_settings.wash_fuzz,
+                    lobe: atmosphere.material_settings.wash_lobe,
+                    variety: atmosphere.material_settings.scale_variety,
+                    refract: if atmosphere.material_style
+                        == harmonigraph_scene::LatticeMaterial::Watercolor
+                    {
+                        atmosphere.material_settings.wash_refract
+                    } else {
+                        atmosphere.material_settings.scale_refract
+                    },
+                    layers: atmosphere.material_settings.wash_layers,
                     padding: Float2([0.0; 2]),
                 },
                 // Every shadow still casts with the glow disabled. Markers

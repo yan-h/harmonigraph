@@ -1733,9 +1733,12 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         texture: harmonigraph_scene::LatticeTexture::Interference,
         material_style: harmonigraph_scene::LatticeMaterial::Mosaic,
         material_amount: 0.63,
-        material_scale: 1.7,
+        material_settings: harmonigraph_scene::MaterialSettings {
+            scale_size: 1.7,
+            ..Default::default()
+        },
         material_speed: 0.8,
-        source_roughness: 0.73,
+
         texture_depth: 0.45,
         breath_speed: 2.2,
         ..Default::default()
@@ -1780,27 +1783,20 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(
         restored.picture.appearance.view.atmosphere,
-        AtmosphereSettings {
-            breath_amount: 0.6,
-            breath_speed: 1.5,
-            source_roughness: 0.7,
-            ..Default::default()
-        }
+        AtmosphereSettings { breath_amount: 0.6, breath_speed: 1.5, ..Default::default() }
     );
     state.picture.appearance.view.atmosphere.material_amount = 7.0;
-    state.picture.appearance.view.atmosphere.material_scale = f32::NAN;
+    state.picture.appearance.view.atmosphere.material_settings.scale_size = f32::NAN;
     state.picture.appearance.view.atmosphere.material_speed = -2.0;
-    state.picture.appearance.view.atmosphere.source_roughness = 7.0;
     state.picture.appearance.view.atmosphere.texture_depth = f32::NAN;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
     let restored = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(restored.view.atmosphere.texture_depth, AtmosphereSettings::default().texture_depth);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
-    assert_eq!(restored.view.atmosphere.source_roughness, 1.0);
     assert_eq!(restored.view.atmosphere.material_amount, 1.0);
     assert_eq!(
-        restored.view.atmosphere.material_scale,
-        AtmosphereSettings::default().material_scale
+        restored.view.atmosphere.material_settings.scale_size,
+        AtmosphereSettings::default().material_settings.scale_size
     );
     assert_eq!(restored.view.atmosphere.material_speed, 0.0);
 }
@@ -2218,4 +2214,28 @@ fn an_old_dock_is_replaced_without_losing_appearance() {
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
     assert_eq!(restored.workspace.layout.position, workspace::Position::Right);
     assert_eq!(restored.workspace.layout.folded, [false; 3]);
+}
+
+#[test]
+fn material_settings_are_independent_and_missing_nested_keys_default() {
+    use harmonigraph_scene::MaterialSettings;
+    let mut state = fresh();
+    let lattice = &mut state.picture.appearance.view.atmosphere.material_settings;
+    lattice.wash_fuzz = 0.23;
+    lattice.scale_variety = 0.81;
+    let spectral = &mut state.picture.appearance.spectrum.atmosphere.material_settings;
+    spectral.wash_fuzz = 0.72;
+    spectral.scale_variety = 0.19;
+    let mut restored = fresh();
+    assert!(restored.load_persist(&state.save_persist()));
+    assert_eq!(
+        restored.picture.appearance.view.atmosphere.material_settings,
+        state.picture.appearance.view.atmosphere.material_settings
+    );
+    assert_eq!(
+        restored.picture.appearance.spectrum.atmosphere.material_settings,
+        state.picture.appearance.spectrum.atmosphere.material_settings
+    );
+    let partial: MaterialSettings = ron::from_str("(wash_fuzz:0.23)").unwrap();
+    assert_eq!(partial, MaterialSettings { wash_fuzz: 0.23, ..Default::default() });
 }

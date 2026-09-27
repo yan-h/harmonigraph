@@ -67,12 +67,8 @@ pub struct SpectrogramAtmosphere {
 /// screen direction. The shader samples `screen + drift`, so the sampling
 /// offset moves opposite the texture itself.
 fn cloud_drift(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f32; 2] {
-    const UNITS_PER_SECOND: f64 = 0.047_169_905_660_283_02;
-    const INITIAL_PHASE: [f64; 2] = [0.0, 0.6];
-    let distance = now * f64::from(settings.cloud_speed) * UNITS_PER_SECOND;
-    let direction = f64::from(settings.cloud_direction).to_radians();
-    let (sin, cos) = direction.sin_cos();
-    [(INITIAL_PHASE[0] - distance * cos) as f32, (INITIAL_PHASE[1] - distance * sin) as f32]
+    harmonigraph_scene::MaterialSettings::drift(settings.cloud_speed, settings.cloud_direction, now)
+        .map(|v| v as f32)
 }
 
 /// How many depth slices the starfield walks, from the farthest (0) to the
@@ -603,18 +599,11 @@ pub(super) fn tile_key(
         color_release: _,    // does not change the baked cell walk
         cloud_speed: _,      // does not change the baked cell walk
         cloud_direction: _,  // does not change the baked cell walk
-        scale_size,
-        scale_variety,
-        scale_refract: _, // applied after the tile bake
         cloud_style,
-        wash_size,
-        wash_fuzz,
-        wash_lobe,
-        wash_refract: _,         // applied after the tile bake
-        wash_layers: _,          // applied after the tile bake
         star_density: _,         // no tile for Stars
-        star_randomness: _,      // no tile for Stars
         star_jitter: _,          // no tile for Stars
+        star_halo_resolution: _, // no tile for Stars
+        star_randomness: _,      // no tile for Stars
         star_size_min: _,        // no tile for Stars
         star_size_max: _,        // no tile for Stars
         star_size_curve: _,      // no tile for Stars
@@ -622,9 +611,19 @@ pub(super) fn tile_key(
         star_speed_max: _,       // no tile for Stars
         star_speed_curve: _,     // no tile for Stars
         star_lifetime: _,        // no tile for Stars
-        star_halo_resolution: _, // no tile for Stars
         star_fringe: _,          // no tile for Stars
         star_defocus: _,         // no tile for Stars
+        material_settings:
+            harmonigraph_scene::MaterialSettings {
+                scale_size,
+                scale_variety,
+                scale_refract: _, // applied after the tile bake
+                wash_size,
+                wash_fuzz,
+                wash_lobe,
+                wash_refract: _, // applied after the tile bake
+                wash_layers: _,  // applied after the tile bake
+            },
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
     // live-walk arm was retired because, never taken, it still cost the
@@ -1161,15 +1160,7 @@ fn memory_key(
         color_release: _, // response/coverage changes do not change material identity
         cloud_speed,
         cloud_direction,
-        scale_size,
-        scale_variety,
-        scale_refract,
         cloud_style,
-        wash_size,
-        wash_fuzz,
-        wash_lobe,
-        wash_refract,
-        wash_layers,
         star_density,
         star_randomness,
         star_jitter,
@@ -1183,6 +1174,17 @@ fn memory_key(
         star_halo_resolution: _, // sampling does not change material identity
         star_fringe: _,          // response/coverage changes do not change material identity
         star_defocus: _,         // response/coverage changes do not change material identity
+        material_settings:
+            harmonigraph_scene::MaterialSettings {
+                scale_size,
+                scale_variety,
+                scale_refract,
+                wash_size,
+                wash_fuzz,
+                wash_lobe,
+                wash_refract,
+                wash_layers,
+            },
     } = s;
     let mut values = vec![
         size[0],
@@ -1855,19 +1857,19 @@ impl Targets {
             tone_baked: u32::from(self.tone.is_some()),
             drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },
-            scale_size: settings.scale_size,
-            scale_variety: settings.scale_variety,
-            scale_refract: settings.scale_refract,
+            scale_size: settings.material_settings.scale_size,
+            scale_variety: settings.material_settings.scale_variety,
+            scale_refract: settings.material_settings.scale_refract,
             cloud_style: match settings.cloud_style {
                 harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
                 harmonigraph_scene::CloudStyle::Stars => 2,
             },
-            wash_size: settings.wash_size,
-            wash_fuzz: settings.wash_fuzz,
-            wash_lobe: settings.wash_lobe,
-            wash_refract: settings.wash_refract,
-            wash_layers: settings.wash_layers,
+            wash_size: settings.material_settings.wash_size,
+            wash_fuzz: settings.material_settings.wash_fuzz,
+            wash_lobe: settings.material_settings.wash_lobe,
+            wash_refract: settings.material_settings.wash_refract,
+            wash_layers: settings.material_settings.wash_layers,
             // Zero only where no tile was allocated, which is where no cloud is
             // drawn and the shader returns before the tone.
             tile_cells: tile.map_or(0, TileKey::period),
@@ -2279,7 +2281,10 @@ mod tests {
                 [1920, height],
                 SpectrogramAtmosphere {
                     settings: harmonigraph_scene::SpectralAtmosphere {
-                        wash_size,
+                        material_settings: harmonigraph_scene::MaterialSettings {
+                            wash_size,
+                            ..Default::default()
+                        },
                         cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
                         ..Default::default()
                     },

@@ -52,23 +52,22 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
-            multiplier(ui, &mut settings.material_scale, "Material size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
-                .on_hover_text("Size of washes or facets, independently of the texture they receive.");
-            multiplier(ui, &mut settings.material_speed, "Material speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
-                .on_hover_text("Motion of washes or facets. 0 freezes the material and source roughness; the input texture can still move.");
-            if settings.material_style == LatticeMaterial::Watercolor {
-                ValueBar::new(&mut settings.source_roughness, 0.0..=1.0, "Source roughness")
-                    .percent().show(ui).on_hover_text("Ragged node-local lobes before texture and watercolor washes. Material amount scales this effect; Material speed controls its motion.");
+            super::material::speed(ui, &mut settings.material_speed);
+            super::material::direction(ui, &mut settings.material_direction);
+            match settings.material_style {
+                LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings),
+                LatticeMaterial::Mosaic => super::material::mosaic(ui, &mut settings.material_settings),
+                LatticeMaterial::None => {},
             }
         }
         crate::widgets::button_row(ui, |ui| {
-            if ui.button("Reset material").on_hover_text("Reset only the material choice, amount, size, speed and source roughness.").clicked() {
+            if ui.button("Reset material").on_hover_text("Reset only the material choice, amount, motion and geometry controls.").clicked() {
                 let fresh = AtmosphereSettings::default();
                 settings.material_style = fresh.material_style;
                 settings.material_amount = fresh.material_amount;
-                settings.material_scale = fresh.material_scale;
+                settings.material_settings = fresh.material_settings;
                 settings.material_speed = fresh.material_speed;
-                settings.source_roughness = fresh.source_roughness;
+                settings.material_direction = fresh.material_direction;
             }
         });
     });

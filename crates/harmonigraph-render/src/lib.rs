@@ -357,7 +357,6 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "fs_plus_split",
     "vs_glow_splat",
     "fs_glow_splat",
-    "fs_glow_splat_watercolor",
     "vs_glow_resolve",
     "fs_glow_resolve",
     "vs_ink_strip",
@@ -2564,7 +2563,6 @@ fn create_post_pipeline(
 struct ShaderPipelines {
     scenes: [ScenePipelines; 2],
     glow_splat_pipeline: wgpu::RenderPipeline,
-    glow_watercolor_pipeline: wgpu::RenderPipeline,
     glow_resolve_pipeline: wgpu::RenderPipeline,
     ink_strip_pipeline: wgpu::RenderPipeline,
     ink_blur_pipeline: wgpu::RenderPipeline,
@@ -2595,15 +2593,14 @@ impl ShaderPipelines {
         let (node_cell_pipeline, plus_cell_pipeline) =
             create_cell_pipelines(device, lattice, layouts.scene.uniforms);
         progress(startup::Stage::Lighting);
-        let (glow_splat_pipeline, glow_resolve_pipeline, glow_watercolor_pipeline) =
-            create_glow_pipelines(
-                device,
-                lattice,
-                LATTICE_COLOR_FORMAT,
-                layouts.scene.uniforms,
-                layouts.strip,
-                layouts.statistics,
-            );
+        let (glow_splat_pipeline, glow_resolve_pipeline) = create_glow_pipelines(
+            device,
+            lattice,
+            LATTICE_COLOR_FORMAT,
+            layouts.scene.uniforms,
+            layouts.strip,
+            layouts.statistics,
+        );
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
         progress(startup::Stage::Lattice);
@@ -2622,7 +2619,6 @@ impl ShaderPipelines {
             node_cell_pipeline,
             plus_cell_pipeline,
             glow_splat_pipeline,
-            glow_watercolor_pipeline,
             glow_resolve_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,

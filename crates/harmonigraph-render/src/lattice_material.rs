@@ -9,19 +9,10 @@ const SOURCE: &str = concat!(
 );
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// Exactly representable in the instance's spare f32; never a strip row or a
-/// camera-relative world coordinate. Three lattice axes distinguish sheets.
-pub(super) fn node_seed(fives: i32, threes: i32, sevens: i32) -> f32 {
-    let mut n = (fives as u32).wrapping_mul(0x9e37_79b9)
-        ^ (threes as u32).wrapping_mul(0x85eb_ca6b)
-        ^ (sevens as u32).wrapping_mul(0x27d4_eb2d);
-    n = (n ^ (n >> 16)).wrapping_mul(0x7feb_352d);
-    ((n ^ (n >> 15)) & 0x00ff_ffff) as f32
-}
-
 #[derive(Clone)]
 pub(super) struct Pipelines {
     bake: wgpu::RenderPipeline,
+    bake_layout: wgpu::BindGroupLayout,
     bake_mosaic: wgpu::RenderPipeline,
     mosaic: wgpu::RenderPipeline,
     material: wgpu::RenderPipeline,
@@ -70,6 +61,19 @@ impl Pipelines {
             label: Some("lattice_material_tile_layout"),
             entries: &[texture(0), texture(1), sampler],
         });
+        let bake_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("material_geometry_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lattice_material"),
             source: wgpu::ShaderSource::Wgsl(SOURCE.into()),
@@ -116,8 +120,9 @@ impl Pipelines {
                 })
             };
         Self {
-            bake: pipeline("fs_tile", &[], &[FORMAT, FORMAT]),
-            bake_mosaic: pipeline("fs_mosaic_tile", &[], &[FORMAT]),
+            bake: pipeline("fs_tile", &[Some(&bake_layout)], &[FORMAT, FORMAT]),
+            bake_mosaic: pipeline("fs_mosaic_tile", &[Some(&bake_layout)], &[FORMAT]),
+            bake_layout,
             mosaic: pipeline(
                 "fs_mosaic",
                 &[Some(&source_layout), Some(&tile_layout)],
@@ -178,12 +183,11 @@ fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachmen
 }
 
 pub(super) struct Tile {
-    /// Keyed on material and quantized texels per fixed 40-cell period.
-    /// Watercolor fuzz .25/lobe .7 and Mosaic variety .5 are shader constants.
-    /// Depth, roughness, drift, light and camera never change geometry;
-    /// size affects density only.
+    // Only baked geometry and quantized density belong in this key.
+    // Refraction, layer mix, amount, drift, light and camera are live inputs.
     texels: u32,
     material: u32,
+    geometry: [u32; 2],
     bind_group: wgpu::BindGroup,
 }
 impl Tile {
@@ -191,15 +195,13 @@ impl Tile {
     pub(super) fn geometry_binding(&self) -> wgpu::BindGroup {
         self.bind_group.clone()
     }
-    pub(super) fn is_watercolor(&self) -> bool {
-        self.material == harmonigraph_scene::LatticeMaterial::Watercolor as u32
-    }
     fn new(
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
         texels: u32,
         material: u32,
+        geometry: [u32; 2],
     ) -> Self {
         let a = texture(device, "lattice_material_tile_a", [texels; 2], FORMAT);
         let mosaic = material == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
@@ -226,6 +228,22 @@ impl Tile {
                 },
             ],
         });
+        use wgpu::util::DeviceExt;
+        let values = if mosaic {
+            [0.0, 0.0, f32::from_bits(geometry[0]), 0.0]
+        } else {
+            [f32::from_bits(geometry[0]), f32::from_bits(geometry[1]), 0.0, 0.0]
+        };
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("material_geometry"),
+            contents: bytemuck::cast_slice(&values),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bake_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material_geometry"),
+            layout: &pipelines.bake_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 3, resource: buffer.as_entire_binding() }],
+        });
         let attachments =
             if mosaic { vec![attachment(&a)] } else { vec![attachment(&a), attachment(&b)] };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -234,8 +252,9 @@ impl Tile {
             ..Default::default()
         });
         pass.set_pipeline(if mosaic { &pipelines.bake_mosaic } else { &pipelines.bake });
+        pass.set_bind_group(0, &bake_binding, &[]);
         pass.draw(0..4, 0..1);
-        Self { texels, material, bind_group }
+        Self { texels, material, geometry, bind_group }
     }
 }
 
@@ -314,16 +333,21 @@ pub(super) fn prepare(
         return;
     }
     let size = offscreen.size.map(|n| n.div_ceil(2).max(1));
-    // 23px cells at the prototype's 560px pane and size 1x. Quantized density
-    // keeps nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
-    let cell = size[1] as f32 * (23.0 / 560.0) * settings.scale;
+    // Match the spectrogram's pane-height calibration. Quantized density keeps
+    // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
+    let watercolor = settings.style == harmonigraph_scene::LatticeMaterial::Watercolor as u32;
+    let cell = size[1] as f32 * settings.scale / (10.0 * if watercolor { 5.25 } else { 6.0 / 2.2 });
+    let geometry = if watercolor {
+        [settings.fuzz.to_bits(), settings.lobe.to_bits()]
+    } else {
+        [settings.variety.to_bits(), 0]
+    };
     let texels = ((40.0 * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
-    if pane
-        .material_tile
-        .as_ref()
-        .is_none_or(|tile| tile.texels != texels || tile.material != settings.style)
-    {
-        pane.material_tile = Some(Tile::new(device, encoder, pipelines, texels, settings.style));
+    if pane.material_tile.as_ref().is_none_or(|tile| {
+        tile.texels != texels || tile.material != settings.style || tile.geometry != geometry
+    }) {
+        pane.material_tile =
+            Some(Tile::new(device, encoder, pipelines, texels, settings.style, geometry));
     }
     let source = glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
     let values = [
@@ -333,8 +357,8 @@ pub(super) fn prepare(
         settings.amount,
         settings.drift.0[0],
         settings.drift.0[1],
-        0.0,
-        0.0,
+        settings.refract,
+        settings.layers,
     ];
     queue.write_buffer(&source.buffer, 0, bytemuck::cast_slice(&values));
 }

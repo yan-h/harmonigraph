@@ -1632,8 +1632,8 @@ mod tests {
                     let bare = frame_with(&device, &queue, &mut resources, &cb);
                     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                     s.cloud_depth = 1.0;
-                    s.scale_refract = 0.0;
-                    s.wash_refract = 0.0;
+                    s.material_settings.scale_refract = 0.0;
+                    s.material_settings.wash_refract = 0.0;
                     assert_eq!(
                         frame_with(&device, &queue, &mut resources, &cb),
                         bare,
@@ -1642,8 +1642,8 @@ mod tests {
                 }
                 let straight = frame_with(&device, &queue, &mut resources, &cb);
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                s.scale_refract = 1.0;
-                s.wash_refract = 1.0;
+                s.material_settings.scale_refract = 1.0;
+                s.material_settings.wash_refract = 1.0;
                 let bent = frame_with(&device, &queue, &mut resources, &cb);
                 let moved = bent.iter().zip(&straight).filter(|(a, b)| a.abs_diff(**b) > 4).count();
                 assert!(moved > bent.len() / 50, "{style:?} did not displace structured sound");
@@ -1888,12 +1888,13 @@ mod tests {
                 // that turn `cloud_depth` up: a cloud the refraction reaches,
                 // where the fresh Stars would paint a field of their own.
                 cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
-                scale_size: 1.0,
-                scale_refract: 0.3,
-                // And the Watercolor's globs at 1x, for the probes that switch
-                // to it: the fresh globs are too fine for this small pane.
-                wash_size: 1.0,
-                wash_lobe: 0.55,
+                material_settings: harmonigraph_scene::MaterialSettings {
+                    scale_size: 1.0,
+                    scale_refract: 0.3,
+                    wash_size: 1.0,
+                    wash_lobe: 0.55,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             region: cb.rect,
@@ -3304,10 +3305,10 @@ mod tests {
             {
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                 s.cloud_depth = 1.0;
-                s.scale_refract = 0.0;
+                s.material_settings.scale_refract = 0.0;
             }
             let straight = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.scale_refract = 1.0;
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.scale_refract = 1.0;
             let bent = fresh_frame(&device, &queue, cb);
             let n = straight.len() / 4;
             let moved = straight
@@ -3365,7 +3366,7 @@ mod tests {
             // From the fresh bend through the faces to the read at the centres.
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
             let bent = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.scale_refract = -1.0;
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.scale_refract = -1.0;
             let faceted = fresh_frame(&device, &queue, cb);
             let n = bent.len() / 4;
             let moved = bent
@@ -3401,8 +3402,8 @@ mod tests {
             let mut cb = refracted_fixture();
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_depth = 1.0;
-            s.scale_refract = 1.0;
-            s.scale_variety = variety;
+            s.material_settings.scale_refract = 1.0;
+            s.material_settings.scale_variety = variety;
             fresh_frame(&device, &queue, &cb)
         };
         let plain = lit(0.0);
@@ -3696,7 +3697,7 @@ fn cs_wrap_probe() {
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
         s.cloud_depth = 1.0;
-        s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+        s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
         cb
     }
 
@@ -3707,9 +3708,9 @@ fn cs_wrap_probe() {
             return;
         };
         let moved_by_refraction = |cb: &mut SpectrogramCallback| {
-            cb.atmosphere.as_mut().unwrap().settings.wash_refract = 0.0;
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_refract = 0.0;
             let straight = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.wash_refract = 1.0;
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_refract = 1.0;
             let bent = fresh_frame(&device, &queue, cb);
             let n = straight.len() / 4;
             straight
@@ -3827,11 +3828,12 @@ fn cs_wrap_probe() {
             cb.atmosphere.as_mut().unwrap().settings.cloud_style =
                 harmonigraph_scene::CloudStyle::Watercolor;
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-            cb.atmosphere.as_mut().unwrap().settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_size =
+                harmonigraph_scene::CLOUD_SIZE_MAX;
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.wash_fuzz = 0.5;
-            s.wash_lobe = 0.5;
-            s.wash_layers = 0.5;
+            s.material_settings.wash_fuzz = 0.5;
+            s.material_settings.wash_lobe = 0.5;
+            s.material_settings.wash_layers = 0.5;
             turn(s);
             fresh_frame(&device, &queue, &cb)
         };
@@ -3839,12 +3841,13 @@ fn cs_wrap_probe() {
         for (name, turn) in [
             (
                 "Glob size",
-                (|s: &mut harmonigraph_scene::SpectralAtmosphere| s.wash_size = 1.0)
-                    as fn(&mut harmonigraph_scene::SpectralAtmosphere),
+                (|s: &mut harmonigraph_scene::SpectralAtmosphere| {
+                    s.material_settings.wash_size = 1.0
+                }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
-            ("Fuzz", |s| s.wash_fuzz = 0.0),
-            ("Lobe shape", |s| s.wash_lobe = 0.0),
-            ("Layers", |s| s.wash_layers = 0.0),
+            ("Fuzz", |s| s.material_settings.wash_fuzz = 0.0),
+            ("Lobe shape", |s| s.material_settings.wash_lobe = 0.0),
+            ("Layers", |s| s.material_settings.wash_layers = 0.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
@@ -3905,7 +3908,7 @@ fn cs_wrap_probe() {
             cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.cloud_style = style;
-            s.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            s.material_settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
             let mut native_resources = CallbackResources::default();
             let native = frame_with(&device, &queue, &mut native_resources, &cb);
             // 2 pt against the fixture's 1 pixel per point: a 64 by 64 tone
@@ -3986,7 +3989,7 @@ fn cs_wrap_probe() {
         {
             let a = cb.atmosphere.as_mut().unwrap();
             a.settings.cloud_style = CloudStyle::Mosaic;
-            a.settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+            a.settings.material_settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
             let r = cb.rect;
             a.region =
                 egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y + r.height() * split), r.max);
@@ -4098,7 +4101,7 @@ fn cs_wrap_probe() {
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_style = harmonigraph_scene::CloudStyle::Mosaic;
         settings.cloud_depth = 1.0;
-        settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
+        settings.material_settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
         settings.cloud_speed = 0.0;
         UNWRAPPED_MOSAIC.set(true);
         let live = fresh_frame(&device, &queue, &cb);
@@ -4384,23 +4387,23 @@ fn cs_rotation_probe() {
             ("Drift speed", (|s| s.cloud_speed = 20.0) as Turn),
             ("Drift direction", |s| s.cloud_direction = 42.0),
             ("Cloud depth", |s| s.cloud_depth = 0.5),
-            ("Refraction", |s| s.wash_refract = 0.2),
-            ("Layers", |s| s.wash_layers = 0.0),
+            ("Refraction", |s| s.material_settings.wash_refract = 0.2),
+            ("Layers", |s| s.material_settings.wash_layers = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),
             // The mosaic's own dial, which the wash's walk cannot read.
-            ("Variety", |s| s.scale_variety = 1.0),
+            ("Variety", |s| s.material_settings.scale_variety = 1.0),
         ] {
             assert_eq!(key(turn, 0.0), fresh, "{name} rebaked a tile it cannot reach");
         }
         for (name, turn) in [
-            ("Lobe shape", (|s| s.wash_lobe = 0.0) as Turn),
-            ("Fuzz", |s| s.wash_fuzz = 0.0),
+            ("Lobe shape", (|s| s.material_settings.wash_lobe = 0.0) as Turn),
+            ("Fuzz", |s| s.material_settings.wash_fuzz = 0.0),
             ("Texture", |s| s.cloud_style = harmonigraph_scene::CloudStyle::Mosaic),
             // Through the tile's texel size alone — how many cells cross the
             // pane, not what a cell draws.
-            ("Glob size", |s| s.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),
+            ("Glob size", |s| s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),
         ] {
             assert_ne!(key(turn, 0.0), fresh, "{name} reaches the walk and did not rebake");
         }
@@ -4441,7 +4444,7 @@ fn cs_rotation_probe() {
         frame_with(&device, &queue, &mut resources, &cb);
         let steady = passes(&resources) - first;
         assert_eq!(first, steady + 1, "the first frame encoded no bake, so nothing is cached");
-        cb.atmosphere.as_mut().unwrap().settings.wash_fuzz = 0.9;
+        cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_fuzz = 0.9;
         frame_with(&device, &queue, &mut resources, &cb);
         assert_eq!(
             passes(&resources) - first - steady,

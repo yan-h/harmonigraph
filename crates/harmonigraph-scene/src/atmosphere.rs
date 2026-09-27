@@ -39,8 +39,8 @@ pub enum CloudStyle {
     Stars,
 }
 
-/// The band both cloud size dials run over — [`SpectralAtmosphere::scale_size`]
-/// and [`SpectralAtmosphere::wash_size`], which mean the same thing about two
+/// The band both cloud size dials run over — [`MaterialSettings::scale_size`]
+/// and [`MaterialSettings::wash_size`], which mean the same thing about two
 /// different textures and so are worth one pair of numbers rather than two.
 ///
 /// **Exported because the dial and the load-door clamp have to be the SAME
@@ -114,13 +114,15 @@ pub const CONTOUR_SOFTNESS_MAX: f32 = 0.5;
 pub const CLOUD_SPEED_MIN: f32 = 0.0;
 /// See [`CLOUD_SPEED_MIN`].
 pub const CLOUD_SPEED_MAX: f32 = 20.0;
+const MATERIAL_SPEED_DEFAULT: f32 = 4.242_738_7;
+const MATERIAL_DIRECTION_DEFAULT: f32 = 174.0;
 
 /// Bounds shared by the [`SpectralAtmosphere::cloud_direction`] control and sanitizer.
 pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
 /// See [`CLOUD_DIRECTION_MIN`].
 pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
 
-/// Bounds shared by the [`SpectralAtmosphere::scale_refract`] control and sanitizer.
+/// Bounds shared by the [`MaterialSettings::scale_refract`] control and sanitizer.
 pub const SCALE_REFRACT_MIN: f32 = -1.0;
 /// See [`SCALE_REFRACT_MIN`].
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
@@ -188,6 +190,95 @@ pub const NEBULA_SPEED_MAX: f32 = 20.0;
 pub const BREATH_SPEED_MIN: f32 = 0.0;
 /// See [`BREATH_SPEED_MIN`].
 pub const BREATH_SPEED_MAX: f32 = 4.0;
+
+/// Geometry and sampling controls shared by lattice and spectrogram materials.
+/// Each view owns its own copy; changing one view never changes the other.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct MaterialSettings {
+    /// Size of one scale, as a multiplier on that size: how many of them cross
+    /// a cloud moves the other way, because the count is divided by this.
+    /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
+    pub scale_size: f32,
+    /// How much the scales differ in size from each other. 0 is one radius for
+    /// every glob in the field, which is the most regular texture there is; 1
+    /// draws each from the whole band the layer's coverage proof allows.
+    pub scale_variety: f32,
+    /// How far a scale carries the light behind it, and which way — the
+    /// refraction, and the whole reason the layer reads as a lens rather than
+    /// as something painted over the picture. 0 leaves the light where it is.
+    ///
+    /// ABOVE 0 the light is read where the scale's own face POINTS, in scale
+    /// widths, so the picture bends smoothly through the cloud. BELOW 0 it is
+    /// pulled toward the scale's CENTRE, and at -1 it is read there — one value
+    /// across the whole scale, so the picture comes apart into flat quantized
+    /// patches. That second half used to be its own `scale_facet` dial, a blend
+    /// between the two readings; the pair spanned a plane and the looks worth
+    /// having lie on this line through it, which is also exactly what the
+    /// watercolour's `wash_refract` has always meant by the word.
+    pub scale_refract: f32,
+    /// How big one glob is, as a multiplier on that size: how many of them
+    /// cross the cloud frame moves the other way, because the count is divided
+    /// by this. Larger is bigger, like `scale_size`, and over the same
+    /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
+    pub wash_size: f32,
+    /// One dial over everything that dissolves a glob's rim: how far it feathers
+    /// into what lies beneath and how far it bleeds into what is about to cover it.
+    pub wash_fuzz: f32,
+    /// How far the shared domain warp carries glob space off the grid: 0 is
+    /// bubbles, the top of the dial is shearing lobes.
+    pub wash_lobe: f32,
+    /// How far each glob's tone is pulled to the light at its own centre. 0
+    /// leaves the picture exactly where it is.
+    pub wash_refract: f32,
+    /// How opaque the finer octave's wash is over the coarse one. 0 draws the
+    /// coarse octave alone and skips the finer one's work.
+    pub wash_layers: f32,
+}
+impl Default for MaterialSettings {
+    fn default() -> Self {
+        Self {
+            scale_size: 0.153_937_07,
+            scale_variety: 0.5,
+            scale_refract: -1.0,
+            wash_size: 0.181_260_21,
+            wash_fuzz: 1.0,
+            wash_lobe: 1.0,
+            wash_refract: 0.950_153_47,
+            wash_layers: 0.5,
+        }
+    }
+}
+impl MaterialSettings {
+    /// Sampling offset in cloud units, opposite the visible screen direction.
+    /// Keep f64 until the caller reduces the material's repeating period.
+    pub fn drift(speed: f32, direction: f32, now: f64) -> [f64; 2] {
+        let distance = now * f64::from(speed) * 0.047_169_905_660_283_02;
+        let (sin, cos) = f64::from(direction).to_radians().sin_cos();
+        [-distance * cos, 0.6 - distance * sin]
+    }
+
+    pub fn sanitized(mut self) -> Self {
+        let fresh = Self::default();
+        let clamp = |value: f32, fallback: f32, low, high| {
+            if value.is_finite() {
+                value.clamp(low, high)
+            } else {
+                fallback
+            }
+        };
+        self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
+        self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
+        self.scale_refract =
+            clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
+        self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
+        self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
+        self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
+        self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
+        self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
+        self
+    }
+}
 
 /// Independent spectrogram diffusion, analyzer shading and note light.
 ///
@@ -281,48 +372,11 @@ pub struct SpectralAtmosphere {
     /// Constant visible texture drift direction in screen degrees: 0 points
     /// right, 90 down, 180 left and 270 up.
     pub cloud_direction: f32,
-    /// Size of one scale, as a multiplier on that size: how many of them cross
-    /// a cloud moves the other way, because the count is divided by this.
-    /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
-    pub scale_size: f32,
-    /// How much the scales differ in size from each other. 0 is one radius for
-    /// every glob in the field, which is the most regular texture there is; 1
-    /// draws each from the whole band the layer's coverage proof allows.
-    pub scale_variety: f32,
-    /// How far a scale carries the light behind it, and which way — the
-    /// refraction, and the whole reason the layer reads as a lens rather than
-    /// as something painted over the picture. 0 leaves the light where it is.
-    ///
-    /// ABOVE 0 the light is read where the scale's own face POINTS, in scale
-    /// widths, so the picture bends smoothly through the cloud. BELOW 0 it is
-    /// pulled toward the scale's CENTRE, and at -1 it is read there — one value
-    /// across the whole scale, so the picture comes apart into flat quantized
-    /// patches. That second half used to be its own `scale_facet` dial, a blend
-    /// between the two readings; the pair spanned a plane and the looks worth
-    /// having lie on this line through it, which is also exactly what the
-    /// watercolour's `wash_refract` has always meant by the word.
-    pub scale_refract: f32,
+    pub material_settings: MaterialSettings,
     /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
     /// belongs to it alone; `Stars` is the starfield, and so is every `star_`.
     pub cloud_style: CloudStyle,
-    /// How big one glob is, as a multiplier on that size: how many of them
-    /// cross the cloud frame moves the other way, because the count is divided
-    /// by this. Larger is bigger, like `scale_size`, and over the same
-    /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
-    pub wash_size: f32,
-    /// One dial over everything that dissolves a glob's rim: how far it feathers
-    /// into what lies beneath and how far it bleeds into what is about to cover it.
-    pub wash_fuzz: f32,
-    /// How far the shared domain warp carries glob space off the grid: 0 is
-    /// bubbles, the top of the dial is shearing lobes.
-    pub wash_lobe: f32,
-    /// How far each glob's tone is pulled to the light at its own centre. 0
-    /// leaves the picture exactly where it is.
-    pub wash_refract: f32,
-    /// How opaque the finer octave's wash is over the coarse one. 0 draws the
-    /// coarse octave alone and skips the finer one's work.
-    pub wash_layers: f32,
     /// Stars per area at every depth, as a multiplier: the cells each depth's
     /// stars are hashed into shrink by its square root. Runs over
     /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
@@ -440,17 +494,10 @@ impl Default for SpectralAtmosphere {
             cloud_depth: 1.0,
             color_pickup: 0.043_984_346,
             color_release: 0.711_714_74,
-            cloud_speed: 4.242_738_7,
-            cloud_direction: 174.0,
-            scale_size: 0.153_937_07,
-            scale_variety: 0.5,
-            scale_refract: -1.0,
+            cloud_speed: MATERIAL_SPEED_DEFAULT,
+            cloud_direction: MATERIAL_DIRECTION_DEFAULT,
             cloud_style: CloudStyle::Stars,
-            wash_size: 0.181_260_21,
-            wash_fuzz: 1.0,
-            wash_lobe: 1.0,
-            wash_refract: 0.950_153_47,
-            wash_layers: 0.5,
+            material_settings: MaterialSettings::default(),
             // Yan's Stars controls captured from the DAW on 2026-09-26.
             star_density: 10.0,
             star_randomness: 0.080912866,
@@ -512,15 +559,7 @@ impl SpectralAtmosphere {
         } else {
             fresh.cloud_direction
         };
-        self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
-        self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
-        self.scale_refract =
-            clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
-        self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
-        self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
-        self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
-        self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
-        self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
+        self.material_settings = self.material_settings.sanitized();
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
@@ -579,12 +618,12 @@ impl SpectralAtmosphere {
             cloud: self.cloud_depth > 0.0
                 && match self.cloud_style {
                     CloudStyle::Mosaic => {
-                        self.scale_refract != 0.0
+                        self.material_settings.scale_refract != 0.0
                             || self.color_pickup > 0.0
                             || self.color_release > 0.0
                     }
                     CloudStyle::Watercolor => {
-                        self.wash_refract != 0.0
+                        self.material_settings.wash_refract != 0.0
                             || self.color_pickup > 0.0
                             || self.color_release > 0.0
                     }
@@ -626,10 +665,9 @@ pub struct AtmosphereSettings {
     /// Replaces the retired combined `material` key, which serde ignores.
     pub material_style: LatticeMaterial,
     pub material_amount: f32,
-    pub material_scale: f32,
+    pub material_settings: MaterialSettings,
     pub material_speed: f32,
-    /// Per-node source breakup before watercolor resamples the combined light.
-    pub source_roughness: f32,
+    pub material_direction: f32,
     pub texture_depth: f32,
     pub texture_scale: f32,
     pub texture_speed: f32,
@@ -643,9 +681,9 @@ impl Default for AtmosphereSettings {
             texture: LatticeTexture::Clouds,
             material_style: LatticeMaterial::None,
             material_amount: 1.0,
-            material_scale: 1.0,
-            material_speed: 1.0,
-            source_roughness: 0.0,
+            material_settings: MaterialSettings::default(),
+            material_speed: MATERIAL_SPEED_DEFAULT,
+            material_direction: MATERIAL_DIRECTION_DEFAULT,
             texture_depth: 0.134_627_85,
             texture_scale: 0.840_435_3,
             texture_speed: 6.077_757_4,
@@ -666,11 +704,14 @@ impl AtmosphereSettings {
             }
         };
         self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
-        self.material_scale =
-            clamp(self.material_scale, fresh.material_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
+        self.material_settings = self.material_settings.sanitized();
         self.material_speed =
-            clamp(self.material_speed, fresh.material_speed, NEBULA_SPEED_MIN, NEBULA_SPEED_MAX);
-        self.source_roughness = clamp(self.source_roughness, fresh.source_roughness, 0.0, 1.0);
+            clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
+        self.material_direction = if self.material_direction.is_finite() {
+            self.material_direction.rem_euclid(CLOUD_DIRECTION_MAX)
+        } else {
+            fresh.material_direction
+        };
         self.texture_depth = clamp(self.texture_depth, fresh.texture_depth, 0.0, 1.0);
         self.texture_scale =
             clamp(self.texture_scale, fresh.texture_scale, NEBULA_SCALE_MIN, NEBULA_SCALE_MAX);
