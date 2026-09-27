@@ -278,7 +278,11 @@ fn draw_map_overlay(
         .into_iter()
         .flat_map(|map| (0..12i64).map(move |midi| map.node(midi)))
         .chain(state.surfaces.hovered.filter(|_| editing))
-        .filter_map(|pos| window.index_of(pos))
+        .filter_map(|pos| {
+            let i = window.index_of(pos)?;
+            debug_assert_eq!(scene.nodes.get(i).map(|n| n.lattice_pos), Some(pos));
+            Some(i)
+        })
         .collect();
     indices.sort_unstable();
     indices.dedup();
