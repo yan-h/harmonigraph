@@ -192,9 +192,7 @@ impl VoiceBaseline {
         ConfirmedPitch {
             key: self.key(source),
             lifetime: (self.lifetime != 0).then_some(self.lifetime),
-            host_note_id: (self.host_note_id >= 0).then_some(self.host_note_id),
             pitch_microcents: self.pitch_microcents,
-            onset_sample: self.onset.map_or(0, |onset| onset.sample),
             provenance: self.provenance,
         }
     }

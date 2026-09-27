@@ -1667,9 +1667,9 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
     });
     let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 1.0, 0, true, &voices).unwrap();
     let mut confirmed = ConfirmedPitches::default();
-    for row in &voices {
-        confirmed.on(row.confirmed(SourceId::DIRECT)).unwrap();
-    }
+    confirmed
+        .replace_source(SourceId::DIRECT, &voices.map(|row| row.confirmed(SourceId::DIRECT)))
+        .unwrap();
     let before: Vec<_> = confirmed.rows().copied().collect();
     let start = std::time::Instant::now();
     nice_assert_no_alloc::assert_no_alloc(|| {

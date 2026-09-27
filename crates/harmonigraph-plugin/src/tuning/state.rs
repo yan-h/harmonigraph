@@ -129,32 +129,27 @@ impl State {
     ///
     /// A source whose state has lost an event has no confirmed pitches rather
     /// than an empty list of them.
-    pub fn publish_confirmed(
-        &self,
-        source: SourceId,
-        live: bool,
-        confirmed: &mut ConfirmedPitches,
-    ) -> bool {
+    pub fn publish_confirmed(&self, source: SourceId, confirmed: &mut ConfirmedPitches) -> bool {
+        if !self.complete {
+            confirmed.invalidate(source);
+            return false;
+        }
         let empty = ConfirmedPitch {
             key: VoiceKey { source, channel: 0, note: 0 },
             lifetime: None,
-            host_note_id: None,
             pitch_microcents: 0,
-            onset_sample: 0,
             provenance: PitchProvenance::AcceptedOutput,
         };
         let mut rows = [empty; HELD_PER_SOURCE];
         let mut count = 0;
-        if live {
-            for voice in self.voices() {
-                rows[count] = ConfirmedPitch {
-                    pitch_microcents: voice
-                        .pitch_microcents
-                        .saturating_sub(voice.frozen_offset_microcents),
-                    ..voice.confirmed(source)
-                };
-                count += 1;
-            }
+        for voice in self.voices() {
+            rows[count] = ConfirmedPitch {
+                pitch_microcents: voice
+                    .pitch_microcents
+                    .saturating_sub(voice.frozen_offset_microcents),
+                ..voice.confirmed(source)
+            };
+            count += 1;
         }
         confirmed.replace_source(source, &rows[..count]).is_ok()
     }
