@@ -149,9 +149,8 @@ impl EditorShared {
     /// back into `Interaction`, and the next frame — whenever there is one —
     /// draws what it left.
     pub(crate) fn poll_take_end(&mut self) {
-        // Counted by the recorder, whichever path a note took into the take:
-        // with a configuration owner installed — every CLAP host — notes never
-        // pass through the plain-MIDI arm of `process` at all (#818).
+        // Counted by the recorder, which every note reaches the take through:
+        // the Hub publishes it there, and nothing in `process` sees it (#818).
         let count = self.take.captured();
         self.take_last_count = count;
         // The audio thread's own view, rather than inferring it from

@@ -885,8 +885,9 @@ impl NoteTracker {
     /// After a stream-wide gap that means every source this tracker has heard
     /// from, and — until the first of them answers — the stream as a whole,
     /// since what the gap lost may have been a source's first word. A source
-    /// that stopped publishing before the gap never answers, and holds this
-    /// until a session reset speaks for everyone.
+    /// that stopped publishing before the gap answers only if its publisher
+    /// still speaks for it; the Hub does, with the empty snapshot of a
+    /// departed Tune's row.
     pub fn history_missing(&self) -> bool {
         match &self.certainty {
             Certainty::AllBut(doubted) => !doubted.is_empty(),
@@ -1807,7 +1808,9 @@ mod tests {
     /// The banner's condition means "right now": it holds while a source the
     /// tracker has heard from is in doubt, and clears once each one's complete
     /// baseline has answered for it. Two sources, so the half-recovered state
-    /// in between is reached rather than skipped.
+    /// in between is reached rather than skipped, and a one-source gap first,
+    /// because after a stream-wide one certainty never returns to the shape
+    /// that one reaches.
     #[test]
     fn missing_history_clears_once_every_heard_source_recovers() {
         let (a, b) = (SourceId(1), SourceId(2));
@@ -1820,17 +1823,17 @@ mod tests {
         tracker.replace_source(&baseline(b, 1, 0.5)).unwrap();
         assert!(!tracker.history_missing(), "nothing lost yet");
 
-        tracker.handle_canonical(gap(1.0, None)).unwrap();
-        assert!(tracker.history_missing(), "a stream-wide gap doubts both");
-        assert!(tracker.replace_source(&baseline(a, 2, 2.0)).unwrap());
-        assert!(tracker.history_missing(), "b has not answered for itself");
-        assert!(tracker.replace_source(&baseline(b, 2, 3.0)).unwrap());
-        assert!(!tracker.history_missing(), "both recovered, so the banner clears");
-
-        tracker.handle_canonical(gap(4.0, Some(a))).unwrap();
+        tracker.handle_canonical(gap(1.0, Some(a))).unwrap();
         assert!(tracker.history_missing(), "a gap naming one source");
-        assert!(tracker.replace_source(&baseline(a, 3, 5.0)).unwrap());
+        assert!(tracker.replace_source(&baseline(a, 2, 2.0)).unwrap());
         assert!(!tracker.history_missing(), "clears on that source's own recovery");
+
+        tracker.handle_canonical(gap(3.0, None)).unwrap();
+        assert!(tracker.history_missing(), "a stream-wide gap doubts both");
+        assert!(tracker.replace_source(&baseline(a, 3, 4.0)).unwrap());
+        assert!(tracker.history_missing(), "b has not answered for itself");
+        assert!(tracker.replace_source(&baseline(b, 2, 5.0)).unwrap());
+        assert!(!tracker.history_missing(), "both recovered, so the banner clears");
     }
 
     #[test]

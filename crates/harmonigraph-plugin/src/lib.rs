@@ -651,7 +651,8 @@ impl Plugin for Harmonigraph {
     // Main audio passes through untouched. The selected input is tapped for
     // the GUI's spectrum analyzer — INTERLEAVED, channel by channel, not as a
     // mixdown (see `process`, and `interleaved_reservation` for what that
-    // costs). MIDI is forwarded verbatim.
+    // costs). MIDI goes out through the Hub, which delays it by D and states
+    // each note's tuning (see `tuning`).
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: NonZeroU32::new(2),
         main_output_channels: NonZeroU32::new(2),

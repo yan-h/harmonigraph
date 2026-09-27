@@ -19,11 +19,11 @@ pub struct State {
     /// MIDI channel displacement, which is also the attack pitch the policy
     /// scores. Bend and RPN 0 sensitivity both reduce into it.
     pitch: [harmonigraph_core::policy::channel::ChannelPitch; 16],
-    /// Whether the last [`apply`](Self::apply) moved a held voice with no
-    /// delta to say so: a channel bend, or a bend-range change, on a channel
-    /// that has voices on it. A bend on an empty channel changes only the
-    /// pitch later attacks start from, which no snapshot carries.
-    pub pitch_changed: bool,
+    /// The channel whose held voices the last [`apply`](Self::apply) moved
+    /// with no delta of its own: a channel bend, or a bend-range change, on a
+    /// channel that has voices on it. A bend on an empty channel changes only
+    /// the pitch later attacks start from, and moves nothing to publish.
+    pub moved_channel: Option<u8>,
     /// False once a bounded store refused a voice. A source with an incomplete
     /// state publishes no baseline, because a partial one is worse than none.
     pub complete: bool,
@@ -34,7 +34,7 @@ impl Default for State {
         Self {
             voices: [None; HELD_PER_SOURCE],
             pitch: [Default::default(); 16],
-            pitch_changed: false,
+            moved_channel: None,
             complete: true,
         }
     }
@@ -177,11 +177,37 @@ impl State {
         SourceBaseline::new(source, id, time, cut, true, &voices[..count]).ok()
     }
 
+    /// The delta that states a held voice's pitch after a channel move: a
+    /// `Tuning` carrying the absolute pitch, which both lanes draw as a bend
+    /// on the voice's own row. A snapshot would state it too, but a consumer
+    /// takes a snapshot as recovery and breaks the row at it (#1151).
+    pub fn retuned(&self, lifetime: u64, stamp: Stamp) -> Option<NoteDelta> {
+        let voice = self.voice(lifetime)?;
+        Some(NoteDelta {
+            event: NoteEvent {
+                source: stamp.source,
+                time: stamp.time,
+                channel: voice.channel,
+                note: voice.note,
+                // The player's own tuning, as every Tuning delta states it;
+                // the move is in `pitch_microcents`.
+                kind: NoteEventKind::Tuning { semitones: voice.player_tuning as f32 },
+            },
+            sequence: stamp.sequence,
+            lifetime,
+            provenance: PitchProvenance::AcceptedOutput,
+            timing: Some(stamp.timing),
+            pitch_microcents: Some(voice.pitch_microcents),
+            assignment: VoiceBaseline::metadata(voice),
+            partial_output: false,
+        })
+    }
+
     /// Apply one sequenced input at the time it is scheduled to sound. A
     /// release and a per-note expression find their voice by what the event
     /// addresses, which is the same rule the Tune's held set uses.
     pub fn apply(&mut self, event: Event, stamp: Stamp) -> Option<NoteDelta> {
-        self.pitch_changed = false;
+        self.moved_channel = None;
         let mut result = None;
         if let Some((id, channel, note, velocity)) = event.attack() {
             let index = self.onset_cell(channel, note);
@@ -271,7 +297,7 @@ impl State {
                     self.voices.iter_mut().flatten().filter(|v| usize::from(v.channel) == index)
                 {
                     voice.pitch_microcents = voice.pitch_microcents.saturating_add(change);
-                    self.pitch_changed = true;
+                    self.moved_channel = Some(index as u8);
                 }
             }
         }

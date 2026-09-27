@@ -1518,10 +1518,9 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
     }
 }
 
-/// A CLAP host always installs the configuration owner, and with it installed
-/// a note reaches the take through the Hub's publication rather than the
-/// plain-MIDI arm — so "has this take captured anything" has to be answered by
-/// what the recorder took in, not by a count only that arm kept (#818).
+/// A note reaches the take through the Hub's publication, so "has this take
+/// captured anything" is answered by what the recorder took in, not by a
+/// count kept anywhere else (#818).
 ///
 /// The plugin's own recorder and the editor state wired to it, not an injected
 /// one: the claim is that the editor's frame-counted stop sees a note that

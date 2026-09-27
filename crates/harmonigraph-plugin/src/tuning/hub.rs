@@ -920,32 +920,52 @@ impl Hub {
                 assigned.channel_pitch,
             );
         }
-        // A channel bend moves the voices it reaches and produces no delta of
-        // its own, so the snapshot this owes is the only thing that carries the
-        // move to either lane (#1151).
-        if self.rows[index].state.pitch_changed {
-            self.rows[index].repair = publication::Lanes::both(true);
-        }
-        let Some(mut delta) = delta else {
+        match delta {
+            Some(mut delta) => {
+                // The voice now carries its frozen choice, so the delta states
+                // the pitch this note will actually sound at rather than its
+                // raw key.
+                if let Some(voice) = self.rows[index].state.voice(delta.lifetime) {
+                    delta.assignment = VoiceBaseline::metadata(voice);
+                    if delta.pitch_microcents.is_some() {
+                        delta.pitch_microcents = Some(voice.pitch_microcents);
+                    }
+                }
+                self.hold(record, timing, delta);
+            }
             // Defensive cleanup if an onset cannot be retained. Admission
             // above normally refuses it before assignment; policy must not
             // keep a lifetime that the scheduled state cannot address.
-            if event.attack().is_some() {
+            None if event.attack().is_some() => {
                 self.sequencer.forget_voice(record.source, record.serial);
                 self.status |= session::DROPPED;
             }
-            self.rows[index].applied = self.rows[index].sequence;
-            return;
-        };
-        // The voice now carries its frozen choice, so the delta states the
-        // pitch this note will actually sound at rather than its raw key.
-        if let Some(voice) = self.rows[index].state.voice(delta.lifetime) {
-            delta.assignment = VoiceBaseline::metadata(voice);
-            if delta.pitch_microcents.is_some() {
-                delta.pitch_microcents = Some(voice.pitch_microcents);
+            None => {}
+        }
+        // A channel bend moves every voice held on its channel and has no
+        // delta of its own, so each moved voice gets one: its new pitch as a
+        // bend, sequenced after the event that moved it (#1151).
+        if let Some(channel) = self.rows[index].state.moved_channel {
+            let mut moved = [0; HELD_PER_SOURCE];
+            let mut count = 0;
+            for voice in self.rows[index].state.voices().filter(|v| v.channel == channel) {
+                moved[count] = voice.lifetime;
+                count += 1;
+            }
+            for &lifetime in &moved[..count] {
+                self.rows[index].sequence += 1;
+                let stamp = Stamp { sequence: self.rows[index].sequence, ..stamp };
+                if let Some(delta) = self.rows[index].state.retuned(lifetime, stamp) {
+                    self.hold(record, timing, delta);
+                }
             }
         }
         self.rows[index].applied = self.rows[index].sequence;
+    }
+
+    /// Queue one delta for this callback's publication pass. A full queue
+    /// owes the row a snapshot instead, which is what states the lost delta.
+    fn hold(&mut self, record: Record, timing: EventTiming, delta: NoteDelta) {
         if self.pending.len() < BATCH_EVENTS {
             self.pending.push(Published {
                 source: record.source,
@@ -954,7 +974,7 @@ impl Hub {
                 timing,
             });
         } else {
-            self.rows[index].repair = publication::Lanes::both(true);
+            self.rows[usize::from(record.source)].repair = publication::Lanes::both(true);
             self.status |= session::PUBLICATION;
         }
     }
@@ -1087,7 +1107,14 @@ impl Hub {
             }
         }
         for index in 0..=TUNERS {
-            if !self.rows[index].live || !self.rows[index].repair.any() {
+            // A row whose Tune has left still pays what it owes, with the empty
+            // snapshot its cleared state makes: a consumer that doubted it
+            // after a gap hears it holds nothing, where silence would leave it
+            // in doubt for the life of the instance (#1195). A row that never
+            // published has nothing to answer for, and a consumer that never
+            // heard of it must not start now.
+            let departed = !self.rows[index].live;
+            if !self.rows[index].repair.any() || (departed && self.rows[index].sequence == 0) {
                 continue;
             }
             // A snapshot cuts at every delta this row applied, and has to
