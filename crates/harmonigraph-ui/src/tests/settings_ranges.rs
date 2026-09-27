@@ -79,7 +79,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // and checked directly in `loaded`.
     poison!(a.camera; yaw, pitch, distance, cabinet_angle, cabinet_scale);
     poison!(a.spectrum; low_midi, high_midi, marking_scale, floor_db, ceiling_db,
-        attack, release, keyline_lift, roll_seconds, roll_thickness, roll_opacity, roll_lead,
+        attack, release, keyline_lift, roll_seconds, roll_thickness, roll_lead,
         roll_lead_fade, roll_lead_release, note_name_scale, volume_floor_db, volume_ceiling_db,
         backdrop_strength, backdrop_height, backdrop_gap);
     // Two more that cross this door without a bar of their own. `tilt` is a
@@ -272,9 +272,9 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Colors => visits + 8,
             panes::Tab::LatticeSettings => visits + 5 + 6,
-            // ...the spectrogram's fourteen, the ribbons' six, and the
+            // ...the spectrogram's fourteen, the ribbons' five, and the
             // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 14 + 6 + 2,
+            panes::Tab::AnalyzerSettings => visits + 14 + 5 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -288,7 +288,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Watercolor,
         enabled: true,
-        visits: 13 + 14 + 6 + 2 + 2 - 3 + 5,
+        visits: 13 + 14 + 5 + 2 + 2 - 3 + 5,
         ..base
     });
     // The starfield's, on the same terms: the three scale bars and the shared
@@ -297,7 +297,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Stars,
         enabled: true,
-        visits: 13 + 14 + 6 + 2 + 2 - 3 - 1 + 9,
+        visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + 9,
         ..base
     });
     for projection in [Projection::Perspective, Projection::Orthographic] {

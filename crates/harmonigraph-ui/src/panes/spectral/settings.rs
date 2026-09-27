@@ -250,13 +250,6 @@ pub(crate) fn ribbons_section(
                 "Ribbon width in semitones (st), measured on the frequency axis. \
                      1 st is the width of one semitone at any zoom.",
             );
-            ValueBar::new(&mut cfg.roll_opacity, 0.0..=1.0, "Ribbon opacity")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "Opacity of MIDI ribbon colors over the spectrogram. \
-                     Their dark surrounds keep their full strength.",
-                );
             super::super::lighting::note_bloom(ui, note_bloom);
             edge_bar(
                 ui,
