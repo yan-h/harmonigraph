@@ -23,6 +23,8 @@
 //! ```
 //! `PROBE_OCCLUSION=0` compares the same shader with receiver fading disabled.
 //! `PROBE_LOCAL_SHADOW=0` disables only the local notation-shadow pass.
+//! `PROBE_TIMER=1` arms the production preparation timer and reports its samples.
+//! Compare with `PROBE_TIMER=0` to measure its overhead with no overlay drawn.
 //! `PROBE_OCTAVES=1` bounds the cost of the default seven-slot shader walks.
 //! Probe scenes now use `scrolled()` at the rendered default camera and square
 //! aspect. Historical `reach()` figures over-counted off-pane instances (#1182).
@@ -444,6 +446,9 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let mut completion_samples = Vec::with_capacity(frames);
     let mut callback_samples = Vec::with_capacity(frames);
     let mut cpu_samples = Vec::with_capacity(frames);
+    let stats = (std::env::var("PROBE_TIMER").as_deref() == Ok("1"))
+        .then(|| std::sync::Arc::new(LatticeStats::default()));
+    let mut preparation_samples = Vec::new();
     for frame in 0..frames + 10 {
         if let Some(clock) = &mut scene.glow_timing {
             clock.now = 1.0 + frame as f64 / 60.0;
@@ -456,7 +461,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             egui::vec2(pane.x, pane.y),
             format,
             1,
-            None,
+            stats.clone(),
         );
         let callback_ms = callback_start.elapsed().as_secs_f64() * 1000.0;
         if frame == 0 {
@@ -475,6 +480,10 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         }
         let mut encoder = device.create_command_encoder(&Default::default());
         drop(stamped_pass(&mut encoder, &stamp_view, Some(0), None));
+        if let Some(stats) = &stats {
+            // A failed/invalid readback must not recount a stale publication.
+            stats.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+        }
         let cpu_start = std::time::Instant::now();
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
@@ -516,7 +525,26 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             completion_samples.push(completion_ms);
             cpu_samples.push(cpu_ms);
             callback_samples.push(callback_ms);
+            if let Some(stats) = &stats {
+                let timer = resources.get::<LatticeResources>().unwrap().timer.as_ref().unwrap();
+                let reading =
+                    f32::from_bits(stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed));
+                // Recorded means a completed map just allowed a new bracket;
+                // do not count the old published value again while mapping.
+                if timer.state == TimerState::Recorded && reading.is_finite() {
+                    preparation_samples.push(reading);
+                }
+            }
         }
+    }
+    if stats.is_some() {
+        assert!(!preparation_samples.is_empty(), "production timer never published a sample");
+        preparation_samples.sort_by(f32::total_cmp);
+        eprintln!(
+            "{what}: production preparation GPU {:.3} ms median ({} samples)",
+            preparation_samples[preparation_samples.len() / 2],
+            preparation_samples.len()
+        );
     }
     completion_samples.sort_by(f64::total_cmp);
     eprintln!("{what}: submit through completion {:.3} ms median (p10 {:.3}, p90 {:.3}); includes host submission and waiting",

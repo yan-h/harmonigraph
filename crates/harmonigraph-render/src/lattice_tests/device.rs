@@ -281,7 +281,7 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
         queue.submit(bufs.into_iter().chain([encoder.finish()]));
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
-    assert!(measured, "beginning-of-pass timestamps must produce a real measurement");
+    assert!(measured, "preparation pass timestamps must produce a real measurement");
 }
 
 /// The refactor's core claim: rendering offscreen and compositing through
@@ -498,4 +498,25 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
         "a pane that encodes no pass must not keep reporting the time it took \
          when it last drew",
     );
+}
+
+#[test]
+fn invalid_gpu_timestamp_pairs_are_not_published_as_zero_time() {
+    for (begin, end) in [(0, 10), (10, 0), (10, 9)] {
+        assert_eq!(GpuTimer::elapsed_ms(begin, end, 1.0), None);
+    }
+    assert_eq!(GpuTimer::elapsed_ms(10, 10, 1.0), Some(0.0));
+    assert_eq!(GpuTimer::elapsed_ms(10, 1_000_010, 2.0), Some(2.0));
+}
+
+#[test]
+fn a_failed_lattice_timestamp_map_can_arm_again() {
+    let Some((device, queue)) = headless_device_with_timestamps() else { return };
+    let mut timer = GpuTimer::new(&device, &queue).unwrap();
+    let old = timer.staging.clone();
+    timer.state = TimerState::Mapping;
+    timer.ready.store(2, std::sync::atomic::Ordering::Release);
+    assert_eq!(timer.poll(&device), None);
+    assert!(timer.arming());
+    assert_ne!(timer.staging, old);
 }

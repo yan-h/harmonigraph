@@ -624,6 +624,7 @@ impl CallbackTrait for GlowCallback {
                 blur_v: blur_v_pipeline,
             },
             "glow",
+            None,
         );
         pane.ready = true;
 

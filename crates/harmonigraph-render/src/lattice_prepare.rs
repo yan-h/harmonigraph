@@ -746,6 +746,7 @@ impl LatticeCallback {
         offscreen: &Offscreen,
         egui_encoder: &mut wgpu::CommandEncoder,
         has_light: bool,
+        end_stamp: Option<&wgpu::QuerySet>,
     ) {
         let scene = &compiled.shaders.scenes[usize::from(offscreen.bloom.is_some())];
         let attachment = |view| {
@@ -778,7 +779,11 @@ impl LatticeCallback {
             label: Some("lattice_scene_pass"),
             color_attachments: &attachments[..if offscreen.bloom.is_some() { 5 } else { 3 }],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: end_stamp.map(|query_set| wgpu::RenderPassTimestampWrites {
+                query_set,
+                beginning_of_pass_write_index: None,
+                end_of_pass_write_index: Some(1),
+            }),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -923,10 +928,23 @@ impl LatticeCallback {
 
             self.encode_node_glow(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
 
-            self.encode_scene(&resources.compiled, pane, offscreen, egui_encoder, *has_light);
+            let end_stamp = timing.then(|| &resources.timer.as_ref().expect("armed timer").set);
+            self.encode_scene(
+                &resources.compiled,
+                pane,
+                offscreen,
+                egui_encoder,
+                *has_light,
+                end_stamp.filter(|_| offscreen.bloom.is_none()),
+            );
 
             if let Some(bloom) = &offscreen.bloom {
-                bloom.chain.run(egui_encoder, Self::bloom_pipelines(resources), "lattice");
+                bloom.chain.run(
+                    egui_encoder,
+                    Self::bloom_pipelines(resources),
+                    "lattice",
+                    end_stamp,
+                );
             }
 
             if timing {
