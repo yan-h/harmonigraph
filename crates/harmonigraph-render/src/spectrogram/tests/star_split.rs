@@ -96,17 +96,12 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut native = CallbackResources::default();
         let mut changing = CallbackResources::default();
         let mut first: Option<Vec<u8>> = None;
-        for step in 0u64..6 {
+        for step in 0u64..5 {
             cb.pass_nr = step;
-            use harmonigraph_scene::StarHaloProfile::{Uniform, P2, P3};
-            let (profile, resolution) = [
-                (Uniform, 0.5),
-                (Uniform, 0.25),
-                (Uniform, 1.0 / 3.0),
-                (P2, 0.5),
-                (P3, 0.5),
-                (Uniform, 1.0),
-            ][step as usize];
+            use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
+            let (profile, resolution) =
+                [(Uniform, 0.5), (Uniform, 0.25), (Uniform, 1.0 / 3.0), (P3, 0.5), (Uniform, 1.0)]
+                    [step as usize];
             cb.atmosphere.as_mut().unwrap().settings.star_halo_profile = profile;
             cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
@@ -300,11 +295,12 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.star_jitter = jitter;
             settings.star_fringe = fringe;
+            settings.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
             settings.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
             for reference in [0, 1, 2] {
                 // Native halo sampling isolates the split's algebra from the
-                // intentional interpolation of the default half-size image.
+                // intentional interpolation of reduced halo images.
                 let _halo = HaloOverride::set(reference);
                 let mut resources = CallbackResources::default();
                 frames.push(frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0));
@@ -340,6 +336,8 @@ fn uniform_halos_preserve_the_original_array_lookup() {
     let Some((device, queue)) = headless_device() else { return };
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
+    cb.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+        harmonigraph_scene::StarHaloProfile::Uniform;
     for resolution in [0.25, 0.5, 1.0] {
         cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
         let mut frames = Vec::new();
@@ -354,7 +352,7 @@ fn uniform_halos_preserve_the_original_array_lookup() {
 
 #[test]
 fn halo_profile_transitions_preserve_color_history() {
-    use harmonigraph_scene::StarHaloProfile::{Uniform, P2, P3};
+    use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
     let Some((device, queue)) = headless_device() else { return };
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
@@ -365,7 +363,7 @@ fn halo_profile_transitions_preserve_color_history() {
     let mut changing = CallbackResources::default();
     let mut final_frame = Vec::new();
     for (step, (profile, resolution, level)) in
-        [(Uniform, 0.5, 220), (P2, 0.5, 0), (P3, 0.5, 80), (Uniform, 1.0, 0)]
+        [(Uniform, 0.5, 220), (P3, 0.5, 0), (Uniform, 0.25, 80), (Uniform, 1.0, 0)]
             .into_iter()
             .enumerate()
     {

@@ -627,7 +627,6 @@ pub(super) fn star_halo_layout(
     let settings = settings.sanitized();
     let factors = match settings.star_halo_profile {
         StarHaloProfile::Uniform => [settings.star_halo_resolution; STAR_SLICES],
-        StarHaloProfile::P2 => [0.5, 0.5, 0.8, 1.0, 0.5],
         StarHaloProfile::P3 => [0.5, 0.5, 1.0, 1.0, 0.6],
     };
     StarHaloLayout::from_sizes(factors.map(|factor| star_halo_size(pixels, factor)))
@@ -2139,31 +2138,19 @@ mod tests {
     #[test]
     fn halo_profiles_group_actual_sizes_and_keep_depth_addresses() {
         use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
-        for (profile, sizes, counts, layers) in [
-            (
-                StarHaloProfile::P2,
-                [[81, 61], [129, 97], [161, 121]],
-                [3, 1, 1],
-                [[0, 0], [0, 1], [1, 0], [2, 0], [0, 2]],
-            ),
-            (
-                StarHaloProfile::P3,
-                [[81, 61], [161, 121], [97, 73]],
-                [2, 2, 1],
-                [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0]],
-            ),
-        ] {
-            let settings = SpectralAtmosphere { star_halo_profile: profile, ..Default::default() };
-            let layout = super::star_halo_layout([161, 121], settings);
-            assert_eq!(layout.groups.map(|g| g.size), sizes);
-            assert_eq!(layout.groups.map(|g| g.layers), counts);
-            assert_eq!(layout.layers, layers);
-            assert_eq!(
-                super::star_halo_layout([1, 1], settings),
-                super::star_halo_layout([1, 1], SpectralAtmosphere::default()),
-                "rounded equivalent targets must share allocation identity",
-            );
-        }
+        let settings = SpectralAtmosphere::default();
+        assert_eq!(settings.star_halo_profile, StarHaloProfile::P3);
+        let layout = super::star_halo_layout([161, 121], settings);
+        assert_eq!(layout.groups.map(|g| g.size), [[81, 61], [161, 121], [97, 73]]);
+        assert_eq!(layout.groups.map(|g| g.layers), [2, 2, 1]);
+        assert_eq!(layout.layers, [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0]]);
+        let uniform =
+            SpectralAtmosphere { star_halo_profile: StarHaloProfile::Uniform, ..settings };
+        assert_eq!(
+            super::star_halo_layout([1, 1], settings),
+            super::star_halo_layout([1, 1], uniform),
+            "rounded equivalent targets must share allocation identity",
+        );
     }
 
     /// Both walks include every star that can reach the pixel: one nominal

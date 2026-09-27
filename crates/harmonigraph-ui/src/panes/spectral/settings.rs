@@ -568,20 +568,15 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
             "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Halos keep their full reach at every setting. Brightness and size variation are controlled by Randomness.",
         );
     use harmonigraph_scene::StarHaloProfile;
-    crate::widgets::preset_row(ui, "Halo resolution", &["Half", "P2", "P3", "Full"], |ui, menu| {
-        for (label, profile, resolution, hint) in [
-            ("Half", StarHaloProfile::Uniform, Some(0.5), "50% on every depth"),
-            ("P2", StarHaloProfile::P2, None, "Depth resolutions: 50, 50, 80, 100, 50%"),
-            ("P3", StarHaloProfile::P3, None, "Depth resolutions: 50, 50, 100, 100, 60%"),
-            ("Full", StarHaloProfile::Uniform, Some(1.0), "100% on every depth"),
+    crate::widgets::preset_row(ui, "Halo sampling", &["Optimized", "Uniform"], |ui, menu| {
+        for (label, profile, hint) in [
+            ("Optimized", StarHaloProfile::P3, "The selected balance of halo detail and rendering cost, using a different resolution for each depth."),
+            ("Uniform", StarHaloProfile::Uniform, "Override halo resolution with one value for every depth."),
         ] {
-            let active = atmosphere.star_halo_profile == profile
-                && resolution.is_none_or(|r| atmosphere.star_halo_resolution == r);
-            if ui.selectable_label(active, label).on_hover_text(hint).clicked() {
+            if ui.selectable_label(atmosphere.star_halo_profile == profile, label)
+                .on_hover_text(hint).clicked()
+            {
                 atmosphere.star_halo_profile = profile;
-                if let Some(r) = resolution {
-                    atmosphere.star_halo_resolution = r;
-                }
                 if menu {
                     ui.close();
                 }
@@ -597,7 +592,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "Halo image width and height relative to the pane. Drag for any uniform value, including saved values between the Half and Full shortcuts. Lower values soften the glow. Star positions, sharp cores and halo reach stay the same.",
+            "Halo image width and height relative to the pane. 50% uses a quarter of the pixels; 100% uses native resolution. Lower values soften the glow. Star positions, sharp cores and halo reach stay the same.",
         );
     }
     ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
