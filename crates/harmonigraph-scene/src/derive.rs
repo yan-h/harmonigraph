@@ -35,11 +35,29 @@ pub fn derive_scene(
     camera: Camera,
     hovered: Option<LatticePos>,
 ) -> Scene {
-    let mut nodes = Vec::with_capacity(window.count());
+    derive_scene_with_extra(tracker, tuning, view, window, &[], frame, camera, hovered)
+}
+
+/// Build the regular window and selected off-pane light owners in lattice order.
+/// Extra owners share the ordinary node derivation and animation path.
+/// The caller supplies unique positions outside `window`, within its remaining
+/// node budget; this constructor sorts them but does not deduplicate them.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_scene_with_extra(
+    tracker: &NoteTracker,
+    tuning: &Tuning,
+    view: &ViewConfig,
+    window: &DrawnWindow,
+    extra: &[LatticePos],
+    frame: &FrameParams,
+    camera: Camera,
+    hovered: Option<LatticePos>,
+) -> Scene {
+    let mut nodes = Vec::with_capacity(window.count() + extra.len());
     // Kept parallel to `nodes` for the trail, which matches remembered
     // pitches against every node afterwards and would otherwise have to
     // recompute each node's pitch class to do it.
-    let mut node_pcs = Vec::with_capacity(window.count());
+    let mut node_pcs = Vec::with_capacity(window.count() + extra.len());
     let center = view.center();
     // The ground both of a node's rings stand on where nothing is lit.
     let ground = crate::grey_of_lightness(view.lattice_ground_lightness());
@@ -63,7 +81,19 @@ pub fn derive_scene(
         view.octave_extra_blend,
     );
 
-    for pos in window.positions() {
+    // Keep the rectangular window's canonical order. Equal-depth GPU draws
+    // preserve it, and changing that order changes FP16 light accumulation.
+    let key = |p: &LatticePos| (p.threes, p.fives, p.sevens);
+    let mut extra = extra.to_vec();
+    extra.sort_unstable_by_key(key);
+    let mut inside = window.positions().peekable();
+    let mut outside = extra.into_iter().peekable();
+    let positions = std::iter::from_fn(move || match (inside.peek(), outside.peek()) {
+        (Some(a), Some(b)) if key(b) < key(a) => outside.next(),
+        (Some(_), _) => inside.next(),
+        _ => outside.next(),
+    });
+    for pos in positions {
         let node_pc = tuning.pitch_class(pos);
         let node_cents = node_pc.to_cents();
         // World positions are relative to the window center, keeping the

@@ -1,0 +1,196 @@
+--- a/crates/harmonigraph-ui/src/panes/selective_halo.rs
++++ b/crates/harmonigraph-ui/src/panes/selective_halo.rs
+@@ -230,4 +230,193 @@
+             assert!(node.glow.level >= old.glow.level, "a held light must continue its attack");
+         }
+     }
++
++    #[test]
++    fn scratch_populated_candidate_cost() {
++        use std::hint::black_box;
++        for dense in [false, true] {
++            let mut state = state();
++            if dense {
++                state.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
++                state.appearance.camera.cabinet_scale = 1.0;
++                state.appearance.view.min_sevens = -4;
++                state.appearance.view.max_sevens = 4;
++                state.appearance.view.sevens_size = 1.0;
++            }
++            let aspect = if dense { 3.0 } else { 1.0 };
++            notes(&mut state, 0.0, true);
++            let window = state.appearance.view.scrolled(&state.appearance.camera, aspect);
++            for now in [1.0, 1.02, 1.04] {
++                black_box(super::super::lattice::compose_scene(
++                    &mut state, &window, aspect, None, 0, now,
++                ));
++            }
++            let n = owners(&state, &window, aspect, 0, 1.06).len();
++            let bounds = state.appearance.view.halo_window(&state.appearance.camera, aspect).unwrap();
++            eprintln!("bounds {bounds:?}, normal {window:?}, border {}", bounds.positions().filter(|p| !window.contains(*p)).count());
++            let start = std::time::Instant::now();
++            for _ in 0..1000 {
++                black_box(owners(&state, &window, aspect, 0, 1.06));
++            }
++            let selection = start.elapsed().as_secs_f64() * 1000.0;
++            let start = std::time::Instant::now();
++            for step in 0..100 {
++                black_box(super::super::lattice::compose_scene(
++                    &mut state,
++                    &window,
++                    aspect,
++                    None,
++                    0,
++                    1.06 + step as f64 / 60.0,
++                ));
++            }
++            let total = start.elapsed().as_secs_f64() * 10000.0;
++            eprintln!("populated dense={dense}: {} regular, {n} extra; selector {selection:.2} us, full composition {total:.2} us",window.count());
++        }
++    }
++    #[test]
++    fn scratch_gpu_selective_composition_matches_padded() {
++        use harmonigraph_render::wgpu;
++        let Some((device, queue)) = harmonigraph_render::test_gpu_device() else { return };
++        let format = wgpu::TextureFormat::Rgba8Unorm;
++        let mut renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
++        let size = wgpu::Extent3d { width: 512, height: 512, depth_or_array_layers: 1 };
++        let target = device.create_texture(&wgpu::TextureDescriptor {
++            label: None,
++            size,
++            mip_level_count: 1,
++            sample_count: 1,
++            dimension: wgpu::TextureDimension::D2,
++            format,
++            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
++            view_formats: &[],
++        });
++        let target_view = target.create_view(&Default::default());
++        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
++            label: None,
++            size: 512 * 512 * 4,
++            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
++            mapped_at_creation: false,
++        });
++        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512.0, 512.0));
++        let screen =
++            egui_wgpu::ScreenDescriptor { size_in_pixels: [512, 512], pixels_per_point: 1.0 };
++        let mut shot = |scene: &Scene, pane: u64| {
++            let callback = harmonigraph_render::lattice_paint_callback(
++                rect,
++                scene,
++                Default::default(),
++                format,
++                pane,
++                None,
++                Default::default(),
++            );
++            let primitives = [egui::ClippedPrimitive {
++                clip_rect: rect,
++                primitive: egui::epaint::Primitive::Callback(callback),
++            }];
++            let mut encoder = device.create_command_encoder(&Default::default());
++            let commands =
++                renderer.update_buffers(&device, &queue, &mut encoder, &primitives, &screen);
++            {
++                let mut pass = encoder
++                    .begin_render_pass(&wgpu::RenderPassDescriptor {
++                        label: None,
++                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                            view: &target_view,
++                            depth_slice: None,
++                            resolve_target: None,
++                            ops: wgpu::Operations {
++                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
++                                store: wgpu::StoreOp::Store,
++                            },
++                        })],
++                        depth_stencil_attachment: None,
++                        timestamp_writes: None,
++                        occlusion_query_set: None,
++                        multiview_mask: None,
++                    })
++                    .forget_lifetime();
++                renderer.render(&mut pass, &primitives, &screen);
++            }
++            encoder.copy_texture_to_buffer(
++                target.as_image_copy(),
++                wgpu::TexelCopyBufferInfo {
++                    buffer: &buffer,
++                    layout: wgpu::TexelCopyBufferLayout {
++                        offset: 0,
++                        bytes_per_row: Some(2048),
++                        rows_per_image: None,
++                    },
++                },
++                size,
++            );
++            queue.submit(commands.into_iter().chain([encoder.finish()]));
++            buffer.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
++            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
++            let result = buffer.slice(..).get_mapped_range().to_vec();
++            buffer.unmap();
++            result
++        };
++        let mut mismatch = 0;
++        let mut pane = 0;
++        for projection in [Projection::Cabinet, Projection::Orthographic, Projection::Perspective] {
++            for reach in [harmonigraph_scene::ViewConfig::default().glow_reach, 8.0] {
++                let mut sparse = state();
++                let mut reference = state();
++                for s in [&mut sparse, &mut reference] {
++                    s.appearance.camera.projection = projection;
++                    s.appearance.camera.target.x = 0.25;
++                    s.appearance.view.glow_reach = reach;
++                    notes(s, 0.0, true);
++                }
++                let window = sparse.appearance.view.scrolled(&sparse.appearance.camera, 1.0);
++                let mut padded = window;
++                padded.min.threes -= 10;
++                padded.min.fives -= 10;
++                padded.max.threes += 10;
++                padded.max.fives += 10;
++                pane += 2;
++                for now in [1.0, 1.1, 1.3, 2.0] {
++                    if now == 1.1 {
++                        notes(&mut sparse, now, false);
++                        notes(&mut reference, now, false);
++                    }
++                    let a = compose(&mut sparse, &window, now);
++                    let b = compose(&mut reference, &padded, now);
++                    let a = shot(&a, pane);
++                    let b = shot(&b, pane + 1);
++                    let changed = a.iter().zip(&b).filter(|(x, y)| x != y).count();
++                    let max = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
++                    eprintln!("production {projection:?} reach{reach} t{now}: {changed} changed bytes, max{max}");
++                    mismatch += changed;
++                }
++            }
++        }
++        assert_eq!(mismatch, 0);
++        let mut sparse = state();
++        let mut reference = state();
++        for s in [&mut sparse, &mut reference] {
++            s.appearance.view.glow_attack = 0.4;
++            notes(s, 0.0, true);
++        }
++        let mut padded = reference.appearance.view.scrolled(&reference.appearance.camera, 1.0);
++        padded.min.threes -= 10;
++        padded.min.fives -= 10;
++        padded.max.threes += 10;
++        padded.max.fives += 10;
++        pane += 2;
++        for (x, now) in [(0.0, 0.0), (0.0, 0.3), (0.0, 1.0), (2.0, 1.05), (2.0, 1.45)] {
++            sparse.appearance.camera.target.x = x;
++            reference.appearance.camera.target.x = x;
++            let window = sparse.appearance.view.scrolled(&sparse.appearance.camera, 1.0);
++            let a = compose(&mut sparse, &window, now);
++            let b = compose(&mut reference, &padded, now);
++            let a = shot(&a, pane);
++            let b = shot(&b, pane + 1);
++            let changed = a.iter().zip(&b).filter(|(x, y)| x != y).count();
++            let max = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
++            eprintln!("nonzero-attack pan x{x} t{now}: {changed} changed bytes, max{max}");
++        }
++    }
+ }

@@ -268,6 +268,42 @@ fn delays(
     config.delays(layout, cents, seed, duration)
 }
 impl NodeMotion {
+    /// Whether a position has carried MIDI ink or marks. Audio poses emit no light.
+    pub fn owns_light(&self, pos: LatticePos) -> bool {
+        self.nodes.get(&pos).is_some_and(|motion| {
+            motion.gate
+                || motion
+                    .levels
+                    .iter()
+                    .chain(&motion.melody.levels)
+                    .chain(&motion.bass.levels)
+                    .any(|&level| level > 0.0)
+        })
+    }
+
+    /// Conservative pitch candidates for the same bounded history `step` replays.
+    /// This selects geometry only; `step` remains the sole event/envelope reader.
+    pub fn light_classes(
+        tracker: &NoteTracker,
+        view: &ViewConfig,
+        env: &Envelope,
+        now: f64,
+    ) -> Vec<PitchClass> {
+        let floor = now - horizon(env.fade_time, mark_delay(view));
+        let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
+        for note in tracker.roll().notes().filter(|note| note.end.is_none_or(|at| at >= floor)) {
+            for ((at, pitch), (end, next)) in note.segments(now) {
+                if at <= now && end >= floor {
+                    classes.push(PitchClass::from_cents(pitch * 100.0));
+                    classes.push(PitchClass::from_cents(next * 100.0));
+                }
+            }
+        }
+        classes.sort_unstable();
+        classes.dedup();
+        classes
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn gates(
         &mut self,
@@ -663,6 +699,40 @@ impl NodeMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn halo_candidates_keep_between_frame_bends_after_voice_pruning() {
+        use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
+        let mut tracker = NoteTracker::new();
+        let on = NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0);
+        tracker.handle_event(on);
+        tracker.handle_event(NoteEvent {
+            time: 0.02,
+            kind: NoteEventKind::Tuning { semitones: 2.0 },
+            ..on
+        });
+        tracker.handle_event(NoteEvent {
+            time: 0.04,
+            kind: NoteEventKind::Tuning { semitones: 4.0 },
+            ..on
+        });
+        tracker.handle_event(NoteEvent::off(0.06, SourceId::DIRECT, 0, 60));
+        let view = ViewConfig::default();
+        let frame = FrameParams { fade_time: 0.1, ..Default::default() };
+        let env = view.envelope(&frame);
+        tracker.prune(0.2, &env);
+        assert_eq!(
+            tracker.voices().count(),
+            0,
+            "fixture must rely on bounded roll, not current voices"
+        );
+        let classes = NodeMotion::light_classes(&tracker, &view, &env, 0.2);
+        for note in [60, 62, 64] {
+            assert!(classes.contains(&PitchClass::from_midi_note(note)));
+        }
+        assert!(NodeMotion::light_classes(&tracker, &view, &env, 2.0).is_empty());
+    }
+
     use crate::{derive_scene, AnimationOrder, Camera, FrameParams, MIDDLE_C_SLOT};
     use harmonigraph_core::{NoteEvent, SourceId};
 

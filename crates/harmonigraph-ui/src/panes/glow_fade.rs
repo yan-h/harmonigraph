@@ -157,6 +157,10 @@ pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize,
 }
 
 impl GlowFade {
+    pub(super) fn owns(&self, pos: LatticePos) -> bool {
+        self.nodes.contains_key(&pos)
+    }
+
     /// One step of the filter over `scene`: every node's own
     /// [`glow`](harmonigraph_scene::NodeInstance::glow), and
     /// [`Scene::glow_rows`] for the frame.

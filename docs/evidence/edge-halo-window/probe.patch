@@ -1,0 +1,51 @@
+diff --git a/crates/harmonigraph-render/src/lattice_tests/glow_reach.rs b/crates/harmonigraph-render/src/lattice_tests/glow_reach.rs
+index 04edc60d..6f0ee430 100644
+--- a/crates/harmonigraph-render/src/lattice_tests/glow_reach.rs
++++ b/crates/harmonigraph-render/src/lattice_tests/glow_reach.rs
+@@ -443,3 +443,46 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
+         middle(&one_sheet),
+     );
+ }
++
++#[test]
++fn scrolled_window_keeps_the_halos_of_off_pane_nodes() {
++    use harmonigraph_core::{NoteEvent, NoteTracker, SourceId, Tuning};
++    use harmonigraph_scene::{Camera, FrameParams, ViewConfig};
++    let Some(mut shooter) = Shooter::new([512, 512]) else { return };
++    let view = ViewConfig { min_sevens: 0, max_sevens: 0, ..Default::default() };
++    let mut tracker = NoteTracker::new();
++    for note in [55, 60, 64, 67, 71] {
++        tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
++    }
++    for offset in [0.0, 0.25] {
++        let camera = Camera { target: glam::vec3(offset, 0.0, 0.0), ..Default::default() };
++        let window = view.scrolled(&camera, 1.0);
++        let mut padded = window;
++        padded.min.threes -= 5;
++        padded.min.fives -= 5;
++        padded.max.threes += 5;
++        padded.max.fives += 5;
++        let scene = |window| {
++            animated_snapshot(
++                &tracker,
++                &Tuning::default(),
++                &view,
++                window,
++                &FrameParams { fade_time: 0.0, ..Default::default() },
++                camera,
++                None,
++                1.0,
++            )
++        };
++        let narrow = shooter.shot(&scene(&window));
++        let wide = shooter.shot(&scene(&padded));
++        let changed = narrow.iter().zip(&wide).filter(|(a, b)| a != b).count();
++        let max = narrow.iter().zip(&wide).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
++        eprintln!(
++            "halo window offset {offset}: {} vs {} nodes; {changed} changed channels, max {max}",
++            window.count(),
++            padded.count()
++        );
++        assert!(narrow == wide, "off-pane halo missing at camera offset {offset}");
++    }
++}

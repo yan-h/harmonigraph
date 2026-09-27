@@ -57,7 +57,7 @@ pub use color::{
     gradient_color, grey_of_lightness, hue_circle, pitch_lut_color, pitch_ramp_lut, LutSpacing,
     HUE_CIRCLE_N,
 };
-pub use derive::derive_scene;
+pub use derive::{derive_scene, derive_scene_with_extra};
 pub use intensity::{
     IntensityReach, IntensityReading, IntensitySettings, IntensitySource, IntensityTarget,
     INTENSITY_WEIGHT_MAX, THICKNESS_MAX_RANGE,

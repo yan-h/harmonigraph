@@ -155,6 +155,58 @@ impl ViewConfig {
         window
     }
 
+    /// Maximum world radius of the glow billboard, shared by candidate bounds.
+    /// Matches `lattice.wgsl::vs_glow_splat`: fixed ring/mark rim plus reach,
+    /// multiplied by the node radius and 1.8 UV-to-node scale. Per-sheet scale
+    /// (with the shader's 0.05 floor) is applied by the candidate selector.
+    pub fn halo_radius(&self) -> f32 {
+        let rings = self.rings();
+        let rim = rings.outer.max(if rings.mark_thickness > 0.0 {
+            rings.mark_inner + rings.mark_thickness
+        } else {
+            0.0
+        });
+        (rim + finite_or(self.glow_reach, 0.0).clamp(0.0, GLOW_REACH_MAX)).max(0.1)
+            * NODE_RADIUS_FACTOR
+            * 1.8
+    }
+
+    /// Bounded candidate region, not a replacement for the pane's drawn window.
+    /// A billboard can leave its owner's sheet in Z under a tilted camera.
+    /// Expand that slab before bounding visible points, then expand XY to reach
+    /// their owners. The ordinary horizon budget bounds even degenerate views.
+    pub fn halo_window(&self, camera: &Camera, aspect: f32) -> Option<DrawnWindow> {
+        let radius = self.halo_radius();
+        let center = self.center();
+        let (low, high) = self.sevens_window();
+        let sheet = camera.visible_world_bounds(
+            aspect,
+            (low - center.sevens) as f32 - radius,
+            (high - center.sevens) as f32 + radius,
+        )?;
+        let (min, max) = if sheet.bounded {
+            (sheet.min, sheet.max)
+        } else {
+            let far = sheet.min.abs().max(sheet.max.abs());
+            (-far, far)
+        };
+        let axis = |value: f32| (value as i32).clamp(-MAX_DRAWN_EXTENT, MAX_DRAWN_EXTENT);
+        let mut window = DrawnWindow {
+            min: LatticePos::new(
+                center.threes + axis((min.y - radius).floor()),
+                center.fives + axis((min.x - radius).floor()),
+                low,
+            ),
+            max: LatticePos::new(
+                center.threes + axis((max.y + radius).ceil()),
+                center.fives + axis((max.x + radius).ceil()),
+                high,
+            ),
+        };
+        window.fit_to_node_budget(center);
+        Some(window)
+    }
+
     /// How far out a played pitch is hunted for a spelling and a node, as a
     /// block — the naming REACH, centered on the camera but sized by the
     /// setting rather than by any pane.

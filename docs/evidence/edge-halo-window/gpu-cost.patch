@@ -1,0 +1,97 @@
+diff --git a/crates/harmonigraph-ui/src/panes/selective_halo.rs b/crates/harmonigraph-ui/src/panes/selective_halo.rs
+index b9ae5a33..2775da52 100644
+--- a/crates/harmonigraph-ui/src/panes/selective_halo.rs
++++ b/crates/harmonigraph-ui/src/panes/selective_halo.rs
+@@ -230,4 +230,92 @@ mod tests {
+             assert!(node.glow.level >= old.glow.level, "a held light must continue its attack");
+         }
+     }
++    #[test]
++    fn scratch_selective_gpu_cost() {
++        use harmonigraph_render::wgpu;
++        fn block_on<F: std::future::Future>(future: F) -> F::Output {
++            struct Wake(std::thread::Thread);
++            impl std::task::Wake for Wake { fn wake(self: std::sync::Arc<Self>) { self.0.unpark(); } }
++            let waker = std::task::Waker::from(std::sync::Arc::new(Wake(std::thread::current())));
++            let mut cx = std::task::Context::from_waker(&waker);
++            let mut future = std::pin::pin!(future);
++            loop { match future.as_mut().poll(&mut cx) { std::task::Poll::Ready(value) => return value, std::task::Poll::Pending => std::thread::park() } }
++        }
++        let (_, adapter) = harmonigraph_render::test_gpu_adapter().unwrap();
++        eprintln!("adapter {:?}", adapter.get_info());
++        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
++            required_features: wgpu::Features::TIMESTAMP_QUERY,
++            required_limits: harmonigraph_render::device_limits(&adapter),
++            ..Default::default()
++        })).unwrap();
++        let format = wgpu::TextureFormat::Rgba8Unorm;
++        let set = device.create_query_set(&wgpu::QuerySetDescriptor { label: None, ty: wgpu::QueryType::Timestamp, count: 2 });
++        let buffer = |usage| device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage, mapped_at_creation: false });
++        let resolve = buffer(wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC);
++        let staging = buffer(wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
++        let target = |size| device.create_texture(&wgpu::TextureDescriptor {
++            label: None, size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
++            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format,
++            usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
++        }).create_view(&Default::default());
++        let stamp = target(1);
++        for size in [512, 1536] {
++            let mut state = state();
++            state.appearance.camera.target.x = 0.25;
++            notes(&mut state, 0.0, true);
++            let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
++            let mut old = harmonigraph_scene::derive_scene(&state.runtime.tracker, &state.runtime.tuning, &state.appearance.view, &window, &state.runtime.frame_params, state.appearance.camera, None);
++            super::super::spectral_fold::apply(&mut old, &mut state, 1.0);
++            super::super::node_motion::apply(&mut old, &mut state, 0, 1.0);
++            super::super::glow_fade::apply(&mut old, &mut state, 0, 1.0);
++            let selected = compose(&mut state, &window, 1.0);
++            eprintln!("size{size} old{} selected{} bloom{}", old.nodes.len(), selected.nodes.len(), old.bloom_strength);
++            let mut scenes = [old, selected];
++            let mut renderer = egui_wgpu::Renderer::new(&device, format, Default::default());
++            let pane_view = target(size);
++            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size as f32, size as f32));
++            let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [size, size], pixels_per_point: 1.0 };
++            let mut samples = [Vec::new(), Vec::new()];
++            for frame in 0..100 {
++                for which in if frame % 2 == 0 { [0, 1] } else { [1, 0] } {
++                    let scene = &mut scenes[which];
++                    scene.glow_timing.as_mut().unwrap().now = 1.0 + frame as f64 / 60.0;
++                    let callback = harmonigraph_render::lattice_paint_callback(rect, scene, Default::default(), format, which as u64, None, Default::default());
++                    let primitives = [egui::ClippedPrimitive { clip_rect: rect, primitive: egui::epaint::Primitive::Callback(callback) }];
++                    let mut start = device.create_command_encoder(&Default::default());
++                    drop(start.begin_render_pass(&wgpu::RenderPassDescriptor {
++                        label: None,
++                        color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &stamp, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
++                        depth_stencil_attachment: None, timestamp_writes: Some(wgpu::RenderPassTimestampWrites { query_set: &set, beginning_of_pass_write_index: Some(0), end_of_pass_write_index: None }), occlusion_query_set: None, multiview_mask: None,
++                    }));
++                    let mut encoder = device.create_command_encoder(&Default::default());
++                    let commands = renderer.update_buffers(&device, &queue, &mut encoder, &primitives, &screen);
++                    {
++                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                            label: None,
++                            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &pane_view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
++                            depth_stencil_attachment: None, timestamp_writes: Some(wgpu::RenderPassTimestampWrites { query_set: &set, beginning_of_pass_write_index: None, end_of_pass_write_index: Some(1) }), occlusion_query_set: None, multiview_mask: None,
++                        }).forget_lifetime();
++                        renderer.render(&mut pass, &primitives, &screen);
++                    }
++                    encoder.resolve_query_set(&set, 0..2, &resolve, 0);
++                    encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
++                    queue.submit([start.finish()].into_iter().chain(commands).chain([encoder.finish()]));
++                    staging.slice(..).map_async(wgpu::MapMode::Read, |r| r.unwrap());
++                    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
++                    let data = staging.slice(..).get_mapped_range();
++                    let begin = u64::from_ne_bytes(data[0..8].try_into().unwrap());
++                    let end = u64::from_ne_bytes(data[8..16].try_into().unwrap());
++                    assert!(end > begin);
++                    let ms = (end - begin) as f64 * queue.get_timestamp_period() as f64 / 1e6;
++                    drop(data); staging.unmap();
++                    if frame >= 20 { samples[which].push(ms); }
++                }
++            }
++            for (which, sample) in samples.iter_mut().enumerate() {
++                sample.sort_by(f64::total_cmp);
++                eprintln!("size{size} selective{which} n{} p10{:.4} p50{:.4} p90{:.4} ms", sample.len(), sample[sample.len()/10], sample[sample.len()/2], sample[sample.len()*9/10]);
++            }
++        }
++    }
+ }

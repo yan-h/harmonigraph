@@ -964,7 +964,7 @@ mod tests {
     /// these has a fade running through it, exactly as a shell does.
     fn scene_of_at(state: &mut PictureState, now: f64) -> Scene {
         let window = state.appearance.view.reach();
-        crate::panes::lattice::compose_scene(state, &window, None, 0, now)
+        crate::panes::lattice::compose_scene(state, &window, 1.0, None, 0, now)
     }
 
     /// EITHER reading adds. The ring fills a channel of its own — one reading
