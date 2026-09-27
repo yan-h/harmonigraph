@@ -97,6 +97,7 @@ pub(super) fn frame(
         state: &mut shared.ui,
         params: &backend,
         now,
+        build_tag: crate::BUILD_TAG,
         window_size: egui::vec2(window_width as f32, window_height as f32),
     }
     .draw();

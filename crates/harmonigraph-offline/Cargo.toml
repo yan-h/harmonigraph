@@ -13,7 +13,6 @@ harmonigraph-render = { workspace = true }
 harmonigraph-take = { workspace = true }
 egui = { workspace = true }
 egui-wgpu = { workspace = true }
-serde = { workspace = true }
 ron = { workspace = true }
 # Blocks on wgpu's async adapter/device setup; there is no event loop
 # here to be async around.

@@ -3,21 +3,10 @@
 //! steady enough to read. The picture is the UI crate's half (`perf::draw_overlay`);
 //! everything here computes, and none of it needs a font or a painter.
 //!
-//! Its own crate rather than a module of `harmonigraph-ui`, on three grounds
-//! that point the same way. Two items here are the whole reason a pane shell
-//! otherwise declares a platform syscall dependency and carries a build
-//! script: the `libc` that [`rss_bytes`] needs on macOS, and the `build.rs`
-//! that stamps [`BUILD_TAG`]. Neither is a BUILD cost that moving it removes,
-//! and reading it that way is the mistake worth heading off — `libc` reaches
-//! that crate transitively through wgpu and parking_lot whatever its manifest
-//! says, and a stamp keyed on `HEAD` re-links on every commit wherever it
-//! lives, taking its dependents with it. What moves is which crate ANSWERS
-//! for them, and the crate that draws panes is the wrong one to ask about
-//! `proc_pidinfo`. [`ShellTimings`] is a contract between a windowed shell and
-//! this model, and a shell reaching it through the UI crate's exports says the
-//! UI owns a measurement it never reads. And the model/drawing seam is already
-//! cut exactly where a crate boundary goes, so drawing one there costs
-//! nothing.
+//! Its own crate rather than a module of `harmonigraph-ui`: this model owns
+//! process memory readings and [`ShellTimings`], the contract a windowed shell
+//! fills in. The shell owns its build tag, because stamping that tag on each
+//! commit should recompile only the shell, not this model and its dependents.
 //!
 //! Interactive only. `root_ui` times the frame, folds the numbers in through
 //! [`PerfStats::record`], and draws the overlay; the offline renderer bypasses
@@ -815,20 +804,6 @@ pub fn memory_readout(rss_bytes: u64) -> String {
         format!("{rounded} MB")
     }
 }
-
-/// Which build this binary IS: `<branch> @<short sha>`, stamped at compile
-/// time by `build.rs` (`worktree-` stripped, so it is exactly what
-/// `./load-plugin.sh <branch>` takes).
-///
-/// Bitwig loads one bundle and every session builds into its own worktree, so
-/// two builds are indistinguishable from inside the DAW — and swapping the
-/// slot is a step that can silently not have happened (no reactivate, a build that
-/// landed in a different worktree, the wrong branch named). The overlay saying
-/// it in the picture is the one check that a reload cannot fool.
-///
-/// Names the last COMMIT, not the working tree — see `build.rs` for why there
-/// is no dirty marker.
-pub const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
 
 /// Resident set size of THIS process in bytes, or 0 when the platform can't
 /// report it. Called about once a second (see [`MEM_INTERVAL`]).
