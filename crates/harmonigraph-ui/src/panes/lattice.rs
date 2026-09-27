@@ -1151,7 +1151,6 @@ mod tests {
             hovered: false,
             on_home,
             scale: 1.0,
-            comma: 0.0,
             cents: 0.0,
             melody_slots: 0,
             bass_slots: 0,

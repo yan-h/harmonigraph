@@ -11,7 +11,6 @@ pub const MAX_CONTEXT: usize = 256;
 /// second, while each one more costs every decision a pass over the
 /// candidates on the audio thread.
 pub const MAX_MEMORY: usize = 24;
-pub const MAX_COHORT_ONSETS: usize = 256;
 const OCTAVE: i64 = crate::tuning::OCTAVE_MICROCENTS as i64;
 /// How far a key may sit from the keyboard tuning's rendering of a node and
 /// still be that node's key. Not the same-note tolerance: a learned fifth
@@ -23,7 +22,6 @@ const KEYBOARD_TOLERANCE: i64 = 5_000_000;
 /// exhaustion instead of scoring an incomplete neighbourhood.
 pub const MAX_CANDIDATES: usize = 4096;
 pub const CONFIG: PolicyConfig = PolicyConfig {
-    version: 3,
     radius: 3,
     axes: 2,
     pitch_flexibility: 100,

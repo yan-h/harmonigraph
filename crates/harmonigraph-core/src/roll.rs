@@ -383,12 +383,7 @@ impl NoteRoll {
         offset: Time,
     ) {
         let matches = |row: &VoiceBaseline, note: &RollNote| {
-            row.key(source) == note.key()
-                && if row.lifetime == 0 {
-                    note.lifetime.is_none() && row.actual_onset == note.original_onset
-                } else {
-                    note.lifetime == Some(row.lifetime)
-                }
+            row.matches_voice(source, note.key(), note.lifetime, note.original_onset)
         };
         let removed: Vec<_> = self
             .live

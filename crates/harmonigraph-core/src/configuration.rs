@@ -23,7 +23,6 @@ impl Default for TuningModes {
 /// means never, and no decay, respectively).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PolicyConfig {
-    pub version: u32,
     pub radius: u8,
     pub axes: u8,
     /// Cents at which the exponential pitch penalty reaches one.
@@ -51,7 +50,6 @@ impl Default for PolicyConfig {
 }
 impl PolicyConfig {
     pub fn sanitize(mut self) -> Self {
-        self.version = 3;
         self.radius = self.radius.clamp(1, 5);
         self.axes = self.axes.clamp(1, 3);
         self.pitch_flexibility = self.pitch_flexibility.clamp(1, 100);
@@ -85,7 +83,6 @@ impl PolicyConfig {
     }
     pub fn from_words(w: [i32; 10]) -> Self {
         Self {
-            version: 3,
             radius: w[1] as u8,
             axes: (w[1] >> 8) as u8,
             reset_stop: w[1] & (1 << 26) != 0,

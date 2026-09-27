@@ -244,7 +244,6 @@ fn scene_floats(scene: &Scene) -> Floats {
             hovered: _,
             on_home: _,
             scale,
-            comma,
             cents,
             melody_slots: _,
             bass_slots: _,
@@ -262,7 +261,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         f.many(&format!("nodes[{i}].octaves"), *octaves);
         f.many(&format!("nodes[{i}].thickness"), *thickness);
         f.one(format!("nodes[{i}].scale"), *scale);
-        f.one(format!("nodes[{i}].comma"), *comma);
         f.one(format!("nodes[{i}].cents"), *cents);
         f.one(format!("nodes[{i}].melody_level"), *melody_level);
         f.one(format!("nodes[{i}].bass_level"), *bass_level);

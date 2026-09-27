@@ -171,6 +171,24 @@ impl Default for VoiceBaseline {
 }
 
 impl VoiceBaseline {
+    /// Identity within this baseline's source, shared by the tracker and roll.
+    /// Direct observations have no lifetime token, so their factual onset
+    /// distinguishes repeated uses of the same channel/key.
+    pub fn matches_voice(
+        &self,
+        source: SourceId,
+        key: VoiceKey,
+        lifetime: Option<u64>,
+        original_onset: Time,
+    ) -> bool {
+        self.key(source) == key
+            && if self.lifetime == 0 {
+                lifetime.is_none() && self.actual_onset == original_onset
+            } else {
+                lifetime == Some(self.lifetime)
+            }
+    }
+
     pub fn metadata(&self) -> Option<AssignmentMetadata> {
         self.assignment.filter(|_| self.decision != 0).map(|_| AssignmentMetadata {
             decision: self.decision,

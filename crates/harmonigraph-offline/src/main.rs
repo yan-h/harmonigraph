@@ -77,10 +77,6 @@ OPTIONS:
                            versioned appearance RON (read-plugin-state.py --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
                            PATH or in the usual install locations.
-        --align <SEC>      Where the soundtrack\'s first sample falls, in
-                           seconds of take time. off is the default spelled
-                           out: the take\'s recording starts where its
-                           header says (or at zero if unstamped).
     -h, --help             Show this.
 
 ENVIRONMENT:
@@ -125,9 +121,6 @@ struct Args {
     crf: u32,
     appearance: Option<String>,
     ffmpeg: Option<String>,
-    /// A hand-set start for the soundtrack, in seconds of take time. `None`
-    /// places it where it starts by construction — see `start_of_audio`.
-    align: Option<f64>,
 }
 
 impl Default for Args {
@@ -152,7 +145,6 @@ impl Default for Args {
             crf: 10,
             appearance: None,
             ffmpeg: None,
-            align: None,
         }
     }
 }
@@ -194,7 +186,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
-            "--align" => args.align = parse_align(&value("--align")?)?,
             other if other.starts_with('-') => {
                 return Err(format!("unknown option {other:?} (--help for the list)"))
             }
@@ -206,23 +197,6 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
 
 fn parse_number<T: std::str::FromStr>(name: &str, text: &str) -> Result<T, String> {
     text.parse().map_err(|_| format!("{name}: {text:?} is not a number"))
-}
-
-fn parse_align(text: &str) -> Result<Option<f64>, String> {
-    match text {
-        "off" => Ok(None),
-        other => other
-            .parse()
-            .map(Some)
-            .map_err(|_| format!("--align: expected off or a number, got {other:?}")),
-    }
-}
-
-/// Where the soundtrack's first sample falls on the take's timeline.
-///
-/// The header says where recording started; `--align` overrides that stamp.
-fn start_of_audio(align: Option<f64>, recorded_start: Option<f64>) -> f64 {
-    align.unwrap_or(recorded_start.unwrap_or(0.0))
 }
 
 fn parse_size(text: &str) -> Result<[u32; 2], String> {
@@ -462,7 +436,7 @@ fn export(args: Args) -> Result<(), String> {
     }
     let mut audio = audio_path.as_deref().map(crate::wav::read).transpose()?;
 
-    let audio_start = start_of_audio(args.align, take.header.audio_start);
+    let audio_start = take.header.audio_start.unwrap_or(0.0);
 
     let end = end_of_render(
         args.end,
@@ -844,41 +818,14 @@ mod tests {
         assert_eq!(parse(&["--fps", "30"]), None);
     }
 
-    /// Recorded audio keeps its header placement unless manually aligned.
-    #[test]
-    fn a_soundtrack_starts_where_its_own_clock_says() {
-        assert_eq!(start_of_audio(None, Some(5.48)), 5.48);
-        assert_eq!(start_of_audio(None, None), 0.0);
-        assert_eq!(start_of_audio(Some(2.5), Some(5.48)), 2.5);
-        assert_eq!(start_of_audio(Some(0.0), Some(5.48)), 0.0);
-        assert_eq!(start_of_audio(Some(-1.25), Some(5.48)), -1.25);
-    }
-
     #[test]
     fn separate_audio_replacement_flags_are_rejected() {
-        for flag in ["-a", "--audio"] {
+        for flag in ["-a", "--audio", "--align"] {
             let result =
                 parse_args_from(["recorded.take", flag, "replacement.wav"].map(str::to_owned));
             let Err(error) = result else { panic!("accepted retired flag {flag}") };
             assert!(error.contains("unknown option") && error.contains(flag), "{error}");
         }
-    }
-
-    /// `off` restores the recorded stamp; a number overrides it. Automatic
-    /// correlation remains retired and must be refused visibly.
-    #[test]
-    fn align_takes_a_number_or_off_and_refuses_the_deleted_auto() {
-        assert_eq!(parse_align("off").unwrap(), None);
-        assert_eq!(parse_align("0").unwrap(), Some(0.0));
-        assert_eq!(parse_align("-1.5").unwrap(), Some(-1.5));
-        let refused = parse_align("auto").unwrap_err();
-        assert!(refused.contains("auto"), "the refusal names what was typed: {refused}");
-
-        // Through the command line, which is where they are typed.
-        let parse = |flags: &[&str]| parse_args_from(flags.iter().map(|s| s.to_string()));
-        assert_eq!(parse(&["--align", "0"]).unwrap().unwrap().align, Some(0.0));
-        assert_eq!(parse(&["--align", "off"]).unwrap().unwrap().align, None);
-        assert!(parse(&["--align", "auto"]).is_err());
     }
 
     /// The warning fires on a different SHAPE and stays quiet for a bigger
