@@ -273,19 +273,25 @@ fn draw_map_overlay(
         })
         .and_then(|m| m.playback.map);
     let editing = maps.is_some_and(|m| m.editing());
-    // The twelve map nodes and the hovered one, looked up in the window
-    // rather than found by testing every drawn node against all twelve:
-    // `derive_scene` draws one node per window position, in order, so a
-    // position's index in the window is its index in `scene.nodes`. Sorted,
-    // so overlapping outlines still paint in the scene's own order.
+    // Look up at most twelve map nodes and the hovered one in the scene's
+    // canonical lattice order. Sparse halo owners can precede ordinary nodes,
+    // so a window index is not a scene index. Keep overlay membership in the
+    // ordinary window, then sort actual scene indices to preserve paint order.
     let mut indices: Vec<usize> = active_map
         .into_iter()
         .flat_map(|map| (0..12i64).map(move |midi| map.node(midi)))
         .chain(state.surfaces.hovered.filter(|_| editing))
         .filter_map(|pos| {
-            let i = window.index_of(pos)?;
-            debug_assert_eq!(scene.nodes.get(i).map(|n| n.lattice_pos), Some(pos));
-            Some(i)
+            if !window.contains(pos) {
+                return None;
+            }
+            scene
+                .nodes
+                .binary_search_by_key(&(pos.threes, pos.fives, pos.sevens), |node| {
+                    let p = node.lattice_pos;
+                    (p.threes, p.fives, p.sevens)
+                })
+                .ok()
         })
         .collect();
     indices.sort_unstable();
@@ -843,6 +849,87 @@ mod tests {
             (0, 0),
             "hiding map indicators must remove assignment outlines and labels from the interactive lattice"
         );
+    }
+
+    #[test]
+    fn map_overlay_finds_ordinary_nodes_after_sparse_halo_insertion() {
+        use crate::lattice_maps::{MapPlayback, MapView};
+        use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+        use harmonigraph_core::LatticePos;
+        let mut state = fresh();
+        state.appearance.view.min_sevens = 0;
+        state.appearance.view.max_sevens = 0;
+        state.appearance.view.glow_attack = 0.0;
+        for note in [55, 60, 64, 67, 71] {
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
+        }
+        let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
+        let scene = compose_scene(&mut state, &window, 1.0, None, 0, 1.0);
+        let extra = scene.nodes.iter().find(|n| !window.contains(n.lattice_pos)).unwrap();
+        let origin = scene.nodes.iter().position(|n| n.lattice_pos == LatticePos::ORIGIN).unwrap();
+        assert!(
+            origin > window.index_of(LatticePos::ORIGIN).unwrap(),
+            "fixture must insert halo owners before ordinary positions"
+        );
+        let mut map = LatticeMap::default();
+        map.replace(extra.lattice_pos);
+        assert!(map.valid(), "the outside assignment is a real map destination");
+        let mut expected: Vec<_> =
+            (0..12).map(|midi| map.node(midi)).filter(|&pos| window.contains(pos)).collect();
+        expected.sort_unstable_by_key(|p| (p.threes, p.fives, p.sevens));
+        assert_eq!(expected.len(), 11, "one map assignment must be outside the ordinary window");
+        let hovered = expected[0];
+        state.surfaces.hovered = Some(hovered);
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback {
+                engine: TuningEngine::LatticeMap,
+                map: Some(map),
+                audition: true,
+                selected: 0,
+                offset: LatticePos::ORIGIN,
+            },
+            offsets: Default::default(),
+            pending: false,
+            names: Default::default(),
+            edit_shape: true,
+            can_undo: false,
+            full: false,
+        });
+        let screen = egui::vec2(512.0, 512.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+        let output =
+            frame_full(&themed(), screen, |ui| draw_map_overlay(ui, rect, &scene, &window, &state));
+        let projector = scene.projector(glam::Vec2::new(screen.x, screen.y));
+        let positions = |radius| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    let egui::Shape::Circle(circle) = &shape.shape else { return None };
+                    if circle.radius != radius {
+                        return None;
+                    }
+                    Some(
+                        scene
+                            .nodes
+                            .iter()
+                            .find(|node| {
+                                projector
+                                    .project(node.world_pos)
+                                    .is_some_and(|p| circle.center == egui::pos2(p.x, p.y))
+                            })
+                            .expect("every overlay must match a scene position")
+                            .lattice_pos,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            positions(8.0),
+            expected,
+            "map outlines must name the requested ordinary nodes in scene order"
+        );
+        assert_eq!(positions(12.0), [hovered], "hover must find its actual scene node");
     }
 
     /// Draw the labels for a chord, with the camera at `distance`, and

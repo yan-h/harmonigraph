@@ -68,6 +68,14 @@ That order matters:
 appending extras changed equal-depth FP16 accumulation by one byte in the cabinet reference;
 the merged order restores exactness without changing renderer sorting.
 
+The lattice-map overlay also resolves its at-most-thirteen requested positions by binary search in that canonical scene order.
+Its optimized lookup introduced by #1221 used rectangular-window indices directly,
+which sparse insertion shifts.
+The overlay retains ordinary-window membership and sorts the resulting scene indices,
+so map annotations keep their positions and paint order without a new lookup cache.
+A regression inserts halo owners before ordinary nodes and checks the actual map-outline and hover positions,
+including exclusion of a valid map assignment outside the ordinary window.
+
 ## Image measurements
 
 The scratch probe in `selective-probe.patch` exercises the actual UI composition path and renders its result through the production paint callback.
