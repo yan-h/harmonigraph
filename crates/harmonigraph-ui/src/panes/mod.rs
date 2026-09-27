@@ -288,41 +288,6 @@ pub(super) fn display_note_name(
     pos.respell(tempered).note_name()
 }
 
-/// Whether `window` holds any node at all for `pc` under the current tuning:
-/// the analyzer's red band for a voice the lattice has nowhere to light.
-///
-/// The question is "is this PLAYED pitch on the lattice", and
-/// `Tuning::tolerance` is load-bearing in it — a note off every node is a note
-/// the lattice cannot show, and saying so is the point.
-///
-/// `window` is [`PictureState::shown`](crate::PictureState::shown), the
-/// picture's own window and not the view's reach. Taking a window rather than a
-/// view is what makes that a choice a caller has to make rather than one it can
-/// fall into.
-///
-/// It answers WHETHER and not WHICH, so it stops at the first match. That was
-/// once one half of a pair: the Notes pane printed which node a voice sat on,
-/// so it drained the same walk to pick a nearest. #975 retired that pane and
-/// the nearest with it, which leaves the half worth having — the walk is not
-/// small. The window is the camera's now, and a tilted one takes it to twenty
-/// thousand positions against the reach's thousand, per voice, per frame.
-/// Draining that to pick a winner measured 2.34ms on ten held voices where
-/// stopping at the first match measured 40µs, against a whole `derive_scene`
-/// priced at 1.2ms.
-///
-/// WHICH node is still a live question one caller away, and deliberately not
-/// this one: [`names`](crate::panes::spectral::names)'s `naming_node` takes the
-/// same played pitch and asks what to CALL it, where a collapsed equal
-/// temperament makes the choice AMONG matches the whole problem rather than an
-/// afterthought.
-pub(super) fn window_shows_node(
-    window: &harmonigraph_scene::DrawnWindow,
-    tuning: &harmonigraph_core::Tuning,
-    pc: harmonigraph_core::PitchClass,
-) -> bool {
-    window.positions().any(|pos| tuning.matches(pc, tuning.pitch_class(pos)))
-}
-
 /// The wheel/pinch zoom under the pointer — `(scroll, zoom)` — for a caller
 /// to turn into a zoom in whatever unit its scene uses. `None` when the
 /// pointer is elsewhere.

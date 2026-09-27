@@ -914,7 +914,7 @@ fn dots(
 /// One name per pitch CLASS ([`NAME_GRAIN_CENTS`]), and no octave number on it:
 /// a name here says which direction out of the centre you are looking, and the
 /// dots say which turns are lit. The spelling is the lattice's own, through the
-/// analyzer's [`note_name`](super::spectral::names::note_name), so a note is
+/// analyzer's [`Namer`](super::spectral::names::Namer), so a note is
 /// called the same thing here, on the roll, and at the node it lit up.
 ///
 /// Set in [`theme::picture_name`](crate::theme::picture_name) rather than the note's colour,
@@ -947,7 +947,11 @@ fn names(
     if named.is_empty() {
         return;
     }
-    let shown = state.shown();
+    let mut namer = super::spectral::names::Namer::new(
+        &state.appearance.view,
+        state.shown(),
+        &state.runtime.tuning,
+    );
     // `raster` is the rung of the size ladder the type is cut at and `magnify`
     // the rest of what the band asks for, exactly as the roll's names split
     // them — the band is a continuous size and the atlas holds a discrete set.
@@ -957,12 +961,7 @@ fn names(
     // rung crosses back into its terms here — a conversion, not a second snap.
     let scale = NAME_PT * raster / crate::marks::NAME_SIZE;
     for voice in named {
-        let name = super::spectral::names::note_name(
-            &state.appearance.view,
-            &shown,
-            &state.runtime.tuning,
-            voice.pitch,
-        );
+        let name = namer.name(voice.pitch);
         crate::marks::draw_stacked_name(
             batch,
             painter,
