@@ -47,7 +47,7 @@
 
 use std::collections::HashMap;
 
-use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tuning};
+use harmonigraph_core::{LatticePos, NoteName, PitchClass, RollNote, Tempered, Tuning};
 use harmonigraph_scene::{DrawnWindow, ViewConfig};
 
 use super::axes::{Axes, PitchScale, TimeAxis};
@@ -459,6 +459,19 @@ pub(super) struct NoteLabel {
     pub at: f64,
 }
 
+#[cfg(test)]
+fn plan_for_test(
+    state: &PictureState,
+    axes: &Axes,
+    scale: &PitchScale,
+    split: f32,
+    now: f64,
+    scales: NameScale,
+) -> Vec<NoteLabel> {
+    let mut namer = Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
+    plan(state, axes, scale, split, now, scales, &mut namer)
+}
+
 /// Every name this frame draws, already thinned to the ones that fit — empty
 /// when the setting is off or the pane has kept no roll region to draw in.
 ///
@@ -471,6 +484,7 @@ pub(super) fn plan(
     split: f32,
     now: f64,
     scales: NameScale,
+    namer: &mut Namer,
 ) -> Vec<NoteLabel> {
     let cfg = &state.appearance.spectrum;
     // Names label RIBBONS, so they need ribbons. With the roll hidden there is
@@ -577,35 +591,10 @@ pub(super) fn plan(
     // the name for its marks, and each of those builds a String. Per class
     // that is a few allocations a frame; per note it would be thousands.
     let mut names: HashMap<PitchClass, (NoteName, f64)> = HashMap::new();
-    // Read once for the whole pass, so every name on the pane is chosen out of
-    // one window even if a lattice pane redraws between two of them.
-    let shown = state.shown();
-    let view = &state.appearance.view;
-    let tuning = &state.runtime.tuning;
-    let reach = view.reach();
-    // Adaptive pitches keep the exact-name memo busy. The lattice's pitches
-    // depend only on the window and tuning, both fixed for this pass: compute
-    // them once, lazily so an empty roll allocates nothing here.
-    let mut reach_nodes = None;
-    let mut shown_nodes = None;
-    let prepare = |window: &DrawnWindow| {
-        window.positions().map(|pos| (pos, tuning.pitch_class(pos))).collect::<Vec<_>>()
-    };
     let mut naming = |pitch: f32, names: &mut HashMap<PitchClass, (NoteName, f64)>| {
         let class = PitchClass::from_cents(pitch.rem_euclid(12.0) * 100.0);
         *names.entry(class).or_insert_with(|| {
-            let nodes = reach_nodes.get_or_insert_with(|| prepare(&reach));
-            let node = naming_node_from(nodes.iter().copied(), view, tuning, class).or_else(|| {
-                if shown == reach {
-                    return None;
-                }
-                let nodes = shown_nodes.get_or_insert_with(|| prepare(&shown));
-                naming_node_from(nodes.iter().copied(), view, tuning, class)
-            });
-            let name = match node {
-                Some(pos) => crate::panes::display_note_name(pos, view.tempered()),
-                None => equal_tempered_name(pitch),
-            };
+            let name = namer.name(pitch);
             (name, room(&name))
         })
     };
@@ -1168,7 +1157,10 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
     )
 }
 
-/// A note's name: the LATTICE's spelling of its pitch.
+/// One frame's answer to naming and visible-node questions. The roll and red
+/// bands share it; Spiral makes one for its own frame.
+///
+/// A note's name is the LATTICE's spelling of its pitch.
 ///
 /// No octave number, because a lattice node is a pitch class and wears none
 /// either — and on this pane the octave is already said by where the name
@@ -1200,20 +1192,88 @@ fn name_extent(name: &NoteName, size: f32) -> egui::Vec2 {
 /// the band says what is on screen, the name says what the note is called —
 /// and a name that changed under a pan would be the worse of the two to make
 /// agree. A note with no name at all would just look like a bug.
-pub(crate) fn note_name(
-    view: &ViewConfig,
-    shown: &DrawnWindow,
-    tuning: &Tuning,
-    midi: f32,
-) -> NoteName {
-    // Cents from C, measured from MIDI 0 (which IS a C) — the same reduction
-    // the pane's hover makes before asking the same question.
-    let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
-    let reach = view.reach();
-    match naming_node(&reach, view, tuning, pc).or_else(|| naming_node(shown, view, tuning, pc)) {
-        Some(pos) => crate::panes::display_note_name(pos, view.tempered()),
-        None => equal_tempered_name(midi),
+pub(crate) struct Namer {
+    reach: DrawnWindow,
+    shown: DrawnWindow,
+    tuning: Tuning,
+    tempered: Tempered,
+    reach_nodes: Option<Vec<(LatticePos, PitchClass)>>,
+    shown_nodes: Option<Vec<(LatticePos, PitchClass)>>,
+    names: HashMap<PitchClass, NoteName>,
+    visible: HashMap<PitchClass, bool>,
+}
+
+impl Namer {
+    pub(crate) fn new(view: &ViewConfig, shown: DrawnWindow, tuning: &Tuning) -> Self {
+        Self {
+            reach: view.reach(),
+            shown,
+            tuning: *tuning,
+            tempered: view.tempered(),
+            reach_nodes: None,
+            shown_nodes: None,
+            names: HashMap::new(),
+            visible: HashMap::new(),
+        }
     }
+
+    fn nodes(window: DrawnWindow, tuning: Tuning) -> Vec<(LatticePos, PitchClass)> {
+        window.positions().map(|pos| (pos, tuning.pitch_class(pos))).collect()
+    }
+
+    pub(crate) fn name(&mut self, midi: f32) -> NoteName {
+        // Cents from C, measured from MIDI 0 (which IS a C).
+        let pc = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
+        if let Some(&name) = self.names.get(&pc) {
+            return name;
+        }
+        let nodes = self.reach_nodes.get_or_insert_with(|| Self::nodes(self.reach, self.tuning));
+        let pos = naming_node_from(nodes.iter().copied(), self.tempered, &self.tuning, pc).or_else(
+            || {
+                if self.shown == self.reach {
+                    return None;
+                }
+                let nodes =
+                    self.shown_nodes.get_or_insert_with(|| Self::nodes(self.shown, self.tuning));
+                naming_node_from(nodes.iter().copied(), self.tempered, &self.tuning, pc)
+            },
+        );
+        let name = match pos {
+            Some(pos) => crate::panes::display_note_name(pos, self.tempered),
+            None => equal_tempered_name(midi),
+        };
+        self.names.insert(pc, name);
+        name
+    }
+
+    /// Whether the drawn window holds a node for this pitch. Stop on the
+    /// first match in the usual case; after a miss, prepare the shown list so
+    /// further bent voices and fallback names reuse its pitch calculations.
+    pub(crate) fn shows_node(&mut self, pc: PitchClass) -> bool {
+        if let Some(&visible) = self.visible.get(&pc) {
+            return visible;
+        }
+        let visible = match &self.shown_nodes {
+            Some(nodes) => nodes.iter().any(|&(_, pitch)| self.tuning.matches(pc, pitch)),
+            None => {
+                let visible = self
+                    .shown
+                    .positions()
+                    .any(|pos| self.tuning.matches(pc, self.tuning.pitch_class(pos)));
+                if !visible {
+                    self.shown_nodes = Some(Self::nodes(self.shown, self.tuning));
+                }
+                visible
+            }
+        };
+        self.visible.insert(pc, visible);
+        visible
+    }
+}
+
+#[cfg(test)]
+fn note_name(view: &ViewConfig, shown: &DrawnWindow, tuning: &Tuning, midi: f32) -> NoteName {
+    Namer::new(view, *shown, tuning).name(midi)
 }
 
 /// The node in `window` to name a pitch by: the closest match, and among
@@ -1234,23 +1294,11 @@ pub(crate) fn note_name(
 /// renames itself whenever the view is panned. True, useless, and not what the
 /// lattice shows you, which is the lit node you were looking at.
 ///
-/// Kept apart from [`window_shows_node`](crate::panes::window_shows_node),
-/// which walks the same filter, because that one asks whether the pitch is on
-/// the lattice AT ALL — where any of a collapsed set will do and the walk can
-/// stop at the first — and this one asks what to call it, where they differ and
-/// it cannot.
-fn naming_node(
-    window: &DrawnWindow,
-    view: &ViewConfig,
-    tuning: &Tuning,
-    pc: PitchClass,
-) -> Option<LatticePos> {
-    naming_node_from(window.positions().map(|pos| (pos, tuning.pitch_class(pos))), view, tuning, pc)
-}
-
+/// Kept apart from [`Namer::shows_node`], which asks only WHETHER a node
+/// matches and can stop at the first, while naming must choose AMONG matches.
 fn naming_node_from(
     nodes: impl Iterator<Item = (LatticePos, PitchClass)>,
-    view: &ViewConfig,
+    tempered: Tempered,
     tuning: &Tuning,
     pc: PitchClass,
 ) -> Option<LatticePos> {
@@ -1259,7 +1307,7 @@ fn naming_node_from(
         .min_by_key(|&(pos, pitch)| {
             (
                 pc.distance_to(pitch),
-                spelling_cost(crate::panes::display_note_name(pos, view.tempered()), pos),
+                spelling_cost(crate::panes::display_note_name(pos, tempered), pos),
             )
         })
         .map(|(pos, _)| pos)
@@ -1503,7 +1551,7 @@ mod tests {
         let max_midi = cfg.high_midi.max(min_midi + crate::PITCH_RANGE_MIN_SPAN);
         let scale = PitchScale { min_midi, max_midi, span: max_midi - min_midi };
         let split = super::super::axes::spectrum_share(cfg);
-        plan(state, &axes, &scale, split, now, FLAT)
+        plan_for_test(state, &axes, &scale, split, now, FLAT)
     }
 
     /// A phrase dense enough that its names have to compete for room: three
@@ -1538,7 +1586,8 @@ mod tests {
             let cfg = state.appearance.spectrum;
             let split = super::super::axes::spectrum_share(&cfg);
             let axes = Axes::new(BIG, &cfg);
-            let labels = plan(&state, &axes, &scale_of(&state), split, now, zoomed(label_scale));
+            let labels =
+                plan_for_test(&state, &axes, &scale_of(&state), split, now, zoomed(label_scale));
             for label in labels {
                 let key = (label.name.to_string(), (label.at * 1000.0).round() as i64);
                 seen.entry(key).or_default().push(frame);
@@ -1586,7 +1635,7 @@ mod tests {
         for frame in 0..480 {
             let now = start + frame as f64 / 60.0;
             feed(&mut state, &mut next, now);
-            for label in plan(&state, &axes, &scale_of(&state), split, now, FLAT) {
+            for label in plan_for_test(&state, &axes, &scale_of(&state), split, now, FLAT) {
                 seen.entry((label.name.to_string(), (label.at * 1000.0).round() as i64))
                     .or_default()
                     .push(frame);
@@ -1622,7 +1671,7 @@ mod tests {
         let cfg = state.appearance.spectrum;
         let split = super::super::axes::spectrum_share(&cfg);
         let axes = Axes::new(BIG, &cfg);
-        let placed = plan(&state, &axes, &scale_of(&state), split, 20.0, zoomed(ZOOMED));
+        let placed = plan_for_test(&state, &axes, &scale_of(&state), split, 20.0, zoomed(ZOOMED));
         let on_pane = state
             .runtime
             .tracker
@@ -2791,7 +2840,14 @@ mod tests {
             state.appearance.spectrum.roll_seconds = span;
             let cfg = state.appearance.spectrum;
             let split = super::super::axes::spectrum_share(&cfg);
-            plan(&state, &Axes::new(BIG, &cfg), &scale_of(&state), split, NOW, zoomed(label))
+            plan_for_test(
+                &state,
+                &Axes::new(BIG, &cfg),
+                &scale_of(&state),
+                split,
+                NOW,
+                zoomed(label),
+            )
         };
         let span = |frame| at(5.0 * sweep(frame), 2.23);
         let pitch = |frame| at(10.0, sweep(frame));
@@ -3008,6 +3064,21 @@ mod tests {
             note_name(&view, &window, &just, midi).to_string(),
             crate::panes::display_note_name(far, view.tempered()).to_string(),
             "the picture is drawing this node and the name ignored it",
+        );
+        // The red-band and name queries use this same frame-local lookup.
+        // A matching band query stops early; a miss prepares the shown list,
+        // which the subsequent fallback name then reads without rebuilding.
+        let mut namer = Namer::new(&view, window, &just);
+        let far_class = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
+        assert!(namer.shows_node(far_class));
+        assert!(namer.shown_nodes.is_none());
+        let bent = PitchClass::from_cents(314.15);
+        assert!(!namer.shows_node(bent), "the fixture must exercise a full off-node miss");
+        assert!(namer.shown_nodes.is_some());
+        assert!(namer.shows_node(just.pitch_class(LatticePos::ORIGIN)));
+        assert_eq!(
+            namer.name(midi).to_string(),
+            crate::panes::display_note_name(far, view.tempered()).to_string(),
         );
         // Exercise the roll's prepared lookup too: it must populate the
         // distinct shown window when the naming reach has no match.

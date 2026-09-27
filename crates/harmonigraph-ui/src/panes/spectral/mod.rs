@@ -37,7 +37,6 @@ pub(crate) use gestures::ZOOM_PER_SCROLL_POINT;
 pub(crate) use gestures::{hold_spectrum, SpectrumHold};
 pub(super) use settings::{analysis_section, ribbons_section, spectrogram_section, view_section};
 
-use crate::panes::window_shows_node;
 use crate::{theme, PictureState};
 use axes::{
     frequency_grid, label_anchor, level_grid, plot_budget, text_scales, Axes, PitchScale,
@@ -443,14 +442,10 @@ pub(crate) fn spectral_pane(
     // for it, instead of recoloring the note and costing you the one thing the
     // ribbon's color is for. See `PictureState::shown` (crate::state) for why
     // this reads `shown` rather than the reach.
+    let mut namer = names::Namer::new(&state.appearance.view, state.shown(), &state.runtime.tuning);
     if show_spectrum && split > 0.0 {
-        let shown = state.shown();
-        let mut voices: Vec<&harmonigraph_core::Voice> = state
-            .runtime
-            .tracker
-            .voices()
-            .filter(|v| !window_shows_node(&shown, &state.runtime.tuning, v.pitch_class))
-            .collect();
+        let mut voices: Vec<&harmonigraph_core::Voice> =
+            state.runtime.tracker.voices().filter(|v| !namer.shows_node(v.pitch_class)).collect();
         // Translucent bands accumulate where they overlap, so the paint
         // order is part of the picture. The tracker's own order is stable —
         // held voices by (channel, note), then the release tail — but it is
@@ -590,7 +585,7 @@ pub(crate) fn spectral_pane(
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
     if show_history {
-        let note_names = names::plan(state, &axes, &scale, split, now, text.names);
+        let note_names = names::plan(state, &axes, &scale, split, now, text.names, &mut namer);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
     }
     // Flushed before the divider: a batch is drawn where it is flushed, and
