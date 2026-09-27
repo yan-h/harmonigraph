@@ -332,14 +332,15 @@ impl Take {
     }
 
     pub fn parse(input: impl BufRead) -> Result<Take, ReadError> {
-        // Read the lines up front so the last one can be recognized: a
+        // Keep one line of lookahead to recognize the physical last line: a
         // syntactically unfinished final record can be a half-written line.
         // A complete record with an invalid type/value is corruption even there.
-        let lines = input.lines().collect::<Result<Vec<String>, _>>()?;
+        let mut lines = input.lines().enumerate().peekable();
         let mut take = Take::default();
         let mut have_header = false;
         let mut event_lines = Vec::new();
-        for (i, line) in lines.iter().enumerate() {
+        while let Some((i, line)) = lines.next() {
+            let line = line?;
             let line = line.trim();
             // Blank lines and `#` comments are ignored, so a take stays
             // hand-editable while debugging a render.
@@ -348,7 +349,7 @@ impl Take {
             }
             let record = match ron::from_str::<Record>(line) {
                 Ok(record) => record,
-                Err(_) if i + 1 == lines.len() && unfinished_ron(line) => {
+                Err(_) if lines.peek().is_none() && unfinished_ron(line) => {
                     take.truncated = true;
                     break;
                 }
@@ -462,8 +463,8 @@ impl Take {
 
 /// Appends records to a take file, one line at a time.
 ///
-/// Deliberately dumb: no buffering beyond the OS, no background thread,
-/// no batching. It is meant to be driven from a plain thread that drains
+/// Buffers file writes, with flushing controlled by the caller.
+/// It is meant to be driven from a plain thread that drains
 /// a ring buffer — **never** from an audio thread, which must not touch a
 /// file at all. The shells own that handoff; this only knows how to write.
 pub struct Writer {
@@ -727,6 +728,15 @@ mod tests {
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::Parse(2, _))
         ));
+    }
+
+    #[test]
+    fn an_unfinished_record_before_trailing_lines_is_corruption() {
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        for suffix in ["\n", "# trailing comment\n"] {
+            let text = format!("{header}\nNote((t:0.0,\n{suffix}");
+            assert!(matches!(Take::parse(std::io::Cursor::new(text)), Err(ReadError::Parse(2, _))));
+        }
     }
 
     /// A transport loop writes records out of order. The reader has to
