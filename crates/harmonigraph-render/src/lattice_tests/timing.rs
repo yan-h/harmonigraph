@@ -589,5 +589,9 @@ fn timing_editor_pipeline_startup() {
         let resources = LatticeResources::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
         eprintln!("opening {opening}: lattice {:?}", started.elapsed());
         drop(resources);
+        let [plain, cloud] =
+            crate::spectrogram::timing_pipeline_startup(&device, wgpu::TextureFormat::Bgra8Unorm);
+        let roll = crate::roll::timing_pipeline_startup(&device, wgpu::TextureFormat::Bgra8Unorm);
+        eprintln!("opening {opening}: spectrogram {plain:?}, atmosphere {cloud:?}, roll {roll:?}");
     }
 }

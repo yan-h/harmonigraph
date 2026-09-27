@@ -18,6 +18,8 @@
 //! height sets how finely the image is sampled and not how bright it is. The
 //! vertex rule feeding the two slab taps is `heatmap_mesh`'s.
 
+use crate::uniforms::{uniform_group, Float2};
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -226,11 +228,10 @@ fn slot_of(key: i64, capacity: u32) -> u32 {
     key.rem_euclid(i64::from(capacity)) as u32
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+uniform_group! {
 struct SpectrogramUniforms {
-    origin_points: [f32; 2],
-    viewport_points: [f32; 2],
+    origin_points: Float2,
+    viewport_points: Float2,
     min_midi: f32,
     span: f32,
     spectrum_min_midi: f32,
@@ -244,7 +245,10 @@ struct SpectrogramUniforms {
     capacity: u32,
     first_slot: u32,
     run_slabs: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
 }
 
 /// GPU objects cached across frames in egui-wgpu's `CallbackResources`.
@@ -327,6 +331,19 @@ struct SpectrogramPane {
 /// when a frame overflows it. The mesh is a handful of quads.
 const INITIAL_VERTEX_CAPACITY: usize = 64;
 
+#[cfg(test)]
+pub(super) fn timing_pipeline_startup(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+) -> [std::time::Duration; 2] {
+    let started = std::time::Instant::now();
+    let resources = SpectrogramResources::new(device, format);
+    let plain = started.elapsed();
+    let started = std::time::Instant::now();
+    let _cloud = atmosphere::Pipelines::new(device, format, &resources.layout);
+    [plain, started.elapsed()]
+}
+
 impl SpectrogramResources {
     fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         let buffer_entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
@@ -363,9 +380,11 @@ impl SpectrogramResources {
                 },
             ],
         });
+        let shader = spectrogram_shader(device);
         SpectrogramResources {
             pipeline: create_spectrogram_pipeline(
                 device,
+                &shader,
                 target_format,
                 &layout,
                 None,
@@ -417,25 +436,29 @@ impl SpectrogramPane {
     }
 }
 
+fn spectrogram_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
+    #[cfg(not(test))]
+    let source = SPECTROGRAM_SRC.into();
+    #[cfg(test)]
+    let source = tests::pipeline_source();
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("spectrogram_shader"),
+        source: wgpu::ShaderSource::Wgsl(source),
+    })
+}
+
 /// The heatmap pipeline: a triangle list, blended exactly the way egui blends
 /// its own shapes so the heatmap composites under the notes identically to the
 /// tessellated mesh it replaces.
 fn create_spectrogram_pipeline(
     device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
     target_format: wgpu::TextureFormat,
     layout: &wgpu::BindGroupLayout,
     extra_layout: Option<&wgpu::BindGroupLayout>,
     fragment: &str,
     split_stars: bool,
 ) -> wgpu::RenderPipeline {
-    #[cfg(not(test))]
-    let source = SPECTROGRAM_SRC.into();
-    #[cfg(test)]
-    let source = tests::pipeline_source();
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("spectrogram_shader"),
-        source: wgpu::ShaderSource::Wgsl(source),
-    });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectrogram_pipeline_layout"),
         bind_group_layouts: &std::iter::once(Some(layout))
@@ -447,13 +470,13 @@ fn create_spectrogram_pipeline(
         label: Some("spectrogram"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
-            module: &shader,
+            module: shader,
             entry_point: Some("vs_heatmap"),
             compilation_options: Default::default(),
             buffers: &[SpectrogramVertex::LAYOUT],
         },
         fragment: Some(wgpu::FragmentState {
-            module: &shader,
+            module: shader,
             entry_point: Some(fragment),
             compilation_options: wgpu::PipelineCompilationOptions {
                 constants: if split_stars { &[("STAR_SPLIT", 1.0)] } else { &[] },
@@ -667,11 +690,11 @@ impl CallbackTrait for SpectrogramCallback {
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let uniforms = SpectrogramUniforms {
             // The whole surface, which is the viewport `paint` draws into.
-            origin_points: [0.0, 0.0],
-            viewport_points: [
+            origin_points: Float2([0.0, 0.0]),
+            viewport_points: Float2([
                 screen_descriptor.size_in_pixels[0] as f32 / ppp,
                 screen_descriptor.size_in_pixels[1] as f32 / ppp,
-            ],
+            ]),
             min_midi: self.read.min_midi,
             span: self.read.span,
             spectrum_min_midi: self.read.spectrum_min_midi,
@@ -685,7 +708,9 @@ impl CallbackTrait for SpectrogramCallback {
             capacity: self.grid.capacity,
             first_slot: slot_of(self.grid.first_key, self.grid.capacity),
             run_slabs: run_slabs as u32,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -761,7 +786,7 @@ impl CallbackTrait for SpectrogramCallback {
                 // rules. Rebuild bind groups when any allocation changes, but
                 // carry the tile bake and color history when their own sizes
                 // still fit. A scalar-field resize must not erase color memory.
-                let memory_size = (settings.settings.effects().cloud
+                let memory_extent = (settings.settings.effects().cloud
                     && (settings.settings.color_pickup > 0.0
                         || settings.settings.color_release > 0.0))
                     .then(|| {
@@ -771,6 +796,16 @@ impl CallbackTrait for SpectrogramCallback {
                                 .map(|n| (n + 2).min(device.limits().max_texture_dimension_2d))
                         })
                     });
+                let memory_size = memory_extent.map(|extent| {
+                    if stars.is_some() {
+                        extent
+                    } else {
+                        atmosphere::memory_allocation_size(
+                            extent,
+                            device.limits().max_texture_dimension_2d,
+                        )
+                    }
+                });
                 let texels = tile.map(atmosphere::TileKey::texels);
                 let resize = pane.cloud.as_ref().is_none_or(|c| {
                     c.size != size
@@ -808,6 +843,7 @@ impl CallbackTrait for SpectrogramCallback {
                     settings,
                     tile,
                     stars,
+                    memory_extent,
                     self.shades.lut.clone(),
                     self.grid.first_key + self.grid.run.len() as i64,
                 );
@@ -1484,7 +1520,7 @@ mod tests {
 
     /// `prepare` then `paint` against resources the caller owns, so a test can
     /// hand the same ones a sequence of frames.
-    fn frame_with(
+    pub(super) fn frame_with(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         resources: &mut CallbackResources,
@@ -1544,6 +1580,11 @@ mod tests {
                 .collect(),
         );
         cb
+    }
+
+    #[test]
+    fn uniforms_match_the_bound_shader_layout() {
+        crate::uniforms::layout::check_binding::<SpectrogramUniforms>(SPECTROGRAM_SRC, 0, 0);
     }
 
     /// Zero refraction is the ordinary picture, while nonzero refraction must

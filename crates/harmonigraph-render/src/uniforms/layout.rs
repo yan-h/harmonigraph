@@ -1,6 +1,6 @@
 //! Test-only reflection of the transport declarations in the parent module.
 
-use super::{Float2, Float4, Matrix4, Uint4};
+use super::{Float2, Float4, Int2, Matrix4, Uint4};
 
 pub(crate) struct Layout {
     size: usize,
@@ -37,10 +37,15 @@ impl Layout {
         resolved: &naga::proc::Layouter,
         ty: naga::Handle<naga::Type>,
         path: &str,
+        prefix: bool,
     ) {
         use naga::TypeInner as T;
         let layout = resolved[ty];
-        assert_eq!(self.size, layout.size as usize, "{path}: size");
+        if prefix {
+            assert!(self.size >= layout.size as usize, "{path}: prefix fits the uploaded buffer");
+        } else {
+            assert_eq!(self.size, layout.size as usize, "{path}: size");
+        }
         // Naga retains @align's offsets/span but its Layouter reports the
         // member types' natural maximum. Uniform structs/arrays instead
         // require at least 16-byte alignment (valid/type.rs applies this too).
@@ -78,16 +83,21 @@ impl Layout {
                     "{path}: array count"
                 );
                 assert_eq!(*stride, *actual as usize, "{path}: array stride");
-                element.check(module, resolved, *base, &format!("{path}[]"));
+                element.check(module, resolved, *base, &format!("{path}[]"), false);
             }
             (Kind::Struct(fields), T::Struct { members, span }) => {
-                assert_eq!(self.size, *span as usize, "{path}: struct span");
-                assert_eq!(fields.len(), members.len(), "{path}: field count");
+                if prefix {
+                    assert!(self.size >= *span as usize, "{path}: struct prefix span");
+                    assert!(fields.len() >= members.len(), "{path}: struct prefix fields");
+                } else {
+                    assert_eq!(self.size, *span as usize, "{path}: struct span");
+                    assert_eq!(fields.len(), members.len(), "{path}: field count");
+                }
                 for (field, member) in fields.iter().zip(members) {
                     let path = format!("{path}.{}", field.name);
                     assert_eq!(Some(field.name), member.name.as_deref(), "{path}: field name");
                     assert_eq!(field.offset, member.offset as usize, "{path}: offset");
-                    field.layout.check(module, resolved, member.ty, &path);
+                    field.layout.check(module, resolved, member.ty, &path, false);
                 }
             }
             _ => panic!("{path}: Rust transport and WGSL type shapes differ"),
@@ -103,6 +113,16 @@ impl GpuLayout for f32 {
 impl GpuLayout for u32 {
     fn layout() -> Layout {
         Layout::of::<Self>(Kind::Scalar(naga::Scalar::U32))
+    }
+}
+impl GpuLayout for i32 {
+    fn layout() -> Layout {
+        Layout::of::<Self>(Kind::Scalar(naga::Scalar::I32))
+    }
+}
+impl GpuLayout for Int2 {
+    fn layout() -> Layout {
+        Layout::of::<Self>(Kind::Vector(naga::Scalar::I32, naga::VectorSize::Bi))
     }
 }
 impl GpuLayout for Float2 {
@@ -142,6 +162,16 @@ impl<T: GpuLayout, const N: usize> GpuLayout for [T; N] {
 /// Start at the bound type, so an unused correct-looking declaration cannot
 /// satisfy the contract while the pipeline actually consumes another struct.
 pub(crate) fn check_binding<T: GpuLayout>(source: &str, group: u32, binding: u32) {
+    check_bound::<T>(source, group, binding, false);
+}
+
+/// A shader may read only the head of an existing upload. Check that head
+/// against the actual declaration rather than maintaining a second Rust mirror.
+pub(crate) fn check_binding_prefix<T: GpuLayout>(source: &str, group: u32, binding: u32) {
+    check_bound::<T>(source, group, binding, true);
+}
+
+fn check_bound<T: GpuLayout>(source: &str, group: u32, binding: u32, prefix: bool) {
     let module = naga::front::wgsl::parse_str(source).unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -159,5 +189,5 @@ pub(crate) fn check_binding<T: GpuLayout>(source: &str, group: u32, binding: u32
     assert_eq!(variables.len(), 1, "one variable at {group}:{binding}");
     let (_, variable) = variables[0];
     assert_eq!(variable.space, naga::AddressSpace::Uniform);
-    T::layout().check(&module, &resolved, variable.ty, &format!("{group}:{binding}"));
+    T::layout().check(&module, &resolved, variable.ty, &format!("{group}:{binding}"), prefix);
 }
