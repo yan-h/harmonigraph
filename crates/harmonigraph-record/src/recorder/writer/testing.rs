@@ -22,24 +22,11 @@ impl WorkerProbe {
     pub fn boundary_entered(&self) -> bool {
         self.fence.boundary_pause.entered.load(Ordering::Acquire)
     }
-    pub fn empty_visits(&self) -> u64 {
-        self.fence.worker_empty_visits.load(Ordering::Acquire)
-    }
     pub fn finished(&self) -> bool {
         self.fence.worker_finished.load(Ordering::Acquire)
     }
     pub fn failed(&self) -> bool {
         self.fence.failed.load(Ordering::Acquire)
-    }
-    pub fn pause_retirement_check(&self) {
-        self.fence.worker_before_retirement_check.entered.store(false, Ordering::Release);
-        self.fence.worker_before_retirement_check.enabled.store(true, Ordering::Release);
-    }
-    pub fn retirement_check_paused(&self) -> bool {
-        self.fence.worker_before_retirement_check.entered.load(Ordering::Acquire)
-    }
-    pub fn resume_retirement_check(&self) {
-        self.fence.worker_before_retirement_check.enabled.store(false, Ordering::Release);
     }
 }
 

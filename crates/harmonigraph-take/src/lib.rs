@@ -237,8 +237,8 @@ pub enum Record {
     Incomplete(IncompleteRecord),
 }
 
-/// A whole take, read into memory. Takes are small — a busy ten-minute
-/// piece is a few hundred kilobytes — so the reader does not stream.
+/// A whole take, read into memory. Per-block expression records can make
+/// long expressive performances large; parsing retains the complete history.
 #[derive(Clone, Debug, Default)]
 pub struct Take {
     pub header: Header,
@@ -476,6 +476,7 @@ impl Writer {
         let file = std::fs::File::create(path)?;
         let mut writer = Writer { out: std::io::BufWriter::new(file) };
         writer.write(&Record::Header(header.clone()))?;
+        writer.flush()?;
         Ok(writer)
     }
 
@@ -491,25 +492,16 @@ impl Writer {
         Ok(())
     }
 
-    /// Write one record, and flush it.
-    ///
-    /// Flushing every time is deliberate. A take is worth nothing if it
-    /// is lost, and the ways a recording session ends are exactly the
-    /// ways buffered data disappears: a killed export, a crashed host, a
-    /// `process::exit` that skips every destructor. The line-oriented
-    /// format promises that whatever reached the disk is readable — which
-    /// is only true if lines actually reach the disk. The cost is one
-    /// small write per event, against a few hundred events a second at
-    /// the very worst.
+    /// Buffer one record. The recorder flushes at each worker drain pass,
+    /// rather than paying a file write for every per-block expression.
+    /// Callers must flush before reading or reporting successful completion;
+    /// dropping the writer also attempts a flush, but cannot report I/O errors.
     pub fn write(&mut self, record: &Record) -> std::io::Result<()> {
         // A record that cannot be encoded is a bug, not a runtime
         // condition — but a take is written during a long export, so drop
         // the line rather than take the whole render down with it.
         match ron::to_string(record) {
-            Ok(line) => {
-                writeln!(self.out, "{line}")?;
-                self.out.flush()
-            }
+            Ok(line) => writeln!(self.out, "{line}"),
             Err(_) => Ok(()),
         }
     }

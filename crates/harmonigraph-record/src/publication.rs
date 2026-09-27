@@ -378,20 +378,6 @@ impl Consumer {
 const _: () = assert!(std::mem::size_of::<Item>() <= 256);
 const _: () = assert!(std::mem::align_of::<Item>() <= 8);
 
-#[cfg(feature = "test-support")]
-pub fn print_test_memory_layout() {
-    use std::mem::size_of;
-    println!(
-        "LEDGER publication [item,snapshot,publisher,consumer] {:?}",
-        [
-            size_of::<Item>(),
-            size_of::<SourceBaseline>(),
-            size_of::<Publisher>(),
-            size_of::<Consumer>()
-        ]
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

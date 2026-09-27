@@ -26,9 +26,9 @@ pub use writer::testing;
 use configuration::{RecordAddress, RecordFence};
 use lifecycle::{Action, End, History, Observation, Policy, State};
 
-/// Ring capacity. Sized for a fast offline render rather than for a
-/// frame: even at 20x realtime a dense piece is only a few thousand
-/// records a second, and the writer thread drains continuously.
+/// Record-ring capacity. Expressive voices can produce several records per
+/// audio block, multiplied by export speed. This bounded queue absorbs worker
+/// scheduling delays; the separate canonical publication lane has its own cap.
 const TAKE_RING_CAPACITY: usize = 1 << 16;
 
 const CONFIGURATION_FAILURE: &str =

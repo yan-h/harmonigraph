@@ -180,6 +180,8 @@ impl Recorder {
                 });
             }
         }
+        // This harness has a frame boundary instead of the plugin's worker pump.
+        let _ = self.writer.flush();
     }
 }
 
@@ -824,8 +826,8 @@ mod tests {
         let learned = app.state.picture.runtime.tuning;
         assert_eq!(learned.three, 700_000_000);
         assert_eq!(learned.five, 400_000_000);
-        drop(recorder);
         let take = harmonigraph_take::Take::read(&path).unwrap();
+        drop(recorder);
         std::fs::remove_file(path).unwrap();
         assert_eq!(
             take.configurations.iter().map(|r| (r.t, r.resolved().tuning)).collect::<Vec<_>>(),
