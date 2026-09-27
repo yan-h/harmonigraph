@@ -14,6 +14,7 @@ pub mod labels;
 pub mod lattice;
 mod lattice_atmosphere;
 pub mod lighting;
+mod material;
 pub(crate) mod node_motion;
 pub mod nodes;
 pub mod pages;

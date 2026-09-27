@@ -65,7 +65,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
             *source.weight_mut(target) = Some(v);
         }
     }
-    poison!(a.view.atmosphere; source_roughness, texture_depth, texture_scale, texture_speed, material_amount, material_scale, material_speed,
+    poison!(a.view.atmosphere; texture_depth, texture_scale, texture_speed, material_amount, material_speed, material_direction,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -96,11 +96,15 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
-        cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, scale_size, scale_variety, scale_refract,
-        wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers,
+        cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction,
         star_density, star_randomness, star_fringe,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_lifetime);
+    for material in
+        [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
+    {
+        poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers);
+    }
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their
@@ -281,20 +285,19 @@ fn scenarios() -> Vec<Scenario> {
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // Source roughness is visible only for lattice Watercolor: the same
-    // enabled lattice inventory plus three material bars and one source control.
+    // Lattice materials share the spectrogram geometry bars, plus amount, speed and direction.
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 1,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 5,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Mosaic,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 3,
         ..base
     });
     // The wash's own inventory: it takes the three scale bars off the Spectrogram

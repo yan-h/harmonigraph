@@ -90,16 +90,16 @@ const CASES: &[(&str, Option<Turn>)] = &[
     ),
     ("mosaic, defaults", Some(|_| {})),
     ("mosaic, no terraces", Some(|s| s.contour_strength = 0.0)),
-    ("mosaic, variety 0", Some(|s| s.scale_variety = 0.0)),
+    ("mosaic, variety 0", Some(|s| s.material_settings.scale_variety = 0.0)),
     ("mosaic, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
     ("watercolor, defaults", Some(watercolor)),
-    ("watercolor, layers 0", Some(|s| (watercolor(s), s.wash_layers = 0.0).0)),
-    ("watercolor, lobe 0", Some(|s| (watercolor(s), s.wash_lobe = 0.0).0)),
+    ("watercolor, layers 0", Some(|s| (watercolor(s), s.material_settings.wash_layers = 0.0).0)),
+    ("watercolor, lobe 0", Some(|s| (watercolor(s), s.material_settings.wash_lobe = 0.0).0)),
     (
         "watercolor, lobe 0 layers 0",
         Some(|s| {
             watercolor(s);
-            (s.wash_lobe, s.wash_layers) = (0.0, 0.0);
+            (s.material_settings.wash_lobe, s.material_settings.wash_layers) = (0.0, 0.0);
         }),
     ),
     ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),

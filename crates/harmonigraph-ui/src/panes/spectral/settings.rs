@@ -3,9 +3,8 @@
 //! [`super::super::color`].
 
 use harmonigraph_scene::{
-    CLOUD_DIRECTION_MAX, CLOUD_DIRECTION_MIN, CLOUD_SPEED_MAX, CLOUD_SPEED_MIN, CONTOURS_MAX,
-    CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX,
-    PITCH_SOFTNESS_MIN, SCALE_REFRACT_MAX, SCALE_REFRACT_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
+    CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX,
+    PITCH_SOFTNESS_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
 };
 
 use crate::config::BALLISTICS_MAX;
@@ -164,59 +163,18 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 // The stars' pace is their own two-ended `Star speed`, so this
                 // would be a bar that did nothing on their page.
                 if atmosphere.cloud_style != CloudStyle::Stars {
-                    ValueBar::new(
-                        &mut atmosphere.cloud_speed,
-                        CLOUD_SPEED_MIN..=CLOUD_SPEED_MAX,
-                        "Drift speed",
-                    )
-                    .unit(1.0, "\u{d7}")
-                    .show(ui)
-                    .on_hover_text(
-                        "1\u{d7} carries the texture about a pane-height every four minutes. 0 holds it still.",
-                    );
+                    super::super::material::speed(ui, &mut atmosphere.cloud_speed);
                 }
-                ValueBar::new(
-                    &mut atmosphere.cloud_direction,
-                    CLOUD_DIRECTION_MIN..=CLOUD_DIRECTION_MAX,
-                    "Drift direction",
-                )
-                .integer()
-                .unit(1.0, "°")
-                .show(ui)
-                .on_hover_text(
-                    "Constant direction of texture travel: 0° right, 90° down, 180° left and 270° up.",
-                );
+                super::super::material::direction(ui, &mut atmosphere.cloud_direction);
                 // Two constructions, so two sets of dials: nothing a wash carries means
                 // anything to a refracting scale, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
                 if atmosphere.cloud_style == CloudStyle::Stars {
                     star_bars(ui, atmosphere);
                 } else if atmosphere.cloud_style == CloudStyle::Watercolor {
-                    wash_bars(ui, atmosphere);
+                    super::super::material::watercolor(ui, &mut atmosphere.material_settings);
                 } else {
-                    ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
-                        .eased(true)
-                        .unit(1.0, "\u{d7}")
-                        .show(ui)
-                        .on_hover_text(
-                            "Size of each mosaic cell relative to the pane. 1× is the reference size; larger values make broader cells. Refraction is a fraction of each cell's width, so larger cells also displace the picture farther.",
-                        );
-                    ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Size variation")
-                        .percent()
-                        .show(ui)
-                        .on_hover_text(
-                            "Variation in mosaic cell size. 0% makes an even grid; 100% mixes small and large cells, with the largest about four times the smallest. The cells continue to cover the whole picture.",
-                        );
-                    ValueBar::new(
-                        &mut atmosphere.scale_refract,
-                        SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
-                        "Refraction",
-                    )
-                    .unit(100.0, "%")
-                    .show(ui)
-                    .on_hover_text(
-                        "Displacement of the spectrogram within each mosaic cell, as a percentage of cell width. Positive values bend bands outward; negative values pull toward the center. -100% gives each cell one level; 0% leaves the picture unchanged.",
-                    );
+                    super::super::material::mosaic(ui, &mut atmosphere.material_settings);
                 }
             });
         },
@@ -547,55 +505,6 @@ pub(crate) fn analysis_section(
                      0 ms responds immediately.",
             );
     });
-}
-
-/// The band both texture size bars run over, taken from the same constants the
-/// load door clamps to rather than written out here.
-///
-/// Two bars for two constructions, but one range: they mean the same thing
-/// about their own texture, and a size the bar can reach but the blob cannot
-/// keep is the silent break the persistence rule is about.
-fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
-    harmonigraph_scene::CLOUD_SIZE_MIN..=harmonigraph_scene::CLOUD_SIZE_MAX
-}
-
-/// The watercolour wash: a field of translucent globs, and no light anywhere in
-/// it.
-///
-/// Its own function because the two textures share only the three dials above,
-/// and because describing this look in words has failed repeatedly — the
-/// prototype's three keepers (J1, J2, J5) are one construction at three settings
-/// of these bars, so the settings are what shipped rather than a choice made
-/// here.
-fn wash_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtmosphere) {
-    ValueBar::new(&mut atmosphere.wash_size, cloud_size_range(), "Glob size")
-        .eased(true)
-        .unit(1.0, "\u{d7}")
-        .show(ui)
-        .on_hover_text(
-            "Size of watercolor globs relative to the pane. 1× is about one twentieth of the pane's height; smaller values make finer grain and larger values make broader patches. The apparent pitch width depends on the frequency range.",
-        );
-    ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Edge feathering").percent().show(ui).on_hover_text(
-        "Blend between neighboring watercolor patches. 0% makes hard-edged patches; 100% dissolves their edges. Does not change where each patch samples the audio.",
-    );
-    ValueBar::new(&mut atmosphere.wash_lobe, 0.0..=1.0, "Shape warp")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Distort round watercolor patches into lobes and streaks. 0% keeps them round; higher values stretch and bend their shapes.",
-        );
-    ValueBar::new(&mut atmosphere.wash_refract, 0.0..=1.0, "Refraction")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Pull the sampled audio toward each glob's center. 0% keeps the original picture; 100% gives each glob the level at its center.",
-        );
-    ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Fine layer mix")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
-        );
 }
 
 /// The starfield: pinpoints in depth drifting with parallax, and the one texture
