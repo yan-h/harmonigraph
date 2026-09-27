@@ -1518,6 +1518,86 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
     }
 }
 
+/// Stop followed immediately by real CLAP destruction has no later process
+/// callback to observe disarm. Only its complete, released prefix may finish.
+#[test]
+fn destruction_closes_a_stopped_take_without_another_process_callback() {
+    use nice_plug::params::InternalParamMut;
+    let _scope = crate::test_scope::enter();
+    for (stopped, held) in [(true, false), (false, false), (true, true)] {
+        let mut device = Device::new();
+        let left: [f32; 64] = std::array::from_fn(|i| (i + 1) as f32 / 128.0);
+        let right = left.map(|v| -v);
+        device.sidechain.set([left, right]);
+        device.wrapper().test_inspect_plugin(|plugin| {
+            // SAFETY: set between callbacks while the parameter stays alive.
+            assert!(unsafe {
+                plugin
+                    .params
+                    .analysis_input
+                    ._internal_set_plain_value(crate::AnalysisInputParam::Sidechain)
+            });
+        });
+        device.activate();
+        let dir = std::env::temp_dir()
+            .join(format!("harmonigraph-stop-destroy-{}-{stopped}-{held}", std::process::id(),));
+        let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+        let probe = {
+            let shared = shared.lock();
+            let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
+            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize(), true);
+            probe
+        };
+        let events = if held { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
+        device.run_transport(0, events, false, None, Some(transport(5.0, 0)));
+        assert!(shared.lock().take.has_rolled());
+        if held {
+            device.wrapper().test_inspect_plugin(|plugin| {
+                assert!(plugin
+                    .aggregation
+                    .as_ref()
+                    .unwrap()
+                    .test_voice(crate::tuning::TUNERS as u8, 0, 60)
+                    .is_some());
+            });
+        }
+        if stopped {
+            shared.lock().take.stop(None);
+        }
+        // No finish_notes or other process callback: Drop uses the host's
+        // stop_processing/deactivate/destroy vtables and joins the writer.
+        drop(shared);
+        drop(device);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !probe.finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(probe.finished(), "joined destruction must retire the writer");
+        let complete = stopped && !held;
+        assert_eq!(probe.failed(), !complete, "stopped={stopped}, held={held}");
+        let paths: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|p| p.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|e| e == "take"))
+            .collect();
+        assert_eq!(paths.len(), 1);
+        let take = harmonigraph_take::Take::read(&paths[0]).unwrap();
+        assert_eq!(take.incomplete.is_none(), complete);
+        assert_eq!(take.header.audio_start, Some(5.0));
+        assert_eq!(take.configurations.len(), 1);
+        let wav = std::fs::read(paths[0].with_extension("wav")).unwrap();
+        let expected: Vec<u8> = left
+            .iter()
+            .zip(&right)
+            .flat_map(|(l, r)| [*l, *r])
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        assert_eq!(wav.len(), 44 + expected.len());
+        assert_eq!(&wav[44..], expected, "the exact nonempty callback audio survives");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 /// A note reaches the take through the Hub's publication, so "has this take
 /// captured anything" is answered by what the recorder took in, not by a
 /// count kept anywhere else (#818).

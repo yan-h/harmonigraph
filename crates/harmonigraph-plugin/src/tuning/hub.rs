@@ -1189,6 +1189,13 @@ impl Hub {
         if self.callback.is_some() {
             self.snapshots(owner, recorder);
         }
+        // Forced publication above accounts for every input in this callback,
+        // including delayed output. A later callback need not arrive to prove
+        // this prefix when Stop is followed immediately by destruction.
+        let through = callback.steady_time.saturating_add(i64::from(callback.frames));
+        if owner.recording.source_frontier(self.clock, through).is_err() {
+            recorder.fail_configuration();
+        }
         self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);
@@ -1226,9 +1233,15 @@ impl Hub {
         observation: f64,
     ) {
         recorder.hold_retired_publication();
+        let held = self.rows.iter().any(|row| row.state.count() != 0);
+        // Stop can finish as soon as all closure entries reach the worker.
+        // Publish this failure first, before retirement can release them.
+        if held {
+            recorder.fail_configuration();
+        }
+        owner.recording.observe_retired_disarm(&mut recorder);
         owner.recording.dispose_retired_configuration(&mut recorder);
         owner.finish_recording_publication(&mut recorder, observation);
-        let held = self.rows.iter().any(|row| row.state.count() != 0);
         owner.recording.finish_retired_publication(&mut recorder, held);
     }
 
