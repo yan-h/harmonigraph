@@ -37,7 +37,7 @@ use glam::Vec4;
 ///
 /// Non-finite ends yield the darkest color rather than a NaN that would ride
 /// into the instance buffer unnoticed.
-fn ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
+pub(crate) fn ramp_t(pitch: f32, darkest_pitch: f32, brightest_pitch: f32) -> f64 {
     if !darkest_pitch.is_finite() || !brightest_pitch.is_finite() {
         return 0.0;
     }
@@ -770,9 +770,9 @@ impl LutSpacing {
 /// `darkest_pitch`/`brightest_pitch` into the entries would make that cache
 /// wrong, not just stale.
 ///
-/// Hands back a copy, for the renderer, which needs the table as a value to
-/// upload. The per-node draw path wants two entries rather than a kilobyte and
-/// goes through [`with_lut`] instead.
+/// Hands back a copy for the scene: the renderer uploads it and node motion
+/// samples it directly. Callers without a scene use [`gradient_color`] to
+/// read the memoized table without copying it.
 pub fn pitch_ramp_lut(gradient: Gradient) -> [Vec4; PITCH_LUT_N] {
     with_lut(gradient, |lut| *lut)
 }
@@ -899,6 +899,13 @@ pub fn pitch_lut_color(
 /// [`pitch_lut_color`] says: a caller wanting the DESIGNED color of one point
 /// is asking a question no drawn shape asks.
 pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
+    let spacing = LutSpacing::of(gradient);
+    with_lut(gradient, |lut| sample_lut(t, lut, spacing))
+}
+
+/// Sample an already prepared table with the spacing it was built for.
+/// Motion uses the scene's pair, avoiding a memo lookup for every mark.
+pub(crate) fn sample_lut(t: f32, lut: &[Vec4; PITCH_LUT_N], spacing: LutSpacing) -> Vec4 {
     // A NaN takes the bottom of the range, which is [`ramp_t`]'s own answer for
     // a non-finite RANGE and wanted here for the same reason: `clamp` hands NaN
     // straight back, `as usize` then saturates the index to 0, and the lerp
@@ -914,12 +921,12 @@ pub fn gradient_color(t: f32, gradient: Gradient) -> Vec4 {
     let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
     // Onto the table's own spacing first, as the shader's `lut_position` does.
     // Even spacing hands `t` straight back, bit for bit.
-    let u = LutSpacing::of(gradient).position(f64::from(t)) as f32;
+    let u = spacing.position(f64::from(t)) as f32;
     let f = u * (PITCH_LUT_N - 1) as f32;
     // The clamp above lands the floor inside the table, so the last entry pairs
     // with itself at a lerp weight of 0.
     let i0 = f.floor() as usize;
-    with_lut(gradient, |lut| lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor()))
+    lut[i0].lerp(lut[(i0 + 1).min(PITCH_LUT_N - 1)], f - f.floor())
 }
 
 /// The NEUTRAL grey of a given `L*`: no hue, no chroma, and the luminance that

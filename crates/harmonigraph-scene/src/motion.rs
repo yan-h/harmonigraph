@@ -4,6 +4,7 @@ use crate::{IntensityReading, NoteAnimationConfig, OctaveLayout, RingFade, Scene
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
+use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
 // Fixed-seed rather than per-process: nothing here is keyed by input an
@@ -321,8 +322,10 @@ impl NodeMotion {
         let low = self.held.values().map(|v| v.pitch).min_by(f32::total_cmp);
         for node in &scene.nodes {
             let node_class = PitchClass::from_cents(node.cents);
-            let newly_visible = !self.nodes.contains_key(&node.lattice_pos);
-            let motion = self.nodes.entry(node.lattice_pos).or_default();
+            let (motion, newly_visible) = match self.nodes.entry(node.lattice_pos) {
+                Entry::Occupied(entry) => (entry.into_mut(), false),
+                Entry::Vacant(entry) => (entry.insert(Motion::default()), true),
+            };
             let (lo, hi) = scene.octave_layout.slots(node.cents);
             motion.targets = [0.0; 11];
             let mut melody = None;
@@ -668,12 +671,9 @@ impl NodeMotion {
             node.bass_slots = bass_slots;
             node.bass_level = bass_level * fades[bass_slot];
             let color = |slot| {
-                crate::pitch_lut_color(
-                    scene.octave_layout.slot_pitch(slot as i32, node.cents),
-                    scene.darkest_pitch,
-                    scene.brightest_pitch,
-                    view.pitch_gradient,
-                )
+                let pitch = scene.octave_layout.slot_pitch(slot as i32, node.cents);
+                let t = crate::color::ramp_t(pitch, scene.darkest_pitch, scene.brightest_pitch);
+                crate::color::sample_lut(t as f32, &scene.pitch_lut, scene.pitch_lut_spacing)
             };
             node.melody_color = color(melody_slot);
             node.bass_color = color(bass_slot);
