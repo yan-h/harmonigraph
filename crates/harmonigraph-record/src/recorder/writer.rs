@@ -165,6 +165,7 @@ pub fn channel() -> (Recorder, Control) {
             latches: latches.clone(),
         },
         Control {
+            stop_wakeup: None,
             display: Arc::new(Mutex::new(Some(display_consumer))),
             fence,
             commands,

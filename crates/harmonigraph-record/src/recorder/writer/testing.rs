@@ -16,6 +16,10 @@ pub fn worker_probe(control: &Control, directory: std::path::PathBuf) -> WorkerP
     WorkerProbe { fence: control.fence.clone() }
 }
 impl WorkerProbe {
+    pub fn finishing(&self) -> bool {
+        self.fence.finishing.load(Ordering::Acquire)
+    }
+
     pub fn pause_boundary(&self, enabled: bool) {
         self.fence.boundary_pause.enabled.store(enabled, Ordering::Release);
     }

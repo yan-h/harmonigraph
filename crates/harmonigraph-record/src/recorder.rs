@@ -706,6 +706,7 @@ impl Drop for Recorder {
 /// happened. Cloneable so the editor can hold it.
 #[derive(Clone)]
 pub struct Control {
+    stop_wakeup: Option<Arc<dyn Fn() + Send + Sync>>,
     display: Arc<Mutex<Option<publication::Consumer>>>,
     fence: Arc<RecordFence>,
     commands: mpsc::Sender<Command>,
@@ -733,6 +734,12 @@ pub struct Control {
 }
 
 impl Control {
+    /// Install before sharing this control. Stop only requests service; the
+    /// owner must establish a joined lifecycle boundary before closing audio.
+    pub fn set_stop_wakeup(&mut self, wake: impl Fn() + Send + Sync + 'static) {
+        self.stop_wakeup = Some(Arc::new(wake));
+    }
+
     pub fn take_display(&self) -> Option<publication::Consumer> {
         self.display.lock().take()
     }
@@ -902,6 +909,9 @@ impl Control {
         self.fence.intent.fetch_and(!1, Ordering::AcqRel);
         let _ = self.commands.send(Command::Stop(epoch, render.map(Box::new)));
         self.recording.store(false, Ordering::Relaxed);
+        if let Some(wake) = &self.stop_wakeup {
+            wake();
+        }
     }
 
     /// Called each GUI frame while recording, so the status line reflects

@@ -2120,7 +2120,11 @@ impl<P: ClapPlugin> Wrapper<P> {
             process_mode: wrapper.current_process_mode.load(),
         };
 
-        if P::CLAP_PERFORMANCE && !wrapper.plugin.lock().clap_main_activate(&buffer_config) { return false; }
+        if P::CLAP_PERFORMANCE {
+            let mut plugin = wrapper.plugin.lock();
+            plugin.clap_main_inactive();
+            if !plugin.clap_main_activate(&buffer_config) { return false; }
+        }
 
         // Before initializing the plugin, make sure all smoothers are set the the default values
         for param in wrapper.param_by_hash.values() {
@@ -2169,6 +2173,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         if P::CLAP_PERFORMANCE { wrapper.plugin.lock().clap_main_deactivate(); }
 
         wrapper.is_activated.store(false, Ordering::SeqCst);
+        if P::CLAP_PERFORMANCE { wrapper.plugin.lock().clap_main_inactive(); }
     }
 
     unsafe extern "C" fn start_processing(plugin: *const clap_plugin) -> bool {
@@ -2647,6 +2652,9 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!((), plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
+        if P::CLAP_PERFORMANCE && !wrapper.is_activated.load(Ordering::SeqCst) {
+            wrapper.plugin.lock().clap_main_inactive();
+        }
         if P::CLAP_CONFIGURATION { wrapper.configuration_main_thread(); }
         if wrapper.setup_pending.swap(false, Ordering::AcqRel) {
             let dirty = wrapper.setup.as_ref().is_some_and(|setup| setup.service());

@@ -122,6 +122,10 @@ pub struct Row {
     /// writer; the Hub reads it for the time it reports each sequenced input
     /// was scheduled for, which is that Tune's own input plus D.
     pub delay: AtomicI64,
+    /// 0 outside a callback, MAX while acquiring its epoch, otherwise that
+    /// callback's epoch. Paired with the session cut in SeqCst order so a
+    /// joined Hub cannot overlook a late publisher from its recording epoch.
+    pub capture_epoch: AtomicU64,
     ends: Mutex<Ends>,
 }
 
@@ -141,6 +145,7 @@ impl Row {
             show: AtomicBool::new(true),
             owner: AtomicU64::new(0),
             delay: AtomicI64::new(0),
+            capture_epoch: AtomicU64::new(0),
             ends: Mutex::new(Ends::new()),
         }
     }
@@ -196,7 +201,7 @@ impl Session {
         self.hubs.load(Ordering::Acquire)
     }
     pub fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::Acquire)
+        self.epoch.load(Ordering::SeqCst)
     }
     /// A completion counter rather than an epoch-valued reason: concurrent
     /// Reset producers may finish out of epoch order, but cannot regress this.
@@ -210,7 +215,7 @@ impl Session {
         self.next.fetch_add(1, Ordering::AcqRel) + 1
     }
     fn bump(&self) -> u64 {
-        self.epoch.fetch_add(1, Ordering::AcqRel) + 1
+        self.epoch.fetch_add(1, Ordering::SeqCst) + 1
     }
     /// Explicit Reset. Every paired Tune cuts and the Hub clears its context.
     pub fn reset(&self) {
@@ -304,6 +309,7 @@ impl Session {
     pub fn test_reset(&self) {
         for row in &self.rows {
             row.owner.store(0, Ordering::Release);
+            row.capture_epoch.store(0, Ordering::SeqCst);
             row.delay.store(0, Ordering::Release);
             row.retune.store(1, Ordering::Release);
             row.show.store(true, Ordering::Release);

@@ -210,7 +210,6 @@ impl Tune {
     /// and lifecycle in full; there is no third thing to agree with them.
     fn adopt(&mut self) {
         let session = session::session();
-        self.claim();
         // The editor's Reset bumps the
         // session epoch, so every paired track cuts, not just this one.
         let setup = self.shared.reset_generation();
@@ -301,7 +300,14 @@ impl Tune {
         self.callback = Some(callback);
         self.cursor = 0;
         self.emitted = 0;
+        self.claim();
+        if let Link::Row(attached) = &self.link {
+            session::session().row(attached.slot).capture_epoch.store(u64::MAX, Ordering::SeqCst);
+        }
         self.adopt();
+        if let Link::Row(attached) = &self.link {
+            session::session().row(attached.slot).capture_epoch.store(self.epoch, Ordering::SeqCst);
+        }
         if callback.steady_time < 0 {
             self.status |= session::CLOCK;
         }
@@ -661,6 +667,9 @@ impl Tune {
     }
 
     pub fn end(&mut self) {
+        if let Link::Row(attached) = &self.link {
+            session::session().row(attached.slot).capture_epoch.store(0, Ordering::SeqCst);
+        }
         if let Some(callback) = self.callback.take() {
             self.shared.held.store(self.held() as u64, Ordering::Relaxed);
             self.shared.notes_in.store(self.notes_in, Ordering::Relaxed);

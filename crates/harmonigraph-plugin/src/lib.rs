@@ -575,12 +575,14 @@ impl Default for Harmonigraph {
     fn default() -> Self {
         let (audio_producer, audio_consumer) = audio_ingress::channel(AUDIO_RING_CAPACITY);
         let sample_rate_bits = Arc::new(AtomicU32::new((DEFAULT_SAMPLE_RATE as f32).to_bits()));
-        let (take, take_control) = harmonigraph_record::channel();
+        let (take, mut take_control) = harmonigraph_record::channel();
         let consumer = take_control.take_display().expect("one display consumer");
         #[cfg(test)]
         let take = configuration::injected_recorder().unwrap_or(take);
         let params = Arc::new(HarmonigraphParams::default());
         let aggregation = tuning::hub::Hub::new();
+        let wake = aggregation.shared.clone();
+        take_control.set_stop_wakeup(move || wake.request_main());
         params.session.set(aggregation.shared.clone()).unwrap_or_else(|_| unreachable!());
         let editor_shared = Arc::new(Mutex::new(editor::EditorShared::new(
             consumer,
@@ -692,6 +694,9 @@ impl Plugin for Harmonigraph {
     fn reset(&mut self) {
         if let Some(owner) = self.configuration.as_mut() {
             if let Some(hub) = &mut self.aggregation {
+                // Stop may arrive after activation but before start_processing
+                // resets this owner. Pay its closure before forgetting routes.
+                hub.finish_stopped_recording(owner, &mut self.take, self.presentation_seconds);
                 hub.prove_final_frontier(owner, &self.take);
             }
             owner.reset(&self.take);
@@ -846,6 +851,13 @@ impl ClapPlugin for Harmonigraph {
             .unwrap()
             .activate(f64::from(config.sample_rate), config.max_buffer_size);
         true
+    }
+    fn clap_main_inactive(&mut self) {
+        self.aggregation.as_mut().unwrap().finish_stopped_recording(
+            self.configuration.as_mut().unwrap(),
+            &mut self.take,
+            self.presentation_seconds,
+        );
     }
     fn clap_configuration_retire(&mut self, unfinished: bool) {
         self.configuration.as_mut().unwrap().recording.retired_configuration = Some(unfinished);
