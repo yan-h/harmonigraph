@@ -237,7 +237,7 @@ impl GlowTarget {
             pass.draw(0..4, 0..1);
         }
         drop(pass);
-        if let (Some(source), Some(tile)) = (&self.material_source, &pane.material_tile) {
+        if let Some(source) = &self.material_source {
             if has_light && shadow_pickup > 0.0 {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("material_source_shadow"),
@@ -260,7 +260,13 @@ impl GlowTarget {
                 pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
                 pass.draw(0..4, 0..pane.instance_count);
             }
-            source.draw(encoder, &compiled.material, tile, &self.view);
+            source.draw(
+                encoder,
+                &compiled.material,
+                pane.material_tile.as_ref(),
+                &self.view,
+                has_light,
+            );
         }
     }
 }

@@ -139,34 +139,34 @@ pub const SCALE_REFRACT_MIN: f32 = -1.0;
 /// See [`SCALE_REFRACT_MIN`].
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
 
-/// Bounds shared by the [`SpectralAtmosphere::star_density`] control and
+/// Bounds shared by the [`StarSettings::star_density`] control and
 /// sanitizer, as a multiplier on stars per area. Past about 3x the farthest
 /// dust is finer than a pixel of a 540-point pane and merges into texture.
 pub const STAR_DENSITY_MIN: f32 = 0.5;
 /// See [`STAR_DENSITY_MIN`].
 pub const STAR_DENSITY_MAX: f32 = 10.0;
-/// The top of [`SpectralAtmosphere::star_fringe`]: past half, the fringes of a
+/// The top of [`StarSettings::star_fringe`]: past half, the fringes of a
 /// dense slice add up to a flat wash of its average colour.
 pub const STAR_FRINGE_MAX: f32 = 0.5;
 /// Bounds for the per-axis resolution of the Stars halo images.
 pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
 
-/// The top of [`SpectralAtmosphere::star_defocus`].
+/// The top of [`StarSettings::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// Bounds shared by the two ends of the `Star size` control
-/// ([`SpectralAtmosphere::star_size_min`], [`SpectralAtmosphere::star_size_max`])
+/// ([`StarSettings::star_size_min`], [`StarSettings::star_size_max`])
 /// and their sanitizer, in star pixels of spacing at density 2.
 pub const STAR_SIZE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_MIN`].
 pub const STAR_SIZE_MAX: f32 = 64.0;
-/// Bounds shared by the [`SpectralAtmosphere::star_size_curve`] control and
+/// Bounds shared by the [`StarSettings::star_size_curve`] control and
 /// sanitizer.
 pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_CURVE_MIN`].
 pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
 /// Bounds shared by the two ends of the `Star speed` control
-/// ([`SpectralAtmosphere::star_speed_min`], [`SpectralAtmosphere::star_speed_max`])
+/// ([`StarSettings::star_speed_min`], [`StarSettings::star_speed_max`])
 /// and their sanitizer, as a share of the prototype's pace: at the top a depth
 /// crosses the pane's height in about nine seconds. The top was once 5, and
 /// everything past 1 was too fast to use while it crowded the useful range
@@ -174,7 +174,7 @@ pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
 pub const STAR_SPEED_MIN: f32 = 0.0;
 /// See [`STAR_SPEED_MIN`].
 pub const STAR_SPEED_MAX: f32 = 1.0;
-/// Bounds shared by the [`SpectralAtmosphere::star_speed_curve`] control and
+/// Bounds shared by the [`StarSettings::star_speed_curve`] control and
 /// sanitizer.
 pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;
 /// See [`STAR_SPEED_CURVE_MIN`].
@@ -182,7 +182,7 @@ pub const STAR_SPEED_CURVE_MAX: f32 = 4.0;
 /// Longest color-memory time constant in seconds.
 pub const COLOR_MEMORY_MAX: f32 = 5.0;
 
-/// Bounds shared by the [`SpectralAtmosphere::star_lifetime`] control and
+/// Bounds shared by the [`StarSettings::star_lifetime`] control and
 /// sanitizer, in seconds.
 pub const STAR_LIFETIME_MIN: f32 = 0.5;
 /// See [`STAR_LIFETIME_MIN`].
@@ -394,17 +394,25 @@ pub struct SpectralAtmosphere {
     /// above; `Watercolor` is the glob field below, and every `wash_` setting
     /// belongs to it alone; `Stars` is the starfield, and so is every `star_`.
     pub cloud_style: CloudStyle,
+    pub stars: StarSettings,
+}
+
+/// Shared star geometry and rendering controls. Each pane owns its own values.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct StarSettings {
     /// Stars per area at every depth, as a multiplier: the cells each depth's
     /// stars are hashed into shrink by its square root. Runs over
     /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
     ///
-    /// Every `star_` setting below belongs to [`CloudStyle::Stars`] alone, and
-    /// each fresh value is the prototype's pick — V3 of round 4 for the motion,
+    /// Shared by [`CloudStyle::Stars`] and [`LatticeMaterial::Stars`]. Each
+    /// fresh value is the prototype's pick — V3 of round 4 for the motion,
     /// YB3 of round 8 for the colour and shape — so the page opens on the look
     /// Yan chose, with its levers on bars.
     pub star_density: f32,
     /// How far the stars differ from each other in brightness, spent as a
-    /// position on the palette: the steepness of the brightness rank, how far
+    /// palette position in the spectrogram or coverage of the sampled lattice
+    /// hue: the steepness of the brightness rank, how far
     /// it spreads each star above and below the colour behind it, and the
     /// spread of core sizes, all together. At 0 every star is the colour
     /// behind it, lifted a little.
@@ -469,6 +477,85 @@ pub struct SpectralAtmosphere {
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
 }
+impl Default for StarSettings {
+    fn default() -> Self {
+        Self {
+            // Yan's Stars controls captured from the DAW on 2026-09-26.
+            star_density: 10.0,
+            star_randomness: 0.080912866,
+            star_jitter: 0.5,
+            star_size_min: 2.315533,
+            star_size_max: 14.752405,
+            star_size_curve: 2.1178954,
+            star_speed_min: 0.08931082,
+            star_speed_max: 0.16860056,
+            star_speed_curve: 3.179647,
+            star_lifetime: 2.9719827,
+            star_fringe: 0.5,
+            star_far_fill: 0.0,
+            star_halo_resolution: 0.5,
+            star_halo_profile: StarHaloProfile::P3,
+            star_defocus: 0.35391274,
+        }
+    }
+}
+impl StarSettings {
+    pub fn sanitized(mut self) -> Self {
+        let fresh = Self::default();
+        let clamp = |value: f32, fallback: f32, low, high| {
+            if value.is_finite() {
+                value.clamp(low, high)
+            } else {
+                fallback
+            }
+        };
+        self.star_density =
+            clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
+        self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
+        self.star_size_min =
+            clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        self.star_size_max =
+            clamp(self.star_size_max, fresh.star_size_max, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        // One control with two handles, so its ends cannot cross on screen;
+        // a blob that holds them crossed is drawn, and kept, as the one pair.
+        if self.star_size_min > self.star_size_max {
+            std::mem::swap(&mut self.star_size_min, &mut self.star_size_max);
+        }
+        self.star_size_curve = clamp(
+            self.star_size_curve,
+            fresh.star_size_curve,
+            STAR_SIZE_CURVE_MIN,
+            STAR_SIZE_CURVE_MAX,
+        );
+        self.star_speed_min =
+            clamp(self.star_speed_min, fresh.star_speed_min, STAR_SPEED_MIN, STAR_SPEED_MAX);
+        self.star_speed_max =
+            clamp(self.star_speed_max, fresh.star_speed_max, STAR_SPEED_MIN, STAR_SPEED_MAX);
+        // The same one control with two handles as `Star size`.
+        if self.star_speed_min > self.star_speed_max {
+            std::mem::swap(&mut self.star_speed_min, &mut self.star_speed_max);
+        }
+        self.star_speed_curve = clamp(
+            self.star_speed_curve,
+            fresh.star_speed_curve,
+            STAR_SPEED_CURVE_MIN,
+            STAR_SPEED_CURVE_MAX,
+        );
+        self.star_lifetime =
+            clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
+        self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
+        self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);
+        self.star_halo_resolution = clamp(
+            self.star_halo_resolution,
+            fresh.star_halo_resolution,
+            STAR_HALO_RESOLUTION_MIN,
+            STAR_HALO_RESOLUTION_MAX,
+        );
+        self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
+        self
+    }
+}
 
 /// Which of the three spectrogram effects a setting actually draws — what the
 /// retired style enum used to say in one word, read off the dials instead.
@@ -523,22 +610,7 @@ impl Default for SpectralAtmosphere {
             cloud_direction: MATERIAL_DIRECTION_DEFAULT,
             cloud_style: CloudStyle::Stars,
             material_settings: MaterialSettings::default(),
-            // Yan's Stars controls captured from the DAW on 2026-09-26.
-            star_density: 10.0,
-            star_randomness: 0.080912866,
-            star_jitter: 0.5,
-            star_size_min: 2.315533,
-            star_size_max: 14.752405,
-            star_size_curve: 2.1178954,
-            star_speed_min: 0.08931082,
-            star_speed_max: 0.16860056,
-            star_speed_curve: 3.179647,
-            star_lifetime: 2.9719827,
-            star_fringe: 0.5,
-            star_far_fill: 0.0,
-            star_halo_resolution: 0.5,
-            star_halo_profile: StarHaloProfile::P3,
-            star_defocus: 0.35391274,
+            stars: StarSettings::default(),
         }
     }
 }
@@ -587,50 +659,7 @@ impl SpectralAtmosphere {
             fresh.cloud_direction
         };
         self.material_settings = self.material_settings.sanitized();
-        self.star_density =
-            clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
-        self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
-        self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
-        self.star_size_min =
-            clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
-        self.star_size_max =
-            clamp(self.star_size_max, fresh.star_size_max, STAR_SIZE_MIN, STAR_SIZE_MAX);
-        // One control with two handles, so its ends cannot cross on screen;
-        // a blob that holds them crossed is drawn, and kept, as the one pair.
-        if self.star_size_min > self.star_size_max {
-            std::mem::swap(&mut self.star_size_min, &mut self.star_size_max);
-        }
-        self.star_size_curve = clamp(
-            self.star_size_curve,
-            fresh.star_size_curve,
-            STAR_SIZE_CURVE_MIN,
-            STAR_SIZE_CURVE_MAX,
-        );
-        self.star_speed_min =
-            clamp(self.star_speed_min, fresh.star_speed_min, STAR_SPEED_MIN, STAR_SPEED_MAX);
-        self.star_speed_max =
-            clamp(self.star_speed_max, fresh.star_speed_max, STAR_SPEED_MIN, STAR_SPEED_MAX);
-        // The same one control with two handles as `Star size`.
-        if self.star_speed_min > self.star_speed_max {
-            std::mem::swap(&mut self.star_speed_min, &mut self.star_speed_max);
-        }
-        self.star_speed_curve = clamp(
-            self.star_speed_curve,
-            fresh.star_speed_curve,
-            STAR_SPEED_CURVE_MIN,
-            STAR_SPEED_CURVE_MAX,
-        );
-        self.star_lifetime =
-            clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
-        self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);
-        self.star_halo_resolution = clamp(
-            self.star_halo_resolution,
-            fresh.star_halo_resolution,
-            STAR_HALO_RESOLUTION_MIN,
-            STAR_HALO_RESOLUTION_MAX,
-        );
-        self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
+        self.stars = self.stars.sanitized();
         self
     }
 
@@ -677,7 +706,7 @@ pub enum LatticeTexture {
     None = 3,
 }
 
-/// A displacement of the textured glow; None bypasses the material pass.
+/// A material sampling the textured glow; None bypasses the material pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum LatticeMaterial {
@@ -685,6 +714,7 @@ pub enum LatticeMaterial {
     None = 0,
     Watercolor = 1,
     Mosaic = 2,
+    Stars = 3,
 }
 
 /// Pickup width and edge softness, in node radii. Independent of ordinary shadows.
@@ -706,6 +736,7 @@ pub struct AtmosphereSettings {
     /// Feather distance beyond each band edge, in node radii.
     pub material_shadow_softness: f32,
     pub material_settings: MaterialSettings,
+    pub stars: StarSettings,
     pub material_speed: f32,
     pub material_direction: f32,
     pub texture_depth: f32,
@@ -726,6 +757,7 @@ impl Default for AtmosphereSettings {
             material_shadow_width: 1.5,
             material_shadow_softness: 2.0,
             material_settings: MaterialSettings::default(),
+            stars: StarSettings::default(),
             material_speed: MATERIAL_SPEED_DEFAULT,
             material_direction: MATERIAL_DIRECTION_DEFAULT,
             texture_depth: 0.134_627_85,
@@ -765,6 +797,7 @@ impl AtmosphereSettings {
             SHADOW_PICKUP_SIZE_MAX,
         );
         self.material_settings = self.material_settings.sanitized();
+        self.stars = self.stars.sanitized();
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.material_direction = if self.material_direction.is_finite() {

@@ -107,7 +107,7 @@ const CASES: &[(&str, Option<Turn>)] = &[
         "stars, medium",
         Some(|s| {
             s.cloud_style = CloudStyle::Stars;
-            s.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
+            s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
         }),
     ),
     ("mosaic, memory", Some(memory)),

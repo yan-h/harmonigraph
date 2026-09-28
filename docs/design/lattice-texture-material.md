@@ -15,7 +15,9 @@ Keep `ViewConfig::atmosphere` as the owner of lattice glow effects.
 Replace its combined enable/material controls with two independently selectable stages:
 
 - Texture: None, Clouds, Contours, Interference; depth, size and speed.
-- Material: None, Watercolor, Mosaic; amount, drift speed and direction.
+- Material: None, Watercolor, Mosaic, Stars; amount and drift direction.
+Watercolor and Mosaic use Drift speed;
+Stars uses its depth-dependent Star speed range.
 - Watercolor: glob size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
 - Mosaic: cell size, size variation and signed refraction.
 - Breathing: depth and speed in the Background glow controls, independent of either stage.
@@ -174,3 +176,79 @@ Bloom brightening only the colored source,
 RGB changes without added alpha,
 material/glow bypasses,
 and wide/soft pickup reaching beyond the old node quad.
+
+## Shared Stars material
+
+Stars reads the same resolved note illumination and optional pigment pickup as the displacement materials.
+Its source adapter samples one premultiplied color at each star center,
+keeps that hue,
+and spends brightness variation as coverage.
+The shared renderer composites five depths over transparent black;
+the final lattice material scales its bounded coverage to the existing glow strength/accumulation ceiling,
+then blends with the original source by Material amount.
+Scaling all premultiplied channels retains star contrast;
+a hard cap flattened the bright center of a recorded note cluster.
+Silence clears the output without running the star passes or discarding their allocations.
+
+`StarSettings` owns defaults and normalization for both panes,
+with independent values in each atmosphere's `stars` field and one shared controls widget.
+`harmonigraph-render::stars` owns the layout,
+clock reduction,
+profile sizes,
+halo allocation,
+uniform transport and bake/halo/far/near pass sequence.
+`shaders/stars.wgsl` owns the star geometry and premultiplied composition.
+The spectrogram supplies its palette/color-memory adapter;
+`lattice_stars` supplies the colored-light adapter and pane-specific resource bindings.
+Color history remains spectrogram-owned.
+
+The raw lattice light remains half resolution.
+Stars has its own full-scene-resolution output so High and Uniform keep sharp foreground cores;
+Medium keeps the same reduced foreground policy as the spectrogram.
+`GlowTarget::binding` selects the finished material image for background composition and every node/label light reader,
+so normal shadows and bloom see the same picture.
+Other materials retain their existing half-resolution output.
+
+The lattice star allocation key contains actual output,
+atlas,
+halo,
+far and near image shapes.
+Time,
+color,
+amount,
+jitter and other appearance changes reuse images while their required shapes stay unchanged.
+Star targets belong to their source texture owner,
+so changing or dropping that source also drops its bindings;
+material bypass releases the source and star targets together.
+
+### Saved-state and reference-image consequences
+
+The spectrogram's former flat `star_*` keys move under `stars`.
+Old custom star tuning therefore resets to the current shared defaults;
+other spectral controls,
+material selection,
+camera and lattice settings survive.
+There is no migration or alias.
+Lattice material defaults remain None.
+
+The shared shader extraction changes one color channel by 1/255 at one pixel in each of two export references:
+`spectrogram-short-pane` green 235 to 234 at (12,108),
+and `spectrogram-spectral-shadows-mixed` red 179 to 178 at (173,71).
+Their RGB mean differences are 0.00001017/255 and 0.00000521/255 respectively.
+Restoring the old paint ordering did not remove the changes;
+we retain the simpler shared implementation rather than a separate numerical path.
+The dedicated High and Medium Stars references and all existing lattice references remain unchanged.
+
+### Performance spot check
+
+The existing `atmosphere_costs_by_polyphony` probe on an Apple M1 Pro,
+with six MIDI notes (110 lit lattice nodes),
+a 768×768 target and 60 measured frames,
+reported total prepare/composite GPU medians of 11.13 ms for High,
+8.80 ms for Medium and 12.90 ms for Uniform.
+Watercolor and Mosaic measured 3.66 ms and 2.79 ms in the same probe;
+these are total scene timings,
+not isolated material-pass costs.
+Stars is therefore a more expensive material,
+with Medium providing the existing shared quality/performance tradeoff.
+The callback CPU medians remained 0.05 ms across the materials.

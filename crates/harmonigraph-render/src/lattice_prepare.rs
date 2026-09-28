@@ -121,14 +121,7 @@ impl CallbackTrait for LatticeCallback {
             shared_sdf.texture.as_ref(),
         );
 
-        lattice_material::prepare(
-            device,
-            queue,
-            egui_encoder,
-            &material,
-            pane,
-            &self.uniforms.material,
-        );
+        lattice_material::prepare(device, queue, egui_encoder, &material, pane, self);
 
         self.upload_frame(
             device,
@@ -817,7 +810,7 @@ impl LatticeCallback {
         // light the nodes emit, and it blooms with the rest of them.
         if let Some(glow) = offscreen.glow.as_ref().filter(|_| has_light) {
             pass.set_pipeline(&scene.glow_over);
-            pass.set_bind_group(0, &glow.bind_group, &[]);
+            pass.set_bind_group(0, glow.binding(), &[]);
             pass.draw(0..4, 0..1);
         }
 
@@ -838,7 +831,7 @@ impl LatticeCallback {
         // at all, which is the Reach bar at 0 — a transparent read is the
         // plain ground, so nothing branches (see `glow_dummy_bind_group`).
         let light =
-            offscreen.glow.as_ref().map_or(&compiled.glow_dummy_bind_group, |g| &g.bind_group);
+            offscreen.glow.as_ref().map_or(&compiled.glow_dummy_bind_group, |g| g.binding());
         // The finished atlas at group 2 of every node and marker draw, for
         // each to read its own cell. The 1x1 stand-in where this frame
         // packed none: every box is then zeros, and a caster with no cell

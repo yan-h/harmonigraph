@@ -1804,27 +1804,42 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
 #[test]
 fn star_rendering_controls_default_old_saves_and_roundtrip() {
     use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
-    let old: SpectralAtmosphere = ron::from_str("(star_halo_resolution:0.625)").unwrap();
-    assert_eq!(old.star_halo_profile, StarHaloProfile::P3);
-    assert_eq!(old.star_halo_resolution, 0.625);
-    assert_eq!(old.star_far_fill, 0.0);
+    let old: SpectralAtmosphere =
+        ron::from_str("(star_halo_resolution:0.625,pitch_softness:12.0)").unwrap();
+    assert_eq!(old.stars.star_halo_profile, StarHaloProfile::P3);
+    assert_eq!(old.stars, harmonigraph_scene::StarSettings::default());
+    assert_eq!(old.pitch_softness, 12.0);
+    assert_eq!(old.stars.star_far_fill, 0.0);
 
+    let partial: harmonigraph_scene::StarSettings = ron::from_str("(star_jitter:0.23)").unwrap();
+    assert_eq!(
+        partial,
+        harmonigraph_scene::StarSettings { star_jitter: 0.23, ..Default::default() }
+    );
     for profile in [StarHaloProfile::P3, StarHaloProfile::Medium, StarHaloProfile::Uniform] {
         let mut state = fresh();
-        state.picture.appearance.spectrum.atmosphere.star_halo_profile = profile;
-        state.picture.appearance.spectrum.atmosphere.star_halo_resolution = 0.625;
-        state.picture.appearance.spectrum.atmosphere.star_far_fill = 0.42;
+        state.picture.appearance.view.atmosphere.stars.star_jitter = 0.37;
+        state.picture.appearance.view.atmosphere.material_style =
+            harmonigraph_scene::LatticeMaterial::Stars;
+        state.picture.appearance.spectrum.atmosphere.stars.star_halo_profile = profile;
+        state.picture.appearance.spectrum.atmosphere.stars.star_halo_resolution = 0.625;
+        state.picture.appearance.spectrum.atmosphere.stars.star_far_fill = 0.42;
         let saved = state.save_persist();
         let mut editor = fresh();
         assert!(editor.load_persist(&saved));
-        assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_halo_profile, profile);
-        assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_halo_resolution, 0.625);
+        assert_eq!(editor.picture.appearance.view.atmosphere.stars.star_jitter, 0.37);
+        assert_eq!(
+            editor.picture.appearance.view.atmosphere.material_style,
+            harmonigraph_scene::LatticeMaterial::Stars
+        );
+        assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_halo_profile, profile);
+        assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_halo_resolution, 0.625);
         let offline =
             crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-        assert_eq!(offline.spectrum.atmosphere.star_halo_profile, profile);
-        assert_eq!(offline.spectrum.atmosphere.star_halo_resolution, 0.625);
-        assert_eq!(offline.spectrum.atmosphere.star_far_fill, 0.42);
-        assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_far_fill, 0.42);
+        assert_eq!(offline.spectrum.atmosphere.stars.star_halo_profile, profile);
+        assert_eq!(offline.spectrum.atmosphere.stars.star_halo_resolution, 0.625);
+        assert_eq!(offline.spectrum.atmosphere.stars.star_far_fill, 0.42);
+        assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_far_fill, 0.42);
     }
 }
 
@@ -1838,12 +1853,16 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert_eq!(partial, SpectralAtmosphere { spread: 2.0, ..Default::default() });
     let mut state = fresh();
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
+        stars: harmonigraph_scene::StarSettings {
+            star_jitter: 2.0,
+            star_far_fill: 2.0,
+            star_halo_resolution: 0.1,
+            ..Default::default()
+        },
         pitch_softness: f32::NAN,
         contours: 64.0,
         cloud_direction: 725.0,
-        star_jitter: 2.0,
-        star_far_fill: 2.0,
-        star_halo_resolution: 0.1,
+
         ..Default::default()
     };
     state.picture.appearance.camera.yaw = 1.23;
@@ -1852,11 +1871,15 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     assert!(editor.load_persist(&saved));
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     let expected = SpectralAtmosphere {
+        stars: harmonigraph_scene::StarSettings {
+            star_jitter: 1.0,
+            star_far_fill: 1.0,
+            star_halo_resolution: 0.25,
+            ..Default::default()
+        },
         contours: 20.0,
         cloud_direction: 5.0,
-        star_jitter: 1.0,
-        star_far_fill: 1.0,
-        star_halo_resolution: 0.25,
+
         ..Default::default()
     };
     assert_eq!(editor.picture.appearance.spectrum.atmosphere, expected);

@@ -381,3 +381,6 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
     }
     return visibility;
 }
+
+// Shared full-strength node-light coverage, including material output.
+const GLOW_BASE: f32 = 0.8;

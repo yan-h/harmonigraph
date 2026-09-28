@@ -88,7 +88,7 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         );
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.cloud_depth = 0.65;
-        settings.star_jitter = jitter;
+        settings.stars.star_jitter = jitter;
         if memory {
             settings.color_pickup = 0.6;
             settings.color_release = 0.6;
@@ -98,7 +98,7 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut first: Option<Vec<u8>> = None;
         for step in 0u64..5 {
             cb.pass_nr = step;
-            cb.atmosphere.as_mut().unwrap().settings.star_far_fill = step as f32 / 4.0;
+            cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = step as f32 / 4.0;
             use harmonigraph_scene::StarHaloProfile::Uniform;
             let (profile, resolution) = [
                 (Uniform, 0.5),
@@ -107,8 +107,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                 (Uniform, 0.6),
                 (Uniform, 1.0),
             ][step as usize];
-            cb.atmosphere.as_mut().unwrap().settings.star_halo_profile = profile;
-            cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
+            cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile = profile;
+            cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = resolution;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
             if step == 1 {
                 cb.grid.fill(80);
@@ -124,10 +124,10 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                     vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
                 }
                 let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-                settings.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
-                settings.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
-                settings.star_size_min = harmonigraph_scene::STAR_SIZE_MIN;
-                settings.star_size_max = harmonigraph_scene::STAR_SIZE_MAX;
+                settings.stars.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
+                settings.stars.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
+                settings.stars.star_size_min = harmonigraph_scene::STAR_SIZE_MIN;
+                settings.stars.star_size_max = harmonigraph_scene::STAR_SIZE_MAX;
                 settings.cloud_depth = 1.0;
             }
             let a = {
@@ -144,7 +144,10 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             assert_eq!(target(&changing).memory_size().is_some(), memory);
             assert_eq!(
                 target(&changing).halo_layout(),
-                Some(atmosphere::star_halo_layout([161, 121], cb.atmosphere.unwrap().settings)),
+                Some(atmosphere::star_halo_layout(
+                    [161, 121],
+                    cb.atmosphere.unwrap().settings.stars
+                )),
             );
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
             // Bound both half-float rounding and aggregate error so a
@@ -188,13 +191,13 @@ fn star_split_activates_at_the_real_size_threshold() {
     let Some((device, queue)) = headless_device() else { return };
     let _override = SplitOverride::set(None);
     let mut below = star_fixture([2560, 1439], egui::Pos2::ZERO);
-    below.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+    below.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile =
         harmonigraph_scene::StarHaloProfile::Uniform;
     let atmosphere = below.atmosphere.unwrap();
     assert_eq!(atmosphere::tone_size([2560, 1439], 1.0, atmosphere, 1.0), None);
     assert_eq!(atmosphere::tone_size([2560, 1440], 1.0, atmosphere, 1.0), Some([2560, 1440]));
     let mut cb = star_fixture([2560, 1441], egui::Pos2::ZERO);
-    cb.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile =
         harmonigraph_scene::StarHaloProfile::Uniform;
     cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut native = CallbackResources::default();
@@ -243,7 +246,7 @@ pub(super) fn reference_source() -> Option<String> {
     let source = SPECTROGRAM_SRC.to_owned();
     if mode == 4 {
         let start = source.find("fn star_far_gather(").unwrap();
-        let end = source[start..].find("\n// The scheme's floor").unwrap() + start;
+        let end = source[start..].find("\nfn star_layers(").unwrap() + start;
         return Some(format!(
             "{}{}{}",
             &source[..start],
@@ -326,10 +329,10 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
     for jitter in [0.0, 0.5, 1.0] {
         for fringe in [0.0, harmonigraph_scene::STAR_FRINGE_MAX] {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-            settings.star_jitter = jitter;
-            settings.star_fringe = fringe;
-            settings.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
-            settings.star_halo_resolution = 1.0;
+            settings.stars.star_jitter = jitter;
+            settings.stars.star_fringe = fringe;
+            settings.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
+            settings.stars.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
             for reference in [0, 1, 2] {
                 // Native halo sampling isolates the split's algebra from the
@@ -339,7 +342,10 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
                 frames.push(frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0));
                 assert_eq!(
                     target(&resources).halo_layout(),
-                    Some(atmosphere::star_halo_layout([385, 217], cb.atmosphere.unwrap().settings))
+                    Some(atmosphere::star_halo_layout(
+                        [385, 217],
+                        cb.atmosphere.unwrap().settings.stars
+                    ))
                 );
             }
             let differences: Vec<_> =
@@ -369,10 +375,10 @@ fn uniform_halos_preserve_the_original_array_lookup() {
     let Some((device, queue)) = headless_device() else { return };
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
-    cb.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+    cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile =
         harmonigraph_scene::StarHaloProfile::Uniform;
     for resolution in [0.25, 0.5, 1.0] {
-        cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = resolution;
         let mut frames = Vec::new();
         for mode in [0, 3] {
             let _halo = HaloOverride::set(mode);
@@ -404,16 +410,16 @@ fn halo_profile_transitions_preserve_color_history() {
         cb.grid.fill(level);
         let atmosphere = cb.atmosphere.as_mut().unwrap();
         atmosphere.now = 3.25 + step as f64 * 0.04;
-        atmosphere.settings.star_halo_profile = Uniform;
-        atmosphere.settings.star_halo_resolution = 1.0;
+        atmosphere.settings.stars.star_halo_profile = Uniform;
+        atmosphere.settings.stars.star_halo_resolution = 1.0;
         let reference = frame_at_ppp(&device, &queue, &mut fixed, &cb, 1.25);
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        settings.star_halo_profile = profile;
-        settings.star_halo_resolution = resolution;
+        settings.stars.star_halo_profile = profile;
+        settings.stars.star_halo_resolution = resolution;
         final_frame = frame_at_ppp(&device, &queue, &mut changing, &cb, 1.25);
         assert_eq!(
             target(&changing).halo_layout(),
-            Some(atmosphere::star_halo_layout([161, 121], cb.atmosphere.unwrap().settings))
+            Some(atmosphere::star_halo_layout([161, 121], cb.atmosphere.unwrap().settings.stars))
         );
         if step == 4 {
             assert_eq!(final_frame, reference, "halo reallocations changed retained color");
@@ -451,12 +457,12 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
                 vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
             }
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-            settings.star_jitter = jitter;
-            settings.star_halo_profile = profile;
+            settings.stars.star_jitter = jitter;
+            settings.stars.star_halo_profile = profile;
             settings.cloud_depth = 0.65;
-            settings.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
-            settings.star_far_fill = 1.0;
-            settings.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
+            settings.stars.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
+            settings.stars.star_far_fill = 1.0;
+            settings.stars.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
             if memory {
                 settings.color_pickup = 0.6;
                 settings.color_release = 0.6;
@@ -486,11 +492,11 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
                 let settings = cb.atmosphere.unwrap().settings;
                 assert_eq!(
                     target(&partial).tone_size(),
-                    Some(atmosphere::star_far_size([161, 121], settings))
+                    Some(atmosphere::star_far_size([161, 121], settings.stars))
                 );
                 assert_eq!(
                     target(&partial).near_size(),
-                    atmosphere::star_near_size([161, 121], settings)
+                    atmosphere::star_near_size([161, 121], settings.stars)
                 );
                 if step == 0 {
                     let passes = target(&partial).encoded_passes.load(Ordering::Relaxed);

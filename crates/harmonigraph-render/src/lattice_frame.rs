@@ -418,6 +418,8 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
+            material_stars: atmosphere.stars,
+            material_direction: atmosphere.material_direction,
             glow_blend: scene.glow_blend,
             glyphs,
             casters,

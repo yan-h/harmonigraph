@@ -52,7 +52,7 @@ fn read_glow(shooter: &Shooter) -> Vec<u8> {
     let Some(glow) = &offscreen.glow else {
         return vec![0; (shooter.size[0] * shooter.size[1] * 4) as usize];
     };
-    read_glow_binding(shooter, &glow.bind_group)
+    read_glow_binding(shooter, glow.binding())
 }
 
 fn read_glow_binding(shooter: &Shooter, binding: &wgpu::BindGroup) -> Vec<u8> {
@@ -203,7 +203,9 @@ fn material_shadow_pickup_darkens_light_without_adding_coverage() {
     scene.atmosphere.material_settings.wash_refract = 1.0;
     for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
         scene.shadow = one_shadow(0.8, 0.7, kernel);
-        for material in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
+        for material in
+            [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic, LatticeMaterial::Stars]
+        {
             scene.atmosphere.material_style = material;
             scene.atmosphere.material_shadow_pickup = 0.0;
             let before = glow(&mut shooter, &scene);
@@ -662,7 +664,7 @@ fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles(
 }
 
 #[test]
-fn textures_feed_both_materials_before_displacement() {
+fn textures_feed_materials_before_sampling() {
     use harmonigraph_scene::{LatticeMaterial, LatticeTexture};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let changed = |a: &[u8], b: &[u8]| {
@@ -673,7 +675,9 @@ fn textures_feed_both_materials_before_displacement() {
     };
     for texture in [LatticeTexture::Clouds, LatticeTexture::Contours, LatticeTexture::Interference]
     {
-        for material in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
+        for material in
+            [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic, LatticeMaterial::Stars]
+        {
             let mut scene = scene(&[1.0, 1.0], 0.75, true);
             scene.atmosphere.breath_amount = 0.0;
             scene.atmosphere.texture = texture;
@@ -1193,6 +1197,99 @@ fn dense_faint_overlap_order_precision() {
             scene.nodes.reverse();
             let largest = forward.iter().zip(&backward).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
             eprintln!("precision count={count} accumulation={accumulation}: maximum order difference {largest}/255");
+        }
+    }
+}
+
+#[test]
+fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() {
+    use harmonigraph_scene::{LatticeMaterial, LatticeTexture, StarHaloProfile};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.atmosphere.texture = LatticeTexture::None;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_style = LatticeMaterial::Stars;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
+    scene.atmosphere.material_amount = 0.0;
+    let raw = glow(&mut shooter, &scene);
+    let hue = raw.chunks_exact(4).max_by_key(|p| p[3]).unwrap();
+    scene.atmosphere.material_amount = 1.0;
+    for profile in [StarHaloProfile::P3, StarHaloProfile::Medium, StarHaloProfile::Uniform] {
+        scene.atmosphere.stars.star_halo_profile = profile;
+        let painted = glow(&mut shooter, &scene);
+        assert!(
+            painted.chunks_exact(4).filter(|p| p[3] > 20).count() > 500,
+            "fixture lights the starfield: {profile:?}"
+        );
+        assert!(
+            raw.iter().zip(&painted).filter(|(a, b)| a.abs_diff(**b) > 3).count() > 500,
+            "Stars must change the note field: {profile:?}"
+        );
+        for p in painted.chunks_exact(4) {
+            assert!(
+                p[..3].iter().all(|c| *c <= p[3].saturating_add(1)),
+                "premultiplied {profile:?}: {p:?}"
+            );
+            assert!(p.iter().all(|c| *c <= 154), "fixed glow ceiling {profile:?}: {p:?}");
+            if p[3] > 30 {
+                for channel in 0..3 {
+                    let expected = f32::from(hue[channel]) / f32::from(hue[3]) * f32::from(p[3]);
+                    assert!(
+                        (f32::from(p[channel]) - expected).abs() <= 3.0,
+                        "source hue {profile:?}: {p:?}, source {hue:?}"
+                    );
+                }
+            }
+        }
+        scene.glow_timing.as_mut().unwrap().now = 2.0;
+        shooter.shot_again(&scene);
+        assert_ne!(painted, read_glow(&shooter), "star motion must advance: {profile:?}");
+        for node in &mut scene.nodes {
+            node.glow.level = 0.0;
+        }
+        shooter.shot_again(&scene);
+        assert!(
+            read_glow(&shooter).iter().all(|b| *b == 0),
+            "silent stars retain no independent light: {profile:?}"
+        );
+        scene.nodes[0].glow.level = 1.0;
+        scene.glow_timing.as_mut().unwrap().now = 1.0;
+    }
+}
+
+#[test]
+fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
+    use harmonigraph_scene::{LatticeMaterial, StarHaloProfile};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.breath_amount = 0.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 3.0, attack: 0.0, release: 0.0 });
+    for (style, amount, profile, scale) in [
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::Medium, 1.0),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::Uniform, 1.0),
+        (LatticeMaterial::Mosaic, 1.0, StarHaloProfile::Uniform, 1.0),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
+        (LatticeMaterial::Stars, 0.0, StarHaloProfile::P3, 1.0),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::Medium, 1.5),
+    ] {
+        scene.atmosphere.material_style = style;
+        scene.atmosphere.material_amount = amount;
+        scene.atmosphere.stars.star_halo_profile = profile;
+        scene.render_scale = scale;
+        shooter.shot_again(&scene);
+        let carried = read_glow(&shooter);
+        assert_eq!(
+            carried,
+            glow(&mut shooter, &scene),
+            "{style:?}, {amount}, {profile:?}, {scale}"
+        );
+        if amount == 0.0 {
+            scene.atmosphere.material_style = LatticeMaterial::None;
+            assert_eq!(carried, glow(&mut shooter, &scene), "amount zero is exact bypass");
         }
     }
 }

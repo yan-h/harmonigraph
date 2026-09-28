@@ -11,6 +11,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[derive(Clone)]
 pub(super) struct Pipelines {
+    stars: lattice_stars::Pipelines,
     bake: wgpu::RenderPipeline,
     bake_layout: wgpu::BindGroupLayout,
     bake_mosaic: wgpu::RenderPipeline,
@@ -23,7 +24,7 @@ pub(super) struct Pipelines {
 }
 
 impl Pipelines {
-    pub(super) fn new(device: &wgpu::Device) -> Self {
+    pub(super) fn new(device: &wgpu::Device, filter_layout: &wgpu::BindGroupLayout) -> Self {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -120,6 +121,7 @@ impl Pipelines {
                 })
             };
         Self {
+            stars: lattice_stars::Pipelines::new(device, filter_layout),
             bake: pipeline("fs_tile", &[Some(&bake_layout)], &[FORMAT, FORMAT]),
             bake_mosaic: pipeline("fs_mosaic_tile", &[Some(&bake_layout)], &[FORMAT]),
             bake_layout,
@@ -259,6 +261,9 @@ impl Tile {
 }
 
 pub(super) struct Source {
+    // Targets bind this source view and therefore share its lifetime. Replacing
+    // the source always drops star bindings, even when the dimensions agree.
+    stars: Option<lattice_stars::Targets>,
     pub(super) view: wgpu::TextureView,
     buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -287,15 +292,24 @@ impl Source {
                 },
             ],
         });
-        Self { view, buffer, bind_group }
+        Self { view, buffer, bind_group, stars: None }
+    }
+    pub(super) fn star_output(&self) -> Option<&wgpu::BindGroup> {
+        self.stars.as_ref().map(|stars| &stars.output_group)
     }
     pub(super) fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
-        tile: &Tile,
+        tile: Option<&Tile>,
         output: &wgpu::TextureView,
+        has_light: bool,
     ) {
+        if let Some(stars) = &self.stars {
+            stars.draw(encoder, &pipelines.stars, has_light);
+            return;
+        }
+        let tile = tile.expect("displaced material tile");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_material_material"),
             color_attachments: &[attachment(output)],
@@ -318,8 +332,9 @@ pub(super) fn prepare(
     encoder: &mut wgpu::CommandEncoder,
     pipelines: &Pipelines,
     pane: &mut PaneBuffers,
-    settings: &MaterialParams,
+    callback: &LatticeCallback,
 ) {
+    let settings = &callback.uniforms.material;
     let Some(offscreen) = pane.offscreen.as_mut() else { return };
     let Some(glow) = offscreen.glow.as_mut() else {
         pane.material_tile = None;
@@ -327,12 +342,35 @@ pub(super) fn prepare(
     };
     let displaced = settings.style == harmonigraph_scene::LatticeMaterial::Watercolor as u32
         || settings.style == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
-    if !displaced || settings.amount <= 0.0 {
+    let starfield = settings.style == harmonigraph_scene::LatticeMaterial::Stars as u32;
+    if (!displaced && !starfield) || settings.amount <= 0.0 {
         glow.material_source = None;
         pane.material_tile = None;
         return;
     }
     let size = offscreen.size.map(|n| n.div_ceil(2).max(1));
+    if starfield {
+        pane.material_tile = None;
+        let source =
+            glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
+        lattice_stars::Targets::prepare(
+            &mut source.stars,
+            device,
+            queue,
+            &pipelines.stars,
+            &source.view,
+            offscreen.size,
+            lattice_stars::Frame {
+                settings: callback.material_stars,
+                direction: callback.material_direction,
+                now: callback.glow_timing.map_or(0.0, |clock| clock.now),
+                amount: settings.amount,
+                strength: callback.uniforms.glow.strength,
+                accumulation: callback.uniforms.glow.accumulation,
+            },
+        );
+        return;
+    }
     // Match the spectrogram's pane-height calibration. Quantized density keeps
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
     let watercolor = settings.style == harmonigraph_scene::LatticeMaterial::Watercolor as u32;
@@ -350,6 +388,7 @@ pub(super) fn prepare(
             Some(Tile::new(device, encoder, pipelines, texels, settings.style, geometry));
     }
     let source = glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
+    source.stars = None;
     let values = [
         size[0] as f32,
         size[1] as f32,
