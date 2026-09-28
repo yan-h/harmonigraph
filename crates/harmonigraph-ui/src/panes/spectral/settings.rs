@@ -565,7 +565,7 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
         .percent()
         .show(ui)
         .on_hover_text(
-            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Halos keep their full reach at every setting. Brightness and size variation are controlled by Randomness.",
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Increasing Jitter also shortens distant halos, except in Uniform rendering. Brightness and size variation are controlled by Randomness.",
         );
     use harmonigraph_scene::StarHaloProfile;
     crate::widgets::preset_row(
