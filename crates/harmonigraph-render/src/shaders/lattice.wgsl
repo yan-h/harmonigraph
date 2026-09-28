@@ -165,7 +165,7 @@ const GLYPH_FADE_LIMIT: f32 = 1.3;
 // Strength bar reads: at 1 a node's middle is unmistakably lit and its halo
 // plainly visible, at 2 — the bar's top — the middle saturates and the halo
 // doubles.
-const GLOW_BASE: f32 = 0.8;
+
 // How many σ out a shadow is drawn, which is how far the packer pads a cell
 // (`shadow::REACH_SIGMAS`) and so how far past its ink a caster's quad has to
 // reach. The two have to agree or a quad stops inside a cell that still holds

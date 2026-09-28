@@ -31,6 +31,8 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 const SPECTROGRAM_SRC: &str = concat!(
     include_str!("shaders/atmosphere_geometry.wgsl"),
     "\n",
+    include_str!("shaders/stars.wgsl"),
+    "\n",
     include_str!("shaders/spectrogram.wgsl"),
 );
 
@@ -781,7 +783,7 @@ impl CallbackTrait for SpectrogramCallback {
                         // work while the intermediate retains the full pane size.
                         .map(|size| {
                             if stars {
-                                atmosphere::star_far_size(pixels, settings.settings)
+                                atmosphere::star_far_size(pixels, settings.settings.stars)
                             } else {
                                 size
                             }
@@ -789,7 +791,7 @@ impl CallbackTrait for SpectrogramCallback {
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
                 let near_size =
-                    stars.and_then(|_| atmosphere::star_near_size(pixels, settings.settings));
+                    stars.and_then(|_| atmosphere::star_near_size(pixels, settings.settings.stars));
                 let near_coverage = near_size.map(|size| {
                     atmosphere::star_far_scissor(
                         star_coverage.expect("Stars coverage"),
@@ -797,7 +799,8 @@ impl CallbackTrait for SpectrogramCallback {
                         size,
                     )
                 });
-                let halos = stars.map(|_| atmosphere::star_halo_layout(pixels, settings.settings));
+                let halos =
+                    stars.map(|_| atmosphere::star_halo_layout(pixels, settings.settings.stars));
                 let star_size = stars.map(|layout| {
                     atmosphere::star_atlas_size(
                         layout.size(),
@@ -983,43 +986,18 @@ impl CallbackTrait for SpectrogramCallback {
                         }
                     }
                     target.remember(egui_encoder, cloud);
-                    // Every star on screen this frame, after the material
-                    // pass because each reads the finished light under it.
-                    if let Some((view, group)) = target.star_pass() {
-                        #[cfg(test)]
-                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                        let mut pass =
-                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("spectral_star_bake"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                ..Default::default()
-                            });
-                        pass.set_pipeline(&cloud.stars);
-                        pass.set_bind_group(0, &target.source_group, &[]);
-                        pass.set_bind_group(1, group, &[]);
-                        pass.draw(0..3, 0..1);
-                    }
-                    // Keep every slice's halo separate until its native core
-                    // is combined with it. Fill beyond partial regions so
-                    // bilinear reads at their edges never meet cleared texels.
-                    target.draw_halos(egui_encoder, cloud);
-                    // Precompose scalar cloud tone at reduced resolution, or
-                    // the far Stars layers at the profile's resolution. Stars
-                    // read the finished atlas above, including retained color.
-                    let stars =
-                        settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
-                    if let Some(((tone_view, _), tone_group)) = target
+                    if settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
+                        target.draw_stars(
+                            egui_encoder,
+                            cloud,
+                            pixels,
+                            star_coverage.expect("Stars coverage"),
+                            near_coverage,
+                        );
+                    } else if let Some(((tone_view, _), tone_group)) = target
                         .tone
                         .as_ref()
-                        .filter(|_| stars || target.memory_size().is_none())
+                        .filter(|_| target.memory_size().is_none())
                         .zip(target.tone_group.as_ref())
                     {
                         #[cfg(test)]
@@ -1038,52 +1016,11 @@ impl CallbackTrait for SpectrogramCallback {
                                 })],
                                 ..Default::default()
                             });
-                        pass.set_pipeline(if stars { &cloud.star_far } else { &cloud.tone });
+                        pass.set_pipeline(&cloud.tone);
                         pass.set_bind_group(0, &target.source_group, &[]);
                         pass.set_bind_group(1, tone_group, &[]);
-                        // Cover the whole intermediate; final painting clips
-                        // it to the region. Stars use a full-target triangle.
-                        if stars {
-                            let [x, y, width, height] = atmosphere::star_far_scissor(
-                                // Medium's near pass needs the far taps beyond
-                                // its own expanded boundary, not just the final region.
-                                near_coverage
-                                    .unwrap_or_else(|| star_coverage.expect("Stars coverage")),
-                                near_size.unwrap_or(pixels),
-                                target.tone_size().expect("Stars far target"),
-                            );
-                            pass.set_scissor_rect(x, y, width, height);
-                            pass.draw(0..3, 0..1);
-                        } else {
-                            pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
-                            pass.draw(0..6, 0..1);
-                        }
-                    }
-                    if let Some(((view, _), group)) =
-                        target.near.as_ref().zip(target.near_group.as_ref())
-                    {
-                        #[cfg(test)]
-                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                        let mut pass =
-                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("spectral_star_near"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                ..Default::default()
-                            });
-                        pass.set_pipeline(&cloud.star_near);
-                        pass.set_bind_group(0, &target.source_group, &[]);
-                        pass.set_bind_group(1, group, &[]);
-                        let [x, y, width, height] = near_coverage.expect("Medium coverage");
-                        pass.set_scissor_rect(x, y, width, height);
-                        pass.draw(0..3, 0..1);
+                        pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
+                        pass.draw(0..6, 0..1);
                     }
                 }
                 pane.cloud_ready = true;
@@ -1818,7 +1755,7 @@ mod tests {
             let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
             let targets = targets.cloud.as_ref().unwrap();
             assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
-            cb.atmosphere.as_mut().unwrap().settings.star_far_fill = 1.0;
+            cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = 1.0;
             cb.grid.fill(0);
             let silent = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
@@ -1860,8 +1797,8 @@ mod tests {
         s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
         s.cloud_depth = 1.0;
         (s.pitch_softness, s.time_softness) = (0.0, 0.0);
-        (s.star_speed_min, s.star_speed_max, s.cloud_direction) = (SPEED, SPEED, 0.0);
-        s.star_lifetime = 20.0;
+        (s.stars.star_speed_min, s.stars.star_speed_max, s.cloud_direction) = (SPEED, SPEED, 0.0);
+        s.stars.star_lifetime = 20.0;
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().now +=

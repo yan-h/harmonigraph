@@ -400,7 +400,7 @@ fn medium_stars_draw_the_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-        a.spectrum.atmosphere.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
+        a.spectrum.atmosphere.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
     });
     check_take("spectrogram-starfield-medium", shot, take);
 }

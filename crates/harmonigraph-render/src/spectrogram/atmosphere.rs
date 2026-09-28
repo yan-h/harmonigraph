@@ -7,6 +7,7 @@
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 
 use super::{create_spectrogram_pipeline, SpectrogramUniforms, SpectrogramVertex};
+pub(super) use crate::stars::*;
 use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
@@ -71,297 +72,13 @@ fn cloud_drift(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f
         .map(|v| v as f32)
 }
 
-/// How many depth slices the starfield walks, from the farthest (0) to the
-/// nearest. The shader's `STAR_SLICES`, held to this by
-/// `the_star_ring_holds_every_star_that_reaches_a_pixel`.
-const STAR_SLICES: usize = 5;
-/// The period the star hash wraps at, in cells of each slice, and the modulus
-/// each slice's drift is reduced by here in f64 before it is narrowed to f32.
-///
-/// Without the reduction a session left running for hours would carry a drift
-/// of millions of star pixels into an f32, and the stars would start stepping
-/// by fractions of a pixel. It is wider than any pane is in the finest cells,
-/// so the repeat never shows: those are `STAR_SIZE_MIN / sqrt(STAR_DENSITY_MAX
-/// / 2)`, 0.224 star pixels, which puts a 16:9 pane about 4300 cells wide (the
-/// 4096 this was once repeated inside it) and a 16:1 pane about 38,600.
-///
-/// The price is the offset's own precision: an f32 near 65536 resolves a 256th
-/// of a cell, which is 0.03 star pixels in the fresh nearest cells and half a
-/// star pixel only in the biggest cell `Star size` and `Star density` allow.
-const STAR_HASH_PERIOD: f64 = 65536.0;
-/// The period the life clock is reduced by, in lives: a power of two, so the
-/// shader's mask on the life index wraps with it and a star's life runs
-/// straight across the wrap. The shader's own constant, checked against it.
-const STAR_LIFE_PERIOD: f64 = 4096.0;
-/// How fast a depth at `Star speed` 1 travels, in star pixels (a
-/// 540th of the pane's height) per second: the prototype's `(-60, -14)` px/s
-/// over its 540-pixel pane, which is about a ninth of the pane's height a
-/// second, while the music scrolled at 192 px/s under it.
-///
-/// Its OWN speed, not the other textures' `UNITS_PER_SECOND` times something:
-/// those cross a pane in minutes, and at that pace a starfield reads as a still
-/// sprite over the sound — which is exactly what Yan rejected in the first
-/// motion video.
-pub(super) fn star_px_per_second() -> f64 {
-    (60.0f64 * 60.0 + 14.0 * 14.0).sqrt()
-}
-
-uniform_group! {
-/// One depth slice of the starfield, in the shader's `StarSlice` order: read by
-/// OFFSET, so a reordering here swaps values silently.
-///
-/// Worked out here rather than in the shader because it is a function of the
-/// dials alone, per slice, and because the drift has to be reduced in f64. The
-/// formulas are the prototype's `drift.slice_params`, with `d` running 0 (far)
-/// to 1 (near); every length is in STAR PIXELS, a 540th of the pane's height,
-/// which was the prototype's pane.
-#[derive(Debug, Default, PartialEq)]
-struct StarSlice {
-    /// This slice's drift, in its own cells, reduced modulo
-    /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
-    offset: Float2,
-    /// The cell one star is hashed into: `Star size`'s low end at the far end
-    /// over the square root of half the density, times the ratio of its ends
-    /// raised to `d^Size curve` — at the fresh 2 to 32 and 2, 32 at the near
-    /// end and most of the depth fine dust.
-    cell: f32,
-    /// The core's base sigma, before the per-star size draw.
-    sigma: f32,
-    /// The ceiling on a core, before defocus: 1.8 star pixels or a third of a
-    /// cell. The cell half is what keeps the dust pinpoint — dropping it made
-    /// the prototype's field foamy.
-    cap: f32,
-    /// How much the core is widened after the cap, equally at every depth.
-    defocus: f32,
-    /// The same-colour fringe's coverage at the star's centre, falling off as
-    /// `exp(-d / 2.5 sigma)`. Uniform and the nearest two layers fade to zero
-    /// at 1.2 cells; the optimized far-three response ends at
-    /// `1.0 - 0.3 * star_jitter` cells.
-    fringe: f32,
-    /// Where this slice sits in the star atlas: the texel its first cell
-    /// takes, counted along the rows, the cell that first one is, and how
-    /// many cells it holds across and down. See [`StarLayout`].
-    base: i32,
-    origin: Int2,
-    grid: Int2,
-}
-}
-
-/// The slice's depth, 0 for the farthest and 1 for the nearest.
-fn star_depth(k: usize) -> f32 {
-    k as f32 / (STAR_SLICES - 1) as f32
-}
-
-/// The shader's `STAR_PANE`: star pixels across the pane's height.
-const STAR_PANE: f32 = 540.0;
-/// The star atlas's texel, one cell's star as the shader's `star_bake` packs it.
-const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
-const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// Below this area the extra pass does not consistently pay for itself.
-/// Apply it to drawn device pixels, independent of display scale and star count.
-const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
-/// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
-/// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
-/// million; only the finest `Star size` at a high `Star density`, or a
-/// still wider pane, asks for more (see [`star_layout`]).
-const STAR_ATLAS_TEXELS: u64 = 1 << 22;
-/// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
-/// cell's index splits into a texel with a mask and a shift.
-const STAR_ATLAS_WIDTH: u32 = 2048;
-/// Cells a slice's grid holds past the ones the walk can reach from the pane
-/// on each side. On correctly rounded arithmetic it is not needed: the CPU
-/// takes the pane's leading edge exactly in f64 from the same f32 inputs, and
-/// the shader's rounded f32 can only floor at or above that. It is for the GPU,
-/// whose `sp / cell` is not correctly rounded and which no CPU replay
-/// reproduces — see `the_star_atlas_holds_every_cell_the_walk_reads`.
-const STAR_GRID_MARGIN: u32 = 1;
-/// The atlas is allocated in whole multiples of this many rows, so a drag of a
-/// dial that sizes cells reallocates at steps rather than every frame.
-const STAR_ATLAS_STEP: u32 = 64;
-
-/// Each slice's cell as the dials ask for it, in star pixels: `Star size`'s
-/// low end at the far end over the square root of half the density, times the
-/// ratio of its ends raised to `d^Size curve`.
-fn star_cells(settings: harmonigraph_scene::SpectralAtmosphere) -> [f32; STAR_SLICES] {
-    let packing = (settings.star_density / 2.0).sqrt();
-    let (small, big) = (settings.star_size_min, settings.star_size_max);
-    std::array::from_fn(|k| {
-        small * (big / small).powf(star_depth(k).powf(settings.star_size_curve)) / packing
-    })
-}
-
-/// Where every slice's cells sit in the star atlas the shader's
-/// `fs_star_bake` fills each frame: a texel a cell, each slice's grid — the
-/// pane's cells and a margin — laid row after row along the atlas's rows, one
-/// slice straight after the other.
-///
-/// A function of the dials and the pane's SHAPE alone — a pane has the same
-/// number of cells at any resolution, because a star pixel is a fraction of
-/// its height — so an export draws the same stars at every size.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct StarLayout {
-    /// Each slice's cell in star pixels: the dials' own, unless the atlas
-    /// could not hold the finest of them.
-    cells: [f32; STAR_SLICES],
-    /// Cells across and down in each slice, and the atlas texel its first
-    /// cell is, counted along the rows.
-    grids: [[u32; 2]; STAR_SLICES],
-    bases: [u32; STAR_SLICES],
-    /// The pane in star pixels, across and down.
-    pane: [f32; 2],
-    /// The texels all of it takes.
-    texels: u64,
-}
-
-impl StarLayout {
-    fn at(cells: [f32; STAR_SLICES], floor: f32, aspect: f32) -> Self {
-        let cells = cells.map(|cell| cell.max(floor));
-        let pane = [STAR_PANE * aspect, STAR_PANE];
-        // Retain the padded atlas bounds needed by the halo
-        // pass's 3x3 walk around each pixel's nominal cell.
-        let grids = cells.map(|cell| {
-            pane.map(|span| ((span / cell).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN))
-        });
-        // Each slice's cells row after row, straight after the last slice's,
-        // so no slice pays for another's width.
-        let mut bases = [0; STAR_SLICES];
-        let mut texels = 0u64;
-        for (base, grid) in bases.iter_mut().zip(&grids) {
-            *base = texels.min(u64::from(u32::MAX)) as u32;
-            texels += u64::from(grid[0]) * u64::from(grid[1]);
-        }
-        Self { cells, grids, bases, pane, texels }
-    }
-
-    fn fits(&self) -> bool {
-        self.texels <= STAR_ATLAS_TEXELS
-    }
-
-    /// The atlas this needs: [`STAR_ATLAS_WIDTH`] across and as many rows as
-    /// the cells fill.
-    pub fn size(&self) -> [u32; 2] {
-        [STAR_ATLAS_WIDTH, self.texels.div_ceil(u64::from(STAR_ATLAS_WIDTH)).max(1) as u32]
-    }
-}
-
-/// The starfield's layout for a pane `aspect` wide per unit of height.
-///
-/// Where the dials' cells would take more atlas than [`STAR_ATLAS_TEXELS`] —
-/// the finest `Star size` at a high `Star density`, where a far cell is a
-/// fraction of a pixel on any real pane — the finest cells are raised to the
-/// smallest floor that fits, so those slices hold fewer, sparser stars and
-/// every other slice is untouched.
-pub(super) fn star_layout(
-    settings: harmonigraph_scene::SpectralAtmosphere,
-    aspect: f32,
-) -> StarLayout {
-    let wanted = star_cells(settings);
-    let whole = StarLayout::at(wanted, 0.0, aspect);
-    if whole.fits() {
-        return whole;
-    }
-    let mut high = wanted[0].max(1e-3);
-    while !StarLayout::at(wanted, high, aspect).fits() {
-        high *= 2.0;
-    }
-    let mut low = 0.0;
-    for _ in 0..24 {
-        let mid = (low + high) / 2.0;
-        if StarLayout::at(wanted, mid, aspect).fits() {
-            high = mid;
-        } else {
-            low = mid;
-        }
-    }
-    StarLayout::at(wanted, high, aspect)
-}
-
 /// The starfield's layout for a pane of `pixels`, or `None` where no starfield
 /// is drawn and no atlas is allocated.
 pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Option<StarLayout> {
     let settings = atmosphere.settings.sanitized();
     let drawn =
         settings.effects().cloud && settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
-    drawn.then(|| star_layout(settings, pixels[0] as f32 / pixels[1] as f32))
-}
-
-/// The atlas to allocate for `needed` texels, keeping the one `held` while it
-/// still holds them and has not more than twice the rows, so a dial drag steps
-/// through a handful of sizes rather than one per frame.
-pub(super) fn star_atlas_size(needed: [u32; 2], held: Option<[u32; 2]>) -> [u32; 2] {
-    let rows = needed[1].next_multiple_of(STAR_ATLAS_STEP);
-    held.filter(|held| held[0] == needed[0] && needed[1] <= held[1] && held[1] <= rows * 2)
-        .unwrap_or([needed[0], rows])
-}
-
-/// The life clock every slice shares: seconds over `Star lifetime`, reduced
-/// modulo [`STAR_LIFE_PERIOD`] in f64. A cell's lives start at this plus its
-/// hashed stagger, so it moves with nothing but the clock and that one dial.
-fn star_life(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> f32 {
-    (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
-}
-
-/// A slice's speed, as a multiple of [`star_px_per_second`]:
-/// `min + (max - min) d^curve` over `Star speed`'s two ends.
-fn star_speed(settings: harmonigraph_scene::SpectralAtmosphere, k: usize) -> f32 {
-    let (far, near) = (settings.star_speed_min, settings.star_speed_max);
-    far + (near - far) * star_depth(k).powf(settings.star_speed_curve)
-}
-
-/// Every slice's numbers for this frame. Each depth moves as one sheet at its
-/// own speed.
-fn star_slices(
-    settings: harmonigraph_scene::SpectralAtmosphere,
-    now: f64,
-    layout: &StarLayout,
-) -> [StarSlice; STAR_SLICES] {
-    // Star pixels travelled at a speed of one.
-    let travel = now * star_px_per_second();
-    let (sin, cos) = f64::from(settings.cloud_direction).to_radians().sin_cos();
-    let small = settings.star_size_min;
-    let big = settings.star_size_max;
-    std::array::from_fn(|k| {
-        let d = star_depth(k);
-        let along = d.powf(settings.star_size_curve);
-        let cell = layout.cells[k];
-        // The core and its cap grow with this depth's spacing over the fresh
-        // 2-to-32 one at the same depth, so a bigger `Star size` is bigger
-        // stars and not only sparser ones, and the fresh ends are 1 here.
-        let scale = small / 2.0 * (big / small / 16.0).powf(along);
-        let sigma = (0.5 + 0.8 * d) * scale;
-        let cap = (0.33 * cell).min(1.8 * scale);
-        let defocus = 1.0 + settings.star_defocus;
-        let speed = f64::from(star_speed(settings, k));
-        let shift = |axis: f64| {
-            (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
-        };
-        let offset = [shift(cos), shift(sin)];
-        let grid = layout.grids[k];
-        // The cell a pixel at the pane's top left edge is in, as the shader
-        // works it out, with the original conservative neighbor and margin.
-        let origin: [i32; 2] =
-            std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
-        StarSlice {
-            offset: Float2(offset),
-            cell,
-            sigma,
-            cap,
-            defocus,
-            fringe: settings.star_fringe,
-            base: layout.bases[k] as i32,
-            origin: Int2(origin),
-            grid: Int2(grid.map(|side| side as i32)),
-        }
-    })
-}
-
-/// The cell at the start of a slice's grid on one axis: the one a pixel at
-/// the pane's leading edge is in, less one conservative neighbor and the
-/// margin. This bounds the three-cell halo walk and its one-cell core.
-/// `span` is the pane along the axis in star pixels.
-fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
-    let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
-    edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
+    drawn.then(|| star_layout(settings.stars, pixels[0] as f32 / pixels[1] as f32))
 }
 
 /// Bound filter work by reducing each axis only as its musical radius grows,
@@ -473,8 +190,8 @@ pub(super) fn tone_size(
         return None;
     }
     if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
-        if settings.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform {
-            return Some(star_far_size(pixels, settings));
+        if settings.stars.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform {
+            return Some(star_far_size(pixels, settings.stars));
         }
         let split = u64::from(pixels[0]) * u64::from(pixels[1]) >= STAR_SPLIT_PIXELS;
         #[cfg(test)]
@@ -564,141 +281,6 @@ impl TileKey {
 /// only see a core that stays within its own cell, so its reach is the nearest
 /// possible center's distance from the edge: half a cell less half the jitter.
 /// The wider response is reconstructed by the separate nine-cell halo pass.
-fn star_geometry(jitter: f32, far_fill: f32) -> Float4 {
-    let width = 0.6 * f64::from(jitter);
-    Float4([width as f32, (0.5 - width / 2.0) as f32, 0.7, far_fill])
-}
-
-/// Per-depth halo sampling follows pane pixels and the sanitized resolution
-/// dial. The rounded texture shape is the whole allocation key: jitter, halo
-/// width, drift and color edits refill the same targets.
-pub(super) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
-    pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
-}
-
-/// Uniform keeps exact native texel addressing; High and Medium share the complete
-/// far-three response at 75% and 50% dimensions respectively, at every pane size.
-pub(super) fn star_far_size(
-    pixels: [u32; 2],
-    settings: harmonigraph_scene::SpectralAtmosphere,
-) -> [u32; 2] {
-    use harmonigraph_scene::StarHaloProfile;
-    match settings.star_halo_profile {
-        StarHaloProfile::Uniform => pixels,
-        StarHaloProfile::P3 => star_halo_size(pixels, 0.75),
-        StarHaloProfile::Medium => star_halo_size(pixels, 0.5),
-    }
-}
-
-/// Medium shades the foreground over the far image at 75% dimensions.
-/// Exact rounded dimensions belong to allocation identity, not the preset name.
-pub(super) fn star_near_size(
-    pixels: [u32; 2],
-    settings: harmonigraph_scene::SpectralAtmosphere,
-) -> Option<[u32; 2]> {
-    (settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::Medium)
-        .then(|| star_halo_size(pixels, 0.75))
-}
-
-/// Include every bilinear tap at the boundary of a partially covered pane.
-pub(super) fn star_far_scissor(coverage: [u32; 4], pixels: [u32; 2], target: [u32; 2]) -> [u32; 4] {
-    if pixels == target {
-        return coverage;
-    }
-    let start: [u32; 2] = std::array::from_fn(|axis| {
-        ((f64::from(coverage[axis]) * f64::from(target[axis]) / f64::from(pixels[axis])).floor()
-            as u32)
-            .saturating_sub(1)
-    });
-    let end: [u32; 2] = std::array::from_fn(|axis| {
-        ((f64::from(coverage[axis] + coverage[axis + 2]) * f64::from(target[axis])
-            / f64::from(pixels[axis]))
-        .ceil() as u32)
-            .saturating_add(1)
-            .min(target[axis])
-    });
-    [start[0], start[1], end[0] - start[0], end[1] - start[1]]
-}
-
-const STAR_HALO_GROUPS: usize = 3;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HaloGroup {
-    size: [u32; 2],
-    layers: u32,
-}
-
-/// Allocation identity contains only the actual images and their depth mapping.
-/// Different controls that round to this same layout reuse the same targets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct StarHaloLayout {
-    groups: [HaloGroup; STAR_HALO_GROUPS],
-    /// [group, array layer] for each far-to-near depth.
-    layers: [[u32; 2]; STAR_SLICES],
-    /// High and Medium far depths are drawn directly and own no halo images.
-    first_active_layer: usize,
-}
-
-impl StarHaloLayout {
-    fn from_sizes(sizes: [[u32; 2]; STAR_SLICES], first_active_layer: usize) -> Self {
-        let mut layout = Self {
-            groups: [HaloGroup { size: [1, 1], layers: 0 }; STAR_HALO_GROUPS],
-            layers: [[0, 0]; STAR_SLICES],
-            first_active_layer,
-        };
-        for (depth, size) in sizes.into_iter().enumerate().skip(first_active_layer) {
-            let group = layout
-                .groups
-                .iter()
-                .position(|g| g.layers > 0 && g.size == size)
-                .or_else(|| layout.groups.iter().position(|g| g.layers == 0))
-                .expect("halo profiles use at most three different target sizes");
-            layout.layers[depth] = [group as u32, layout.groups[group].layers];
-            layout.groups[group].size = size;
-            layout.groups[group].layers += 1;
-        }
-        layout
-    }
-
-    fn samples(self) -> [StarHaloSample; STAR_SLICES] {
-        self.layers.map(|[group, layer]| StarHaloSample {
-            size: Float2(self.groups[group as usize].size.map(|n| n as f32)),
-            group,
-            layer,
-        })
-    }
-}
-
-/// High and Medium need halos only for the nearest two depths. Material history
-/// keeps the same identity across profiles, independent of their sampling.
-pub(super) fn star_halo_layout(
-    pixels: [u32; 2],
-    settings: harmonigraph_scene::SpectralAtmosphere,
-) -> StarHaloLayout {
-    use harmonigraph_scene::StarHaloProfile;
-    let settings = settings.sanitized();
-    let (factors, first_active_layer) = match settings.star_halo_profile {
-        StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
-        StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
-        StarHaloProfile::Medium => ([0.0, 0.0, 0.0, 0.75, 0.45], 3),
-    };
-    StarHaloLayout::from_sizes(
-        factors.map(|factor| star_halo_size(pixels, factor)),
-        first_active_layer,
-    )
-}
-
-// One 16-byte uniform row: the renderer supplies the allocated size and
-// array address directly, without reproducing float rounding in the shader.
-uniform_group! {
-    #[derive(Debug)]
-    struct StarHaloSample {
-        size: Float2,
-        group: u32,
-        layer: u32,
-    }
-}
-
 /// The tile this frame wants, or `None` where no cloud is drawn.
 ///
 /// See [`TileKey`] for what is in it and what deliberately is not.
@@ -728,21 +310,7 @@ pub(super) fn tile_key(
         cloud_speed: _,      // does not change the baked cell walk
         cloud_direction: _,  // does not change the baked cell walk
         cloud_style,
-        star_density: _,         // no tile for Stars
-        star_jitter: _,          // no tile for Stars
-        star_halo_resolution: _, // no tile for Stars
-        star_halo_profile: _,    // no tile for Stars
-        star_randomness: _,      // no tile for Stars
-        star_size_min: _,        // no tile for Stars
-        star_size_max: _,        // no tile for Stars
-        star_size_curve: _,      // no tile for Stars
-        star_speed_min: _,       // no tile for Stars
-        star_speed_max: _,       // no tile for Stars
-        star_speed_curve: _,     // no tile for Stars
-        star_lifetime: _,        // no tile for Stars
-        star_fringe: _,          // no tile for Stars
-        star_far_fill: _,        // no tile for Stars
-        star_defocus: _,         // no tile for Stars
+        stars: _, // Stars do not use a displacement tile.
         material_settings:
             harmonigraph_scene::MaterialSettings {
                 scale_size,
@@ -1328,21 +896,24 @@ fn memory_key(
         cloud_speed,
         cloud_direction,
         cloud_style,
-        star_density,
-        star_randomness,
-        star_jitter,
-        star_size_min,
-        star_size_max,
-        star_size_curve,
-        star_speed_min: _,       // carried by absolute cell and per-cell life
-        star_speed_max: _,       // carried by absolute cell and per-cell life
-        star_speed_curve: _,     // carried by absolute cell and per-cell life
-        star_lifetime: _,        // carried by absolute cell and per-cell life
-        star_halo_resolution: _, // sampling does not change material identity
-        star_halo_profile: _,    // sampling does not change material identity
-        star_fringe: _,          // response/coverage changes do not change material identity
-        star_far_fill: _,        // composition does not change material identity
-        star_defocus: _,         // response/coverage changes do not change material identity
+        stars:
+            harmonigraph_scene::StarSettings {
+                star_density,
+                star_randomness,
+                star_jitter,
+                star_size_min,
+                star_size_max,
+                star_size_curve,
+                star_speed_min: _,   // carried by absolute cell and per-cell life
+                star_speed_max: _,   // carried by absolute cell and per-cell life
+                star_speed_curve: _, // carried by absolute cell and per-cell life
+                star_lifetime: _,    // carried by absolute cell and per-cell life
+                star_halo_resolution: _, // sampling does not change material identity
+                star_halo_profile: _, // sampling does not change material identity
+                star_fringe: _,      // response/coverage changes do not change material identity
+                star_far_fill: _,    // composition does not change material identity
+                star_defocus: _,     // response/coverage changes do not change material identity
+            },
         material_settings:
             harmonigraph_scene::MaterialSettings {
                 scale_size,
@@ -1406,59 +977,6 @@ fn memory_key(
         ]),
     }
     values.into_iter().map(f32::to_bits).collect()
-}
-
-/// One premultiplied halo image per depth, sampled together only after each
-/// slice's native core has been added. A flattened RGB image would lose the
-/// coverage normalization and depth order.
-struct StarHalos {
-    views: [wgpu::TextureView; STAR_HALO_GROUPS],
-    layers: [Option<wgpu::TextureView>; STAR_SLICES],
-    layout: StarHaloLayout,
-}
-
-impl StarHalos {
-    fn new(device: &wgpu::Device, layout: StarHaloLayout) -> Self {
-        let textures = layout.groups.map(|group| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("spectral_star_halos"),
-                size: wgpu::Extent3d {
-                    width: group.size[0],
-                    height: group.size[1],
-                    // Unused fixed bindings receive a harmless one-texel array.
-                    depth_or_array_layers: group.layers.max(1),
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: STAR_FAR_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        });
-        Self {
-            views: std::array::from_fn(|group| {
-                textures[group].create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2Array),
-                    ..Default::default()
-                })
-            }),
-            layers: std::array::from_fn(|depth| {
-                if depth < layout.first_active_layer {
-                    return None;
-                }
-                let [group, layer] = layout.layers[depth];
-                Some(textures[group as usize].create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                }))
-            }),
-            layout,
-        }
-    }
 }
 
 pub(super) struct Targets {
@@ -1543,30 +1061,7 @@ impl Targets {
             memory: memory_size,
             carried_memory,
         } = wanted;
-        let formatted = |label, size: [u32; 2], format| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: size[0],
-                        height: size[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING
-                        | if cfg!(test) {
-                            wgpu::TextureUsages::COPY_SRC
-                        } else {
-                            wgpu::TextureUsages::empty()
-                        },
-                    view_formats: &[],
-                })
-                .create_view(&Default::default())
-        };
+        let formatted = |label, size, format| crate::stars::image(device, label, size, format);
         let sized = |label, size: [u32; 2]| formatted(label, size, FORMAT);
         let view = |label| sized(label, size);
         let source_view = view("spectral_cloud_source");
@@ -1840,34 +1335,55 @@ impl Targets {
         self.halos.as_ref().map(|halo| halo.layout)
     }
 
-    /// Writes each depth separately. The group binds a scratch array where
-    /// consumers bind the real one, so no attached layer is also sampled.
-    pub fn draw_halos(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
-        let Some(halos) = &self.halos else { return };
-        for (layer, view) in halos.layers.iter().enumerate() {
-            let Some(view) = view else { continue };
-            #[cfg(test)]
-            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("spectral_star_halo"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            pass.set_pipeline(&pipelines.star_halo);
-            pass.set_bind_group(0, &self.source_group, &[]);
-            pass.set_bind_group(1, self.halo_group.as_ref().expect("halo group"), &[]);
-            // A flat instance index chooses the slice without mutating a
-            // uniform shared by passes queued in this same command buffer.
-            pass.draw(0..3, layer as u32..layer as u32 + 1);
-        }
+    pub fn draw_stars(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        pixels: [u32; 2],
+        coverage: [u32; 4],
+        near_coverage: Option<[u32; 4]>,
+    ) {
+        let Some((atlas, atlas_group)) = self.star_pass() else { return };
+        let halos = self.halos.as_ref().expect("star halos");
+        let bake = [&self.source_group, atlas_group];
+        let halo = [&self.source_group, self.halo_group.as_ref().expect("halo group")];
+        let far = self.tone_group.as_ref().map(|g| [&self.source_group, g]);
+        let near = self.near_group.as_ref().map(|g| [&self.source_group, g]);
+        #[cfg(test)]
+        self.encoded_passes.fetch_add(
+            1 + halos.layers.iter().flatten().count() as u32
+                + u32::from(self.tone.is_some())
+                + u32::from(self.near.is_some()),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        crate::stars::draw(
+            encoder,
+            crate::stars::Pass {
+                view: atlas,
+                pipeline: &pipelines.stars,
+                groups: &bake,
+                scissor: None,
+            },
+            halos,
+            &pipelines.star_halo,
+            &halo,
+            self.tone.as_ref().zip(far.as_ref()).map(|((view, size), groups)| crate::stars::Pass {
+                view,
+                pipeline: &pipelines.star_far,
+                groups,
+                scissor: Some(star_far_scissor(
+                    near_coverage.unwrap_or(coverage),
+                    self.near_size().unwrap_or(pixels),
+                    *size,
+                )),
+            }),
+            self.near.as_ref().zip(near.as_ref()).map(|((view, _), groups)| crate::stars::Pass {
+                view,
+                pipeline: &pipelines.star_near,
+                groups,
+                scissor: near_coverage,
+            }),
+        );
     }
 
     /// The star atlas and the group the pass that fills it binds.
@@ -1986,9 +1502,12 @@ impl Targets {
         // units — ten across the pane's height, so 1x travels about one pane
         // height every four minutes.
         let drift = cloud_drift(settings, atmosphere.now);
-        let slices =
-            stars.map(|layout| star_slices(settings, atmosphere.now, &layout)).unwrap_or_default();
-        let life = star_life(settings, atmosphere.now);
+        let slices = stars
+            .map(|layout| {
+                star_slices(settings.stars, settings.cloud_direction, atmosphere.now, &layout)
+            })
+            .unwrap_or_default();
+        let life = star_life(settings.stars, atmosphere.now);
         let mut memory_valid = false;
         let mut alphas = [1.0; 2];
         let mut previous_slices = slices;
@@ -2082,15 +1601,16 @@ impl Targets {
             // drawn and the shader returns before the tone.
             tile_cells: tile.map_or(0, TileKey::period),
             pitch_vertical: u32::from(pitch_vertical),
-            star_randomness: settings.star_randomness,
-            star_life: star_life(settings, atmosphere.now),
+            star_randomness: settings.stars.star_randomness,
+            star_life: star_life(settings.stars, atmosphere.now),
             star_far: {
                 let [width, height] = self.tone_size().unwrap_or([1, 1]);
                 Float4([
                     width as f32,
                     height as f32,
                     f32::from(
-                        settings.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform,
+                        settings.stars.star_halo_profile
+                            != harmonigraph_scene::StarHaloProfile::Uniform,
                     ),
                     0.0,
                 ])
@@ -2099,7 +1619,7 @@ impl Targets {
                 let [width, height] = self.near_size().unwrap_or([0, 0]);
                 Float4([width as f32, height as f32, 0.0, 0.0])
             },
-            star_geometry: star_geometry(settings.star_jitter, settings.star_far_fill),
+            star_geometry: star_geometry(settings.stars.star_jitter, settings.stars.star_far_fill),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -2215,7 +1735,12 @@ mod tests {
         settings: harmonigraph_scene::SpectralAtmosphere,
         now: f64,
     ) -> [super::StarSlice; STAR_SLICES] {
-        star_slices(settings, now, &star_layout(settings, 16.0 / 9.0))
+        star_slices(
+            settings.stars,
+            settings.cloud_direction,
+            now,
+            &star_layout(settings.stars, 16.0 / 9.0),
+        )
     }
 
     fn shader_number(name: &str) -> f64 {
@@ -2250,23 +1775,34 @@ mod tests {
     fn halo_profiles_group_actual_sizes_and_keep_depth_addresses() {
         use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
         let settings = SpectralAtmosphere::default();
-        assert_eq!(settings.star_halo_profile, StarHaloProfile::P3);
-        let layout = super::star_halo_layout([161, 121], settings);
+        assert_eq!(settings.stars.star_halo_profile, StarHaloProfile::P3);
+        let layout = super::star_halo_layout([161, 121], settings.stars);
         assert_eq!(layout.groups.map(|g| g.size), [[161, 121], [97, 73], [1, 1]]);
         assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
         assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
-        let medium = SpectralAtmosphere { star_halo_profile: StarHaloProfile::Medium, ..settings };
-        let layout = super::star_halo_layout([161, 121], medium);
+        let medium = SpectralAtmosphere {
+            stars: harmonigraph_scene::StarSettings {
+                star_halo_profile: StarHaloProfile::Medium,
+                ..settings.stars
+            },
+            ..settings
+        };
+        let layout = super::star_halo_layout([161, 121], medium.stars);
         assert_eq!(layout.groups.map(|g| g.size), [[121, 91], [73, 55], [1, 1]]);
         assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
-        assert_eq!(super::star_far_size([161, 121], medium), [81, 61]);
-        assert_eq!(super::star_near_size([161, 121], medium), Some([121, 91]));
-        assert_eq!(super::star_near_size([161, 121], settings), None);
-        let uniform =
-            SpectralAtmosphere { star_halo_profile: StarHaloProfile::Uniform, ..settings };
+        assert_eq!(super::star_far_size([161, 121], medium.stars), [81, 61]);
+        assert_eq!(super::star_near_size([161, 121], medium.stars), Some([121, 91]));
+        assert_eq!(super::star_near_size([161, 121], settings.stars), None);
+        let uniform = SpectralAtmosphere {
+            stars: harmonigraph_scene::StarSettings {
+                star_halo_profile: StarHaloProfile::Uniform,
+                ..settings.stars
+            },
+            ..settings
+        };
         assert_ne!(
-            super::star_halo_layout([1, 1], settings),
-            super::star_halo_layout([1, 1], uniform),
+            super::star_halo_layout([1, 1], settings.stars),
+            super::star_halo_layout([1, 1], uniform.stars),
             "omitted far depths must remain part of allocation identity",
         );
     }
@@ -2337,8 +1873,12 @@ mod tests {
         assert_eq!(STAR_ATLAS_WIDTH, 1 << shader_number("STAR_ATLAS_SHIFT") as u32);
         let fresh = harmonigraph_scene::SpectralAtmosphere::default();
         let fine = harmonigraph_scene::SpectralAtmosphere {
-            star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-            star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+            stars: harmonigraph_scene::StarSettings {
+                star_density: harmonigraph_scene::STAR_DENSITY_MAX,
+                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                ..fresh.stars
+            },
+
             ..fresh
         };
         let panes = [
@@ -2349,10 +1889,13 @@ mod tests {
         ];
         for (settings, pixels, ppp) in panes {
             let aspect = pixels[0] as f32 / pixels[1] as f32;
-            let layout = star_layout(settings, aspect);
+            let layout = star_layout(settings.stars, aspect);
             assert!(layout.fits(), "{layout:?}");
             let size = pixels.map(|side| side as f32 / ppp);
-            for (k, slice) in star_slices(settings, 0.0, &layout).iter().enumerate() {
+            for (k, slice) in star_slices(settings.stars, settings.cloud_direction, 0.0, &layout)
+                .iter()
+                .enumerate()
+            {
                 for axis in 0..2 {
                     let half = f64::from(layout.pane[axis] / 2.0 / slice.cell);
                     // Drifts that put the leading edge, then the trailing one, on
@@ -2395,22 +1938,30 @@ mod tests {
     fn the_star_atlas_floors_only_the_finest_cells_and_only_past_its_budget() {
         // Exercise the below-budget path independently of the current look defaults.
         let coarse = harmonigraph_scene::SpectralAtmosphere {
-            star_density: 1.0,
-            star_size_min: 3.0,
-            star_size_curve: 1.0,
+            stars: harmonigraph_scene::StarSettings {
+                star_density: 1.0,
+                star_size_min: 3.0,
+                star_size_curve: 1.0,
+                ..Default::default()
+            },
+
             ..Default::default()
         };
         for aspect in [16.0 / 9.0, 8.0] {
-            let layout = star_layout(coarse, aspect);
-            assert_eq!(layout.cells, super::star_cells(coarse), "{aspect}");
+            let layout = star_layout(coarse.stars, aspect);
+            assert_eq!(layout.cells, super::star_cells(coarse.stars), "{aspect}");
         }
         let fine = harmonigraph_scene::SpectralAtmosphere {
-            star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-            star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+            stars: harmonigraph_scene::StarSettings {
+                star_density: harmonigraph_scene::STAR_DENSITY_MAX,
+                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                ..coarse.stars
+            },
+
             ..coarse
         };
-        let wanted = super::star_cells(fine);
-        let layout = star_layout(fine, 16.0 / 9.0);
+        let wanted = super::star_cells(fine.stars);
+        let layout = star_layout(fine.stars, 16.0 / 9.0);
         let floor = layout.cells[0];
         assert!(floor > wanted[0], "{layout:?}");
         assert!(!super::StarLayout::at(wanted, floor * 0.99, 16.0 / 9.0).fits());
@@ -2432,9 +1983,13 @@ mod tests {
         // Held at the prototype's parallax, which is what the pace below is
         // stated against, whatever the fresh far speed is.
         let fresh = harmonigraph_scene::SpectralAtmosphere {
+            stars: harmonigraph_scene::StarSettings {
+                star_speed_min: 0.15,
+                star_speed_max: 1.0,
+                ..Default::default()
+            },
             cloud_direction: 0.0,
-            star_speed_min: 0.15,
-            star_speed_max: 1.0,
+
             ..Default::default()
         };
         let travelled = |settings, now| {
@@ -2449,7 +2004,10 @@ mod tests {
         assert!(moved.iter().all(|m| m[1].abs() < 1e-3));
         assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
         let together = travelled(
-            harmonigraph_scene::SpectralAtmosphere { star_speed_min: 1.0, ..fresh },
+            harmonigraph_scene::SpectralAtmosphere {
+                stars: harmonigraph_scene::StarSettings { star_speed_min: 1.0, ..fresh.stars },
+                ..fresh
+            },
             10.0,
         );
         assert!(together.iter().all(|m| (m[0] - near).abs() < 0.01), "{together:?}");

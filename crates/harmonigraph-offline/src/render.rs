@@ -869,7 +869,7 @@ mod tests {
             // stars take their own speed, and their nearest at its top is as
             // visible.
             a.cloud_speed = speed;
-            a.star_speed_max = speed.min(harmonigraph_scene::STAR_SPEED_MAX);
+            a.stars.star_speed_max = speed.min(harmonigraph_scene::STAR_SPEED_MAX);
             let mut take = transient_take(0.0);
             take.header.appearance = Some(state.appearance.serialize());
             take

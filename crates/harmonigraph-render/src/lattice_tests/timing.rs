@@ -194,7 +194,19 @@ fn atmosphere_costs_by_polyphony() {
             "audit settings: render scale {}, glow reach {}, strength {}, atmosphere {:?}",
             view.render_scale, view.glow_reach, view.glow_strength, view.atmosphere
         );
-        for case in ["all", "off", "no-nebula", "no-breath", "half-scale", "no-glow"] {
+        for case in [
+            "all",
+            "off",
+            "no-nebula",
+            "no-breath",
+            "half-scale",
+            "no-glow",
+            "watercolor",
+            "mosaic",
+            "stars",
+            "stars-medium",
+            "stars-uniform",
+        ] {
             if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
                 continue;
             }
@@ -217,6 +229,21 @@ fn atmosphere_costs_by_polyphony() {
                 "off" => {
                     variant.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
                     variant.atmosphere.breath_amount = 0.0;
+                }
+                "watercolor" => {
+                    variant.atmosphere.material_style =
+                        harmonigraph_scene::LatticeMaterial::Watercolor
+                }
+                "mosaic" => {
+                    variant.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Mosaic
+                }
+                "stars" | "stars-medium" | "stars-uniform" => {
+                    variant.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Stars;
+                    variant.atmosphere.stars.star_halo_profile = match case {
+                        "stars-medium" => harmonigraph_scene::StarHaloProfile::Medium,
+                        "stars-uniform" => harmonigraph_scene::StarHaloProfile::Uniform,
+                        _ => harmonigraph_scene::StarHaloProfile::P3,
+                    };
                 }
                 "no-nebula" => variant.atmosphere.texture_depth = 0.0,
                 "no-breath" => variant.atmosphere.breath_amount = 0.0,

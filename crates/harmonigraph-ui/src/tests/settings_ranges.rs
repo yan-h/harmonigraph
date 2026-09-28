@@ -97,10 +97,14 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
-        cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction,
+            cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction
+    );
+    for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
+        poison!(stars;
         star_density, star_randomness, star_jitter, star_fringe, star_far_fill, star_halo_resolution,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_lifetime);
+    }
     for material in
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
@@ -304,6 +308,29 @@ fn scenarios() -> Vec<Scenario> {
         visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
         ..base
     });
+    for profile in [
+        harmonigraph_scene::StarHaloProfile::P3,
+        harmonigraph_scene::StarHaloProfile::Medium,
+        harmonigraph_scene::StarHaloProfile::Uniform,
+    ] {
+        cases.push(Scenario {
+            pane: panes::Tab::LatticeSettings,
+            material: harmonigraph_scene::LatticeMaterial::Stars,
+            halo_profile: profile,
+            enabled: true,
+            visits: 16
+                + 1
+                + 10
+                + 6
+                + 3
+                + 6
+                + 2
+                + 11
+                + 4
+                + usize::from(profile == harmonigraph_scene::StarHaloProfile::Uniform),
+            ..base
+        });
+    }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
     // section and puts six of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the fresh
@@ -383,7 +410,8 @@ fn check(edge: Edge) {
         a.spectrum.backdrop_strength =
             if scenario.enabled { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
         a.spectrum.atmosphere.cloud_style = scenario.style;
-        a.spectrum.atmosphere.star_halo_profile = scenario.halo_profile;
+        a.spectrum.atmosphere.stars.star_halo_profile = scenario.halo_profile;
+        a.view.atmosphere.stars.star_halo_profile = scenario.halo_profile;
         a.view.show_perf = scenario.enabled;
         a.view.atmosphere.texture = if scenario.enabled {
             harmonigraph_scene::LatticeTexture::Clouds
@@ -427,6 +455,8 @@ fn check(edge: Edge) {
         let saw = |label: &str| visits.iter().any(|visit| visit.label == label);
         if scenario.pane == panes::Tab::AnalyzerSettings
             && scenario.style == harmonigraph_scene::CloudStyle::Stars
+            || (scenario.pane == panes::Tab::LatticeSettings
+                && scenario.material == harmonigraph_scene::LatticeMaterial::Stars)
         {
             assert_eq!(
                 saw("Uniform halo resolution"),
@@ -460,6 +490,8 @@ fn check(edge: Edge) {
             scenario.pane == panes::Tab::AnalyzerSettings
                 && scenario.enabled
                 && scenario.style == harmonigraph_scene::CloudStyle::Stars
+                || (scenario.pane == panes::Tab::LatticeSettings
+                    && scenario.material == harmonigraph_scene::LatticeMaterial::Stars)
         );
         assert_eq!(saw("Spiral bloom"), scenario.pane == panes::Tab::AnalyzerSettings);
         assert!(!saw("Bloom base"), "{scenario:?} drew the retired mapping base");

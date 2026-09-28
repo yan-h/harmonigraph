@@ -129,6 +129,7 @@ fn poisoned_view() -> ViewConfig {
             material_color_pickup: nan,
             material_shadow_width: nan,
             material_shadow_softness: nan,
+            stars: crate::StarSettings::default(),
             material_settings: crate::MaterialSettings {
                 scale_size: nan,
                 scale_variety: nan,
@@ -396,6 +397,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         material_shadow_width,
         material_shadow_softness,
         material_settings,
+        stars,
         material_speed,
         material_direction,
         texture_depth,
@@ -404,6 +406,20 @@ fn scene_floats(scene: &Scene) -> Floats {
         breath_amount,
         breath_speed,
     } = atmosphere;
+    f.one("atmosphere.stars.star_density", stars.star_density);
+    f.one("atmosphere.stars.star_randomness", stars.star_randomness);
+    f.one("atmosphere.stars.star_jitter", stars.star_jitter);
+    f.one("atmosphere.stars.star_size_min", stars.star_size_min);
+    f.one("atmosphere.stars.star_size_max", stars.star_size_max);
+    f.one("atmosphere.stars.star_size_curve", stars.star_size_curve);
+    f.one("atmosphere.stars.star_speed_min", stars.star_speed_min);
+    f.one("atmosphere.stars.star_speed_max", stars.star_speed_max);
+    f.one("atmosphere.stars.star_speed_curve", stars.star_speed_curve);
+    f.one("atmosphere.stars.star_lifetime", stars.star_lifetime);
+    f.one("atmosphere.stars.star_fringe", stars.star_fringe);
+    f.one("atmosphere.stars.star_far_fill", stars.star_far_fill);
+    f.one("atmosphere.stars.star_halo_resolution", stars.star_halo_resolution);
+    f.one("atmosphere.stars.star_defocus", stars.star_defocus);
     f.one("atmosphere.material_amount", *material_amount);
     f.one("atmosphere.material_shadow_pickup", *material_shadow_pickup);
     f.one("atmosphere.material_color_pickup", *material_color_pickup);

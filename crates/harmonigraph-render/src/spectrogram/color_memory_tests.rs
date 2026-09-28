@@ -70,11 +70,11 @@ fn fixture(style: CloudStyle) -> SpectrogramCallback {
     a.settings.color_release = 0.6;
     a.settings.cloud_speed = 20.0;
     a.settings.cloud_direction = 37.0;
-    a.settings.star_lifetime = 0.5;
+    a.settings.stars.star_lifetime = 0.5;
     // Explicit motion ensures every slice crosses a cell regardless of look defaults.
-    a.settings.star_speed_min = 0.2;
-    a.settings.star_speed_max = 1.0;
-    a.settings.star_speed_curve = 1.0;
+    a.settings.stars.star_speed_min = 0.2;
+    a.settings.stars.star_speed_max = 1.0;
+    a.settings.stars.star_speed_curve = 1.0;
     // Start away from zero to exercise initialization at an export's crop.
     a.now = 100.0;
     cb
@@ -180,7 +180,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         if wrap {
             let a = cb.atmosphere.as_mut().unwrap();
             a.settings.cloud_direction = 0.0;
-            let layout = star_layout(a.settings, cb.rect.width() / cb.rect.height());
+            let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
             a.now = STAR_HASH_PERIOD * f64::from(layout.cells[STAR_SLICES - 1])
                 / star_px_per_second()
                 - 0.125;
@@ -193,11 +193,11 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let old_size = memory(&resources).size;
         let a = cb.atmosphere.as_mut().unwrap();
         match case {
-            "speed-min" => a.settings.star_speed_min += 0.01,
-            "speed-max" => a.settings.star_speed_max += 0.01,
-            "speed-curve" => a.settings.star_speed_curve += 0.01,
+            "speed-min" => a.settings.stars.star_speed_min += 0.01,
+            "speed-max" => a.settings.stars.star_speed_max += 0.01,
+            "speed-curve" => a.settings.stars.star_speed_curve += 0.01,
             "direction" => a.settings.cloud_direction += 0.1,
-            "lifetime" => a.settings.star_lifetime += 0.001,
+            "lifetime" => a.settings.stars.star_lifetime += 0.001,
             "width" => cb.rect.max.x -= 2.0,
             _ => {}
         }
@@ -270,14 +270,14 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     for budgeted in [false, true] {
         let mut cb = fixture(CloudStyle::Stars);
         let a = cb.atmosphere.as_mut().unwrap();
-        a.settings.star_speed_min = 0.0;
-        a.settings.star_speed_max = 0.0;
+        a.settings.stars.star_speed_min = 0.0;
+        a.settings.stars.star_speed_max = 0.0;
         if budgeted {
-            a.settings.star_density = harmonigraph_scene::atmosphere::STAR_DENSITY_MAX;
-            a.settings.star_size_min = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
+            a.settings.stars.star_density = harmonigraph_scene::atmosphere::STAR_DENSITY_MAX;
+            a.settings.stars.star_size_min = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
         }
         let settings = a.settings;
-        let old_cells = star_layout(settings, cb.rect.width() / cb.rect.height()).cells;
+        let old_cells = star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells;
         let mut resources = CallbackResources::default();
         cb.grid.fill(255);
         prepare_once(&device, &queue, &mut resources, &cb);
@@ -290,7 +290,7 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
             cb.rect.max.x += 1.0;
             assert_ne!(
                 old_cells,
-                star_layout(settings, cb.rect.width() / cb.rect.height()).cells,
+                star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells,
                 "fixture did not change atlas-budget cell sizes"
             );
         } else {
@@ -351,7 +351,7 @@ fn jitter_edits_reset_only_the_stars_color_history() {
         cb.grid.fill(0);
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources)), lit, "paused history changed");
-        cb.atmosphere.as_mut().unwrap().settings.star_jitter = 1.0;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_jitter = 1.0;
         prepare_once(&device, &queue, &mut resources, &cb);
         let edited = pixels(&device, &queue, memory(&resources));
         if style == CloudStyle::Stars {
@@ -390,8 +390,8 @@ fn halo_resolution_changes_carry_stars_color_history() {
         (Medium, 0.5),
         (P3, 0.5),
     ] {
-        cb.atmosphere.as_mut().unwrap().settings.star_halo_profile = profile;
-        cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile = profile;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = resolution;
         prepare_once(&device, &queue, &mut changed, &cb);
         let layout = changed
             .get::<SpectrogramResources>()
@@ -410,7 +410,7 @@ fn halo_resolution_changes_carry_stars_color_history() {
     // Composition-only fill edits must not erase held star colors, even
     // when the current input is dark and the clock is paused.
     for fill in [0.5, 1.0, 0.0] {
-        cb.atmosphere.as_mut().unwrap().settings.star_far_fill = fill;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = fill;
         prepare_once(&device, &queue, &mut changed, &cb);
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
     }
@@ -454,7 +454,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         // A changed source at the identical clock, and an unrelated style dial,
         // must neither advance nor invalidate the active material's history.
         cb.grid.fill(0);
-        cb.atmosphere.as_mut().unwrap().settings.star_fringe += 0.1;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_fringe += 0.1;
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources))[5000], held);
         // Palette interpretation changes are immediate even on a paused frame.

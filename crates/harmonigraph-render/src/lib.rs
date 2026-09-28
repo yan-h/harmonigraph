@@ -73,6 +73,8 @@ mod dot_shadow;
 mod glow;
 mod lattice_material;
 mod lattice_node_glow;
+mod lattice_stars;
+mod stars;
 pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
@@ -811,6 +813,8 @@ struct LatticeCallback {
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
     glow_blend: f32,
+    material_stars: harmonigraph_scene::StarSettings,
+    material_direction: f32,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
@@ -1411,6 +1415,8 @@ struct LatticeBloom {
 /// Where a frame's node light is assembled before any of it reaches the
 /// picture: one transparent premultiplied colour texture at half the scene's
 /// width and height, plus the bind group its readers take it through.
+/// Stars keeps this source resolution but supplies a scene-resolution material
+/// output through the same reader interface, preserving its compact cores.
 ///
 /// A target of its own, rather than the glow drawn straight into the scene
 /// pass, because a node has to sample the finished light to paint its own
@@ -1903,6 +1909,13 @@ impl Offscreen {
 }
 
 impl GlowTarget {
+    /// Stars preserve native scene-resolution cores; all other materials read the half-resolution light.
+    fn binding(&self) -> &wgpu::BindGroup {
+        self.material_source
+            .as_ref()
+            .and_then(|source| source.star_output())
+            .unwrap_or(&self.bind_group)
+    }
     /// Half the scene's width and height, rounded up for odd-sized panes.
     /// All readers reconstruct the same filtered field in normalized coordinates.
     fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2]) -> Self {
@@ -2867,7 +2880,7 @@ impl CompiledLatticeResources {
             blur_h_pipeline,
             blur_v_pipeline,
             glow_statistics_layout,
-            material: lattice_material::Pipelines::new(device),
+            material: lattice_material::Pipelines::new(device, &filter_layout),
             bind_group_layout,
             composite_layout,
             bright_layout,
