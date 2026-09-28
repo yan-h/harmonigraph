@@ -1,0 +1,21 @@
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 0b51e85d..bf28a6f1 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -4049,6 +4049,7 @@ fn cs_wrap_probe() {
+     /// composite 16 to 21% without ever being taken, so the reference lives
+     /// here instead.
+     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
++        if let Some(source) = next_timing::source() { return source.into(); }
+         if let Some(source) = star_split::reference_source() {
+             return source.into();
+         }
+@@ -4468,6 +4469,8 @@ fn cs_rotation_probe() {
+ 
+     mod star_split;
+     mod timing;
++    mod next_timing;
++    mod next_images;
+ }
+ 
+ #[cfg(all(test, target_os = "macos", feature = "shader-assets-tools"))]

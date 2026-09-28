@@ -1,0 +1,14 @@
+{
+  "take-levels.u8": {
+    "bytes": 983040,
+    "sha256": "28f261f128ce63bcfb071d20705757fe2f7bd645304f1997622bfeefd0b66644"
+  },
+  "flat-levels.u8": {
+    "bytes": 983040,
+    "sha256": "c15394e8cc9c4eceaf332f7fc28016c6ef1c57324e0a4b09dfd333033c67d936"
+  },
+  "palette.rgba": {
+    "bytes": 16384,
+    "sha256": "8c785e44c97a17e6f65949982e4ce42a1ac9f38e84d260f57ab977d0d8e9c2fb"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "ppp": 2,
+  "origin": 0,
+  "frames": 30,
+  "width": 1920,
+  "height": 1080,
+  "env": {
+    "PROBE_PPP": "2",
+    "IMAGE_FRAMES": "30",
+    "PROBE_JITTER": "1",
+    "IMAGE_OUTPUT": "/private/tmp/stars-next/complete-motion"
+  }
+}

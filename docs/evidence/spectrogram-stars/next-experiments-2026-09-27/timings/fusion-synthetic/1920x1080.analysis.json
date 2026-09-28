@@ -1,0 +1,151 @@
+{
+  "aa_noise": {
+    "blur-a/blur-b": {
+      "mean_ratio_b_over_a": 1.0039565049534913,
+      "mean_savings_percent": -0.3956504953491313
+    },
+    "p3-a/p3-b": {
+      "mean_ratio_b_over_a": 1.0034919064973726,
+      "mean_savings_percent": -0.3491906497372632
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "blur-a": {
+      "mean_gpu_ms": 6.492070308333333,
+      "median_gpu_ms": 6.416042,
+      "n": 240
+    },
+    "blur-b": {
+      "mean_gpu_ms": 6.517756216666666,
+      "median_gpu_ms": 6.417312000000001,
+      "n": 240
+    },
+    "blur-fused": {
+      "mean_gpu_ms": 13.732482666666666,
+      "median_gpu_ms": 13.5740625,
+      "n": 240
+    },
+    "full-a": {
+      "mean_gpu_ms": 8.786329875,
+      "median_gpu_ms": 8.68225,
+      "n": 240
+    },
+    "p3-a": {
+      "mean_gpu_ms": 7.727100516666667,
+      "median_gpu_ms": 7.629417,
+      "n": 240
+    },
+    "p3-b": {
+      "mean_gpu_ms": 7.754082829166666,
+      "median_gpu_ms": 7.609562,
+      "n": 240
+    }
+  },
+  "comparisons": {
+    "blur-fused": {
+      "blur-a/blur-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -112.1559401435361,
+          -109.96032977677248
+        ],
+        "mean_variant_over_control_ratio": 2.111093893570063,
+        "paired_mean_savings_percent": -111.10938935700632
+      },
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -78.23088308879895,
+          -76.55437286399967
+        ],
+        "mean_variant_over_control_ratio": 1.7740869492851374,
+        "paired_mean_savings_percent": -77.40869492851374
+      }
+    },
+    "full-a": {
+      "blur-a/blur-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -35.84498214983508,
+          -34.26570973000155
+        ],
+        "mean_variant_over_control_ratio": 1.3507220650661216,
+        "paired_mean_savings_percent": -35.07220650661216
+      },
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -14.252482187686514,
+          -12.780357299041366
+        ],
+        "mean_variant_over_control_ratio": 1.1350979674773751,
+        "paired_mean_savings_percent": -13.509796747737512
+      }
+    }
+  },
+  "frames": 240,
+  "input": "/private/tmp/stars-next/fusion-synthetic/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "p3-a",
+      "p3-b"
+    ],
+    [
+      "blur-a",
+      "blur-b"
+    ]
+  ],
+  "slot_histograms": {
+    "blur-a": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "blur-b": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "blur-fused": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "full-a": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-a": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-b": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    }
+  },
+  "slot_positions_balanced": true
+}

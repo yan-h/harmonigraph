@@ -1,0 +1,151 @@
+{
+  "aa_noise": {
+    "full-a/full-b": {
+      "mean_ratio_b_over_a": 1.0030429992018168,
+      "mean_savings_percent": -0.30429992018168317
+    },
+    "p3-a/p3-b": {
+      "mean_ratio_b_over_a": 0.9975235579620955,
+      "mean_savings_percent": 0.2476442037904536
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "full-a": {
+      "mean_gpu_ms": 29.345758875,
+      "median_gpu_ms": 28.2123335,
+      "n": 240
+    },
+    "full-b": {
+      "mean_gpu_ms": 29.435057995833333,
+      "median_gpu_ms": 28.2875205,
+      "n": 240
+    },
+    "full-complete": {
+      "mean_gpu_ms": 26.279733704166667,
+      "median_gpu_ms": 25.242979499999997,
+      "n": 240
+    },
+    "p3-a": {
+      "mean_gpu_ms": 21.683363004166665,
+      "median_gpu_ms": 20.7450005,
+      "n": 240
+    },
+    "p3-b": {
+      "mean_gpu_ms": 21.6296654125,
+      "median_gpu_ms": 20.8195625,
+      "n": 240
+    },
+    "p3-complete": {
+      "mean_gpu_ms": 21.0895644,
+      "median_gpu_ms": 20.4485,
+      "n": 240
+    }
+  },
+  "comparisons": {
+    "full-complete": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          9.792745180230597,
+          11.526320205119122
+        ],
+        "mean_variant_over_control_ratio": 0.894160207467498,
+        "paired_mean_savings_percent": 10.583979253250197
+      },
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -22.253774243893297,
+          -20.476655104787977
+        ],
+        "mean_variant_over_control_ratio": 1.2134793924524725,
+        "paired_mean_savings_percent": -21.34793924524725
+      }
+    },
+    "p3-complete": {
+      "full-a/full-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          27.624022229124414,
+          28.79968460953519
+        ],
+        "mean_variant_over_control_ratio": 0.7175662239040612,
+        "paired_mean_savings_percent": 28.243377609593878
+      },
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          1.8434591782576244,
+          3.431084516492991
+        ],
+        "mean_variant_over_control_ratio": 0.9738208188594282,
+        "paired_mean_savings_percent": 2.6179181140571828
+      }
+    }
+  },
+  "frames": 240,
+  "input": "/private/tmp/stars-next/complete-take/3840x2160.csv",
+  "paired_control_cases": [
+    [
+      "p3-a",
+      "p3-b"
+    ],
+    [
+      "full-a",
+      "full-b"
+    ]
+  ],
+  "slot_histograms": {
+    "full-a": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "full-b": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "full-complete": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-a": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-b": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-complete": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    }
+  },
+  "slot_positions_balanced": true
+}

@@ -1,0 +1,15 @@
+   Compiling harmonigraph-render v0.5.0 (/Users/yan/.codex/worktrees/stars-next-experiments/harmonigraph/crates/harmonigraph-render)
+warning: method `mapping` is never used
+   --> crates/harmonigraph-render/src/spectrogram/atmosphere/star_blur.rs:246:12
+    |
+141 | impl Targets {
+    | ------------ method in this implementation
+...
+246 |     pub fn mapping(&self) -> [Float4; STAR_SLICES] {
+    |            ^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `harmonigraph-render` (lib test) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 12.66s
+  Executable unittests src/lib.rs (target/release/deps/harmonigraph_render-6209358007c8e797)

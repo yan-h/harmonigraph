@@ -1,0 +1,11 @@
+{
+  "ppp": 1.25,
+  "origin": 0,
+  "frames": 3,
+  "width": 1200,
+  "height": 675,
+  "env": {
+    "PROBE_PPP": "1.25",
+    "IMAGE_OUTPUT": "/private/tmp/stars-next/complete-fractional"
+  }
+}

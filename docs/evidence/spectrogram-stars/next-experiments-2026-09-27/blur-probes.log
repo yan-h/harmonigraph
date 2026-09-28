@@ -1,0 +1,7 @@
+
+running 2 tests
+test spectrogram::atmosphere::star_blur::probe::fused_filter_matches_independent_discrete_convolution_through_full_jitter_motion ... ok
+test spectrogram::atmosphere::star_blur::probe::gathered_seeds_match_independent_tent_deposits_through_full_jitter_motion ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 371 filtered out; finished in 1.00s
+

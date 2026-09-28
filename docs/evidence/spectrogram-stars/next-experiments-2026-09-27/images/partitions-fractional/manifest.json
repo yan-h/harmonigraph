@@ -1,0 +1,13 @@
+{
+  "ppp": 1.25,
+  "origin": 0.125,
+  "frames": 3,
+  "width": 1201,
+  "height": 676,
+  "env": {
+    "PROBE_PPP": "1.25",
+    "IMAGE_ORIGIN": "0.125",
+    "RESEARCH_CASES": "p3-a,p3-split1,p3-split3,p3-split2",
+    "IMAGE_OUTPUT": "/private/tmp/stars-next/partitions-fractional"
+  }
+}

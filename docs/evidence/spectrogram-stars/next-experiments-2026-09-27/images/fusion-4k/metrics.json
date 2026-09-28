@@ -1,0 +1,62 @@
+[
+  {
+    "case": "blur-fused",
+    "input": "take",
+    "frame": 0,
+    "max": 1,
+    "mae": 0.03137393904320988,
+    "mse": 0.03137393904320988,
+    "changed_channels": 780684,
+    "alpha_changed": 0
+  },
+  {
+    "case": "blur-fused",
+    "input": "take",
+    "frame": 1,
+    "max": 1,
+    "mae": 0.03129569347993827,
+    "mse": 0.03129569347993827,
+    "changed_channels": 778737,
+    "alpha_changed": 0
+  },
+  {
+    "case": "blur-fused",
+    "input": "flat",
+    "frame": 2,
+    "max": 1,
+    "mae": 0.039246198238168724,
+    "mse": 0.039246198238168724,
+    "changed_channels": 976571,
+    "alpha_changed": 0
+  },
+  {
+    "case": "blur-fused",
+    "input": "flat",
+    "frame": 1,
+    "max": 1,
+    "mae": 0.039269667888374486,
+    "mse": 0.039269667888374486,
+    "changed_channels": 977155,
+    "alpha_changed": 0
+  },
+  {
+    "case": "blur-fused",
+    "input": "flat",
+    "frame": 0,
+    "max": 1,
+    "mae": 0.03921264146090535,
+    "mse": 0.03921264146090535,
+    "changed_channels": 975736,
+    "alpha_changed": 0
+  },
+  {
+    "case": "blur-fused",
+    "input": "take",
+    "frame": 2,
+    "max": 1,
+    "mae": 0.03137848025977366,
+    "mse": 0.03137848025977366,
+    "changed_channels": 780797,
+    "alpha_changed": 0
+  }
+]

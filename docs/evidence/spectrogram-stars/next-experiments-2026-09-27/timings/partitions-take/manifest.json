@@ -1,0 +1,14 @@
+{
+  "base": "7711b98d2c28c737b5a9c44dd298eb3d96efe589",
+  "binary_sha256": "b42909827187bd779c218ee612a40d55f9e91b39ed599b02fcc585728fdbec86",
+  "shaders": {
+    "split1.wgsl": "397e4763437341bc8302274b024fb6b151af9776092e9fef11b5ff4885b8565f",
+    "base.wgsl": "a62234e23c3fb03c45d777bc3b21a0a28ac74df40741ef1a85d66ac7e3a3ced1",
+    "complete.wgsl": "62c08f8f770616cf00e75a6314898c997c0d99083cfa0f929741a0a2ada35578",
+    "split3.wgsl": "f816e49a434c08ecca9bbee23f57fa83278a43f45704fcb37602c21c52f01971",
+    "split2.wgsl": "a62234e23c3fb03c45d777bc3b21a0a28ac74df40741ef1a85d66ac7e3a3ced1"
+  },
+  "env": {
+    "RESEARCH_CASES": "p3-a,p3-b,p3-split1,p3-split3,p3-nosplit,p3-split2"
+  }
+}

@@ -1,0 +1,122 @@
+[
+  {
+    "case": "p3-complete",
+    "input": "flat",
+    "frame": 2,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "take",
+    "frame": 2,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "take",
+    "frame": 0,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "flat",
+    "frame": 0,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "flat",
+    "frame": 1,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "take",
+    "frame": 1,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "flat",
+    "frame": 2,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "take",
+    "frame": 2,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "flat",
+    "frame": 1,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "take",
+    "frame": 1,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "take",
+    "frame": 0,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "flat",
+    "frame": 0,
+    "max": 0,
+    "mae": 0.0,
+    "mse": 0.0,
+    "changed_channels": 0,
+    "alpha_changed": 0
+  }
+]

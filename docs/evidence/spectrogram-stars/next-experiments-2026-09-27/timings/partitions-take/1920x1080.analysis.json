@@ -1,0 +1,147 @@
+{
+  "aa_noise": {
+    "p3-a/p3-b": {
+      "mean_ratio_b_over_a": 0.9926642999039647,
+      "mean_savings_percent": 0.7335700096035347
+    }
+  },
+  "bootstrap": {
+    "block_frames": 12,
+    "description": "descriptive block-bootstrap interval; not a calibrated guarantee",
+    "samples": 2000,
+    "seed": 0
+  },
+  "cases": {
+    "p3-a": {
+      "mean_gpu_ms": 8.7579439125,
+      "median_gpu_ms": 8.004396,
+      "n": 240
+    },
+    "p3-b": {
+      "mean_gpu_ms": 8.6936982625,
+      "median_gpu_ms": 8.023167,
+      "n": 240
+    },
+    "p3-nosplit": {
+      "mean_gpu_ms": 8.795271408333333,
+      "median_gpu_ms": 8.0426665,
+      "n": 240
+    },
+    "p3-split1": {
+      "mean_gpu_ms": 8.6171331625,
+      "median_gpu_ms": 8.031249500000001,
+      "n": 240
+    },
+    "p3-split2": {
+      "mean_gpu_ms": 8.759919116666667,
+      "median_gpu_ms": 7.810271500000001,
+      "n": 240
+    },
+    "p3-split3": {
+      "mean_gpu_ms": 8.388447979166667,
+      "median_gpu_ms": 7.6764585,
+      "n": 240
+    }
+  },
+  "comparisons": {
+    "p3-nosplit": {
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -4.514989711693025,
+          2.259972327365162
+        ],
+        "mean_variant_over_control_ratio": 1.0079591731410606,
+        "paired_mean_savings_percent": -0.7959173141060649
+      }
+    },
+    "p3-split1": {
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -0.19186229385745324,
+          2.709856979484893
+        ],
+        "mean_variant_over_control_ratio": 0.9875441034247541,
+        "paired_mean_savings_percent": 1.2455896575245928
+      }
+    },
+    "p3-split2": {
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          -7.464225096484904,
+          4.050477294205698
+        ],
+        "mean_variant_over_control_ratio": 1.0039077158269396,
+        "paired_mean_savings_percent": -0.3907715826939606
+      }
+    },
+    "p3-split3": {
+      "p3-a/p3-b": {
+        "block_bootstrap_95pct_interval_savings_percent": [
+          1.8731158881951242,
+          5.9140401006456695
+        ],
+        "mean_variant_over_control_ratio": 0.9613362335818881,
+        "paired_mean_savings_percent": 3.8663766418111867
+      }
+    }
+  },
+  "frames": 240,
+  "input": "/private/tmp/stars-next/partitions-take/1920x1080.csv",
+  "paired_control_cases": [
+    [
+      "p3-a",
+      "p3-b"
+    ]
+  ],
+  "slot_histograms": {
+    "p3-a": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-b": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-nosplit": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-split1": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-split2": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    },
+    "p3-split3": {
+      "0": 40,
+      "1": 40,
+      "2": 40,
+      "3": 40,
+      "4": 40,
+      "5": 40
+    }
+  },
+  "slot_positions_balanced": true
+}

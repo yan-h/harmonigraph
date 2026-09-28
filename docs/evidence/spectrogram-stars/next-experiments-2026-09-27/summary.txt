@@ -1,0 +1,102 @@
+fusion-synthetic 1920x1080.analysis
+means {'blur-a': 6.492, 'blur-b': 6.518, 'blur-fused': 13.732, 'full-a': 8.786, 'p3-a': 7.727, 'p3-b': 7.754}
+A/A {'blur-a/blur-b': -0.4, 'p3-a/p3-b': -0.35}
+blur-fused -111.11 [-112.16, -109.96]
+fusion-synthetic 3840x2160.analysis
+means {'blur-a': 12.546, 'blur-b': 12.525, 'blur-fused': 15.239, 'full-a': 27.832, 'p3-a': 20.578, 'p3-b': 20.689}
+A/A {'blur-a/blur-b': 0.16, 'p3-a/p3-b': -0.54}
+blur-fused -21.57 [-22.41, -20.87]
+complete-repeat 1920x1080.analysis
+means {'full-a': 10.726, 'full-b': 10.725, 'full-complete': 9.481, 'p3-a': 9.656, 'p3-b': 9.275, 'p3-complete': 9.519}
+A/A {'full-a/full-b': 0.01, 'p3-a/p3-b': 3.95}
+full-complete 11.6 [7.67, 16.8]
+p3-complete -0.57 [-4.96, 4.02]
+complete-repeat 3840x2160.analysis
+means {'full-a': 37.1, 'full-b': 37.17, 'full-complete': 33.264, 'p3-a': 27.441, 'p3-b': 27.713, 'p3-complete': 26.819}
+A/A {'full-a/full-b': -0.19, 'p3-a/p3-b': -0.99}
+full-complete 10.42 [9.56, 11.31]
+p3-complete 2.75 [1.9, 3.61]
+fusion-take 1920x1080.analysis
+means {'blur-a': 6.389, 'blur-b': 6.281, 'blur-fused': 13.47, 'full-a': 8.537, 'p3-a': 7.529, 'p3-b': 7.493}
+A/A {'blur-a/blur-b': 1.69, 'p3-a/p3-b': 0.48}
+blur-fused -112.61 [-114.52, -110.93]
+fusion-take 3840x2160.analysis
+means {'blur-a': 13.303, 'blur-b': 13.682, 'blur-fused': 16.221, 'full-a': 29.788, 'p3-a': 22.099, 'p3-b': 21.888}
+A/A {'blur-a/blur-b': -2.85, 'p3-a/p3-b': 0.96}
+blur-fused -20.22 [-22.62, -17.1]
+partitions-repeat 1920x1080.analysis
+means {'p3-a': 8.258, 'p3-b': 8.307, 'p3-nosplit': 8.292, 'p3-split1': 8.243, 'p3-split2': 8.184, 'p3-split3': 8.009}
+A/A {'p3-a/p3-b': -0.59}
+p3-nosplit -0.12 [-2.14, 2.0]
+p3-split1 0.47 [-0.71, 1.66]
+p3-split2 1.19 [-0.57, 3.01]
+p3-split3 3.3 [1.77, 4.93]
+partitions-repeat 3840x2160.analysis
+means {'p3-a': 20.478, 'p3-b': 20.468, 'p3-nosplit': 21.547, 'p3-split1': 21.15, 'p3-split2': 20.528, 'p3-split3': 19.91}
+A/A {'p3-a/p3-b': 0.05}
+p3-nosplit -5.25 [-6.01, -4.56]
+p3-split1 -3.31 [-3.68, -2.95]
+p3-split2 -0.27 [-0.76, 0.21]
+p3-split3 2.75 [2.25, 3.27]
+complete-take 1920x1080.analysis
+means {'full-a': 9.358, 'full-b': 9.486, 'full-complete': 8.601, 'p3-a': 8.415, 'p3-b': 8.937, 'p3-complete': 8.416}
+A/A {'full-a/full-b': -1.37, 'p3-a/p3-b': -6.2}
+full-complete 8.71 [6.52, 10.69]
+p3-complete 3.0 [-1.66, 9.9]
+complete-take 3840x2160.analysis
+means {'full-a': 29.346, 'full-b': 29.435, 'full-complete': 26.28, 'p3-a': 21.683, 'p3-b': 21.63, 'p3-complete': 21.09}
+A/A {'full-a/full-b': -0.3, 'p3-a/p3-b': 0.25}
+full-complete 10.58 [9.79, 11.53]
+p3-complete 2.62 [1.84, 3.43]
+partitions-take 1920x1080.analysis
+means {'p3-a': 8.758, 'p3-b': 8.694, 'p3-nosplit': 8.795, 'p3-split1': 8.617, 'p3-split2': 8.76, 'p3-split3': 8.388}
+A/A {'p3-a/p3-b': 0.73}
+p3-nosplit -0.8 [-4.51, 2.26]
+p3-split1 1.25 [-0.19, 2.71]
+p3-split2 -0.39 [-7.46, 4.05]
+p3-split3 3.87 [1.87, 5.91]
+partitions-take 3840x2160.analysis
+means {'p3-a': 26.12, 'p3-b': 26.185, 'p3-nosplit': 26.932, 'p3-split1': 27.364, 'p3-split2': 26.051, 'p3-split3': 25.161}
+A/A {'p3-a/p3-b': -0.25}
+p3-nosplit -2.98 [-4.74, -1.6]
+p3-split1 -4.63 [-7.54, -2.46]
+p3-split2 0.39 [-0.75, 1.68]
+p3-split3 3.79 [2.41, 5.38]
+partitions-synthetic 1920x1080.analysis
+means {'p3-a': 8.935, 'p3-b': 8.83, 'p3-nosplit': 8.767, 'p3-split1': 8.992, 'p3-split2': 8.711, 'p3-split3': 8.563}
+A/A {'p3-a/p3-b': 1.17}
+p3-nosplit 1.3 [0.18, 2.52]
+p3-split1 -1.23 [-2.94, 0.35]
+p3-split2 1.93 [0.49, 3.2]
+p3-split3 3.6 [1.99, 5.12]
+partitions-synthetic 3840x2160.analysis
+means {'p3-a': 23.838, 'p3-b': 23.786, 'p3-nosplit': 24.884, 'p3-split1': 24.55, 'p3-split2': 23.852, 'p3-split3': 23.034}
+A/A {'p3-a/p3-b': 0.22}
+p3-nosplit -4.5 [-5.75, -3.22]
+p3-split1 -3.1 [-4.07, -2.09]
+p3-split2 -0.17 [-1.08, 0.76]
+p3-split3 3.27 [2.24, 4.35]
+partitions-sparse 1920x1080.analysis
+means {'p3-a': 5.878, 'p3-b': 5.793, 'p3-nosplit': 5.839, 'p3-split1': 5.783, 'p3-split2': 5.597, 'p3-split3': 5.474}
+A/A {'p3-a/p3-b': 1.45}
+p3-nosplit -0.06 [-1.76, 2.03]
+p3-split1 0.9 [-1.09, 3.28]
+p3-split2 4.09 [2.78, 5.66]
+p3-split3 6.2 [5.45, 6.99]
+partitions-sparse 3840x2160.analysis
+means {'p3-a': 19.019, 'p3-b': 18.907, 'p3-nosplit': 20.075, 'p3-split1': 19.787, 'p3-split2': 18.965, 'p3-split3': 18.363}
+A/A {'p3-a/p3-b': 0.59}
+p3-nosplit -5.86 [-6.62, -5.15]
+p3-split1 -4.34 [-5.57, -3.4]
+p3-split2 -0.01 [-0.57, 0.64]
+p3-split3 3.17 [2.3, 3.91]
+complete-synthetic 1920x1080.analysis
+means {'full-a': 9.576, 'full-b': 9.598, 'full-complete': 8.821, 'p3-a': 8.513, 'p3-b': 8.504, 'p3-complete': 8.465}
+A/A {'full-a/full-b': -0.22, 'p3-a/p3-b': 0.1}
+full-complete 7.99 [7.19, 8.84]
+p3-complete 0.5 [-0.38, 1.4]
+complete-synthetic 3840x2160.analysis
+means {'full-a': 50.669, 'full-b': 50.21, 'full-complete': 45.302, 'p3-a': 37.358, 'p3-b': 37.831, 'p3-complete': 36.636}
+A/A {'full-a/full-b': 0.91, 'p3-a/p3-b': -1.27}
+full-complete 10.18 [6.14, 13.95]
+p3-complete 2.55 [-1.72, 6.68]

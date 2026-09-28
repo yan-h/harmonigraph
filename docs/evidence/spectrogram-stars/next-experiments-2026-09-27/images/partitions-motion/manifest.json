@@ -1,0 +1,13 @@
+{
+  "ppp": 2,
+  "origin": 0,
+  "frames": 12,
+  "width": 1920,
+  "height": 1080,
+  "env": {
+    "PROBE_PPP": "2",
+    "IMAGE_FRAMES": "12",
+    "RESEARCH_CASES": "p3-a,p3-split1,p3-split3,p3-split2",
+    "IMAGE_OUTPUT": "/private/tmp/stars-next/partitions-motion"
+  }
+}

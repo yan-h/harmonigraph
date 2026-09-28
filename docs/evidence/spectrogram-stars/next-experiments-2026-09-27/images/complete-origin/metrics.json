@@ -1,0 +1,122 @@
+[
+  {
+    "case": "p3-complete",
+    "input": "flat",
+    "frame": 2,
+    "max": 1,
+    "mae": 0.008768816606239394,
+    "mse": 0.008768816606239394,
+    "changed_channels": 54628,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "take",
+    "frame": 2,
+    "max": 1,
+    "mae": 0.010371596019970454,
+    "mse": 0.010371596019970454,
+    "changed_channels": 64613,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "take",
+    "frame": 0,
+    "max": 1,
+    "mae": 0.006943237209908563,
+    "mse": 0.006943237209908563,
+    "changed_channels": 43255,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "flat",
+    "frame": 0,
+    "max": 1,
+    "mae": 0.013007473912096418,
+    "mse": 0.013007473912096418,
+    "changed_channels": 81034,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "flat",
+    "frame": 1,
+    "max": 1,
+    "mae": 0.013116145085165615,
+    "mse": 0.013116145085165615,
+    "changed_channels": 81711,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "take",
+    "frame": 1,
+    "max": 1,
+    "mae": 0.00688817928913643,
+    "mse": 0.00688817928913643,
+    "changed_channels": 42912,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "flat",
+    "frame": 2,
+    "max": 1,
+    "mae": 0.01307023673140226,
+    "mse": 0.01307023673140226,
+    "changed_channels": 81425,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "take",
+    "frame": 2,
+    "max": 1,
+    "mae": 0.006891389663525476,
+    "mse": 0.006891389663525476,
+    "changed_channels": 42932,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "flat",
+    "frame": 1,
+    "max": 1,
+    "mae": 0.008813922366405486,
+    "mse": 0.008813922366405486,
+    "changed_channels": 54909,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "take",
+    "frame": 1,
+    "max": 1,
+    "mae": 0.01047175970090868,
+    "mse": 0.01047175970090868,
+    "changed_channels": 65237,
+    "alpha_changed": 0
+  },
+  {
+    "case": "full-complete",
+    "input": "take",
+    "frame": 0,
+    "max": 1,
+    "mae": 0.010463733764936067,
+    "mse": 0.010463733764936067,
+    "changed_channels": 65187,
+    "alpha_changed": 0
+  },
+  {
+    "case": "p3-complete",
+    "input": "flat",
+    "frame": 0,
+    "max": 1,
+    "mae": 0.008756456664841568,
+    "mse": 0.008756456664841568,
+    "changed_channels": 54551,
+    "alpha_changed": 0
+  }
+]
