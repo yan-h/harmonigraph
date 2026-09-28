@@ -639,10 +639,10 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
     .on_hover_text(
         "How long each star lives before a new one takes its place, fading in and out, alike at every depth.",
     );
-    ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Near star softness")
+    ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Star softness")
         .percent()
         .show(ui)
-        .on_hover_text("How much the nearest stars are softened, as if out of focus. 0% keeps every star sharp.");
+        .on_hover_text("Widens every star's core and glow by the same proportion, at every depth. 0% keeps their base widths; Fringe controls the strength of the surrounding glow.");
 }
 
 #[cfg(test)]
