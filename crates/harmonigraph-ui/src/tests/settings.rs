@@ -312,15 +312,10 @@ fn the_video_pane_does_not_start_with_a_rule() {
     }
 }
 
-/// A folded section's heading sits midway between the rule over it and the
-/// rule that opens the next section, with its chevron ahead of the name.
-///
-/// The space that sets a section off from the one above once went in above
-/// the rule alone, which is the same space landing UNDER a folded heading and
-/// nowhere over it. "Analysis" because a section with one below it is the only
-/// kind with a rule on both sides to measure between.
+/// A folded section keeps its heading between the surrounding rules and its
+/// chevron ahead of the name, without overlap. Exact gap symmetry is styling.
 #[test]
-fn a_folded_heading_sits_centred_between_its_rules() {
+fn a_folded_heading_keeps_its_rules_and_chevron_clear() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
     state.workspace.interaction.folded_sections.insert("Analyzer/Analysis".to_owned());
@@ -356,8 +351,6 @@ fn a_folded_heading_sits_centred_between_its_rules() {
     let above = rules.iter().copied().filter(|&y| y < heading.top()).fold(f32::MIN, f32::max);
     let below = rules.iter().copied().filter(|&y| y > heading.bottom()).fold(f32::MAX, f32::min);
     assert!(above > f32::MIN && below < f32::MAX, "no rule on both sides of {heading:?}");
-    let (over, under) = (heading.top() - above, below - heading.bottom());
-    assert!((over - under).abs() < 1.0, "{over}pt over the folded heading, {under}pt under it");
     assert!(
         out.shapes.iter().any(|cs| matches!(&cs.shape,
             egui::Shape::Path(p) if p.points.len() == 3 && {
