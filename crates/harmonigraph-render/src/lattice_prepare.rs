@@ -751,7 +751,7 @@ impl LatticeCallback {
                 pane,
                 strip,
                 has_lit_nodes,
-                self.uniforms.material.shadow_pickup,
+                self.uniforms.pickup.intensity,
             );
         }
     }

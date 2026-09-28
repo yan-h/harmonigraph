@@ -234,8 +234,7 @@ fn shadow_pickup_bypasses_with_material_or_light_disabled() {
         |s| s.atmosphere.material_amount = 0.0,
         |s| s.glow_reach = 0.0,
         |s| s.glow_strength = 0.0,
-        // Zero visible depth must not remove the independent full-depth bloom mask.
-        |s| s.shadow.lattice_geometry.depth = 0.0,
+        |s| s.atmosphere.material_shadow_width = 0.0,
     ] {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
         scene.bloom_strength = 1.0;
@@ -246,6 +245,99 @@ fn shadow_pickup_bypasses_with_material_or_light_disabled() {
         let ordinary = shooter.shot(&scene);
         scene.atmosphere.material_shadow_pickup = 1.0;
         assert_eq!(ordinary, shooter.shot_again(&scene), "bypass preserves ordinary shadows");
+    }
+}
+
+#[test]
+fn pickup_and_ordinary_shadows_are_independent() {
+    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.shadow = one_shadow(0.8, 0.7, ShadowKernel::Distance);
+    let scene_alpha = |shooter: &Shooter| {
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let target = resources.panes[&shooter.pane].offscreen.as_ref().unwrap();
+        let binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &resources.compiled.filter_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&target.color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+                },
+            ],
+        });
+        read_glow_binding(shooter, &binding).chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>()
+    };
+    let plain = glow(&mut shooter, &scene);
+    let ordinary = scene_alpha(&shooter);
+    scene.atmosphere.material_shadow_pickup = 0.5;
+    scene.atmosphere.material_shadow_width = 3.0;
+    scene.atmosphere.material_shadow_softness = 4.0;
+    shooter.shot_again(&scene);
+    let pigment = read_glow(&shooter);
+    assert_ne!(plain, pigment, "fixture reaches the pigment source");
+    assert_eq!(ordinary, scene_alpha(&shooter), "pickup must not suppress the actual shadow mask");
+    for (width, depth, kernel) in [
+        (0.0, 0.0, ShadowKernel::Distance),
+        (0.2, 1.0, ShadowKernel::Distance),
+        (1.0, 0.3, ShadowKernel::Gaussian),
+    ] {
+        scene.shadow = one_shadow(width, depth, kernel);
+        shooter.shot_again(&scene);
+        assert_eq!(pigment, read_glow(&shooter), "actual shadow settings cannot change pickup");
+        if width == 0.0 {
+            assert_ne!(ordinary, scene_alpha(&shooter), "fixture must contain actual shadows");
+        }
+    }
+}
+
+#[test]
+fn pickup_width_and_softness_reach_beyond_the_ordinary_node_quad() {
+    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 1.0, false);
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.material_settings.wash_refract = 0.0;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.shadow = one_shadow(0.0, 0.0, ShadowKernel::Distance);
+    scene.glow_reach = 6.0;
+    let plain = glow(&mut shooter, &scene);
+    let (right, _) = scene.camera.right_up();
+    let radius = on_screen(&scene, SIZE, right * scene.node_radius).distance(CENTRE);
+    let far_changed = |output: &[u8]| {
+        plain
+            .chunks_exact(4)
+            .zip(output.chunks_exact(4))
+            .enumerate()
+            .filter(|(i, (a, b))| {
+                let at = glam::vec2(
+                    (i % SIZE[0] as usize) as f32 + 0.5,
+                    (i / SIZE[0] as usize) as f32 + 0.5,
+                );
+                at.distance(CENTRE) > 4.0 * radius
+                    && a[..3].iter().zip(*b).any(|(a, b)| a.saturating_sub(*b) > 3)
+            })
+            .count()
+    };
+    scene.atmosphere.material_shadow_pickup = 0.8;
+    scene.atmosphere.material_shadow_width = 0.3;
+    scene.atmosphere.material_shadow_softness = 0.1;
+    assert_eq!(far_changed(&glow(&mut shooter, &scene)), 0, "narrow pigment stays near its ring");
+    for (width, softness) in [(6.0, 0.1), (0.3, 6.0)] {
+        scene.atmosphere.material_shadow_width = width;
+        scene.atmosphere.material_shadow_softness = softness;
+        let count = far_changed(&glow(&mut shooter, &scene));
+        assert!(
+            count > 100,
+            "wide/fuzzy pickup must extend beyond the ink quad: {width}/{softness}: {count}"
+        );
     }
 }
 

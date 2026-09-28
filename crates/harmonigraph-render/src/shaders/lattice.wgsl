@@ -84,7 +84,13 @@ struct MaterialParams {
     variety: f32,
     refract: f32,
     layers: f32,
-    shadow_pickup: f32,
+    padding: vec2<f32>,
+};
+
+struct PickupParams {
+    @align(16) intensity: f32,
+    width: f32,
+    softness: f32,
     padding: f32,
 };
 
@@ -119,6 +125,7 @@ struct Uniforms {
     glow: GlowParams,
     texture: TextureParams,
     material: MaterialParams,
+    pickup: PickupParams,
     geometry_shadow: ShadowParams,
     marker_shadow: ShadowParams,
     shadow_target: ShadowTargetParams,
@@ -2860,36 +2867,69 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 // blended. The ink component then takes only foreground ink coverage, while
 // the other component still takes every ordinary shadow. This restores the
 // background under fading ink without applying a second darkening to it.
-fn node_split(paint: Painted, shadow_alpha: f32, shadow_pickup: f32) -> SplitOut {
+fn node_split(paint: Painted, shadow_alpha: f32) -> SplitOut {
     // Zero keeps the pre-prototype reference available to GPU A/B probes.
     let alpha = mix(shadow_alpha, paint.ink_alpha, clamp(u.geometry_shadow.occlusion, 0.0, 1.0));
-    // Material pickup already shaded the light before it was displaced. Keep
-    // foreground coverage and receiver occlusion, but spend its shadow only once.
-    let other_alpha = mix(shadow_alpha, paint.ink_alpha, shadow_pickup);
-    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, other_alpha), vec4<f32>(paint.rgb, alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
+    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
 }
 
 @fragment
 fn fs_main_split(in: VsOut) -> SplitOut {
     let paint = node_paint(in);
-    return node_split(paint, paint.seen, u.material.shadow_pickup);
+    return node_split(paint, paint.seen);
 }
 
 @fragment
 fn fs_main_scene(in: VsOut) -> SceneOut {
     let paint = node_paint(in);
-    let seen = node_split(paint, paint.seen, u.material.shadow_pickup);
-    // Bloom keeps its full-depth local mask, independent of visible Shadow Depth.
-    let bloom = node_split(paint, paint.bloom, 0.0);
+    let seen = node_split(paint, paint.seen);
+    let bloom = node_split(paint, paint.bloom);
     return SceneOut(seen.other, seen.ink, seen.transmission, bloom.other, bloom.ink);
 }
 
-// Dark pigment in the material input. RGB-only blending preserves light
-// coverage; a shadow cannot introduce opaque black where no light was emitted.
+// Independent pigment behind the material, with no shadow-atlas dependency.
+// Its own quad includes the full feather support, even beyond the ink/halo quad.
+struct PickupOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) level: f32,
+};
+
+@vertex
+fn vs_source_shadow(@builtin(vertex_index) vertex: u32, inst: Instance) -> PickupOut {
+    var out: PickupOut;
+    out.position = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+    out.uv = vec2<f32>(0.0);
+    // Pigment follows the note-light envelope, including its release, but not
+    // decorative breathing. It never feeds back into the carried ink color.
+    out.level = clamp(inst.glow.x, 0.0, 1.0);
+    if out.level <= 0.0 {
+        return out;
+    }
+    let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u)) * 2.0 - 1.0;
+    let radius = u.node.radius * 1.8 * max(inst.scale, 0.05);
+    let center = u.camera.view_proj * vec4<f32>(inst.world_pos, 1.0);
+    let edge = u.camera.view_proj * vec4<f32>(inst.world_pos + u.camera.right.xyz * radius, 1.0);
+    let source_size = ceil(u.texture.target_size * 0.5);
+    let radius_px = length((edge.xy / edge.w - center.xy / center.w) * source_size * 0.5);
+    let aa = 1.0 / max(radius_px, 1e-3);
+    let span = node_rim(false) + (0.5 * u.pickup.width + u.pickup.softness) / 1.8 + aa;
+    out.uv = corner * span;
+    let world = inst.world_pos
+        + (u.camera.right.xyz * out.uv.x + u.camera.up.xyz * out.uv.y) * radius;
+    out.position = u.camera.view_proj * vec4<f32>(world, 1.0);
+    return out;
+}
+
 @fragment
-fn fs_source_shadow(in: VsOut) -> @location(0) vec4<f32> {
-    let through = node_shadow_through(in.shadow_box.x, in.shadow_at.xy, in.shadow_at.z);
-    return vec4<f32>(0.0, 0.0, 0.0, (1.0 - through.seen) * u.material.shadow_pickup);
+fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
+    let d = abs(length(in.uv) - node_rim(false));
+    let half_width = 0.5 * u.pickup.width / 1.8;
+    let aa = max(fwidth(in.uv.x), 1e-5);
+    let feather = max(u.pickup.softness / 1.8, aa);
+    let coverage = 1.0 - smoothstep(half_width - aa, half_width + feather, d);
+    // RGB-only blending darkens existing light without introducing opacity.
+    return vec4<f32>(0.0, 0.0, 0.0, coverage * in.level * u.pickup.intensity);
 }
 
 // ---- Node glow -------------------------------------------------------------

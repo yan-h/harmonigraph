@@ -145,7 +145,14 @@ uniform_group! {
         variety: f32,
         refract: f32,
         layers: f32,
-        shadow_pickup: f32,
+        padding: Float2,
+    }
+}
+uniform_group! {
+    struct PickupParams {
+        intensity: f32,
+        width: f32,
+        softness: f32,
         padding: f32,
     }
 }
@@ -188,6 +195,7 @@ uniform_group! {
         glow: GlowParams,
         texture: TextureParams,
         material: MaterialParams,
+        pickup: PickupParams,
         geometry_shadow: ShadowParams,
         marker_shadow: ShadowParams,
         shadow_target: ShadowTargetParams,

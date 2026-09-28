@@ -105,33 +105,44 @@ Its lifecycle clarification is incorporated above:
 retain geometry only while active, release on None/zero, and compare reactivation and resize with fresh panes.
 No extra abstractions or configurable ordering were recommended.
 
-## Shadow pickup experiment
+## Independent shadow pickup
 
-`material_shadow_pickup` defaults to 0 and ranges from 0 to 1.
-The material controls expose it as Shadow pickup;
-resetting the material resets it too.
-Existing appearances retain the current shadow composition.
-With material None, zero material amount, or disabled glow, pickup is bypassed.
+The material can sample a separate dark circular band behind each note's ring.
+This pigment source is independent of the actual ring, mark and label shadows:
+changing pickup never replaces or suppresses those shadows,
+and changing an actual shadow's width, darkness or kernel does not change pickup.
 
-Pickup darkens the RGB of the material input with the existing node-shadow field,
-then lets Watercolor or Mosaic sample that dark pigment with the colored light.
-Source alpha is preserved:
-a shadow cannot introduce opaque black where there was no light.
-The corresponding share of the smooth visible shadow is removed after the material,
-while node and label receiver occlusion remain local.
-Intermediate values multiply partial source and overlay shadows,
-so they can look slightly lighter than either endpoint.
+The material controls expose three persisted fields:
 
-Bloom keeps its full-depth local shadow mask independent of visible Shadow Depth.
-Its input also includes the material's darkened light,
-so pickup can reduce bloom further near a shadow boundary.
+- Pickup darkness (`material_shadow_pickup`): 0–100%, default 0% (off).
+- Pickup width (`material_shadow_width`): full band width, 0–800% of the node radius, default 150%.
+- Pickup softness (`material_shadow_softness`): feather distance beyond each edge, 0–800% of the node radius, default 200%.
 
-This opt-in experiment also reduces node-shadow shading over resting crosses:
-the current scene attachment combines those crosses with background light.
-At full pickup, crosses keep ink coverage from nearer rings but lose their surrounding node-shadow darkening.
-Preserving that interaction separately would require another receiver treatment or separating light from the cross attachment;
-that additional rendering machinery is deferred until the look is selected ([#1253](https://github.com/yan-h/harmonigraph/issues/1253)).
+The band is centered on the configured ring rim and follows each note's light envelope,
+including release, independently of decorative breathing.
+Width zero disables pickup.
+Material None, zero material amount and disabled glow also bypass it.
+Reset material restores all three controls.
+The first draft's `material_shadow_pickup` transfer amount now means independent darkness;
+a nonzero value saved from that draft is reinterpreted,
+while existing appearances without pickup retain the default of zero.
 
-The source pass uses live instance, caster and uniform buffers on every frame.
-Pickup does not belong in the geometry-tile key:
-it changes sampled light, not wash or facet geometry.
+One half-resolution quad per active node blends black into the resolved light before the material pass.
+The analytic band needs only node instances and uniforms,
+with no shadow atlas or caster dependency and no new texture allocation.
+Its own quad covers the full width, feather and antialiasing margin,
+including when its center is outside the viewport.
+RGB-only blending preserves source alpha and cannot introduce opaque black into empty light.
+Watercolor or Mosaic samples this dark pigment along with the colored source light.
+The normal scene shadow and bloom masks then apply unchanged to the resulting picture.
+
+Pickup changes light sampled by the material,
+so its controls do not belong in the geometry-tile cache key.
+The live source draw reads current uniforms and instances each frame.
+The first draft's resting-cross shadow limitation (#1253) is removed by retaining the normal scene shadow pass in full.
+
+GPU tests verify unchanged actual-shadow masks when pickup is adjusted,
+unchanged pickup when actual shadows are adjusted or disabled,
+RGB darkening without added alpha,
+material/glow bypasses,
+and wide/soft pickup reaching beyond the old node quad.

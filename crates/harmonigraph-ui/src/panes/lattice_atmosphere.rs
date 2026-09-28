@@ -2,7 +2,7 @@
 
 use harmonigraph_scene::{
     AtmosphereSettings, LatticeMaterial, LatticeTexture, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN,
-    NEBULA_SPEED_MAX, NEBULA_SPEED_MIN,
+    NEBULA_SPEED_MAX, NEBULA_SPEED_MIN, SHADOW_PICKUP_SIZE_MAX,
 };
 
 pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewConfig) {
@@ -52,8 +52,12 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
-            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Shadow pickup")
-                .percent().show(ui).on_hover_text("How much node-shadow darkness the washes or facets pick up. 0% keeps smooth shadows over the material; 100% lets the material carry them. Ring and label occlusion stay local.");
+            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Pickup darkness")
+                .percent().show(ui).on_hover_text("Darkness of a separate circular source behind the material. Washes or facets pick up this dark color. 0% disables it. Actual ring and label shadows keep their own settings.");
+            ValueBar::new(&mut settings.material_shadow_width, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup width")
+                .percent().show(ui).on_hover_text("Full width of the dark source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
+            ValueBar::new(&mut settings.material_shadow_softness, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup softness")
+                .percent().show(ui).on_hover_text("Soft fade beyond each edge of the pickup band, as a percentage of the node radius. Up to 800% for very diffuse darkness. Does not alter the actual shadow.");
             super::material::speed(ui, &mut settings.material_speed);
             super::material::direction(ui, &mut settings.material_direction);
             match settings.material_style {
@@ -68,6 +72,8 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 settings.material_style = fresh.material_style;
                 settings.material_amount = fresh.material_amount;
                 settings.material_shadow_pickup = fresh.material_shadow_pickup;
+                settings.material_shadow_width = fresh.material_shadow_width;
+                settings.material_shadow_softness = fresh.material_shadow_softness;
                 settings.material_settings = fresh.material_settings;
                 settings.material_speed = fresh.material_speed;
                 settings.material_direction = fresh.material_direction;

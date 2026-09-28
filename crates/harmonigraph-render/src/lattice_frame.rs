@@ -525,14 +525,20 @@ impl LatticeCallback {
                         atmosphere.material_settings.scale_refract
                     },
                     layers: atmosphere.material_settings.wash_layers,
-                    shadow_pickup: if lights
+                    padding: Float2([0.0; 2]),
+                },
+                pickup: PickupParams {
+                    intensity: if lights
                         && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
                         && atmosphere.material_amount > 0.0
+                        && atmosphere.material_shadow_width > 0.0
                     {
                         atmosphere.material_shadow_pickup
                     } else {
                         0.0
                     },
+                    width: atmosphere.material_shadow_width,
+                    softness: atmosphere.material_shadow_softness,
                     padding: 0.0,
                 },
                 // Every shadow still casts with the glow disabled. Markers

@@ -359,6 +359,7 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "fs_glow_splat",
     "vs_glow_resolve",
     "fs_glow_resolve",
+    "vs_source_shadow",
     "fs_source_shadow",
     "vs_ink_strip",
     "fs_ink_strip",
@@ -2604,7 +2605,7 @@ impl ShaderPipelines {
             layouts.statistics,
         );
         let source_shadow_pipeline =
-            lattice_node_glow::source_shadow_pipeline(device, lattice, layouts.scene);
+            lattice_node_glow::source_shadow_pipeline(device, lattice, layouts.scene.uniforms);
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
         progress(startup::Stage::Lattice);
