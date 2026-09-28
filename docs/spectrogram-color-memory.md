@@ -32,6 +32,8 @@ With memory enabled, Mosaic and Watercolor's Texture mix blends the plain color 
 This is bounded and preserves the zero and full-strength endpoints, but intermediate colors can leave the authored palette ramp.
 With both times zero, the original scalar-before-palette Texture mix remains exact.
 Zero refraction disables displacement but leaves temporal memory available.
+Watercolor’s Random brightness is applied after reading held color,
+so changing it does not reset history or feed altered brightness back into memory.
 
 ## Lifetime and storage
 

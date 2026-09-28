@@ -29,6 +29,12 @@ pub(super) fn watercolor(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene:
         .on_hover_text(
             "Pull the sampled picture toward each glob's center. 0% keeps the original picture; 100% gives each glob the level at its center.",
         );
+    ValueBar::new(&mut atmosphere.wash_randomness, 0.0..=1.0, "Random brightness")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Vary brightness between watercolor globs with balanced brightening and dimming, preserving the average color. Highlights vary less to avoid clipping. 0% keeps the original brightness.",
+        );
     ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Fine layer mix")
         .percent()
         .show(ui)

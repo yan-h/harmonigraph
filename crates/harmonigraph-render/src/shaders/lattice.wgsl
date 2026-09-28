@@ -84,7 +84,8 @@ struct MaterialParams {
     variety: f32,
     refract: f32,
     layers: f32,
-    padding: vec2<f32>,
+    randomness: f32,
+    padding: f32,
 };
 
 struct PickupParams {

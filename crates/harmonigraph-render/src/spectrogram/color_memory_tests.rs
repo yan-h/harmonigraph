@@ -483,3 +483,22 @@ fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
     assert_eq!(memory_allocation_size([16383, 16384], 16384), [16384; 2]);
     assert_eq!(memory_allocation_size([998, 1000], 1000), [1000; 2]);
 }
+
+/// Brightness is applied to displayed color, so its slider preserves held RGB
+/// even when current sound is dark and a reset would erase the old color.
+#[test]
+fn watercolor_brightness_edits_preserve_held_color() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Watercolor);
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let lit = pixels(&device, &queue, memory(&resources));
+    assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
+    cb.grid.fill(0);
+    for randomness in [1.0, 0.5, 0.0] {
+        cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_randomness = randomness;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        assert_eq!(pixels(&device, &queue, memory(&resources)), lit);
+    }
+}

@@ -16,7 +16,7 @@ Replace its combined enable/material controls with two independently selectable 
 
 - Texture: None, Clouds, Contours, Interference; depth, size and speed.
 - Material: None, Watercolor, Mosaic; amount, drift speed and direction.
-- Watercolor: glob size, edge feathering, shape warp, refraction and fine layer mix.
+- Watercolor: glob size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
 - Mosaic: cell size, size variation and signed refraction.
 - Breathing: depth and speed in the Background glow controls, independent of either stage.
 
@@ -56,10 +56,16 @@ Materials drift at constant screen direction using the spectrogram’s motion ca
 texture drift remains independent.
 All texture attenuation and material sampling preserve premultiplied RGBA and the existing brightness ceiling.
 No display modulation feeds back into ink history.
+Watercolor’s Random brightness uses the shared signed glob field to vary linear RGB after refraction,
+leaving alpha unchanged.
+Equal brightening and dimming headroom preserves the expected average color and premultiplied ceiling;
+saturated highlights vary less.
+The default is 0%,
+including when older saved settings omit the field.
 
 While the material is active, its geometry is keyed by material kind, quantized tile resolution and the active style’s geometry controls:
 Watercolor feathering/warp, or Mosaic variety.
-Texture settings, amount, refraction, fine layer mix, drift, illumination, camera and the inactive style’s controls do not invalidate geometry.
+Texture settings, amount, refraction, random brightness, fine layer mix, drift, illumination, camera and the inactive style’s controls do not invalidate geometry.
 The active material source target has a lifetime bounded by the glow allocation;
 resizing the glow replaces that source as before.
 None or zero material amount releases both source and geometry resources and skips the pass, as before.

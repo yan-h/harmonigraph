@@ -3867,6 +3867,87 @@ fn cs_wrap_probe() {
         }
     }
 
+    /// Brightness changes colored globs even at zero refraction, without biasing
+    /// their linear-light RGB mean. Hundreds of resolved globs reach the random
+    /// field; constant palettes isolate brightness from nonlinear palette shifts.
+    #[test]
+    fn watercolor_random_brightness_preserves_average_color() {
+        let Some((device, queue)) = headless_device() else { return };
+        let linear = |byte: u8| {
+            let v = f64::from(byte) / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        for palette in [[96, 128, 160, 255], [210, 230, 250, 255]] {
+            for (sampling, memory) in [(1.0, false), (3.0, false), (1.0, true)] {
+                let mut cb = wash_fixture();
+                cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(384.0, 384.0));
+                cb.atmosphere.as_mut().unwrap().region = cb.rect;
+                relay_quad(&mut cb, 12);
+                cb.grid.fill(150);
+                cb.shades.lut = Arc::new(vec![palette; 256]);
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.pitch_softness = 0.0;
+                s.time_softness = 0.0;
+                s.material_settings.wash_size = 0.7;
+                s.material_settings.wash_refract = 0.0;
+                s.color_pickup = if memory { 0.5 } else { 0.0 };
+                s.color_release = s.color_pickup;
+                let mut resources = CallbackResources::default();
+                resources.insert(atmosphere::CloudSampling {
+                    pixel_points: sampling,
+                    ..Default::default()
+                });
+                let plain = frame_with(&device, &queue, &mut resources, &cb);
+                cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_randomness = 1.0;
+                let varied = frame_with(&device, &queue, &mut resources, &cb);
+                let cloud = resources
+                    .get::<SpectrogramResources>()
+                    .unwrap()
+                    .panes
+                    .get(0)
+                    .unwrap()
+                    .cloud
+                    .as_ref();
+                let cloud = cloud.expect("zero refraction must still draw random brightness");
+                if sampling > 1.0 {
+                    let (_, size) = cloud.tone.as_ref().expect("fixture must reach reduced tone");
+                    assert!(size[0] < 384 && size[1] < 384);
+                }
+                for c in 0..3 {
+                    let n = (plain.len() / 4) as f64;
+                    let mean = varied.chunks_exact(4).map(|p| linear(p[c])).sum::<f64>() / n;
+                    let reference = plain.chunks_exact(4).map(|p| linear(p[c])).sum::<f64>() / n;
+                    assert!((mean - reference).abs() < 0.01,
+                        "{palette:?}, sampling={sampling}, memory={memory}, channel={c}: {mean} vs {reference}");
+                }
+                let changed = plain
+                    .chunks_exact(4)
+                    .zip(varied.chunks_exact(4))
+                    .filter(|(a, b)| a[2].abs_diff(b[2]) > 2)
+                    .count();
+                assert!(
+                    changed > plain.len() / 40,
+                    "fixture must resolve varying globs: {changed}"
+                );
+                assert_eq!(
+                    varied,
+                    frame_with(&device, &queue, &mut resources, &cb),
+                    "brightness must be stable at a fixed drift time"
+                );
+                cb.atmosphere.as_mut().unwrap().settings.material_settings.wash_randomness = 0.0;
+                assert_eq!(
+                    plain,
+                    frame_with(&device, &queue, &mut resources, &cb),
+                    "zero restores the original color, including carried memory"
+                );
+            }
+        }
+    }
+
     /// Each retained wash control changes the displacement over structured sound.
     #[test]
     fn the_wash_dials_each_reach_the_globs() {
@@ -3898,6 +3979,7 @@ fn cs_wrap_probe() {
             ("Fuzz", |s| s.material_settings.wash_fuzz = 0.0),
             ("Lobe shape", |s| s.material_settings.wash_lobe = 0.0),
             ("Layers", |s| s.material_settings.wash_layers = 0.0),
+            ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
@@ -4439,6 +4521,7 @@ fn cs_rotation_probe() {
             ("Cloud depth", |s| s.cloud_depth = 0.5),
             ("Refraction", |s| s.material_settings.wash_refract = 0.2),
             ("Layers", |s| s.material_settings.wash_layers = 0.0),
+            ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),

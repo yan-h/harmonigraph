@@ -529,7 +529,8 @@ impl LatticeCallback {
                         atmosphere.material_settings.scale_refract
                     },
                     layers: atmosphere.material_settings.wash_layers,
-                    padding: Float2([0.0; 2]),
+                    randomness: atmosphere.material_settings.wash_randomness,
+                    padding: 0.0,
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },

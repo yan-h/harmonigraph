@@ -268,7 +268,7 @@ impl Source {
         let view = texture(device, "lattice_material_light_source", size, LATTICE_COLOR_FORMAT);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lattice_material_settings"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -359,6 +359,10 @@ pub(super) fn prepare(
         settings.drift.0[1],
         settings.refract,
         settings.layers,
+        settings.randomness,
+        0.0,
+        0.0,
+        0.0,
     ];
     queue.write_buffer(&source.buffer, 0, bytemuck::cast_slice(&values));
 }

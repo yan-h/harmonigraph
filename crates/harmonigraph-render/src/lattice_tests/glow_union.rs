@@ -841,6 +841,7 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         (LatticeMaterial::Watercolor, "warp", true, |s| s.wash_lobe = 0.0),
         (LatticeMaterial::Watercolor, "refraction", false, |s| s.wash_refract = 0.0),
         (LatticeMaterial::Watercolor, "fine layer", false, |s| s.wash_layers = 0.0),
+        (LatticeMaterial::Watercolor, "random brightness", false, |s| s.wash_randomness = 1.0),
         (LatticeMaterial::Mosaic, "variety", true, |s| s.scale_variety = 1.0),
         (LatticeMaterial::Mosaic, "outward refraction", false, |s| s.scale_refract = 1.0),
         (LatticeMaterial::Mosaic, "zero refraction", false, |s| s.scale_refract = 0.0),
@@ -853,6 +854,12 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         turn(&mut scene.atmosphere.material_settings);
         shooter.shot_again(&scene);
         let after = read_glow(&shooter);
+        if label == "random brightness" {
+            assert!(
+                before.chunks_exact(4).zip(after.chunks_exact(4)).all(|(a, b)| a[3] == b[3]),
+                "brightness must preserve premultiplied coverage"
+            );
+        }
         assert_eq!(before_tile != tile(&shooter), rebake, "{style:?}/{label}: tile invalidation");
         let changed = before
             .chunks_exact(4)

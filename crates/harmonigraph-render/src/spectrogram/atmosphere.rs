@@ -750,8 +750,9 @@ pub(super) fn tile_key(
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
-                wash_refract: _, // applied after the tile bake
-                wash_layers: _,  // applied after the tile bake
+                wash_refract: _,    // applied after the tile bake
+                wash_layers: _,     // applied after the tile bake
+                wash_randomness: _, // applied after coloring
             },
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
@@ -841,7 +842,7 @@ struct Uniforms {
     memory_shift: Int2,
     memory_fraction: Float2,
     previous_life: f32,
-    memory_pad_a: f32,
+    wash_randomness: f32,
     memory_extent: Float2,
     previous_slices: [StarSlice; STAR_SLICES],
     /// Actual rounded dimensions and array address for each depth.
@@ -1348,6 +1349,7 @@ fn memory_key(
                 wash_lobe,
                 wash_refract,
                 wash_layers,
+                wash_randomness: _, // display brightness does not change held color
             },
     } = s;
     let mut values = vec![
@@ -2098,7 +2100,7 @@ impl Targets {
             memory_shift: Int2(memory_shift),
             memory_fraction: Float2(memory_fraction),
             previous_life,
-            memory_pad_a: 0.0,
+            wash_randomness: settings.material_settings.wash_randomness,
             memory_extent: Float2(memory_extent.unwrap_or([0; 2]).map(|n| n as f32)),
             previous_slices,
             star_halo_samples: self
