@@ -198,7 +198,12 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
             "speed-curve" => a.settings.stars.star_speed_curve += 0.01,
             "direction" => a.settings.cloud_direction += 0.1,
             "lifetime" => a.settings.stars.star_lifetime += 0.001,
-            "width" => cb.rect.max.x -= 2.0,
+            "width" => {
+                let previous_width = cb.rect.width();
+                cb.rect.max.x -= 2.0;
+                // The UI keeps the time window fixed while the analyzer grows.
+                a.points_per_ms *= cb.rect.width() / previous_width;
+            }
             _ => {}
         }
         a.now += 0.25;
