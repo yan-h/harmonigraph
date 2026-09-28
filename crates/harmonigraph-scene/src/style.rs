@@ -348,11 +348,11 @@ fn default_lightness_ramp() -> f32 {
 /// knob is for, not what it should open on.
 ///
 /// The figure holding the default arc's MEAN colorfulness where a fraction of
-/// the per-hue ceiling at 0.5 holds it, so the picture opens about as colored as
+/// the per-hue ceiling at 0.5 holds it, so the gradient type opens about as colored as
 /// that alternative draws it and spends the color evenly rather than banking it
 /// in the magentas. `the_default_opens_at_the_colorfulness_it_used_to` measures
-/// it, and measures `ViewConfig`'s own chroma beside it — the two are
-/// independent numbers and a retune of this one does not reach that one.
+/// that conversion. `ViewConfig`'s captured look is independent; a retune of
+/// this type default does not reach it.
 fn default_chroma() -> f32 {
     0.669
 }
