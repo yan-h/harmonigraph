@@ -1,0 +1,22 @@
+{
+  "H": {
+    "mae_vs_medium_rgb_255": 0.8171823559670782,
+    "mean_rgb_255": 106.99953366126543,
+    "pixels_any_channel_gt5_percent": 1.4889081790123457
+  },
+  "M": {
+    "mae_vs_medium_rgb_255": 0.0,
+    "mean_rgb_255": 106.96324990354938,
+    "pixels_any_channel_gt5_percent": 0.0
+  },
+  "L1": {
+    "mae_vs_medium_rgb_255": 1.0211160943930042,
+    "mean_rgb_255": 106.96268068415638,
+    "pixels_any_channel_gt5_percent": 2.29711612654321
+  },
+  "X": {
+    "mae_vs_medium_rgb_255": 3.427071920010288,
+    "mean_rgb_255": 106.9601668595679,
+    "pixels_any_channel_gt5_percent": 29.28515625
+  }
+}

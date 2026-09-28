@@ -1,0 +1,9 @@
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 3840x2160 px at 4 px/pt, 960 slabs of 1024 buckets
+actual X: far [480, 270], near Some([960, 540]), halos StarHaloLayout { groups: [HaloGroup { size: [960, 540], layers: 1 }, HaloGroup { size: [576, 324], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median
+X / 1.00 / 10.0: 5.266/6.632/8.091/14.161/20.819; wall 11.639; CPU 0.177; source px Some([960, 2160])
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 380 filtered out; finished in 25.65s

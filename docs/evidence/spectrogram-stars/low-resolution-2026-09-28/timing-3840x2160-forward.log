@@ -1,0 +1,21 @@
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 3840x2160 px at 4 px/pt, 1024 slabs of 3828 buckets
+actual H: far [2880, 1620], near None, halos StarHaloLayout { groups: [HaloGroup { size: [3840, 2160], layers: 1 }, HaloGroup { size: [2304, 1296], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+actual M: far [1920, 1080], near Some([2880, 1620]), halos StarHaloLayout { groups: [HaloGroup { size: [2880, 1620], layers: 1 }, HaloGroup { size: [1728, 972], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+actual L1: far [1280, 720], near Some([1920, 1080]), halos StarHaloLayout { groups: [HaloGroup { size: [1920, 1080], layers: 1 }, HaloGroup { size: [1152, 648], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+actual L2: far [960, 540], near Some([1920, 1080]), halos StarHaloLayout { groups: [HaloGroup { size: [1920, 1080], layers: 1 }, HaloGroup { size: [1152, 648], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+actual V: far [640, 360], near Some([1280, 720]), halos StarHaloLayout { groups: [HaloGroup { size: [1280, 720], layers: 1 }, HaloGroup { size: [768, 432], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+actual X: far [480, 270], near Some([960, 540]), halos StarHaloLayout { groups: [HaloGroup { size: [960, 540], layers: 1 }, HaloGroup { size: [576, 324], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+actual M2: far [1920, 1080], near Some([2880, 1620]), halos StarHaloLayout { groups: [HaloGroup { size: [2880, 1620], layers: 1 }, HaloGroup { size: [1728, 972], layers: 1 }, HaloGroup { size: [1, 1], layers: 0 }], layers: [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]], first_active_layer: 3 }
+case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median
+H / 1.00 / 10.0: 15.181/19.021/23.790/33.436/44.580; wall 26.606; CPU 0.139; source px Some([1024, 2160])
+M / 1.00 / 10.0: 9.264/11.415/15.083/20.754/28.620; wall 17.149; CPU 0.151; source px Some([1024, 2160])
+L1 / 1.00 / 10.0: 6.723/8.052/10.380/14.329/35.889; wall 12.624; CPU 0.152; source px Some([1024, 2160])
+L2 / 1.00 / 10.0: 6.724/8.645/10.741/14.560/21.139; wall 12.701; CPU 0.141; source px Some([1024, 2160])
+V / 1.00 / 10.0: 6.022/7.178/9.168/12.411/18.950; wall 11.188; CPU 0.139; source px Some([1024, 2160])
+X / 1.00 / 10.0: 5.296/6.520/8.352/11.945/17.890; wall 10.586; CPU 0.140; source px Some([1024, 2160])
+M2 / 1.00 / 10.0: 9.335/11.453/14.670/20.511/29.443; wall 17.096; CPU 0.142; source px Some([1024, 2160])
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 380 filtered out; finished in 28.47s

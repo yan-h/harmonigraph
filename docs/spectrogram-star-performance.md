@@ -102,6 +102,14 @@ The cores-and-halos variant is now available as Medium;
 High remains the default.
 The [production confirmation](evidence/spectrogram-stars/medium-preset-2026-09-28/README.md) records the port and its interleaved timing checks.
 
+A [resolution screen below Medium](evidence/spectrogram-stars/low-resolution-2026-09-28/README.md) keeps the production star construction and lowers only intermediate dimensions.
+Longer confirmation runs measured about 29% less GPU time than Medium for half-resolution foreground at 4K,
+and about 43% less for quarter-resolution foreground.
+The report includes recording-derived visual error,
+matched crops,
+and reproducible motion captures;
+it selects no new preset.
+
 ## What was tried and what remains worth considering
 
 This table is a decision index,

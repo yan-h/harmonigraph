@@ -1,0 +1,110 @@
+{
+  "3840x2160-L2/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "3840x2160-H/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-M/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-flat-H/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "2"
+  },
+  "1920x1080-X/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-V/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-flat-L1/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "2"
+  },
+  "1920x1080-L1/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-flat-M/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "2"
+  },
+  "1920x1080-flat-X/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "2"
+  },
+  "3840x2160-L1/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-H/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "3840x2160-take-M2/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "2"
+  },
+  "3840x2160-V/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "3840x2160-X/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "3840x2160-M/motion.mp4": {
+    "width": 3840,
+    "height": 2160,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  },
+  "1920x1080-take-M2/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "2"
+  },
+  "1920x1080-L2/motion.mp4": {
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1",
+    "nb_frames": "360"
+  }
+}
