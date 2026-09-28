@@ -198,6 +198,18 @@ pub(super) fn tone_size(
         let split = super::tests::STAR_SPLIT_OVERRIDE.get().unwrap_or(split);
         return split.then_some(pixels);
     }
+    if settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales {
+        // S1's broad bodies need 32 samples per cell, independent of display
+        // resolution. Sharper edges increase that density; tiny cells stay
+        // native. This bounds the expensive exact body mixture without
+        // selecting/truncating contributors or changing their sampled light.
+        // Power-of-two spacings keep nearby dial values on one allocation.
+        let material = settings.material_settings;
+        let cell = pixels[1] as f32 * (24.0 / 405.0) * material.velvet_size;
+        let samples = 32.0 * (0.34 / material.velvet_edge).max(1.0);
+        let spacing = 2.0f32.powf((cell / samples).max(1.0).log2().floor());
+        return Some(pixels.map(|n| (n as f32 / spacing).ceil().max(1.0) as u32));
+    }
     let pixel = pixel_points * ppp;
     if pixel <= 1.0 {
         return None;
@@ -289,7 +301,12 @@ pub(super) fn tile_key(
     // The starfield walks its own ring per pixel and reads no tile: what it
     // walks MOVES — every slice at its own speed, every star on its own
     // life — so there is no one fixed field to bake.
-    if !settings.effects().cloud || settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
+    if !settings.effects().cloud
+        || matches!(
+            settings.cloud_style,
+            harmonigraph_scene::CloudStyle::Stars | harmonigraph_scene::CloudStyle::VelvetScales
+        )
+    {
         return None;
     }
     let harmonigraph_scene::SpectralAtmosphere {
@@ -309,6 +326,11 @@ pub(super) fn tile_key(
         stars: _, // Stars do not use a displacement tile.
         material_settings:
             harmonigraph_scene::MaterialSettings {
+                velvet_size: _,
+                velvet_variety: _,
+                velvet_edge: _,
+                velvet_irregularity: _,
+                velvet_shape: _,
                 scale_size,
                 scale_variety,
                 scale_refract: _, // applied after the tile bake
@@ -331,7 +353,9 @@ pub(super) fn tile_key(
         harmonigraph_scene::CloudStyle::Watercolor => {
             (1, WASH_CELLS / wash_size, [wash_lobe, wash_fuzz])
         }
-        harmonigraph_scene::CloudStyle::Stars => unreachable!("returned above"),
+        harmonigraph_scene::CloudStyle::Stars | harmonigraph_scene::CloudStyle::VelvetScales => {
+            unreachable!("returned above")
+        }
     };
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
@@ -412,6 +436,8 @@ struct Uniforms {
     previous_slices: [StarSlice; STAR_SLICES],
     /// Actual rounded dimensions and array address for each depth.
     star_halo_samples: [StarHaloSample; STAR_SLICES],
+    velvet: Float4,
+    velvet_size: Float4,
 }
 }
 
@@ -465,6 +491,7 @@ pub(super) struct Pipelines {
     /// The cloud's scalar tone into its own reduced target, for the composite to
     /// read instead of walking the cells per pixel.
     pub tone: wgpu::RenderPipeline,
+    pub velvet: wgpu::RenderPipeline,
     /// One period of the cell walk into the two tile targets, for both of the
     /// above to read instead of walking the ring at all.
     pub tile: wgpu::RenderPipeline,
@@ -646,6 +673,15 @@ impl Pipelines {
                 source_layout,
                 Some(&composite_layout),
                 "fs_cloud_light",
+                false,
+            ),
+            velvet: create_spectrogram_pipeline(
+                device,
+                &spectrogram,
+                FORMAT,
+                source_layout,
+                Some(&composite_layout),
+                "fs_velvet_tone",
                 false,
             ),
             tone: create_spectrogram_pipeline(
@@ -912,6 +948,11 @@ fn memory_key(
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
+                velvet_size,
+                velvet_variety,
+                velvet_edge,
+                velvet_irregularity,
+                velvet_shape,
                 scale_size,
                 scale_variety,
                 scale_refract,
@@ -944,6 +985,20 @@ fn memory_key(
             star_size_curve,
             star_randomness,
             star_jitter,
+        ]),
+        CloudStyle::VelvetScales => values.extend([
+            3.0,
+            size[0],
+            cloud_direction,
+            cloud_speed,
+            velvet_size,
+            velvet_variety,
+            velvet_edge,
+            velvet_irregularity,
+            velvet_shape,
+            contours,
+            contour_softness,
+            contour_strength,
         ]),
         CloudStyle::Mosaic => values.extend([
             0.0,
@@ -1249,7 +1304,7 @@ impl Targets {
             groups: std::array::from_fn(|i| {
                 cloud_group(
                     &source_view,
-                    &views[0],
+                    final_tone,
                     tile_views,
                     &star_scratch,
                     &history[1 - i],
@@ -1576,6 +1631,13 @@ impl Targets {
             });
         }
         let uniforms = Uniforms {
+            velvet: Float4([
+                settings.material_settings.velvet_edge,
+                settings.material_settings.velvet_irregularity,
+                settings.material_settings.velvet_shape,
+                settings.material_settings.velvet_variety,
+            ]),
+            velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
             origin: Float2(rect.min.into()),
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
@@ -1594,6 +1656,7 @@ impl Targets {
                 harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
                 harmonigraph_scene::CloudStyle::Stars => 2,
+                harmonigraph_scene::CloudStyle::VelvetScales => 3,
             },
             wash_size: settings.material_settings.wash_size,
             wash_fuzz: settings.material_settings.wash_fuzz,
@@ -2031,6 +2094,45 @@ mod tests {
         for slice in slices(fresh, 3.0e5) {
             assert!(slice.offset.0.iter().all(|&o| (0.0..=STAR_HASH_PERIOD as f32).contains(&o)));
         }
+    }
+
+    #[test]
+    fn velvet_tone_density_tracks_size_and_softness_without_a_geometry_tile() {
+        let mut a = SpectrogramAtmosphere {
+            settings: harmonigraph_scene::SpectralAtmosphere {
+                cloud_style: harmonigraph_scene::CloudStyle::VelvetScales,
+                cloud_depth: 1.0,
+                ..Default::default()
+            },
+            region: egui::Rect::ZERO,
+            pitch_vertical: true,
+            points_per_cent: 0.03,
+            points_per_ms: 0.01,
+            points_per_slab: 0.0,
+            now: 0.0,
+        };
+        let size = [1920, 1080];
+        let density = |a| tone_size(size, 2.0, a, 0.5);
+        assert_eq!(density(a), Some([960, 540]));
+        assert_eq!(tile_key(size, a, 40), None);
+        a.settings.material_settings.velvet_size = 1.01;
+        assert_eq!(density(a), Some([960, 540]), "small dial steps should not reallocate");
+        a.settings.cloud_speed = 15.0;
+        a.now = 100_000.0;
+        a.settings.material_settings.velvet_irregularity = 1.0;
+        a.settings.material_settings.velvet_shape = 0.0;
+        a.settings.material_settings.velvet_variety = 1.0;
+        a.settings.material_settings.wash_fuzz = 0.0;
+        assert_eq!(
+            density(a),
+            Some([960, 540]),
+            "live/unrelated dials changed sampling allocation"
+        );
+        a.settings.material_settings.velvet_edge = 0.01;
+        assert_eq!(density(a), Some(size), "sharp edges must keep native samples");
+        a.settings.material_settings.velvet_edge = 0.34;
+        a.settings.material_settings.velvet_size = 0.2;
+        assert_eq!(density(a), Some(size), "fine scales must keep native samples");
     }
 
     #[test]

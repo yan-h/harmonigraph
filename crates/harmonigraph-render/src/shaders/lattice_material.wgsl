@@ -8,6 +8,7 @@ struct Settings {
     refract: f32,
     layers: f32,
     randomness: f32,
+    velvet: vec4<f32>,
 };
 struct Geometry { fuzz: f32, lobe: f32, variety: f32, padding: f32 };
 @group(0) @binding(3) var<uniform> geometry: Geometry;
@@ -71,4 +72,12 @@ fn fs_mosaic(in: Vertex) -> @location(0) vec4<f32> {
     let raw = textureSampleLevel(source, source_sampler, in.uv, 0.0);
     let facet = textureSampleLevel(source, source_sampler, in.uv + offset, 0.0);
     return mix(raw, facet, settings.depth);
+}
+
+@fragment
+fn fs_velvet(in: Vertex) -> @location(0) vec4<f32> {
+    let body = velvet_material(source, source_sampler, in.uv * settings.size,
+        settings.size, settings.cell, settings.drift, settings.velvet);
+    let raw = textureSampleLevel(source, source_sampler, in.uv, 0.0);
+    return mix(raw, body, settings.depth);
 }

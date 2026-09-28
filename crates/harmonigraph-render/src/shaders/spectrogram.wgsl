@@ -321,6 +321,8 @@ struct Cloud {
     memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
     star_halo_samples: array<StarHaloSample, 5>,
+    velvet: vec4<f32>,
+    velvet_size: vec4<f32>,
 };
 @group(1) @binding(9) var color_memory: texture_2d<f32>;
 @group(1) @binding(0) var close_light: texture_2d<f32>;
@@ -729,6 +731,9 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
 // Whichever texture is selected, as one scalar. The branch is on a uniform, so
 // no two lanes ever disagree about it.
 fn cloud_tone_at(pt: vec2<f32>) -> f32 {
+    if cloud.cloud_style == 3u {
+        return textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).r;
+    }
     if cloud.cloud_style == 1u {
         return wash_cloud_tone(pt);
     }
@@ -742,6 +747,15 @@ fn cloud_tone_at(pt: vec2<f32>) -> f32 {
 @fragment
 fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
+    let cell = cloud.size.y * (24.0 / 405.0) * cloud.velvet_size.x;
+    let drift = (cloud.drift - vec2<f32>(0.0, 0.6)) * cloud.size.y / (10.0 * cell);
+    let level = velvet_material(close_light, cloud_sampler, vec2<f32>(in.slab, in.t) * cloud.size,
+        cloud.size, cell, drift, cloud.velvet).r;
+    return vec4<f32>(level, 0.0, 0.0, 1.0);
 }
 
 // ====================== ONE PERIOD OF THE CELL WALK ========================

@@ -152,6 +152,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                             "A field of overlapping globs, each reading the sound near its own \
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
+                        (CloudStyle::VelvetScales, "Velvet Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
                         (
                             CloudStyle::Mosaic,
                             "Mosaic",
@@ -173,6 +174,8 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     super::super::material::stars(ui, &mut atmosphere.stars);
                 } else if atmosphere.cloud_style == CloudStyle::Watercolor {
                     super::super::material::watercolor(ui, &mut atmosphere.material_settings);
+                } else if atmosphere.cloud_style == CloudStyle::VelvetScales {
+                    super::super::material::velvet(ui, &mut atmosphere.material_settings);
                 } else {
                     super::super::material::mosaic(ui, &mut atmosphere.material_settings);
                 }

@@ -202,6 +202,7 @@ fn atmosphere_costs_by_polyphony() {
             "no-glow",
             "watercolor",
             "mosaic",
+            "velvet",
             "stars",
             "stars-medium",
             "stars-low",
@@ -233,6 +234,10 @@ fn atmosphere_costs_by_polyphony() {
                 "watercolor" => {
                     variant.atmosphere.material_style =
                         harmonigraph_scene::LatticeMaterial::Watercolor
+                }
+                "velvet" => {
+                    variant.atmosphere.material_style =
+                        harmonigraph_scene::LatticeMaterial::VelvetScales
                 }
                 "mosaic" => {
                     variant.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Mosaic

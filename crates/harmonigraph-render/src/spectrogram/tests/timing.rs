@@ -88,6 +88,21 @@ const CASES: &[(&str, Option<Turn>)] = &[
             (s.pitch_softness, s.time_softness, s.cloud_depth) = (0.0, 0.0, 0.0);
         }),
     ),
+    ("velvet, defaults", Some(|s| s.cloud_style = CloudStyle::VelvetScales)),
+    (
+        "velvet, small cells",
+        Some(|s| {
+            s.cloud_style = CloudStyle::VelvetScales;
+            s.material_settings.velvet_size = 0.2;
+        }),
+    ),
+    (
+        "velvet, memory",
+        Some(|s| {
+            s.cloud_style = CloudStyle::VelvetScales;
+            memory(s);
+        }),
+    ),
     ("mosaic, defaults", Some(|_| {})),
     ("mosaic, no terraces", Some(|s| s.contour_strength = 0.0)),
     ("mosaic, variety 0", Some(|s| s.material_settings.scale_variety = 0.0)),

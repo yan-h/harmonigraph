@@ -609,3 +609,70 @@ fn wash_vary_brightness(color: vec3<f32>, ceiling: f32, draw: f32, amount: f32) 
     let headroom = clamp((ceiling - peak) / max(peak, 1.0e-6), 0.0, 1.0);
     return color * (1.0 + amount * draw * headroom);
 }
+
+// Velvet Scales: the S1 prototype's normalized mixture of body light.
+// Each body samples its own center BEFORE weighting. Sampling the source at
+// the weighted average center would recreate raw spectrogram edges instead.
+// Geometry is a fixed, nonperiodic field; drift translates it without morphing.
+fn velvet_hash(cell: vec2<i32>, seed: u32) -> f32 {
+    var h = bitcast<u32>(cell.x) * 1597334677u ^ bitcast<u32>(cell.y) * 3812015801u ^ seed * 2798796415u;
+    h = (h ^ (h >> 16u)) * 2246822519u;
+    h = (h ^ (h >> 13u)) * 3266489917u;
+    h = h ^ (h >> 16u);
+    return f32(h >> 8u) / 16777216.0;
+}
+fn velvet_warp(p: vec2<f32>, irregularity: f32) -> vec2<f32> {
+    return vec2<f32>(0.43 * sin(p.y * 0.61 + sin(p.x * 0.24)),
+        0.40 * sin(p.x * 0.53 + sin(p.y * 0.31))) * (irregularity / 0.8);
+}
+struct VelvetBody { center: vec2<f32>, weight: f32 };
+fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>) -> VelvetBody {
+    let a = velvet_hash(cell, 0u);
+    let b = velvet_hash(cell, 1u);
+    let center = vec2<f32>(cell) + 0.5 + (vec2<f32>(a, b) - 0.5) * dials.y;
+    let delta = q - center;
+    // Compact support is exactly zero here. Reject before trigonometry,
+    // radius, priority and source-center warp; no contributor is truncated.
+    if any(abs(delta) >= vec2<f32>(1.9)) {
+        return VelvetBody(vec2<f32>(0.0), 0.0);
+    }
+    let c = velvet_hash(cell, 2u);
+    let d = velvet_hash(cell, 3u);
+    let angle = 0.2 + (c - 0.5) * 0.85;
+    let ca = cos(angle); let sa = sin(angle);
+    let size = 0.875 + 0.9 * dials.w * (d - 0.5);
+    let rotated = vec2<f32>(delta.x * ca + delta.y * sa, -delta.x * sa + delta.y * ca) / size;
+    let rx = rotated.x / mix(1.0, clamp(1.0 - 0.38 * rotated.y, 0.52, 1.3), dials.z);
+    let r = length(vec2<f32>(rx, rotated.y + dials.z * 0.17 * rx * rx));
+    let support = (1.0 - smoothstep(1.5, 1.9, abs(delta.x))) * (1.0 - smoothstep(1.5, 1.9, abs(delta.y)));
+    let body = 1.0 - smoothstep(0.85 - dials.x, 0.85 + dials.x, r);
+    let weight = (body + 0.025 * exp(-2.0 * r * r)) * exp(2.8 * (c - 0.5)) * support;
+    return VelvetBody(center - velvet_warp(center, dials.y), weight);
+}
+fn velvet_light(source: texture_2d<f32>, source_sampler: sampler, uv: vec2<f32>, radius: vec2<f32>) -> vec4<f32> {
+    return 0.4 * textureSampleLevel(source, source_sampler, uv, 0.0)
+        + 0.15 * (textureSampleLevel(source, source_sampler, uv + vec2<f32>(radius.x, 0.0), 0.0)
+        + textureSampleLevel(source, source_sampler, uv - vec2<f32>(radius.x, 0.0), 0.0)
+        + textureSampleLevel(source, source_sampler, uv + vec2<f32>(0.0, radius.y), 0.0)
+        + textureSampleLevel(source, source_sampler, uv - vec2<f32>(0.0, radius.y), 0.0));
+}
+fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f32>, size: vec2<f32>, cell_size: f32, drift: vec2<f32>, dials: vec4<f32>) -> vec4<f32> {
+    let p = pt / cell_size + drift;
+    let q = p + velvet_warp(p, dials.y);
+    let base = vec2<i32>(floor(q));
+    var light = vec4<f32>(0.0);
+    var weight = 0.0;
+    for (var j = -2; j <= 2; j++) {
+        for (var i = -2; i <= 2; i++) {
+            let body = velvet_body(q, base + vec2<i32>(i, j), dials);
+            if body.weight > 0.0 {
+                let uv = (body.center - drift) * cell_size / size;
+                light += body.weight * velvet_light(source, source_sampler, uv, vec2<f32>(0.14 * cell_size) / size);
+                weight += body.weight;
+            }
+        }
+    }
+    // The soft skirts cover the entire field. No raw-source fallback: a flat
+    // source stays flat, and full material depth contains only body light.
+    return light / max(weight, 1e-20);
+}

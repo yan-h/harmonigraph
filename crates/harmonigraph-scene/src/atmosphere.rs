@@ -5,10 +5,12 @@ use harmonigraph_core::LatticePos;
 
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
-/// Two constructions, not two presets of one: [`CloudStyle::Mosaic`] is a pile
+/// Distinct constructions: [`CloudStyle::Mosaic`] is a pile
 /// of soft domes joined by a soft union, and [`CloudStyle::Watercolor`] is a
 /// field of overlapping globs. Both displace the same scalar picture without
 /// altering its levels, then apply the shared Contours and palette controls.
+/// [`CloudStyle::VelvetScales`] instead averages each overlapping scallop's
+/// sampled light, with no raw source overlay at full material depth.
 ///
 /// **These name what Yan sees on the page, and the code under each keeps the
 /// name of its own CONSTRUCTION** — `scale_*` and `dome_*` for the mosaic's
@@ -37,6 +39,7 @@ pub enum CloudStyle {
     Mosaic,
     Watercolor,
     Stars,
+    VelvetScales,
 }
 
 /// Stars rendering policy. P3 is the High preset; `Uniform`
@@ -210,6 +213,16 @@ pub const BREATH_SPEED_MAX: f32 = 4.0;
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MaterialSettings {
+    /// Velvet cell size; 1× is 24/405 of the pane height (the S1 prototype).
+    pub velvet_size: f32,
+    /// Radius variation; 50% reproduces S1's 0.65..1.10 cell radii.
+    pub velvet_variety: f32,
+    /// Width of the smooth transition around each scale's edge.
+    pub velvet_edge: f32,
+    /// Cell-center jitter and smooth coordinate warp; S1 uses 80%.
+    pub velvet_irregularity: f32,
+    /// Round bodies at zero, tapered overlapping scallops at one.
+    pub velvet_shape: f32,
     /// Size of one scale, as a multiplier on that size: how many of them cross
     /// a cloud moves the other way, because the count is divided by this.
     /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
@@ -255,6 +268,11 @@ pub struct MaterialSettings {
 impl Default for MaterialSettings {
     fn default() -> Self {
         Self {
+            velvet_size: 1.0,
+            velvet_variety: 0.5,
+            velvet_edge: 0.34,
+            velvet_irregularity: 0.8,
+            velvet_shape: 1.0,
             scale_size: 0.153_937_07,
             scale_variety: 0.5,
             scale_refract: -1.0,
@@ -269,7 +287,8 @@ impl Default for MaterialSettings {
 }
 impl MaterialSettings {
     /// Sampling offset in cloud units, opposite the visible screen direction.
-    /// Keep f64 until the caller reduces the material's repeating period.
+    /// Keep f64 until upload; repeating materials reduce their period first.
+    /// Velvet keeps the translation unwrapped because its warp is nonperiodic.
     pub fn drift(speed: f32, direction: f32, now: f64) -> [f64; 2] {
         let distance = now * f64::from(speed) * 0.047_169_905_660_283_02;
         let (sin, cos) = f64::from(direction).to_radians().sin_cos();
@@ -285,6 +304,13 @@ impl MaterialSettings {
                 fallback
             }
         };
+        self.velvet_size =
+            clamp(self.velvet_size, fresh.velvet_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
+        self.velvet_variety = clamp(self.velvet_variety, fresh.velvet_variety, 0.0, 1.0);
+        self.velvet_edge = clamp(self.velvet_edge, fresh.velvet_edge, 0.01, 1.0);
+        self.velvet_irregularity =
+            clamp(self.velvet_irregularity, fresh.velvet_irregularity, 0.0, 1.0);
+        self.velvet_shape = clamp(self.velvet_shape, fresh.velvet_shape, 0.0, 1.0);
         self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
         self.scale_refract =
@@ -690,7 +716,7 @@ impl SpectralAtmosphere {
                     // Light rather than a displacement, so it has no dial at
                     // which it draws the ordinary picture: `Cloud depth` alone
                     // switches it off.
-                    CloudStyle::Stars => true,
+                    CloudStyle::Stars | CloudStyle::VelvetScales => true,
                 },
         }
     }
@@ -717,6 +743,7 @@ pub enum LatticeMaterial {
     Watercolor = 1,
     Mosaic = 2,
     Stars = 3,
+    VelvetScales = 4,
 }
 
 /// Pickup width and edge softness, in node radii. Independent of ordinary shadows.

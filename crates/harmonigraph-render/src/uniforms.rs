@@ -147,6 +147,7 @@ uniform_group! {
         layers: f32,
         randomness: f32,
         padding: f32,
+        velvet: Float4,
     }
 }
 uniform_group! {

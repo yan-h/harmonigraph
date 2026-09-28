@@ -40,22 +40,40 @@ impl LatticeCallback {
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
         let watercolor =
             atmosphere.material_style == harmonigraph_scene::LatticeMaterial::Watercolor;
-        let material_scale = if watercolor {
+        let velvet = atmosphere.material_style == harmonigraph_scene::LatticeMaterial::VelvetScales;
+        let material_scale = if velvet {
+            atmosphere.material_settings.velvet_size
+        } else if watercolor {
             atmosphere.material_settings.wash_size
         } else {
             atmosphere.material_settings.scale_size
         };
-        let cells = if watercolor { 5.25 } else { 6.0 / 2.2 };
+        let cells = if velvet {
+            405.0 / 240.0
+        } else if watercolor {
+            5.25
+        } else {
+            6.0 / 2.2
+        };
         // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling
         // its 40-cell tile. A screen-axis wrap must span five tile periods
         // so that the rotated jump is still a whole-number tile repeat.
         let drift_period = if watercolor { 200.0 } else { 40.0 };
-        let material_drift = harmonigraph_scene::MaterialSettings::drift(
+        let offsets = harmonigraph_scene::MaterialSettings::drift(
             atmosphere.material_speed,
             atmosphere.material_direction,
             scene.glow_timing.map_or(0.0, |clock| clock.now),
-        )
-        .map(|offset| (offset * f64::from(cells / material_scale)).rem_euclid(drift_period) as f32);
+        );
+        let material_drift = std::array::from_fn(|axis| {
+            let offset = offsets[axis];
+            if velvet {
+                // Velvet's domain warp is nonperiodic: wrapping would jump.
+                ((offset - if axis == 1 { 0.6 } else { 0.0 }) * f64::from(cells / material_scale))
+                    as f32
+            } else {
+                (offset * f64::from(cells / material_scale)).rem_euclid(drift_period) as f32
+            }
+        });
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
@@ -532,6 +550,12 @@ impl LatticeCallback {
                     },
                     layers: atmosphere.material_settings.wash_layers,
                     randomness: atmosphere.material_settings.wash_randomness,
+                    velvet: Float4([
+                        atmosphere.material_settings.velvet_edge,
+                        atmosphere.material_settings.velvet_irregularity,
+                        atmosphere.material_settings.velvet_shape,
+                        atmosphere.material_settings.velvet_variety,
+                    ]),
                     padding: 0.0,
                 },
                 pickup: PickupParams {

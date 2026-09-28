@@ -344,6 +344,20 @@ fn scenarios() -> Vec<Scenario> {
         visits: 13 + 14 + 5 + 2 + 2 - 3 + 6,
         ..base
     });
+    cases.push(Scenario {
+        pane: panes::Tab::AnalyzerSettings,
+        style: harmonigraph_scene::CloudStyle::VelvetScales,
+        enabled: true,
+        visits: 13 + 14 + 5 + 2 + 2 - 3 + 5,
+        ..base
+    });
+    cases.push(Scenario {
+        pane: panes::Tab::LatticeSettings,
+        material: harmonigraph_scene::LatticeMaterial::VelvetScales,
+        enabled: true,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
+        ..base
+    });
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [

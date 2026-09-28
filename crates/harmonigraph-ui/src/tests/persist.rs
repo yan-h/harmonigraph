@@ -2280,12 +2280,22 @@ fn an_old_dock_is_replaced_without_losing_appearance() {
 fn material_settings_are_independent_and_missing_nested_keys_default() {
     use harmonigraph_scene::MaterialSettings;
     let mut state = fresh();
+    state.picture.appearance.view.atmosphere.material_style =
+        harmonigraph_scene::LatticeMaterial::VelvetScales;
+    state.picture.appearance.spectrum.atmosphere.cloud_style =
+        harmonigraph_scene::CloudStyle::VelvetScales;
     let lattice = &mut state.picture.appearance.view.atmosphere.material_settings;
     lattice.wash_fuzz = 0.23;
     lattice.scale_variety = 0.81;
+    lattice.velvet_edge = 0.51;
+    lattice.velvet_irregularity = 0.43;
+    lattice.velvet_shape = 0.72;
     let spectral = &mut state.picture.appearance.spectrum.atmosphere.material_settings;
     spectral.wash_fuzz = 0.72;
     spectral.scale_variety = 0.19;
+    spectral.velvet_edge = 0.18;
+    spectral.velvet_irregularity = 0.93;
+    spectral.velvet_shape = 0.29;
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
     assert_eq!(

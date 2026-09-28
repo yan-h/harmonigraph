@@ -131,6 +131,11 @@ fn poisoned_view() -> ViewConfig {
             material_shadow_softness: nan,
             stars: crate::StarSettings::default(),
             material_settings: crate::MaterialSettings {
+                velvet_size: nan,
+                velvet_variety: nan,
+                velvet_edge: nan,
+                velvet_irregularity: nan,
+                velvet_shape: nan,
                 scale_size: nan,
                 scale_variety: nan,
                 scale_refract: nan,
@@ -426,6 +431,11 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.material_shadow_width", *material_shadow_width);
     f.one("atmosphere.material_shadow_softness", *material_shadow_softness);
     let crate::MaterialSettings {
+        velvet_size,
+        velvet_variety,
+        velvet_edge,
+        velvet_irregularity,
+        velvet_shape,
         scale_size,
         scale_variety,
         scale_refract,
@@ -436,6 +446,11 @@ fn scene_floats(scene: &Scene) -> Floats {
         wash_layers,
         wash_randomness,
     } = material_settings;
+    f.one("atmosphere.material_settings.velvet_size", *velvet_size);
+    f.one("atmosphere.material_settings.velvet_variety", *velvet_variety);
+    f.one("atmosphere.material_settings.velvet_edge", *velvet_edge);
+    f.one("atmosphere.material_settings.velvet_irregularity", *velvet_irregularity);
+    f.one("atmosphere.material_settings.velvet_shape", *velvet_shape);
     f.one("atmosphere.material_settings.scale_size", *scale_size);
     f.one("atmosphere.material_settings.scale_variety", *scale_variety);
     f.one("atmosphere.material_settings.scale_refract", *scale_refract);
