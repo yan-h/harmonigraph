@@ -1,0 +1,14 @@
+
+running 1 test
+test spectrogram::atmosphere::tests::far_prototype_keeps_original_layers ... FAR_LAYOUT mode=1 texels=1192570 grids=[[934, 528], [847, 479], [612, 347], [345, 197], [152, 88], [0, 0], [0, 0]]
+FAR_LAYOUT mode=2 texels=1975318 grids=[[934, 528], [847, 479], [612, 347], [345, 197], [152, 88], [913, 516], [742, 420]]
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 372 filtered out; finished in 0.00s
+
+
+running 1 test
+test spectrogram::atmosphere::tests::spectral_uniforms_match_the_bound_shader_layouts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 372 filtered out; finished in 0.01s
+

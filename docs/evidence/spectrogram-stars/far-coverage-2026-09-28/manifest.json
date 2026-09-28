@@ -1,0 +1,51 @@
+{
+  "base": "7f88775ed50aca914877276168408ded01ad41fc",
+  "prototype_patch_sha256": "e6d0a08de145ff8f6694e56e2a148819483db97a152fb7e64f62fc942364bfd6",
+  "gpu": "Apple M1 Pro / Metal",
+  "visualization_directory": "/Users/yan/.codex/visualizations/2026/09/28/01a0e620-6ae2-7832-944f-8c4534649f7f/far-coverage",
+  "raw_directory": "/tmp/far-coverage",
+  "media": {
+    "foreground-diagnostic.png": {
+      "bytes": 922243,
+      "sha256": "822f14811b0854f097293cac02e29e50049778706a58c11ed50191fd41bf7dc8"
+    },
+    "B-crop-2x.png": {
+      "bytes": 458357,
+      "sha256": "97c5b1f7a60c907175155be88f4f299e1c63500bc42e18a1bbaded12ed91f8cf"
+    },
+    "crops-2x.png": {
+      "bytes": 741549,
+      "sha256": "bc30b955919fd575257c2050f7282777a7dad5ab3a4a44495b6fca7f985fb317"
+    },
+    "C-full.png": {
+      "bytes": 2355244,
+      "sha256": "211f13c481ac60c6a6d5176ea0d68043d48df6a5766e5aba5654fd16fa6a80aa"
+    },
+    "B-full.png": {
+      "bytes": 2357385,
+      "sha256": "8ca71d1d518d629b839dc13a60ddeeeb2b2a8f18ba38ec792fec28562912bfc5"
+    },
+    "A-crop-2x.png": {
+      "bytes": 458921,
+      "sha256": "ec15cfaf169c5efcae93bdd6410a301be0c698686367774a522eafa90665250d"
+    },
+    "overview.png": {
+      "bytes": 1049718,
+      "sha256": "628897c0027b89c3d568d957e86d5c44533ea93eb86203577e58ac7b59ac42da"
+    },
+    "A-full.png": {
+      "bytes": 2360435,
+      "sha256": "a3073f3e08a8df8ecbae25159c68f37f3049405980b65f62e5720dd4f7e395af"
+    },
+    "C-crop-2x.png": {
+      "bytes": 457418,
+      "sha256": "9d5f3208f9edd608f080ad1ac464956237bfe17400cabd9ff3fe2aa036aa4d1b"
+    },
+    "motion-native-crops.mp4": {
+      "bytes": 13073035,
+      "sha256": "b44f61d066d9b16738ea702e38f8bb2ed7dbf27d00943fdff2260991a26af31e"
+    }
+  },
+  "private_take_sha256": "f5243f120097cd5d0b2ffba9d74d41195b785850f80707ba74b6d3ae02834a23",
+  "test_binary_sha256": "125bbf9a60c640ff8eb9283fd99959203264e80b3c7b5fb87dab3bd20446172c"
+}

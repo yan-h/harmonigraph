@@ -1,0 +1,94 @@
+{
+  "roi_xywh": [
+    16,
+    64,
+    1400,
+    760
+  ],
+  "thresholds": "source G >= 51/255 in both A and C for actual opacity distributions; coverage <230/255 and <253/255; code-valued means not linear luminance",
+  "flat": {
+    "A": {
+      "pixels": 25536000,
+      "mean": 0.9944958970649664,
+      "p01": 0.8980392156862745,
+      "p10": 0.9882352941176471,
+      "below_90_pct": 1.030905388471178,
+      "below_99_pct": 11.554190162907268,
+      "uncovered_weight": 0.005504102935033663
+    },
+    "B": {
+      "pixels": 25536000,
+      "mean": 0.9945234575409111,
+      "p01": 0.9098039215686274,
+      "p10": 0.984313725490196,
+      "below_90_pct": 0.8275336779448621,
+      "below_99_pct": 12.773343515037594,
+      "uncovered_weight": 0.005476542459088898
+    },
+    "C": {
+      "pixels": 25536000,
+      "mean": 0.999848026008649,
+      "p01": 0.996078431372549,
+      "p10": 1.0,
+      "below_90_pct": 0.004331140350877193,
+      "below_99_pct": 0.3783717105263158,
+      "uncovered_weight": 0.00015197399135092612
+    }
+  },
+  "actual": {
+    "A": {
+      "far": {
+        "pixels": 89784633,
+        "mean": 0.9944862331471207,
+        "p01": 0.8980392156862745,
+        "p10": 0.9882352941176471,
+        "below_90_pct": 1.0385808448980351,
+        "below_99_pct": 11.525437766170967,
+        "uncovered_weight": 0.005513766852879303
+      },
+      "near": {
+        "pixels": 89784633,
+        "mean": 0.9162232368065156,
+        "p01": 0.3843137254901961,
+        "p10": 0.6784313725490196,
+        "below_90_pct": 26.172524422971133,
+        "below_99_pct": 36.39215298680343,
+        "uncovered_weight": 0.08377676319348437
+      },
+      "far_and_near_below_90_pct": 0.2749913785357902
+    },
+    "C": {
+      "far": {
+        "pixels": 89784633,
+        "mean": 0.9998478251753358,
+        "p01": 0.996078431372549,
+        "p10": 1.0,
+        "below_90_pct": 0.00426799093782563,
+        "below_99_pct": 0.3819707098429639,
+        "uncovered_weight": 0.00015217482466419065
+      },
+      "near": {
+        "pixels": 89784633,
+        "mean": 0.9162232368065156,
+        "p01": 0.3843137254901961,
+        "p10": 0.6784313725490196,
+        "below_90_pct": 26.172524422971133,
+        "below_99_pct": 36.39215298680343,
+        "uncovered_weight": 0.08377676319348437
+      },
+      "far_and_near_below_90_pct": 0.0009979436013287486
+    }
+  },
+  "near_identity": {
+    "max_u8_delta": 0,
+    "changed_samples": 0
+  },
+  "near_darkening": {
+    "eligible_pixels": 79725362,
+    "eligible_condition": "G>=51, far coverage>=253, far-only weighted RGB>=20",
+    "darkened_by_25pct_pixels": 4717618,
+    "darkened_pct": 5.9173365685062675,
+    "darkened_with_near_coverage_at_least_230_pct": 86.41428788850645,
+    "mean_near_coverage_when_darkened": 0.9643694571718019
+  }
+}

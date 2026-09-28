@@ -1,0 +1,402 @@
+diff --git a/crates/harmonigraph-render/src/shaders/spectrogram.wgsl b/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+index fa396924..ca994ed4 100644
+--- a/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
++++ b/crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+@@ -308,7 +308,7 @@ struct Cloud {
+     star_geometry: vec4<f32>,
+     // One entry per depth, worked out on the CPU from the dials and the clock
+     // (`star_slices` in atmosphere.rs, which says what each field is).
+-    star_slices: array<StarSlice, 5>,
++    star_slices: array<StarSlice, 7>,
+     memory_enabled: u32,
+     memory_valid: u32,
+     pickup_alpha: f32,
+@@ -318,8 +318,8 @@ struct Cloud {
+     previous_life: f32,
+     memory_pad_a: f32,
+     memory_extent: vec2<f32>,
+-    previous_slices: array<StarSlice, 5>,
+-    star_halo_samples: array<StarHaloSample, 5>,
++    previous_slices: array<StarSlice, 7>,
++    star_halo_samples: array<StarHaloSample, 7>,
+ };
+ struct StarHaloSample {
+     size: vec2<f32>,
+@@ -876,7 +876,11 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
+ // Every length is in STAR PIXELS, a 540th of the pane's height, because the
+ // prototype's pane was 540 pixels; the stars keep their size relative to the
+ // pane at any export resolution, like the other textures' `CLOUD_UNITS`.
+-const STAR_SLICES: u32 = 5u;
++const STAR_SLICES: u32 = 7u;
++const ACTIVE_STAR_SLICES: u32 = 5u;
++const FAR_EXTRA: bool = false;
++const FAR_DEBUG: u32 = 0u;
++const FAR_FLAT: bool = false;
+ const STAR_PANE: f32 = 540.0;
+ // Original full-jitter halo bounds. The nominal cell and its eight neighbors
+ // cover this radius at every Jitter setting; a missing cell starts at 1.2.
+@@ -912,6 +916,7 @@ const STAR_LIFT: f32 = 0.18;
+ // softnesses, as it is for every texture. A Stars-only blur toward the wide
+ // light stood here and was that dial a second time.
+ fn star_level_at(pt: vec2<f32>) -> f32 {
++    if FAR_FLAT { return 0.6; }
+     let uv = pt / cloud.size;
+     return clamp(textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r, 0.0, 1.0);
+ }
+@@ -1142,15 +1147,18 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
+ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
+     var out = under;
+     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
+-    for (var k = first; k < last; k += 1u) {
++    for (var order = first; order < last; order += 1u) {
++        var k = order;
++        if FAR_EXTRA { k = array<u32, 7>(0u, 5u, 1u, 6u, 2u, 3u, 4u)[order]; }
+         let s = cloud.star_slices[k];
++        if s.grid.x == 0 { continue; }
+         let r = sp / s.cell - fract(s.offset);
+         let o = floor(r);
+         let f = r - o;
+         let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
+         let index = s.base + local.y * s.grid.x + local.x;
+         var slice = vec4<f32>(0.0);
+-        if cloud.star_far.z > 0.0 && k < STAR_FAR_LAYERS {
++        if cloud.star_far.z > 0.0 && order < STAR_FAR_LAYERS {
+             slice = star_far_gather(s, r);
+         } else {
+             slice = star_texel(s, f, index, false);
+@@ -1178,9 +1186,24 @@ fn star_color(pt: vec2<f32>) -> vec3<f32> {
+         } else {
+             far = textureLoad(cloud_tone, vec2<i32>(pt * cloud.ppp), 0).rgb;
+         }
+-        return star_layers(pt, STAR_FAR_LAYERS, STAR_SLICES, far);
++        if FAR_DEBUG == 3u {
++            let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
++            var near_gap = 1.0;
++            for (var k = 3u; k < 5u; k += 1u) {
++                let s = cloud.star_slices[k];
++                let r = sp / s.cell - fract(s.offset);
++                let o = floor(r);
++                let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
++                let index = s.base + local.y * s.grid.x + local.x;
++                let coverage = star_texel(s, r-o, index, false).w + star_halo_at(pt,k).w;
++                near_gap *= 1.0 - min(coverage,1.0);
++            }
++            return vec3<f32>(far.r,far.g,1.0-near_gap);
++        }
++        if FAR_DEBUG > 0u { return far; }
++        return star_layers(pt, STAR_FAR_LAYERS, ACTIVE_STAR_SLICES, far);
+     }
+-    return star_layers(pt, 0u, STAR_SLICES, palette_color(0.0));
++    return star_layers(pt, 0u, ACTIVE_STAR_SLICES, palette_color(0.0));
+ }
+ 
+ @fragment
+@@ -1194,6 +1217,20 @@ fn fs_star_far(in: TileVertex) -> @location(0) vec4<f32> {
+     }
+     // Layer compositing remains gamma-coded here. Depth mixing and the final
+     // target's color conversion are applied once, in the final composite.
++    if FAR_DEBUG >= 2u {
++        let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
++        var gap = 1.0;
++        for (var order = 0u; order < STAR_FAR_LAYERS; order += 1u) {
++            var k = order;
++            if FAR_EXTRA { k = array<u32, 7>(0u, 5u, 1u, 6u, 2u, 3u, 4u)[order]; }
++            let s = cloud.star_slices[k];
++            if s.grid.x == 0 { continue; }
++            let coverage = star_far_gather(s, sp / s.cell - fract(s.offset)).w;
++            gap *= 1.0 - min(coverage, 1.0);
++        }
++        if FAR_DEBUG == 3u { return vec4<f32>(1.0 - gap, star_level_at(pt), 0.0, 1.0); }
++        return vec4<f32>(vec3<f32>(1.0 - gap), 1.0);
++    }
+     return vec4<f32>(star_layers(pt, 0u, STAR_FAR_LAYERS, palette_color(0.0)), 1.0);
+ }
+ 
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 179f9245..ffdea85e 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -441,11 +441,14 @@ impl SpectrogramPane {
+     }
+ }
+ 
++mod far_coverage_probe;
++
+ fn spectrogram_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
+     #[cfg(not(test))]
+     let source = SPECTROGRAM_SRC.into();
+     #[cfg(test)]
+     let source = tests::pipeline_source();
++    let source = far_coverage_probe::shader(source);
+     device.create_shader_module(wgpu::ShaderModuleDescriptor {
+         label: Some("spectrogram_shader"),
+         source: wgpu::ShaderSource::Wgsl(source),
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+index ace13e77..5cbe6915 100644
+--- a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+@@ -74,7 +74,7 @@ fn cloud_drift(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f
+ /// How many depth slices the starfield walks, from the farthest (0) to the
+ /// nearest. The shader's `STAR_SLICES`, held to this by
+ /// `the_star_ring_holds_every_star_that_reaches_a_pixel`.
+-const STAR_SLICES: usize = 5;
++const STAR_SLICES: usize = 7;
+ /// The period the star hash wraps at, in cells of each slice, and the modulus
+ /// each slice's drift is reduced by here in f64 before it is narrowed to f32.
+ ///
+@@ -148,7 +148,11 @@ struct StarSlice {
+ 
+ /// The slice's depth, 0 for the farthest and 1 for the nearest.
+ fn star_depth(k: usize) -> f32 {
+-    k as f32 / (STAR_SLICES - 1) as f32
++    match k {
++        5 => 0.125,
++        6 => 0.375,
++        _ => k as f32 / 4.0,
++    }
+ }
+ 
+ /// The shader's `STAR_PANE`: star pixels across the pane's height.
+@@ -218,7 +222,11 @@ impl StarLayout {
+         let pane = [STAR_PANE * aspect, STAR_PANE];
+         // Retain the padded atlas bounds needed by the halo
+         // pass's 3x3 walk around each pixel's nominal cell.
+-        let grids = cells.map(|cell| {
++        let grids = std::array::from_fn(|k| {
++            if k >= 5 && super::far_coverage_probe::mode() != 2 {
++                return [0, 0];
++            }
++            let cell = cells[k];
+             pane.map(|span| ((span / cell).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN))
+         });
+         // Each slice's cells row after row, straight after the last slice's,
+@@ -582,7 +590,7 @@ pub(super) fn star_far_size(
+     settings: harmonigraph_scene::SpectralAtmosphere,
+ ) -> [u32; 2] {
+     if settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3 {
+-        star_halo_size(pixels, 0.75)
++        star_halo_size(pixels, if super::far_coverage_probe::mode() == 0 { 0.75 } else { 0.5 })
+     } else {
+         pixels
+     }
+@@ -634,7 +642,7 @@ impl StarHaloLayout {
+             layers: [[0, 0]; STAR_SLICES],
+             first_active_layer,
+         };
+-        for (depth, size) in sizes.into_iter().enumerate().skip(first_active_layer) {
++        for (depth, size) in sizes.into_iter().enumerate().take(5).skip(first_active_layer) {
+             let group = layout
+                 .groups
+                 .iter()
+@@ -667,7 +675,7 @@ pub(super) fn star_halo_layout(
+     let settings = settings.sanitized();
+     let (factors, first_active_layer) = match settings.star_halo_profile {
+         StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
+-        StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
++        StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6, 0.0, 0.0], 3),
+     };
+     StarHaloLayout::from_sizes(
+         factors.map(|factor| star_halo_size(pixels, factor)),
+@@ -1416,7 +1424,7 @@ impl StarHalos {
+                 })
+             }),
+             layers: std::array::from_fn(|depth| {
+-                if depth < layout.first_active_layer {
++                if depth < layout.first_active_layer || depth >= 5 {
+                     return None;
+                 }
+                 let [group, layer] = layout.layers[depth];
+@@ -2175,6 +2183,31 @@ mod tests {
+             .expect("a number")
+     }
+ 
++    #[test]
++    fn far_prototype_keeps_original_layers() {
++        let settings = harmonigraph_scene::SpectralAtmosphere::default();
++        super::super::far_coverage_probe::set(0);
++        let reference = star_layout(settings, 16.0 / 9.0);
++        let reference_slices = star_slices(settings, 123.456, &reference);
++        let reference_halos = super::star_halo_layout([1920, 1080], settings);
++        assert_eq!(&reference.grids[5..], &[[0, 0], [0, 0]]);
++        for mode in [1, 2] {
++            super::super::far_coverage_probe::set(mode);
++            let layout = star_layout(settings, 16.0 / 9.0);
++            let slices = star_slices(settings, 123.456, &layout);
++            assert_eq!(&slices[..5], &reference_slices[..5]);
++            let wanted = super::star_cells(settings);
++            assert_eq!(layout.cells, wanted, "atlas floor changed original stars");
++            assert_eq!(&layout.bases[..5], &reference.bases[..5]);
++            assert_eq!(super::star_halo_layout([1920, 1080], settings), reference_halos);
++            eprintln!("FAR_LAYOUT mode={mode} texels={} grids={:?}", layout.texels, layout.grids);
++            if mode == 2 {
++                assert!(layout.texels > reference.texels);
++            }
++        }
++        super::super::far_coverage_probe::set(0);
++    }
++
+     #[test]
+     fn spectral_uniforms_match_the_bound_shader_layouts() {
+         crate::uniforms::layout::check_binding::<super::Uniforms>(
+@@ -2203,7 +2236,7 @@ mod tests {
+         let layout = super::star_halo_layout([161, 121], settings);
+         assert_eq!(layout.groups.map(|g| g.size), [[161, 121], [97, 73], [1, 1]]);
+         assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
+-        assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
++        assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0], [0, 0], [0, 0]]);
+         let uniform =
+             SpectralAtmosphere { star_halo_profile: StarHaloProfile::Uniform, ..settings };
+         assert_ne!(
+diff --git a/crates/harmonigraph-render/src/spectrogram/far_coverage_probe.rs b/crates/harmonigraph-render/src/spectrogram/far_coverage_probe.rs
+new file mode 100644
+index 00000000..16a32b4e
+--- /dev/null
++++ b/crates/harmonigraph-render/src/spectrogram/far_coverage_probe.rs
+@@ -0,0 +1,29 @@
++// Scratch look comparison only; no persisted setting or production mode.
++use std::cell::Cell;
++thread_local! { static MODE: Cell<Option<u8>> = const { Cell::new(None) }; }
++pub(super) fn mode() -> u8 {
++    MODE.get().unwrap_or_else(|| {
++        std::env::var("HG_FAR_PROBE").ok().and_then(|s| s.parse().ok()).unwrap_or(0)
++    })
++}
++#[cfg(test)]
++pub(super) fn set(mode: u8) {
++    MODE.set(Some(mode));
++}
++pub(super) fn shader(source: std::borrow::Cow<'static, str>) -> std::borrow::Cow<'static, str> {
++    let mut source = source.into_owned();
++    if mode() == 2 {
++        source = source
++            .replace("const FAR_EXTRA: bool = false;", "const FAR_EXTRA: bool = true;")
++            .replace("const ACTIVE_STAR_SLICES: u32 = 5u;", "const ACTIVE_STAR_SLICES: u32 = 7u;")
++            .replace("const STAR_FAR_LAYERS: u32 = 3u;", "const STAR_FAR_LAYERS: u32 = 5u;");
++    }
++    let diagnostic =
++        std::env::var("HG_FAR_DEBUG").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
++    source = source
++        .replace("const FAR_DEBUG: u32 = 0u;", &format!("const FAR_DEBUG: u32 = {diagnostic}u;"));
++    if std::env::var("HG_FAR_FLAT").as_deref() == Ok("1") {
++        source = source.replace("const FAR_FLAT: bool = false;", "const FAR_FLAT: bool = true;");
++    }
++    source.into()
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+index 6f30a0e1..c86cee3e 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+@@ -496,3 +496,29 @@ fn optimized_far_layers_cover_partial_panes_at_fractional_scale() {
+         }
+     }
+ }
++
++#[test]
++#[ignore = "scratch far coverage masks, sampled through actual production composition"]
++fn far_coverage_image_probe() {
++    let Some((device, queue)) = headless_device() else { panic!("GPU required") };
++    let output =
++        std::env::var("FAR_OUTPUT").unwrap_or_else(|_| "/tmp/far-coverage/flat".to_owned());
++    std::fs::create_dir_all(&output).unwrap();
++    let mut cb = star_fixture([768, 432], egui::Pos2::ZERO);
++    cb.grid.fill(160);
++    cb.atmosphere.as_mut().unwrap().settings = harmonigraph_scene::SpectralAtmosphere::default();
++    for mode in 0..3 {
++        super::super::far_coverage_probe::set(mode);
++        let mut resources = CallbackResources::default();
++        for step in 0..120 {
++            cb.pass_nr = step;
++            cb.atmosphere.as_mut().unwrap().now = 1.0 + step as f64 / 24.0;
++            let bytes = frame_at_ppp(&device, &queue, &mut resources, &cb, 2.0);
++            if step >= 96 {
++                std::fs::write(format!("{output}/mode-{mode}-frame-{}.rgba", step - 96), bytes)
++                    .unwrap();
++            }
++        }
++    }
++    super::super::far_coverage_probe::set(0);
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+index 259f868a..cc4120e4 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -103,6 +103,10 @@ const CASES: &[(&str, Option<Turn>)] = &[
+         }),
+     ),
+     ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
++    ("far A", Some(|s| *s = SpectralAtmosphere::default())),
++    ("far A2", Some(|s| *s = SpectralAtmosphere::default())),
++    ("far B", Some(|s| *s = SpectralAtmosphere::default())),
++    ("far C", Some(|s| *s = SpectralAtmosphere::default())),
+     ("mosaic, memory", Some(memory)),
+     (
+         "watercolor, memory",
+@@ -311,7 +315,12 @@ fn cloud_costs_by_style_and_dial() {
+     // INTERLEAVED: one frame of every case per round, so a GPU that another
+     // process is also drawing on, or one that changes its clock mid-run, moves
+     // every case together rather than whichever ran last.
+-    for frame in 0..frames + 10 {
++    let warmup = 120;
++    for frame in 0..frames + warmup {
++        if frame % 4 == 0 {
++            cases.reverse();
++        }
++        cases.rotate_left(1);
+         for case in &mut cases {
+             let Case {
+                 turn,
+@@ -325,6 +334,11 @@ fn cloud_costs_by_style_and_dial() {
+                 fill,
+                 ..
+             } = case;
++            super::super::far_coverage_probe::set(match *name {
++                "far B" => 1,
++                "far C" => 2,
++                _ => 0,
++            });
+             cb.pass_nr = frame as u64;
+             cb.atmosphere = turn.map(|turn| {
+                 let mut settings = SpectralAtmosphere {
+@@ -334,6 +348,13 @@ fn cloud_costs_by_style_and_dial() {
+                     ..Default::default()
+                 };
+                 turn(&mut settings);
++                if let Some(density) = dial("PROBE_STAR_DENSITY") {
++                    settings.star_density = density;
++                }
++                if dial("PROBE_MEMORY") == Some(0.0) {
++                    settings.color_pickup = 0.0;
++                    settings.color_release = 0.0;
++                }
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -361,7 +382,7 @@ fn cloud_costs_by_style_and_dial() {
+                     // fraction, so this is `w / n` and not the pane's width
+                     // over the slab count.
+                     points_per_slab: points.x * *fill / slabs as f32,
+-                    now: 1.0 + frame as f64 / 144.0,
++                    now: 1.0 + frame as f64 / 60.0,
+                 }
+             });
+             let mut encoder = device.create_command_encoder(&Default::default());
+@@ -396,7 +417,7 @@ fn cloud_costs_by_style_and_dial() {
+             let ticks: Vec<u64> =
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
+-            if frame >= 10 {
++            if frame >= warmup {
+                 assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                     "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
+                 wall.push(wall_ms);
+@@ -406,6 +427,10 @@ fn cloud_costs_by_style_and_dial() {
+         }
+     }
+ 
++    for case in &cases {
++        eprintln!("RAW {} {:?}", case.name, case.gpu_total);
++    }
++    super::super::far_coverage_probe::set(0);
+     for case in &mut cases {
+         case.wall.sort_by(f64::total_cmp);
+         case.gpu_total.sort_by(f64::total_cmp);

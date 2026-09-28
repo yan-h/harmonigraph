@@ -93,6 +93,7 @@ and visual comparisons.
 | Falloff lookup, packed atlas, early/squared rejection, tail truncation, full depth unrolling | No useful demonstrated gain; several were slower. The lookup was 18–41% slower in paired dense-default tests. |
 | f16, wider native cores, RGBA8 halos, boundary tweaks | No repeatable useful win or an unfavorable appearance tradeoff in the tested screens. |
 | Skip unused immediate-color work during memory | Only 0.2–3.3%, nearly tied in the longer 4K repeat. Not selected. |
+| Five far layers at 50% versus current three at 75% | Fills the small remaining opacity holes but retains the large dark pockets in the tested recording. Roughly ties at 4K; costs 20–21% more at dense 1080p. Not selected; [bounded coverage comparison](evidence/spectrogram-stars/far-coverage-2026-09-28/README.md) preserves the controls, masks, raw timings and replay patch. |
 | Fewer layers or reduced jitter | Measured appearance changes, not equivalent-look optimizations; the selected design preserves both. |
 | Temporal reuse or caching the star bake | No valid moving-picture cache was established. Drift, life, and sampled light evolve every frame; a frozen diagnostic is not an implementable cache. |
 
