@@ -1766,3 +1766,37 @@ fn a_channel_bend_on_a_held_note_reaches_the_display_and_the_take() {
         }
     }
 }
+
+#[test]
+fn channel_bend_fanout_overflow_is_not_silent() {
+    use harmonigraph_take::CanonicalRecord;
+    let _scope = crate::test_scope::enter();
+    let (mut hub, mut capture) = Device::recorded_hub();
+    hub.activate();
+    capture.arm();
+    hub.run(0, (0..64).map(|key| note(key, 0, key as i16, 0, true)).collect(), None);
+    hub.run(512, vec![], None);
+    let _ = capture.drain_canonical();
+    let _ = capture.display_events();
+    hub.run(1024, (0..33).map(|i| raw_midi([0xE0, i as u8 + 1, 0x40], i)).collect(), None);
+    let records = capture.drain_canonical();
+    let notes = records.iter().filter(|r| matches!(r, CanonicalRecord::Delta(_))).count();
+    let gaps = records.iter().filter(|r| matches!(r, CanonicalRecord::Gap(_))).count();
+    let frame = records
+        .iter()
+        .find_map(|r| match r {
+            CanonicalRecord::Baseline(b) => Some(b),
+            _ => None,
+        })
+        .expect("overflow must repair the current held state");
+    assert_eq!(frame.voices.len(), 64, "fixture must fill one source's held set");
+    let repaired_at = frame.t;
+    hub.run(1536, (0..64).map(|key| note(key, 0, key as i16, 0, false)).collect(), None);
+    hub.run(2048, vec![], None);
+    assert_eq!(notes, 2048, "fixture must exhaust the pending queue");
+    assert!(gaps > 0, "lost bend history must be explicit");
+    assert!(
+        repaired_at >= (1024.0 + 512.0 + 32.0) / 48000.0,
+        "repair must not place the last bend at an earlier retained delta's time"
+    );
+}

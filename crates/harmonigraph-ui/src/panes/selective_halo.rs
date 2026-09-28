@@ -17,7 +17,7 @@ pub(super) fn owners(
         return Vec::new();
     }
     let camera = &state.appearance.camera;
-    let Some(bounds) = view.halo_window(camera, aspect) else { return Vec::new() };
+    let Some(bounds) = view.light_owner_window(camera, aspect) else { return Vec::new() };
     if window.contains(bounds.min) && window.contains(bounds.max) {
         return Vec::new();
     }
@@ -35,7 +35,7 @@ pub(super) fn owners(
     let center = view.center();
     let transform = camera.view_proj(aspect);
     let (right, up) = camera.right_up();
-    let radius = view.halo_radius();
+    let radius = view.light_owner_radius();
     let tuning = &state.runtime.tuning;
     let mut extra: Vec<_> = bounds
         .positions()
@@ -229,5 +229,48 @@ mod tests {
             );
             assert!(node.glow.level >= old.glow.level, "a held light must continue its attack");
         }
+    }
+    #[test]
+    fn wide_material_pickup_keeps_off_pane_light_owners() {
+        let mut state = state();
+        state.appearance.camera = harmonigraph_scene::Camera::default();
+        let view = &mut state.appearance.view;
+        view.center_fives = 0;
+        view.center_threes = 0;
+        view.center_sevens = 0;
+        view.glow_reach = 0.1;
+        view.glow_strength = 1.0;
+        view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Mosaic;
+        view.atmosphere.material_amount = 1.0;
+        view.atmosphere.material_color_pickup = 1.0;
+        view.atmosphere.material_shadow_width = 8.0;
+        view.atmosphere.material_shadow_softness = 8.0;
+        for key in [64, 68] {
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, key, 1.0));
+        }
+        let window = state.appearance.view.scrolled(&state.appearance.camera, 1.0);
+        let owner = LatticePos::new(0, 8, 0);
+        assert!(
+            !window.contains(owner),
+            "fixture must put the pigment owner outside ordinary geometry"
+        );
+        compose(&mut state, &window, 0.0);
+        let actual = compose(&mut state, &window, 1.0);
+        assert!(
+            actual
+                .nodes
+                .iter()
+                .any(|n| n.lattice_pos == LatticePos::new(0, 4, 0) && n.glow.level > 0.0),
+            "fixture must light the visible pickup destination"
+        );
+        assert!(
+            actual.nodes.iter().any(|n| n.lattice_pos == owner && n.glow.level > 0.0),
+            "wide pickup overlaps the visible E light but its off-pane owner was culled"
+        );
+        state.appearance.view.atmosphere.material_color_pickup = 0.0;
+        assert!(
+            owners(&state, &window, 1.0, 0, 1.0).is_empty(),
+            "disabled pickup must not enlarge the candidate region"
+        );
     }
 }

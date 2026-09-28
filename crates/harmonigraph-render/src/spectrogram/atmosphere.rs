@@ -277,10 +277,6 @@ impl TileKey {
     }
 }
 
-/// Compact core bounds from the sanitized Jitter dial. A one-cell lookup can
-/// only see a core that stays within its own cell, so its reach is the nearest
-/// possible center's distance from the edge: half a cell less half the jitter.
-/// The wider response is reconstructed by the separate nine-cell halo pass.
 /// The tile this frame wants, or `None` where no cloud is drawn.
 ///
 /// See [`TileKey`] for what is in it and what deliberately is not.
@@ -1524,7 +1520,14 @@ impl Targets {
                 integer as i32
             });
             let mut key = memory_key(settings, rect.size().into(), pitch_vertical, &read);
-            key.extend([atmosphere.points_per_ms.to_bits(), atmosphere.points_per_cent.to_bits()]);
+            // A resize changes musical density, hence the light a star samples,
+            // but not the absolute cell that owns its carried color.
+            if stars.is_none() {
+                key.extend([
+                    atmosphere.points_per_ms.to_bits(),
+                    atmosphere.points_per_cent.to_bits(),
+                ]);
+            }
             // Different logical grids can now share one allocation. DPI or
             // sampling changes must still reset history even in the same bucket.
             key.extend(memory.extent);

@@ -155,28 +155,43 @@ impl ViewConfig {
         window
     }
 
-    /// Maximum world radius of the glow billboard, shared by candidate bounds.
-    /// Matches `lattice.wgsl::vs_glow_splat`: fixed ring/mark rim plus reach,
-    /// multiplied by the node radius and 1.8 UV-to-node scale. Per-sheet scale
-    /// (with the shader's 0.05 floor) is applied by the candidate selector.
-    pub fn halo_radius(&self) -> f32 {
+    /// Maximum world radius of a light owner's halo or material pigment.
+    /// Matches `vs_glow_splat` and `vs_source_shadow` in lattice.wgsl.
+    /// Per-sheet scale (with the shader's 0.05 floor) is applied by the selector.
+    pub fn light_owner_radius(&self) -> f32 {
         let rings = self.rings();
         let rim = rings.outer.max(if rings.mark_thickness > 0.0 {
             rings.mark_inner + rings.mark_thickness
         } else {
             0.0
         });
-        (rim + finite_or(self.glow_reach, 0.0).clamp(0.0, GLOW_REACH_MAX)).max(0.1)
+        let halo = (rim + finite_or(self.glow_reach, 0.0).clamp(0.0, GLOW_REACH_MAX)).max(0.1)
             * NODE_RADIUS_FACTOR
-            * 1.8
+            * 1.8;
+        let atmosphere = self.atmosphere.sanitized();
+        if atmosphere.material_style == crate::LatticeMaterial::None
+            || atmosphere.material_amount <= 0.0
+            || atmosphere.material_shadow_width <= 0.0
+            || atmosphere.material_shadow_pickup.max(atmosphere.material_color_pickup) <= 0.0
+        {
+            return halo;
+        }
+        // Pickup can color another note's visible light even when this owner's
+        // own halo ends off-pane. Its width/feather are in node radii, unlike
+        // the ring stack's UV units, and its rim excludes decorative marks.
+        let pigment = NODE_RADIUS_FACTOR
+            * (1.8 * rings.outer.max(0.0)
+                + 0.5 * atmosphere.material_shadow_width
+                + atmosphere.material_shadow_softness);
+        halo.max(pigment)
     }
 
     /// Bounded candidate region, not a replacement for the pane's drawn window.
     /// A billboard can leave its owner's sheet in Z under a tilted camera.
     /// Expand that slab before bounding visible points, then expand XY to reach
     /// their owners. The ordinary horizon budget bounds even degenerate views.
-    pub fn halo_window(&self, camera: &Camera, aspect: f32) -> Option<DrawnWindow> {
-        let radius = self.halo_radius();
+    pub fn light_owner_window(&self, camera: &Camera, aspect: f32) -> Option<DrawnWindow> {
+        let radius = self.light_owner_radius();
         let center = self.center();
         let (low, high) = self.sevens_window();
         let sheet = camera.visible_world_bounds(

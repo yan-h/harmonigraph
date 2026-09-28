@@ -256,10 +256,12 @@ struct Row {
     state: State,
     sequence: u64,
     applied: u64,
+    /// Includes deltas lost before publication; a repair cannot predate them.
+    applied_time: Option<f64>,
     delay: i64,
-    /// The presentation time and route of the latest delta this row published:
-    /// the earliest a snapshot cutting at `applied` may be stamped, and the
-    /// translation that puts the snapshot exactly level with it in the take.
+    /// The presentation time and route of the latest delta this row published,
+    /// for the translation that puts a snapshot exactly level with it in the take.
+    /// `applied_time` also covers deltas that never reached publication.
     latest: Option<(f64, publication::Route)>,
     repair: publication::Lanes<bool>,
     baseline_id: publication::Lanes<u64>,
@@ -278,6 +280,8 @@ pub struct Hub {
     rows: Box<[Row]>,
     batch: Vec<Record>,
     pending: Vec<Published>,
+    /// Earliest delta lost before reaching either publication lane.
+    pending_loss: Option<f64>,
     sequencer: Box<Sequencer>,
     rate: f64,
     callback: Option<api::Callback>,
@@ -308,6 +312,7 @@ impl Hub {
             rows: (0..=TUNERS).map(|_| Row::default()).collect::<Vec<_>>().into_boxed_slice(),
             batch: Vec::with_capacity(BATCH_EVENTS),
             pending: Vec::with_capacity(BATCH_EVENTS),
+            pending_loss: None,
             sequencer: Box::default(),
             rate: 0.0,
             callback: None,
@@ -408,6 +413,7 @@ impl Hub {
             // ended. Every row is already owed a snapshot, which is what tells
             // the display what is actually sounding now.
             self.pending.clear();
+            self.pending_loss = None;
             self.status = 0;
             self.epoch = epoch;
         }
@@ -964,8 +970,11 @@ impl Hub {
     }
 
     /// Queue one delta for this callback's publication pass. A full queue
-    /// owes the row a snapshot instead, which is what states the lost delta.
+    /// owes an explicit gap and a snapshot: current state cannot replace history.
     fn hold(&mut self, record: Record, timing: EventTiming, delta: NoteDelta) {
+        let time = delta.event.time;
+        let row = &mut self.rows[usize::from(record.source)];
+        row.applied_time = Some(row.applied_time.map_or(time, |old| old.max(time)));
         if self.pending.len() < BATCH_EVENTS {
             self.pending.push(Published {
                 source: record.source,
@@ -974,7 +983,8 @@ impl Hub {
                 timing,
             });
         } else {
-            self.rows[usize::from(record.source)].repair = publication::Lanes::both(true);
+            self.pending_loss = Some(self.pending_loss.map_or(time, |old| old.min(time)));
+            row.repair = publication::Lanes::both(true);
             self.status |= session::PUBLICATION;
         }
     }
@@ -1027,6 +1037,22 @@ impl Hub {
         // and the reserve that refilled it would allocate, on audio.
         self.pending.copy_within(published.., 0);
         self.pending.truncate(self.pending.len() - published);
+        if let Some(time) = self.pending_loss.take() {
+            // Fanout can overflow before routing exists for every sub-block.
+            // The existing unaddressed-gap contract marks all retained passes.
+            // Send it before publish advances the frontier and retires any of
+            // them, and let the ordinary all-source snapshots repair each lane.
+            recorder.publication_lost(time, publication::Route::default());
+        }
+        let outage = recorder.take_publication_outage();
+        for lane in publication::Lane::ALL {
+            if outage[lane] {
+                for row in self.rows.iter_mut() {
+                    row.repair[lane] = true;
+                }
+                self.status |= session::PUBLICATION;
+            }
+        }
     }
 
     /// Learn hears every row, Retune off included: Retune decides what the Hub
@@ -1052,15 +1078,6 @@ impl Hub {
     /// itself scheduled. It reconstructs no history.
     pub fn publish(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         self.flush(owner, recorder, false);
-        let outage = recorder.take_publication_outage();
-        for lane in publication::Lane::ALL {
-            if outage[lane] {
-                for row in self.rows.iter_mut() {
-                    row.repair[lane] = true;
-                }
-                self.status |= session::PUBLICATION;
-            }
-        }
         let Some(callback) = self.callback else { return };
         self.snapshots(owner, recorder);
         // Every record collected this callback has been published, and nothing
@@ -1139,6 +1156,7 @@ impl Hub {
             // translation when both land in the same pass: two routes into
             // one pass agree only to within rounding, which is enough to sort
             // the frame a hair before the very delta it is level with.
+            let time = self.rows[index].applied_time.map_or(time, |applied| applied.max(time));
             let (at, route) = match self.rows[index].latest {
                 Some((latest, own)) if latest >= time => {
                     (latest, if own.address == route.address { own } else { route })
