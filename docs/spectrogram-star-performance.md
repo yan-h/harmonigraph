@@ -29,6 +29,18 @@ Jitter itself is unchanged.
 The previous wide support is 1.2 cells:
 four neighbors cannot reproduce it simply by dropping five reads.
 
+The Stars **Far fill** slider reduces background leakage through the farthest three layers without adding stars or texture reads.
+It works in both rendering profiles:
+0% preserves the original coverage,
+50% gives gentle filling,
+and 100% gives stronger filling,
+with continuous interpolation between them.
+New and older appearances default to 0%.
+Changing fill preserves star color history.
+It strengthens partial tails and lifetime fades but cannot fill a pixel with zero star contribution.
+The [bounded prototype report](https://github.com/yan-h/harmonigraph/tree/e90cca23/docs/evidence/spectrogram-stars/crack-fill-2026-09-28) records the appearance and cost comparison.
+The [slider validation](evidence/spectrogram-stars/far-fill-2026-09-28/README.md) records production parity and measured overhead.
+
 Uniform retains all five wide responses and its adjustable halo resolution.
 At drawn coverage of at least 2560×1440 device pixels in area,
 it composites the farthest three into a native-resolution target and draws the nearest two over an exact texel read.

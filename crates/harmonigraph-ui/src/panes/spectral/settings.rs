@@ -595,6 +595,12 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
             "Halo image width and height relative to the pane. 50% uses a quarter of the pixels; 100% uses native resolution. Lower values soften the glow. Star positions, sharp cores and halo reach stay the same.",
         );
     }
+    ValueBar::new(&mut atmosphere.star_far_fill, 0.0..=1.0, "Far fill")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Fills thin background gaps between distant stars using their own colors. 0% keeps the original coverage, 50% fills gently, and 100% fills more strongly. Completely empty gaps remain empty.",
+        );
     ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
         .percent()
         .show(ui)

@@ -563,9 +563,9 @@ impl TileKey {
 /// only see a core that stays within its own cell, so its reach is the nearest
 /// possible center's distance from the edge: half a cell less half the jitter.
 /// The wider response is reconstructed by the separate nine-cell halo pass.
-fn star_geometry(jitter: f32) -> Float4 {
+fn star_geometry(jitter: f32, far_fill: f32) -> Float4 {
     let width = 0.6 * f64::from(jitter);
-    Float4([width as f32, (0.5 - width / 2.0) as f32, 0.7, 0.0])
+    Float4([width as f32, (0.5 - width / 2.0) as f32, 0.7, far_fill])
 }
 
 /// Per-depth halo sampling follows pane pixels and the sanitized resolution
@@ -728,6 +728,7 @@ pub(super) fn tile_key(
         star_speed_curve: _,     // no tile for Stars
         star_lifetime: _,        // no tile for Stars
         star_fringe: _,          // no tile for Stars
+        star_far_fill: _,        // no tile for Stars
         star_defocus: _,         // no tile for Stars
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -816,7 +817,7 @@ struct Uniforms {
     star_life: f32,
     /// Exact far target dimensions, optimized-far flag, and padding.
     star_far: Float4,
-    /// Jitter width, compact-core reach, fade-start fraction and padding; see [`star_geometry`].
+    /// Jitter width, compact-core reach, fade-start fraction and far fill; see [`star_geometry`].
     star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
@@ -1312,6 +1313,7 @@ fn memory_key(
         star_halo_resolution: _, // sampling does not change material identity
         star_halo_profile: _,    // sampling does not change material identity
         star_fringe: _,          // response/coverage changes do not change material identity
+        star_far_fill: _,        // composition does not change material identity
         star_defocus: _,         // response/coverage changes do not change material identity
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -2048,7 +2050,7 @@ impl Targets {
                     0.0,
                 ])
             },
-            star_geometry: star_geometry(settings.star_jitter),
+            star_geometry: star_geometry(settings.star_jitter, settings.star_far_fill),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -2221,7 +2223,7 @@ mod tests {
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let [jitter, core_reach, fade, _] = star_geometry(dial).0;
+            let [jitter, core_reach, fade, _] = star_geometry(dial, 0.0).0;
             assert!(fade > 0.0 && fade < 1.0);
             for (radius, reach) in [(0, core_reach), (1, shader_number("STAR_HALO_REACH") as f32)] {
                 let nearest = nearest_outside_the_ring(jitter / 2.0, radius);

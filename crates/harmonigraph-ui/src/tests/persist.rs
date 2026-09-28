@@ -1802,15 +1802,17 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
 }
 
 #[test]
-fn star_halo_profile_defaults_old_saves_and_roundtrips() {
+fn star_rendering_controls_default_old_saves_and_roundtrip() {
     use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
     let old: SpectralAtmosphere = ron::from_str("(star_halo_resolution:0.625)").unwrap();
     assert_eq!(old.star_halo_profile, StarHaloProfile::P3);
     assert_eq!(old.star_halo_resolution, 0.625);
+    assert_eq!(old.star_far_fill, 0.0);
 
     let mut state = fresh();
     state.picture.appearance.spectrum.atmosphere.star_halo_profile = StarHaloProfile::Uniform;
     state.picture.appearance.spectrum.atmosphere.star_halo_resolution = 0.625;
+    state.picture.appearance.spectrum.atmosphere.star_far_fill = 0.42;
     let saved = state.save_persist();
     let mut editor = fresh();
     assert!(editor.load_persist(&saved));
@@ -1822,6 +1824,8 @@ fn star_halo_profile_defaults_old_saves_and_roundtrips() {
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(offline.spectrum.atmosphere.star_halo_profile, StarHaloProfile::Uniform);
     assert_eq!(offline.spectrum.atmosphere.star_halo_resolution, 0.625);
+    assert_eq!(offline.spectrum.atmosphere.star_far_fill, 0.42);
+    assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_far_fill, 0.42);
 }
 
 #[test]
@@ -1838,6 +1842,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
         contours: 64.0,
         cloud_direction: 725.0,
         star_jitter: 2.0,
+        star_far_fill: 2.0,
         star_halo_resolution: 0.1,
         ..Default::default()
     };
@@ -1850,6 +1855,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
         contours: 20.0,
         cloud_direction: 5.0,
         star_jitter: 1.0,
+        star_far_fill: 1.0,
         star_halo_resolution: 0.25,
         ..Default::default()
     };

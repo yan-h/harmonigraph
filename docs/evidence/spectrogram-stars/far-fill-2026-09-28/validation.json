@@ -1,0 +1,165 @@
+{
+  "capture_parity": {
+    "A": {
+      "fill": 0,
+      "max_channel_delta": 0,
+      "mean_channel_delta": 0.0,
+      "changed_channels": 0,
+      "channels": 764411904
+    },
+    "B": {
+      "fill": 0.5,
+      "max_channel_delta": 0,
+      "mean_channel_delta": 0.0,
+      "changed_channels": 0,
+      "channels": 764411904
+    },
+    "C": {
+      "fill": 1,
+      "max_channel_delta": 0,
+      "mean_channel_delta": 0.0,
+      "changed_channels": 0,
+      "channels": 764411904
+    }
+  },
+  "old_shader_control": {
+    "1080-repeat": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 5.2193755,
+        "fill A2": 5.2111665,
+        "fill B": 5.246646500000001,
+        "fill C": 5.2310625
+      },
+      "aa_percent": -0.15727935267351167,
+      "paired_savings": {
+        "fill B": -0.19156162519063347,
+        "fill C": -0.2956724590942401
+      }
+    },
+    "1080": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 6.2552085,
+        "fill A2": 6.2611875,
+        "fill B": 6.3637915,
+        "fill C": 6.282792
+      },
+      "aa_percent": 0.09558434383123426,
+      "paired_savings": {
+        "fill B": -0.26171399900431397,
+        "fill C": -0.3236386254814821
+      }
+    },
+    "4k-repeat": {
+      "size": "3840x2160",
+      "ppp": "4",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 15.4739165,
+        "fill A2": 15.3657915,
+        "fill B": 15.590396,
+        "fill C": 15.4918545
+      },
+      "aa_percent": -0.698756517136434,
+      "paired_savings": {
+        "fill B": -0.7280098083118124,
+        "fill C": -0.5511746080503686
+      }
+    },
+    "4k": {
+      "size": "3840x2160",
+      "ppp": "4",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 16.688271,
+        "fill A2": 16.5890215,
+        "fill B": 16.776999500000002,
+        "fill C": 16.7268745
+      },
+      "aa_percent": -0.5947260803710552,
+      "paired_savings": {
+        "fill B": -0.4311543509558242,
+        "fill C": -0.6085992451494237
+      }
+    }
+  },
+  "new_shader_level_comparison": {
+    "1080-repeat": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 6.257521,
+        "fill A2": 6.1711875,
+        "fill B": 6.138854500000001,
+        "fill C": 6.152583
+      },
+      "aa_percent": -1.379675753385401,
+      "paired_savings": {
+        "fill B": 0.3137660610575068,
+        "fill C": 0.6086899401069894
+      }
+    },
+    "1080": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 11.497583500000001,
+        "fill A2": 11.904333,
+        "fill B": 11.96175,
+        "fill C": 11.8613335
+      },
+      "aa_percent": 3.537695551417386,
+      "paired_savings": {
+        "fill B": -2.6093021427776426,
+        "fill C": 0.47376479299429153
+      }
+    },
+    "4k-repeat": {
+      "size": "3840x2160",
+      "ppp": "4",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 21.6260835,
+        "fill A2": 21.418979,
+        "fill B": 21.7176665,
+        "fill C": 21.256854
+      },
+      "aa_percent": -0.9576606878448413,
+      "paired_savings": {
+        "fill B": 0.12304249365756555,
+        "fill C": 0.5323742697911659
+      }
+    },
+    "4k": {
+      "size": "3840x2160",
+      "ppp": "4",
+      "density": "10",
+      "memory": "1",
+      "medians": {
+        "fill A": 23.209125,
+        "fill A2": 23.2921455,
+        "fill B": 23.315125000000002,
+        "fill C": 23.176187499999997
+      },
+      "aa_percent": 0.3577062900906425,
+      "paired_savings": {
+        "fill B": 0.99026346206735,
+        "fill C": 0.6597883779208666
+      }
+    }
+  }
+}

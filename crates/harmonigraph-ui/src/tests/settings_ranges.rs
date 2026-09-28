@@ -98,7 +98,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
         cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction,
-        star_density, star_randomness, star_jitter, star_fringe, star_halo_resolution,
+        star_density, star_randomness, star_jitter, star_fringe, star_far_fill, star_halo_resolution,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_lifetime);
     for material in
@@ -319,8 +319,8 @@ fn scenarios() -> Vec<Scenario> {
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
-        (harmonigraph_scene::StarHaloProfile::P3, 10),
-        (harmonigraph_scene::StarHaloProfile::Uniform, 11),
+        (harmonigraph_scene::StarHaloProfile::P3, 11),
+        (harmonigraph_scene::StarHaloProfile::Uniform, 12),
     ] {
         cases.push(Scenario {
             pane: panes::Tab::AnalyzerSettings,

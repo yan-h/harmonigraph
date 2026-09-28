@@ -446,6 +446,10 @@ pub struct SpectralAtmosphere {
     /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
     /// Runs to [`STAR_FRINGE_MAX`].
     pub star_fringe: f32,
+    /// Coverage of the farthest three layers: 0 preserves their response,
+    /// 0.5 squares remaining background leakage, and 1 raises it to the fourth
+    /// power. Interpolates between those responses without adding stars.
+    pub star_far_fill: f32,
     /// Halo image width and height relative to the pane's device pixels.
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
@@ -523,6 +527,7 @@ impl Default for SpectralAtmosphere {
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
             star_fringe: 0.5,
+            star_far_fill: 0.0,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::P3,
             star_defocus: 0.35391274,
@@ -610,6 +615,7 @@ impl SpectralAtmosphere {
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
+        self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);
         self.star_halo_resolution = clamp(
             self.star_halo_resolution,
             fresh.star_halo_resolution,
