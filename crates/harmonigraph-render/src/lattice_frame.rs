@@ -525,7 +525,15 @@ impl LatticeCallback {
                         atmosphere.material_settings.scale_refract
                     },
                     layers: atmosphere.material_settings.wash_layers,
-                    padding: Float2([0.0; 2]),
+                    shadow_pickup: if lights
+                        && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
+                        && atmosphere.material_amount > 0.0
+                    {
+                        atmosphere.material_shadow_pickup
+                    } else {
+                        0.0
+                    },
+                    padding: 0.0,
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.

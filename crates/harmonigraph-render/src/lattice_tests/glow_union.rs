@@ -192,6 +192,64 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
 }
 
 #[test]
+fn material_shadow_pickup_darkens_light_without_adding_coverage() {
+    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_speed = 0.0;
+    scene.atmosphere.material_settings.wash_size = 2.0;
+    scene.atmosphere.material_settings.scale_size = 2.0;
+    scene.atmosphere.material_settings.wash_refract = 1.0;
+    for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
+        scene.shadow = one_shadow(0.8, 0.7, kernel);
+        for material in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
+            scene.atmosphere.material_style = material;
+            scene.atmosphere.material_shadow_pickup = 0.0;
+            let before = glow(&mut shooter, &scene);
+            scene.atmosphere.material_shadow_pickup = 1.0;
+            shooter.shot_again(&scene);
+            let after = read_glow(&shooter);
+            let mut changed = 0;
+            for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+                assert_eq!(a[3], b[3], "shadow pigment must preserve source coverage");
+                assert!(b[..3].iter().zip(a).all(|(b, a)| *b <= a.saturating_add(1)));
+                changed += usize::from(a[..3].iter().zip(b).any(|(a, b)| a.saturating_sub(*b) > 3));
+            }
+            assert!(
+                changed > 100,
+                "fixture must reach source shadows: {kernel:?} {material:?}: {changed}"
+            );
+            assert_eq!(after, glow(&mut shooter, &scene), "carried pane matches fresh rendering");
+        }
+    }
+}
+
+#[test]
+fn shadow_pickup_bypasses_with_material_or_light_disabled() {
+    use harmonigraph_scene::LatticeMaterial;
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    for turn_off in [
+        (|s: &mut Scene| s.atmosphere.material_style = LatticeMaterial::None) as fn(&mut Scene),
+        |s| s.atmosphere.material_amount = 0.0,
+        |s| s.glow_reach = 0.0,
+        |s| s.glow_strength = 0.0,
+        // Zero visible depth must not remove the independent full-depth bloom mask.
+        |s| s.shadow.lattice_geometry.depth = 0.0,
+    ] {
+        let mut scene = scene(&[1.0, 1.0], 0.75, true);
+        scene.bloom_strength = 1.0;
+        scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+        scene.atmosphere.breath_amount = 0.0;
+        turn_off(&mut scene);
+        scene.atmosphere.material_shadow_pickup = 0.0;
+        let ordinary = shooter.shot(&scene);
+        scene.atmosphere.material_shadow_pickup = 1.0;
+        assert_eq!(ordinary, shooter.shot_again(&scene), "bypass preserves ordinary shadows");
+    }
+}
+
+#[test]
 fn watercolor_motion_and_silence_use_the_production_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);

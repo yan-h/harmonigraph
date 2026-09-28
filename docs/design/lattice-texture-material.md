@@ -4,7 +4,7 @@
 
 The lattice separates Clouds, Contours and Interference patterns from the Watercolor and Mosaic displacement materials,
 so a cloudy glow can feed either material.
-The fixed order is note illumination and breathing → texture → material → existing lattice composition.
+The fixed order is note illumination and breathing → texture → optional shadow pickup → material → lattice composition.
 Texture remains lit by notes;
 silence stays dark.
 This is not a general layer stack or a new ambient background.
@@ -46,10 +46,11 @@ dim effect controls when glow reach or gain is zero.
 Preserve the existing glow-statistics and resolve passes.
 The resolve applies only the chosen texture to combined note light.
 The material pass consumes that resolved texture using the existing optional source target and geometry tiles.
-No extra render pass or target is introduced beyond those Watercolor/Mosaic already use.
+Shadow pickup adds one half-resolution node-quad draw into the existing source target when enabled;
+it allocates no extra texture.
 Compute texture and material drift independently from the existing decorative clock.
 Keep texture uniforms distinct from material uniforms so neither stage borrows the other's depth, scale or clock.
-All materials use the same smooth note illumination.
+All materials use the same resolved note illumination.
 The former per-node source roughness and its dedicated splat pipeline are removed.
 Materials drift at constant screen direction using the spectrogram’s motion calculation;
 texture drift remains independent.
@@ -103,3 +104,34 @@ An independent review approved the fixed two-stage design and separate GPU param
 Its lifecycle clarification is incorporated above:
 retain geometry only while active, release on None/zero, and compare reactivation and resize with fresh panes.
 No extra abstractions or configurable ordering were recommended.
+
+## Shadow pickup experiment
+
+`material_shadow_pickup` defaults to 0 and ranges from 0 to 1.
+The material controls expose it as Shadow pickup;
+resetting the material resets it too.
+Existing appearances retain the current shadow composition.
+With material None, zero material amount, or disabled glow, pickup is bypassed.
+
+Pickup darkens the RGB of the material input with the existing node-shadow field,
+then lets Watercolor or Mosaic sample that dark pigment with the colored light.
+Source alpha is preserved:
+a shadow cannot introduce opaque black where there was no light.
+The corresponding share of the smooth visible shadow is removed after the material,
+while node and label receiver occlusion remain local.
+Intermediate values multiply partial source and overlay shadows,
+so they can look slightly lighter than either endpoint.
+
+Bloom keeps its full-depth local shadow mask independent of visible Shadow Depth.
+Its input also includes the material's darkened light,
+so pickup can reduce bloom further near a shadow boundary.
+
+This opt-in experiment also reduces node-shadow shading over resting crosses:
+the current scene attachment combines those crosses with background light.
+At full pickup, crosses keep ink coverage from nearer rings but lose their surrounding node-shadow darkening.
+Preserving that interaction separately would require another receiver treatment or separating light from the cross attachment;
+that additional rendering machinery is deferred until the look is selected ([#1253](https://github.com/yan-h/harmonigraph/issues/1253)).
+
+The source pass uses live instance, caster and uniform buffers on every frame.
+Pickup does not belong in the geometry-tile key:
+it changes sampled light, not wash or facet geometry.

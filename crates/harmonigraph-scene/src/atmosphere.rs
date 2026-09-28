@@ -679,6 +679,8 @@ pub struct AtmosphereSettings {
     /// Replaces the retired combined `material` key, which serde ignores.
     pub material_style: LatticeMaterial,
     pub material_amount: f32,
+    /// Share of node-shadow darkness carried through the material instead of over it.
+    pub material_shadow_pickup: f32,
     pub material_settings: MaterialSettings,
     pub material_speed: f32,
     pub material_direction: f32,
@@ -695,6 +697,7 @@ impl Default for AtmosphereSettings {
             texture: LatticeTexture::Clouds,
             material_style: LatticeMaterial::None,
             material_amount: 1.0,
+            material_shadow_pickup: 0.0,
             material_settings: MaterialSettings::default(),
             material_speed: MATERIAL_SPEED_DEFAULT,
             material_direction: MATERIAL_DIRECTION_DEFAULT,
@@ -718,6 +721,8 @@ impl AtmosphereSettings {
             }
         };
         self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
+        self.material_shadow_pickup =
+            clamp(self.material_shadow_pickup, fresh.material_shadow_pickup, 0.0, 1.0);
         self.material_settings = self.material_settings.sanitized();
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);

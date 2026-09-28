@@ -52,6 +52,8 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
+            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Shadow pickup")
+                .percent().show(ui).on_hover_text("How much node-shadow darkness the washes or facets pick up. 0% keeps smooth shadows over the material; 100% lets the material carry them. Ring and label occlusion stay local.");
             super::material::speed(ui, &mut settings.material_speed);
             super::material::direction(ui, &mut settings.material_direction);
             match settings.material_style {
@@ -65,6 +67,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 let fresh = AtmosphereSettings::default();
                 settings.material_style = fresh.material_style;
                 settings.material_amount = fresh.material_amount;
+                settings.material_shadow_pickup = fresh.material_shadow_pickup;
                 settings.material_settings = fresh.material_settings;
                 settings.material_speed = fresh.material_speed;
                 settings.material_direction = fresh.material_direction;

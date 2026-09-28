@@ -132,6 +132,53 @@ pub(super) fn create_glow_pipelines(
     (splat, resolve)
 }
 
+pub(super) fn source_shadow_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layouts: SceneLayouts<'_>,
+) -> wgpu::RenderPipeline {
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("material_source_shadow"),
+        bind_group_layouts: &[
+            Some(layouts.uniforms),
+            Some(layouts.glow),
+            Some(layouts.shadow),
+            Some(layouts.casters),
+        ],
+        ..Default::default()
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("material_source_shadow"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[GpuInstance::LAYOUT, shadow::ShadowBox::BESIDE_NODES],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_source_shadow"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: LATTICE_COLOR_FORMAT,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::RED
+                    | wgpu::ColorWrites::GREEN
+                    | wgpu::ColorWrites::BLUE,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl GlowTarget {
     pub(super) fn draw(
         &self,
@@ -140,6 +187,7 @@ impl GlowTarget {
         pane: &PaneBuffers,
         strip: &InkStrip,
         has_light: bool,
+        shadow_pickup: f32,
     ) {
         let attachment = |view| {
             Some(wgpu::RenderPassColorAttachment {
@@ -186,6 +234,41 @@ impl GlowTarget {
         }
         drop(pass);
         if let (Some(source), Some(tile)) = (&self.material_source, &pane.material_tile) {
+            if has_light && shadow_pickup > 0.0 {
+                let atlas = pane
+                    .offscreen
+                    .as_ref()
+                    .and_then(|o| o.shadow.as_ref())
+                    .filter(|_| pane.box_count > 0);
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("material_source_shadow"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &source.view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&compiled.shaders.source_shadow_pipeline);
+                pass.set_bind_group(0, &pane.bind_group, &[]);
+                pass.set_bind_group(1, &compiled.glow_dummy_bind_group, &[]);
+                pass.set_bind_group(
+                    2,
+                    atlas.map_or(&compiled.shadow_dummy_bind_group, |a| a.read()),
+                    &[],
+                );
+                pass.set_bind_group(3, &pane.caster_bind_group, &[]);
+                pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
+                pass.draw(0..4, 0..pane.instance_count);
+            }
             source.draw(encoder, &compiled.material, tile, &self.view);
         }
     }

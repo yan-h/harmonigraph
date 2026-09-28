@@ -359,6 +359,7 @@ const LATTICE_ENTRY_POINTS: &[&str] = &[
     "fs_glow_splat",
     "vs_glow_resolve",
     "fs_glow_resolve",
+    "fs_source_shadow",
     "vs_ink_strip",
     "fs_ink_strip",
     "vs_ink_blur",
@@ -2564,6 +2565,7 @@ struct ShaderPipelines {
     scenes: [ScenePipelines; 2],
     glow_splat_pipeline: wgpu::RenderPipeline,
     glow_resolve_pipeline: wgpu::RenderPipeline,
+    source_shadow_pipeline: wgpu::RenderPipeline,
     ink_strip_pipeline: wgpu::RenderPipeline,
     ink_blur_pipeline: wgpu::RenderPipeline,
     glyph_coverage_cell_pipeline: wgpu::RenderPipeline,
@@ -2601,6 +2603,8 @@ impl ShaderPipelines {
             layouts.strip,
             layouts.statistics,
         );
+        let source_shadow_pipeline =
+            lattice_node_glow::source_shadow_pipeline(device, lattice, layouts.scene);
         let (ink_strip_pipeline, ink_blur_pipeline) =
             create_ink_strip_pipelines(device, lattice, layouts.scene.uniforms, layouts.strip);
         progress(startup::Stage::Lattice);
@@ -2620,6 +2624,7 @@ impl ShaderPipelines {
             plus_cell_pipeline,
             glow_splat_pipeline,
             glow_resolve_pipeline,
+            source_shadow_pipeline,
             ink_strip_pipeline,
             ink_blur_pipeline,
             glyph_coverage_cell_pipeline,

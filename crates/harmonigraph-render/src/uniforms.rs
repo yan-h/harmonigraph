@@ -145,7 +145,8 @@ uniform_group! {
         variety: f32,
         refract: f32,
         layers: f32,
-        padding: Float2,
+        shadow_pickup: f32,
+        padding: f32,
     }
 }
 uniform_group! {
