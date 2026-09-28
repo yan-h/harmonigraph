@@ -46,12 +46,16 @@ impl LatticeCallback {
             atmosphere.material_settings.scale_size
         };
         let cells = if watercolor { 5.25 } else { 6.0 / 2.2 };
+        // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling
+        // its 40-cell tile. A screen-axis wrap must span five tile periods
+        // so that the rotated jump is still a whole-number tile repeat.
+        let drift_period = if watercolor { 200.0 } else { 40.0 };
         let material_drift = harmonigraph_scene::MaterialSettings::drift(
             atmosphere.material_speed,
             atmosphere.material_direction,
             scene.glow_timing.map_or(0.0, |clock| clock.now),
         )
-        .map(|offset| (offset * f64::from(cells / material_scale)).rem_euclid(40.0) as f32);
+        .map(|offset| (offset * f64::from(cells / material_scale)).rem_euclid(drift_period) as f32);
         let view_proj = camera.view_proj(aspect);
         let (right, up) = camera.right_up();
 
