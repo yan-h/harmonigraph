@@ -1304,6 +1304,9 @@ struct MemoryFrame {
 /// Only coordinate and color interpretation belong to the history key. Sound,
 /// time, response times and Texture mix change the response, not its identity.
 /// Other styles' dials must not erase the active style's carried color.
+/// Stars locate history by absolute cell and life, independent of width and
+/// motion. Keep height here because it changes the material sampling scale;
+/// the actual atlas cell sizes are appended by `update` below.
 fn memory_key(
     s: harmonigraph_scene::SpectralAtmosphere,
     size: [f32; 2],
@@ -1331,10 +1334,10 @@ fn memory_key(
         star_size_min,
         star_size_max,
         star_size_curve,
-        star_speed_min,
-        star_speed_max,
-        star_speed_curve,
-        star_lifetime,
+        star_speed_min: _,       // carried by absolute cell and per-cell life
+        star_speed_max: _,       // carried by absolute cell and per-cell life
+        star_speed_curve: _,     // carried by absolute cell and per-cell life
+        star_lifetime: _,        // carried by absolute cell and per-cell life
         star_halo_resolution: _, // sampling does not change material identity
         star_halo_profile: _,    // sampling does not change material identity
         star_fringe: _,          // response/coverage changes do not change material identity
@@ -1354,7 +1357,6 @@ fn memory_key(
             },
     } = s;
     let mut values = vec![
-        size[0],
         size[1],
         u32::from(pitch_vertical) as f32,
         read.min_midi,
@@ -1365,7 +1367,6 @@ fn memory_key(
         pitch_softness,
         time_softness,
         spread,
-        cloud_direction,
     ];
     match cloud_style {
         CloudStyle::Stars => values.extend([
@@ -1376,13 +1377,11 @@ fn memory_key(
             star_size_curve,
             star_randomness,
             star_jitter,
-            star_speed_min,
-            star_speed_max,
-            star_speed_curve,
-            star_lifetime,
         ]),
         CloudStyle::Mosaic => values.extend([
             0.0,
+            size[0],
+            cloud_direction,
             cloud_speed,
             scale_size,
             scale_variety,
@@ -1393,6 +1392,8 @@ fn memory_key(
         ]),
         CloudStyle::Watercolor => values.extend([
             1.0,
+            size[0],
+            cloud_direction,
             cloud_speed,
             wash_size,
             wash_fuzz,
@@ -2008,6 +2009,12 @@ impl Targets {
             // Different logical grids can now share one allocation. DPI or
             // sampling changes must still reset history even in the same bucket.
             key.extend(memory.extent);
+            if let Some(layout) = stars {
+                // Stars carry by absolute cell and life across motion edits
+                // and width changes. At the atlas budget, a wider pane can
+                // coarsen cells: the same integer cell then names a new star.
+                key.extend(layout.cells.map(f32::to_bits));
+            }
             if let Some(previous) = &memory.frame {
                 let dt = atmosphere.now - previous.now;
                 // Six maximum time constants leave under 0.25% residual;
