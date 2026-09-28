@@ -31,6 +31,8 @@ use lifecycle::{Action, End, History, Observation, Policy, State};
 /// scheduling delays; the separate canonical publication lane has its own cap.
 const TAKE_RING_CAPACITY: usize = 1 << 16;
 
+const FINISHING: &str = "finishing — waiting for the recording prefix";
+const FINISHING_PREVIOUS: &str = "finishing the previous take — waiting for its recording prefix";
 const CONFIGURATION_FAILURE: &str =
     "recording incomplete: configuration/audio ownership failed; no render started";
 
@@ -851,10 +853,14 @@ impl Control {
                 "recording incomplete — reload the plugin before starting another take".into();
             return;
         }
-        if self.fence.finishing.load(Ordering::Acquire) {
-            *self.status.lock() =
-                "finishing the previous take — waiting for its recording prefix".into();
-            return;
+        {
+            // Completion uses this same lock before releasing the fence, so
+            // a rejected Start cannot publish "finishing" after success.
+            let mut status = self.status.lock();
+            if self.fence.finishing.load(Ordering::Acquire) {
+                *status = FINISHING_PREVIOUS.into();
+                return;
+            }
         }
         let dir = take_dir();
         #[cfg(feature = "test-support")]

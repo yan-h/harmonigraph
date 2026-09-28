@@ -30,6 +30,8 @@ pub(crate) struct RecordFence {
     pub worker_before_commands: TestPause,
     #[cfg(feature = "test-support")]
     pub worker_after_stop: TestPause,
+    #[cfg(all(test, feature = "test-support"))]
+    pub worker_after_finish: TestPause,
     #[cfg(feature = "test-support")]
     pub worker_finished: AtomicBool,
     #[cfg(feature = "test-support")]

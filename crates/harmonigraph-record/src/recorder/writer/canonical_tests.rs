@@ -289,6 +289,8 @@ impl Drop for WorkerPause {
     fn drop(&mut self) {
         self.0.worker_after_empty.enabled.store(false, Ordering::Release);
         self.0.worker_after_stop.enabled.store(false, Ordering::Release);
+        self.0.worker_after_finish.enabled.store(false, Ordering::Release);
+        self.0.worker_before_commands.enabled.store(false, Ordering::Release);
     }
 }
 fn worker_take(directory: &std::path::Path) -> std::path::PathBuf {
@@ -548,6 +550,83 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     assert_eq!(*last_take.lock(), Some(file));
     assert!(!fence.failed.load(Ordering::Acquire));
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// Completion owns only its finishing message and publishes it before Start
+/// is allowed again, even if the old completion handler has not run yet.
+#[test]
+fn completed_recording_releases_its_status_before_accepting_another_start() {
+    for (case, newer) in [
+        ("ordinary", None),
+        ("retry", None),
+        ("render", Some("rendering another take")),
+        ("error", Some("cannot start renderer: test error")),
+    ] {
+        let directory = path(&format!("worker-status-{case}")).parent().unwrap().to_path_buf();
+        let (mut recorder, control) = channel();
+        *control.fence.test_directory.lock() = Some(directory.clone());
+        let fence = control.fence.clone();
+        let _resume_on_panic = WorkerPause(fence.clone());
+        control.start(48000.0, String::new(), false);
+        assert!(recorder.is_armed());
+        let address = RecordAddress { epoch: 1, pass: 1 };
+        recorder.configuration_at(
+            address,
+            0.0,
+            harmonigraph_core::configuration::ConfigReducer::default().resolved(),
+        );
+        let route = publication::Route { address: Some(address), time_offset: 0.0 };
+        recorder
+            .publish_note(accepted(NoteEvent::on(0.01, SourceId(1), 0, 60, 0.8), 1), route)
+            .expect_both();
+        recorder
+            .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route)
+            .expect_both();
+        fence.worker_after_stop.enabled.store(true, Ordering::Release);
+        fence.worker_after_finish.enabled.store(true, Ordering::Release);
+        control.stop(None);
+        assert!(!recorder.is_armed());
+        recorder.configuration_pass_complete(address);
+        recorder.configuration_epoch_complete(1);
+        recorder.source_pass_complete(address, 1.0);
+        recorder.source_epoch_complete(1, 1.0);
+        wait_for(&fence.worker_after_stop.entered);
+        if case == "retry" {
+            control.start(48000.0, String::new(), false);
+            assert!(!control.is_recording());
+            assert!(control.status().starts_with("finishing the previous take"));
+        }
+        if let Some(message) = newer {
+            *control.status.lock() = message.into();
+        }
+        fence.worker_after_stop.enabled.store(false, Ordering::Release);
+        wait_for(&fence.worker_after_finish.entered);
+        assert!(!fence.finishing.load(Ordering::Acquire));
+        let file = worker_take(&directory);
+        let take = harmonigraph_take::Take::read(&file).unwrap();
+        assert!(take.incomplete.is_none());
+        assert_eq!(take.notes().count(), 2, "fixture must finish a nonempty prefix");
+        assert_eq!(
+            control.status(),
+            newer.map_or_else(|| format!("recorded {}", file.display()), str::to_owned)
+        );
+        assert!(control.last_take().is_none(), "old completion handler is still parked");
+        control.start(48000.0, String::new(), false);
+        assert!(control.is_recording());
+        let armed = control.status();
+        // Park at the next command poll: the old handler runs, but the new
+        // Start has not opened a file or published its own writer message.
+        fence.worker_before_commands.enabled.store(true, Ordering::Release);
+        fence.worker_after_finish.enabled.store(false, Ordering::Release);
+        wait_for(&fence.worker_before_commands.entered);
+        assert_eq!(control.last_take(), Some(file));
+        assert_eq!(control.status(), armed, "old completion overwrote the new Start");
+        drop(recorder);
+        drop(control);
+        fence.worker_before_commands.enabled.store(false, Ordering::Release);
+        wait_for(&fence.worker_finished);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
 
 #[test]
