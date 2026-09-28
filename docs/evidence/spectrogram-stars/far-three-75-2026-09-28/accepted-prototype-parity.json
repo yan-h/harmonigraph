@@ -1,0 +1,30 @@
+{
+  "width": 768,
+  "height": 432,
+  "fps": 24,
+  "frames": 144,
+  "warmup_frames": 960,
+  "exact_pixel_percent": 99.99432975863233,
+  "mean_absolute_channel_difference_255": 1.89217356824417e-05,
+  "max_channel_difference_255": 1,
+  "binary_sha256": "19fb3f9c59ff75d606b98c38ad37274e56caed42f8e926dab3f67d015d079fea",
+  "accepted_reference_sha256": "8d1a604e241191758b0466b04c218ba288b01991743d04a742efbc1d7278d0a9",
+  "elapsed_seconds": 13.489681457984261,
+  "command": [
+    "/Users/yan/.codex/worktrees/stars-architecture-trials/harmonigraph/target/release/harmonigraph-offline",
+    "/Users/yan/Music/Harmonigraph Takes/take-2026-09-11_03-16-17.take",
+    "--appearance",
+    "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/appearance.ron",
+    "--start",
+    "46.766945",
+    "--end",
+    "92.766945",
+    "--fps",
+    "24",
+    "--size",
+    "768x432",
+    "--out",
+    "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/production/accepted-parity.rgba"
+  ],
+  "mode": "source"
+}

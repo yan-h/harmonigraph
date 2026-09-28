@@ -39,12 +39,12 @@ pub enum CloudStyle {
     Stars,
 }
 
-/// Halo texture resolution across the five star depths. P3 is the selected
-/// optimized profile; `Uniform` uses the adjustable resolution override.
+/// Stars rendering policy. P3 is the selected optimized profile; `Uniform`
+/// keeps native cores and uses the adjustable halo resolution for every depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StarHaloProfile {
     Uniform,
-    /// Layer resolutions [50, 50, 100, 100, 60] percent.
+    /// Shorter-glow far three composited at 75%; near halos at 100% and 60%.
     #[default]
     P3,
 }

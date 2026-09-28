@@ -98,10 +98,14 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut first: Option<Vec<u8>> = None;
         for step in 0u64..5 {
             cb.pass_nr = step;
-            use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
-            let (profile, resolution) =
-                [(Uniform, 0.5), (Uniform, 0.25), (Uniform, 1.0 / 3.0), (P3, 0.5), (Uniform, 1.0)]
-                    [step as usize];
+            use harmonigraph_scene::StarHaloProfile::Uniform;
+            let (profile, resolution) = [
+                (Uniform, 0.5),
+                (Uniform, 0.25),
+                (Uniform, 1.0 / 3.0),
+                (Uniform, 0.6),
+                (Uniform, 1.0),
+            ][step as usize];
             cb.atmosphere.as_mut().unwrap().settings.star_halo_profile = profile;
             cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
             cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
@@ -182,11 +186,15 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
 fn star_split_activates_at_the_real_size_threshold() {
     let Some((device, queue)) = headless_device() else { return };
     let _override = SplitOverride::set(None);
-    let below = star_fixture([2560, 1439], egui::Pos2::ZERO);
+    let mut below = star_fixture([2560, 1439], egui::Pos2::ZERO);
+    below.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+        harmonigraph_scene::StarHaloProfile::Uniform;
     let atmosphere = below.atmosphere.unwrap();
     assert_eq!(atmosphere::tone_size([2560, 1439], 1.0, atmosphere, 1.0), None);
     assert_eq!(atmosphere::tone_size([2560, 1440], 1.0, atmosphere, 1.0), Some([2560, 1440]));
     let mut cb = star_fixture([2560, 1441], egui::Pos2::ZERO);
+    cb.atmosphere.as_mut().unwrap().settings.star_halo_profile =
+        harmonigraph_scene::StarHaloProfile::Uniform;
     cb.target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut native = CallbackResources::default();
     let mut automatic = CallbackResources::default();
@@ -232,6 +240,30 @@ pub(super) fn reference_source() -> Option<String> {
         return None;
     }
     let source = SPECTROGRAM_SRC.to_owned();
+    if mode == 4 {
+        let start = source.find("fn star_far_gather(").unwrap();
+        let end = source[start..].find("\n// The scheme's floor").unwrap() + start;
+        return Some(format!(
+            "{}{}{}",
+            &source[..start],
+            r#"
+fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
+    let o = floor(r);
+    let f = r - o;
+    let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
+    let index = s.base + local.y * s.grid.x + local.x;
+    var result = vec4<f32>(0.0);
+    for (var y = -1; y <= 1; y += 1) {
+        for (var x = -1; x <= 1; x += 1) {
+            result += star_far_texel(s, f - vec2<f32>(f32(x), f32(y)), index + y * s.grid.x + x);
+        }
+    }
+    return result;
+}
+"#,
+            &source[end..]
+        ));
+    }
     if mode == 3 {
         let read = "slice += star_halo_at(pt, k);";
         assert_eq!(source.matches(read).count(), 1, "the Stars read moved");
@@ -240,11 +272,11 @@ pub(super) fn reference_source() -> Option<String> {
             "slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);",
         ));
     }
-    let read = "var slice = star_texel(s, f, index, false);\n        slice += star_halo_at(pt, k);";
+    let read = "slice = star_texel(s, f, index, false);\n            slice += star_halo_at(pt, k);";
     assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Stars read moved");
-    let core = "let slice = star_texel(s, f, index, false);";
+    let core = "slice = star_texel(s, f, index, false);";
     let full = r#"
-        var slice = vec4<f32>(0.0);
+        slice = vec4<f32>(0.0);
         for (var y = -1; y <= 1; y += 1) {
             for (var x = -1; x <= 1; x += 1) {
                 slice += reference_star(s, f - vec2<f32>(f32(x), f32(y)), index + y * s.grid.x + x);
@@ -390,4 +422,77 @@ fn halo_profile_transitions_preserve_color_history() {
     let cold_frame = frame_at_ppp(&device, &queue, &mut cold, &cb, 1.25);
     let retained = final_frame.iter().zip(&cold_frame).filter(|(a, b)| a.abs_diff(**b) > 4).count();
     assert!(retained > final_frame.len() / 100, "fixture did not retain color across transitions");
+}
+
+#[test]
+fn optimized_far_layers_cover_partial_panes_at_fractional_scale() {
+    let Some((device, queue)) = headless_device() else { return };
+    const PPP: f32 = 1.25;
+    for (jitter, memory) in [(0.0, false), (0.5, true), (1.0, true)] {
+        let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
+        let region = egui::Rect::from_min_max(
+            cb.rect.min + egui::vec2(13.3, 9.3),
+            cb.rect.min + egui::vec2(117.1, 87.1),
+        );
+        // BOTH the source mesh and final region must be interior, otherwise
+        // their union silently forces a full-pane far pass.
+        for vertex in &mut cb.vertices {
+            vertex.pos[0] = vertex.pos[0].clamp(region.left(), region.right());
+            vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
+        }
+        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+        settings.star_jitter = jitter;
+        settings.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
+        settings.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
+        if memory {
+            settings.color_pickup = 0.6;
+            settings.color_release = 0.6;
+        }
+        let mut full = CallbackResources::default();
+        let mut partial = CallbackResources::default();
+        let mut wide_reference = CallbackResources::default();
+        for step in 0..3 {
+            cb.pass_nr = step;
+            cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
+            cb.grid.fill(80 + step as u8 * 60);
+            cb.atmosphere.as_mut().unwrap().region = cb.rect;
+            let a = frame_at_ppp(&device, &queue, &mut full, &cb, PPP);
+            // The wider gather changes subtraction order at cell boundaries,
+            // so permit one quantization level, separately from exact clipping.
+            STAR_REFERENCE.set(4);
+            let wide = frame_at_ppp(&device, &queue, &mut wide_reference, &cb, PPP);
+            STAR_REFERENCE.set(0);
+            let errors: Vec<_> = a.iter().zip(&wide).map(|(a, b)| a.abs_diff(*b)).collect();
+            let mean = errors.iter().map(|e| f64::from(*e)).sum::<f64>() / errors.len() as f64;
+            assert!(
+                errors.iter().copied().max().unwrap() <= 1 && mean < 0.01,
+                "four-cell gather omitted coverage: jitter={jitter}, memory={memory}, mean={mean}"
+            );
+            cb.atmosphere.as_mut().unwrap().region = region;
+            let b = frame_at_ppp(&device, &queue, &mut partial, &cb, PPP);
+            assert_eq!(target(&partial).tone_size(), Some([121, 91]));
+            assert_eq!(target(&partial).memory_size().is_some(), memory);
+            let width = (cb.rect.max.x * PPP).ceil() as usize + 1;
+            let mut checked = 0;
+            let mut lit = 0;
+            // Include the first and last covered pixel centers on every edge.
+            for y in 0..((cb.rect.max.y * PPP).ceil() as usize + 1) {
+                for x in 0..width {
+                    let pt = egui::pos2((x as f32 + 0.5) / PPP, (y as f32 + 0.5) / PPP);
+                    if !region.contains(pt) {
+                        continue;
+                    }
+                    let i = (y * width + x) * 4;
+                    assert_eq!(
+                        &a[i..i + 4],
+                        &b[i..i + 4],
+                        "jitter={jitter}, memory={memory}, step={step}, pixel={x},{y}"
+                    );
+                    lit += usize::from(b[i..i + 3] != cb.shades.lut[0][..3]);
+                    checked += 1;
+                }
+            }
+            assert!(checked > 10000 && lit > 1000, "fixture did not exercise a lit interior");
+        }
+    }
 }

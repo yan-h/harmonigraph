@@ -1,0 +1,66 @@
+{
+  "frames": 240,
+  "warmup": 10,
+  "order": "A B B A",
+  "fixture": "existing cloud_costs_by_style_and_dial, synthetic noisy grid, memory off, full coverage",
+  "baseline": "existing research executable with unmodified c5c0cb77 WGSL; baseline runtime differs only by dormant research hooks and comments",
+  "candidate": "production test executable, source shaders",
+  "binaries": {
+    "main": "5bf6595f0a5b5f516ea7794a10c28b2ce34fa15e9f4f35d05754515c3661cc55",
+    "selected": "3473950089925c89a49abf12b18d26e564a5c6b9f261eb3364e8e3a884fd7b7c"
+  },
+  "rows": [
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 0,
+      "case": "main",
+      "gpu_ms": {
+        "min": 18.295,
+        "p10": 18.705,
+        "median": 19.078,
+        "p90": 19.608,
+        "max": 22.245
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 1,
+      "case": "selected",
+      "gpu_ms": {
+        "min": 14.292,
+        "p10": 14.513,
+        "median": 14.771,
+        "p90": 15.258,
+        "max": 16.653
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 2,
+      "case": "selected",
+      "gpu_ms": {
+        "min": 14.224,
+        "p10": 14.52,
+        "median": 14.771,
+        "p90": 15.275,
+        "max": 16.582
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 3,
+      "case": "main",
+      "gpu_ms": {
+        "min": 18.455,
+        "p10": 18.717,
+        "median": 19.052,
+        "p90": 19.756,
+        "max": 21.91
+      }
+    }
+  ]
+}

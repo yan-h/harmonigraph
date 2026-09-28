@@ -778,7 +778,13 @@ impl CallbackTrait for SpectrogramCallback {
                     atmosphere::tone_size(drawn_pixels, ppp, settings, sampling.pixel_points)
                         // Keep pane-relative texel addressing; the scissor bounds
                         // work while the intermediate retains the full pane size.
-                        .map(|size| if stars { pixels } else { size });
+                        .map(|size| {
+                            if stars {
+                                atmosphere::star_far_size(pixels, settings.settings)
+                            } else {
+                                size
+                            }
+                        });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
                 let halos = stars.map(|_| atmosphere::star_halo_layout(pixels, settings.settings));
@@ -1024,9 +1030,13 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_bind_group(0, &target.source_group, &[]);
                         pass.set_bind_group(1, tone_group, &[]);
                         // Cover the whole intermediate; final painting clips
-                        // it to the region. Stars use a native-pixel triangle.
+                        // it to the region. Stars use a full-target triangle.
                         if stars {
-                            let [x, y, width, height] = star_coverage.expect("Stars coverage");
+                            let [x, y, width, height] = atmosphere::star_far_scissor(
+                                star_coverage.expect("Stars coverage"),
+                                pixels,
+                                target.tone_size().expect("Stars far target"),
+                            );
                             pass.set_scissor_rect(x, y, width, height);
                             pass.draw(0..3, 0..1);
                         } else {
@@ -1766,7 +1776,7 @@ mod tests {
             assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars: pixel={pixel}");
             let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
             let targets = targets.cloud.as_ref().unwrap();
-            assert!(targets.tone_size().is_none() && targets.tile_texels().is_none());
+            assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
             cb.grid.fill(0);
             let silent = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;

@@ -1,0 +1,118 @@
+{
+  "frames": 240,
+  "warmup": 10,
+  "order": "A B B A",
+  "fixture": "existing cloud_costs_by_style_and_dial, synthetic noisy grid, memory off, full coverage",
+  "baseline": "existing research executable with unmodified c5c0cb77 WGSL; baseline runtime differs only by dormant research hooks and comments",
+  "candidate": "production test executable, source shaders",
+  "binaries": {
+    "main": "5bf6595f0a5b5f516ea7794a10c28b2ce34fa15e9f4f35d05754515c3661cc55",
+    "selected": "3473950089925c89a49abf12b18d26e564a5c6b9f261eb3364e8e3a884fd7b7c"
+  },
+  "rows": [
+    {
+      "size": "1920x1080",
+      "ppp": 2.0,
+      "index": 0,
+      "case": "main",
+      "gpu_ms": {
+        "min": 6.79,
+        "p10": 6.998,
+        "median": 7.156,
+        "p90": 7.562,
+        "max": 8.27
+      }
+    },
+    {
+      "size": "1920x1080",
+      "ppp": 2.0,
+      "index": 1,
+      "case": "selected",
+      "gpu_ms": {
+        "min": 4.591,
+        "p10": 4.821,
+        "median": 4.916,
+        "p90": 5.199,
+        "max": 5.844
+      }
+    },
+    {
+      "size": "1920x1080",
+      "ppp": 2.0,
+      "index": 2,
+      "case": "selected",
+      "gpu_ms": {
+        "min": 4.591,
+        "p10": 4.775,
+        "median": 4.912,
+        "p90": 5.331,
+        "max": 7.484
+      }
+    },
+    {
+      "size": "1920x1080",
+      "ppp": 2.0,
+      "index": 3,
+      "case": "main",
+      "gpu_ms": {
+        "min": 6.807,
+        "p10": 6.978,
+        "median": 7.164,
+        "p90": 7.581,
+        "max": 8.504
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 0,
+      "case": "main",
+      "gpu_ms": {
+        "min": 18.444,
+        "p10": 18.732,
+        "median": 19.096,
+        "p90": 20.017,
+        "max": 21.655
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 1,
+      "case": "selected",
+      "gpu_ms": {
+        "min": 14.304,
+        "p10": 14.538,
+        "median": 14.93,
+        "p90": 16.047,
+        "max": 27.627
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 2,
+      "case": "selected",
+      "gpu_ms": {
+        "min": 14.215,
+        "p10": 14.53,
+        "median": 14.986,
+        "p90": 15.46,
+        "max": 16.115
+      }
+    },
+    {
+      "size": "3840x2160",
+      "ppp": 4.0,
+      "index": 3,
+      "case": "main",
+      "gpu_ms": {
+        "min": 18.526,
+        "p10": 19.288,
+        "median": 22.946,
+        "p90": 26.385,
+        "max": 31.286
+      }
+    }
+  ]
+}

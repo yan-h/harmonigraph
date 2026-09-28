@@ -452,8 +452,9 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
 
 /// The precomposite size, or `None` for the complete per-pixel walk.
 ///
-/// Stars instead split their far layers into a native RGB target on large
-/// regions. The caller retains a pane-sized allocation for texel addressing,
+/// Optimized Stars composite their far three layers at 75% width and height.
+/// Uniform Stars retain a native RGB split on large regions. The caller retains
+/// a pane-relative allocation for texel addressing,
 /// but scissors this pass to the drawn region on every frame.
 ///
 /// Other styles stay native at sample spacing at or under one DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
@@ -471,6 +472,9 @@ pub(super) fn tone_size(
         return None;
     }
     if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
+        if settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3 {
+            return Some(star_far_size(pixels, settings));
+        }
         let split = u64::from(pixels[0]) * u64::from(pixels[1]) >= STAR_SPLIT_PIXELS;
         #[cfg(test)]
         let split = super::tests::STAR_SPLIT_OVERRIDE.get().unwrap_or(split);
@@ -571,6 +575,39 @@ pub(super) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
     pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
 }
 
+/// Uniform keeps exact native texel addressing; Optimized shares the complete
+/// far-three response at 75% width and height, at every pane size.
+pub(super) fn star_far_size(
+    pixels: [u32; 2],
+    settings: harmonigraph_scene::SpectralAtmosphere,
+) -> [u32; 2] {
+    if settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3 {
+        star_halo_size(pixels, 0.75)
+    } else {
+        pixels
+    }
+}
+
+/// Include every bilinear tap at the boundary of a partially covered pane.
+pub(super) fn star_far_scissor(coverage: [u32; 4], pixels: [u32; 2], target: [u32; 2]) -> [u32; 4] {
+    if pixels == target {
+        return coverage;
+    }
+    let start: [u32; 2] = std::array::from_fn(|axis| {
+        ((f64::from(coverage[axis]) * f64::from(target[axis]) / f64::from(pixels[axis])).floor()
+            as u32)
+            .saturating_sub(1)
+    });
+    let end: [u32; 2] = std::array::from_fn(|axis| {
+        ((f64::from(coverage[axis] + coverage[axis + 2]) * f64::from(target[axis])
+            / f64::from(pixels[axis]))
+        .ceil() as u32)
+            .saturating_add(1)
+            .min(target[axis])
+    });
+    [start[0], start[1], end[0] - start[0], end[1] - start[1]]
+}
+
 const STAR_HALO_GROUPS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -586,15 +623,18 @@ pub(super) struct StarHaloLayout {
     groups: [HaloGroup; STAR_HALO_GROUPS],
     /// [group, array layer] for each far-to-near depth.
     layers: [[u32; 2]; STAR_SLICES],
+    /// Optimized far depths are drawn directly and own no halo images.
+    first_active_layer: usize,
 }
 
 impl StarHaloLayout {
-    fn from_sizes(sizes: [[u32; 2]; STAR_SLICES]) -> Self {
+    fn from_sizes(sizes: [[u32; 2]; STAR_SLICES], first_active_layer: usize) -> Self {
         let mut layout = Self {
             groups: [HaloGroup { size: [1, 1], layers: 0 }; STAR_HALO_GROUPS],
             layers: [[0, 0]; STAR_SLICES],
+            first_active_layer,
         };
-        for (depth, size) in sizes.into_iter().enumerate() {
+        for (depth, size) in sizes.into_iter().enumerate().skip(first_active_layer) {
             let group = layout
                 .groups
                 .iter()
@@ -617,19 +657,22 @@ impl StarHaloLayout {
     }
 }
 
-/// Presets change only halo sampling; the native cores and material history
-/// have the same identity at every profile.
+/// Optimized needs halos only for the nearest two depths. Material history
+/// keeps the same identity across profiles, independent of their sampling.
 pub(super) fn star_halo_layout(
     pixels: [u32; 2],
     settings: harmonigraph_scene::SpectralAtmosphere,
 ) -> StarHaloLayout {
     use harmonigraph_scene::StarHaloProfile;
     let settings = settings.sanitized();
-    let factors = match settings.star_halo_profile {
-        StarHaloProfile::Uniform => [settings.star_halo_resolution; STAR_SLICES],
-        StarHaloProfile::P3 => [0.5, 0.5, 1.0, 1.0, 0.6],
+    let (factors, first_active_layer) = match settings.star_halo_profile {
+        StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
+        StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
     };
-    StarHaloLayout::from_sizes(factors.map(|factor| star_halo_size(pixels, factor)))
+    StarHaloLayout::from_sizes(
+        factors.map(|factor| star_halo_size(pixels, factor)),
+        first_active_layer,
+    )
 }
 
 // One 16-byte uniform row: the renderer supplies the allocated size and
@@ -740,7 +783,7 @@ struct Uniforms {
     contour_softness: f32,
     contour_strength: f32,
     /// 1 when the tone target holds this frame's reduced scalar cloud field
-    /// or native RGB far Stars layers.
+    /// or RGB far Stars layers.
     tone_baked: u32,
     /// Cloud-space offset of the cloud texture, reduced from f64 on the CPU.
     ///
@@ -771,6 +814,8 @@ struct Uniforms {
     /// The geometry and slice rows that follow both start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
+    /// Exact far target dimensions, optimized-far flag, and padding.
+    star_far: Float4,
     /// Jitter width, compact-core reach, fade-start fraction and padding; see [`star_geometry`].
     star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
@@ -1339,7 +1384,7 @@ fn memory_key(
 /// coverage normalization and depth order.
 struct StarHalos {
     views: [wgpu::TextureView; STAR_HALO_GROUPS],
-    layers: [wgpu::TextureView; STAR_SLICES],
+    layers: [Option<wgpu::TextureView>; STAR_SLICES],
     layout: StarHaloLayout,
 }
 
@@ -1370,13 +1415,17 @@ impl StarHalos {
                     ..Default::default()
                 })
             }),
-            layers: layout.layers.map(|[group, layer]| {
-                textures[group as usize].create_view(&wgpu::TextureViewDescriptor {
+            layers: std::array::from_fn(|depth| {
+                if depth < layout.first_active_layer {
+                    return None;
+                }
+                let [group, layer] = layout.layers[depth];
+                Some(textures[group as usize].create_view(&wgpu::TextureViewDescriptor {
                     dimension: Some(wgpu::TextureViewDimension::D2),
                     base_array_layer: layer,
                     array_layer_count: Some(1),
                     ..Default::default()
-                })
+                }))
             }),
             layout,
         }
@@ -1396,8 +1445,9 @@ pub(super) struct Targets {
     /// draws a dark seam. The original data mesh still bounds measured sound.
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
-    /// The precomposite and its size: reduced scalar cloud tone or native RGB
-    /// of the three far Stars layers. None draws the full walk in the composite.
+    /// The precomposite and its size: reduced scalar cloud tone or RGB
+    /// of the three far Stars layers (75% for Optimized, native for Uniform).
+    /// None draws the full walk in the composite.
     /// Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
@@ -1503,7 +1553,7 @@ impl Targets {
         let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
         let halos = halo_layout.map(|layout| StarHalos::new(device, layout));
         let halo_scratch =
-            StarHalos::new(device, StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES]));
+            StarHalos::new(device, StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES], 0));
         let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
@@ -1754,6 +1804,7 @@ impl Targets {
     pub fn draw_halos(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
         let Some(halos) = &self.halos else { return };
         for (layer, view) in halos.layers.iter().enumerate() {
+            let Some(view) = view else { continue };
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1986,9 +2037,18 @@ impl Targets {
             pitch_vertical: u32::from(pitch_vertical),
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, atmosphere.now),
+            star_far: {
+                let [width, height] = self.tone_size().unwrap_or([1, 1]);
+                Float4([
+                    width as f32,
+                    height as f32,
+                    f32::from(
+                        settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3,
+                    ),
+                    0.0,
+                ])
+            },
             star_geometry: star_geometry(settings.star_jitter),
-            // Zeroes where the starfield is not drawn, which the shader never
-            // reads then.
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -2002,7 +2062,7 @@ impl Targets {
             previous_slices,
             star_halo_samples: self
                 .halo_layout()
-                .unwrap_or_else(|| StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES]))
+                .unwrap_or_else(|| StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES], 0))
                 .samples(),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
@@ -2141,15 +2201,15 @@ mod tests {
         let settings = SpectralAtmosphere::default();
         assert_eq!(settings.star_halo_profile, StarHaloProfile::P3);
         let layout = super::star_halo_layout([161, 121], settings);
-        assert_eq!(layout.groups.map(|g| g.size), [[81, 61], [161, 121], [97, 73]]);
-        assert_eq!(layout.groups.map(|g| g.layers), [2, 2, 1]);
-        assert_eq!(layout.layers, [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0]]);
+        assert_eq!(layout.groups.map(|g| g.size), [[161, 121], [97, 73], [1, 1]]);
+        assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
+        assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
         let uniform =
             SpectralAtmosphere { star_halo_profile: StarHaloProfile::Uniform, ..settings };
-        assert_eq!(
+        assert_ne!(
             super::star_halo_layout([1, 1], settings),
             super::star_halo_layout([1, 1], uniform),
-            "rounded equivalent targets must share allocation identity",
+            "omitted far depths must remain part of allocation identity",
         );
     }
 
