@@ -86,6 +86,7 @@ struct MaterialParams {
     layers: f32,
     randomness: f32,
     padding: f32,
+    velvet: vec4<f32>,
 };
 
 struct PickupParams {

@@ -239,3 +239,27 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
         .show(ui)
         .on_hover_text("Widens every star's core and glow by the same proportion, at every depth. 0% keeps their base widths; Fringe controls the strength of the surrounding glow.");
 }
+
+/// The S1 body-light material; every body contributes its own sampled light.
+pub(super) fn velvet(ui: &mut egui::Ui, s: &mut harmonigraph_scene::MaterialSettings) {
+    ValueBar::new(&mut s.velvet_size, cloud_size_range(), "Cell size")
+        .eased(true)
+        .unit(1.0, "×")
+        .show(ui)
+        .on_hover_text("Size of each velvet scale. 1× is about six percent of the pane height.");
+    ValueBar::new(&mut s.velvet_variety, 0.0..=1.0, "Size variation")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Variation in scale radius. 0% makes equal sizes; 50% is the Velvet Scales reference.",
+        );
+    ValueBar::new(&mut s.velvet_edge, 0.01..=1.0, "Edge softness")
+        .percent()
+        .show(ui)
+        .on_hover_text("Width of the transitions between overlapping scales.");
+    ValueBar::new(&mut s.velvet_irregularity, 0.0..=1.0, "Irregularity").percent().show(ui).on_hover_text("Move scale centers off their grid and smoothly warp their placement. Drift moves this fixed field in one direction.");
+    ValueBar::new(&mut s.velvet_shape, 0.0..=1.0, "Scale shape")
+        .percent()
+        .show(ui)
+        .on_hover_text("Round bodies at 0%; tapered overlapping scallops at 100%.");
+}

@@ -55,6 +55,7 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "fs_cloud_backdrop_linear",
     "vs_cloud_tile",
     "fs_cloud_tile",
+    "fs_velvet_tone",
     "fs_star_bake",
     "fs_star_far",
     "fs_star_near",
@@ -985,7 +986,11 @@ impl CallbackTrait for SpectrogramCallback {
                             target.tile_baked(key);
                         }
                     }
-                    target.remember(egui_encoder, cloud);
+                    let velvet = settings.settings.cloud_style
+                        == harmonigraph_scene::CloudStyle::VelvetScales;
+                    if !velvet {
+                        target.remember(egui_encoder, cloud);
+                    }
                     if settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
                         target.draw_stars(
                             egui_encoder,
@@ -997,7 +1002,7 @@ impl CallbackTrait for SpectrogramCallback {
                     } else if let Some(((tone_view, _), tone_group)) = target
                         .tone
                         .as_ref()
-                        .filter(|_| target.memory_size().is_none())
+                        .filter(|_| velvet || target.memory_size().is_none())
                         .zip(target.tone_group.as_ref())
                     {
                         #[cfg(test)]
@@ -1016,11 +1021,22 @@ impl CallbackTrait for SpectrogramCallback {
                                 })],
                                 ..Default::default()
                             });
-                        pass.set_pipeline(&cloud.tone);
+                        pass.set_pipeline(
+                            if settings.settings.cloud_style
+                                == harmonigraph_scene::CloudStyle::VelvetScales
+                            {
+                                &cloud.velvet
+                            } else {
+                                &cloud.tone
+                            },
+                        );
                         pass.set_bind_group(0, &target.source_group, &[]);
                         pass.set_bind_group(1, tone_group, &[]);
                         pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
                         pass.draw(0..6, 0..1);
+                    }
+                    if velvet {
+                        target.remember(egui_encoder, cloud);
                     }
                 }
                 pane.cloud_ready = true;
@@ -1671,6 +1687,41 @@ mod tests {
                     cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
                 }
             }
+        }
+    }
+
+    #[test]
+    fn velvet_samples_body_light_and_preserves_flat_fields() {
+        use harmonigraph_scene::CloudStyle;
+        let Some((device, queue)) = headless_device() else { return };
+        let mut cb = refracted_fixture();
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.cloud_style = CloudStyle::VelvetScales;
+        s.color_pickup = 0.0;
+        s.color_release = 0.0;
+        s.cloud_speed = 0.0;
+        s.cloud_depth = 1.0;
+        s.contour_strength = 0.0;
+        let mut resources = CallbackResources::default();
+        let bodies = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let raw = frame_with(&device, &queue, &mut resources, &cb);
+        assert!(
+            bodies.iter().zip(&raw).filter(|(a, b)| a.abs_diff(**b) > 4).count()
+                > bodies.len() / 50,
+            "structured fixture did not reach body-light replacement"
+        );
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        for value in [0, 64, 150, 255] {
+            cb.grid.fill(value);
+            let bodies = frame_with(&device, &queue, &mut resources, &cb);
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+            let raw = frame_with(&device, &queue, &mut resources, &cb);
+            assert!(
+                bodies.iter().zip(&raw).all(|(a, b)| a.abs_diff(*b) <= 1),
+                "Velvet invented structure over flat {value}"
+            );
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
         }
     }
 

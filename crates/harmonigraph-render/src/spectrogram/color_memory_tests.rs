@@ -106,7 +106,7 @@ fn material_color_memory_carries_exact_texels_in_both_orientations() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
+    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor, CloudStyle::VelvetScales] {
         for vertical in [false, true] {
             let mut cb = fixture(style);
             cb.atmosphere.as_mut().unwrap().pitch_vertical = vertical;

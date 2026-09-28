@@ -847,7 +847,7 @@ mod tests {
     #[test]
     fn rendering_a_drifting_wash_twice_is_byte_identical() {
         use harmonigraph_scene::CloudStyle;
-        for style in [CloudStyle::Watercolor, CloudStyle::Stars] {
+        for style in [CloudStyle::Watercolor, CloudStyle::Stars, CloudStyle::VelvetScales] {
             drifting_texture_renders_twice_to_the_same_bytes(style);
         }
     }
