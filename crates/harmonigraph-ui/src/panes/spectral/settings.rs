@@ -568,9 +568,9 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
             "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Halos keep their full reach at every setting. Brightness and size variation are controlled by Randomness.",
         );
     use harmonigraph_scene::StarHaloProfile;
-    crate::widgets::preset_row(ui, "Halo sampling", &["Optimized", "Uniform"], |ui, menu| {
+    crate::widgets::preset_row(ui, "Stars rendering", &["Optimized", "Uniform"], |ui, menu| {
         for (label, profile, hint) in [
-            ("Optimized", StarHaloProfile::P3, "The selected balance of halo detail and rendering cost, using a different resolution for each depth."),
+            ("Optimized", StarHaloProfile::P3, "The selected faster rendering, with slightly softer distant stars and shorter distant glow."),
             ("Uniform", StarHaloProfile::Uniform, "Override halo resolution with one value for every depth."),
         ] {
             if ui.selectable_label(atmosphere.star_halo_profile == profile, label)
