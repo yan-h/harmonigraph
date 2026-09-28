@@ -2,7 +2,7 @@
 
 use harmonigraph_scene::{
     AtmosphereSettings, LatticeMaterial, LatticeTexture, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN,
-    NEBULA_SPEED_MAX, NEBULA_SPEED_MIN,
+    NEBULA_SPEED_MAX, NEBULA_SPEED_MIN, SHADOW_PICKUP_SIZE_MAX,
 };
 
 pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewConfig) {
@@ -52,6 +52,14 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
+            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Dark pickup")
+                .percent().show(ui).on_hover_text("Dark pigment behind unlit ring segments, picked up by washes or facets. Fades as each segment lights up. Actual ring and label shadows keep their own settings.");
+            ValueBar::new(&mut settings.material_color_pickup, 0.0..=1.0, "Color pickup")
+                .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by washes or facets. Follows each segment’s activation and Bloom brightness. Spreads by distance around the segment, including its ends. 0% disables colored pickup.");
+            ValueBar::new(&mut settings.material_shadow_width, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup width")
+                .percent().show(ui).on_hover_text("Full width of the pigment source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
+            ValueBar::new(&mut settings.material_shadow_softness, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup softness")
+                .percent().show(ui).on_hover_text("Soft fade by distance around each segment, including its rounded ends, as a percentage of the node radius. Up to 800% for very diffuse pigment. Does not alter the actual shadow.");
             super::material::speed(ui, &mut settings.material_speed);
             super::material::direction(ui, &mut settings.material_direction);
             match settings.material_style {
@@ -65,6 +73,10 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 let fresh = AtmosphereSettings::default();
                 settings.material_style = fresh.material_style;
                 settings.material_amount = fresh.material_amount;
+                settings.material_shadow_pickup = fresh.material_shadow_pickup;
+                settings.material_color_pickup = fresh.material_color_pickup;
+                settings.material_shadow_width = fresh.material_shadow_width;
+                settings.material_shadow_softness = fresh.material_shadow_softness;
                 settings.material_settings = fresh.material_settings;
                 settings.material_speed = fresh.material_speed;
                 settings.material_direction = fresh.material_direction;

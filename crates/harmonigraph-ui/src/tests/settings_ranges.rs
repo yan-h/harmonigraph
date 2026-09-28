@@ -66,6 +66,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         }
     }
     poison!(a.view.atmosphere; texture_depth, texture_scale, texture_speed, material_amount, material_speed, material_direction,
+        material_shadow_pickup, material_color_pickup, material_shadow_width, material_shadow_softness,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -287,19 +288,20 @@ fn scenarios() -> Vec<Scenario> {
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
-    // Lattice materials share the spectrogram geometry bars, plus amount, speed and direction.
+    // Lattice materials share the spectrogram geometry bars, plus amount, speed,
+    // direction and four independent pigment controls.
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 5,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Mosaic,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 3,
+        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
         ..base
     });
     // The wash's own inventory: it takes the three scale bars off the Spectrogram

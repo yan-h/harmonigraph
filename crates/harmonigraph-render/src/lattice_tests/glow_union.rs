@@ -192,6 +192,322 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
 }
 
 #[test]
+fn material_shadow_pickup_darkens_light_without_adding_coverage() {
+    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_speed = 0.0;
+    scene.atmosphere.material_settings.wash_size = 2.0;
+    scene.atmosphere.material_settings.scale_size = 2.0;
+    scene.atmosphere.material_settings.wash_refract = 1.0;
+    for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
+        scene.shadow = one_shadow(0.8, 0.7, kernel);
+        for material in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
+            scene.atmosphere.material_style = material;
+            scene.atmosphere.material_shadow_pickup = 0.0;
+            let before = glow(&mut shooter, &scene);
+            scene.atmosphere.material_shadow_pickup = 1.0;
+            shooter.shot_again(&scene);
+            let after = read_glow(&shooter);
+            let mut changed = 0;
+            for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+                assert_eq!(a[3], b[3], "shadow pigment must preserve source coverage");
+                assert!(b[..3].iter().zip(a).all(|(b, a)| *b <= a.saturating_add(1)));
+                changed += usize::from(a[..3].iter().zip(b).any(|(a, b)| a.saturating_sub(*b) > 3));
+            }
+            assert!(
+                changed > 100,
+                "fixture must reach source shadows: {kernel:?} {material:?}: {changed}"
+            );
+            assert_eq!(after, glow(&mut shooter, &scene), "carried pane matches fresh rendering");
+        }
+    }
+}
+
+fn material_source(shooter: &Shooter) -> Vec<u8> {
+    let resources = shooter.resources.get::<LatticeResources>().unwrap();
+    let view = &resources.panes[&shooter.pane]
+        .offscreen
+        .as_ref()
+        .unwrap()
+        .glow
+        .as_ref()
+        .unwrap()
+        .material_source
+        .as_ref()
+        .unwrap()
+        .view;
+    let binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &resources.compiled.filter_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+            },
+        ],
+    });
+    read_glow_binding(shooter, &binding)
+}
+
+#[test]
+fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage() {
+    use harmonigraph_scene::{octave_layout, LatticeMaterial};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.node_radius *= 2.0; // narrow pigment and extra sectors still span multiple pixels
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_shadow_width = 0.2;
+    scene.atmosphere.material_shadow_softness = 0.0;
+    // Unequal extra sectors and a detuned seam must agree with the drawn ring.
+    for cents in [0.0, 1100.0] {
+        scene.octave_layout = octave_layout(5, 60.0, 1, 0.4, 0.7);
+        scene.nodes[0].cents = cents;
+        for target_slot in [5, scene.octave_layout.ring(cents).base] {
+            for level in [0.0, 0.5, 1.0] {
+                scene.nodes[0].octaves = [0.0; 11];
+                scene.nodes[0].octaves[4] = 1.0; // keeps real light under silent sectors
+                scene.nodes[0].octaves[target_slot as usize] = level;
+                scene.atmosphere.material_shadow_pickup = 0.0;
+                scene.atmosphere.material_color_pickup = 0.0;
+                shooter.shot(&scene);
+                let before = material_source(&shooter);
+                scene.atmosphere.material_color_pickup = 1.0;
+                shooter.shot_again(&scene);
+                let colored = material_source(&shooter);
+                if level > 0.0 {
+                    assert!(
+                    before
+                        .chunks_exact(4)
+                        .zip(colored.chunks_exact(4))
+                        .filter(|(a, b)| a[..3].iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+                        .count()
+                        > 100,
+                    "color pickup works independently of dark pickup: slot {target_slot}, level {level}, cents {cents}"
+                );
+                }
+                scene.atmosphere.material_shadow_pickup = 1.0;
+                shooter.shot_again(&scene);
+                let after = material_source(&shooter);
+                for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+                    assert_eq!(
+                        a[3], b[3],
+                        "colored pigment preserves alpha, including empty light"
+                    );
+                    assert!(
+                        b[..3].iter().all(|v| *v <= b[3].saturating_add(1)),
+                        "valid premultiplied color"
+                    );
+                }
+                for (slot, activation) in [(target_slot, level), (6, 0.0)] {
+                    let (start, end) = scene.octave_layout.sector(slot, cents);
+                    let angle = (start + end) * 0.5;
+                    let world = glam::Vec3::new(angle.cos(), angle.sin(), 0.0)
+                        * scene.node_radius
+                        * 1.8
+                        * scene.rings_outer;
+                    let at = on_screen(&scene, SIZE, world);
+                    let offset = (at.y as usize * SIZE[0] as usize + at.x as usize) * 4;
+                    let pixel = &after[offset..offset + 4];
+                    if slot == 6 {
+                        assert_eq!(
+                            &before[offset..offset + 4],
+                            &colored[offset..offset + 4],
+                            "color pickup alone leaves an unlit sector unchanged"
+                        );
+                    }
+                    assert!(pixel[3] > 20, "fixture has enough source light at slot {slot}");
+                    let pitch = scene.octave_layout.slot_pitch(slot, cents);
+                    let t = ((pitch - scene.darkest_pitch)
+                        / (scene.brightest_pitch - scene.darkest_pitch))
+                        .clamp(0.0, 1.0);
+                    for (actual, color) in pixel[..3].iter().zip([t, 0.4, 1.0 - t]) {
+                        let expected = color * activation * f32::from(pixel[3]);
+                        assert!(
+                        (f32::from(*actual) - expected).abs() < 4.0,
+                        "slot {slot}, cents {cents}, level {level}: {pixel:?}, expected {expected}"
+                    );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pickup_spreads_around_arc_ends_and_bloom_brightens_its_source() {
+    use harmonigraph_scene::LatticeMaterial;
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.octave_layout = probe_octave_layout();
+    scene.pitch_lut.fill(glam::Vec4::new(0.35, 0.4, 0.5, 1.0));
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_shadow_pickup = 1.0;
+    scene.atmosphere.material_color_pickup = 1.0;
+    scene.atmosphere.material_shadow_width = 1.0;
+    scene.atmosphere.material_shadow_softness = 0.2;
+    shooter.shot(&scene);
+    let plain = material_source(&shooter);
+    let sample = |pixels: &[u8], uv: glam::Vec2| {
+        let world = uv.extend(0.0) * scene.node_radius * 1.8;
+        let at = on_screen(&scene, SIZE, world);
+        let offset = (at.y as usize * SIZE[0] as usize + at.x as usize) * 4;
+        assert!(pixels[offset + 3] > 20, "fixture must contain source light beyond the arc end");
+        f32::from(pixels[offset + 2]) / f32::from(pixels[offset + 3])
+    };
+    let (start, end) = scene.octave_layout.sector(5, 0.0);
+    for (angle, sign) in [(start, 1.0), (end, -1.0)] {
+        let endpoint = glam::Vec2::new(angle.cos(), angle.sin()) * scene.rings_outer;
+        let tangent = glam::Vec2::new(-angle.sin(), angle.cos()) * sign;
+        let near = sample(&plain, endpoint + tangent * 0.2);
+        let far_angle = angle + sign * 0.9;
+        let far =
+            sample(&plain, glam::Vec2::new(far_angle.cos(), far_angle.sin()) * scene.rings_outer);
+        assert!(near > 0.1, "pickup extends past both angular ends: {near}");
+        assert!(far < 0.025, "pickup ends by distance, rather than extending a ray: {far}");
+    }
+    scene.bloom_strength = 2.0;
+    shooter.shot_again(&scene);
+    let bloomed = material_source(&shooter);
+    let mut brighter = 0;
+    for (a, b) in plain.chunks_exact(4).zip(bloomed.chunks_exact(4)) {
+        assert_eq!(a[3], b[3], "Bloom changes pigment brightness, never source alpha");
+        assert!(b[..3].iter().zip(a).all(|(b, a)| *b >= a.saturating_sub(1)));
+        assert!(b[..3].iter().all(|v| *v <= b[3].saturating_add(1)));
+        brighter += usize::from(b[..3].iter().zip(a).any(|(b, a)| b.saturating_sub(*a) > 3));
+    }
+    assert!(brighter > 100, "fixture reaches Bloom-responsive pigment: {brighter}");
+    scene.atmosphere.material_color_pickup = 0.0;
+    shooter.shot_again(&scene);
+    let dark = material_source(&shooter);
+    scene.bloom_strength = 0.0;
+    shooter.shot_again(&scene);
+    assert_eq!(dark, material_source(&shooter), "Bloom never changes dark pickup");
+}
+
+#[test]
+fn shadow_pickup_bypasses_with_material_or_light_disabled() {
+    use harmonigraph_scene::LatticeMaterial;
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    for turn_off in [
+        (|s: &mut Scene| s.atmosphere.material_style = LatticeMaterial::None) as fn(&mut Scene),
+        |s| s.atmosphere.material_amount = 0.0,
+        |s| s.glow_reach = 0.0,
+        |s| s.glow_strength = 0.0,
+        |s| s.atmosphere.material_shadow_width = 0.0,
+    ] {
+        let mut scene = scene(&[1.0, 1.0], 0.75, true);
+        scene.bloom_strength = 1.0;
+        scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+        scene.atmosphere.breath_amount = 0.0;
+        turn_off(&mut scene);
+        scene.atmosphere.material_shadow_pickup = 0.0;
+        let ordinary = shooter.shot(&scene);
+        scene.atmosphere.material_shadow_pickup = 1.0;
+        scene.atmosphere.material_color_pickup = 1.0;
+        assert_eq!(ordinary, shooter.shot_again(&scene), "bypass preserves ordinary shadows");
+    }
+}
+
+#[test]
+fn pickup_and_ordinary_shadows_are_independent() {
+    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.shadow = one_shadow(0.8, 0.7, ShadowKernel::Distance);
+    let scene_alpha = |shooter: &Shooter| {
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let target = resources.panes[&shooter.pane].offscreen.as_ref().unwrap();
+        let binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &resources.compiled.filter_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&target.color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+                },
+            ],
+        });
+        read_glow_binding(shooter, &binding).chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>()
+    };
+    let plain = glow(&mut shooter, &scene);
+    let ordinary = scene_alpha(&shooter);
+    scene.atmosphere.material_shadow_pickup = 0.5;
+    scene.atmosphere.material_color_pickup = 0.7;
+    scene.atmosphere.material_shadow_width = 3.0;
+    scene.atmosphere.material_shadow_softness = 4.0;
+    shooter.shot_again(&scene);
+    let pigment = read_glow(&shooter);
+    assert_ne!(plain, pigment, "fixture reaches the pigment source");
+    assert_eq!(ordinary, scene_alpha(&shooter), "pickup must not suppress the actual shadow mask");
+    for (width, depth, kernel) in [
+        (0.0, 0.0, ShadowKernel::Distance),
+        (0.2, 1.0, ShadowKernel::Distance),
+        (1.0, 0.3, ShadowKernel::Gaussian),
+    ] {
+        scene.shadow = one_shadow(width, depth, kernel);
+        shooter.shot_again(&scene);
+        assert_eq!(pigment, read_glow(&shooter), "actual shadow settings cannot change pickup");
+        if width == 0.0 {
+            assert_ne!(ordinary, scene_alpha(&shooter), "fixture must contain actual shadows");
+        }
+    }
+}
+
+#[test]
+fn pickup_width_and_softness_reach_beyond_the_ordinary_node_quad() {
+    use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 1.0, false);
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.material_settings.wash_refract = 0.0;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.shadow = one_shadow(0.0, 0.0, ShadowKernel::Distance);
+    scene.glow_reach = 6.0;
+    let plain = glow(&mut shooter, &scene);
+    let (right, _) = scene.camera.right_up();
+    let radius = on_screen(&scene, SIZE, right * scene.node_radius).distance(CENTRE);
+    let far_changed = |output: &[u8]| {
+        plain
+            .chunks_exact(4)
+            .zip(output.chunks_exact(4))
+            .enumerate()
+            .filter(|(i, (a, b))| {
+                let at = glam::vec2(
+                    (i % SIZE[0] as usize) as f32 + 0.5,
+                    (i / SIZE[0] as usize) as f32 + 0.5,
+                );
+                at.distance(CENTRE) > 4.0 * radius
+                    && a[..3].iter().zip(*b).any(|(a, b)| a.saturating_sub(*b) > 3)
+            })
+            .count()
+    };
+    scene.atmosphere.material_shadow_pickup = 0.8;
+    scene.atmosphere.material_shadow_width = 0.3;
+    scene.atmosphere.material_shadow_softness = 0.1;
+    assert_eq!(far_changed(&glow(&mut shooter, &scene)), 0, "narrow pigment stays near its ring");
+    for (width, softness) in [(6.0, 0.1), (0.3, 6.0)] {
+        scene.atmosphere.material_shadow_width = width;
+        scene.atmosphere.material_shadow_softness = softness;
+        let count = far_changed(&glow(&mut shooter, &scene));
+        assert!(
+            count > 100,
+            "wide/fuzzy pickup must extend beyond the ink quad: {width}/{softness}: {count}"
+        );
+    }
+}
+
+#[test]
 fn watercolor_motion_and_silence_use_the_production_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
