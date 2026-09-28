@@ -1,0 +1,21 @@
+
+running 1 test
+test spectrogram::tests::star_split::near_quad_image_probe ... QUAD_IMAGE fixture=0 size=[768, 432] ppp=1 jitter=0.5 density=10 memory=true rgb_count=95897376 motion_witness=15736283
+QUAD_IMAGE mode=1 max=1 mean=0.024108574 changed=2311949 total=95897376
+QUAD_IMAGE mode=2 max=1 mean=0.024887448 changed=2386641 total=95897376
+QUAD_IMAGE fixture=1 size=[768, 432] ppp=1 jitter=0.5 density=0.5 memory=false rgb_count=95897376 motion_witness=35657052
+QUAD_IMAGE mode=1 max=1 mean=0.002861861 changed=274445 total=95897376
+QUAD_IMAGE mode=2 max=1 mean=0.003788623 changed=363319 total=95897376
+QUAD_IMAGE fixture=2 size=[321, 239] ppp=1.25 jitter=0 density=10 memory=true rgb_count=4672080 motion_witness=953714
+QUAD_IMAGE mode=1 max=1 mean=0.018525582 changed=86553 total=4672080
+QUAD_IMAGE mode=2 max=1 mean=0.021459821 changed=100262 total=4672080
+QUAD_IMAGE fixture=3 size=[321, 239] ppp=1.25 jitter=1 density=0.5 memory=true rgb_count=4672080 motion_witness=875066
+QUAD_IMAGE mode=1 max=1 mean=0.002876235 changed=13438 total=4672080
+QUAD_IMAGE mode=2 max=1 mean=0.003702848 changed=17300 total=4672080
+QUAD_IMAGE fixture=4 size=[960, 540] ppp=4 jitter=1 density=10 memory=true rgb_count=99604812 motion_witness=17925049
+QUAD_IMAGE mode=1 max=1 mean=0.025194706 changed=2509514 total=99604812
+QUAD_IMAGE mode=2 max=1 mean=0.022769492 changed=2267951 total=99604812
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 371 filtered out; finished in 14.52s
+

@@ -1,0 +1,160 @@
+{
+  "baseline": "7f88775ed50aca914877276168408ded01ad41fc",
+  "gpu": "Apple M1 Pro / Metal",
+  "frames": 240,
+  "warmup": 120,
+  "case_order": "reverse every fourth round, then rotate left once each round",
+  "interval": "first real source BEGIN to dependent final composite END",
+  "binary_sha256": "2e03809f2d88813a99a4c49f8b0d1c6c0e99312c6a16f82f25133c49b5509cb1",
+  "patch_sha256": "8b9835d18b0adcd74b0cf833ef846ef6393068913998b8e9076747fbc1b91983",
+  "private_inputs": {
+    "/private/tmp/stars-full-halo-compare/take-levels.u8": "28f261f128ce63bcfb071d20705757fe2f7bd645304f1997622bfeefd0b66644",
+    "/private/tmp/stars-full-halo-compare/palette.rgba": "8c785e44c97a17e6f65949982e4ce42a1ac9f38e84d260f57ab977d0d8e9c2fb"
+  },
+  "results": {
+    "small": {
+      "size": "926x720",
+      "ppp": "1",
+      "density": "10",
+      "memory": "1",
+      "recording": null,
+      "medians": {
+        "quad A": 3.1540835,
+        "quad A2": 3.189667,
+        "quad residual-near2": 3.6288125,
+        "quad complete-layer3": 3.454458
+      },
+      "aa_percent": 1.1281724152198302,
+      "paired_savings": {
+        "quad residual-near2": -12.287164176607934,
+        "quad complete-layer3": -5.389858458554365
+      }
+    },
+    "1080": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "recording": null,
+      "medians": {
+        "quad A": 9.029146,
+        "quad A2": 8.981604,
+        "quad residual-near2": 9.823187,
+        "quad complete-layer3": 9.592103999999999
+      },
+      "aa_percent": -0.5265392762504928,
+      "paired_savings": {
+        "quad residual-near2": -9.445589080978973,
+        "quad complete-layer3": -6.5625156454032805
+      }
+    },
+    "4k": {
+      "size": "3840x2160",
+      "ppp": "4",
+      "density": "10",
+      "memory": "1",
+      "recording": null,
+      "medians": {
+        "quad A": 23.403833,
+        "quad A2": 23.364979499999997,
+        "quad residual-near2": 25.446875,
+        "quad complete-layer3": 23.474583000000003
+      },
+      "aa_percent": -0.16601340472734982,
+      "paired_savings": {
+        "quad residual-near2": -8.729144337575852,
+        "quad complete-layer3": -0.10651501237437992
+      }
+    },
+    "sparse1080": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "0.5",
+      "memory": "1",
+      "recording": null,
+      "medians": {
+        "quad A": 8.1743125,
+        "quad A2": 8.124479000000001,
+        "quad residual-near2": 8.6896875,
+        "quad complete-layer3": 8.380125
+      },
+      "aa_percent": -0.6096353668886278,
+      "paired_savings": {
+        "quad residual-near2": -5.289032681481613,
+        "quad complete-layer3": -1.7485166486709398
+      }
+    },
+    "4k-repeat": {
+      "size": "3840x2160",
+      "ppp": "4",
+      "density": "10",
+      "memory": "1",
+      "recording": null,
+      "medians": {
+        "quad A": 21.997771,
+        "quad A2": 21.9416045,
+        "quad residual-near2": 24.0938545,
+        "quad complete-layer3": 22.307812
+      },
+      "aa_percent": -0.25532814211040034,
+      "paired_savings": {
+        "quad residual-near2": -8.465535760986064,
+        "quad complete-layer3": -0.7417752009969183
+      }
+    },
+    "1080-repeat": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "recording": null,
+      "medians": {
+        "quad A": 5.8065,
+        "quad A2": 5.7989999999999995,
+        "quad residual-near2": 6.4843329999999995,
+        "quad complete-layer3": 6.0831875
+      },
+      "aa_percent": -0.12916559028675056,
+      "paired_savings": {
+        "quad residual-near2": -11.882079331214912,
+        "quad complete-layer3": -5.514145480348642
+      }
+    },
+    "recorded1080": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "1",
+      "recording": "/private/tmp/stars-full-halo-compare/take-levels.u8",
+      "medians": {
+        "quad A": 9.692,
+        "quad A2": 9.815146,
+        "quad residual-near2": 10.4399585,
+        "quad complete-layer3": 10.211437499999999
+      },
+      "aa_percent": 1.2705943045810963,
+      "paired_savings": {
+        "quad residual-near2": -9.237038596036982,
+        "quad complete-layer3": -3.9979410451255073
+      }
+    },
+    "no-memory1080": {
+      "size": "1920x1080",
+      "ppp": "2",
+      "density": "10",
+      "memory": "0",
+      "recording": null,
+      "medians": {
+        "quad A": 9.164854,
+        "quad A2": 8.944521000000002,
+        "quad residual-near2": 10.317729,
+        "quad complete-layer3": 9.95325
+      },
+      "aa_percent": -2.4041081287274,
+      "paired_savings": {
+        "quad residual-near2": -12.521645325461996,
+        "quad complete-layer3": -7.57510719735577
+      }
+    }
+  }
+}

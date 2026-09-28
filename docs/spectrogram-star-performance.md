@@ -89,6 +89,7 @@ and visual comparisons.
 | All-five reduced-resolution groups | Wide glow at 75% saved roughly 37–40%/31%; at 50%, roughly 53–55%/56.5% against old P3. Softer foreground detail made the visual tradeoff worse. |
 | Omit impossible neighboring core work | Small same-look gains around 2% in confirmation; environment-sensitive and not enough to justify additional machinery in this port. |
 | Fused seed/horizontal filtering | Roughly 2.1× existing blur cost at 1080p and 20–22% slower at 4K. Rejected. Matching a shared blurred image does not reconstruct each analytic halo. |
+| Near-layer analytic quads on current Optimized | [Bounded follow-up](evidence/spectrogram-stars/near-quads-2026-09-28/README.md): residual near-two quads were about 5–13% slower; complete-response quads for the native second-nearest layer were approximately tied to 8% slower. No candidate met the 5% saving gate; do not port these constructions. |
 | Seed quads, sprites and shared bloom | Previously investigated. Additional draws/filtering or changed halo structure did not establish a better visual-plus-maintenance tradeoff. Consult the archived evidence and #1242 before retrying. |
 | Falloff lookup, packed atlas, early/squared rejection, tail truncation, full depth unrolling | No useful demonstrated gain; several were slower. The lookup was 18–41% slower in paired dense-default tests. |
 | f16, wider native cores, RGBA8 halos, boundary tweaks | No repeatable useful win or an unfavorable appearance tradeoff in the tested screens. |

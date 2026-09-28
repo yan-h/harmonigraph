@@ -1,0 +1,18 @@
+{
+  "size": "1920x1080",
+  "ppp": "2",
+  "density": "10",
+  "memory": "1",
+  "recording": null,
+  "medians": {
+    "quad A": 9.029146,
+    "quad A2": 8.981604,
+    "quad residual-near2": 9.823187,
+    "quad complete-layer3": 9.592103999999999
+  },
+  "aa_percent": -0.5265392762504928,
+  "paired_savings": {
+    "quad residual-near2": -9.445589080978973,
+    "quad complete-layer3": -6.5625156454032805
+  }
+}

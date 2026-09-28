@@ -1,0 +1,18 @@
+{
+  "size": "1920x1080",
+  "ppp": "2",
+  "density": "10",
+  "memory": "1",
+  "recording": "/private/tmp/stars-full-halo-compare/take-levels.u8",
+  "medians": {
+    "quad A": 9.692,
+    "quad A2": 9.815146,
+    "quad residual-near2": 10.4399585,
+    "quad complete-layer3": 10.211437499999999
+  },
+  "aa_percent": 1.2705943045810963,
+  "paired_savings": {
+    "quad residual-near2": -9.237038596036982,
+    "quad complete-layer3": -3.9979410451255073
+  }
+}

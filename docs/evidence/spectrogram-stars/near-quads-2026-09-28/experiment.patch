@@ -1,0 +1,532 @@
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 179f9245..41809860 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -4044,6 +4044,7 @@ fn cs_wrap_probe() {
+     }
+ 
+     thread_local! {
++        pub(super) static QUAD_MODE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+         /// Consumed only when the timing probe's first real source pass runs.
+         pub(super) static SOURCE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
+         /// Compare both paths without allocating a large pane in every test.
+@@ -4059,6 +4060,18 @@ fn cs_wrap_probe() {
+     /// composite 16 to 21% without ever being taken, so the reference lives
+     /// here instead.
+     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
++        if QUAD_MODE.get() > 0 {
++            let mut source = SPECTROGRAM_SRC.to_owned();
++            if QUAD_MODE.get() == 2 {
++                source = source.replace(
++                    "slice = star_texel(s, f, index, false);",
++                    "if k != 3u { slice = star_texel(s, f, index, false); }",
++                );
++            }
++            source.push_str(&format!("\nconst QUAD_COMPLETE: bool = {};\n", QUAD_MODE.get() == 2));
++            source.push_str(include_str!("spectrogram/tests/near_quads.wgsl"));
++            return source.into();
++        }
+         if let Some(source) = star_split::reference_source() {
+             return source.into();
+         }
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+index ace13e77..275061af 100644
+--- a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+@@ -895,6 +895,8 @@ pub(super) struct Pipelines {
+     pub star_far: wgpu::RenderPipeline,
+     /// One depth's weighted halo color and coverage at the selected resolution.
+     pub star_halo: wgpu::RenderPipeline,
++    #[cfg(test)]
++    pub star_quad: Option<wgpu::RenderPipeline>,
+     /// Specialize the final draws so the unsplit shader carries no runtime
+     /// split branch (that branch alone regressed intermediate pane sizes).
+     pub star_composite: wgpu::RenderPipeline,
+@@ -935,7 +937,7 @@ impl Pipelines {
+         };
+         let uniform = |binding| wgpu::BindGroupLayoutEntry {
+             binding,
+-            visibility: wgpu::ShaderStages::FRAGMENT,
++            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+             ty: wgpu::BindingType::Buffer {
+                 ty: wgpu::BufferBindingType::Uniform,
+                 has_dynamic_offset: false,
+@@ -1000,7 +1002,7 @@ impl Pipelines {
+                 sampler_entry(7),
+                 wgpu::BindGroupLayoutEntry {
+                     binding: 8,
+-                    visibility: wgpu::ShaderStages::FRAGMENT,
++                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                     ty: wgpu::BindingType::Texture {
+                         sample_type: wgpu::TextureSampleType::Uint,
+                         view_dimension: wgpu::TextureViewDimension::D2,
+@@ -1091,6 +1093,17 @@ impl Pipelines {
+                 "fs_star_bake",
+                 &[Some(STAR_FORMAT)],
+             ),
++            #[cfg(test)]
++            star_quad: (super::tests::QUAD_MODE.get() > 0).then(|| {
++                tile_pipeline(
++                    device,
++                    &spectrogram,
++                    source_layout,
++                    &composite_layout,
++                    "fs_near_quad",
++                    &[Some(STAR_FAR_FORMAT)],
++                )
++            }),
+             star_halo: tile_pipeline(
+                 device,
+                 &spectrogram,
+@@ -1208,12 +1221,24 @@ fn tile_pipeline(
+         bind_group_layouts: &[Some(source_layout), Some(composite_layout)],
+         ..Default::default()
+     });
++    let quad = entry == "fs_near_quad";
+     let targets = formats
+         .iter()
+         .map(|format| {
+             format.map(|format| wgpu::ColorTargetState {
+                 format,
+-                blend: None,
++                blend: quad.then_some(wgpu::BlendState {
++                    color: wgpu::BlendComponent {
++                        src_factor: wgpu::BlendFactor::One,
++                        dst_factor: wgpu::BlendFactor::One,
++                        operation: wgpu::BlendOperation::Add,
++                    },
++                    alpha: wgpu::BlendComponent {
++                        src_factor: wgpu::BlendFactor::One,
++                        dst_factor: wgpu::BlendFactor::One,
++                        operation: wgpu::BlendOperation::Add,
++                    },
++                }),
+                 write_mask: wgpu::ColorWrites::ALL,
+             })
+         })
+@@ -1223,7 +1248,7 @@ fn tile_pipeline(
+         layout: Some(&layout),
+         vertex: wgpu::VertexState {
+             module: shader,
+-            entry_point: Some("vs_cloud_tile"),
++            entry_point: Some(if quad { "vs_near_quad" } else { "vs_cloud_tile" }),
+             compilation_options: Default::default(),
+             buffers: &[],
+         },
+@@ -1233,7 +1258,14 @@ fn tile_pipeline(
+             compilation_options: Default::default(),
+             targets: &targets,
+         }),
+-        primitive: Default::default(),
++        primitive: wgpu::PrimitiveState {
++            topology: if quad {
++                wgpu::PrimitiveTopology::TriangleStrip
++            } else {
++                wgpu::PrimitiveTopology::TriangleList
++            },
++            ..Default::default()
++        },
+         depth_stencil: None,
+         multisample: Default::default(),
+         multiview_mask: None,
+@@ -1456,6 +1488,8 @@ pub(super) struct Targets {
+     /// of the allocation key, sized by [`star_atlas_size`].
+     stars: Option<(wgpu::TextureView, [u32; 2])>,
+     halos: Option<StarHalos>,
++    #[cfg(test)]
++    quad_counts: [u32; STAR_SLICES],
+     halo_group: Option<wgpu::BindGroup>,
+     source_uniform: wgpu::Buffer,
+     pub source_group: wgpu::BindGroup,
+@@ -1770,6 +1804,8 @@ impl Targets {
+             tile,
+             stars,
+             halos,
++            #[cfg(test)]
++            quad_counts: [0; STAR_SLICES],
+             halo_group,
+             source_uniform,
+             source_group,
+@@ -1820,12 +1856,33 @@ impl Targets {
+                 })],
+                 ..Default::default()
+             });
+-            pass.set_pipeline(&pipelines.star_halo);
++            #[cfg(test)]
++            let quad = match super::tests::QUAD_MODE.get() {
++                1 => layer >= 3,
++                2 => layer == 3,
++                _ => false,
++            };
++            #[cfg(not(test))]
++            let quad = false;
++            #[cfg(test)]
++            if quad {
++                pass.set_pipeline(pipelines.star_quad.as_ref().expect("quad pipeline"));
++            }
++            if !quad {
++                pass.set_pipeline(&pipelines.star_halo);
++            }
+             pass.set_bind_group(0, &self.source_group, &[]);
+             pass.set_bind_group(1, self.halo_group.as_ref().expect("halo group"), &[]);
+             // A flat instance index chooses the slice without mutating a
+             // uniform shared by passes queued in this same command buffer.
+-            pass.draw(0..3, layer as u32..layer as u32 + 1);
++            #[cfg(test)]
++            if quad {
++                let first = (layer as u32) << 24;
++                pass.draw(0..4, first..first + self.quad_counts[layer]);
++            }
++            if !quad {
++                pass.draw(0..3, layer as u32..layer as u32 + 1);
++            }
+         }
+     }
+ 
+@@ -1947,6 +2004,10 @@ impl Targets {
+         let drift = cloud_drift(settings, atmosphere.now);
+         let slices =
+             stars.map(|layout| star_slices(settings, atmosphere.now, &layout)).unwrap_or_default();
++        #[cfg(test)]
++        {
++            self.quad_counts = slices.map(|s| (s.grid.0[0] * s.grid.0[1]) as u32);
++        }
+         let life = star_life(settings, atmosphere.now);
+         let mut memory_valid = false;
+         let mut alphas = [1.0; 2];
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/near_quads.wgsl b/crates/harmonigraph-render/src/spectrogram/tests/near_quads.wgsl
+new file mode 100644
+index 00000000..a493810c
+--- /dev/null
++++ b/crates/harmonigraph-render/src/spectrogram/tests/near_quads.wgsl
+@@ -0,0 +1,66 @@
++
++struct NearQuad {
++    @builtin(position) position: vec4<f32>,
++    @location(0) @interpolate(flat) layer: u32,
++    @location(1) @interpolate(flat) cell: vec2<i32>,
++    @location(2) @interpolate(flat) packed: vec4<u32>,
++};
++@vertex
++fn vs_near_quad(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32) -> NearQuad {
++    let k = instance >> 24u;
++    let local = i32(instance & 0xffffffu);
++    let s = cloud.star_slices[k];
++    let cell = s.origin + vec2<i32>(local % s.grid.x, local / s.grid.x);
++    let t = textureLoad(star_atlas, atlas_texel(s.base + local), 0);
++    var out: NearQuad;
++    out.layer = k;
++    out.cell = cell;
++    out.packed = t;
++    if t.w == 0u {
++        out.position = vec4<f32>(2.0, 2.0, 0.0, 1.0);
++        return out;
++    }
++    let center = vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y));
++    let relative = vec2<f32>(cell + vec2<i32>(floor(s.offset))) + fract(s.offset) + center;
++    let at = relative * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
++    let extent = STAR_HALO_REACH * s.cell * cloud.size.y / STAR_PANE;
++    let margin = cloud.size / cloud.star_halo_samples[k].size / 16.0;
++    let corner = vec2<f32>(f32(vertex & 1u), f32(vertex >> 1u)) * 2.0 - 1.0;
++    let pt = at + corner * (vec2<f32>(extent) + margin);
++    out.position = vec4<f32>(pt / cloud.size * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
++    return out;
++}
++@fragment
++fn fs_near_quad(in: NearQuad) -> @location(0) vec4<f32> {
++    let k = in.layer;
++    let s = cloud.star_slices[k];
++    let pt = in.position.xy * (cloud.size / cloud.star_halo_samples[k].size);
++    let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
++    let r = sp / s.cell - fract(s.offset);
++    let o = floor(r);
++    let nominal = vec2<i32>(o) - vec2<i32>(floor(s.offset));
++    let neighbor = in.cell - nominal;
++    if any(abs(neighbor) > vec2<i32>(1)) { discard; }
++    // Same subtraction order as the gather, including long-running drift.
++    let f = r - o - vec2<f32>(neighbor);
++    let t = in.packed;
++    let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
++    let outer = STAR_HALO_REACH * s.cell;
++    if dist >= outer { discard; }
++    let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
++    let shape = unpack2x16float(t.w);
++    let d = dist * shape.x;
++    let gaussian = exp(-0.5 * d * d);
++    var full = gaussian;
++    if s.fringe > 0.0 { full += s.fringe * exp(-0.4 * d); }
++    full = min(full, 1.0) * (1.0 - smoothstep(STAR_HALO_FADE * outer, outer, dist));
++    var cover = full;
++    if !QUAD_COMPLETE {
++        let reach = cloud.star_geometry.y * s.cell;
++        let core = gaussian * (1.0 - smoothstep(cloud.star_geometry.z * reach, reach, dist));
++        cover = max(full - core, 0.0);
++    }
++    cover *= shape.y;
++    if cover <= 0.0 { discard; }
++    return vec4<f32>(colour * cover, cover);
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+index 6f30a0e1..4b121228 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+@@ -496,3 +496,149 @@ fn optimized_far_layers_cover_partial_panes_at_fractional_scale() {
+         }
+     }
+ }
++
++#[test]
++#[ignore = "bounded near-quad research image comparison"]
++fn near_quad_image_probe() {
++    let Some((device, queue)) = headless_device() else { panic!("GPU required") };
++    let output =
++        std::env::var("QUAD_OUTPUT").unwrap_or_else(|_| "/tmp/near-quads-images".to_owned());
++    std::fs::create_dir_all(&output).unwrap();
++    // size, scale, origin, jitter, density, memory, long-running clock.
++    let fixtures = [
++        ([768, 432], 1.0, egui::Pos2::ZERO, 0.5, 10.0, true, 0.0),
++        ([768, 432], 1.0, egui::Pos2::ZERO, 0.5, 0.5, false, 0.0),
++        ([321, 239], 1.25, egui::pos2(7.2, 11.6), 0.0, 10.0, true, 0.0),
++        ([321, 239], 1.25, egui::pos2(7.2, 11.6), 1.0, 0.5, true, 0.0),
++        ([960, 540], 4.0, egui::Pos2::ZERO, 1.0, 10.0, true, 1_000_000.0),
++    ];
++    for (fixture, (size, ppp, origin, jitter, density, memory, clock)) in
++        fixtures.into_iter().enumerate()
++    {
++        let mut cb = star_fixture(size, origin);
++        let bytes = std::fs::read("/private/tmp/stars-full-halo-compare/take-levels.u8").unwrap();
++        assert_eq!(bytes.len(), 960 * 1024);
++        let palette = std::fs::read("/private/tmp/stars-full-halo-compare/palette.rgba").unwrap();
++        cb.shades.lut =
++            Arc::new(palette.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]).collect());
++        cb.grid = grid_of(Arc::new(bytes.clone()), 1024, 968, 0);
++        relay_quad(&mut cb, 960);
++        for v in &mut cb.vertices {
++            v.pos[0] += origin.x;
++            v.pos[1] += origin.y;
++        }
++        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
++        *settings = harmonigraph_scene::SpectralAtmosphere::default();
++        settings.star_jitter = jitter;
++        settings.star_density = density;
++        if !memory {
++            settings.color_pickup = 0.0;
++            settings.color_release = 0.0;
++        }
++        let mut resources: [CallbackResources; 3] =
++            std::array::from_fn(|_| CallbackResources::default());
++        let mut sums = [0u64; 2];
++        let mut changed = [0u64; 2];
++        let mut max = [0u8; 2];
++        let mut count = 0u64;
++        let mut witness = [0u64; 2];
++        let mut prior: Option<Vec<u8>> = None;
++        let steps = if fixture == 4 {
++            5
++        } else if fixture < 2 {
++            192
++        } else {
++            36
++        };
++        let warmup = if fixture == 4 {
++            1
++        } else if fixture < 2 {
++            96
++        } else {
++            24
++        };
++        for step in 0..steps {
++            cb.pass_nr = step as u64;
++            cb.atmosphere.as_mut().unwrap().now = clock + 1.0 + step as f64 / 24.0;
++            // Scrolling recording-derived field. All modes see identical prefilled history.
++            let shift = step * 3 % 960;
++            let mut frame = bytes[shift * 1024..].to_vec();
++            frame.extend_from_slice(&bytes[..shift * 1024]);
++            cb.grid.set_bytes(&frame);
++            // Check release into silence in fractional cases, then recovery.
++            if fixture >= 2 && fixture < 4 && step >= 27 && step < 32 {
++                cb.grid.fill(0);
++            }
++            let pictures: [Vec<u8>; 3] = std::array::from_fn(|mode| {
++                QUAD_MODE.set(mode as u32);
++                frame_at_ppp(&device, &queue, &mut resources[mode], &cb, ppp)
++            });
++            if step < warmup {
++                continue;
++            }
++            let a = &pictures[0];
++            for mode in 1..3 {
++                for (i, (&x, &y)) in a.iter().zip(&pictures[mode]).enumerate() {
++                    if i % 4 == 3 {
++                        continue;
++                    }
++                    let delta = x.abs_diff(y);
++                    sums[mode - 1] += u64::from(delta);
++                    changed[mode - 1] += u64::from(delta > 0);
++                    max[mode - 1] = max[mode - 1].max(delta);
++                }
++            }
++            count += (a.len() / 4 * 3) as u64;
++            if let Some(previous) = prior.as_ref() {
++                witness[0] +=
++                    a.iter().zip(previous).filter(|(x, y)| x.abs_diff(**y) > 4).count() as u64;
++            }
++            prior = Some(a.clone());
++            let target = target(&resources[1]);
++            assert_eq!(
++                target.halo_layout().unwrap(),
++                atmosphere::star_halo_layout(
++                    [(size[0] as f32 * ppp) as u32, (size[1] as f32 * ppp) as u32],
++                    cb.atmosphere.unwrap().settings
++                )
++            );
++            if step == steps - 1 {
++                let dimensions = [
++                    (cb.rect.max.x * ppp).ceil() as u32 + 1,
++                    (cb.rect.max.y * ppp).ceil() as u32 + 1,
++                ];
++                for (mode, picture) in pictures.iter().enumerate() {
++                    std::fs::write(
++                        format!(
++                            "{output}/fixture-{fixture}-mode-{mode}-{}x{}.rgba",
++                            dimensions[0], dimensions[1]
++                        ),
++                        picture,
++                    )
++                    .unwrap();
++                }
++            }
++        }
++        eprintln!("QUAD_IMAGE fixture={fixture} size={size:?} ppp={ppp} jitter={jitter} density={density} memory={memory} rgb_count={count} motion_witness={}",witness[0]);
++        for mode in 1..3 {
++            eprintln!(
++                "QUAD_IMAGE mode={mode} max={} mean={:.9} changed={} total={count}",
++                max[mode - 1],
++                sums[mode - 1] as f64 / count as f64,
++                changed[mode - 1]
++            );
++        }
++        assert!(witness[0] > 100, "fixture did not move");
++        assert!(
++            max[0] <= 3 && sums[0] as f64 / count as f64 <= 0.05,
++            "residual quad parity failed"
++        );
++        if ppp == ppp.round() {
++            assert!(
++                max[1] <= 3 && sums[1] as f64 / count as f64 <= 0.05,
++                "native complete quad parity failed"
++            );
++        }
++    }
++    QUAD_MODE.set(0);
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+index 259f868a..67ee66d3 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -103,6 +103,10 @@ const CASES: &[(&str, Option<Turn>)] = &[
+         }),
+     ),
+     ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
++    ("quad A", Some(|s| *s = SpectralAtmosphere::default())),
++    ("quad A2", Some(|s| *s = SpectralAtmosphere::default())),
++    ("quad residual-near2", Some(|s| *s = SpectralAtmosphere::default())),
++    ("quad complete-layer3", Some(|s| *s = SpectralAtmosphere::default())),
+     ("mosaic, memory", Some(memory)),
+     (
+         "watercolor, memory",
+@@ -200,7 +204,23 @@ fn cloud_costs_by_style_and_dial() {
+     let span: f32 =
+         std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0);
+     let bins = 3828u32;
+-    let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
++    let input = if let Ok(path) = std::env::var("PROBE_RECORDING") {
++        let bytes = std::fs::read(path).unwrap();
++        assert_eq!(bytes.len(), 960 * 1024);
++        Arc::new(
++            (0..slabs as usize)
++                .flat_map(|s| {
++                    let bytes = &bytes;
++                    (0..bins as usize).map(move |b| {
++                        bytes[(s * 960 / slabs as usize) * 1024 + b * 1024 / bins as usize]
++                    })
++                })
++                .collect(),
++        )
++    } else {
++        noisy_grid(bins as usize, slabs as usize)
++    };
++    let grid = grid_of(input, bins, 1032, 0);
+     let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
+     read.level_per_step = 1.0 / 255.0;
+     let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
+@@ -311,7 +331,13 @@ fn cloud_costs_by_style_and_dial() {
+     // INTERLEAVED: one frame of every case per round, so a GPU that another
+     // process is also drawing on, or one that changes its clock mid-run, moves
+     // every case together rather than whichever ran last.
+-    for frame in 0..frames + 10 {
++    let warmup =
++        std::env::var("PROBE_WARMUP").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(120);
++    for frame in 0..frames + warmup {
++        if frame % 4 == 0 {
++            cases.reverse();
++        }
++        cases.rotate_left(1);
+         for case in &mut cases {
+             let Case {
+                 turn,
+@@ -325,6 +351,11 @@ fn cloud_costs_by_style_and_dial() {
+                 fill,
+                 ..
+             } = case;
++            QUAD_MODE.set(match *name {
++                "quad residual-near2" => 1,
++                "quad complete-layer3" => 2,
++                _ => 0,
++            });
+             cb.pass_nr = frame as u64;
+             cb.atmosphere = turn.map(|turn| {
+                 let mut settings = SpectralAtmosphere {
+@@ -334,6 +365,13 @@ fn cloud_costs_by_style_and_dial() {
+                     ..Default::default()
+                 };
+                 turn(&mut settings);
++                if let Some(density) = dial("PROBE_STAR_DENSITY") {
++                    settings.star_density = density;
++                }
++                if dial("PROBE_MEMORY") == Some(0.0) {
++                    settings.color_pickup = 0.0;
++                    settings.color_release = 0.0;
++                }
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -361,7 +399,7 @@ fn cloud_costs_by_style_and_dial() {
+                     // fraction, so this is `w / n` and not the pane's width
+                     // over the slab count.
+                     points_per_slab: points.x * *fill / slabs as f32,
+-                    now: 1.0 + frame as f64 / 144.0,
++                    now: 1.0 + frame as f64 / 60.0,
+                 }
+             });
+             let mut encoder = device.create_command_encoder(&Default::default());
+@@ -396,7 +434,7 @@ fn cloud_costs_by_style_and_dial() {
+             let ticks: Vec<u64> =
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
+-            if frame >= 10 {
++            if frame >= warmup {
+                 assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                     "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
+                 wall.push(wall_ms);
+@@ -406,6 +444,10 @@ fn cloud_costs_by_style_and_dial() {
+         }
+     }
+ 
++    for case in &cases {
++        eprintln!("RAW {} {:?}", case.name, case.gpu_total);
++    }
++    QUAD_MODE.set(0);
+     for case in &mut cases {
+         case.wall.sort_by(f64::total_cmp);
+         case.gpu_total.sort_by(f64::total_cmp);
