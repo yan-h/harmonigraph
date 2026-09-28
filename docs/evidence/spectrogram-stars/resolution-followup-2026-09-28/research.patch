@@ -1,0 +1,320 @@
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 70e188b5..e00aef2d 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -4060,6 +4060,31 @@ fn cs_wrap_probe() {
+     /// composite 16 to 21% without ever being taken, so the reference lives
+     /// here instead.
+     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
++        if let Ok(scale) = std::env::var("RES_NEAR") {
++            let scale: f32 = scale.parse().unwrap();
++            let mut source = SPECTROGRAM_SRC.to_owned();
++            for entry in [
++                "fs_cloud_backdrop_gamma",
++                "fs_cloud_backdrop_linear",
++                "fs_cloud_gamma",
++                "fs_cloud_linear",
++            ] {
++                let old = format!("fn {entry}(in: VertexOut) -> @location(0) vec4<f32> {{");
++                let new = format!("fn {entry}(input: VertexOut) -> @location(0) vec4<f32> {{\n var in = input; in.position = vec4<f32>(input.position.xy / {scale:?}, input.position.zw);");
++                assert!(source.contains(&old));
++                source = source.replace(&old, &new);
++            }
++            source = source
++                .replace(
++                    "return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), 1.0);",
++                    "return gamma;",
++                )
++                .replace(
++                    "return vec4<f32>(linear_from_gamma_rgb(color.rgb), color.a);",
++                    "return color;",
++                );
++            return source.into();
++        }
+         if let Some(source) = star_split::reference_source() {
+             return source.into();
+         }
+diff --git a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+index af477bbd..4df2f1fc 100644
+--- a/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
++++ b/crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+@@ -582,7 +582,13 @@ pub(super) fn star_far_size(
+     settings: harmonigraph_scene::SpectralAtmosphere,
+ ) -> [u32; 2] {
+     if settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3 {
+-        star_halo_size(pixels, 0.75)
++        {
++            #[cfg(test)]
++            let scale = std::env::var("RES_FAR").ok().and_then(|v| v.parse().ok()).unwrap_or(0.75);
++            #[cfg(not(test))]
++            let scale = 0.75;
++            star_halo_size(pixels, scale)
++        }
+     } else {
+         pixels
+     }
+@@ -669,6 +675,9 @@ pub(super) fn star_halo_layout(
+         StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
+         StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
+     };
++    #[cfg(test)]
++    let factors =
++        if std::env::var("RES_HALOS").is_ok() { factors.map(|v| v * 0.75) } else { factors };
+     StarHaloLayout::from_sizes(
+         factors.map(|factor| star_halo_size(pixels, factor)),
+         first_active_layer,
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+index 259f868a..238f93e9 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -135,6 +135,8 @@ struct Case {
+ #[test]
+ #[ignore = "a probe: prints timings and asserts timestamp ordering"]
+ fn cloud_costs_by_style_and_dial() {
++    let near: f32 = std::env::var("RES_NEAR").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
++    let extra = near != 1.0 || std::env::var("RES_EXTRA").is_ok();
+     let size: [u32; 2] = std::env::var("PROBE_SIZE")
+         .ok()
+         .map(|v| {
+@@ -199,10 +201,30 @@ fn cloud_costs_by_style_and_dial() {
+     // 119.59 semitones.
+     let span: f32 =
+         std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0);
+-    let bins = 3828u32;
+-    let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
++    let recorded = std::env::var("RES_INPUT").ok();
++    let bins = if recorded.is_some() { 1024u32 } else { 3828u32 };
++    let grid = if let Some(input) = &recorded {
++        assert_eq!(slabs, 960);
++        grid_of(
++            Arc::new(
++                std::fs::read(format!("/private/tmp/stars-full-halo-compare/{input}-levels.u8"))
++                    .unwrap(),
++            ),
++            bins,
++            1032,
++            0,
++        )
++    } else {
++        grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0)
++    };
+     let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
+     read.level_per_step = 1.0 / 255.0;
++    if recorded.is_some() {
++        read.min_midi = 35.0;
++        read.spectrum_min_midi = 35.0;
++        read.bins_per_semitone = 1024.0 / span;
++        read.level_per_midi = 0.0;
++    }
+     let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
+     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+     let quad = |fill: f32| {
+@@ -229,28 +251,85 @@ fn cloud_costs_by_style_and_dial() {
+     let staging =
+         buffer("timing_staging", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
+     let target = |label, size: [u32; 2]| {
+-        device
+-            .create_texture(&wgpu::TextureDescriptor {
+-                label: Some(label),
+-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+-                mip_level_count: 1,
+-                sample_count: 1,
+-                dimension: wgpu::TextureDimension::D2,
+-                format: FORMAT,
+-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+-                view_formats: &[],
+-            })
+-            .create_view(&Default::default())
++        device.create_texture(&wgpu::TextureDescriptor {
++            label: Some(label),
++            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
++            mip_level_count: 1,
++            sample_count: 1,
++            dimension: wgpu::TextureDimension::D2,
++            format: if label == "timing_reduced" {
++                wgpu::TextureFormat::Rgba16Float
++            } else {
++                FORMAT
++            },
++            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
++                | wgpu::TextureUsages::TEXTURE_BINDING
++                | wgpu::TextureUsages::COPY_SRC,
++            view_formats: &[],
++        })
+     };
+     // Held across frames, as a swapchain's is: allocating 33 MB per frame would
+     // be the larger half of what a wall clock read.
+-    let pane_view = target("timing_pane", size);
++    let output = target("timing_pane", size);
++    let output_view = output.create_view(&Default::default());
++    let reduced_size = size.map(|n| (n as f32 * near).ceil() as u32);
++    let reduced = target("timing_reduced", reduced_size);
++    let reduced_view = reduced.create_view(&Default::default());
++    let pane_view = if extra { &reduced_view } else { &output_view };
++    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
++        label: Some("upsample"), source: wgpu::ShaderSource::Wgsl(r#"
++@group(0) @binding(0) var tex: texture_2d<f32>;
++@group(0) @binding(1) var samp: sampler;
++struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> }
++@vertex fn vs(@builtin(vertex_index) i: u32) -> V {
++ let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
++ var v: V; v.pos = vec4<f32>(uv * vec2<f32>(2.0,-2.0)+vec2<f32>(-1.0,1.0),0.0,1.0); v.uv=uv; return v;
++}
++@fragment fn fs(v: V) -> @location(0) vec4<f32> { return textureSampleLevel(tex,samp,v.uv,0.0); }
++"#.into()) });
++    let up = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
++        label: Some("upsample"),
++        layout: None,
++        vertex: wgpu::VertexState {
++            module: &shader,
++            entry_point: Some("vs"),
++            compilation_options: Default::default(),
++            buffers: &[],
++        },
++        fragment: Some(wgpu::FragmentState {
++            module: &shader,
++            entry_point: Some("fs"),
++            compilation_options: Default::default(),
++            targets: &[Some(FORMAT.into())],
++        }),
++        primitive: Default::default(),
++        depth_stencil: None,
++        multisample: Default::default(),
++        multiview_mask: None,
++        cache: None,
++    });
++    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
++        mag_filter: wgpu::FilterMode::Linear,
++        min_filter: wgpu::FilterMode::Linear,
++        ..Default::default()
++    });
++    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
++        label: None,
++        layout: &up.get_bind_group_layout(0),
++        entries: &[
++            wgpu::BindGroupEntry {
++                binding: 0,
++                resource: wgpu::BindingResource::TextureView(&reduced_view),
++            },
++            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
++        ],
++    });
+     let stamped_pass = |encoder: &mut wgpu::CommandEncoder, source_stamped: bool| {
+         encoder
+             .begin_render_pass(&wgpu::RenderPassDescriptor {
+                 label: Some("timing_paint"),
+                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+-                    view: &pane_view,
++                    view: pane_view,
+                     depth_slice: None,
+                     resolve_target: None,
+                     ops: wgpu::Operations {
+@@ -258,11 +337,13 @@ fn cloud_costs_by_style_and_dial() {
+                         store: wgpu::StoreOp::Store,
+                     },
+                 })],
+-                timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
+-                    query_set: &set,
+-                    beginning_of_pass_write_index: (!source_stamped).then_some(0),
+-                    end_of_pass_write_index: Some(1),
+-                }),
++                timestamp_writes: (!(source_stamped && extra)).then_some(
++                    wgpu::RenderPassTimestampWrites {
++                        query_set: &set,
++                        beginning_of_pass_write_index: (!source_stamped).then_some(0),
++                        end_of_pass_write_index: (!extra).then_some(1),
++                    },
++                ),
+                 ..Default::default()
+             })
+             .forget_lifetime()
+@@ -274,6 +355,9 @@ fn cloud_costs_by_style_and_dial() {
+     let mut cases: Vec<Case> = CASES
+         .iter()
+         .filter(|(name, _)| {
++            if let Ok(exact) = std::env::var("RES_CASE") {
++                return *name == exact;
++            }
+             std::env::var("PROBE_CASE")
+                 .ok()
+                 .is_none_or(|v| v.split(',').any(|v| name.contains(v.trim())))
+@@ -285,6 +369,15 @@ fn cloud_costs_by_style_and_dial() {
+         .map(|(name, turn, fill, history_seconds)| {
+             let mut cb = callback(quad(fill), &grid, &read);
+             cb.rect = rect;
++            if recorded.is_some() {
++                let palette =
++                    std::fs::read("/private/tmp/stars-full-halo-compare/palette.rgba").unwrap();
++                cb.shades.lut =
++                    Arc::new(palette.chunks_exact(4).map(|p| p.try_into().unwrap()).collect());
++            }
++            if extra {
++                cb.target_format = wgpu::TextureFormat::Rgba16Float;
++            }
+             let mut resources = CallbackResources::default();
+             let mut sampling = atmosphere::CloudSampling::default();
+             if let Some(pixel) = cloud_pixel {
+@@ -334,6 +427,12 @@ fn cloud_costs_by_style_and_dial() {
+                     ..Default::default()
+                 };
+                 turn(&mut settings);
++                if let Some(v) = dial("RES_DENSITY") {
++                    settings.star_density = v;
++                }
++                if let Some(v) = dial("RES_JITTER") {
++                    settings.star_jitter = v;
++                }
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -379,12 +478,35 @@ fn cloud_costs_by_style_and_dial() {
+                         viewport: rect,
+                         clip_rect: rect,
+                         pixels_per_point: ppp,
+-                        screen_size_px: size,
++                        screen_size_px: if extra { reduced_size } else { size },
+                     },
+                     &mut pass,
+                     resources,
+                 );
+             }
++            if extra {
++                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
++                    label: Some("upsample"),
++                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
++                        view: &output_view,
++                        depth_slice: None,
++                        resolve_target: None,
++                        ops: wgpu::Operations {
++                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
++                            store: wgpu::StoreOp::Store,
++                        },
++                    })],
++                    timestamp_writes: Some(wgpu::RenderPassTimestampWrites {
++                        query_set: &set,
++                        beginning_of_pass_write_index: None,
++                        end_of_pass_write_index: Some(1),
++                    }),
++                    ..Default::default()
++                });
++                pass.set_pipeline(&up);
++                pass.set_bind_group(0, &group, &[]);
++                pass.draw(0..3, 0..1);
++            }
+             encoder.resolve_query_set(&set, 0..2, &resolve, 0);
+             encoder.copy_buffer_to_buffer(&resolve, 0, &staging, 0, 16);
+             let start = std::time::Instant::now();
+@@ -396,6 +518,13 @@ fn cloud_costs_by_style_and_dial() {
+             let ticks: Vec<u64> =
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
++            if frame >= 10 && (frame - 10) % 20 == 0 {
++                if let Ok(dir) = std::env::var("RES_CAPTURE") {
++                    std::fs::create_dir_all(&dir).unwrap();
++                    let data = readback(&device, &queue, &output, size);
++                    std::fs::write(format!("{dir}/{frame:04}.rgba"), data).unwrap();
++                }
++            }
+             if frame >= 10 {
+                 assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                     "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");

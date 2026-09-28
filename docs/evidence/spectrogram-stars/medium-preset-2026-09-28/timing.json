@@ -1,0 +1,142 @@
+{
+  "implementation_commit": "bfd7ef57",
+  "binary_sha256": "314892532e6dbb1d61507d86cd0ba8af95ee880bd1d7c51065781adceeef6049",
+  "measured_frames": 240,
+  "warmup_frames": 10,
+  "input": "synthetic, default dials, full pane, 10-second history",
+  "ordering": "High, Medium, High memory interleaved each frame; 1080 then 4K, repeated twice",
+  "rows": [
+    {
+      "run": "1080-1.log",
+      "case": "stars, defaults",
+      "gpu_ms": {
+        "min": 4.653,
+        "p10": 4.763,
+        "median": 5.171,
+        "p90": 7.276,
+        "max": 14.971
+      }
+    },
+    {
+      "run": "1080-1.log",
+      "case": "stars, medium",
+      "gpu_ms": {
+        "min": 3.615,
+        "p10": 3.677,
+        "median": 4.051,
+        "p90": 5.646,
+        "max": 12.336
+      }
+    },
+    {
+      "run": "1080-1.log",
+      "case": "stars, memory",
+      "gpu_ms": {
+        "min": 5.032,
+        "p10": 5.158,
+        "median": 5.605,
+        "p90": 8.031,
+        "max": 12.573
+      }
+    },
+    {
+      "run": "1080-2.log",
+      "case": "stars, defaults",
+      "gpu_ms": {
+        "min": 4.641,
+        "p10": 4.784,
+        "median": 5.744,
+        "p90": 8.064,
+        "max": 12.173
+      }
+    },
+    {
+      "run": "1080-2.log",
+      "case": "stars, medium",
+      "gpu_ms": {
+        "min": 3.621,
+        "p10": 3.664,
+        "median": 4.576,
+        "p90": 6.221,
+        "max": 12.091
+      }
+    },
+    {
+      "run": "1080-2.log",
+      "case": "stars, memory",
+      "gpu_ms": {
+        "min": 5.049,
+        "p10": 5.176,
+        "median": 6.349,
+        "p90": 8.144,
+        "max": 22.312
+      }
+    },
+    {
+      "run": "4k-1.log",
+      "case": "stars, defaults",
+      "gpu_ms": {
+        "min": 14.423,
+        "p10": 14.584,
+        "median": 14.847,
+        "p90": 15.132,
+        "max": 18.609
+      }
+    },
+    {
+      "run": "4k-1.log",
+      "case": "stars, medium",
+      "gpu_ms": {
+        "min": 8.885,
+        "p10": 9.01,
+        "median": 9.144,
+        "p90": 9.375,
+        "max": 12.471
+      }
+    },
+    {
+      "run": "4k-1.log",
+      "case": "stars, memory",
+      "gpu_ms": {
+        "min": 14.827,
+        "p10": 14.971,
+        "median": 15.241,
+        "p90": 15.603,
+        "max": 19.172
+      }
+    },
+    {
+      "run": "4k-2.log",
+      "case": "stars, defaults",
+      "gpu_ms": {
+        "min": 14.415,
+        "p10": 14.602,
+        "median": 14.853,
+        "p90": 15.308,
+        "max": 18.727
+      }
+    },
+    {
+      "run": "4k-2.log",
+      "case": "stars, medium",
+      "gpu_ms": {
+        "min": 8.836,
+        "p10": 9.016,
+        "median": 9.154,
+        "p90": 9.406,
+        "max": 11.925
+      }
+    },
+    {
+      "run": "4k-2.log",
+      "case": "stars, memory",
+      "gpu_ms": {
+        "min": 14.812,
+        "p10": 14.96,
+        "median": 15.254,
+        "p90": 15.642,
+        "max": 19.161
+      }
+    }
+  ]
+}

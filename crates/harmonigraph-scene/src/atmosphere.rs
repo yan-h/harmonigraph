@@ -39,7 +39,7 @@ pub enum CloudStyle {
     Stars,
 }
 
-/// Stars rendering policy. P3 is the selected optimized profile; `Uniform`
+/// Stars rendering policy. P3 is the High preset; `Uniform`
 /// keeps native cores and uses the adjustable halo resolution for every depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StarHaloProfile {
@@ -47,6 +47,8 @@ pub enum StarHaloProfile {
     /// Shorter-glow far three composited at 75%; near halos at 100% and 60%.
     #[default]
     P3,
+    /// Back three at 50%, foreground at 75%, near halos at 75% and 45%.
+    Medium,
 }
 
 /// The band both cloud size dials run over — [`MaterialSettings::scale_size`]
