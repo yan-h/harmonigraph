@@ -81,6 +81,12 @@ and 99.9944% match in the saved 4K frame;
 every remaining channel differs by at most 1/255.
 Pixel averages describe these captures and do not certify perceptual equivalence across settings.
 
+A [follow-up against the current profile](evidence/spectrogram-stars/resolution-followup-2026-09-28/README.md) measured back-three 50% and foreground 75% variants.
+Back-only 50% saved about 10.5% at 4K with no dependable 1080p gain;
+scaling foreground cores and existing halo dimensions to 75% saved about 34.8%/20.2% at 4K/1080p in the synthetic probe.
+Recording-derived captures quantify the accompanying softness.
+These remain experiments and do not change the selected defaults.
+
 ## What was tried and what remains worth considering
 
 This table is a decision index,

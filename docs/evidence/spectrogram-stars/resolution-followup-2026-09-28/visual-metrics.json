@@ -1,0 +1,96 @@
+{
+  "1920x1080-B": {
+    "mae_rgb_255": 0.24151952589163236,
+    "rmse_rgb_255": 0.8503882038857054,
+    "p99_channel_error": 4,
+    "max_channel_error": 55,
+    "pixels_any_channel_gt5_percent": 0.973608699845679,
+    "gradient_absolute_sum_change_percent": -1.5532685486326026,
+    "frame_delta_error_mae": 0.38137759247568276,
+    "frames": 12
+  },
+  "1920x1080-C": {
+    "mae_rgb_255": 0.8847488533093278,
+    "rmse_rgb_255": 1.6506516680211323,
+    "p99_channel_error": 6,
+    "max_channel_error": 54,
+    "pixels_any_channel_gt5_percent": 3.7453020511831276,
+    "gradient_absolute_sum_change_percent": -8.308200267845544,
+    "frame_delta_error_mae": 1.2402974478582118,
+    "frames": 12
+  },
+  "1920x1080-D": {
+    "mae_rgb_255": 0.7498034148876886,
+    "rmse_rgb_255": 1.453995666341861,
+    "p99_channel_error": 6,
+    "max_channel_error": 54,
+    "pixels_any_channel_gt5_percent": 2.6400462962962963,
+    "gradient_absolute_sum_change_percent": -7.341015766172109,
+    "frame_delta_error_mae": 1.0590484415918444,
+    "frames": 12
+  },
+  "1920x1080-control": {
+    "mae_rgb_255": 0.026111901470336072,
+    "rmse_rgb_255": 0.16159177414192863,
+    "p99_channel_error": 1,
+    "max_channel_error": 1,
+    "pixels_any_channel_gt5_percent": 0.0,
+    "gradient_absolute_sum_change_percent": -0.025738468498970324,
+    "frame_delta_error_mae": 0.05002116068088291,
+    "frames": 12
+  },
+  "1920x1080-crop": {
+    "x": 640,
+    "y": 720,
+    "width": 320,
+    "height": 180,
+    "frame": 130
+  },
+  "3840x2160-B": {
+    "mae_rgb_255": 0.10391046301654665,
+    "rmse_rgb_255": 0.4273728301549442,
+    "p99_channel_error": 2,
+    "max_channel_error": 44,
+    "pixels_any_channel_gt5_percent": 0.10313685538837448,
+    "gradient_absolute_sum_change_percent": -1.0075104621672049,
+    "frame_delta_error_mae": 0.17898997571198094,
+    "frames": 12
+  },
+  "3840x2160-C": {
+    "mae_rgb_255": 0.3185327282396691,
+    "rmse_rgb_255": 0.7171044089686442,
+    "p99_channel_error": 3,
+    "max_channel_error": 54,
+    "pixels_any_channel_gt5_percent": 0.23330399627057613,
+    "gradient_absolute_sum_change_percent": -3.7651621008686575,
+    "frame_delta_error_mae": 0.514282542584409,
+    "frames": 12
+  },
+  "3840x2160-D": {
+    "mae_rgb_255": 0.26857299302340537,
+    "rmse_rgb_255": 0.6530499375188294,
+    "p99_channel_error": 2,
+    "max_channel_error": 54,
+    "pixels_any_channel_gt5_percent": 0.20025458944187244,
+    "gradient_absolute_sum_change_percent": -3.3881336776276694,
+    "frame_delta_error_mae": 0.43930387497661805,
+    "frames": 12
+  },
+  "3840x2160-control": {
+    "mae_rgb_255": 0.026116680464463304,
+    "rmse_rgb_255": 0.1616065607098403,
+    "p99_channel_error": 1,
+    "max_channel_error": 1,
+    "pixels_any_channel_gt5_percent": 0.0,
+    "gradient_absolute_sum_change_percent": -0.025337926031776536,
+    "frame_delta_error_mae": 0.05002949050692107,
+    "frames": 12
+  },
+  "3840x2160-crop": {
+    "x": 1920,
+    "y": 1440,
+    "width": 320,
+    "height": 180,
+    "frame": 130
+  }
+}
