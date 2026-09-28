@@ -891,11 +891,16 @@ impl Pass {
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 if spec.is_none() || audio.is_some() {
-                    *status.lock() = if number <= 1 {
-                        format!("recording to {}", path.display())
-                    } else {
-                        format!("pass {number} -> {}", path.display())
-                    };
+                    let mut status = status.lock();
+                    // Stop can overtake the drain of a queued loop split.
+                    // Opening that pass is still finishing the old prefix.
+                    if !matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                        *status = if number <= 1 {
+                            format!("recording to {}", path.display())
+                        } else {
+                            format!("pass {number} -> {}", path.display())
+                        };
+                    }
                 }
                 Some(Pass {
                     number,

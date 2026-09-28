@@ -558,6 +558,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
 fn completed_recording_releases_its_status_before_accepting_another_start() {
     for (case, newer) in [
         ("ordinary", None),
+        ("split", None),
         ("retry", None),
         ("render", Some("rendering another take")),
         ("error", Some("cannot start renderer: test error")),
@@ -584,11 +585,32 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
             .expect_both();
         fence.worker_after_stop.enabled.store(true, Ordering::Release);
         fence.worker_after_finish.enabled.store(true, Ordering::Release);
+        if case == "split" {
+            // First ensure Start was consumed; otherwise the worker could
+            // drain the split with Start, before it polls the queued Stop.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::fs::read_dir(&directory).map_or(true, |mut entries| entries.next().is_none())
+            {
+                assert!(std::time::Instant::now() < deadline, "Start did not open its file");
+                std::thread::yield_now();
+            }
+            // Stop must be polled before the pending transport split drains.
+            fence.worker_before_commands.enabled.store(true, Ordering::Release);
+            wait_for(&fence.worker_before_commands.entered);
+            recorder.producer.push(Entry::NewPass).unwrap();
+        }
         control.stop(None);
         assert!(!recorder.is_armed());
         recorder.configuration_pass_complete(address);
         recorder.configuration_epoch_complete(1);
         recorder.source_pass_complete(address, 1.0);
+        if case == "split" {
+            let second = RecordAddress { epoch: 1, pass: 2 };
+            recorder.configuration_pass_complete(second);
+            recorder.source_pass_complete(second, 1.0);
+            fence.worker_before_commands.enabled.store(false, Ordering::Release);
+            fence.worker_before_commands.entered.store(false, Ordering::Release);
+        }
         recorder.source_epoch_complete(1, 1.0);
         wait_for(&fence.worker_after_stop.entered);
         if case == "retry" {
@@ -602,7 +624,17 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         fence.worker_after_stop.enabled.store(false, Ordering::Release);
         wait_for(&fence.worker_after_finish.entered);
         assert!(!fence.finishing.load(Ordering::Acquire));
-        let file = worker_take(&directory);
+        let file = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|file| {
+                file.extension().is_some_and(|ext| ext == "take")
+                    && harmonigraph_take::Take::read(file).unwrap().notes().count() == 2
+            })
+            .expect("the completed voiced pass");
+        if case == "split" {
+            assert!(Pass::path_for(&file, 2).exists(), "queued split did not open its pass");
+        }
         let take = harmonigraph_take::Take::read(&file).unwrap();
         assert!(take.incomplete.is_none());
         assert_eq!(take.notes().count(), 2, "fixture must finish a nonempty prefix");
