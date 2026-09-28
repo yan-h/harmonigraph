@@ -457,7 +457,7 @@ pub struct SpectralAtmosphere {
     /// Uniform uses `star_halo_resolution`; P3 chooses fixed resolutions
     /// for the five depths. Saves without a profile use the selected P3 default.
     pub star_halo_profile: StarHaloProfile,
-    /// How much the nearest stars are softened, growing with depth squared.
+    /// How much every star is widened, equally at every depth.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
 }

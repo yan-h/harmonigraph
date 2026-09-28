@@ -131,7 +131,7 @@ struct StarSlice {
     /// cell. The cell half is what keeps the dust pinpoint — dropping it made
     /// the prototype's field foamy.
     cap: f32,
-    /// How much the core is widened after the cap: 1 at the far end.
+    /// How much the core is widened after the cap, equally at every depth.
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
     /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
@@ -329,7 +329,7 @@ fn star_slices(
         let scale = small / 2.0 * (big / small / 16.0).powf(along);
         let sigma = (0.5 + 0.8 * d) * scale;
         let cap = (0.33 * cell).min(1.8 * scale);
-        let defocus = 1.0 + settings.star_defocus * d * d;
+        let defocus = 1.0 + settings.star_defocus;
         let speed = f64::from(star_speed(settings, k));
         let shift = |axis: f64| {
             (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
