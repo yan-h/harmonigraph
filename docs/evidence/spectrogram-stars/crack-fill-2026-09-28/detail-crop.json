@@ -1,0 +1,11 @@
+{
+  "frame": 72,
+  "xywh": [
+    1176,
+    648,
+    96,
+    64
+  ],
+  "score": 624.545166015625,
+  "selection": "maximum summed positive deficit against 7x7 mean far-only weighted RGB, times far transmittance, where source>76/255; all from A; candidate pixels not used"
+}

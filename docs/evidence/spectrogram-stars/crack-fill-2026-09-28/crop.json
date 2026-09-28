@@ -1,0 +1,11 @@
+{
+  "frame": 72,
+  "xywh": [
+    944,
+    512,
+    256,
+    160
+  ],
+  "score": 41.27450942993164,
+  "selection": "maximize count far opacity<230/255 and source>76/255 weighted by near transmittance, grid step32"
+}

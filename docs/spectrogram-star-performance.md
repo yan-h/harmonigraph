@@ -93,6 +93,7 @@ and visual comparisons.
 | Falloff lookup, packed atlas, early/squared rejection, tail truncation, full depth unrolling | No useful demonstrated gain; several were slower. The lookup was 18–41% slower in paired dense-default tests. |
 | f16, wider native cores, RGBA8 halos, boundary tweaks | No repeatable useful win or an unfavorable appearance tradeoff in the tested screens. |
 | Skip unused immediate-color work during memory | Only 0.2–3.3%, nearly tied in the longer 4K repeat. Not selected. |
+| Increase existing far-group coverage | A bounded crack-fill prototype uses existing gathered colors with background leakage squared or raised to the fourth power. Reduces low-coverage pixels without adding layers; GPU cost roughly tied in dense 1080p/4K repeats. Appearance is not selected; [report and replay evidence](evidence/spectrogram-stars/crack-fill-2026-09-28/README.md). |
 | Fewer layers or reduced jitter | Measured appearance changes, not equivalent-look optimizations; the selected design preserves both. |
 | Temporal reuse or caching the star bake | No valid moving-picture cache was established. Drift, life, and sampled light evolve every frame; a frozen diagnostic is not an implementable cache. |
 

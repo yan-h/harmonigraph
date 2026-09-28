@@ -1,0 +1,29 @@
+{
+  "command": [
+    "/Users/yan/.codex/worktrees/stars-near-quads/harmonigraph/target/release/harmonigraph-offline",
+    "/Users/yan/Music/Harmonigraph Takes/take-2026-09-11_03-16-17.take",
+    "--appearance",
+    "/Users/yan/.codex/visualizations/2026/09/27/01a0e495-2447-7061-8516-168df98e4784/stars-1242/actual-stars-appearance.ron",
+    "--start",
+    "46.766945",
+    "--end",
+    "92.766945",
+    "--fps",
+    "24",
+    "--size",
+    "1536x864",
+    "--scale",
+    "2",
+    "--out",
+    "/tmp/crack-fill/A-pipe.rgba"
+  ],
+  "mode": "0",
+  "debug": 0,
+  "flat": false,
+  "width": 1536,
+  "height": 864,
+  "fps": 24,
+  "warmup_frames": 960,
+  "frames": 144,
+  "binary_sha256": "f4af57dde1b1da9ed2b97ea1f9eb8cac90947f627b7f2ba616ff56bb4e79b09a"
+}

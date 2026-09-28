@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/tmp/harmonigraph-offline-far-coverage-baseline",
+    "/Users/yan/Music/Harmonigraph Takes/take-2026-09-11_03-16-17.take",
+    "--appearance",
+    "/Users/yan/.codex/visualizations/2026/09/27/01a0e495-2447-7061-8516-168df98e4784/stars-1242/actual-stars-appearance.ron",
+    "--start",
+    "46.766945",
+    "--end",
+    "92.766945",
+    "--fps",
+    "24",
+    "--size",
+    "1536x864",
+    "--scale",
+    "2",
+    "--out",
+    "/tmp/far-coverage/pristine-pipe.rgba"
+  ],
+  "mode": "0",
+  "width": 1536,
+  "height": 864,
+  "fps": 24,
+  "warmup_frames": 960,
+  "frames": 144,
+  "binary_sha256": "94896797d6f414412799c2f3d8b8d0eb3859fd4e881c1315e6c18e28769ecba6"
+}

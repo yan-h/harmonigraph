@@ -1,0 +1,76 @@
+{
+  "base": "7f88775ed50aca914877276168408ded01ad41fc",
+  "patch_sha256": "bd13d66355cdee7c7d638c3e5dc24eb2be992126f2ff3c5f6b1c8fcd755dabc7",
+  "gpu": "Apple M1 Pro / Metal",
+  "media_directory": "/Users/yan/.codex/visualizations/2026/09/28/01a0e620-6ae2-7832-944f-8c4534649f7f/crack-fill",
+  "raw_directory": "/tmp/crack-fill",
+  "prior_diagnostic": {
+    "path": "/tmp/far-coverage/diag-A.rgba",
+    "sha256": "c9a6f31524ac04deb888c4cbc3d4b2b64e2f729e0d722edaf0b0579ef67038ac",
+    "debug": 3,
+    "prior_report": "https://github.com/yan-h/harmonigraph/tree/7224cd73/docs/evidence/spectrogram-stars/far-coverage-2026-09-28"
+  },
+  "media": {
+    "far-notches-motion-6x.mp4": {
+      "bytes": 6286020,
+      "sha256": "7897c1d5bdad537e78733a4cb7c79bc847492332e8782406886dc7a8b4256a5a"
+    },
+    "far-only-crops-2x.png": {
+      "bytes": 183769,
+      "sha256": "129dbce65112d76539e17848a3355a376b4b0d1878f2c06eed118b0b2e2342c0"
+    },
+    "C-full.png": {
+      "bytes": 2358170,
+      "sha256": "cb555fda9fe06bd26d482b42b69eb62f635021e13bc5775b62211d01e27bd124"
+    },
+    "B-full.png": {
+      "bytes": 2357960,
+      "sha256": "0f1e8e20368fd3fd614fbd9049b154a7c01911bb156bee4f05aae38ee0f3a03d"
+    },
+    "far-A-full.png": {
+      "bytes": 2297959,
+      "sha256": "7c80af24a5243bb6f2f9d6c216f9ad8ab4efc7fba6c9d6a28e576734c327e3c2"
+    },
+    "far-notches-6x.png": {
+      "bytes": 47665,
+      "sha256": "60483a55dd578a45b6df561e517ed0b7f1c15e21fe6b72122cfa966a80ff3e99"
+    },
+    "far-only-crops-4x.png": {
+      "bytes": 229255,
+      "sha256": "4dd2381d9597c84b9136bc3a89244a92045ec6a5f63b137f317b9108bc32c03c"
+    },
+    "full-preview.png": {
+      "bytes": 182770,
+      "sha256": "7d8394919fb11b17be8474b9b1840432335ba3ebbe7656f218e2481127c39c26"
+    },
+    "A-full.png": {
+      "bytes": 2360435,
+      "sha256": "a3073f3e08a8df8ecbae25159c68f37f3049405980b65f62e5720dd4f7e395af"
+    },
+    "full-motion-2x.mp4": {
+      "bytes": 4722013,
+      "sha256": "bbfaf0dddd6acf5627b406e425e5d2a238b49f3758bc37d307699ff754882669"
+    },
+    "far-only-motion-2x.mp4": {
+      "bytes": 6929328,
+      "sha256": "7bd26aad6ab6892621376d0ab947d29d32eb9d6c8aac92a39c4968f8145d697c"
+    },
+    "full-crops-2x.png": {
+      "bytes": 143710,
+      "sha256": "96a5b441270ba519e00107eeef0e8aa9225c3d5c909e200a3c88937a316e8800"
+    },
+    "far-B-full.png": {
+      "bytes": 2264090,
+      "sha256": "e3c18b9d9f9bf73a54fb4527ca5274095b443d4b4dd6c73487b450610a4e0489"
+    },
+    "far-C-full.png": {
+      "bytes": 2259473,
+      "sha256": "f60a1a2d0ff5180df5637d3db87c9bdf4db924d52732155ae243570be78d0a47"
+    },
+    "full-crops-4x.png": {
+      "bytes": 183249,
+      "sha256": "ec80110a90c75eca2589bc11f049240e1c8db8e77bd840dc6a4595ac79382ec5"
+    }
+  },
+  "test_binary_sha256": "587c2400f2c859603b672ceffeaf7d7fd45cac8dcd4f033b9cfda681fd9708ea"
+}

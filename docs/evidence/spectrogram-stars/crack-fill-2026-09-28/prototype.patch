@@ -1,0 +1,218 @@
+diff --git a/crates/harmonigraph-render/src/spectrogram.rs b/crates/harmonigraph-render/src/spectrogram.rs
+index 179f9245..0db5eab5 100644
+--- a/crates/harmonigraph-render/src/spectrogram.rs
++++ b/crates/harmonigraph-render/src/spectrogram.rs
+@@ -35,6 +35,7 @@ const SPECTROGRAM_SRC: &str = concat!(
+ );
+ 
+ mod atmosphere;
++mod coverage_probe;
+ pub use atmosphere::SpectrogramAtmosphere;
+ 
+ /// The detailed heatmap, reduced cloud material, and final composite entry
+@@ -448,7 +449,7 @@ fn spectrogram_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
+     let source = tests::pipeline_source();
+     device.create_shader_module(wgpu::ShaderModuleDescriptor {
+         label: Some("spectrogram_shader"),
+-        source: wgpu::ShaderSource::Wgsl(source),
++        source: wgpu::ShaderSource::Wgsl(coverage_probe::shader(source)),
+     })
+ }
+ 
+diff --git a/crates/harmonigraph-render/src/spectrogram/coverage_probe.rs b/crates/harmonigraph-render/src/spectrogram/coverage_probe.rs
+new file mode 100644
+index 00000000..60290d5c
+--- /dev/null
++++ b/crates/harmonigraph-render/src/spectrogram/coverage_probe.rs
+@@ -0,0 +1,74 @@
++// Scratch comparison only; modes are fixed for each resource lifetime.
++use std::cell::Cell;
++thread_local! { static MODE: Cell<Option<u8>> = const { Cell::new(None) }; }
++pub(super) fn mode() -> u8 {
++    MODE.get().unwrap_or_else(|| {
++        std::env::var("HG_FILL_MODE").ok().and_then(|s| s.parse().ok()).unwrap_or(0)
++    })
++}
++#[cfg(test)]
++pub(super) fn set(mode: u8) {
++    MODE.set(Some(mode));
++}
++pub(super) fn shader(source: std::borrow::Cow<'static, str>) -> std::borrow::Cow<'static, str> {
++    let mode = mode();
++    let debug = std::env::var("HG_FILL_DEBUG").ok().and_then(|s| s.parse::<u8>().ok()).unwrap_or(0);
++    let flat = std::env::var("HG_FILL_FLAT").as_deref() == Ok("1");
++    if mode == 0 && debug == 0 && !flat {
++        return source;
++    }
++    assert!(mode <= 2);
++    let mut source = source.into_owned();
++    let start = source.find("fn star_layers(").unwrap();
++    let end = start + source[start..].find("// Both presets share").unwrap();
++    let mut body = source[start..end].to_owned();
++    body = body.replace("var out = under;", "var out = under;\n    var gap = 1.0;");
++    body = body.replace(
++        "if slice.w > 0.0 {",
++        "gap *= 1.0 - min(slice.w, 1.0);\n        if slice.w > 0.0 {",
++    );
++    let factor = match mode {
++        0 => "1.0",
++        1 => "1.0 + gap",
++        _ => "(1.0 + gap) * (1.0 + gap * gap)",
++    };
++    let opacity = match mode {
++        0 => "1.0 - gap",
++        1 => "1.0 - gap * gap",
++        _ => "1.0 - gap * gap * gap * gap",
++    };
++    let result = if debug == 2 {
++        format!("vec3<f32>({opacity})")
++    } else {
++        format!("under + (out - under) * ({factor})")
++    };
++    body = body.replace("return out;", &format!("if cloud.star_far.z > 0.0 && first == 0u && last == STAR_FAR_LAYERS {{ return {result}; }}\n    return out;"));
++    source.replace_range(start..end, &body);
++    if debug > 0 {
++        let original = "return star_layers(pt, STAR_FAR_LAYERS, STAR_SLICES, far);";
++        assert!(source.contains(original));
++        source = source.replace(original, "return far;");
++    }
++    if flat {
++        let original = "fn star_level_at(pt: vec2<f32>) -> f32 {";
++        assert!(source.contains(original));
++        source = source.replace(original, &format!("{original}\n    if true {{ return 0.6; }}"));
++    }
++    if let Ok(directory) = std::env::var("HG_FILL_DUMP") {
++        std::fs::create_dir_all(&directory).unwrap();
++        std::fs::write(format!("{directory}/mode-{mode}-debug-{debug}-flat-{flat}.wgsl"), &source)
++            .unwrap();
++    }
++    source.into()
++}
++#[cfg(test)]
++mod tests {
++    #[test]
++    fn control_is_original_shader() {
++        super::set(0);
++        assert_eq!(
++            super::shader(super::super::SPECTROGRAM_SRC.into()),
++            super::super::SPECTROGRAM_SRC
++        );
++    }
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+index 6f30a0e1..0a72e0b9 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+@@ -496,3 +496,28 @@ fn optimized_far_layers_cover_partial_panes_at_fractional_scale() {
+         }
+     }
+ }
++
++#[test]
++#[ignore = "scratch coverage diagnostic, fixed resources per mode"]
++fn crack_coverage_image_probe() {
++    let Some((device, queue)) = headless_device() else { panic!("GPU required") };
++    let output = std::env::var("FILL_OUTPUT").unwrap();
++    std::fs::create_dir_all(&output).unwrap();
++    let mut cb = star_fixture([768, 432], egui::Pos2::ZERO);
++    cb.grid.fill(160);
++    cb.atmosphere.as_mut().unwrap().settings = harmonigraph_scene::SpectralAtmosphere::default();
++    for mode in 0..3 {
++        super::super::coverage_probe::set(mode);
++        let mut resources = CallbackResources::default();
++        for step in 0..120 {
++            cb.pass_nr = step;
++            cb.atmosphere.as_mut().unwrap().now = 1.0 + step as f64 / 24.0;
++            let bytes = frame_at_ppp(&device, &queue, &mut resources, &cb, 2.0);
++            if step >= 96 {
++                std::fs::write(format!("{output}/mode-{mode}-frame-{}.rgba", step - 96), bytes)
++                    .unwrap();
++            }
++        }
++    }
++    super::super::coverage_probe::set(0);
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+index 259f868a..1b175c19 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -103,6 +103,10 @@ const CASES: &[(&str, Option<Turn>)] = &[
+         }),
+     ),
+     ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
++    ("fill A", Some(|s| *s = SpectralAtmosphere::default())),
++    ("fill A2", Some(|s| *s = SpectralAtmosphere::default())),
++    ("fill B", Some(|s| *s = SpectralAtmosphere::default())),
++    ("fill C", Some(|s| *s = SpectralAtmosphere::default())),
+     ("mosaic, memory", Some(memory)),
+     (
+         "watercolor, memory",
+@@ -311,7 +315,12 @@ fn cloud_costs_by_style_and_dial() {
+     // INTERLEAVED: one frame of every case per round, so a GPU that another
+     // process is also drawing on, or one that changes its clock mid-run, moves
+     // every case together rather than whichever ran last.
+-    for frame in 0..frames + 10 {
++    let warmup = 120;
++    for frame in 0..frames + warmup {
++        if frame % 4 == 0 {
++            cases.reverse();
++        }
++        cases.rotate_left(1);
+         for case in &mut cases {
+             let Case {
+                 turn,
+@@ -325,6 +334,11 @@ fn cloud_costs_by_style_and_dial() {
+                 fill,
+                 ..
+             } = case;
++            super::super::coverage_probe::set(match *name {
++                "fill B" => 1,
++                "fill C" => 2,
++                _ => 0,
++            });
+             cb.pass_nr = frame as u64;
+             cb.atmosphere = turn.map(|turn| {
+                 let mut settings = SpectralAtmosphere {
+@@ -334,6 +348,13 @@ fn cloud_costs_by_style_and_dial() {
+                     ..Default::default()
+                 };
+                 turn(&mut settings);
++                if let Some(density) = dial("PROBE_STAR_DENSITY") {
++                    settings.star_density = density;
++                }
++                if dial("PROBE_MEMORY") == Some(0.0) {
++                    settings.color_pickup = 0.0;
++                    settings.color_release = 0.0;
++                }
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -361,7 +382,7 @@ fn cloud_costs_by_style_and_dial() {
+                     // fraction, so this is `w / n` and not the pane's width
+                     // over the slab count.
+                     points_per_slab: points.x * *fill / slabs as f32,
+-                    now: 1.0 + frame as f64 / 144.0,
++                    now: 1.0 + frame as f64 / 60.0,
+                 }
+             });
+             let mut encoder = device.create_command_encoder(&Default::default());
+@@ -396,7 +417,7 @@ fn cloud_costs_by_style_and_dial() {
+             let ticks: Vec<u64> =
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
+-            if frame >= 10 {
++            if frame >= warmup {
+                 assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                     "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
+                 wall.push(wall_ms);
+@@ -406,6 +427,10 @@ fn cloud_costs_by_style_and_dial() {
+         }
+     }
+ 
++    for case in &cases {
++        eprintln!("RAW {} {:?}", case.name, case.gpu_total);
++    }
++    super::super::coverage_probe::set(0);
+     for case in &mut cases {
+         case.wall.sort_by(f64::total_cmp);
+         case.gpu_total.sort_by(f64::total_cmp);
