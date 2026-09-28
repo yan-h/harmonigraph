@@ -1,0 +1,183 @@
+diff --git a/crates/harmonigraph-plugin/src/editor/startup_probe.rs b/crates/harmonigraph-plugin/src/editor/startup_probe.rs
+index c9cb0444..d4e1250a 100644
+--- a/crates/harmonigraph-plugin/src/editor/startup_probe.rs
++++ b/crates/harmonigraph-plugin/src/editor/startup_probe.rs
+@@ -14,7 +14,7 @@ use harmonigraph_ui::{
+ };
+ use parking_lot::Mutex;
+ 
+-const OPENINGS: usize = 3;
++const OPENINGS: usize = 1;
+ 
+ struct Defaults;
+ impl ParamBackend for Defaults {
+@@ -140,9 +140,12 @@ impl WindowHandler for Host {
+                 opened: Instant::now(),
+                 first: false,
+                 full: false,
+-                painted: Arc::new(AtomicBool::new(false)),
++                painted: Arc::new(AtomicUsize::new(0)),
+                 ready: Arc::new(AtomicBool::new(false)),
+                 interval: None,
++                samples: 0,
++                readings: Vec::with_capacity(360),
++                previous_painted: 0,
+             },
+             move |ctx, _, probe: &mut Probe| {
+                 harmonigraph_ui::use_renderer_font_texture(ctx);
+@@ -156,7 +159,7 @@ impl WindowHandler for Host {
+             },
+             |ui, queue, probe: &mut Probe| {
+                 if queue.render_ms() > 0.0 {
+-                    if !probe.first && probe.painted.load(Ordering::Relaxed) {
++                    if !probe.first && probe.painted.load(Ordering::Relaxed) > 0 {
+                         probe.first = true;
+                         eprintln!(
+                             "NATIVE_FRAME opening={} stage=first elapsed_ms={:.3}",
+@@ -164,14 +167,35 @@ impl WindowHandler for Host {
+                             probe.opened.elapsed().as_secs_f64() * 1000.0
+                         );
+                     }
+-                    if !probe.full && probe.ready.load(Ordering::Relaxed) {
+-                        probe.full = true;
+-                        probe.observations.completed.fetch_add(1, Ordering::Relaxed);
+-                        eprintln!(
+-                            "NATIVE_FRAME opening={} stage=full elapsed_ms={:.3}",
+-                            probe.opening,
+-                            probe.opened.elapsed().as_secs_f64() * 1000.0
+-                        );
++                    let painted = probe.painted.load(Ordering::Relaxed);
++                    if !probe.full
++                        && probe.ready.load(Ordering::Relaxed)
++                        && painted != probe.previous_painted
++                    {
++                        probe.previous_painted = painted;
++                        probe.samples += 1;
++                        probe.readings.push((
++                            painted,
++                            [
++                                queue.render_ms(),
++                                queue.acquire_ms(),
++                                queue.upload_ms(),
++                                queue.encode_ms(),
++                                queue.submit_ms(),
++                                queue.tick_ms(),
++                            ],
++                            queue.prims(),
++                            queue.verts(),
++                        ));
++                        if probe.samples >= 360 {
++                            probe.full = true;
++                            probe.observations.completed.fetch_add(1, Ordering::Relaxed);
++                            eprintln!(
++                                "NATIVE_FRAME opening={} stage=full elapsed_ms={:.3}",
++                                probe.opening,
++                                probe.opened.elapsed().as_secs_f64() * 1000.0
++                            );
++                        }
+                     }
+                 }
+                 let mut shared = probe.shared.lock();
+@@ -222,18 +246,25 @@ struct Probe {
+     opened: Instant,
+     first: bool,
+     full: bool,
+-    painted: Arc<AtomicBool>,
++    painted: Arc<AtomicUsize>,
+     ready: Arc<AtomicBool>,
+     interval: Option<f64>,
++    samples: usize,
++    readings: Vec<(usize, [f32; 6], u32, u32)>,
++    previous_painted: usize,
+ }
+ 
+ impl Drop for Probe {
+     fn drop(&mut self) {
++        for (n, (frame, values, prims, verts)) in self.readings.iter().enumerate() {
++            let [render, acquire, upload, encode, submit, tick] = values;
++            eprintln!("PROBE_UI n={} frame={frame} render={render} acquire={acquire} upload={upload} encode={encode} submit={submit} tick={tick} prims={prims} verts={verts}", n+1);
++        }
+         self.observations.dropped.fetch_add(1, Ordering::Relaxed);
+     }
+ }
+ 
+-struct Marker(Arc<AtomicBool>, Option<Arc<AtomicBool>>);
++struct Marker(Arc<AtomicUsize>, Option<Arc<AtomicBool>>);
+ impl egui_wgpu::CallbackTrait for Marker {
+     fn paint(
+         &self,
+@@ -241,7 +272,7 @@ impl egui_wgpu::CallbackTrait for Marker {
+         _: &mut harmonigraph_render::wgpu::RenderPass<'static>,
+         _: &egui_wgpu::CallbackResources,
+     ) {
+-        self.0.store(true, Ordering::Relaxed);
++        self.0.fetch_add(1, Ordering::Relaxed);
+         if let Some(ready) = &self.1 {
+             ready.store(true, Ordering::Relaxed);
+         }
+diff --git a/vendor/egui-baseview/src/renderer/wgpu/renderer.rs b/vendor/egui-baseview/src/renderer/wgpu/renderer.rs
+index bf45050a..c35d1b17 100644
+--- a/vendor/egui-baseview/src/renderer/wgpu/renderer.rs
++++ b/vendor/egui-baseview/src/renderer/wgpu/renderer.rs
+@@ -192,6 +192,9 @@ enum EguiTimerState {
+ impl DrawGpuTimer {
+     fn new(device: &egui_wgpu::wgpu::Device, queue: &egui_wgpu::wgpu::Queue) -> Option<Self> {
+         use egui_wgpu::wgpu;
++        if std::env::var("HARMONIGRAPH_PROBE_TIMER").as_deref() == Ok("off") {
++            return None;
++        }
+         if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+             return None;
+         }
+@@ -331,6 +334,7 @@ pub struct Renderer {
+     /// GPU time of callback preparation and egui composition.
+     gpu_timer: Option<DrawGpuTimer>,
+     last_gpu_ms: f32,
++    probe_samples: Vec<(bool, bool, f64, u32, u32, f32)>,
+     /// How long the last frame blocked acquiring the surface.
+     last_acquire_ms: f32,
+     /// Texture and buffer uploads, which is also where paint callbacks
+@@ -412,6 +416,7 @@ impl Renderer {
+             msaa_samples,
+             gpu_timer,
+             last_gpu_ms: 0.0,
++            probe_samples: Vec::with_capacity(512),
+             last_acquire_ms: 0.0,
+             last_upload_ms: 0.0,
+             last_ubuf_ms: 0.0,
+@@ -882,9 +887,15 @@ impl Renderer {
+         let submit_start = std::time::Instant::now();
+         let encoded = encoder.finish();
+ 
++        let probe_start = std::time::Instant::now();
+         self.render_state
+             .queue
+             .submit(user_cmd_bufs.into_iter().chain([encoded]));
++        let probe_wait = std::env::var("HARMONIGRAPH_PROBE_WAIT").as_deref() == Ok("1");
++        if probe_wait {
++            self.render_state.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
++        }
++        let probe_completion = probe_start.elapsed().as_secs_f64() * 1000.0;
+ 
+         // A drawable is in hand and the present is the next statement, so a
+         // layer hidden while the window was occluded comes back here — with
+@@ -894,6 +905,7 @@ impl Renderer {
+ 
+         output_frame.present();
+         self.last_submit_ms = submit_start.elapsed().as_secs_f32() * 1000.0;
++        self.probe_samples.push((timing, probe_wait, probe_completion, canvas_width, canvas_height, pixels_per_point));
+ 
+         true
+     }
+@@ -1175,3 +1187,11 @@ mod layer_present {
+ 
+     }
+ }
++
++impl Drop for Renderer {
++    fn drop(&mut self) {
++        for (frame, (armed, wait, completion, width, height, ppp)) in self.probe_samples.iter().enumerate() {
++            eprintln!("PROBE_DRAW frame={} armed={armed} wait={wait} completion={completion} width={width} height={height} ppp={ppp}", frame+1);
++        }
++    }
++}

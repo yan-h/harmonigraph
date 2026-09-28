@@ -22,7 +22,6 @@
 //! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names
 //! ```
 //! `PROBE_OCCLUSION=0` compares the same shader with receiver fading disabled.
-//! `PROBE_LOCAL_SHADOW=0` disables only the local notation-shadow pass.
 //! `PROBE_TIMER=1` arms the production preparation timer and reports its samples.
 //! Compare with `PROBE_TIMER=0` to measure its overhead with no overlay drawn.
 //! `PROBE_OCTAVES=1` bounds the cost of the default seven-slot shader walks.
@@ -478,9 +477,6 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
             eprintln!("{what}: target {target:?}, {} shipped instances, {lit} lit halo instances, {landed} casters landed", cb.instances.len());
         }
         cb.uniforms.geometry_shadow.occlusion = occlusion;
-        if let Ok(depth) = std::env::var("PROBE_LOCAL_SHADOW") {
-            cb.uniforms.marker_shadow.depth = depth.parse().expect("PROBE_LOCAL_SHADOW is a depth");
-        }
         let mut encoder = device.create_command_encoder(&Default::default());
         drop(stamped_pass(&mut encoder, &stamp_view, Some(0), None));
         if let Some(stats) = &stats {
