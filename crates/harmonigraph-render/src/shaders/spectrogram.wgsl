@@ -303,8 +303,8 @@ struct Cloud {
     star_randomness: f32,
     star_life: f32,
     star_far: vec4<f32>,
-    // Jitter width, compact-core reach, fade-start fraction and padding, computed once
-    // per frame by star_geometry in atmosphere.rs. Lengths are in cells.
+    // Jitter width, compact-core reach, fade-start fraction and far fill, computed once
+    // per frame by star_geometry in atmosphere.rs. The first two lengths are in cells.
     star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
@@ -1141,6 +1141,7 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
 // halo array. Both paths use this same per-slice composition.
 fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f32> {
     var out = under;
+    var far_gap = 1.0;
     let sp = (pt - cloud.size * 0.5) * (STAR_PANE / cloud.size.y);
     for (var k = first; k < last; k += 1u) {
         let s = cloud.star_slices[k];
@@ -1158,6 +1159,20 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
         }
         if slice.w > 0.0 {
             out = mix(out, slice.rgb / slice.w, min(slice.w, 1.0));
+        }
+        if cloud.star_geometry.w > 0.0 && k < STAR_FAR_LAYERS {
+            far_gap *= 1.0 - min(slice.w, 1.0);
+            if k + 1u == STAR_FAR_LAYERS && first == 0u {
+                // Fill only background leakage from the far group. Applying
+                // at its boundary also covers Uniform's unsplit small panes.
+                // 0/50/100% reproduce original / gap^2 / gap^4 coverage;
+                // bounded polynomial gains stay stable at zero coverage.
+                let amount = cloud.star_geometry.w * 2.0;
+                let gentle = min(amount, 1.0);
+                let strong = max(amount - 1.0, 0.0);
+                let gain = (1.0 + gentle * far_gap) * (1.0 + strong * far_gap * far_gap);
+                out = under + (out - under) * gain;
+            }
         }
     }
     return out;

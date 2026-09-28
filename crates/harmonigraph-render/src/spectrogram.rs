@@ -1777,6 +1777,7 @@ mod tests {
             let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
             let targets = targets.cloud.as_ref().unwrap();
             assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
+            cb.atmosphere.as_mut().unwrap().settings.star_far_fill = 1.0;
             cb.grid.fill(0);
             let silent = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;

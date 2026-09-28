@@ -98,6 +98,7 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
         let mut first: Option<Vec<u8>> = None;
         for step in 0u64..5 {
             cb.pass_nr = step;
+            cb.atmosphere.as_mut().unwrap().settings.star_far_fill = step as f32 / 4.0;
             use harmonigraph_scene::StarHaloProfile::Uniform;
             let (profile, resolution) = [
                 (Uniform, 0.5),
@@ -443,6 +444,7 @@ fn optimized_far_layers_cover_partial_panes_at_fractional_scale() {
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.star_jitter = jitter;
         settings.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
+        settings.star_far_fill = 1.0;
         settings.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
         if memory {
             settings.color_pickup = 0.6;
