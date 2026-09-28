@@ -119,7 +119,7 @@ The material controls expose four persisted fields:
 - Dark pickup (`material_shadow_pickup`): 0–100%, default 0% (off).
 - Color pickup (`material_color_pickup`): 0–100%, default 0% (off).
 - Pickup width (`material_shadow_width`): full band width, 0–800% of the node radius, default 150%.
-- Pickup softness (`material_shadow_softness`): feather distance at band and segment boundaries, 0–800% of the node radius, default 200%.
+- Pickup softness (`material_shadow_softness`): feather distance around each finite arc, 0–800% of the node radius, default 200%.
 
 The band is centered on the configured ring rim and follows each note’s light envelope,
 including release, independently of decorative breathing.
@@ -136,15 +136,24 @@ Its own quad covers the full width, feather and antialiasing margin,
 including when its center is outside the viewport.
 The shader reuses the visible ring’s sector mapping, packed activation and pitch-color function,
 including unequal extra octaves and the per-node seam.
-Spatial feathering softens segment boundaries;
+Each pixel measures Euclidean distance to the finite segment arc,
+including the arc’s endpoints.
+Width expands on all sides and softness feathers that distance,
+so the ends are rounded instead of extending as angular wedges;
 at large softness values neighboring pigments intentionally mingle.
-Normalized sector weights keep that mixture bounded even at the center.
+Normalized distance-field weights keep that mixture bounded even at the center.
 
 RGB blending multiplies the incoming pigment by destination alpha,
 then attenuates the old RGB by pigment opacity.
 The alpha write mask preserves coverage,
 so colored pigment cannot create light where the source is empty or violate premultiplication.
 Watercolor or Mosaic samples this pigment along with the source light.
+Bloom brightens the colored source pigment using its strength and luminance soft knee,
+with saturation at white to retain valid premultiplication.
+This is the user-selected brightness coupling,
+not a sample of the final blurred halo.
+That halo is downstream of the material and sampling it here would introduce feedback.
+Dark pickup remains independent of Bloom.
 The normal scene shadow and bloom masks then apply unchanged.
 
 Pickup controls do not belong in the geometry-tile cache key:
@@ -154,6 +163,8 @@ The first draft’s resting-cross shadow limitation (#1253) is removed by retain
 GPU tests verify unchanged actual-shadow masks when pickup is adjusted,
 unchanged pickup when actual shadows are adjusted or disabled,
 per-slot pitch and activation at the source,
+rounded pickup beyond both arc ends,
+Bloom brightening only the colored source,
 RGB changes without added alpha,
 material/glow bypasses,
 and wide/soft pickup reaching beyond the old node quad.

@@ -137,6 +137,10 @@ struct OctRing {
     int base;
     float seam;
 };
+struct SectorFold {
+    metal::float2 q;
+    metal::float2 e;
+};
 struct PickupOut {
     metal::float4 position;
     metal::float2 uv;
@@ -347,20 +351,6 @@ float oct_slot_level(
     return _e13;
 }
 
-float oct_arc_coverage(
-    metal::float2 edges,
-    metal::float2 uv,
-    float aa
-) {
-    metal::float2 b1_ = metal::float2(metal::cos(edges.x), metal::sin(edges.x));
-    metal::float2 b2_ = metal::float2(metal::cos(edges.y), metal::sin(edges.y));
-    float c1_ = (uv.x * b1_.y) - (uv.y * b1_.x);
-    float c2_ = (uv.x * b2_.y) - (uv.y * b2_.x);
-    float s1_ = metal::smoothstep(-(aa), aa, c1_);
-    float s2_ = metal::smoothstep(-(aa), aa, -(c2_));
-    return ((edges.x - edges.y) > 3.1415927) ? (1.0 - ((1.0 - s1_) * (1.0 - s2_))) : (s1_ * s2_);
-}
-
 float lut_position(
     float t,
     metal::float2 corner
@@ -404,12 +394,12 @@ metal::float3 pitch_lut_color(
     float t_1 = metal::clamp((pitch - _e4) / metal::max(_e9 - _e13, 0.01), 0.0, 1.0);
     metal::float4 _e23 = u.lut_spacing;
     float _e25 = lut_position(t_1, _e23.xy);
-    float f = _e25 * 63.0;
-    uint i0_ = naga_f2u32(metal::floor(f));
+    float f_1 = _e25 * 63.0;
+    uint i0_ = naga_f2u32(metal::floor(f_1));
     uint i1_ = metal::min(i0_ + 1u, 63u);
     metal::float4 _e37 = u.pitch_lut.inner[metal::min(unsigned(i0_), 63u)];
     metal::float4 _e42 = u.pitch_lut.inner[metal::min(unsigned(i1_), 63u)];
-    return metal::mix(_e37.xyz, _e42.xyz, f - metal::floor(f));
+    return metal::mix(_e37.xyz, _e42.xyz, f_1 - metal::floor(f_1));
 }
 
 metal::float4 oct_slot_lit(
@@ -422,6 +412,46 @@ metal::float4 oct_slot_lit(
     metal::float3 _e4 = pitch_lut_color(_e3, u);
     float _e5 = oct_slot_level(octaves_2, slot);
     return metal::float4(_e4, _e5);
+}
+
+SectorFold sector_fold(
+    metal::float2 uv,
+    metal::float2 edges
+) {
+    float mid = 0.5 * (edges.x + edges.y);
+    float half_ = metal::clamp(0.5 * (edges.x - edges.y), 0.0, 3.1415927);
+    float c_2 = metal::cos(mid);
+    float s_4 = metal::sin(mid);
+    return SectorFold {metal::float2(metal::abs((uv.y * c_2) - (uv.x * s_4)), (uv.x * c_2) + (uv.y * s_4)), metal::float2(metal::sin(half_), metal::cos(half_))};
+}
+
+float sector_side(
+    SectorFold f
+) {
+    return (f.e.y * f.q.x) - (f.e.x * f.q.y);
+}
+
+float pickup_arc_distance(
+    metal::float2 p,
+    metal::float2 edges_1,
+    float radius
+) {
+    SectorFold _e3 = sector_fold(p, edges_1);
+    float _e4 = sector_side(_e3);
+    if (_e4 <= 0.0) {
+        return metal::abs(metal::length(_e3.q) - radius);
+    }
+    return metal::length(_e3.q - (radius * _e3.e));
+}
+
+metal::float3 pickup_bloom_color(
+    metal::float4 lit,
+    constant Uniforms& u
+) {
+    float lum = metal::dot(lit.xyz * lit.w, metal::float3(0.2126, 0.7152, 0.0722));
+    float keep = metal::smoothstep(0.1, 0.6, lum);
+    float _e16 = u.composite.bloom_strength;
+    return metal::min(lit.xyz * (1.0 + (keep * _e16)), metal::float3(1.0));
 }
 
 struct fs_source_shadowInput {
@@ -441,58 +471,63 @@ fragment fs_source_shadowOutput fs_source_shadow(
     const PickupOut in = { position, varyings.uv, varyings.level, {}, varyings.octaves, varyings.cents };
     metal::float4 pigment = metal::float4(0.0);
     float weight = 0.0;
+    float coverage = 0.0;
     uint i = 0u;
-    float _e4 = node_rim(false, u);
-    float d_1 = metal::abs(metal::length(in.uv) - _e4);
-    float _e10 = u.pickup.width;
-    float half_width = (0.5 * _e10) / 1.8;
-    float _e17 = metal::fwidth(in.uv.x);
-    float aa_1 = metal::max(_e17, 0.00001);
-    float _e23 = u.pickup.softness;
-    float feather = metal::max(_e23 / 1.8, aa_1);
-    float coverage = 1.0 - metal::smoothstep(half_width - aa_1, half_width + feather, d_1);
-    if (coverage <= 0.0) {
+    float _e4 = u.pickup.width;
+    float half_width = (0.5 * _e4) / 1.8;
+    float _e11 = metal::fwidth(in.uv.x);
+    float aa = metal::max(_e11, 0.00001);
+    float _e17 = u.pickup.softness;
+    float feather = metal::max(_e17 / 1.8, aa);
+    float _e24 = node_rim(false, u);
+    if (metal::abs(metal::length(in.uv) - _e24) > (half_width + feather)) {
         metal::discard_fragment();
     }
-    OctRing _e35 = oct_ring(in.cents, u);
+    OctRing _e30 = oct_ring(in.cents, u);
     uint2 loop_bound = uint2(4294967295u);
     bool loop_init = true;
     while(true) {
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            uint _e66 = i;
-            i = _e66 + 1u;
+            uint _e72 = i;
+            i = _e72 + 1u;
         }
         loop_init = false;
-        uint _e43 = i;
-        uint _e44 = oct_span(u);
-        if (_e43 < _e44) {
+        uint _e40 = i;
+        uint _e41 = oct_span(u);
+        if (_e40 < _e41) {
         } else {
             break;
         }
         {
-            uint _e47 = i;
-            int slot_1 = as_type<int>(as_type<uint>(_e35.base) + as_type<uint>(static_cast<int>(_e47)));
-            metal::float2 _e50 = oct_sector(slot_1, _e35, u);
-            float _e52 = oct_arc_coverage(_e50, in.uv, feather);
-            metal::float4 _e55 = oct_slot_lit(in.cents, in.octaves, slot_1, u);
-            metal::float4 _e56 = pigment;
-            pigment = _e56 + (metal::float4(_e55.xyz * _e55.w, _e55.w) * _e52);
-            float _e64 = weight;
-            weight = _e64 + _e52;
+            uint _e44 = i;
+            int slot_1 = as_type<int>(as_type<uint>(_e30.base) + as_type<uint>(static_cast<int>(_e44)));
+            metal::float2 _e48 = oct_sector(slot_1, _e30, u);
+            float _e50 = node_rim(false, u);
+            float _e51 = pickup_arc_distance(in.uv, _e48, _e50);
+            float arc = 1.0 - metal::smoothstep(half_width - aa, half_width + feather, _e51);
+            metal::float4 _e59 = oct_slot_lit(in.cents, in.octaves, slot_1, u);
+            metal::float4 _e60 = pigment;
+            metal::float3 _e61 = pickup_bloom_color(_e59, u);
+            pigment = _e60 + (metal::float4(_e61 * _e59.w, _e59.w) * arc);
+            float _e68 = weight;
+            weight = _e68 + arc;
+            float _e70 = coverage;
+            coverage = metal::max(_e70, arc);
         }
     }
-    metal::float4 _e69 = pigment;
-    float _e70 = weight;
-    pigment = _e69 / metal::float4(metal::max(_e70, 0.00001));
-    float amount = coverage * in.level;
-    float _e80 = u.pickup.intensity;
-    float _e82 = pigment.w;
-    float _e89 = u.pickup.color;
-    float _e91 = pigment.w;
-    float opacity = (_e80 * (1.0 - _e82)) + (_e89 * _e91);
-    metal::float4 _e94 = pigment;
-    float _e99 = u.pickup.color;
-    return fs_source_shadowOutput { metal::float4((_e94.xyz * _e99) * amount, opacity * amount) };
+    metal::float4 _e75 = pigment;
+    float _e76 = weight;
+    pigment = _e75 / metal::float4(metal::max(_e76, 0.00001));
+    float _e81 = coverage;
+    float amount = _e81 * in.level;
+    float _e87 = u.pickup.intensity;
+    float _e89 = pigment.w;
+    float _e96 = u.pickup.color;
+    float _e98 = pigment.w;
+    float opacity = (_e87 * (1.0 - _e89)) + (_e96 * _e98);
+    metal::float4 _e101 = pigment;
+    float _e106 = u.pickup.color;
+    return fs_source_shadowOutput { metal::float4((_e101.xyz * _e106) * amount, opacity * amount) };
 }

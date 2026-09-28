@@ -55,11 +55,11 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Dark pickup")
                 .percent().show(ui).on_hover_text("Dark pigment behind unlit ring segments, picked up by washes or facets. Fades as each segment lights up. Actual ring and label shadows keep their own settings.");
             ValueBar::new(&mut settings.material_color_pickup, 0.0..=1.0, "Color pickup")
-                .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by washes or facets. Follows each segment’s activation. 0% disables colored pickup.");
+                .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by washes or facets. Follows each segment’s activation and Bloom brightness. Spreads by distance around the segment, including its ends. 0% disables colored pickup.");
             ValueBar::new(&mut settings.material_shadow_width, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup width")
                 .percent().show(ui).on_hover_text("Full width of the pigment source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
             ValueBar::new(&mut settings.material_shadow_softness, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup softness")
-                .percent().show(ui).on_hover_text("Soft fade at the pickup band and segment boundaries, as a percentage of the node radius. Up to 800% for very diffuse pigment. Does not alter the actual shadow.");
+                .percent().show(ui).on_hover_text("Soft fade by distance around each segment, including its rounded ends, as a percentage of the node radius. Up to 800% for very diffuse pigment. Does not alter the actual shadow.");
             super::material::speed(ui, &mut settings.material_speed);
             super::material::direction(ui, &mut settings.material_direction);
             match settings.material_style {

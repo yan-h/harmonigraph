@@ -225,44 +225,43 @@ fn material_shadow_pickup_darkens_light_without_adding_coverage() {
     }
 }
 
+fn material_source(shooter: &Shooter) -> Vec<u8> {
+    let resources = shooter.resources.get::<LatticeResources>().unwrap();
+    let view = &resources.panes[&shooter.pane]
+        .offscreen
+        .as_ref()
+        .unwrap()
+        .glow
+        .as_ref()
+        .unwrap()
+        .material_source
+        .as_ref()
+        .unwrap()
+        .view;
+    let binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &resources.compiled.filter_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+            },
+        ],
+    });
+    read_glow_binding(shooter, &binding)
+}
+
 #[test]
 fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage() {
     use harmonigraph_scene::{octave_layout, LatticeMaterial};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
+    scene.node_radius *= 2.0; // narrow pigment and extra sectors still span multiple pixels
     scene.atmosphere.material_style = LatticeMaterial::Watercolor;
     scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_shadow_width = 1.5;
+    scene.atmosphere.material_shadow_width = 0.2;
     scene.atmosphere.material_shadow_softness = 0.0;
-    let source = |shooter: &Shooter| {
-        let resources = shooter.resources.get::<LatticeResources>().unwrap();
-        let view = &resources.panes[&shooter.pane]
-            .offscreen
-            .as_ref()
-            .unwrap()
-            .glow
-            .as_ref()
-            .unwrap()
-            .material_source
-            .as_ref()
-            .unwrap()
-            .view;
-        let binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &resources.compiled.filter_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
-                },
-            ],
-        });
-        read_glow_binding(shooter, &binding)
-    };
     // Unequal extra sectors and a detuned seam must agree with the drawn ring.
     for cents in [0.0, 1100.0] {
         scene.octave_layout = octave_layout(5, 60.0, 1, 0.4, 0.7);
@@ -275,10 +274,10 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
                 scene.atmosphere.material_shadow_pickup = 0.0;
                 scene.atmosphere.material_color_pickup = 0.0;
                 shooter.shot(&scene);
-                let before = source(&shooter);
+                let before = material_source(&shooter);
                 scene.atmosphere.material_color_pickup = 1.0;
                 shooter.shot_again(&scene);
-                let colored = source(&shooter);
+                let colored = material_source(&shooter);
                 if level > 0.0 {
                     assert!(
                     before
@@ -292,7 +291,7 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
                 }
                 scene.atmosphere.material_shadow_pickup = 1.0;
                 shooter.shot_again(&scene);
-                let after = source(&shooter);
+                let after = material_source(&shooter);
                 for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
                     assert_eq!(
                         a[3], b[3],
@@ -336,6 +335,58 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
             }
         }
     }
+}
+
+#[test]
+fn pickup_spreads_around_arc_ends_and_bloom_brightens_its_source() {
+    use harmonigraph_scene::LatticeMaterial;
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.octave_layout = probe_octave_layout();
+    scene.pitch_lut.fill(glam::Vec4::new(0.35, 0.4, 0.5, 1.0));
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_shadow_pickup = 1.0;
+    scene.atmosphere.material_color_pickup = 1.0;
+    scene.atmosphere.material_shadow_width = 1.0;
+    scene.atmosphere.material_shadow_softness = 0.2;
+    shooter.shot(&scene);
+    let plain = material_source(&shooter);
+    let sample = |pixels: &[u8], uv: glam::Vec2| {
+        let world = uv.extend(0.0) * scene.node_radius * 1.8;
+        let at = on_screen(&scene, SIZE, world);
+        let offset = (at.y as usize * SIZE[0] as usize + at.x as usize) * 4;
+        assert!(pixels[offset + 3] > 20, "fixture must contain source light beyond the arc end");
+        f32::from(pixels[offset + 2]) / f32::from(pixels[offset + 3])
+    };
+    let (start, end) = scene.octave_layout.sector(5, 0.0);
+    for (angle, sign) in [(start, 1.0), (end, -1.0)] {
+        let endpoint = glam::Vec2::new(angle.cos(), angle.sin()) * scene.rings_outer;
+        let tangent = glam::Vec2::new(-angle.sin(), angle.cos()) * sign;
+        let near = sample(&plain, endpoint + tangent * 0.2);
+        let far_angle = angle + sign * 0.9;
+        let far =
+            sample(&plain, glam::Vec2::new(far_angle.cos(), far_angle.sin()) * scene.rings_outer);
+        assert!(near > 0.1, "pickup extends past both angular ends: {near}");
+        assert!(far < 0.025, "pickup ends by distance, rather than extending a ray: {far}");
+    }
+    scene.bloom_strength = 2.0;
+    shooter.shot_again(&scene);
+    let bloomed = material_source(&shooter);
+    let mut brighter = 0;
+    for (a, b) in plain.chunks_exact(4).zip(bloomed.chunks_exact(4)) {
+        assert_eq!(a[3], b[3], "Bloom changes pigment brightness, never source alpha");
+        assert!(b[..3].iter().zip(a).all(|(b, a)| *b >= a.saturating_sub(1)));
+        assert!(b[..3].iter().all(|v| *v <= b[3].saturating_add(1)));
+        brighter += usize::from(b[..3].iter().zip(a).any(|(b, a)| b.saturating_sub(*a) > 3));
+    }
+    assert!(brighter > 100, "fixture reaches Bloom-responsive pigment: {brighter}");
+    scene.atmosphere.material_color_pickup = 0.0;
+    shooter.shot_again(&scene);
+    let dark = material_source(&shooter);
+    scene.bloom_strength = 0.0;
+    shooter.shot_again(&scene);
+    assert_eq!(dark, material_source(&shooter), "Bloom never changes dark pickup");
 }
 
 #[test]

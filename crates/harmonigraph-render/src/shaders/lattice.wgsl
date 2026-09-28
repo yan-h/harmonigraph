@@ -2925,29 +2925,48 @@ fn vs_source_shadow(@builtin(vertex_index) vertex: u32, inst: Instance) -> Picku
     return out;
 }
 
+// Euclidean distance to a finite circular arc, including rounded endpoints.
+// The shared sector fold also handles arcs wider than half a turn. No angle-owned
+// wedge survives outside the arc: a point past an end measures to that end.
+fn pickup_arc_distance(p: vec2<f32>, edges: vec2<f32>, radius: f32) -> f32 {
+    let folded = sector_fold(p, edges);
+    if sector_side(folded) <= 0.0 {
+        return abs(length(folded.q) - radius);
+    }
+    return length(folded.q - radius * folded.e);
+}
+
+// Match blit.wgsl's luminance soft knee on the active segment's color.
+// This is bloom-aware pigment, not a read of the downstream scene bloom:
+// that scene already contains this material and would create feedback.
+fn pickup_bloom_color(lit: vec4<f32>) -> vec3<f32> {
+    let lum = dot(lit.rgb * lit.a, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let keep = smoothstep(0.35 - 0.25, 0.35 + 0.25, lum);
+    return min(lit.rgb * (1.0 + keep * u.composite.bloom_strength), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
-    let d = abs(length(in.uv) - node_rim(false));
     let half_width = 0.5 * u.pickup.width / 1.8;
     let aa = max(fwidth(in.uv.x), 1e-5);
     let feather = max(u.pickup.softness / 1.8, aa);
-    let coverage = 1.0 - smoothstep(half_width - aa, half_width + feather, d);
-    if coverage <= 0.0 {
+    if abs(length(in.uv) - node_rim(false)) > half_width + feather {
         discard;
     }
     let ring = oct_ring(in.cents);
     var pigment = vec4<f32>(0.0);
     var weight = 0.0;
-    // Reuse the visible ring's sectors, including its unequal extra octaves.
-    // Spatial feathering softens their shared boundaries as well as the band.
-    // Normalize the overlap so even a feather wider than the ring stays convex.
+    var coverage = 0.0;
     for (var i = 0u; i < oct_span(); i += 1u) {
         let slot = ring.base + i32(i);
-        let arc = oct_arc_coverage(oct_sector(slot, ring), in.uv, feather);
+        let distance = pickup_arc_distance(in.uv, oct_sector(slot, ring), node_rim(false));
+        let arc = 1.0 - smoothstep(half_width - aa, half_width + feather, distance);
         let lit = oct_slot_lit(in.cents, in.octaves, slot);
-        pigment += vec4<f32>(lit.rgb * lit.a, lit.a) * arc;
+        pigment += vec4<f32>(pickup_bloom_color(lit) * lit.a, lit.a) * arc;
         weight += arc;
+        coverage = max(coverage, arc);
     }
+    // Overlapping distance fields mingle pigment without seams or excess alpha.
     pigment /= max(weight, 1e-5);
     let amount = coverage * in.level;
     let opacity = u.pickup.intensity * (1.0 - pigment.a) + u.pickup.color * pigment.a;
