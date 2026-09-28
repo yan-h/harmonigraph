@@ -1,6 +1,6 @@
 # Stars: lower back and foreground resolution
 
-Measured against the current Optimized profile at `7f88775ed50aca914877276168408ded01ad41fc`.
+Measured against the current Optimized profile at `b10b36c68ff940ae3b60d933cab427c834b5e586`.
 This is an experiment,
 not a production behavior change.
 Percentages refer to width and height,
