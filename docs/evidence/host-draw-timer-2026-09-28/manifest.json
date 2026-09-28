@@ -1,0 +1,23 @@
+{
+  "baseline": "3405f09746915a8710791d9fb40b2fe5fe974cba",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M1 Pro",
+  "binary_sha256": "97e2c33f625b7166269178b08fa7a6a5383aedebd452f3e521ccce341dec5e1b",
+  "warmup": 120,
+  "measured": 240,
+  "order": [
+    "on",
+    "on",
+    "off",
+    "off",
+    "on",
+    "off",
+    "off",
+    "on"
+  ],
+  "mode_order": [
+    0,
+    1
+  ],
+  "probe_patch_sha256": "65029f0fd988727a28ee1ba2b155da5eb716690b9ddc1fa54e174eb352de26be"
+}
