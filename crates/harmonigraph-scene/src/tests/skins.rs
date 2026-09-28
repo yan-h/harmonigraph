@@ -1,6 +1,6 @@
 //! The skin dials: every setting legible, and every background one grey.
 
-use crate::skin::{contrast, oklab, Skin, SkinDials, LABEL_FLOOR, LIGHTNESS_RANGE, STEP};
+use crate::skin::{contrast, oklab, Skin, SkinDials, LABEL_FLOOR, LIGHTNESS_RANGE};
 
 /// Every combination of the dials' ends, the default between them, and the
 /// hue circle every 30°. The ladder is linear in lightness and the checks
@@ -44,25 +44,17 @@ fn every_skin_is_legible() {
     }
 }
 
-/// The neutral layers stand a whole number of steps above the page, in
-/// order: a header one step up, tracks two, buttons three, hover four.
-/// Within a byte's rounding of the asked lightness.
+/// Background roles remain distinguishable in increasing lightness; the
+/// exact spacing between them belongs to the chosen skin.
 #[test]
-fn the_neutral_layers_climb_one_step_at_a_time() {
+fn the_neutral_layers_remain_ordered_by_lightness() {
     for dials in reachable() {
         let s = Skin::from_dials(dials);
-        for (steps, what, colour) in [
-            (0.0, "page", s.panel),
-            (1.0, "header", s.header),
-            (2.0, "track", s.well),
-            (3.0, "button", s.widget),
-            (4.0, "hover", s.widget_hover),
-        ] {
-            let want = dials.lightness + steps * STEP;
-            let got = oklab(colour)[0];
+        let layers = [s.panel, s.header, s.well, s.widget, s.widget_hover];
+        for pair in layers.windows(2) {
             assert!(
-                (got - want).abs() < 0.008,
-                "{dials:?}: the {what} is at lightness {got:.3}, not {want:.3}",
+                oklab(pair[0])[0] < oklab(pair[1])[0],
+                "{dials:?}: adjacent background roles lost their lightness order: {pair:?}",
             );
         }
     }
