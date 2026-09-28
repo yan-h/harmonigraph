@@ -1,0 +1,25 @@
+{
+  "base": "7711b98d2c28c737b5a9c44dd298eb3d96efe589",
+  "binary_sha256": "5bf6595f0a5b5f516ea7794a10c28b2ce34fa15e9f4f35d05754515c3661cc55",
+  "shaders": {
+    "base-a": "a62234e23c3fb03c45d777bc3b21a0a28ac74df40741ef1a85d66ac7e3a3ced1",
+    "base-b": "a62234e23c3fb03c45d777bc3b21a0a28ac74df40741ef1a85d66ac7e3a3ced1",
+    "direct4": "8bd205e47e73f8eef92d2783818d4c7f77f73fd4ab74811a164b708fbdd08cf2",
+    "residual4": "f93fc58f0477050a01f970d6244a662051adac5a8b840fb942c808330caabafd",
+    "group5-75": "59e267e80f12cb76aeecdf40f0fe0d9a95076a02e8ce290b7a3631f0a7802d52",
+    "group5-50": "0c8d97742faedf029811356e77bcfcbc7a6562ecdc50fec08a71f0a11afc5a40"
+  },
+  "environment": {
+    "HG_ARCH_DIR": "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/shaders",
+    "HG_FIXTURE": "/private/tmp/stars-full-halo-compare",
+    "RESEARCH_CASES": "base-a,base-b,direct4,residual4,group5-75,group5-50",
+    "PROBE_FRAMES": "120",
+    "PROBE_WARMUP": "120",
+    "PROBE_INPUT": "take",
+    "PROBE_HISTORY_SECONDS": "39.149967",
+    "PROBE_SPAN_SEMITONES": "90.02282",
+    "PROBE_ORDER_OFFSET": "0",
+    "PROBE_PROFILE": "sparse",
+    "PROBE_JITTER": "0.5"
+  }
+}

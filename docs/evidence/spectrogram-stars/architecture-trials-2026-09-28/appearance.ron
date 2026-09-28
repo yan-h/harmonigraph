@@ -1,0 +1,4 @@
+(version:1,
+ spectrum:(show_roll:false,note_names:false,roll_fraction:1.0,show_spectrogram:true,
+ atmosphere:(cloud_style:Stars,cloud_depth:1.0)),
+ render:(spectrogram:Scrolling,frame:(aspect_w:16,aspect_h:9,split:0.05,lattice:Right)))

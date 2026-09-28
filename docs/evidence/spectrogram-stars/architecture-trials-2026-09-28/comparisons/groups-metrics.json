@@ -1,0 +1,22 @@
+{
+  "base-a": {
+    "mean_abs_rgb_255": 0.0,
+    "max_abs_rgb_255": 0
+  },
+  "group3-75": {
+    "mean_abs_rgb_255": 0.3747018298059965,
+    "max_abs_rgb_255": 84
+  },
+  "group3-50": {
+    "mean_abs_rgb_255": 0.6109605930335097,
+    "max_abs_rgb_255": 112
+  },
+  "group5-75": {
+    "mean_abs_rgb_255": 2.2342701247165535,
+    "max_abs_rgb_255": 126
+  },
+  "group5-50": {
+    "mean_abs_rgb_255": 4.185129999685059,
+    "max_abs_rgb_255": 155
+  }
+}

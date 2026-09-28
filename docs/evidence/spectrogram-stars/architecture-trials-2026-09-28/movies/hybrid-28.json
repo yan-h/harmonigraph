@@ -1,0 +1,12 @@
+{
+  "variant": "hybrid-28",
+  "width": 768,
+  "height": 432,
+  "fps": 24,
+  "rendered_frames": 1104,
+  "trim_lead_seconds": 40,
+  "retained_frames": 144,
+  "binary_sha256": "ab03438b7857eabc14bdb8989948015762b43b1f9da412c4be0aa7c062380457",
+  "shader_sha256": "7f7d0ff166b5dec71ae175b2867e1e76cc4e5ebdd6e4b29fc930e8c75b09c80b",
+  "appearance_sha256": "9e5734b75bc13add60c558d0e81ccfe0852573023c19c068f061cc9ce4311e53"
+}

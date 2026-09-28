@@ -1,0 +1,51 @@
+{
+  "base-a": {
+    "median_ms": 8.986,
+    "mean_ms": 9.2620823828125,
+    "median_paired_saving_pct": 0.12245519140503536,
+    "mean_paired_saving_pct": 0.18183120049650725
+  },
+  "base-b": {
+    "median_ms": 8.924875,
+    "mean_ms": 9.284942671875,
+    "median_paired_saving_pct": -0.12245519140501315,
+    "mean_paired_saving_pct": -0.18183120049650725
+  },
+  "hybrid-4": {
+    "median_ms": 7.6861255,
+    "mean_ms": 7.9878161015625,
+    "median_paired_saving_pct": 14.261414872546997,
+    "mean_paired_saving_pct": 13.311103886913255
+  },
+  "hybrid-8": {
+    "median_ms": 7.6604375000000005,
+    "mean_ms": 7.9323124921875,
+    "median_paired_saving_pct": 15.138344439216878,
+    "mean_paired_saving_pct": 14.075941860676389
+  },
+  "hybrid-12": {
+    "median_ms": 8.417312500000001,
+    "mean_ms": 8.6517125703125,
+    "median_paired_saving_pct": 6.391017497495399,
+    "mean_paired_saving_pct": 6.059444498064382
+  },
+  "hybrid-16": {
+    "median_ms": 7.0390415,
+    "mean_ms": 7.146544921875,
+    "median_paired_saving_pct": 22.12064028989149,
+    "mean_paired_saving_pct": 22.256183749980586
+  },
+  "hybrid-24": {
+    "median_ms": 7.647603999999999,
+    "mean_ms": 8.12384890625,
+    "median_paired_saving_pct": 13.578257725947607,
+    "mean_paired_saving_pct": 12.237524661103194
+  },
+  "hybrid-28": {
+    "median_ms": 8.3188955,
+    "mean_ms": 8.642198828125,
+    "median_paired_saving_pct": 6.397528647303075,
+    "mean_paired_saving_pct": 6.234517689039565
+  },
+  "aa_mean_pct": -0.2462081874963662
+}

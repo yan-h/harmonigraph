@@ -1,0 +1,22 @@
+{
+  "base-a": {
+    "mean_abs_rgb_255": 0.0,
+    "max_abs_rgb_255": 0
+  },
+  "hybrid-24": {
+    "mean_abs_rgb_255": 0.3555703577727387,
+    "max_abs_rgb_255": 132
+  },
+  "group3-50": {
+    "mean_abs_rgb_255": 0.6109605930335097,
+    "max_abs_rgb_255": 112
+  },
+  "group3-short75": {
+    "mean_abs_rgb_255": 0.43656231103552534,
+    "max_abs_rgb_255": 112
+  },
+  "group3-short50": {
+    "mean_abs_rgb_255": 0.6522057823129251,
+    "max_abs_rgb_255": 134
+  }
+}

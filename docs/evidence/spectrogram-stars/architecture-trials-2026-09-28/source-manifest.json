@@ -1,0 +1,16 @@
+{
+  "base": "7711b98d2c28c737b5a9c44dd298eb3d96efe589",
+  "patch_sha256": "f03c53a737b27b124416d5a103d311ec8ea0b847fcde710891428ed66b629d35",
+  "fixture_sha256": {
+    "half-take.rgba": "757296407b7519673396f69818b063ab78286af2e6be83f1b9226e771781d9c4",
+    "full-take.rgba": "d2380f4fe32646bc108a66689c2d4286d8ee3675e98cd79062645e88001bc35f",
+    "palette.rgba": "8c785e44c97a17e6f65949982e4ce42a1ac9f38e84d260f57ab977d0d8e9c2fb",
+    "half-flat.rgba": "6c7fac46deadf3a81c289c5b4e94406d5149bb65277ad5a9fedb01b8cbf7cb7b",
+    "full-flat.rgba": "12d41ea363383e97f5ab808f83ac65a777f6692308051e190104ac9c77462e98",
+    "take-levels.u8": "28f261f128ce63bcfb071d20705757fe2f7bd645304f1997622bfeefd0b66644",
+    "flat-levels.u8": "c15394e8cc9c4eceaf332f7fc28016c6ef1c57324e0a4b09dfd333033c67d936",
+    "blur-flat.rgba": "3b7c967a2855f83880773a37f9c54c69e4747e10d2f59c964042623b72d5b162",
+    "blur-take.rgba": "e7c6abc494bd5a8b209d32f91c13aa07576c7259512a349cc58306a3871a8d9f"
+  },
+  "machine": "Apple M1 Pro / Metal"
+}

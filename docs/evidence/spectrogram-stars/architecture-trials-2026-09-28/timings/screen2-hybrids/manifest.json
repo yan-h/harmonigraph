@@ -1,0 +1,27 @@
+{
+  "base": "7711b98d2c28c737b5a9c44dd298eb3d96efe589",
+  "binary_sha256": "b60878841125d4b888958ac26b90e3ae9114aa1c72f5cc0a9639daa48153c04f",
+  "shaders": {
+    "base-a": "a62234e23c3fb03c45d777bc3b21a0a28ac74df40741ef1a85d66ac7e3a3ced1",
+    "base-b": "a62234e23c3fb03c45d777bc3b21a0a28ac74df40741ef1a85d66ac7e3a3ced1",
+    "hybrid-4": "19d9017bb66c092632e42d7cb29e94a03c50fb36bff95b1ee11d73e4c475be3d",
+    "hybrid-8": "684c8c0aec998bc4ef96eecec700dc0f6828c904f689cc8a701964469ff6580f",
+    "hybrid-12": "32a67fa62f6572cd028f1569a87e94f29a9116dd782cb7d94f65edf701a7ca39",
+    "hybrid-16": "f653c167abc97c00248107c131d55eabf803a2186dfae0eadfc9cde811ec5239",
+    "hybrid-24": "884d09871e1da2ef64fd57370991ac10b713062a4cb1c620e41907d4a823cb8e",
+    "hybrid-28": "7f7d0ff166b5dec71ae175b2867e1e76cc4e5ebdd6e4b29fc930e8c75b09c80b"
+  },
+  "environment": {
+    "HG_ARCH_DIR": "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/shaders",
+    "HG_FIXTURE": "/private/tmp/stars-full-halo-compare",
+    "RESEARCH_CASES": "base-a,base-b,hybrid-4,hybrid-8,hybrid-12,hybrid-16,hybrid-24,hybrid-28",
+    "PROBE_FRAMES": "128",
+    "PROBE_WARMUP": "120",
+    "PROBE_INPUT": "take",
+    "PROBE_HISTORY_SECONDS": "39.149967",
+    "PROBE_SPAN_SEMITONES": "90.02282",
+    "PROBE_ORDER_OFFSET": "0",
+    "PROBE_PROFILE": "default",
+    "PROBE_JITTER": "0.5"
+  }
+}

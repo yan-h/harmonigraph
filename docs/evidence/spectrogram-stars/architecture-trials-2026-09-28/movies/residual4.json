@@ -1,0 +1,12 @@
+{
+  "variant": "residual4",
+  "width": 768,
+  "height": 432,
+  "fps": 24,
+  "rendered_frames": 1104,
+  "trim_lead_seconds": 40,
+  "retained_frames": 144,
+  "binary_sha256": "83347aad47a09cf194d686d1bdfe43470cd92843c94579387368294d8daebd96",
+  "shader_sha256": "f93fc58f0477050a01f970d6244a662051adac5a8b840fb942c808330caabafd",
+  "appearance_sha256": "9e5734b75bc13add60c558d0e81ccfe0852573023c19c068f061cc9ce4311e53"
+}

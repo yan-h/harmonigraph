@@ -1,0 +1,14 @@
+{
+  "base-a": {
+    "mean_abs_rgb_255": 0.0,
+    "max_abs_rgb_255": 0
+  },
+  "direct4": {
+    "mean_abs_rgb_255": 3.4588723308767952,
+    "max_abs_rgb_255": 165
+  },
+  "residual4": {
+    "mean_abs_rgb_255": 3.1817741165910807,
+    "max_abs_rgb_255": 163
+  }
+}

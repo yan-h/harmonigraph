@@ -1,0 +1,110 @@
+{
+  "base-a:micro:take:0": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "direct4:direct4-ref9:take:0": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "full-a:group5-100:take:0": {
+    "max": 1,
+    "mean_rgb": 0.030706500771604937,
+    "changed_channels": 764076,
+    "alpha_max": 0
+  },
+  "base-a:micro:take:1": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "direct4:direct4-ref9:take:1": {
+    "max": 1,
+    "mean_rgb": 8.037551440329219e-08,
+    "changed_channels": 2,
+    "alpha_max": 0
+  },
+  "full-a:group5-100:take:1": {
+    "max": 1,
+    "mean_rgb": 0.030775985403806584,
+    "changed_channels": 765805,
+    "alpha_max": 0
+  },
+  "base-a:micro:take:2": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "direct4:direct4-ref9:take:2": {
+    "max": 1,
+    "mean_rgb": 4.0187757201646094e-08,
+    "changed_channels": 1,
+    "alpha_max": 0
+  },
+  "full-a:group5-100:take:2": {
+    "max": 1,
+    "mean_rgb": 0.030735998585390948,
+    "changed_channels": 764810,
+    "alpha_max": 0
+  },
+  "base-a:micro:flat:0": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "direct4:direct4-ref9:flat:0": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "full-a:group5-100:flat:0": {
+    "max": 1,
+    "mean_rgb": 0.040667518647119344,
+    "changed_channels": 1011938,
+    "alpha_max": 0
+  },
+  "base-a:micro:flat:1": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "direct4:direct4-ref9:flat:1": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "full-a:group5-100:flat:1": {
+    "max": 1,
+    "mean_rgb": 0.04072044592335391,
+    "changed_channels": 1013255,
+    "alpha_max": 0
+  },
+  "base-a:micro:flat:2": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "direct4:direct4-ref9:flat:2": {
+    "max": 0,
+    "mean_rgb": 0.0,
+    "changed_channels": 0,
+    "alpha_max": 0
+  },
+  "full-a:group5-100:flat:2": {
+    "max": 1,
+    "mean_rgb": 0.04072382169495885,
+    "changed_channels": 1013339,
+    "alpha_max": 0
+  }
+}
