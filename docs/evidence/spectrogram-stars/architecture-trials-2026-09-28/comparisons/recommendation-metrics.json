@@ -1,0 +1,14 @@
+{
+  "base-a": {
+    "mean_abs_rgb_255": 0.0,
+    "max_abs_rgb_255": 0
+  },
+  "group3-short100": {
+    "mean_abs_rgb_255": 0.3555108497102545,
+    "max_abs_rgb_255": 132
+  },
+  "group3-short75": {
+    "mean_abs_rgb_255": 0.43656231103552534,
+    "max_abs_rgb_255": 112
+  }
+}

@@ -35,8 +35,8 @@ The final harness fixes the shifted image fixture and take clock described in th
 python3 "$bundle/probe_images.py" replay-parity base-a,micro,complete,direct4,direct4-ref9,full-residual4,full-a,group5-100 1.25 0.5 7.3
 cargo build --release -p harmonigraph-plugin -p harmonigraph-offline
 export TAKE_FILE=/absolute/path/to/take-2026-09-11_03-16-17.take
-python3 "$bundle/capture.py" base-a group3-short75 group3-50 direct4 group5-50
-python3 "$bundle/gallery.py" shortlist base-a group3-short75 group3-50 direct4 group5-50
+python3 "$bundle/capture.py" base-a group3-short100 group3-short75 group3-50 direct4 group5-50
+python3 "$bundle/gallery.py" shortlist base-a group3-short100 group3-short75 group3-50 direct4 group5-50
 python3 "$bundle/compare_movies.py"
 ```
 

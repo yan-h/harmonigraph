@@ -7,7 +7,9 @@ The user's cost function is visual difference plus maintenance burden, rather th
 ## Result and recommendation
 
 There are still substantial performance gains worth considering.
-The strongest new family keeps the nearest two depths unchanged and renders the farthest three together in a reduced-resolution color target.
+The strongest new family keeps the nearest two depths unchanged and renders the farthest three together.
+For the stated visual-plus-maintenance cost, the native-resolution short-glow group is the first candidate: it preserves sharpness and can reuse the native 3+2 tone architecture.
+A 75%-dimension target is the faster alternative, at the cost of some distant softness and extra scaling/sampling logic.
 Shortening only those distant halos allows four contributors per target pixel.
 That combination is much closer to the current appearance in the inspected recorded-take stills than shortening all five layers or reducing the entire field's resolution.
 The table below distinguishes screens from confirmations.
@@ -21,38 +23,51 @@ The group reuses the existing tone pass, but production work must own target siz
 ## Measured shortlist
 
 All savings below are median paired GPU-time reductions against current P3, not against the in-progress 3+2 change.
-Ranges are the two completed default-take confirmation runs; single numbers are screens.
+Ranges span the completed default-take screen/confirmation runs named in RESULTS; evidence strength is stated per row.
 
 | Candidate | 1080p saving | 4K saving | Evidence / visual cost |
 |---|---:|---:|---|
-| Far three, short glow, 75% dimensions | 33.9% | 26.3% | One balanced screen; close in inspected stills |
-| Far three, short glow, 50% dimensions | 31.7% | 33.1% | One balanced screen; more distant softness |
-| Far three, wide glow, 50% dimensions | 24.0–24.3% | 23.2–23.4% | Two screens; broad glow retained, distant cores softened |
+| Far three, short glow, native dimensions | 26.1% | 16.9% | One balanced run; no downsampling, conservative glow change |
+| Far three, short glow, 75% dimensions | 32.9–33.9% | 25.9–26.3% | Screen plus independent repeat and workload checks |
+| Far three, short glow, 50% dimensions | 31.7% | 33.1–33.5% | Screen plus independent repeat; more distant softness |
+| Far three, wide glow, 50% dimensions | 24.0–24.7% | 23.2–23.4% | Screens plus repeat/workload checks; distant cores softened |
 | Wide glow only on nearest two (mask 24) | 13.6–14.6% | 9.5–9.6% | Two screens; small glow change, native sharpness |
 | Four-neighbor residual halos everywhere | 24.0–26.1% | 25.0–25.2% | Two confirmation runs; noticeably less glow |
 | Direct four-neighbor response everywhere | 21.8–26.0% | 19.6–19.7% | Two confirmation runs; noticeably less glow |
 | All five, wide glow, 75% dimensions | 36.8–39.8% | 31.0–31.5% | Two confirmation runs; softer star detail |
 | All five, wide glow, 50% dimensions | 53.0–55.1% | 56.5% | Two confirmation runs; clearly softer field |
-| Skip impossible neighboring core work | 3.7% | 1.7% | One screen; byte-exact probes, benefit not yet confirmed |
+| Skip impossible neighboring core work | 2.1–3.7% | 1.7–2.4% | Screen plus confirmation; byte-exact tested frames |
+| Native complete-response helper | -0.4% | 2.9% | Confirmation matches prior size-dependent result |
 
-The far-three short 75% screen's paired means are 32.2% and 26.4%; A/A mean differences are -0.24% and -1.02%.
-Its gain is much larger than the control mismatch, but it still needs the independent repeat and workload checks before a production performance claim.
-The same-look complete-response helper retains its prior #1244 timing evidence, rather than a new timing result here.
+The independent short75 repeat has paired mean savings of approximately 33% and 26%, with A/A mean differences 0.31% and 0.48%.
+Native short100 saved 26.1% and 16.9% in that same balanced run.
+It avoids the scaled target, bilinear upsampling and edge-padding machinery for roughly 6.8 and 9.0 percentage points less saving than short75.
+These percentages are measured against P3; they do not establish gains on other GPUs or settings.
 The 3+2 control saved 5.5% at 1080p and 1.5% at 4K in this initial screen; it is not additive with any row above.
 
 The following views show the same instant and crop without smoothing:
 
-![Selective candidates](comparisons/focused-2x.png)
+![Current, native far-three, and 75% far-three](comparisons/recommendation-2x.png)
 
 ![Whole-field resolution tradeoffs](comparisons/groups-2x.png)
 
-## Pending quiet-window checks
+## Completed focused confirmations
 
-The queued `final_confirm.py` lists the remaining independent repeat, synthetic/sparse workloads, live-pane size and same-look confirmation.
-It includes the generated `group3-short100` control, which has no measurement or appearance claim in this report.
-The user was asked for a quiet GPU window after competing graphics activity began; no response had arrived while this draft was assembled.
-These follow-ups are explicit unfinished verification, not failed candidates.
-The tested families are preserved and comparable without shipping an unselected look.
+After the user supplied a quiet GPU window, `final_confirm.py` completed the independent repeat, synthetic/sparse workloads, live-pane size and same-look confirmation.
+
+| Workload | Short75 at 1080p | Short75 at 4K | Wide50 at 1080p | Wide50 at 4K |
+|---|---:|---:|---:|---:|
+| Default take, independent repeat | 32.9% | 25.9% | 24.7% | 23.4% |
+| Synthetic input | 31.7% | 26.6% | 24.1% | 24.0% |
+| Sparse stars | 25.7% | 26.2% | 23.7% | 24.1% |
+
+At 926x720 the short75 group saved approximately 20.9%, compared with 12.6% for wide50.
+Sparse 1080p A/A was -2.05% and the live-pane A/A was -1.46%, so those results support the direction and rough magnitude rather than precise percentages.
+Native short100 has the one default-take run and coverage/appearance evidence; the extra workload matrix was run for short75 and wide50.
+
+The same-look confirmation found approximately 2.1%/2.4% for omitting impossible core work and -0.4%/2.9% for native complete response.
+The 4K baseline drifted to about 30 ms in that run and A/A was 0.99%; the micro result is a small possible gain, not a reason for new pipeline machinery.
+All runs and samples remain available, including the earlier explicitly excluded interrupted-window evidence.
 
 ## What was tried, in order
 
@@ -62,8 +77,8 @@ The tested families are preserved and comparable without shipping an unselected 
    Bit zero is the farthest layer; mask 24 retains wide glow on the nearest two.
 3. Complete wide-glow groups: farthest three or all five at 75% and 50% of each target dimension.
 4. Focused combination: farthest three with short glow at 75% and 50%, leaving the nearest two on P3.
-   A native-resolution short-group variant was generated for follow-up, but not executed before the quiet-window pause.
-5. Same-look arithmetic: screen omission of impossible neighboring core subtraction; replay aligned native complete-response image checks from prior timing evidence.
+   A native-resolution short-group variant was also measured to separate the partitioning benefit from downsampling.
+5. Same-look arithmetic: screen and confirm omission of impossible neighboring core subtraction; repeat aligned native complete-response timing and image checks.
    The separate 3+2 implementation is included as a control, not claimed as new work.
 
 Previous evidence already covers four layers, P2, split partitions, sprites, shared blur, within-cell clipping and temporal reuse limitations.
@@ -104,20 +119,22 @@ No outliers are selectively deleted.
 The initial `screen1` attempt failed before measurement because the source override omitted the shared geometry helper; `screen1-fixed` corrected concatenation and is the first usable screen.
 The failed setup log and obsolete source hashes are retained for provenance, not included as results.
 The display has 39.149967 seconds of history; 1080p is 2 px/point and 4K is 4 px/point, preserving logical pane size.
-The queued 720-line test is configured for the prior live-pane geometry, 926x720 at 1 px/point.
+The 720-line test uses the prior live-pane geometry, 926x720 at 1 px/point.
 
 The take timing fixture reconstructs 20 seconds of recorded levels and cycles 960 slabs through a live-sized ring.
 It is not the exact plugin analyzer mapping.
 The synthetic all-layer run completed at 1080p; its 4K run was disturbed.
-Sparse, live-pane and focused-candidate confirmations remain pending, rather than inferred from the default screen.
+The focused short75/wide50 confirmations subsequently completed on synthetic, sparse (density 1 instead of the default 10) and live-pane inputs in the quiet window.
 The initial `screen1-fixed`, `screen2-*` and `screen3-groups` runs inherited a 1/48-second clock step while shifting one displayed slab.
-`screen4-combinations` and all `confirm-*`, `focused-*` use the corrected `history_seconds / 960` step for the take.
+`screen4-combinations`, all `confirm-*` and `focused-*`, and `same-look-final` use the corrected `history_seconds / 960` step for the take.
 Both candidates and controls shared the earlier step, so those runs remain screens, not the final confirmation basis.
 
 The first `confirm-main-synthetic` 4K run overlapped competing graphics activity and severe stalls.
 Its A/A mean difference was -17.59%; it is retained but excluded from conclusions.
 The following sparse run was interrupted.
 This exclusion is at run level and has an observed environmental cause.
+The user then supplied a quiet window and all focused confirmations completed.
+The preserved research binary was reused after the evidence-only commit; run manifests record that checkout HEAD while the binary hash identifies the unchanged experiment executable.
 See `interruption.md` for the restart record.
 
 ## Appearance and coverage checks
@@ -127,6 +144,10 @@ They discard a full 40-second lead-in and retain the final 144 frames.
 The appearance file and hashes are preserved.
 The current renderer A/A movie arrays were byte-identical across all 144 frames, including captures made after the scratch host rebuild.
 PNG stills and metrics use lossless arrays; MP4s are viewing copies.
+The subsequently captured native short100 movie differs from the mask-24 movie by at most one code value across all 144 frames (mean RGB error 0.002/255).
+Against P3, the inspected-pane movie mean error is 0.356/255 for native short100 and 0.437/255 for short75; localized maximum differences are 132 and 112 respectively.
+Those averages do not certify visual equivalence, and the fractional-origin still fixture reverses their numerical closeness ranking.
+Native short100 leads on simpler geometry and retained sharpness, not on a universal pixel-error claim.
 No audio or original take is included in this evidence package.
 
 Inspection included native stills, identical crops enlarged without smoothing, and flat-input controls.
@@ -148,11 +169,13 @@ A production port still owes normal pane/layout regression coverage and regenera
 
 ## Engineering ranking
 
-- Far-three short group at 75%: strongest first candidate for a small deliberate look change.
+- Far-three short group at native resolution: first candidate for the stated visual-plus-maintenance cost.
+  It retains native grain, changes only distant glow, and can reuse the existing native tone target without new resolution handling.
+- Far-three short group at 75%: the faster alternative for a small deliberate look change.
   It combines fewer halo contributors with less distant-layer work while retaining the nearest layers.
 - Far-three wide group at 50%: useful alternative if preserving broad distant glow matters more than distant sharpness.
-- Mask-24 hybrid: a conservative alternative when downsampling is objectionable.
-  A native far-three short group is a generated, unmeasured follow-up to isolate partitioning.
+- Mask-24 hybrid: a useful shape reference, but the native far-three group is faster with the same short-support construction.
+  Their fractional-origin take/flat probes differ by at most one 8-bit code value.
 - Four-neighbor residual everywhere: comparatively small implementation delta and useful savings, but appreciably less glow across all depths.
 - Direct four-neighbor everywhere: simpler rendering lifecycle and fewer resources, but a larger visual change and slower than residual4 at 4K here.
 - Whole-field reduced resolution: largest gain, with obvious softness; only attractive if that new look is desirable.

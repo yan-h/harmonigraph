@@ -1,0 +1,32 @@
+{
+  "hybrid24:group3-short100:take:0": {
+    "max": 1,
+    "mean_rgb": 0.0023140495867768596,
+    "changed_channels": 5754
+  },
+  "hybrid24:group3-short100:take:1": {
+    "max": 1,
+    "mean_rgb": 0.0022629748044479298,
+    "changed_channels": 5627
+  },
+  "hybrid24:group3-short100:take:2": {
+    "max": 1,
+    "mean_rgb": 0.002281072168265267,
+    "changed_channels": 5672
+  },
+  "hybrid24:group3-short100:flat:0": {
+    "max": 1,
+    "mean_rgb": 0.003045987412278056,
+    "changed_channels": 7574
+  },
+  "hybrid24:group3-short100:flat:1": {
+    "max": 1,
+    "mean_rgb": 0.0030065753755202994,
+    "changed_channels": 7476
+  },
+  "hybrid24:group3-short100:flat:2": {
+    "max": 1,
+    "mean_rgb": 0.0029965212845106674,
+    "changed_channels": 7451
+  }
+}

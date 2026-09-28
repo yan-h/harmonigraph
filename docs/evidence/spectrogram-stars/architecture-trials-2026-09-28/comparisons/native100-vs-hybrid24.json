@@ -1,0 +1,10 @@
+{
+  "pair": [
+    "hybrid-24",
+    "group3-short100"
+  ],
+  "frames": 144,
+  "max_rgb": 1,
+  "mean_rgb": 0.0019870124890153463,
+  "changed_channels": 284793
+}

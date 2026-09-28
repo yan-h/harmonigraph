@@ -59,6 +59,10 @@
     "bytes": 2621912,
     "sha256": "6959348d74e4039be2861be6fb777a7a72ac54867589eb67e7cf042f02eb3592"
   },
+  "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/movies/group3-short100.mp4": {
+    "bytes": 2554086,
+    "sha256": "211cb8cec80b8f593d571290487a9676837bacac3b6950160935f5fa22ea6569"
+  },
   "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/movies/group5-75.mp4": {
     "bytes": 1884345,
     "sha256": "c40fcd74b1976818b5869c05dfc4fd0a4a6d225d806f6242fa61df96e457eb46"
@@ -78,6 +82,10 @@
   "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/comparisons/current-vs-group3-short75.mp4": {
     "bytes": 4885802,
     "sha256": "999b9ccc8adce775adb194fa2427e6bcd384951864c00c29f5c089d15a390b76"
+  },
+  "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/comparisons/current-vs-group3-short100.mp4": {
+    "bytes": 5045946,
+    "sha256": "e079ae3d2689919d9e4867950733311dfb3ae81227ce71fa8602d9d5839f08b4"
   },
   "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/comparisons/current-vs-group3-50.mp4": {
     "bytes": 4817245,

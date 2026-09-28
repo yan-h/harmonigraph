@@ -1,0 +1,27 @@
+{
+  "base-a": {
+    "median_ms": 7.3822715,
+    "mean_ms": 7.450757633333334,
+    "median_paired_saving_pct": 0.1143068047010698,
+    "mean_paired_saving_pct": 0.17435001553016694
+  },
+  "base-b": {
+    "median_ms": 7.3799165,
+    "mean_ms": 7.477910420833333,
+    "median_paired_saving_pct": -0.1143068047010587,
+    "mean_paired_saving_pct": -0.17435001553016694
+  },
+  "micro": {
+    "median_ms": 7.234104,
+    "mean_ms": 7.320872416666667,
+    "median_paired_saving_pct": 2.055292873839032,
+    "mean_paired_saving_pct": 1.8427709311849894
+  },
+  "complete": {
+    "median_ms": 7.4290205,
+    "mean_ms": 7.50901285,
+    "median_paired_saving_pct": -0.4229763578081691,
+    "mean_paired_saving_pct": -0.685338674685565
+  },
+  "aa_mean_pct": -0.36310661631292485
+}

@@ -88,6 +88,119 @@ A/A difference of mean GPU times: -17.59%.
 | group5-75 | 20.800 | 49.928 | 33.31% | 29.73% |
 | group5-50 | 12.394 | 44.507 | 57.58% | 48.20% |
 
+## focused-720
+
+### 926x720
+
+A/A difference of mean GPU times: -1.46%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 3.402 | 3.420 | 0.88% | 0.72% |
+| base-b | 3.444 | 3.471 | -0.88% | -0.72% |
+| group3-short75 | 2.729 | 2.753 | 20.90% | 19.97% |
+| group3-50 | 2.997 | 3.047 | 12.57% | 11.44% |
+
+## focused-repeat
+
+### 1920x1080
+
+A/A difference of mean GPU times: 0.31%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 7.405 | 7.473 | -0.17% | -0.15% |
+| base-b | 7.368 | 7.450 | 0.17% | 0.15% |
+| group3-short100 | 5.422 | 5.517 | 26.10% | 26.02% |
+| group3-short75 | 4.952 | 5.011 | 32.90% | 32.81% |
+| group3-short50 | 5.058 | 5.115 | 31.68% | 31.41% |
+| group3-50 | 5.553 | 5.629 | 24.66% | 24.52% |
+
+### 3840x2160
+
+A/A difference of mean GPU times: 0.48%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 20.298 | 21.277 | -0.03% | -0.24% |
+| base-b | 20.132 | 21.175 | 0.03% | 0.24% |
+| group3-short100 | 16.942 | 17.626 | 16.89% | 16.76% |
+| group3-short75 | 14.947 | 15.719 | 25.85% | 25.78% |
+| group3-short50 | 13.416 | 14.198 | 33.51% | 33.06% |
+| group3-50 | 15.460 | 16.345 | 23.44% | 23.03% |
+
+## focused-sparse
+
+### 1920x1080
+
+A/A difference of mean GPU times: -2.05%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 5.915 | 7.351 | 0.21% | 0.83% |
+| base-b | 6.038 | 7.505 | -0.21% | -0.83% |
+| group3-short75 | 4.431 | 5.745 | 25.67% | 22.28% |
+| group3-50 | 4.782 | 6.007 | 23.67% | 18.70% |
+
+### 3840x2160
+
+A/A difference of mean GPU times: -0.08%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 18.971 | 20.148 | 0.01% | 0.05% |
+| base-b | 18.966 | 20.164 | -0.01% | -0.05% |
+| group3-short75 | 14.102 | 14.861 | 26.20% | 26.23% |
+| group3-50 | 14.600 | 15.305 | 24.14% | 24.03% |
+
+## focused-synthetic
+
+### 1920x1080
+
+A/A difference of mean GPU times: 0.52%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 7.623 | 7.621 | -0.40% | -0.26% |
+| base-b | 7.499 | 7.582 | 0.40% | 0.26% |
+| group3-short75 | 5.156 | 5.196 | 31.67% | 31.62% |
+| group3-50 | 5.725 | 5.776 | 24.13% | 24.00% |
+
+### 3840x2160
+
+A/A difference of mean GPU times: -0.35%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 20.433 | 20.558 | -0.06% | 0.13% |
+| base-b | 20.392 | 20.630 | 0.06% | -0.13% |
+| group3-short75 | 14.984 | 15.053 | 26.56% | 26.84% |
+| group3-50 | 15.545 | 15.740 | 23.98% | 23.63% |
+
+## same-look-final
+
+### 1920x1080
+
+A/A difference of mean GPU times: -0.36%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 7.382 | 7.451 | 0.11% | 0.17% |
+| base-b | 7.380 | 7.478 | -0.11% | -0.17% |
+| micro | 7.234 | 7.321 | 2.06% | 1.84% |
+| complete | 7.429 | 7.509 | -0.42% | -0.69% |
+
+### 3840x2160
+
+A/A difference of mean GPU times: 0.99%.
+
+| Variant | Median ms | Mean ms | Paired median saving | Paired mean saving |
+|---|---:|---:|---:|---:|
+| base-a | 30.541 | 32.930 | -0.61% | -0.56% |
+| base-b | 29.839 | 32.608 | 0.61% | 0.56% |
+| micro | 29.051 | 31.749 | 2.39% | 2.81% |
+| complete | 29.384 | 31.880 | 2.86% | 2.27% |
+
 ## screen1-fixed
 
 ### 1920x1080

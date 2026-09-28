@@ -1,9 +1,10 @@
 from pathlib import Path
-import subprocess,numpy as np
+import subprocess,sys,numpy as np
 from png import draw_text
 A=Path(__file__).parent;D=A/'movies';O=A/'comparisons'
 base=np.load(D/'base-a.npy',mmap_mode='r')
-for name,label in [('group3-short75','Far 3 - shorter glow - 75%'),('group3-50','Far 3 - wide glow - 50%'),('direct4','All 5 - shorter glow - native'),('group5-50','All 5 - wide glow - 50%')]:
+for name,label in [('group3-short100','Far 3 - shorter glow - native'),('group3-short75','Far 3 - shorter glow - 75%'),('group3-50','Far 3 - wide glow - 50%'),('direct4','All 5 - shorter glow - native'),('group5-50','All 5 - wide glow - 50%')]:
+ if len(sys.argv)>1 and name not in sys.argv[1:]:continue
  other=np.load(D/f'{name}.npy',mmap_mode='r')
  out=O/f'current-vs-{name}.mp4';h,w=base.shape[1:3]
  process=subprocess.Popen(['ffmpeg','-v','error','-y','-f','rawvideo','-pixel_format','rgb24','-video_size',f'{2*w}x{h+28}','-framerate','24','-i','-','-an','-c:v','libx264','-threads','1','-crf','15','-pix_fmt','yuv420p','-movflags','+faststart',str(out)],stdin=subprocess.PIPE)

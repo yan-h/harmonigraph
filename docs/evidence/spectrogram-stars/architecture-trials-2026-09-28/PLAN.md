@@ -14,7 +14,7 @@ include its known shader partition as a control rather than claiming ownership o
    Screen wide masks 4, 8, 12, 16, 24 and 28 (bits numbered from far=0).
 3. Whole depth-group reduced-resolution complete response: farthest three or all five at 75% and 50% dimensions.
 4. Focused combination: farthest three with short glow at 75% and 50% dimensions.
-   A native short-group control and confirmation matrix remain pending a quiet GPU window.
+   The native short-group control and confirmation matrix completed after the user supplied a quiet GPU window.
 5. Small same-look optimizations: omit impossible neighbouring core subtraction and replay measured native complete response.
 
 Already measured visual changes (four layers, P2) remain evidence references rather than being called newly discovered optimizations.
