@@ -280,11 +280,17 @@ fn halo_resolution_changes_carry_stars_color_history() {
     let lit = pixels(&device, &queue, memory(&changed));
     assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
     cb.grid.fill(0);
-    use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
+    use harmonigraph_scene::StarHaloProfile::{Medium, Uniform, P3};
     let mut prior_layout = None;
-    for (profile, resolution) in
-        [(Uniform, 0.25), (Uniform, 1.0), (Uniform, 1.0 / 3.0), (Uniform, 0.5), (P3, 0.5)]
-    {
+    for (profile, resolution) in [
+        (Uniform, 0.25),
+        (Uniform, 1.0),
+        (Uniform, 1.0 / 3.0),
+        (Uniform, 0.5),
+        (P3, 0.5),
+        (Medium, 0.5),
+        (P3, 0.5),
+    ] {
         cb.atmosphere.as_mut().unwrap().settings.star_halo_profile = profile;
         cb.atmosphere.as_mut().unwrap().settings.star_halo_resolution = resolution;
         prepare_once(&device, &queue, &mut changed, &cb);

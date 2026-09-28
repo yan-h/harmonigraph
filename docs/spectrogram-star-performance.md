@@ -14,11 +14,24 @@ life,
 size,
 and color once per frame.
 All five depth layers remain.
-Optimized renders the complete farthest three responses together into an RGBA16Float image at 75% width and height,
+High (formerly Optimized) renders the complete farthest three responses together into an RGBA16Float image at 75% width and height,
 then samples it bilinearly.
 Those layers use four neighboring cells and shorter glow;
 the nearest two retain native cores and their existing 100% and 60% halo images.
 The three unused far-layer halo images and passes are absent.
+
+Medium renders the far three at 50% width and height,
+then the nearest two over that image at 75% in a second RGBA16Float target.
+Its foreground halo targets use 75% and 45% dimensions.
+The final pass samples that composite bilinearly,
+keeping Texture mix and the underlying spectrogram at native resolution.
+Both presets retain all five layers,
+star geometry,
+and color history.
+High remains the default and keeps its existing saved `P3` value;
+Medium is a new saved enum variant,
+and Uniform retains its manual halo-resolution override.
+Switching presets changes sampling without resetting retained colors.
 
 The four-cell gather starts at `floor(r - 0.5)`.
 Its radial support is `1 - jitter_span / 2` cell widths,
@@ -30,7 +43,7 @@ The previous wide support is 1.2 cells:
 four neighbors cannot reproduce it simply by dropping five reads.
 
 The Stars **Far fill** slider reduces background leakage through the farthest three layers without adding stars or texture reads.
-It works in both rendering profiles:
+It works in every rendering profile:
 0% preserves the original coverage,
 50% gives gentle filling,
 and 100% gives stronger filling,
@@ -45,7 +58,7 @@ Uniform retains all five wide responses and its adjustable halo resolution.
 At drawn coverage of at least 2560×1440 device pixels in area,
 it composites the farthest three into a native-resolution target and draws the nearest two over an exact texel read.
 Smaller Uniform regions retain the unsplit path.
-Optimized uses its reduced far-three image at every pane size.
+High and Medium use their reduced far-three images at every pane size.
 Both policies retain layer order,
 palette mixing,
 motion,
@@ -85,7 +98,9 @@ A [follow-up against the current profile](evidence/spectrogram-stars/resolution-
 Back-only 50% saved about 10.5% at 4K with no dependable 1080p gain;
 scaling foreground cores and existing halo dimensions to 75% saved about 34.8%/20.2% at 4K/1080p in the synthetic probe.
 Recording-derived captures quantify the accompanying softness.
-These remain experiments and do not change the selected defaults.
+The cores-and-halos variant is now available as Medium;
+High remains the default.
+The [production confirmation](evidence/spectrogram-stars/medium-preset-2026-09-28/README.md) records the port and its interleaved timing checks.
 
 ## What was tried and what remains worth considering
 

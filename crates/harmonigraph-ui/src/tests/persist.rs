@@ -1809,23 +1809,23 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
     assert_eq!(old.star_halo_resolution, 0.625);
     assert_eq!(old.star_far_fill, 0.0);
 
-    let mut state = fresh();
-    state.picture.appearance.spectrum.atmosphere.star_halo_profile = StarHaloProfile::Uniform;
-    state.picture.appearance.spectrum.atmosphere.star_halo_resolution = 0.625;
-    state.picture.appearance.spectrum.atmosphere.star_far_fill = 0.42;
-    let saved = state.save_persist();
-    let mut editor = fresh();
-    assert!(editor.load_persist(&saved));
-    assert_eq!(
-        editor.picture.appearance.spectrum.atmosphere.star_halo_profile,
-        StarHaloProfile::Uniform
-    );
-    assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_halo_resolution, 0.625);
-    let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
-    assert_eq!(offline.spectrum.atmosphere.star_halo_profile, StarHaloProfile::Uniform);
-    assert_eq!(offline.spectrum.atmosphere.star_halo_resolution, 0.625);
-    assert_eq!(offline.spectrum.atmosphere.star_far_fill, 0.42);
-    assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_far_fill, 0.42);
+    for profile in [StarHaloProfile::P3, StarHaloProfile::Medium, StarHaloProfile::Uniform] {
+        let mut state = fresh();
+        state.picture.appearance.spectrum.atmosphere.star_halo_profile = profile;
+        state.picture.appearance.spectrum.atmosphere.star_halo_resolution = 0.625;
+        state.picture.appearance.spectrum.atmosphere.star_far_fill = 0.42;
+        let saved = state.save_persist();
+        let mut editor = fresh();
+        assert!(editor.load_persist(&saved));
+        assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_halo_profile, profile);
+        assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_halo_resolution, 0.625);
+        let offline =
+            crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
+        assert_eq!(offline.spectrum.atmosphere.star_halo_profile, profile);
+        assert_eq!(offline.spectrum.atmosphere.star_halo_resolution, 0.625);
+        assert_eq!(offline.spectrum.atmosphere.star_far_fill, 0.42);
+        assert_eq!(editor.picture.appearance.spectrum.atmosphere.star_far_fill, 0.42);
+    }
 }
 
 #[test]

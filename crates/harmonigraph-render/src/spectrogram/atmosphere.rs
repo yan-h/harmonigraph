@@ -452,7 +452,7 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
 
 /// The precomposite size, or `None` for the complete per-pixel walk.
 ///
-/// Optimized Stars composite their far three layers at 75% width and height.
+/// High and Medium Stars composite their far three layers at 75% and 50% dimensions.
 /// Uniform Stars retain a native RGB split on large regions. The caller retains
 /// a pane-relative allocation for texel addressing,
 /// but scissors this pass to the drawn region on every frame.
@@ -472,7 +472,7 @@ pub(super) fn tone_size(
         return None;
     }
     if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
-        if settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3 {
+        if settings.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform {
             return Some(star_far_size(pixels, settings));
         }
         let split = u64::from(pixels[0]) * u64::from(pixels[1]) >= STAR_SPLIT_PIXELS;
@@ -575,17 +575,28 @@ pub(super) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
     pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
 }
 
-/// Uniform keeps exact native texel addressing; Optimized shares the complete
-/// far-three response at 75% width and height, at every pane size.
+/// Uniform keeps exact native texel addressing; High and Medium share the complete
+/// far-three response at 75% and 50% dimensions respectively, at every pane size.
 pub(super) fn star_far_size(
     pixels: [u32; 2],
     settings: harmonigraph_scene::SpectralAtmosphere,
 ) -> [u32; 2] {
-    if settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3 {
-        star_halo_size(pixels, 0.75)
-    } else {
-        pixels
+    use harmonigraph_scene::StarHaloProfile;
+    match settings.star_halo_profile {
+        StarHaloProfile::Uniform => pixels,
+        StarHaloProfile::P3 => star_halo_size(pixels, 0.75),
+        StarHaloProfile::Medium => star_halo_size(pixels, 0.5),
     }
+}
+
+/// Medium shades the foreground over the far image at 75% dimensions.
+/// Exact rounded dimensions belong to allocation identity, not the preset name.
+pub(super) fn star_near_size(
+    pixels: [u32; 2],
+    settings: harmonigraph_scene::SpectralAtmosphere,
+) -> Option<[u32; 2]> {
+    (settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::Medium)
+        .then(|| star_halo_size(pixels, 0.75))
 }
 
 /// Include every bilinear tap at the boundary of a partially covered pane.
@@ -623,7 +634,7 @@ pub(super) struct StarHaloLayout {
     groups: [HaloGroup; STAR_HALO_GROUPS],
     /// [group, array layer] for each far-to-near depth.
     layers: [[u32; 2]; STAR_SLICES],
-    /// Optimized far depths are drawn directly and own no halo images.
+    /// High and Medium far depths are drawn directly and own no halo images.
     first_active_layer: usize,
 }
 
@@ -657,7 +668,7 @@ impl StarHaloLayout {
     }
 }
 
-/// Optimized needs halos only for the nearest two depths. Material history
+/// High and Medium need halos only for the nearest two depths. Material history
 /// keeps the same identity across profiles, independent of their sampling.
 pub(super) fn star_halo_layout(
     pixels: [u32; 2],
@@ -668,6 +679,7 @@ pub(super) fn star_halo_layout(
     let (factors, first_active_layer) = match settings.star_halo_profile {
         StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
         StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
+        StarHaloProfile::Medium => ([0.0, 0.0, 0.0, 0.75, 0.45], 3),
     };
     StarHaloLayout::from_sizes(
         factors.map(|factor| star_halo_size(pixels, factor)),
@@ -817,6 +829,8 @@ struct Uniforms {
     star_life: f32,
     /// Exact far target dimensions, optimized-far flag, and padding.
     star_far: Float4,
+    /// Exact Medium foreground dimensions; zero means native foreground.
+    star_near: Float4,
     /// Jitter width, compact-core reach, fade-start fraction and far fill; see [`star_geometry`].
     star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
@@ -891,9 +905,10 @@ pub(super) struct Pipelines {
     /// Every star on screen into the star atlas, once a frame, for the
     /// composite's walk to read instead of working each star out per pixel.
     pub stars: wgpu::RenderPipeline,
-    /// Native-resolution RGB of the three farthest layers, when splitting the
-    /// composite pays for its extra pass.
+    /// RGB of the three farthest layers at the profile's selected resolution.
     pub star_far: wgpu::RenderPipeline,
+    /// Medium foreground over the far image, still gamma-encoded.
+    pub star_near: wgpu::RenderPipeline,
     /// One depth's weighted halo color and coverage at the selected resolution.
     pub star_halo: wgpu::RenderPipeline,
     /// Specialize the final draws so the unsplit shader carries no runtime
@@ -1106,6 +1121,14 @@ impl Pipelines {
                 source_layout,
                 &composite_layout,
                 "fs_star_far",
+                &[Some(STAR_FAR_FORMAT)],
+            ),
+            star_near: tile_pipeline(
+                device,
+                &spectrogram,
+                source_layout,
+                &composite_layout,
+                "fs_star_near",
                 &[Some(STAR_FAR_FORMAT)],
             ),
             memory: tile_pipeline(
@@ -1448,11 +1471,15 @@ pub(super) struct Targets {
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
     /// The precomposite and its size: reduced scalar cloud tone or RGB
-    /// of the three far Stars layers (75% for Optimized, native for Uniform).
+    /// of the three far Stars layers (75% for High, 50% for Medium, native for Uniform).
     /// None draws the full walk in the composite.
     /// Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
+    /// Medium's foreground-over-far image; actual size is part of allocation identity.
+    pub near: Option<(wgpu::TextureView, [u32; 2])>,
+    /// Reads the far target, never the near target attached to its pass.
+    pub near_group: Option<wgpu::BindGroup>,
     tile: Option<Tile>,
     /// The star atlas and its size, `None` unless the starfield is drawn. Part
     /// of the allocation key, sized by [`star_atlas_size`].
@@ -1476,13 +1503,14 @@ pub(super) struct Targets {
     memory: Option<Memory>,
 }
 
-/// Target shapes for the light field, optional tone/tile, star atlas, halos and
-/// retained color. Each follows its own sampling grid, so `prepare` compares
+/// Target shapes for the light field, optional tone/tile, star atlas, halos,
+/// reduced foreground and retained color. Each follows its own sampling grid, so `prepare` compares
 /// every shape before rebuilding. Cached tiles and color history can survive
 /// allocation changes in the other fields.
 pub(super) struct Allocation {
     pub size: [u32; 2],
     pub tone: Option<[u32; 2]>,
+    pub near: Option<[u32; 2]>,
     pub tile: Option<TileKey>,
     pub carried: Option<Tile>,
     pub stars: Option<[u32; 2]>,
@@ -1503,6 +1531,7 @@ impl Targets {
         let Allocation {
             size,
             tone: tone_size,
+            near: near_size,
             tile: tile_key,
             carried,
             stars: star_size,
@@ -1548,6 +1577,8 @@ impl Targets {
             let format = if star_size.is_some() { STAR_FAR_FORMAT } else { FORMAT };
             (formatted("spectral_cloud_tone", size, format), size)
         });
+        let near =
+            near_size.map(|size| (formatted("spectral_star_near", size, STAR_FAR_FORMAT), size));
         let stars =
             star_size.map(|size| (formatted("spectral_star_atlas", size, STAR_FORMAT), size));
         // What every group that does not read the atlas binds in its place, and
@@ -1706,14 +1737,19 @@ impl Targets {
         let star_group = stars.as_ref().map(|_| {
             cloud_group(&source_view, &views[0], tile_views, &star_scratch, &views[0], halo_view)
         });
-        let composite_group = cloud_group(
-            &source_view,
-            tone.as_ref().map_or(&views[0], |(view, _)| view),
-            tile_views,
-            star_view,
-            &views[0],
-            halo_view,
-        );
+        let near_group = near.as_ref().map(|_| {
+            cloud_group(
+                &source_view,
+                &tone.as_ref().expect("Medium has a far target").0,
+                tile_views,
+                star_view,
+                &views[0],
+                halo_view,
+            )
+        });
+        let final_tone = near.as_ref().or(tone.as_ref()).map_or(&views[0], |(view, _)| view);
+        let composite_group =
+            cloud_group(&source_view, final_tone, tile_views, star_view, &views[0], halo_view);
         let memory = memory_views.map(|history| Memory {
             groups: std::array::from_fn(|i| {
                 cloud_group(
@@ -1736,14 +1772,7 @@ impl Targets {
                 )
             }),
             composite_groups: std::array::from_fn(|i| {
-                cloud_group(
-                    &source_view,
-                    tone.as_ref().map_or(&views[0], |(view, _)| view),
-                    tile_views,
-                    star_view,
-                    &history[i],
-                    halo_view,
-                )
+                cloud_group(&source_view, final_tone, tile_views, star_view, &history[i], halo_view)
             }),
             views: history,
             size: memory_size.unwrap(),
@@ -1769,6 +1798,8 @@ impl Targets {
             ),
             views,
             tone,
+            near,
+            near_group,
             tile,
             stars,
             halos,
@@ -1790,6 +1821,10 @@ impl Targets {
     /// against what this frame's settings ask for.
     pub fn tone_size(&self) -> Option<[u32; 2]> {
         self.tone.as_ref().map(|&(_, size)| size)
+    }
+
+    pub fn near_size(&self) -> Option<[u32; 2]> {
+        self.near.as_ref().map(|&(_, size)| size)
     }
 
     /// The star atlas's size, for the allocation key.
@@ -2045,10 +2080,14 @@ impl Targets {
                     width as f32,
                     height as f32,
                     f32::from(
-                        settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::P3,
+                        settings.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform,
                     ),
                     0.0,
                 ])
+            },
+            star_near: {
+                let [width, height] = self.near_size().unwrap_or([0, 0]);
+                Float4([width as f32, height as f32, 0.0, 0.0])
             },
             star_geometry: star_geometry(settings.star_jitter, settings.star_far_fill),
             star_slices: slices,
@@ -2206,6 +2245,13 @@ mod tests {
         assert_eq!(layout.groups.map(|g| g.size), [[161, 121], [97, 73], [1, 1]]);
         assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
         assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
+        let medium = SpectralAtmosphere { star_halo_profile: StarHaloProfile::Medium, ..settings };
+        let layout = super::star_halo_layout([161, 121], medium);
+        assert_eq!(layout.groups.map(|g| g.size), [[121, 91], [73, 55], [1, 1]]);
+        assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
+        assert_eq!(super::star_far_size([161, 121], medium), [81, 61]);
+        assert_eq!(super::star_near_size([161, 121], medium), Some([121, 91]));
+        assert_eq!(super::star_near_size([161, 121], settings), None);
         let uniform =
             SpectralAtmosphere { star_halo_profile: StarHaloProfile::Uniform, ..settings };
         assert_ne!(

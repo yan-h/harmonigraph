@@ -303,6 +303,7 @@ struct Cloud {
     star_randomness: f32,
     star_life: f32,
     star_far: vec4<f32>,
+    star_near: vec4<f32>,
     // Jitter width, compact-core reach, fade-start fraction and far fill, computed once
     // per frame by star_geometry in atmosphere.rs. The first two lengths are in cells.
     star_geometry: vec4<f32>,
@@ -1178,24 +1179,38 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
     return out;
 }
 
-// Both presets share the far-three partition. Uniform preserves native texel
-// addressing; Optimized filters a smaller complete far-layer image.
+// All profiles share the far-three partition. Uniform preserves native texel
+// addressing; High and Medium filter smaller complete far-layer images.
 override STAR_SPLIT: bool = false;
-// Keep the partition shared by both passes. The 3+2 walk reduced GPU time
-// versus 2+3 in the paired Stars measurements recorded in #1142.
 const STAR_FAR_LAYERS: u32 = 3u;
+
+fn star_near_color(pt: vec2<f32>) -> vec3<f32> {
+    var far = vec3<f32>(0.0);
+    if cloud.star_far.z > 0.0 {
+        far = textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).rgb;
+    } else {
+        far = textureLoad(cloud_tone, vec2<i32>(pt * cloud.ppp), 0).rgb;
+    }
+    return star_layers(pt, STAR_FAR_LAYERS, STAR_SLICES, far);
+}
 
 fn star_color(pt: vec2<f32>) -> vec3<f32> {
     if STAR_SPLIT {
-        var far = vec3<f32>(0.0);
-        if cloud.star_far.z > 0.0 {
-            far = textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).rgb;
-        } else {
-            far = textureLoad(cloud_tone, vec2<i32>(pt * cloud.ppp), 0).rgb;
+        if cloud.star_near.x > 0.0 {
+            return textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).rgb;
         }
-        return star_layers(pt, STAR_FAR_LAYERS, STAR_SLICES, far);
+        return star_near_color(pt);
     }
     return star_layers(pt, 0u, STAR_SLICES, palette_color(0.0));
+}
+
+@fragment
+fn fs_star_near(in: TileVertex) -> @location(0) vec4<f32> {
+    // Use actual rounded dimensions, including odd panes at fractional scale.
+    // This pass binds the far image; final painting binds this pass's output
+    // at the same slot. Texture mix and output color conversion stay native.
+    let pt = in.position.xy / cloud.star_near.xy * cloud.size;
+    return vec4<f32>(star_near_color(pt), 1.0);
 }
 
 @fragment

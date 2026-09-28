@@ -394,6 +394,17 @@ fn the_starfield_draws_the_frame_on_record() {
     check_take("spectrogram-starfield", shot, take);
 }
 
+/// Medium must reach its reduced foreground path in the export renderer.
+#[test]
+fn medium_stars_draw_the_frame_on_record() {
+    let shot = Shot { size: TALL, range: whole_axis() };
+    let take = shot.dialled(|a| {
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+        a.spectrum.atmosphere.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
+    });
+    check_take("spectrogram-starfield-medium", shot, take);
+}
+
 /// A non-vacuous Step 7 frame: held roll notes use the Gaussian geometry
 /// route while their labels and the axis use the Distance text route. The
 /// pair lands through separate pane compositors, so this is also the frame

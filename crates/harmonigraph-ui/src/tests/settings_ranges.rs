@@ -320,6 +320,7 @@ fn scenarios() -> Vec<Scenario> {
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
         (harmonigraph_scene::StarHaloProfile::P3, 11),
+        (harmonigraph_scene::StarHaloProfile::Medium, 11),
         (harmonigraph_scene::StarHaloProfile::Uniform, 12),
     ] {
         cases.push(Scenario {

@@ -385,7 +385,7 @@ fn uniform_halos_preserve_the_original_array_lookup() {
 
 #[test]
 fn halo_profile_transitions_preserve_color_history() {
-    use harmonigraph_scene::StarHaloProfile::{Uniform, P3};
+    use harmonigraph_scene::StarHaloProfile::{Medium, Uniform, P3};
     let Some((device, queue)) = headless_device() else { return };
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
@@ -396,7 +396,7 @@ fn halo_profile_transitions_preserve_color_history() {
     let mut changing = CallbackResources::default();
     let mut final_frame = Vec::new();
     for (step, (profile, resolution, level)) in
-        [(Uniform, 0.5, 220), (P3, 0.5, 0), (Uniform, 0.25, 80), (Uniform, 1.0, 0)]
+        [(P3, 0.5, 220), (Medium, 0.5, 0), (Uniform, 0.25, 80), (P3, 1.0, 0), (Uniform, 1.0, 0)]
             .into_iter()
             .enumerate()
     {
@@ -415,7 +415,7 @@ fn halo_profile_transitions_preserve_color_history() {
             target(&changing).halo_layout(),
             Some(atmosphere::star_halo_layout([161, 121], cb.atmosphere.unwrap().settings))
         );
-        if step == 3 {
+        if step == 4 {
             assert_eq!(final_frame, reference, "halo reallocations changed retained color");
         }
     }
@@ -426,75 +426,107 @@ fn halo_profile_transitions_preserve_color_history() {
 }
 
 #[test]
-fn optimized_far_layers_cover_partial_panes_at_fractional_scale() {
+fn quality_profiles_cover_partial_panes_at_fractional_scale() {
     let Some((device, queue)) = headless_device() else { return };
     const PPP: f32 = 1.25;
-    for (jitter, memory) in [(0.0, false), (0.5, true), (1.0, true)] {
-        let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
-        let region = egui::Rect::from_min_max(
-            cb.rect.min + egui::vec2(13.3, 9.3),
-            cb.rect.min + egui::vec2(117.1, 87.1),
-        );
-        // BOTH the source mesh and final region must be interior, otherwise
-        // their union silently forces a full-pane far pass.
-        for vertex in &mut cb.vertices {
-            vertex.pos[0] = vertex.pos[0].clamp(region.left(), region.right());
-            vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
-        }
-        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        settings.star_jitter = jitter;
-        settings.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
-        settings.star_far_fill = 1.0;
-        settings.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
-        if memory {
-            settings.color_pickup = 0.6;
-            settings.color_release = 0.6;
-        }
-        let mut full = CallbackResources::default();
-        let mut partial = CallbackResources::default();
-        let mut wide_reference = CallbackResources::default();
-        for step in 0..3 {
-            cb.pass_nr = step;
-            cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
-            cb.grid.fill(80 + step as u8 * 60);
-            cb.atmosphere.as_mut().unwrap().region = cb.rect;
-            let a = frame_at_ppp(&device, &queue, &mut full, &cb, PPP);
-            // The wider gather changes subtraction order at cell boundaries,
-            // so permit one quantization level, separately from exact clipping.
-            STAR_REFERENCE.set(4);
-            let wide = frame_at_ppp(&device, &queue, &mut wide_reference, &cb, PPP);
-            STAR_REFERENCE.set(0);
-            let errors: Vec<_> = a.iter().zip(&wide).map(|(a, b)| a.abs_diff(*b)).collect();
-            let mean = errors.iter().map(|e| f64::from(*e)).sum::<f64>() / errors.len() as f64;
-            assert!(
+    let mut high_passes = [0; 3];
+    for (profile, format) in [
+        (harmonigraph_scene::StarHaloProfile::P3, wgpu::TextureFormat::Rgba8Unorm),
+        (harmonigraph_scene::StarHaloProfile::Medium, wgpu::TextureFormat::Rgba8Unorm),
+        (harmonigraph_scene::StarHaloProfile::Medium, wgpu::TextureFormat::Rgba8UnormSrgb),
+    ] {
+        for (case, (jitter, memory)) in
+            [(0.0, false), (0.5, true), (1.0, true)].into_iter().enumerate()
+        {
+            let mut cb = star_fixture([129, 97], egui::pos2(7.3, 11.7));
+            cb.target_format = format;
+            let region = egui::Rect::from_min_max(
+                cb.rect.min + egui::vec2(13.3, 9.3),
+                cb.rect.min + egui::vec2(117.07, 87.07),
+            );
+            // BOTH the source mesh and final region must be interior, otherwise
+            // their union silently forces a full-pane far pass.
+            for vertex in &mut cb.vertices {
+                vertex.pos[0] = vertex.pos[0].clamp(region.left(), region.right());
+                vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
+            }
+            let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
+            settings.star_jitter = jitter;
+            settings.star_halo_profile = profile;
+            settings.cloud_depth = 0.65;
+            settings.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
+            settings.star_far_fill = 1.0;
+            settings.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
+            if memory {
+                settings.color_pickup = 0.6;
+                settings.color_release = 0.6;
+            }
+            let mut full = CallbackResources::default();
+            let mut partial = CallbackResources::default();
+            let mut wide_reference = CallbackResources::default();
+            for step in 0..3 {
+                cb.pass_nr = step;
+                cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64 * 0.25;
+                cb.grid.fill(80 + step as u8 * 60);
+                cb.atmosphere.as_mut().unwrap().region = cb.rect;
+                let a = frame_at_ppp(&device, &queue, &mut full, &cb, PPP);
+                // The wider gather changes subtraction order at cell boundaries,
+                // so permit one quantization level, separately from exact clipping.
+                STAR_REFERENCE.set(4);
+                let wide = frame_at_ppp(&device, &queue, &mut wide_reference, &cb, PPP);
+                STAR_REFERENCE.set(0);
+                let errors: Vec<_> = a.iter().zip(&wide).map(|(a, b)| a.abs_diff(*b)).collect();
+                let mean = errors.iter().map(|e| f64::from(*e)).sum::<f64>() / errors.len() as f64;
+                assert!(
                 errors.iter().copied().max().unwrap() <= 1 && mean < 0.01,
                 "four-cell gather omitted coverage: jitter={jitter}, memory={memory}, mean={mean}"
             );
-            cb.atmosphere.as_mut().unwrap().region = region;
-            let b = frame_at_ppp(&device, &queue, &mut partial, &cb, PPP);
-            assert_eq!(target(&partial).tone_size(), Some([121, 91]));
-            assert_eq!(target(&partial).memory_size().is_some(), memory);
-            let width = (cb.rect.max.x * PPP).ceil() as usize + 1;
-            let mut checked = 0;
-            let mut lit = 0;
-            // Include the first and last covered pixel centers on every edge.
-            for y in 0..((cb.rect.max.y * PPP).ceil() as usize + 1) {
-                for x in 0..width {
-                    let pt = egui::pos2((x as f32 + 0.5) / PPP, (y as f32 + 0.5) / PPP);
-                    if !region.contains(pt) {
-                        continue;
+                cb.atmosphere.as_mut().unwrap().region = region;
+                let b = frame_at_ppp(&device, &queue, &mut partial, &cb, PPP);
+                let settings = cb.atmosphere.unwrap().settings;
+                assert_eq!(
+                    target(&partial).tone_size(),
+                    Some(atmosphere::star_far_size([161, 121], settings))
+                );
+                assert_eq!(
+                    target(&partial).near_size(),
+                    atmosphere::star_near_size([161, 121], settings)
+                );
+                if step == 0 {
+                    let passes = target(&partial).encoded_passes.load(Ordering::Relaxed);
+                    if profile == harmonigraph_scene::StarHaloProfile::P3 {
+                        high_passes[case] = passes;
+                    } else {
+                        assert_eq!(
+                            passes,
+                            high_passes[case] + 1,
+                            "Medium did not encode its foreground pass"
+                        );
                     }
-                    let i = (y * width + x) * 4;
-                    assert_eq!(
-                        &a[i..i + 4],
-                        &b[i..i + 4],
-                        "jitter={jitter}, memory={memory}, step={step}, pixel={x},{y}"
-                    );
-                    lit += usize::from(b[i..i + 3] != cb.shades.lut[0][..3]);
-                    checked += 1;
                 }
+                assert_eq!(target(&partial).memory_size().is_some(), memory);
+                let width = (cb.rect.max.x * PPP).ceil() as usize + 1;
+                let mut checked = 0;
+                let mut lit = 0;
+                // Include the first and last covered pixel centers on every edge.
+                for y in 0..((cb.rect.max.y * PPP).ceil() as usize + 1) {
+                    for x in 0..width {
+                        let pt = egui::pos2((x as f32 + 0.5) / PPP, (y as f32 + 0.5) / PPP);
+                        if !region.contains(pt) {
+                            continue;
+                        }
+                        let i = (y * width + x) * 4;
+                        assert_eq!(
+                            &a[i..i + 4],
+                            &b[i..i + 4],
+                            "jitter={jitter}, memory={memory}, step={step}, pixel={x},{y}"
+                        );
+                        lit += usize::from(b[i..i + 3] != cb.shades.lut[0][..3]);
+                        checked += 1;
+                    }
+                }
+                assert!(checked > 10000 && lit > 1000, "fixture did not exercise a lit interior");
             }
-            assert!(checked > 10000 && lit > 1000, "fixture did not exercise a lit interior");
         }
     }
 }

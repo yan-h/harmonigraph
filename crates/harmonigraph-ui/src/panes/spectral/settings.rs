@@ -568,9 +568,14 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
             "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Halos keep their full reach at every setting. Brightness and size variation are controlled by Randomness.",
         );
     use harmonigraph_scene::StarHaloProfile;
-    crate::widgets::preset_row(ui, "Stars rendering", &["Optimized", "Uniform"], |ui, menu| {
-        for (label, profile, hint) in [
-            ("Optimized", StarHaloProfile::P3, "The selected faster rendering, with slightly softer distant stars and shorter distant glow."),
+    crate::widgets::preset_row(
+        ui,
+        "Stars rendering",
+        &["Medium", "High", "Uniform"],
+        |ui, menu| {
+            for (label, profile, hint) in [
+            ("Medium", StarHaloProfile::Medium, "Faster rendering with softer stars, including the foreground."),
+            ("High", StarHaloProfile::P3, "Sharper foreground stars with slightly softer distant stars and shorter distant glow."),
             ("Uniform", StarHaloProfile::Uniform, "Override halo resolution with one value for every depth."),
         ] {
             if ui.selectable_label(atmosphere.star_halo_profile == profile, label)
@@ -582,7 +587,8 @@ fn star_bars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::SpectralAtm
                 }
             }
         }
-    });
+        },
+    );
     if atmosphere.star_halo_profile == StarHaloProfile::Uniform {
         ValueBar::new(
             &mut atmosphere.star_halo_resolution,
