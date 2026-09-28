@@ -134,8 +134,9 @@ struct StarSlice {
     /// How much the core is widened after the cap, equally at every depth.
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
-    /// `exp(-d / 2.5 sigma)` and bounded only by the ring's fade to zero at
-    /// 1.2 cells: `Fringe`, alike at every depth.
+    /// `exp(-d / 2.5 sigma)`. Uniform and the nearest two layers fade to zero
+    /// at 1.2 cells; the optimized far-three response ends at
+    /// `1.0 - 0.3 * star_jitter` cells.
     fringe: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
