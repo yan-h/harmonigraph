@@ -87,8 +87,7 @@ pub fn channel() -> (Recorder, Control) {
                     { processed_stop = true; }
                     pump.pending_stop = Some((epoch, render));
                     if !pump.failure.contains(epoch) {
-                        *thread_status.lock() =
-                            "finishing — waiting for the recording prefix".into();
+                        *thread_status.lock() = FINISHING.into();
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -119,6 +118,8 @@ pub fn channel() -> (Recorder, Control) {
             // pass that observed the disconnect is published and rendered
             // rather than going with the thread.
             if let Some((path, render)) = pumped.finished {
+                #[cfg(all(test, feature = "test-support"))]
+                thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
                 if let Some(render) = render {
                     spawn_render(*render, path, thread_status.clone(),
@@ -301,6 +302,13 @@ impl Pump {
         {
             let (_, render) = self.pending_stop.take().unwrap();
             if let Some(path) = finish_ready(&mut self.open, fence.epoch(), fence) {
+                // Publish before Start is permitted again. A render or error
+                // may already own the line; completion only retires its own
+                // finishing message, under the same lock as a refused Start.
+                let mut status = status.lock();
+                if matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                    *status = format!("recorded {}", path.display());
+                }
                 fence.finishing.store(false, Ordering::Release);
                 pumped.finished = Some((path, render));
             }
@@ -883,11 +891,16 @@ impl Pass {
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
                 if spec.is_none() || audio.is_some() {
-                    *status.lock() = if number <= 1 {
-                        format!("recording to {}", path.display())
-                    } else {
-                        format!("pass {number} -> {}", path.display())
-                    };
+                    let mut status = status.lock();
+                    // Stop can overtake the drain of a queued loop split.
+                    // Opening that pass is still finishing the old prefix.
+                    if !matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                        *status = if number <= 1 {
+                            format!("recording to {}", path.display())
+                        } else {
+                            format!("pass {number} -> {}", path.display())
+                        };
+                    }
                 }
                 Some(Pass {
                     number,
