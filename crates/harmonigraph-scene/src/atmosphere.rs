@@ -246,6 +246,9 @@ pub struct MaterialSettings {
     /// How opaque the finer octave's wash is over the coarse one. 0 draws the
     /// coarse octave alone and skips the finer one's work.
     pub wash_layers: f32,
+    /// Balanced per-glob brightness variation after coloring, from 0 to 1.
+    /// Highlight headroom limits both signs equally, preserving expected RGB.
+    pub wash_randomness: f32,
 }
 impl Default for MaterialSettings {
     fn default() -> Self {
@@ -258,6 +261,7 @@ impl Default for MaterialSettings {
             wash_lobe: 1.0,
             wash_refract: 0.950_153_47,
             wash_layers: 0.5,
+            wash_randomness: 0.0,
         }
     }
 }
@@ -288,6 +292,7 @@ impl MaterialSettings {
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
+        self.wash_randomness = clamp(self.wash_randomness, fresh.wash_randomness, 0.0, 1.0);
         self
     }
 }
@@ -636,8 +641,8 @@ impl SpectralAtmosphere {
         SpectralEffects {
             soft: self.pitch_softness > 0.0 || self.time_softness > 0.0,
             contours: self.contour_strength > 0.0,
-            // With memory disabled, zero refraction also bypasses the texture.
-            // Otherwise a stationary sample still has a temporal color response.
+            // A stationary sample still draws brightness variation or a temporal
+            // color response; only a texture with none of these is bypassed.
             cloud: self.cloud_depth > 0.0
                 && match self.cloud_style {
                     CloudStyle::Mosaic => {
@@ -647,6 +652,7 @@ impl SpectralAtmosphere {
                     }
                     CloudStyle::Watercolor => {
                         self.material_settings.wash_refract != 0.0
+                            || self.material_settings.wash_randomness > 0.0
                             || self.color_pickup > 0.0
                             || self.color_release > 0.0
                     }

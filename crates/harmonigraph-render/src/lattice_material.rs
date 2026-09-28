@@ -268,7 +268,7 @@ impl Source {
         let view = texture(device, "lattice_material_light_source", size, LATTICE_COLOR_FORMAT);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lattice_material_settings"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -359,6 +359,10 @@ pub(super) fn prepare(
         settings.drift.0[1],
         settings.refract,
         settings.layers,
+        settings.randomness,
+        0.0,
+        0.0,
+        0.0,
     ];
     queue.write_buffer(&source.buffer, 0, bytemuck::cast_slice(&values));
 }
@@ -376,5 +380,79 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
+    }
+
+    #[test]
+    fn watercolor_brightness_stays_neutral_for_missing_globs() {
+        use crate::gpu_harness::{headless_device, readback, render_to_texture};
+        let Some((device, queue)) = headless_device() else { return };
+        // Both points are inside the same lone fine glob, on opposite sides
+        // of a cell boundary. No front bleed can mask the under-glob fallback.
+        let source = format!(
+            "{SOURCE}\n{}",
+            r#"
+@fragment
+fn fs_brightness_boundary(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    var r = vec2<f32>(select(19.999, 20.001, p.x > 1.0), 8.0);
+    if p.x > 2.0 {
+        r = vec2<f32>(select(4.999, 5.001, p.x > 3.0), 58.2);
+    }
+    let scan = wash_scan(r, 2u, WASH_FINE_OCCUPANCY, 84);
+    let wet = wash_wet(scan, r, 1.0, 2u, 84);
+    let lone = all(scan.under == r) && scan.near <= -0.9;
+    return vec4<f32>(0.5 + 0.5 * wet.brightness, scan.cover, select(0.0, 1.0, lone), 1.0);
+}
+"#
+        );
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("watercolor_brightness_boundary"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("watercolor_brightness_boundary"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_fullscreen"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_brightness_boundary"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let size = [4, 1];
+        let target = render_to_texture(&device, &queue, size, format, wgpu::Color::BLACK, |pass| {
+            pass.set_pipeline(&pipeline);
+            pass.draw(0..4, 0..1);
+        });
+        let pixels = readback(&device, &queue, &target, size);
+        for pixel in pixels[..8].chunks_exact(4) {
+            assert_eq!(&pixel[1..3], &[255, 255], "fixture must reach a lone, covered glob");
+        }
+        // Uncovered tile texels still filter into their covered neighbors.
+        for pixel in pixels[8..].chunks_exact(4) {
+            assert_eq!(pixel, &[128, 0, 255, 255], "missing globs must have neutral brightness");
+        }
+        assert!(
+            pixels[0].abs_diff(pixels[4]) <= 1,
+            "a cell boundary inside one glob changed brightness: {pixels:?}"
+        );
     }
 }

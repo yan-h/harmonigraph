@@ -7,6 +7,7 @@ struct Settings {
     drift: vec2<f32>,
     refract: f32,
     layers: f32,
+    randomness: f32,
 };
 struct Geometry { fuzz: f32, lobe: f32, variety: f32, padding: f32 };
 @group(0) @binding(3) var<uniform> geometry: Geometry;
@@ -33,8 +34,8 @@ struct TileOut {
 @fragment
 fn fs_tile(in: Vertex) -> TileOut {
     let field = wash_field(in.uv * PERIOD, i32(PERIOD), geometry.fuzz, geometry.lobe);
-    return TileOut(vec4<f32>(field.coarse.offset, 0.0, 0.0),
-        vec4<f32>(field.fine.offset, 0.0, field.cover));
+    return TileOut(vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0),
+        vec4<f32>(field.fine.offset, field.fine.brightness, field.cover));
 }
 @fragment
 fn fs_material(in: Vertex) -> @location(0) vec4<f32> {
@@ -47,7 +48,11 @@ fn fs_material(in: Vertex) -> @location(0) vec4<f32> {
     let raw = textureSampleLevel(source, source_sampler, in.uv, 0.0);
     let first = textureSampleLevel(source, source_sampler, in.uv + coarse * settings.refract, 0.0);
     let second = textureSampleLevel(source, source_sampler, in.uv + fine * settings.refract, 0.0);
-    return mix(raw, mix(first, second, settings.layers * b.w), settings.depth);
+    let over = settings.layers * b.w;
+    let painted = mix(first, second, over);
+    let varied = vec4<f32>(wash_vary_brightness(painted.rgb, painted.a,
+        mix(a.z, b.z, over), settings.randomness), painted.a);
+    return mix(raw, varied, settings.depth);
 }
 
 // Same soft-union geometry and flat-centre reading as spectrogram Mosaic.

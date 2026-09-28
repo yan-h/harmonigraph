@@ -202,6 +202,7 @@ struct Wash {
     // — what its own rim dissolves INTO.
     centre: vec2<f32>,
     under: vec2<f32>,
+    has_under: bool,
     // The nearest glob painted AFTER the visible one, which is the arc about to
     // take this pixel, and how near it is as `1 - edge` (never above 0).
     front: vec2<f32>,
@@ -286,17 +287,24 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
         out.near = near_a;
         out.front = front_a;
     }
+    out.has_under = second >= 0.0;
     return out;
 }
 
-// A wash tile holds only the lookup offset, in its own octave's cell units.
+// Each octave stores its lookup offset and an independent signed brightness draw.
 struct Wet {
     offset: vec2<f32>,
+    brightness: f32,
 };
 
 // The cell walk chooses the lookup. Fuzz feathers and bleeds that lookup
-// across glob boundaries; it never changes the sampled level.
-fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32) -> Wet {
+// across glob boundaries. Brightness follows the same feathering, with a hash
+// independent of paint order, occupancy, size and position jitter.
+fn wash_brightness(centre: vec2<f32>, salt: u32, period: i32) -> f32 {
+    return 2.0 * wash_hash(wrap_cell(vec2<i32>(floor(centre)), period), salt + 197u).x - 1.0;
+}
+
+fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     let feather = 0.10 + 0.80 * fuzz;
     let bleed = 0.12 + 0.78 * fuzz;
 
@@ -315,13 +323,20 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32) -> Wet {
     bl = bl * bl * (3.0 - 2.0 * bl) * 0.5;
     look = mix(look, f.front, bl);
 
-    return Wet(look - r);
+    // Missing-glob lookups are the moving pixel coordinate, not a glob.
+    // Keep them neutral: even uncovered texels filter into the painted rim.
+    let centre = select(0.0, wash_brightness(f.centre, salt, period), f.cover > 0.0);
+    let under = select(0.0, wash_brightness(f.under, salt, period), f.has_under);
+    let brightness = mix(
+        mix(centre, under, fa),
+        wash_brightness(f.front, salt, period), bl);
+    return Wet(look - r, brightness);
 }
 
 // The whole of the wash's geometry at a point, in cells: what each octave
 // carries and how much of the pixel the finer one covers.
 //
-// Five numbers, not one of which reads the light, the sound or the clock —
+// Seven numbers, none of which reads the light, the sound or the clock —
 // which is exactly why `fs_cloud_tile` can bake them into two `Rgba16Float`
 // targets and the per-frame shader can read them back. The bake always walks
 // both octaves, because `Layers` is a mix over channels the tile already holds
@@ -348,14 +363,14 @@ fn wash_field(r: vec2<f32>, period: i32, fuzz: f32, lobe: f32) -> WashField {
         );
     }
     var out: WashField;
-    out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, period), warped, fuzz);
+    out.coarse = wash_wet(wash_scan(warped, 1u, 1.0, period), warped, fuzz, 1u, period);
     // Coarse to fine, the finer octave a translucent wash over the one below and
     // sparse, so a big wash sometimes carries a small one and sometimes sits
     // beside it.
     let fine_r = warped * WASH_LACUNARITY + vec2<f32>(17.3, 5.9);
     let fine =
         wash_scan(fine_r, 2u, WASH_FINE_OCCUPANCY, i32(round(WASH_LACUNARITY * f32(period))));
-    out.fine = wash_wet(fine, fine_r, fuzz);
+    out.fine = wash_wet(fine, fine_r, fuzz, 2u, i32(round(WASH_LACUNARITY * f32(period))));
     out.cover = fine.cover;
     return out;
 }
@@ -585,3 +600,12 @@ fn mosaic_field(r: vec2<f32>, period: i32, variety: f32) -> Pile {
     return out;
 }
 
+// Apply a zero-mean draw AFTER coloring, in linear light. One gain preserves
+// hue; symmetric headroom preserves expected RGB without clipping bright draws.
+// A finite view of a random field fluctuates around that mean. `ceiling` is
+// alpha for premultiplied light and 1 for an opaque spectral color.
+fn wash_vary_brightness(color: vec3<f32>, ceiling: f32, draw: f32, amount: f32) -> vec3<f32> {
+    let peak = max(color.r, max(color.g, color.b));
+    let headroom = clamp((ceiling - peak) / max(peak, 1.0e-6), 0.0, 1.0);
+    return color * (1.0 + amount * draw * headroom);
+}

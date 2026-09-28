@@ -317,7 +317,7 @@ struct Cloud {
     memory_shift: vec2<i32>,
     memory_fraction: vec2<f32>,
     previous_life: f32,
-    memory_pad_a: f32,
+    wash_randomness: f32,
     memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
     star_halo_samples: array<StarHaloSample, 5>,
@@ -701,22 +701,24 @@ fn wash_tile_field(r: vec2<f32>) -> WashField {
     let uv = watercolor_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
     var out: WashField;
-    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy));
-    out.fine = Wet(vec2<f32>(0.0));
+    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy), a.z);
+    out.fine = Wet(vec2<f32>(0.0), 0.0);
     out.cover = 0.0;
     if cloud.wash_layers > 0.0 {
         let b = textureSampleLevel(cloud_tile_b, tile_sampler, uv, 0.0);
-        out.fine = Wet(rotate_watercolor_tile_vector(b.xy));
+        out.fine = Wet(rotate_watercolor_tile_vector(b.xy), b.z);
         out.cover = b.w;
     }
     return out;
 }
 
-// The wash's scalar tone at a pane-relative point — `scale_tone`'s counterpart,
-// split out for the same reason.
-fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
+// Shared coordinates keep brightness and displacement on the same globs.
+fn wash_cell_at(pt: vec2<f32>) -> vec2<f32> {
     let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
+    return q * (WASH_CELLS / cloud.wash_size);
+}
 
+fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     // `wash_size` is how big one GLOB is, so the knob reads as a size.
     //
     // The number is set by the picture and not by the cell count, and the two
@@ -728,7 +730,7 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     // fresh cloud size, which is `WASH_CELLS` per cloud unit.
     let cells = WASH_CELLS / cloud.wash_size;
     let pane_per_cell = cloud.size.y / CLOUD_UNITS / cells;
-    let r = q * cells;
+    let r = wash_cell_at(pt);
 
     // One or two taps into the period of the two ring walks `fs_cloud_tile`
     // already walked; no live arm, for the reason `scale_tone` gives.
@@ -808,11 +810,11 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
-        // Five channels of glob geometry, the fine octave whatever `Layers`
+        // Seven channels of glob geometry and brightness, the fine octave whatever `Layers`
         // says, so turning that dial up is a mix and never a rebake.
         let field = wash_field(wash_cell, period, cloud.wash_fuzz, cloud.wash_lobe);
-        out.a = vec4<f32>(field.coarse.offset, 0.0, 0.0);
-        out.b = vec4<f32>(field.fine.offset, 0.0, field.cover);
+        out.a = vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0);
+        out.b = vec4<f32>(field.fine.offset, field.fine.brightness, field.cover);
     } else {
         // The mosaic's whole walk is these two vectors, so its second target is
         // never read. It is still allocated and still written, which is what
@@ -1307,7 +1309,7 @@ fn memory_color(uv: vec2<f32>) -> vec3<f32> {
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
+fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // There is no gate on the blur here, and there used to be: the light field
     // was only built when a softness was above zero, so the cloud quietly
     // vanished with the blur. The field is built whenever a cloud is drawn now,
@@ -1347,6 +1349,22 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     // Watercolor Layers cannot introduce RGB blends outside the authored ramp.
     return density_color(mix(level, tone, cloud.cloud_depth));
 }
+// Brightness is a display adjustment, after the palette and color memory.
+// It reads the same globs at every blur resolution and never feeds back into
+// held color, so turning the slider requires neither a rebake nor a reset.
+fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
+    let color = clouded_base(level, position);
+    if cloud.cloud_style != 1u || cloud.wash_randomness <= 0.0 || cloud.cloud_depth <= 0.0 {
+        return color;
+    }
+    let pt = position / cloud.ppp - cloud.origin;
+    let field = wash_tile_field(wash_cell_at(pt));
+    let draw = mix(field.coarse.brightness, field.fine.brightness, cloud.wash_layers * field.cover);
+    let varied = wash_vary_brightness(linear_from_gamma_rgb(color.rgb), 1.0, draw,
+        cloud.wash_randomness * cloud.cloud_depth);
+    return vec4<f32>(gamma_from_linear_rgb(varied), color.a);
+}
+
 // Full material memory replaces the base level, so neither its grid walk nor
 // its blurred sample contributes. Stars keep their separate color composite.
 fn full_material_memory() -> bool {
