@@ -297,7 +297,7 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
 }
 
 // All profiles share the far-three partition. Uniform preserves native texel
-// addressing; High and Medium filter smaller complete far-layer images.
+// addressing; High, Medium and Low filter smaller complete far-layer images.
 override STAR_SPLIT: bool = false;
 const STAR_FAR_LAYERS: u32 = 3u;
 

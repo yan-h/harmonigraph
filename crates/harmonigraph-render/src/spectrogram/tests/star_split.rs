@@ -440,6 +440,8 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
         (harmonigraph_scene::StarHaloProfile::P3, wgpu::TextureFormat::Rgba8Unorm),
         (harmonigraph_scene::StarHaloProfile::Medium, wgpu::TextureFormat::Rgba8Unorm),
         (harmonigraph_scene::StarHaloProfile::Medium, wgpu::TextureFormat::Rgba8UnormSrgb),
+        (harmonigraph_scene::StarHaloProfile::Low, wgpu::TextureFormat::Rgba8Unorm),
+        (harmonigraph_scene::StarHaloProfile::Low, wgpu::TextureFormat::Rgba8UnormSrgb),
     ] {
         for (case, (jitter, memory)) in
             [(0.0, false), (0.5, true), (1.0, true)].into_iter().enumerate()
@@ -506,7 +508,7 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
                         assert_eq!(
                             passes,
                             high_passes[case] + 1,
-                            "Medium did not encode its foreground pass"
+                            "{profile:?} did not encode its foreground pass"
                         );
                     }
                 }

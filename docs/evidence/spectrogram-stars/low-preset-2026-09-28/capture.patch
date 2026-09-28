@@ -1,0 +1,275 @@
+--- a/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+@@ -68,70 +68,21 @@
+ /// costs UNDER the history from what the texture costs at all.
+ const FILLS: [f32; 2] = [1.0, 0.02];
+ 
+-fn watercolor(s: &mut SpectralAtmosphere) {
+-    s.cloud_style = CloudStyle::Watercolor;
++fn stars_high(s: &mut SpectralAtmosphere) {
++    s.cloud_style = CloudStyle::Stars;
+ }
+-
+-fn memory(s: &mut SpectralAtmosphere) {
+-    let defaults = SpectralAtmosphere::default();
+-    s.color_pickup = defaults.color_pickup;
+-    s.color_release = defaults.color_release;
++fn stars_medium(s: &mut SpectralAtmosphere) {
++    stars_high(s);
++    s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
+ }
+-
+ const CASES: &[(&str, Option<Turn>)] = &[
+-    ("plain", None),
+-    ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
+-    ("blur + terraces", Some(|s| s.cloud_depth = 0.0)),
+-    (
+-        "terraces only",
+-        Some(|s| {
+-            (s.pitch_softness, s.time_softness, s.cloud_depth) = (0.0, 0.0, 0.0);
+-        }),
+-    ),
+-    ("mosaic, defaults", Some(|_| {})),
+-    ("mosaic, no terraces", Some(|s| s.contour_strength = 0.0)),
+-    ("mosaic, variety 0", Some(|s| s.material_settings.scale_variety = 0.0)),
+-    ("mosaic, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
+-    ("watercolor, defaults", Some(watercolor)),
+-    ("watercolor, layers 0", Some(|s| (watercolor(s), s.material_settings.wash_layers = 0.0).0)),
+-    ("watercolor, lobe 0", Some(|s| (watercolor(s), s.material_settings.wash_lobe = 0.0).0)),
+-    (
+-        "watercolor, lobe 0 layers 0",
+-        Some(|s| {
+-            watercolor(s);
+-            (s.material_settings.wash_lobe, s.material_settings.wash_layers) = (0.0, 0.0);
+-        }),
+-    ),
+-    ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
+-    (
+-        "stars, medium",
+-        Some(|s| {
+-            s.cloud_style = CloudStyle::Stars;
+-            s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
+-        }),
+-    ),
+-    (
+-        "stars, low",
+-        Some(|s| {
+-            s.cloud_style = CloudStyle::Stars;
+-            s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Low;
+-        }),
+-    ),
+-    ("mosaic, memory", Some(memory)),
+-    (
+-        "watercolor, memory",
+-        Some(|s| {
+-            watercolor(s);
+-            memory(s);
+-        }),
+-    ),
+-    (
+-        "stars, memory",
+-        Some(|s| {
+-            s.cloud_style = CloudStyle::Stars;
+-            memory(s);
+-        }),
+-    ),
++    ("H", Some(stars_high)),
++    ("M", Some(stars_medium)),
++    ("L1", Some(stars_medium)),
++    ("L2", Some(stars_medium)),
++    ("V", Some(stars_medium)),
++    ("X", Some(stars_medium)),
++    ("M2", Some(stars_medium)),
+ ];
+ 
+ struct Case {
+@@ -213,10 +164,24 @@
+     // 119.59 semitones.
+     let span: f32 =
+         std::env::var("PROBE_SPAN_SEMITONES").ok().and_then(|v| v.parse().ok()).unwrap_or(96.0);
+-    let bins = 3828u32;
+-    let grid = grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0);
++    let recorded = std::env::var("RES_INPUT").ok();
++    let bins = if recorded.is_some() { 1024u32 } else { 3828u32 };
++    let grid = if let Some(input) = &recorded {
++        assert_eq!(slabs, 960);
++        let bytes = std::fs::read(format!("{input}/take-levels.u8")).unwrap();
++        assert_eq!(bytes.len(), 1024 * 960);
++        grid_of(Arc::new(bytes), bins, 1032, 0)
++    } else {
++        grid_of(noisy_grid(bins as usize, slabs as usize), bins, 1032, 0)
++    };
+     let mut read = read_of(SPECTRUM_MIN_MIDI + 10.0, span, size[1]);
+     read.level_per_step = 1.0 / 255.0;
++    if recorded.is_some() {
++        read.min_midi = 35.0;
++        read.spectrum_min_midi = 35.0;
++        read.bins_per_semitone = 1024.0 / span;
++        read.level_per_midi = 0.0;
++    }
+     let points = egui::vec2(size[0] as f32 / ppp, size[1] as f32 / ppp);
+     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, points);
+     let quad = |fill: f32| {
+@@ -243,22 +208,55 @@
+     let staging =
+         buffer("timing_staging", wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ);
+     let target = |label, size: [u32; 2]| {
+-        device
+-            .create_texture(&wgpu::TextureDescriptor {
+-                label: Some(label),
+-                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+-                mip_level_count: 1,
+-                sample_count: 1,
+-                dimension: wgpu::TextureDimension::D2,
+-                format: FORMAT,
+-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+-                view_formats: &[],
+-            })
+-            .create_view(&Default::default())
++        device.create_texture(&wgpu::TextureDescriptor {
++            label: Some(label),
++            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
++            mip_level_count: 1,
++            sample_count: 1,
++            dimension: wgpu::TextureDimension::D2,
++            format: FORMAT,
++            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
++            view_formats: &[],
++        })
+     };
+     // Held across frames, as a swapchain's is: allocating 33 MB per frame would
+     // be the larger half of what a wall clock read.
+-    let pane_view = target("timing_pane", size);
++    let output = target("timing_pane", size);
++    let pane_view = output.create_view(&Default::default());
++    let capture = std::env::var("RES_CAPTURE").ok();
++    let mut movie = capture.as_ref().map(|dir| {
++        std::fs::create_dir_all(dir).unwrap();
++        std::process::Command::new("ffmpeg")
++            .args([
++                "-hide_banner",
++                "-loglevel",
++                "error",
++                "-y",
++                "-f",
++                "rawvideo",
++                "-pixel_format",
++                "rgba",
++                "-video_size",
++                &format!("{}x{}", size[0], size[1]),
++                "-framerate",
++                "60",
++                "-i",
++                "-",
++                "-an",
++                "-c:v",
++                "libx264",
++                "-preset",
++                "fast",
++                "-crf",
++                "14",
++                "-pix_fmt",
++                "yuv420p",
++                &format!("{dir}/motion.mp4"),
++            ])
++            .stdin(std::process::Stdio::piped())
++            .spawn()
++            .unwrap()
++    });
+     let stamped_pass = |encoder: &mut wgpu::CommandEncoder, source_stamped: bool| {
+         encoder
+             .begin_render_pass(&wgpu::RenderPassDescriptor {
+@@ -288,6 +286,9 @@
+     let mut cases: Vec<Case> = CASES
+         .iter()
+         .filter(|(name, _)| {
++            if let Ok(exact) = std::env::var("RES_CASE") {
++                return *name == exact;
++            }
+             std::env::var("PROBE_CASE")
+                 .ok()
+                 .is_none_or(|v| v.split(',').any(|v| name.contains(v.trim())))
+@@ -299,6 +300,11 @@
+         .map(|(name, turn, fill, history_seconds)| {
+             let mut cb = callback(quad(fill), &grid, &read);
+             cb.rect = rect;
++            if let Some(input) = &recorded {
++                let palette = std::fs::read(format!("{input}/palette.rgba")).unwrap();
++                cb.shades.lut =
++                    Arc::new(palette.chunks_exact(4).map(|p| p.try_into().unwrap()).collect());
++            }
+             let mut resources = CallbackResources::default();
+             let mut sampling = atmosphere::CloudSampling::default();
+             if let Some(pixel) = cloud_pixel {
+@@ -322,6 +328,12 @@
+         })
+         .collect();
+ 
++    if std::env::var("RES_REVERSE").is_ok() {
++        cases.reverse();
++    }
++    if capture.is_some() {
++        assert_eq!(cases.len(), 1);
++    }
+     // INTERLEAVED: one frame of every case per round, so a GPU that another
+     // process is also drawing on, or one that changes its clock mid-run, moves
+     // every case together rather than whichever ran last.
+@@ -348,6 +360,9 @@
+                     ..Default::default()
+                 };
+                 turn(&mut settings);
++                if *name == "L1" {
++                    settings.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Low;
++                }
+                 // After the turn, so each case uses the requested blur step.
+                 if let Some(blur_time_step) = blur_time_step {
+                     settings.blur_time_step = blur_time_step;
+@@ -375,9 +390,18 @@
+                     // fraction, so this is `w / n` and not the pane's width
+                     // over the slab count.
+                     points_per_slab: points.x * *fill / slabs as f32,
+-                    now: 1.0 + frame as f64 / 144.0,
++                    now: 1.0 + frame as f64 / if capture.is_some() { 60.0 } else { 144.0 },
+                 }
+             });
++            if frame == 0 {
++                let settings = cb.atmosphere.unwrap().settings;
++                eprintln!(
++                    "actual {name}: far {:?}, near {:?}, halos {:?}",
++                    atmosphere::star_far_size(size, settings.stars),
++                    atmosphere::star_near_size(size, settings.stars),
++                    atmosphere::star_halo_layout(size, settings.stars)
++                );
++            }
+             let mut encoder = device.create_command_encoder(&Default::default());
+             SOURCE_QUERY.with_borrow_mut(|query| *query = Some(set.clone()));
+             let prepare_start = std::time::Instant::now();
+@@ -411,6 +435,17 @@
+                 bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range()).to_vec();
+             staging.unmap();
+             if frame >= 10 {
++                if let Some(dir) = &capture {
++                    use std::io::Write;
++                    let data = readback(&device, &queue, &output, size);
++                    movie.as_mut().unwrap().stdin.as_mut().unwrap().write_all(&data).unwrap();
++                    // Six spaced adjacent pairs: exact pixels for appearance and local temporal error.
++                    if (frame - 10) % 60 < 2 {
++                        std::fs::write(format!("{dir}/{frame:04}.rgba"), data).unwrap();
++                    }
++                }
++            }
++            if frame >= 10 {
+                 assert!(ticks[0] > 0 && ticks[1] >= ticks[0],
+                     "reversed/zero source-to-composite interval {name} {history_seconds}s: {ticks:?}");
+                 wall.push(wall_ms);
+@@ -420,6 +455,10 @@
+         }
+     }
+ 
++    if let Some(mut child) = movie {
++        drop(child.stdin.take());
++        assert!(child.wait().unwrap().success());
++    }
+     for case in &mut cases {
+         case.wall.sort_by(f64::total_cmp);
+         case.gpu_total.sort_by(f64::total_cmp);

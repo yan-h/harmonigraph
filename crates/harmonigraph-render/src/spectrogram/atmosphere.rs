@@ -170,7 +170,7 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
 
 /// The precomposite size, or `None` for the complete per-pixel walk.
 ///
-/// High and Medium Stars composite their far three layers at 75% and 50% dimensions.
+/// High, Medium and Low Stars composite their far three layers at 75%, 50% and one-third dimensions.
 /// Uniform Stars retain a native RGB split on large regions. The caller retains
 /// a pane-relative allocation for texel addressing,
 /// but scissors this pass to the drawn region on every frame.
@@ -399,7 +399,7 @@ struct Uniforms {
     star_life: f32,
     /// Exact far target dimensions, optimized-far flag, and padding.
     star_far: Float4,
-    /// Exact Medium foreground dimensions; zero means native foreground.
+    /// Exact reduced foreground dimensions; zero means native foreground.
     star_near: Float4,
     /// Jitter width, compact-core reach, fade-start fraction and far fill; see [`star_geometry`].
     star_geometry: Float4,
@@ -477,7 +477,7 @@ pub(super) struct Pipelines {
     pub stars: wgpu::RenderPipeline,
     /// RGB of the three farthest layers at the profile's selected resolution.
     pub star_far: wgpu::RenderPipeline,
-    /// Medium foreground over the far image, still gamma-encoded.
+    /// Reduced foreground over the far image, still gamma-encoded.
     pub star_near: wgpu::RenderPipeline,
     /// One depth's weighted halo color and coverage at the selected resolution.
     pub star_halo: wgpu::RenderPipeline,
@@ -993,12 +993,12 @@ pub(super) struct Targets {
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
     /// The precomposite and its size: reduced scalar cloud tone or RGB
-    /// of the three far Stars layers (75% for High, 50% for Medium, native for Uniform).
+    /// of the three far Stars layers (75% for High, 50% for Medium, one third for Low, native for Uniform).
     /// None draws the full walk in the composite.
     /// Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
-    /// Medium's foreground-over-far image; actual size is part of allocation identity.
+    /// Reduced foreground-over-far image; actual size is part of allocation identity.
     pub near: Option<(wgpu::TextureView, [u32; 2])>,
     /// Reads the far target, never the near target attached to its pass.
     pub near_group: Option<wgpu::BindGroup>,
@@ -1239,7 +1239,7 @@ impl Targets {
         let near_group = near.as_ref().map(|_| {
             cloud_group(
                 &source_view,
-                &tone.as_ref().expect("Medium has a far target").0,
+                &tone.as_ref().expect("reduced foreground has a far target").0,
                 tile_views,
                 star_view,
                 &views[0],
@@ -1793,6 +1793,16 @@ mod tests {
         assert_eq!(super::star_far_size([161, 121], medium.stars), [81, 61]);
         assert_eq!(super::star_near_size([161, 121], medium.stars), Some([121, 91]));
         assert_eq!(super::star_near_size([161, 121], settings.stars), None);
+        let low = harmonigraph_scene::StarSettings {
+            star_halo_profile: StarHaloProfile::Low,
+            ..settings.stars
+        };
+        let layout = super::star_halo_layout([161, 121], low);
+        assert_eq!(layout.groups.map(|g| g.size), [[81, 61], [49, 37], [1, 1]]);
+        assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
+        assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
+        assert_eq!(super::star_far_size([161, 121], low), [54, 41]);
+        assert_eq!(super::star_near_size([161, 121], low), Some([81, 61]));
         let uniform = SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_halo_profile: StarHaloProfile::Uniform,

@@ -1816,9 +1816,15 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
         partial,
         harmonigraph_scene::StarSettings { star_jitter: 0.23, ..Default::default() }
     );
-    for profile in [StarHaloProfile::P3, StarHaloProfile::Medium, StarHaloProfile::Uniform] {
+    for profile in [
+        StarHaloProfile::P3,
+        StarHaloProfile::Medium,
+        StarHaloProfile::Low,
+        StarHaloProfile::Uniform,
+    ] {
         let mut state = fresh();
         state.picture.appearance.view.atmosphere.stars.star_jitter = 0.37;
+        state.picture.appearance.view.atmosphere.stars.star_halo_profile = profile;
         state.picture.appearance.view.atmosphere.material_style =
             harmonigraph_scene::LatticeMaterial::Stars;
         state.picture.appearance.spectrum.atmosphere.stars.star_halo_profile = profile;
@@ -1828,6 +1834,7 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
         let mut editor = fresh();
         assert!(editor.load_persist(&saved));
         assert_eq!(editor.picture.appearance.view.atmosphere.stars.star_jitter, 0.37);
+        assert_eq!(editor.picture.appearance.view.atmosphere.stars.star_halo_profile, profile);
         assert_eq!(
             editor.picture.appearance.view.atmosphere.material_style,
             harmonigraph_scene::LatticeMaterial::Stars
@@ -1837,6 +1844,7 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
         let offline =
             crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
         assert_eq!(offline.spectrum.atmosphere.stars.star_halo_profile, profile);
+        assert_eq!(offline.view.atmosphere.stars.star_halo_profile, profile);
         assert_eq!(offline.spectrum.atmosphere.stars.star_halo_resolution, 0.625);
         assert_eq!(offline.spectrum.atmosphere.stars.star_far_fill, 0.42);
         assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_far_fill, 0.42);

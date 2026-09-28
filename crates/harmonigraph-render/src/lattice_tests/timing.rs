@@ -204,6 +204,7 @@ fn atmosphere_costs_by_polyphony() {
             "mosaic",
             "stars",
             "stars-medium",
+            "stars-low",
             "stars-uniform",
         ] {
             if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
@@ -236,10 +237,11 @@ fn atmosphere_costs_by_polyphony() {
                 "mosaic" => {
                     variant.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Mosaic
                 }
-                "stars" | "stars-medium" | "stars-uniform" => {
+                "stars" | "stars-medium" | "stars-low" | "stars-uniform" => {
                     variant.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Stars;
                     variant.atmosphere.stars.star_halo_profile = match case {
                         "stars-medium" => harmonigraph_scene::StarHaloProfile::Medium,
+                        "stars-low" => harmonigraph_scene::StarHaloProfile::Low,
                         "stars-uniform" => harmonigraph_scene::StarHaloProfile::Uniform,
                         _ => harmonigraph_scene::StarHaloProfile::P3,
                     };
