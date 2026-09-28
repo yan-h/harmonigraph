@@ -149,6 +149,14 @@ uniform_group! {
     }
 }
 uniform_group! {
+    struct PickupParams {
+        intensity: f32,
+        width: f32,
+        softness: f32,
+        color: f32,
+    }
+}
+uniform_group! {
     /// Shadows still cast without glow. Markers inherit the text group's style.
     struct ShadowParams {
         width: f32,
@@ -187,6 +195,7 @@ uniform_group! {
         glow: GlowParams,
         texture: TextureParams,
         material: MaterialParams,
+        pickup: PickupParams,
         geometry_shadow: ShadowParams,
         marker_shadow: ShadowParams,
         shadow_target: ShadowTargetParams,

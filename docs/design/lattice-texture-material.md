@@ -4,7 +4,7 @@
 
 The lattice separates Clouds, Contours and Interference patterns from the Watercolor and Mosaic displacement materials,
 so a cloudy glow can feed either material.
-The fixed order is note illumination and breathing → texture → material → existing lattice composition.
+The fixed order is note illumination and breathing → texture → optional segment pickup → material → lattice composition.
 Texture remains lit by notes;
 silence stays dark.
 This is not a general layer stack or a new ambient background.
@@ -46,10 +46,11 @@ dim effect controls when glow reach or gain is zero.
 Preserve the existing glow-statistics and resolve passes.
 The resolve applies only the chosen texture to combined note light.
 The material pass consumes that resolved texture using the existing optional source target and geometry tiles.
-No extra render pass or target is introduced beyond those Watercolor/Mosaic already use.
+Segment pickup adds one half-resolution node-quad draw into the existing source target when enabled;
+it allocates no extra texture.
 Compute texture and material drift independently from the existing decorative clock.
 Keep texture uniforms distinct from material uniforms so neither stage borrows the other's depth, scale or clock.
-All materials use the same smooth note illumination.
+All materials use the same resolved note illumination.
 The former per-node source roughness and its dedicated splat pipeline are removed.
 Materials drift at constant screen direction using the spectrogram’s motion calculation;
 texture drift remains independent.
@@ -103,3 +104,67 @@ An independent review approved the fixed two-stage design and separate GPU param
 Its lifecycle clarification is incorporated above:
 retain geometry only while active, release on None/zero, and compare reactivation and resize with fresh panes.
 No extra abstractions or configurable ordering were recommended.
+
+## Independent segment pickup
+
+The material samples pigment behind each octave segment:
+dark for unlit segments and the segment’s pitch color for lit segments.
+Each slot’s actual activation interpolates the two contributions during attack and release.
+This source is independent of the actual ring, mark and label shadows:
+changing pickup never replaces or suppresses those shadows,
+and changing an actual shadow’s width, darkness or kernel does not change pickup.
+
+The material controls expose four persisted fields:
+
+- Dark pickup (`material_shadow_pickup`): 0–100%, default 0% (off).
+- Color pickup (`material_color_pickup`): 0–100%, default 0% (off).
+- Pickup width (`material_shadow_width`): full band width, 0–800% of the node radius, default 150%.
+- Pickup softness (`material_shadow_softness`): feather distance around each finite arc, 0–800% of the node radius, default 200%.
+
+The band is centered on the configured ring rim and follows each note’s light envelope,
+including release, independently of decorative breathing.
+Width zero disables both contributions.
+Material None, zero material amount and disabled glow also bypass them.
+Reset material restores all four controls.
+A nonzero dark pickup saved from the earlier circular-band draft now fades in lit sectors;
+appearances without pickup retain zero for both strengths.
+
+One half-resolution quad per active node blends pigment into the resolved light before the material pass.
+The analytic band needs only node instances and uniforms,
+with no shadow atlas or caster dependency and no new texture allocation.
+Its own quad covers the full width, feather and antialiasing margin,
+including when its center is outside the viewport.
+The shader reuses the visible ring’s sector mapping, packed activation and pitch-color function,
+including unequal extra octaves and the per-node seam.
+Each pixel measures Euclidean distance to the finite segment arc,
+including the arc’s endpoints.
+Width expands on all sides and softness feathers that distance,
+so the ends are rounded instead of extending as angular wedges;
+at large softness values neighboring pigments intentionally mingle.
+Normalized distance-field weights keep that mixture bounded even at the center.
+
+RGB blending multiplies the incoming pigment by destination alpha,
+then attenuates the old RGB by pigment opacity.
+The alpha write mask preserves coverage,
+so colored pigment cannot create light where the source is empty or violate premultiplication.
+Watercolor or Mosaic samples this pigment along with the source light.
+Bloom brightens the colored source pigment using its strength and luminance soft knee,
+with saturation at white to retain valid premultiplication.
+This is the user-selected brightness coupling,
+not a sample of the final blurred halo.
+That halo is downstream of the material and sampling it here would introduce feedback.
+Dark pickup remains independent of Bloom.
+The normal scene shadow and bloom masks then apply unchanged.
+
+Pickup controls do not belong in the geometry-tile cache key:
+the live source draw reads current uniforms and instances each frame.
+The first draft’s resting-cross shadow limitation (#1253) is removed by retaining the normal scene shadow pass in full.
+
+GPU tests verify unchanged actual-shadow masks when pickup is adjusted,
+unchanged pickup when actual shadows are adjusted or disabled,
+per-slot pitch and activation at the source,
+rounded pickup beyond both arc ends,
+Bloom brightening only the colored source,
+RGB changes without added alpha,
+material/glow bypasses,
+and wide/soft pickup reaching beyond the old node quad.

@@ -745,7 +745,14 @@ impl LatticeCallback {
                 pass.draw(0..4, 0..pane.instance_count);
             }
 
-            glow.draw(egui_encoder, compiled, pane, strip, has_lit_nodes);
+            glow.draw(
+                egui_encoder,
+                compiled,
+                pane,
+                strip,
+                has_lit_nodes,
+                self.uniforms.pickup.intensity.max(self.uniforms.pickup.color),
+            );
         }
     }
 

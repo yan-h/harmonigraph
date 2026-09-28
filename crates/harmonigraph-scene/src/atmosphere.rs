@@ -672,6 +672,9 @@ pub enum LatticeMaterial {
     Mosaic = 2,
 }
 
+/// Pickup width and edge softness, in node radii. Independent of ordinary shadows.
+pub const SHADOW_PICKUP_SIZE_MAX: f32 = 8.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
@@ -679,6 +682,14 @@ pub struct AtmosphereSettings {
     /// Replaces the retired combined `material` key, which serde ignores.
     pub material_style: LatticeMaterial,
     pub material_amount: f32,
+    /// Dark pigment from unlit segments, sampled by the material.
+    pub material_shadow_pickup: f32,
+    /// Pitch-colored pigment from lit segments, sampled by the material.
+    pub material_color_pickup: f32,
+    /// Full width of the pigment band, in node radii.
+    pub material_shadow_width: f32,
+    /// Feather distance beyond each band edge, in node radii.
+    pub material_shadow_softness: f32,
     pub material_settings: MaterialSettings,
     pub material_speed: f32,
     pub material_direction: f32,
@@ -695,6 +706,10 @@ impl Default for AtmosphereSettings {
             texture: LatticeTexture::Clouds,
             material_style: LatticeMaterial::None,
             material_amount: 1.0,
+            material_shadow_pickup: 0.0,
+            material_color_pickup: 0.0,
+            material_shadow_width: 1.5,
+            material_shadow_softness: 2.0,
             material_settings: MaterialSettings::default(),
             material_speed: MATERIAL_SPEED_DEFAULT,
             material_direction: MATERIAL_DIRECTION_DEFAULT,
@@ -718,6 +733,22 @@ impl AtmosphereSettings {
             }
         };
         self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
+        self.material_color_pickup =
+            clamp(self.material_color_pickup, fresh.material_color_pickup, 0.0, 1.0);
+        self.material_shadow_pickup =
+            clamp(self.material_shadow_pickup, fresh.material_shadow_pickup, 0.0, 1.0);
+        self.material_shadow_width = clamp(
+            self.material_shadow_width,
+            fresh.material_shadow_width,
+            0.0,
+            SHADOW_PICKUP_SIZE_MAX,
+        );
+        self.material_shadow_softness = clamp(
+            self.material_shadow_softness,
+            fresh.material_shadow_softness,
+            0.0,
+            SHADOW_PICKUP_SIZE_MAX,
+        );
         self.material_settings = self.material_settings.sanitized();
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
