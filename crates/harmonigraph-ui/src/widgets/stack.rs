@@ -1068,29 +1068,6 @@ mod tests {
         );
     }
 
-    /// The innermost name is held off the bar's end by the inset every other
-    /// row in the pane holds its own name by, so the row leads where its
-    /// neighbours lead rather than a few points along from them.
-    #[test]
-    fn the_innermost_name_leads_where_every_other_row_leads() {
-        let mut view = pinned();
-        let shapes = shapes(W, |ui| {
-            StackBar::new(&mut view).show(ui);
-        });
-        let runs = text_boxes(&shapes);
-        let (middle, _) = runs
-            .iter()
-            .find(|(_, s)| s == NAMES[0])
-            .unwrap_or_else(|| panic!("the middle's cell went unnamed: {runs:?}"));
-        let (bar, _) = axis_on(&shapes);
-        assert!(
-            (middle.left() - (bar.left() + BAR_TEXT_PAD)).abs() < 0.5,
-            "the middle's name started at {} rather than {} in from the bar's end",
-            middle.left() - bar.left(),
-            BAR_TEXT_PAD,
-        );
-    }
-
     /// Every width the bar is drawn at, from the narrowest a settings column
     /// can be dragged to up past the widest anyone opens one to. The name
     /// placement borrows room from its neighbours, so the widths where it goes

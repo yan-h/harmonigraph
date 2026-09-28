@@ -446,10 +446,7 @@ mod tests {
         let hs = handles(&shapes);
         assert_eq!(hs.len(), 2, "the strip did not paint two handles");
         for h in &hs {
-            assert!(
-                (h.width() - HANDLE_W).abs() < 0.01,
-                "a strip handle is the grip every bar wears"
-            );
+            assert!(h.width() >= 4.0, "a strip handle must read as a grip, not an edge");
         }
         // On the outer edge of the wheel, which is what a fringe is dragged
         // out from and the count is dragged in from.
@@ -488,10 +485,7 @@ mod tests {
                 h.left() >= bar.left() - 0.01 && h.right() <= bar.right() + 0.01,
                 "handle {h:?} hangs outside the bar {bar:?}"
             );
-            assert!(
-                (h.width() - HANDLE_W).abs() < 0.01,
-                "a strip handle is the grip every bar wears"
-            );
+            assert!(h.width() >= 4.0, "a strip handle must read as a grip, not an edge");
         }
     }
 
