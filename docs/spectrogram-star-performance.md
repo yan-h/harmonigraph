@@ -148,8 +148,8 @@ it would need another target and would soften the finest pinpoints.
 ## Native far-layer split
 
 For drawn Stars coverage of at least 2560 × 1440 device pixels in area,
-render layers 0–1 over the palette floor into a native-resolution RGBA16Float target,
-then render layers 2–4 over its exact texel in the final draw.
+render layers 0–2 over the palette floor into a native-resolution RGBA16Float target,
+then render layers 3–4 over its exact texel in the final draw.
 All five layers and their nine-neighbor halos remain.
 The intermediate is gamma-coded RGB;
 texture depth mixing and output color conversion happen once in the final draw.
@@ -170,13 +170,17 @@ A runtime uniform branch made the unsplit path about 8% slower at 2304 × 1296 i
 leaving the switch in the shader would penalize panes that never allocate the intermediate.
 The override-false shader folds that branch away.
 
-The original prototype's longer comparisons found 14.6–17.3% lower GPU time at 4K,
+The original 2+3 prototype's longer comparisons found 14.6–17.3% lower GPU time at 4K,
 and no dependable benefit at 1080p,
 on M1 Pro / Metal.
 Intermediate-size screening found the crossover near 1440p;
 the area cutoff keeps smaller Stars regions on the original walk.
 See [issue #1178](https://github.com/yan-h/harmonigraph/issues/1178) for the original evidence and acceptance criteria.
 These measurements do not establish a gain on every GPU or in full DAW frame time.
+
+The 3+2 partition keeps that cutoff and allocation unchanged.
+Its shared shader constant moves one layer into the first pass,
+following the paired partition comparisons in [issue #1142](https://github.com/yan-h/harmonigraph/issues/1142).
 
 The regression fixtures compare split and native output within one 8-bit color step,
 including a fractional display scale and pane origin,

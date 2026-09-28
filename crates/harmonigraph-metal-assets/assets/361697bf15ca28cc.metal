@@ -105,6 +105,7 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
+constant uint STAR_FAR_LAYERS = 3u;
 
 uint naga_f2u32(float value) {
     return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));

@@ -266,7 +266,7 @@ struct Cloud {
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
     // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
-    // clouds, or native-resolution RGB of the two far Stars layers. 0 keeps
+    // clouds, or native-resolution RGB of the three far Stars layers. 0 keeps
     // the complete walk in the final composite.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
@@ -1128,11 +1128,14 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec3<f32>) -> vec3<f
 // A native pixel lookup preserves the far stars' grain: no upsampling or
 // filtering. The snapped pane origin puts every sample at a texel centre.
 override STAR_SPLIT: bool = false;
+// Keep the partition shared by both passes. The 3+2 walk reduced GPU time
+// versus 2+3 in the paired Stars measurements recorded in #1142.
+const STAR_FAR_LAYERS: u32 = 3u;
 
 fn star_color(pt: vec2<f32>) -> vec3<f32> {
     if STAR_SPLIT {
         let far = textureLoad(cloud_tone, vec2<i32>(pt * cloud.ppp), 0).rgb;
-        return star_layers(pt, 2u, STAR_SLICES, far);
+        return star_layers(pt, STAR_FAR_LAYERS, STAR_SLICES, far);
     }
     return star_layers(pt, 0u, STAR_SLICES, palette_color(0.0));
 }
@@ -1145,7 +1148,7 @@ fn fs_star_far(in: TileVertex) -> @location(0) vec4<f32> {
     let pt = position / cloud.ppp - cloud.origin;
     // Layer compositing remains gamma-coded here. Depth mixing and the final
     // target's color conversion are applied once, in the final composite.
-    return vec4<f32>(star_layers(pt, 0u, 2u, palette_color(0.0)), 1.0);
+    return vec4<f32>(star_layers(pt, 0u, STAR_FAR_LAYERS, palette_color(0.0)), 1.0);
 }
 
 fn gamma_from_linear_rgb(linear: vec3<f32>) -> vec3<f32> {

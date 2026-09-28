@@ -136,6 +136,7 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
+constant uint STAR_FAR_LAYERS = 3u;
 
 metal::int2 naga_mod(metal::int2 lhs, metal::int2 rhs) {
     metal::int2 divisor = metal::select(rhs, 1, (lhs == (-2147483647 - 1) & rhs == -1) | (rhs == 0));

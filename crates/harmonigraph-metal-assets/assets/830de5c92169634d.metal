@@ -69,6 +69,7 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
+constant uint STAR_FAR_LAYERS = 3u;
 
 uint stored(
     uint slot,

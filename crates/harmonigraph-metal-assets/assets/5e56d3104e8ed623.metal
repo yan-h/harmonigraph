@@ -118,6 +118,7 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
+constant uint STAR_FAR_LAYERS = 3u;
 constant bool STAR_SPLIT = false;
 
 metal::float2 rotate_watercolor_tile_vector_for(
@@ -537,7 +538,7 @@ metal::float3 star_color(
         uint clamped_lod_e9 = metal::min(uint(0), cloud_tone.get_num_mip_levels() - 1);
         metal::float4 _e9 = cloud_tone.read(metal::min(metal::uint2(naga_f2i32(pt_7 * _e5)), metal::uint2(cloud_tone.get_width(clamped_lod_e9), cloud_tone.get_height(clamped_lod_e9)) - 1), clamped_lod_e9);
         metal::float3 far = _e9.xyz;
-        metal::float3 _e13 = star_layers(pt_7, 2u, STAR_SLICES, far, cloud_sampler, cloud, star_atlas, star_halos, star_halos_b, star_halos_c);
+        metal::float3 _e13 = star_layers(pt_7, STAR_FAR_LAYERS, STAR_SLICES, far, cloud_sampler, cloud, star_atlas, star_halos, star_halos_b, star_halos_c);
         return _e13;
     }
     metal::float3 _e17 = palette_color(0.0, lut);
@@ -691,15 +692,15 @@ metal::float4 backdrop_color(
     return _e9;
 }
 
-struct fs_cloud_backdrop_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_backdrop_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
-  fs_cloud_backdrop_gammaInput varyings [[stage_in]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
 , metal::float4 position_3 [[position]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> color_memory [[texture(7)]]
@@ -717,5 +718,6 @@ fragment fs_cloud_backdrop_gammaOutput fs_cloud_backdrop_gamma(
 ) {
     const VertexOut in = { position_3, varyings.slab, varyings.t };
     metal::float4 _e3 = backdrop_color(in.position.xy, lut, color_memory, close_light, cloud_sampler, cloud, cloud_tone, cloud_tile_a, cloud_tile_b, tile_sampler, star_atlas, star_halos, star_halos_b, star_halos_c);
-    return fs_cloud_backdrop_gammaOutput { _e3 };
+    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

@@ -118,7 +118,8 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
-constant bool STAR_SPLIT = false;
+constant uint STAR_FAR_LAYERS = 3u;
+constant bool STAR_SPLIT = true;
 
 metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
@@ -537,7 +538,7 @@ metal::float3 star_color(
         uint clamped_lod_e9 = metal::min(uint(0), cloud_tone.get_num_mip_levels() - 1);
         metal::float4 _e9 = cloud_tone.read(metal::min(metal::uint2(naga_f2i32(pt_7 * _e5)), metal::uint2(cloud_tone.get_width(clamped_lod_e9), cloud_tone.get_height(clamped_lod_e9)) - 1), clamped_lod_e9);
         metal::float3 far = _e9.xyz;
-        metal::float3 _e13 = star_layers(pt_7, 2u, STAR_SLICES, far, cloud_sampler, cloud, star_atlas, star_halos, star_halos_b, star_halos_c);
+        metal::float3 _e13 = star_layers(pt_7, STAR_FAR_LAYERS, STAR_SLICES, far, cloud_sampler, cloud, star_atlas, star_halos, star_halos_b, star_halos_c);
         return _e13;
     }
     metal::float3 _e17 = palette_color(0.0, lut);
