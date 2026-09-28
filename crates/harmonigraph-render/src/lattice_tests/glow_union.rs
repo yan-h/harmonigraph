@@ -244,6 +244,50 @@ fn watercolor_motion_and_silence_use_the_production_light() {
 }
 
 #[test]
+fn watercolor_drift_stays_continuous_across_axis_wraps() {
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_settings.wash_size = 2.0;
+    scene.atmosphere.material_speed = 1.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+    scene.atmosphere.material_amount = 0.0;
+    let plain = glow(&mut shooter, &scene);
+    scene.atmosphere.material_amount = 1.0;
+    let painted = glow(&mut shooter, &scene);
+    assert!(
+        plain.iter().zip(&painted).filter(|(a, b)| a.abs_diff(**b) > 3).count() > 500,
+        "fixture must reach the watercolor displacement pass"
+    );
+    // Cross both the former 40-cell boundary and the rotated tile's 200-cell
+    // axis repeat, travelling in both directions along each screen axis.
+    for (direction, axis) in [(0.0, 0), (90.0, 1), (180.0, 0), (270.0, 1)] {
+        scene.atmosphere.material_direction = direction;
+        let drift = |now| harmonigraph_scene::MaterialSettings::drift(1.0, direction, now)[axis];
+        let cells = f64::from(5.25 / scene.atmosphere.material_settings.wash_size);
+        let origin = drift(0.0) * cells;
+        let velocity = (drift(1.0) - drift(0.0)) * cells;
+        for boundary in [40.0, 200.0] {
+            let crossing = (boundary * velocity.signum() - origin) / velocity;
+            scene.glow_timing.as_mut().unwrap().now = crossing - 0.0001;
+            shooter.shot_again(&scene);
+            let before = read_glow(&shooter);
+            scene.glow_timing.as_mut().unwrap().now = crossing + 0.0001;
+            shooter.shot_again(&scene);
+            let after = read_glow(&shooter);
+            let largest_step =
+                before.iter().zip(&after).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            assert!(
+                largest_step <= 2,
+                "direction {direction}, boundary {boundary}: sudden channel step {largest_step}"
+            );
+        }
+    }
+}
+
+#[test]
 fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles() {
     use harmonigraph_scene::LatticeMaterial::{Mosaic, Watercolor};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
