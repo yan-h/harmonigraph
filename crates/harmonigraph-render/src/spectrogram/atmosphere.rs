@@ -845,7 +845,7 @@ pub(super) struct Pipelines {
     /// Every star on screen into the star atlas, once a frame, for the
     /// composite's walk to read instead of working each star out per pixel.
     pub stars: wgpu::RenderPipeline,
-    /// Native-resolution RGB of the two farthest layers, when splitting the
+    /// Native-resolution RGB of the three farthest layers, when splitting the
     /// composite pays for its extra pass.
     pub star_far: wgpu::RenderPipeline,
     /// One depth's weighted halo color and coverage at the selected resolution.
@@ -1397,7 +1397,7 @@ pub(super) struct Targets {
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 3],
     /// The precomposite and its size: reduced scalar cloud tone or native RGB
-    /// of the two far Stars layers. None draws the full walk in the composite.
+    /// of the three far Stars layers. None draws the full walk in the composite.
     /// Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,

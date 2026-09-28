@@ -105,6 +105,7 @@ constant int STAR_HASH_PERIOD = 65536;
 constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
+constant uint STAR_FAR_LAYERS = 3u;
 
 uint naga_f2u32(float value) {
     return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
@@ -294,6 +295,6 @@ fragment fs_star_farOutput fs_star_far(
     metal::float2 _e19 = cloud.origin;
     metal::float2 pt_2 = (position_1 / metal::float2(_e14)) - _e19;
     metal::float3 _e24 = palette_color(0.0, lut);
-    metal::float3 _e25 = star_layers(pt_2, 0u, 2u, _e24, cloud_sampler, cloud, star_atlas, star_halos, star_halos_b, star_halos_c);
+    metal::float3 _e25 = star_layers(pt_2, 0u, STAR_FAR_LAYERS, _e24, cloud_sampler, cloud, star_atlas, star_halos, star_halos_b, star_halos_c);
     return fs_star_farOutput { metal::float4(_e25, 1.0) };
 }
