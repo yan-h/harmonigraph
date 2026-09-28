@@ -202,6 +202,7 @@ struct Wash {
     // — what its own rim dissolves INTO.
     centre: vec2<f32>,
     under: vec2<f32>,
+    has_under: bool,
     // The nearest glob painted AFTER the visible one, which is the arc about to
     // take this pixel, and how near it is as `1 - edge` (never above 0).
     front: vec2<f32>,
@@ -286,6 +287,7 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
         out.near = near_a;
         out.front = front_a;
     }
+    out.has_under = second >= 0.0;
     return out;
 }
 
@@ -321,8 +323,12 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     bl = bl * bl * (3.0 - 2.0 * bl) * 0.5;
     look = mix(look, f.front, bl);
 
+    // Missing-glob lookups are the moving pixel coordinate, not a glob.
+    // Keep them neutral: even uncovered texels filter into the painted rim.
+    let centre = select(0.0, wash_brightness(f.centre, salt, period), f.cover > 0.0);
+    let under = select(0.0, wash_brightness(f.under, salt, period), f.has_under);
     let brightness = mix(
-        mix(wash_brightness(f.centre, salt, period), wash_brightness(f.under, salt, period), fa),
+        mix(centre, under, fa),
         wash_brightness(f.front, salt, period), bl);
     return Wet(look - r, brightness);
 }

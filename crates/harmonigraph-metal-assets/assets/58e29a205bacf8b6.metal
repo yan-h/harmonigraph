@@ -43,7 +43,7 @@ struct Locals {
     uint _pad1_;
     uint _pad2_;
 };
-typedef uint type_7[1];
+typedef uint type_8[1];
 struct VertexOut {
     metal::float4 position;
     float slab;
@@ -148,7 +148,7 @@ constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
 constant uint STAR_FAR_LAYERS = 3u;
-constant bool STAR_SPLIT = false;
+constant bool STAR_SPLIT = true;
 
 metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
@@ -183,7 +183,7 @@ uint stored(
     uint slot,
     uint bucket,
     constant Locals& locals,
-    device type_7 const& grid,
+    device type_8 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.stride;
@@ -215,7 +215,7 @@ float bucket_level(
     uint b,
     bool density,
     constant Locals& locals,
-    device type_7 const& grid,
+    device type_8 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float _e5 = locals.spectrum_min_midi;
@@ -244,7 +244,7 @@ float read_level(
     float t_1,
     bool density_1,
     constant Locals& locals,
-    device type_7 const& grid,
+    device type_8 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float sum = 0.0;
@@ -318,7 +318,7 @@ float field_level(
     VertexOut in_1,
     bool density_2,
     constant Locals& locals,
-    device type_7 const& grid,
+    device type_8 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     uint _e4 = locals.run_slabs;
@@ -342,7 +342,7 @@ float field_level(
 float heatmap_level(
     VertexOut in_2,
     constant Locals& locals,
-    device type_7 const& grid,
+    device type_8 const& grid,
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
@@ -1076,7 +1076,7 @@ bool full_material_memory(
 metal::float4 cloud_color(
     VertexOut in_3,
     constant Locals& locals,
-    device type_7 const& grid,
+    device type_8 const& grid,
     metal::texture2d<float, metal::access::sample> lut,
     metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -1122,7 +1122,7 @@ fragment fs_cloud_linearOutput fs_cloud_linear(
   fs_cloud_linearInput varyings [[stage_in]]
 , metal::float4 position_3 [[position]]
 , constant Locals& locals [[buffer(0)]]
-, device type_7 const& grid [[buffer(1)]]
+, device type_8 const& grid [[buffer(1)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<float, metal::access::sample> color_memory [[texture(7)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
