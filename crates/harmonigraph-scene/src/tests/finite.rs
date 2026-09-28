@@ -126,6 +126,7 @@ fn poisoned_view() -> ViewConfig {
             material_style: base.atmosphere.material_style,
             material_amount: nan,
             material_shadow_pickup: nan,
+            material_color_pickup: nan,
             material_shadow_width: nan,
             material_shadow_softness: nan,
             material_settings: crate::MaterialSettings {
@@ -390,6 +391,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         material_style: _,
         material_amount,
         material_shadow_pickup,
+        material_color_pickup,
         material_shadow_width,
         material_shadow_softness,
         material_settings,
@@ -403,6 +405,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     } = atmosphere;
     f.one("atmosphere.material_amount", *material_amount);
     f.one("atmosphere.material_shadow_pickup", *material_shadow_pickup);
+    f.one("atmosphere.material_color_pickup", *material_color_pickup);
     f.one("atmosphere.material_shadow_width", *material_shadow_width);
     f.one("atmosphere.material_shadow_softness", *material_shadow_softness);
     let crate::MaterialSettings {

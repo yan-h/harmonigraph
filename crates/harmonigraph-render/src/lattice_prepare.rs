@@ -751,7 +751,7 @@ impl LatticeCallback {
                 pane,
                 strip,
                 has_lit_nodes,
-                self.uniforms.pickup.intensity,
+                self.uniforms.pickup.intensity.max(self.uniforms.pickup.color),
             );
         }
     }

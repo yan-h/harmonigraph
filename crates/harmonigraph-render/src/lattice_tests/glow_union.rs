@@ -226,6 +226,119 @@ fn material_shadow_pickup_darkens_light_without_adding_coverage() {
 }
 
 #[test]
+fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage() {
+    use harmonigraph_scene::{octave_layout, LatticeMaterial};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0], 0.75, false);
+    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.material_shadow_width = 1.5;
+    scene.atmosphere.material_shadow_softness = 0.0;
+    let source = |shooter: &Shooter| {
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let view = &resources.panes[&shooter.pane]
+            .offscreen
+            .as_ref()
+            .unwrap()
+            .glow
+            .as_ref()
+            .unwrap()
+            .material_source
+            .as_ref()
+            .unwrap()
+            .view;
+        let binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &resources.compiled.filter_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+                },
+            ],
+        });
+        read_glow_binding(shooter, &binding)
+    };
+    // Unequal extra sectors and a detuned seam must agree with the drawn ring.
+    for cents in [0.0, 1100.0] {
+        scene.octave_layout = octave_layout(5, 60.0, 1, 0.4, 0.7);
+        scene.nodes[0].cents = cents;
+        for target_slot in [5, scene.octave_layout.ring(cents).base] {
+            for level in [0.0, 0.5, 1.0] {
+                scene.nodes[0].octaves = [0.0; 11];
+                scene.nodes[0].octaves[4] = 1.0; // keeps real light under silent sectors
+                scene.nodes[0].octaves[target_slot as usize] = level;
+                scene.atmosphere.material_shadow_pickup = 0.0;
+                scene.atmosphere.material_color_pickup = 0.0;
+                shooter.shot(&scene);
+                let before = source(&shooter);
+                scene.atmosphere.material_color_pickup = 1.0;
+                shooter.shot_again(&scene);
+                let colored = source(&shooter);
+                if level > 0.0 {
+                    assert!(
+                    before
+                        .chunks_exact(4)
+                        .zip(colored.chunks_exact(4))
+                        .filter(|(a, b)| a[..3].iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+                        .count()
+                        > 100,
+                    "color pickup works independently of dark pickup: slot {target_slot}, level {level}, cents {cents}"
+                );
+                }
+                scene.atmosphere.material_shadow_pickup = 1.0;
+                shooter.shot_again(&scene);
+                let after = source(&shooter);
+                for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+                    assert_eq!(
+                        a[3], b[3],
+                        "colored pigment preserves alpha, including empty light"
+                    );
+                    assert!(
+                        b[..3].iter().all(|v| *v <= b[3].saturating_add(1)),
+                        "valid premultiplied color"
+                    );
+                }
+                for (slot, activation) in [(target_slot, level), (6, 0.0)] {
+                    let (start, end) = scene.octave_layout.sector(slot, cents);
+                    let angle = (start + end) * 0.5;
+                    let world = glam::Vec3::new(angle.cos(), angle.sin(), 0.0)
+                        * scene.node_radius
+                        * 1.8
+                        * scene.rings_outer;
+                    let at = on_screen(&scene, SIZE, world);
+                    let offset = (at.y as usize * SIZE[0] as usize + at.x as usize) * 4;
+                    let pixel = &after[offset..offset + 4];
+                    if slot == 6 {
+                        assert_eq!(
+                            &before[offset..offset + 4],
+                            &colored[offset..offset + 4],
+                            "color pickup alone leaves an unlit sector unchanged"
+                        );
+                    }
+                    assert!(pixel[3] > 20, "fixture has enough source light at slot {slot}");
+                    let pitch = scene.octave_layout.slot_pitch(slot, cents);
+                    let t = ((pitch - scene.darkest_pitch)
+                        / (scene.brightest_pitch - scene.darkest_pitch))
+                        .clamp(0.0, 1.0);
+                    for (actual, color) in pixel[..3].iter().zip([t, 0.4, 1.0 - t]) {
+                        let expected = color * activation * f32::from(pixel[3]);
+                        assert!(
+                        (f32::from(*actual) - expected).abs() < 4.0,
+                        "slot {slot}, cents {cents}, level {level}: {pixel:?}, expected {expected}"
+                    );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn shadow_pickup_bypasses_with_material_or_light_disabled() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
@@ -244,6 +357,7 @@ fn shadow_pickup_bypasses_with_material_or_light_disabled() {
         scene.atmosphere.material_shadow_pickup = 0.0;
         let ordinary = shooter.shot(&scene);
         scene.atmosphere.material_shadow_pickup = 1.0;
+        scene.atmosphere.material_color_pickup = 1.0;
         assert_eq!(ordinary, shooter.shot_again(&scene), "bypass preserves ordinary shadows");
     }
 }
@@ -278,6 +392,7 @@ fn pickup_and_ordinary_shadows_are_independent() {
     let plain = glow(&mut shooter, &scene);
     let ordinary = scene_alpha(&shooter);
     scene.atmosphere.material_shadow_pickup = 0.5;
+    scene.atmosphere.material_color_pickup = 0.7;
     scene.atmosphere.material_shadow_width = 3.0;
     scene.atmosphere.material_shadow_softness = 4.0;
     shooter.shot_again(&scene);

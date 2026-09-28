@@ -91,7 +91,7 @@ struct PickupParams {
     @align(16) intensity: f32,
     width: f32,
     softness: f32,
-    padding: f32,
+    color: f32,
 };
 
 struct ShadowParams {
@@ -1147,7 +1147,7 @@ fn glyph_band(d: f32, inner: f32, outer: f32, level: f32, aa: f32) -> NodeLayer 
 // backdrop rather than anything the octave is doing.
 fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
     let presence = in.params.x;
-    let lit = oct_slot_lit(in, slot);
+    let lit = oct_slot_lit(in.cents, in.octaves, slot);
     let level = lit.w;
     if level <= 0.0 {
         return vec4<f32>(u.lattice_ground.rgb, presence);
@@ -1188,11 +1188,11 @@ fn oct_slot_ink(in: VsOut, slot: i32) -> vec4<f32> {
 // The colour of a LIT slice is stated once, here, and the drawn ink is this
 // mixed toward the ground by however much of the node's presence this slot's
 // level does not account for.
-fn oct_slot_lit(in: VsOut, slot: i32) -> vec4<f32> {
+fn oct_slot_lit(cents: f32, octaves: vec3<u32>, slot: i32) -> vec4<f32> {
     // Slot s is MIDI octave s - 1, whose C is MIDI 12*s; add this node's pitch
     // class for the glyph's true pitch.
-    let pitch = oct_slot_pitch(slot, in.cents);
-    return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(in.octaves, slot));
+    let pitch = oct_slot_pitch(slot, cents);
+    return vec4<f32>(pitch_lut_color(pitch), oct_slot_level(octaves, slot));
 }
 
 // How far out slot `s`'s LIT slice reaches from the band's inner edge: its
@@ -1326,7 +1326,7 @@ fn slice_zones(
     let level = oct_slot_level(in.octaves, s);
     var near = band;
     var far = slice;
-    var far_rgb = oct_slot_lit(in, s).xyz;
+    var far_rgb = oct_slot_lit(in.cents, in.octaves, s).xyz;
     var far_level = level;
     if reach < outer {
         near = slice;
@@ -2893,6 +2893,8 @@ struct PickupOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) level: f32,
+    @location(2) @interpolate(flat) octaves: vec3<u32>,
+    @location(3) @interpolate(flat) cents: f32,
 };
 
 @vertex
@@ -2903,6 +2905,8 @@ fn vs_source_shadow(@builtin(vertex_index) vertex: u32, inst: Instance) -> Picku
     // Pigment follows the note-light envelope, including its release, but not
     // decorative breathing. It never feeds back into the carried ink color.
     out.level = clamp(inst.glow.x, 0.0, 1.0);
+    out.octaves = inst.octaves;
+    out.cents = inst.cents;
     if out.level <= 0.0 {
         return out;
     }
@@ -2928,8 +2932,27 @@ fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
     let aa = max(fwidth(in.uv.x), 1e-5);
     let feather = max(u.pickup.softness / 1.8, aa);
     let coverage = 1.0 - smoothstep(half_width - aa, half_width + feather, d);
-    // RGB-only blending darkens existing light without introducing opacity.
-    return vec4<f32>(0.0, 0.0, 0.0, coverage * in.level * u.pickup.intensity);
+    if coverage <= 0.0 {
+        discard;
+    }
+    let ring = oct_ring(in.cents);
+    var pigment = vec4<f32>(0.0);
+    var weight = 0.0;
+    // Reuse the visible ring's sectors, including its unequal extra octaves.
+    // Spatial feathering softens their shared boundaries as well as the band.
+    // Normalize the overlap so even a feather wider than the ring stays convex.
+    for (var i = 0u; i < oct_span(); i += 1u) {
+        let slot = ring.base + i32(i);
+        let arc = oct_arc_coverage(oct_sector(slot, ring), in.uv, feather);
+        let lit = oct_slot_lit(in.cents, in.octaves, slot);
+        pigment += vec4<f32>(lit.rgb * lit.a, lit.a) * arc;
+        weight += arc;
+    }
+    pigment /= max(weight, 1e-5);
+    let amount = coverage * in.level;
+    let opacity = u.pickup.intensity * (1.0 - pigment.a) + u.pickup.color * pigment.a;
+    // DstAlpha color blending confines this pigment to existing light coverage.
+    return vec4<f32>(pigment.rgb * u.pickup.color * amount, opacity * amount);
 }
 
 // ---- Node glow -------------------------------------------------------------
@@ -3085,7 +3108,7 @@ fn ink_at(in: VsOut, oct: OctRing, angle: f32) -> vec4<f32> {
             // the ghost included, which is the backdrop and weighs nothing.
             // Over the width the lit slice is DRAWN, thinned or swelled
             // (`slice_reach`), which is the band's at rest.
-            let ink = oct_slot_lit(in, owner);
+            let ink = oct_slot_lit(in.cents, in.octaves, owner);
             let w = cov * ink.w * (slice_reach(in, owner, band_in, band_out) - band_in);
             rgb = rgb + ink.xyz * w;
             wsum = wsum + w;

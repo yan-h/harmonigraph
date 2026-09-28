@@ -154,6 +154,10 @@ impl LatticeCallback {
         // instance is always one with something to draw.
         let ringing = scene.spectral.ring_draws();
         let lights = scene.glow_reach > 0.0 && scene.glow_strength > 0.0;
+        let pickup_enabled = lights
+            && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
+            && atmosphere.material_amount > 0.0
+            && atmosphere.material_shadow_width > 0.0;
         let paints = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || (lights && g.glow[0] > 0.0)
@@ -528,18 +532,10 @@ impl LatticeCallback {
                     padding: Float2([0.0; 2]),
                 },
                 pickup: PickupParams {
-                    intensity: if lights
-                        && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
-                        && atmosphere.material_amount > 0.0
-                        && atmosphere.material_shadow_width > 0.0
-                    {
-                        atmosphere.material_shadow_pickup
-                    } else {
-                        0.0
-                    },
+                    intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },
                     width: atmosphere.material_shadow_width,
                     softness: atmosphere.material_shadow_softness,
-                    padding: 0.0,
+                    color: if pickup_enabled { atmosphere.material_color_pickup } else { 0.0 },
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.

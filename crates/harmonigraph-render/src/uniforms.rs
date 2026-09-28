@@ -153,7 +153,7 @@ uniform_group! {
         intensity: f32,
         width: f32,
         softness: f32,
-        padding: f32,
+        color: f32,
     }
 }
 uniform_group! {

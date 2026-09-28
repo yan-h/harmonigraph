@@ -52,12 +52,14 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
-            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Pickup darkness")
-                .percent().show(ui).on_hover_text("Darkness of a separate circular source behind the material. Washes or facets pick up this dark color. 0% disables it. Actual ring and label shadows keep their own settings.");
+            ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Dark pickup")
+                .percent().show(ui).on_hover_text("Dark pigment behind unlit ring segments, picked up by washes or facets. Fades as each segment lights up. Actual ring and label shadows keep their own settings.");
+            ValueBar::new(&mut settings.material_color_pickup, 0.0..=1.0, "Color pickup")
+                .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by washes or facets. Follows each segment’s activation. 0% disables colored pickup.");
             ValueBar::new(&mut settings.material_shadow_width, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup width")
-                .percent().show(ui).on_hover_text("Full width of the dark source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
+                .percent().show(ui).on_hover_text("Full width of the pigment source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
             ValueBar::new(&mut settings.material_shadow_softness, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup softness")
-                .percent().show(ui).on_hover_text("Soft fade beyond each edge of the pickup band, as a percentage of the node radius. Up to 800% for very diffuse darkness. Does not alter the actual shadow.");
+                .percent().show(ui).on_hover_text("Soft fade at the pickup band and segment boundaries, as a percentage of the node radius. Up to 800% for very diffuse pigment. Does not alter the actual shadow.");
             super::material::speed(ui, &mut settings.material_speed);
             super::material::direction(ui, &mut settings.material_direction);
             match settings.material_style {
@@ -72,6 +74,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 settings.material_style = fresh.material_style;
                 settings.material_amount = fresh.material_amount;
                 settings.material_shadow_pickup = fresh.material_shadow_pickup;
+                settings.material_color_pickup = fresh.material_color_pickup;
                 settings.material_shadow_width = fresh.material_shadow_width;
                 settings.material_shadow_softness = fresh.material_shadow_softness;
                 settings.material_settings = fresh.material_settings;

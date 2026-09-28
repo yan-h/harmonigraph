@@ -682,9 +682,11 @@ pub struct AtmosphereSettings {
     /// Replaces the retired combined `material` key, which serde ignores.
     pub material_style: LatticeMaterial,
     pub material_amount: f32,
-    /// Darkness of an independent circular pigment source sampled by the material.
+    /// Dark pigment from unlit segments, sampled by the material.
     pub material_shadow_pickup: f32,
-    /// Full width of the dark band, in node radii.
+    /// Pitch-colored pigment from lit segments, sampled by the material.
+    pub material_color_pickup: f32,
+    /// Full width of the pigment band, in node radii.
     pub material_shadow_width: f32,
     /// Feather distance beyond each band edge, in node radii.
     pub material_shadow_softness: f32,
@@ -705,6 +707,7 @@ impl Default for AtmosphereSettings {
             material_style: LatticeMaterial::None,
             material_amount: 1.0,
             material_shadow_pickup: 0.0,
+            material_color_pickup: 0.0,
             material_shadow_width: 1.5,
             material_shadow_softness: 2.0,
             material_settings: MaterialSettings::default(),
@@ -730,6 +733,8 @@ impl AtmosphereSettings {
             }
         };
         self.material_amount = clamp(self.material_amount, fresh.material_amount, 0.0, 1.0);
+        self.material_color_pickup =
+            clamp(self.material_color_pickup, fresh.material_color_pickup, 0.0, 1.0);
         self.material_shadow_pickup =
             clamp(self.material_shadow_pickup, fresh.material_shadow_pickup, 0.0, 1.0);
         self.material_shadow_width = clamp(

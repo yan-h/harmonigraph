@@ -4,7 +4,7 @@
 
 The lattice separates Clouds, Contours and Interference patterns from the Watercolor and Mosaic displacement materials,
 so a cloudy glow can feed either material.
-The fixed order is note illumination and breathing → texture → optional shadow pickup → material → lattice composition.
+The fixed order is note illumination and breathing → texture → optional segment pickup → material → lattice composition.
 Texture remains lit by notes;
 silence stays dark.
 This is not a general layer stack or a new ambient background.
@@ -46,7 +46,7 @@ dim effect controls when glow reach or gain is zero.
 Preserve the existing glow-statistics and resolve passes.
 The resolve applies only the chosen texture to combined note light.
 The material pass consumes that resolved texture using the existing optional source target and geometry tiles.
-Shadow pickup adds one half-resolution node-quad draw into the existing source target when enabled;
+Segment pickup adds one half-resolution node-quad draw into the existing source target when enabled;
 it allocates no extra texture.
 Compute texture and material drift independently from the existing decorative clock.
 Keep texture uniforms distinct from material uniforms so neither stage borrows the other's depth, scale or clock.
@@ -105,44 +105,55 @@ Its lifecycle clarification is incorporated above:
 retain geometry only while active, release on None/zero, and compare reactivation and resize with fresh panes.
 No extra abstractions or configurable ordering were recommended.
 
-## Independent shadow pickup
+## Independent segment pickup
 
-The material can sample a separate dark circular band behind each note's ring.
-This pigment source is independent of the actual ring, mark and label shadows:
+The material samples pigment behind each octave segment:
+dark for unlit segments and the segment’s pitch color for lit segments.
+Each slot’s actual activation interpolates the two contributions during attack and release.
+This source is independent of the actual ring, mark and label shadows:
 changing pickup never replaces or suppresses those shadows,
-and changing an actual shadow's width, darkness or kernel does not change pickup.
+and changing an actual shadow’s width, darkness or kernel does not change pickup.
 
-The material controls expose three persisted fields:
+The material controls expose four persisted fields:
 
-- Pickup darkness (`material_shadow_pickup`): 0–100%, default 0% (off).
+- Dark pickup (`material_shadow_pickup`): 0–100%, default 0% (off).
+- Color pickup (`material_color_pickup`): 0–100%, default 0% (off).
 - Pickup width (`material_shadow_width`): full band width, 0–800% of the node radius, default 150%.
-- Pickup softness (`material_shadow_softness`): feather distance beyond each edge, 0–800% of the node radius, default 200%.
+- Pickup softness (`material_shadow_softness`): feather distance at band and segment boundaries, 0–800% of the node radius, default 200%.
 
-The band is centered on the configured ring rim and follows each note's light envelope,
+The band is centered on the configured ring rim and follows each note’s light envelope,
 including release, independently of decorative breathing.
-Width zero disables pickup.
-Material None, zero material amount and disabled glow also bypass it.
-Reset material restores all three controls.
-The first draft's `material_shadow_pickup` transfer amount now means independent darkness;
-a nonzero value saved from that draft is reinterpreted,
-while existing appearances without pickup retain the default of zero.
+Width zero disables both contributions.
+Material None, zero material amount and disabled glow also bypass them.
+Reset material restores all four controls.
+A nonzero dark pickup saved from the earlier circular-band draft now fades in lit sectors;
+appearances without pickup retain zero for both strengths.
 
-One half-resolution quad per active node blends black into the resolved light before the material pass.
+One half-resolution quad per active node blends pigment into the resolved light before the material pass.
 The analytic band needs only node instances and uniforms,
 with no shadow atlas or caster dependency and no new texture allocation.
 Its own quad covers the full width, feather and antialiasing margin,
 including when its center is outside the viewport.
-RGB-only blending preserves source alpha and cannot introduce opaque black into empty light.
-Watercolor or Mosaic samples this dark pigment along with the colored source light.
-The normal scene shadow and bloom masks then apply unchanged to the resulting picture.
+The shader reuses the visible ring’s sector mapping, packed activation and pitch-color function,
+including unequal extra octaves and the per-node seam.
+Spatial feathering softens segment boundaries;
+at large softness values neighboring pigments intentionally mingle.
+Normalized sector weights keep that mixture bounded even at the center.
 
-Pickup changes light sampled by the material,
-so its controls do not belong in the geometry-tile cache key.
-The live source draw reads current uniforms and instances each frame.
-The first draft's resting-cross shadow limitation (#1253) is removed by retaining the normal scene shadow pass in full.
+RGB blending multiplies the incoming pigment by destination alpha,
+then attenuates the old RGB by pigment opacity.
+The alpha write mask preserves coverage,
+so colored pigment cannot create light where the source is empty or violate premultiplication.
+Watercolor or Mosaic samples this pigment along with the source light.
+The normal scene shadow and bloom masks then apply unchanged.
+
+Pickup controls do not belong in the geometry-tile cache key:
+the live source draw reads current uniforms and instances each frame.
+The first draft’s resting-cross shadow limitation (#1253) is removed by retaining the normal scene shadow pass in full.
 
 GPU tests verify unchanged actual-shadow masks when pickup is adjusted,
 unchanged pickup when actual shadows are adjusted or disabled,
-RGB darkening without added alpha,
+per-slot pitch and activation at the source,
+RGB changes without added alpha,
 material/glow bypasses,
 and wide/soft pickup reaching beyond the old node quad.

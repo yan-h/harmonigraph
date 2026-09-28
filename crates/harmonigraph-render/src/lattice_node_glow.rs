@@ -157,7 +157,16 @@ pub(super) fn source_shadow_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: LATTICE_COLOR_FORMAT,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                // Color is pigment opacity times straight RGB. Destination alpha
+                // confines it to existing light; the alpha channel itself is untouched.
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::DstAlpha,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
                 write_mask: wgpu::ColorWrites::RED
                     | wgpu::ColorWrites::GREEN
                     | wgpu::ColorWrites::BLUE,
