@@ -184,3 +184,10 @@ A production port still owes normal pane/layout regression coverage and regenera
 
 No gains here should be added arithmetically to the separate 3+2 work.
 A selected production port must be measured against the then-current baseline.
+
+## Higher-resolution follow-up
+
+The owner found the 75% variant visually similar and requested a higher-resolution video comparison.
+A fresh 4K capture pair and native-pixel crop comparison are documented in [high-resolution/README.md](high-resolution/README.md).
+This follow-up keeps the same take interval and 40-second warmup, using standard 4K export density.
+It adds visual evidence, not another timing claim or a production selection.

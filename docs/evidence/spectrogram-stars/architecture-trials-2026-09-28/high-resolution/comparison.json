@@ -1,0 +1,79 @@
+{
+  "frames": 144,
+  "fps": 24,
+  "size": [
+    3840,
+    2160
+  ],
+  "pixels_per_point": 3,
+  "native_crop": [
+    960,
+    30,
+    1920,
+    2100
+  ],
+  "comparison_header_height": 60,
+  "no_crop_rescaling": true,
+  "mean_abs_rgb_255": 0.23812472817447558,
+  "max_abs_rgb_255": 101,
+  "video_encoding": "libx264 CRF10 yuv420p",
+  "files": {
+    "base-a-4k.mp4": {
+      "bytes": 59489864,
+      "sha256": "4c9d552403941fbc03e2a2e9dd74c47c244ed4f864ee13b00cbbd5fa2f6a7110",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 3840,
+            "height": 2160,
+            "r_frame_rate": "24/1",
+            "nb_frames": "144"
+          }
+        ],
+        "format": {
+          "duration": "6.000000"
+        }
+      }
+    },
+    "comparison-4k-native-crops.mp4": {
+      "bytes": 62595105,
+      "sha256": "4103416218c46463afc1d1e4bb7851cb724995dcd5421cb15bce47d56ecb92f7",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 3840,
+            "height": 2160,
+            "r_frame_rate": "24/1",
+            "nb_frames": "144"
+          }
+        ],
+        "format": {
+          "duration": "6.000000"
+        }
+      }
+    },
+    "group3-short75-4k.mp4": {
+      "bytes": 62864848,
+      "sha256": "56cd47a38037cf1015d1b35edbd88d9644751ca4080fc66b58bb01f0807f1cc5",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 3840,
+            "height": 2160,
+            "r_frame_rate": "24/1",
+            "nb_frames": "144"
+          }
+        ],
+        "format": {
+          "duration": "6.000000"
+        }
+      }
+    }
+  }
+}

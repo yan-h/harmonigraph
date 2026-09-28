@@ -98,5 +98,17 @@
   "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/comparisons/current-vs-direct4.mp4": {
     "bytes": 5808041,
     "sha256": "30b83fabb191e47231050fb254cafaf5eb2671789ded193a3af59e01e85ea161"
+  },
+  "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/high-resolution/group3-short75-4k.mp4": {
+    "bytes": 62864848,
+    "sha256": "56cd47a38037cf1015d1b35edbd88d9644751ca4080fc66b58bb01f0807f1cc5"
+  },
+  "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/high-resolution/base-a-4k.mp4": {
+    "bytes": 59489864,
+    "sha256": "4c9d552403941fbc03e2a2e9dd74c47c244ed4f864ee13b00cbbd5fa2f6a7110"
+  },
+  "/Users/yan/.codex/visualizations/2026/09/28/01a0e56c-bcc3-7ef3-9cf6-28f90f7a6676/stars-architecture-trials/high-resolution/comparison-4k-native-crops.mp4": {
+    "bytes": 62595105,
+    "sha256": "4103416218c46463afc1d1e4bb7851cb724995dcd5421cb15bce47d56ecb92f7"
   }
 }
