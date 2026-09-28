@@ -49,6 +49,8 @@ pub enum StarHaloProfile {
     P3,
     /// Back three at 50%, foreground at 75%, near halos at 75% and 45%.
     Medium,
+    /// Back three at one third, foreground at half, near halos at 50% and 30%.
+    Low,
 }
 
 /// The band both cloud size dials run over — [`MaterialSettings::scale_size`]

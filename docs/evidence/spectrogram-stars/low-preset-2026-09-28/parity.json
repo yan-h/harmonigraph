@@ -1,0 +1,26 @@
+{
+  "1920x1080/0010.rgba": {
+    "max_channel_error": 1,
+    "mean_channel_error_255": 2.4112654320987655e-07,
+    "changed_channels": 2,
+    "total_channels": 8294400
+  },
+  "1920x1080/0011.rgba": {
+    "max_channel_error": 1,
+    "mean_channel_error_255": 6.028163580246913e-07,
+    "changed_channels": 5,
+    "total_channels": 8294400
+  },
+  "3840x2160/0010.rgba": {
+    "max_channel_error": 1,
+    "mean_channel_error_255": 2.019434799382716e-06,
+    "changed_channels": 67,
+    "total_channels": 33177600
+  },
+  "3840x2160/0011.rgba": {
+    "max_channel_error": 1,
+    "mean_channel_error_255": 2.8332368827160495e-06,
+    "changed_channels": 94,
+    "total_channels": 33177600
+  }
+}

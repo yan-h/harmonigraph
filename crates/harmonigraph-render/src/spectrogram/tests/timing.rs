@@ -110,6 +110,13 @@ const CASES: &[(&str, Option<Turn>)] = &[
             s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
         }),
     ),
+    (
+        "stars, low",
+        Some(|s| {
+            s.cloud_style = CloudStyle::Stars;
+            s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Low;
+        }),
+    ),
     ("mosaic, memory", Some(memory)),
     (
         "watercolor, memory",

@@ -25,12 +25,19 @@ then the nearest two over that image at 75% in a second RGBA16Float target.
 Its foreground halo targets use 75% and 45% dimensions.
 The final pass samples that composite bilinearly,
 keeping Texture mix and the underlying spectrogram at native resolution.
-Both presets retain all five layers,
+Low uses the same path with one-third background dimensions,
+half-resolution foreground,
+and foreground halos at 50% and 30%.
+This is L1 from the [resolution experiment](https://github.com/yan-h/harmonigraph/pull/1270).
+The shared Stars controls expose it in both the spectrogram and lattice background.
+The [production verification](evidence/spectrogram-stars/low-preset-2026-09-28/README.md) compares it with the accepted L1 captures.
+All three presets retain all five layers,
 star geometry,
-and color history.
+and spectrogram color history.
 High remains the default and keeps its existing saved `P3` value;
-Medium is a new saved enum variant,
-and Uniform retains its manual halo-resolution override.
+Low adds a saved enum variant,
+so older binaries cannot parse appearances saved with Low selected.
+Uniform retains its manual halo-resolution override.
 Switching presets changes sampling without resetting retained colors.
 
 The four-cell gather starts at `floor(r - 0.5)`.
@@ -58,7 +65,7 @@ Uniform retains all five wide responses and its adjustable halo resolution.
 At drawn coverage of at least 2560×1440 device pixels in area,
 it composites the farthest three into a native-resolution target and draws the nearest two over an exact texel read.
 Smaller Uniform regions retain the unsplit path.
-High and Medium use their reduced far-three images at every pane size.
+High, Medium and Low use their reduced far-three images at every pane size.
 Both policies retain layer order,
 palette mixing,
 motion,

@@ -379,7 +379,7 @@ fn halo_resolution_changes_carry_stars_color_history() {
     let lit = pixels(&device, &queue, memory(&changed));
     assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
     cb.grid.fill(0);
-    use harmonigraph_scene::StarHaloProfile::{Medium, Uniform, P3};
+    use harmonigraph_scene::StarHaloProfile::{Low, Medium, Uniform, P3};
     let mut prior_layout = None;
     for (profile, resolution) in [
         (Uniform, 0.25),
@@ -388,6 +388,7 @@ fn halo_resolution_changes_carry_stars_color_history() {
         (Uniform, 0.5),
         (P3, 0.5),
         (Medium, 0.5),
+        (Low, 0.5),
         (P3, 0.5),
     ] {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile = profile;

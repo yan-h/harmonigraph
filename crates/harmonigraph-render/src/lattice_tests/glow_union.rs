@@ -1215,7 +1215,12 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
     let raw = glow(&mut shooter, &scene);
     let hue = raw.chunks_exact(4).max_by_key(|p| p[3]).unwrap();
     scene.atmosphere.material_amount = 1.0;
-    for profile in [StarHaloProfile::P3, StarHaloProfile::Medium, StarHaloProfile::Uniform] {
+    for profile in [
+        StarHaloProfile::P3,
+        StarHaloProfile::Medium,
+        StarHaloProfile::Low,
+        StarHaloProfile::Uniform,
+    ] {
         scene.atmosphere.stars.star_halo_profile = profile;
         let painted = glow(&mut shooter, &scene);
         assert!(
@@ -1269,12 +1274,14 @@ fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
     for (style, amount, profile, scale) in [
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Medium, 1.0),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::Low, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Uniform, 1.0),
         (LatticeMaterial::Mosaic, 1.0, StarHaloProfile::Uniform, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
         (LatticeMaterial::Stars, 0.0, StarHaloProfile::P3, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Medium, 1.5),
+        (LatticeMaterial::Stars, 1.0, StarHaloProfile::Low, 1.5),
     ] {
         scene.atmosphere.material_style = style;
         scene.atmosphere.material_amount = amount;

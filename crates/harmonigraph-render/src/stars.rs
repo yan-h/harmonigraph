@@ -295,8 +295,8 @@ pub(crate) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
     pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
 }
 
-/// Uniform keeps exact native texel addressing; High and Medium share the complete
-/// far-three response at 75% and 50% dimensions respectively, at every pane size.
+/// Uniform keeps exact native texel addressing; High, Medium and Low draw the
+/// complete far-three response at 75%, 50% and one-third dimensions.
 pub(crate) fn star_far_size(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
@@ -306,17 +306,22 @@ pub(crate) fn star_far_size(
         StarHaloProfile::Uniform => pixels,
         StarHaloProfile::P3 => star_halo_size(pixels, 0.75),
         StarHaloProfile::Medium => star_halo_size(pixels, 0.5),
+        StarHaloProfile::Low => star_halo_size(pixels, 1.0 / 3.0),
     }
 }
 
-/// Medium shades the foreground over the far image at 75% dimensions.
+/// Medium and Low shade the foreground over the far image at 75% and 50% dimensions.
 /// Exact rounded dimensions belong to allocation identity, not the preset name.
 pub(crate) fn star_near_size(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
 ) -> Option<[u32; 2]> {
-    (settings.star_halo_profile == harmonigraph_scene::StarHaloProfile::Medium)
-        .then(|| star_halo_size(pixels, 0.75))
+    use harmonigraph_scene::StarHaloProfile;
+    match settings.star_halo_profile {
+        StarHaloProfile::Medium => Some(star_halo_size(pixels, 0.75)),
+        StarHaloProfile::Low => Some(star_halo_size(pixels, 0.5)),
+        StarHaloProfile::P3 | StarHaloProfile::Uniform => None,
+    }
 }
 
 /// Include every bilinear tap at the boundary of a partially covered pane.
@@ -354,7 +359,7 @@ pub(crate) struct StarHaloLayout {
     pub(crate) groups: [HaloGroup; STAR_HALO_GROUPS],
     /// [group, array layer] for each far-to-near depth.
     pub(crate) layers: [[u32; 2]; STAR_SLICES],
-    /// High and Medium far depths are drawn directly and own no halo images.
+    /// High, Medium and Low far depths are drawn directly and own no halo images.
     pub(crate) first_active_layer: usize,
 }
 
@@ -388,7 +393,7 @@ impl StarHaloLayout {
     }
 }
 
-/// High and Medium need halos only for the nearest two depths. Material history
+/// High, Medium and Low need halos only for the nearest two depths. Material history
 /// keeps the same identity across profiles, independent of their sampling.
 pub(crate) fn star_halo_layout(
     pixels: [u32; 2],
@@ -400,6 +405,7 @@ pub(crate) fn star_halo_layout(
         StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
         StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
         StarHaloProfile::Medium => ([0.0, 0.0, 0.0, 0.75, 0.45], 3),
+        StarHaloProfile::Low => ([0.0, 0.0, 0.0, 0.5, 0.3], 3),
     };
     StarHaloLayout::from_sizes(
         factors.map(|factor| star_halo_size(pixels, factor)),

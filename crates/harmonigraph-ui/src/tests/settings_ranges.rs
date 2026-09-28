@@ -311,6 +311,7 @@ fn scenarios() -> Vec<Scenario> {
     for profile in [
         harmonigraph_scene::StarHaloProfile::P3,
         harmonigraph_scene::StarHaloProfile::Medium,
+        harmonigraph_scene::StarHaloProfile::Low,
         harmonigraph_scene::StarHaloProfile::Uniform,
     ] {
         cases.push(Scenario {
@@ -348,6 +349,7 @@ fn scenarios() -> Vec<Scenario> {
     for (halo_profile, bars) in [
         (harmonigraph_scene::StarHaloProfile::P3, 11),
         (harmonigraph_scene::StarHaloProfile::Medium, 11),
+        (harmonigraph_scene::StarHaloProfile::Low, 11),
         (harmonigraph_scene::StarHaloProfile::Uniform, 12),
     ] {
         cases.push(Scenario {

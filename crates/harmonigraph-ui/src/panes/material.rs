@@ -159,9 +159,10 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
     crate::widgets::preset_row(
         ui,
         "Stars rendering",
-        &["Medium", "High", "Uniform"],
+        &["Low", "Medium", "High", "Uniform"],
         |ui, menu| {
             for (label, profile, hint) in [
+            ("Low", StarHaloProfile::Low, "Lower rendering cost with softer foreground points and coarser distant detail."),
             ("Medium", StarHaloProfile::Medium, "Faster rendering with softer stars, including the foreground."),
             ("High", StarHaloProfile::P3, "Sharper foreground stars with slightly softer distant stars and shorter distant glow."),
             ("Uniform", StarHaloProfile::Uniform, "Override halo resolution with one value for every depth."),

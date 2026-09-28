@@ -1,0 +1,19 @@
+{
+  "implementation_base": "9bb46cad90c639a38e42c81a1faea05ab78106a4",
+  "experiment_base": "2409d55445defb4b0e63ca11f917fd36c1b1e8df",
+  "executable_sha256": "c2f3f785b4186059e981994b84349712f47b421518de7e06b300db8d86dbcef2",
+  "capture_patch_sha256": "1690d32b41f9679fab3a2b3fc5d512ec0241d51f0c46bc2750dfec007c8376d4",
+  "output_dir": "/private/tmp/stars-low-port",
+  "samples": {
+    "/private/tmp/stars-low-port/1920x1080/0010.rgba": "3ff0bb4c909ac1b716e614cb701c93cf4a5f2b5f27dbf3a10bfa476bba189ad1",
+    "/private/tmp/stars-low-port/1920x1080/0011.rgba": "fcada133d072fc13d57130da2145040210e0874c25dc0dc8b2a4299b26e756aa",
+    "/private/tmp/stars-low-port/3840x2160/0010.rgba": "751f51ddf07e5f4e46e1410f183745b7872b18642ea15e0af03b1e557543895c",
+    "/private/tmp/stars-low-port/3840x2160/0011.rgba": "d27e2c9ed807e48c907ba70c9c3894d6cc641938997a7b3a835c50152c332ed6"
+  },
+  "references": {
+    "/private/tmp/stars-low-resolution/1920x1080-L1/0010.rgba": "af207b9b872cf20d86d0a24ad3f5bcd19176777765d6ff8c387f45b1f3940b6a",
+    "/private/tmp/stars-low-resolution/1920x1080-L1/0011.rgba": "bb07dbdc8f1eeecd72153f7213b2d98b89f72dbf1fc36c56f174b8d12c4fa2f5",
+    "/private/tmp/stars-low-resolution/3840x2160-L1/0010.rgba": "bc1b3643ca4c80cfcdecb88554a303de4d9b648014354e0fe246b7d2b59406b1",
+    "/private/tmp/stars-low-resolution/3840x2160-L1/0011.rgba": "b394440a6a55e7a6a2de30c371a359cefbea9573e1b3a35b2b22ae92277f087a"
+  }
+}
