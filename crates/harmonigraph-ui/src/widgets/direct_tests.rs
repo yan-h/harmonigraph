@@ -163,23 +163,59 @@ fn contour_stepper_moves_one_band() {
     assert_eq!(n, 8.0);
 }
 #[test]
-fn spectrum_diagram_selects_the_clicked_edge() {
-    let ctx = crate::tests::probe::themed_at(1.0);
-    let mut edge = crate::SpectralOrientation::Left;
-    let mut draw = |ui: &mut Ui| spectrum_edge(ui, &mut edge);
-    let output = frame(&ctx, vec![], &mut draw);
-    let top = output
-        .shapes
-        .iter()
-        .find_map(|s| match &s.shape {
-            egui::Shape::Text(t) if t.galley.text() == "Top" => Some(t.pos + t.galley.size() * 0.5),
-            _ => None,
-        })
-        .unwrap();
-    frame(&ctx, vec![Event::PointerMoved(top)], &mut draw);
-    frame(&ctx, vec![press(top, true)], &mut draw);
-    frame(&ctx, vec![press(top, false)], &mut draw);
-    assert_eq!(edge, crate::SpectralOrientation::Top);
+fn spectrum_buttons_form_a_compact_rectangle_and_select_each_edge() {
+    use crate::SpectralOrientation::{Bottom, Left, Right, Top};
+    for scale in [0.7, 1.0, 1.5] {
+        let ctx = crate::tests::probe::themed_scaled(scale);
+        let mut edge = Left;
+        let output = frame(&ctx, vec![], &mut |ui| spectrum_edge(ui, &mut edge));
+        let controls = [(Left, "Left"), (Right, "Right"), (Top, "Top"), (Bottom, "Bottom")].map(
+            |(value, label)| {
+                let at = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == label => {
+                            Some(t.pos + t.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let rect = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.rect.contains(at) => Some(r.rect),
+                        _ => None,
+                    })
+                    .min_by(|a, b| a.area().total_cmp(&b.area()))
+                    .unwrap();
+                (value, rect)
+            },
+        );
+        let [(_, left), (_, right), (_, top), (_, bottom)] = controls;
+        assert_eq!(left.top(), right.top());
+        assert_eq!(left.bottom(), right.bottom());
+        assert_eq!(top.top(), left.top());
+        assert_eq!(bottom.bottom(), left.bottom());
+        assert_eq!(top.left(), bottom.left());
+        assert_eq!(top.right(), bottom.right());
+        assert!(top.left() > left.right() && top.right() < right.left());
+        assert!(top.bottom() < bottom.top());
+        assert!((top.height() - bottom.height()).abs() < 0.1);
+        assert!(left.height() > 2.0 * top.height() && left.height() < 2.4 * top.height());
+        assert!(right.right() - left.left() <= 180.0 * scale);
+        for (value, rect) in controls {
+            let at = rect.center();
+            {
+                let mut draw = |ui: &mut Ui| spectrum_edge(ui, &mut edge);
+                frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
+                frame(&ctx, vec![press(at, true)], &mut draw);
+                frame(&ctx, vec![press(at, false)], &mut draw);
+            }
+            assert_eq!(edge, value);
+        }
+    }
 }
 
 #[test]

@@ -9,9 +9,6 @@ pub(super) struct Plot {
     fields: Rect,
 }
 impl Plot {
-    pub fn new(ui: &mut Ui, label: &str) -> Self {
-        Self::with_fields(ui, label, 0)
-    }
     /// Keep the picture a stable size beside exact values. Very narrow panes
     /// stack instead of squeezing labels, numbers, and handles into one row.
     pub fn with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {

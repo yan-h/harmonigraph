@@ -141,16 +141,37 @@ pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
 
 pub(crate) fn spectrum_edge(ui: &mut Ui, edge: &mut crate::SpectralOrientation) {
     use crate::SpectralOrientation::*;
-    let plot = Plot::new(ui, "Spectrum edge");
+    super::label(ui, "Spectrum edge");
+    let scale = theme::ui_scale(ui.ctx());
+    let row = theme::row_height(scale);
+    let gap = theme::button_gap(scale);
+    let width = super::bar::bar_width(ui).min(176.0 * scale);
+    let (bounds, _) =
+        ui.allocate_exact_size(egui::vec2(width, 2.0 * row + gap), egui::Sense::hover());
+    let side = (width - 2.0 * gap).max(0.0) * 0.27;
+    let middle_left = bounds.left() + side + gap;
+    let middle_right = bounds.right() - side - gap;
     for value in crate::SpectralOrientation::ALL {
-        let (label, a, b) = match value {
-            Left => ("Left", (0.0, 0.15), (0.18, 0.85)),
-            Right => ("Right", (0.82, 0.15), (1.0, 0.85)),
-            Top => ("Top", (0.18, 0.7), (0.82, 1.0)),
-            Bottom => ("Bottom", (0.18, 0.0), (0.82, 0.3)),
+        let (label, min, max) = match value {
+            Left => ("Left", bounds.min, egui::pos2(bounds.left() + side, bounds.bottom())),
+            Right => ("Right", egui::pos2(bounds.right() - side, bounds.top()), bounds.max),
+            Top => (
+                "Top",
+                egui::pos2(middle_left, bounds.top()),
+                egui::pos2(middle_right, bounds.top() + row),
+            ),
+            Bottom => (
+                "Bottom",
+                egui::pos2(middle_left, bounds.bottom() - row),
+                egui::pos2(middle_right, bounds.bottom()),
+            ),
         };
-        let rect = egui::Rect::from_two_pos(plot.point(a.0, a.1), plot.point(b.0, b.1));
-        if ui.put(rect, egui::Button::new(label).selected(*edge == value)).clicked() {
+        let rect = egui::Rect::from_min_max(min, max);
+        if ui
+            .put(rect, egui::Button::new(label).truncate().selected(*edge == value))
+            .on_hover_text(label)
+            .clicked()
+        {
             *edge = value;
         }
     }
