@@ -50,7 +50,7 @@ impl Plot {
         ui.painter().rect_filled(well, super::bar::bar_radius(scale), theme::well());
         let mut fields = if beside {
             Rect::from_min_max(
-                egui::pos2(well.right() + 8.0 * scale, bounds.center().y - fields_height / 2.0),
+                egui::pos2(well.right() + gap, bounds.center().y - fields_height / 2.0),
                 egui::pos2(bounds.right(), bounds.center().y + fields_height / 2.0),
             )
         } else {
@@ -64,10 +64,12 @@ impl Plot {
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             title
-                .add_sized(
+                .allocate_ui_with_layout(
                     Vec2::new(fields.width(), theme::row_height(scale)),
-                    egui::Label::new(label).truncate(),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| ui.add(egui::Label::new(label).truncate()),
                 )
+                .inner
                 .on_hover_text(label);
             fields.min.y += theme::row_height(scale) + gap;
         }
