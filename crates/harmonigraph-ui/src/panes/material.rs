@@ -1,5 +1,5 @@
 //! Shared material controls; each pane supplies its own saved settings.
-use crate::widgets::{RangeBar, ValueBar};
+use crate::widgets::ValueBar;
 use harmonigraph_scene::{SCALE_REFRACT_MAX, SCALE_REFRACT_MIN};
 
 fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
@@ -69,32 +69,6 @@ pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Mat
                     );
 }
 
-pub(super) fn speed(ui: &mut egui::Ui, value: &mut f32) {
-    ValueBar::new(
-        value,
-        harmonigraph_scene::CLOUD_SPEED_MIN..=harmonigraph_scene::CLOUD_SPEED_MAX,
-        "Drift speed",
-    )
-    .unit(1.0, "×")
-    .show(ui)
-    .on_hover_text(
-        "1× carries the texture about a pane-height every four minutes. 0 holds it still.",
-    );
-}
-pub(super) fn direction(ui: &mut egui::Ui, value: &mut f32) {
-    ValueBar::new(
-        value,
-        harmonigraph_scene::CLOUD_DIRECTION_MIN..=harmonigraph_scene::CLOUD_DIRECTION_MAX,
-        "Drift direction",
-    )
-    .integer()
-    .unit(1.0, "°")
-    .show(ui)
-    .on_hover_text(
-        "Constant direction of texture travel: 0° right, 90° down, 180° left and 270° up.",
-    );
-}
-
 /// The starfield: pinpoints in depth drifting with parallax, and the one texture
 /// that is light rather than a displaced reading of it.
 ///
@@ -113,34 +87,14 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
         .on_hover_text(
             "How many stars at every depth. Higher values pack them closer; past about 3\u{d7} the faintest dust is finer than a pixel and merges into texture.",
         );
-    // Dragged in octaves, so the small end has room on the track: the sizes run
-    // over two orders of magnitude and a linear track would crush 0.5 to 4
-    // into its first few percent.
-    let (mut small, mut big) = (atmosphere.star_size_min.log2(), atmosphere.star_size_max.log2());
-    let response =
-        RangeBar::new(&mut small, &mut big, STAR_SIZE_MIN.log2()..=STAR_SIZE_MAX.log2(), "Star size")
-            .display(|octaves| format!("{:.1} px", octaves.exp2()))
-            .show(ui)
-            .on_hover_text(
-                "The smallest and biggest stars: the farthest dust at the low end, the nearest stars at the high end, with Size curve deciding how the depths between share it out. Bigger stars are also farther apart.",
-            );
-    // Only on a change: the round trip through octaves is not exact, and
-    // writing it back every frame would move the stored sizes by an ulp at a
-    // time — and every star with them, since each depth's cells and its drift
-    // in them key on them.
-    if response.changed() {
-        atmosphere.star_size_min = small.exp2();
-        atmosphere.star_size_max = big.exp2();
-    }
-    ValueBar::new(
+    crate::widgets::depth(
+        ui,
+        &mut atmosphere.star_size_min,
+        &mut atmosphere.star_size_max,
         &mut atmosphere.star_size_curve,
+        STAR_SIZE_MIN..=STAR_SIZE_MAX,
         STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
-        "Size curve",
-    )
-    .curve(|curve, p| p.powf(curve))
-    .show(ui)
-    .on_hover_text(
-        "How the star spacing grows from the farthest depth to the nearest. 1 grows it evenly; higher values keep most depths fine dust and save the big stars for the nearest. The line previews it.",
+        true,
     );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Size & brightness variation")
         .percent()
@@ -214,26 +168,14 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
         STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
         STAR_SPEED_MAX, STAR_SPEED_MIN,
     };
-    RangeBar::new(
+    crate::widgets::depth(
+        ui,
         &mut atmosphere.star_speed_min,
         &mut atmosphere.star_speed_max,
-        STAR_SPEED_MIN..=STAR_SPEED_MAX,
-        "Star speed",
-    )
-    .display(|speed| format!("{:.0}%", speed * 100.0))
-    .show(ui)
-    .on_hover_text(
-        "How fast the farthest stars drift at the low end and the nearest at the high end, with Speed curve deciding how the depths between share it out. 100% carries a star a pane-height in about nine seconds; 0% holds it still. A wider range deepens the parallax; equal ends move every depth together.",
-    );
-    ValueBar::new(
         &mut atmosphere.star_speed_curve,
+        STAR_SPEED_MIN..=STAR_SPEED_MAX,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
-        "Speed curve",
-    )
-    .curve(|curve, p| p.powf(curve))
-    .show(ui)
-    .on_hover_text(
-        "How the drift speed grows from the farthest depth to the nearest. 1 steps it evenly; higher values keep most depths slow and the nearest fast, lower ones the reverse. The line previews it.",
+        false,
     );
     ValueBar::new(
         &mut atmosphere.star_lifetime,

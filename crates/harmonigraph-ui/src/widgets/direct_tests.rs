@@ -1,0 +1,374 @@
+//! Exercise the actual handles rather than only their mapping formulas.
+use super::*;
+use egui::{Event, Modifiers, PointerButton, Pos2, Ui, Vec2};
+
+fn frame(
+    ctx: &egui::Context,
+    events: Vec<Event>,
+    draw: &mut impl FnMut(&mut Ui),
+) -> egui::FullOutput {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 1000.0))),
+            events,
+            ..Default::default()
+        },
+        |ui| draw(ui),
+    )
+}
+fn press(p: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+fn drag(mut draw: impl FnMut(&mut Ui), handle: usize, delta: Vec2) {
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let handles: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Circle(c)
+                if (c.radius - 4.0).abs() < 0.01 && c.fill == crate::theme::accent() =>
+            {
+                Some(c.center)
+            }
+            _ => None,
+        })
+        .collect();
+    let p = handles[handle];
+    frame(&ctx, vec![Event::PointerMoved(p)], &mut draw);
+    frame(&ctx, vec![press(p, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(p + delta)], &mut draw);
+    frame(&ctx, vec![press(p + delta, false)], &mut draw);
+}
+
+#[test]
+fn drift_edits_vector_and_compass_keeps_speed_independent() {
+    let (mut angle, mut speed) = (0.0, 5.0);
+    drag(|ui| drift(ui, &mut angle, Some(&mut speed)), 0, egui::vec2(-12.0, 20.0));
+    assert!(angle > 30.0 && angle < 150.0, "{angle}");
+    assert_ne!(speed, 5.0);
+    let before = speed;
+    drag(|ui| drift(ui, &mut angle, None), 0, egui::vec2(-20.0, -20.0));
+    assert_eq!(speed, before);
+}
+#[test]
+fn cabinet_endpoint_sets_angle_and_length_within_the_quadrant() {
+    let (mut a, mut l) = (0.3, 0.4);
+    drag(|ui| cabinet(ui, &mut a, &mut l), 0, egui::vec2(40.0, -60.0));
+    assert!((0.0..=std::f32::consts::FRAC_PI_2).contains(&a));
+    assert!(a > 0.3 && l > 0.4 && l <= 1.0);
+}
+#[test]
+fn softness_handle_edits_both_axes() {
+    let (mut p, mut t) = (20.0, 20.0);
+    drag(|ui| softness(ui, &mut p, &mut t), 0, egui::vec2(30.0, -20.0));
+    assert!(p > 20.0 && t > 20.0);
+}
+#[test]
+fn threshold_can_keep_a_band_below_zero_without_changing_the_gate() {
+    let (mut gate, mut band) = (0.05, 0.1);
+    drag(|ui| threshold(ui, &mut gate, &mut band), 1, egui::vec2(-80.0, 0.0));
+    assert_eq!(gate, 0.05);
+    assert_eq!(band, harmonigraph_scene::SPECTRAL_HYSTERESIS_MAX);
+}
+#[test]
+fn fade_duration_gesture_is_bracketed_and_shape_does_not_edit_time() {
+    let (mut t, mut shape) = (0.5, 0.3);
+    let (mut starts, mut stops) = (0, 0);
+    drag(
+        |ui| {
+            let r = fade(ui, &mut t, &mut shape);
+            starts += usize::from(r.drag_started());
+            stops += usize::from(r.drag_stopped());
+        },
+        0,
+        egui::vec2(45.0, 0.0),
+    );
+    assert!(t > 0.5);
+    assert_eq!((starts, stops), (1, 1));
+    let before = t;
+    drag(
+        |ui| {
+            fade(ui, &mut t, &mut shape);
+        },
+        1,
+        egui::vec2(0.0, 12.0),
+    );
+    assert_eq!(t, before);
+    assert!(shape < 0.3);
+}
+#[test]
+fn response_times_are_independent_and_zero_is_reachable() {
+    let (mut rise, mut fall) = (0.4, 0.7);
+    drag(
+        |ui| response(ui, &mut rise, &mut fall, 2.0, ["Rise", "Fall"], 1000.0),
+        0,
+        egui::vec2(-150.0, 0.0),
+    );
+    assert_eq!(rise, 0.0);
+    assert_eq!(fall, 0.7);
+}
+#[test]
+fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
+    for size in [false, true] {
+        let (mut a, mut b, mut exponent) = if size { (0.7, 32.0, 2.0) } else { (0.1, 0.8, 2.0) };
+        let range = if size { 0.5..=64.0 } else { 0.0..=1.0 };
+        let initial = (a, b, exponent);
+        let ctx = crate::tests::probe::themed_at(1.0);
+        for _ in 0..8 {
+            frame(&ctx, vec![], &mut |ui| {
+                depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size)
+            });
+        }
+        assert_eq!((a, b, exponent), initial);
+        drag(
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            2,
+            egui::vec2(0.0, -12.0),
+        );
+        assert_eq!((a, b), (initial.0, initial.1));
+        assert!(exponent < initial.2);
+    }
+}
+#[test]
+fn shadow_profile_edits_width_and_depth_without_switching_kernel() {
+    let mut s = harmonigraph_scene::ShadowStyle { width: 0.2, depth: 0.3, ..Default::default() };
+    let kernel = s.kernel;
+    drag(|ui| shadow(ui, &mut s, 2.0, true), 0, egui::vec2(35.0, -15.0));
+    assert!(s.width > 0.2 && s.depth > 0.3);
+    assert_eq!(s.kernel, kernel);
+}
+#[test]
+fn contour_slider_snaps_to_whole_levels_and_updates_its_preview() {
+    for width in [120.0, 320.0] {
+        let ctx = crate::tests::probe::themed_at(1.0);
+        let mut n = 7.0;
+        for (fraction, expected) in [(1.0, 16.0), (0.0, 2.0), (0.43, 8.0)] {
+            let output = {
+                let mut draw = |ui: &mut Ui| {
+                    ui.set_max_width(width);
+                    contours(ui, &mut n);
+                };
+                let output = frame(&ctx, vec![], &mut draw);
+                let bar = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r)
+                            if r.fill == crate::theme::well()
+                                && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.1 =>
+                        {
+                            Some(r.rect)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let from = bar.center();
+                let to = egui::pos2(bar.left() + fraction * bar.width(), bar.center().y);
+                frame(&ctx, vec![Event::PointerMoved(from)], &mut draw);
+                frame(&ctx, vec![press(from, true)], &mut draw);
+                frame(&ctx, vec![Event::PointerMoved(to)], &mut draw);
+                frame(&ctx, vec![press(to, false)], &mut draw)
+            };
+            assert_eq!(n, expected);
+            let bands = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Mesh(mesh) => Some(mesh.vertices.len() / 4),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(bands, expected as usize);
+        }
+    }
+}
+#[test]
+fn spectrum_buttons_form_a_compact_rectangle_and_select_each_edge() {
+    use crate::SpectralOrientation::{Bottom, Left, Right, Top};
+    for scale in [0.7, 1.0, 1.5] {
+        let ctx = crate::tests::probe::themed_scaled(scale);
+        let mut edge = Left;
+        let output = frame(&ctx, vec![], &mut |ui| spectrum_edge(ui, &mut edge));
+        let controls = [(Left, "Left"), (Right, "Right"), (Top, "Top"), (Bottom, "Bottom")].map(
+            |(value, label)| {
+                let at = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.text() == label => {
+                            Some(t.pos + t.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let rect = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.rect.contains(at) => Some(r.rect),
+                        _ => None,
+                    })
+                    .min_by(|a, b| a.area().total_cmp(&b.area()))
+                    .unwrap();
+                (value, rect)
+            },
+        );
+        let [(_, left), (_, right), (_, top), (_, bottom)] = controls;
+        assert_eq!(left.top(), right.top());
+        assert_eq!(left.bottom(), right.bottom());
+        assert_eq!(top.top(), left.top());
+        assert_eq!(bottom.bottom(), left.bottom());
+        assert_eq!(top.left(), bottom.left());
+        assert_eq!(top.right(), bottom.right());
+        assert!(top.left() > left.right() && top.right() < right.left());
+        assert!(top.bottom() < bottom.top());
+        assert!((top.height() - bottom.height()).abs() < 0.1);
+        assert!(left.height() > 2.0 * top.height() && left.height() < 2.4 * top.height());
+        assert!(right.right() - left.left() <= 180.0 * scale);
+        for (value, rect) in controls {
+            let at = rect.center();
+            {
+                let mut draw = |ui: &mut Ui| spectrum_edge(ui, &mut edge);
+                frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
+                frame(&ctx, vec![press(at, true)], &mut draw);
+                frame(&ctx, vec![press(at, false)], &mut draw);
+            }
+            assert_eq!(edge, value);
+        }
+    }
+}
+
+#[test]
+fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let (mut hue, mut amount) = (180.0, 0.3);
+    let key = crate::panes::pane_content_right();
+    ctx.data_mut(|d| d.insert_temp(key, 120.0f32));
+    let mut draw = |ui: &mut Ui| {
+        ui.set_max_width(120.0);
+        skin_color(ui, "Accent", &mut hue, &mut amount, ["Hue", "Amount"], |h, s| {
+            let [r, g, b] = harmonigraph_scene::skin::accent_color(h, s);
+            egui::Color32::from_rgb(r, g, b)
+        })
+    };
+    frame(&ctx, vec![], &mut draw);
+    let click = egui::pos2(30.0, 10.0);
+    frame(&ctx, vec![Event::PointerMoved(click)], &mut draw);
+    frame(&ctx, vec![press(click, true)], &mut draw);
+    frame(&ctx, vec![press(click, false)], &mut draw);
+    let output = frame(&ctx, vec![], &mut draw);
+    let handle = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Circle(c) if (c.radius - 4.0).abs() < 0.01 => Some(c.center),
+            _ => None,
+        })
+        .expect("the color popup must actually be open");
+    frame(&ctx, vec![Event::PointerMoved(handle)], &mut draw);
+    frame(&ctx, vec![press(handle, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(handle + egui::vec2(30.0, -10.0))], &mut draw);
+    frame(&ctx, vec![press(handle + egui::vec2(30.0, -10.0), false)], &mut draw);
+    assert!(hue > 180.0 && amount > 0.3);
+    assert_eq!(ctx.data(|d| d.get_temp::<f32>(key)), Some(120.0));
+}
+
+#[test]
+fn numeric_entries_use_display_units_and_reject_non_finite_input() {
+    for (unit, suffix, text, want) in [
+        (1000.0, " ms", "250", 0.25),
+        (100.0, "%", "75%", 0.75),
+        (1.0, "×", "NaN", 0.5),
+        (1.0, "×", "inf", 0.5),
+    ] {
+        let ctx = crate::tests::probe::themed_at(1.0);
+        let mut value = 0.5;
+        let field = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut draw = |ui: &mut Ui| {
+            let plot = plot::Plot::with_fields(ui, "Exact entry", 1);
+            plot.fields(ui, |ui| {
+                field.set(
+                    plot::value_bar(ui, &mut value, 0.0..=1.0, ["Value", "Value"], unit, suffix)
+                        .rect,
+                );
+            });
+        };
+        frame(&ctx, vec![], &mut draw);
+        let at = field.get().center();
+        frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
+        for _ in 0..2 {
+            frame(&ctx, vec![press(at, true)], &mut draw);
+            frame(&ctx, vec![press(at, false)], &mut draw);
+        }
+        frame(&ctx, vec![], &mut draw);
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        frame(&ctx, vec![key(egui::Key::A, Modifiers::COMMAND)], &mut draw);
+        frame(
+            &ctx,
+            vec![Event::Text(text.to_owned()), key(egui::Key::Enter, Modifiers::NONE)],
+            &mut draw,
+        );
+        assert!((value - want).abs() < 1e-6, "{text} stored {value}");
+    }
+}
+
+#[test]
+fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
+    for scale in [0.7, 1.0, 1.5] {
+        for width in [120.0, 219.0, 220.0, 240.0, 320.0] {
+            let ctx = crate::tests::probe::themed_scaled(scale);
+            let screen = egui::vec2(800.0, 500.0);
+            let pane =
+                egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(width * scale, 450.0));
+            for count in [1, 2, 3] {
+                crate::tests::probe::frame_into(&ctx, screen, pane, |ui| {
+                    let plot = plot::Plot::with_fields(ui, "Control", count);
+                    plot.fields(ui, |ui| {
+                        for i in 0..count {
+                            let field = ui
+                                .push_id(i, |ui| {
+                                    plot::value_bar(
+                                        ui,
+                                        &mut 6.0,
+                                        0.0..=6.0,
+                                        ["Exact value", "Value"],
+                                        1000.0,
+                                        " ms",
+                                    )
+                                })
+                                .inner;
+                            assert!(
+                                plot.response.rect.expand(0.1).contains_rect(field.rect),
+                                "{width}/{scale}: value escaped control"
+                            );
+                            assert!(
+                                !plot.rect.expand(8.0 * scale).intersects(field.rect),
+                                "value covers a plot handle"
+                            );
+                        }
+                    });
+                    let after = ui.label("Next setting").rect;
+                    assert!(after.top() >= plot.response.rect.bottom());
+                    if width >= 240.0 {
+                        assert!(
+                            plot.response.rect.height() < 80.0 * scale,
+                            "compact control grew extra rows"
+                        );
+                    }
+                });
+            }
+        }
+    }
+}

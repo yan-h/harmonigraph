@@ -470,7 +470,18 @@ fn check(edge: Edge) {
                 },
             );
         });
-        assert_eq!(visits.len(), scenario.visits, "{edge:?} {scenario:?}: {visits:?}");
+        let depth_endpoint_entries = usize::from(
+            scenario.pane == panes::Tab::LatticeSettings
+                && scenario.material == harmonigraph_scene::LatticeMaterial::Stars
+                || scenario.pane == panes::Tab::AnalyzerSettings
+                    && scenario.enabled
+                    && scenario.style == harmonigraph_scene::CloudStyle::Stars,
+        ) * 2;
+        assert_eq!(
+            visits.len(),
+            scenario.visits + depth_endpoint_entries,
+            "{edge:?} {scenario:?}: {visits:?}"
+        );
         let saw = |label: &str| visits.iter().any(|visit| visit.label == label);
         if scenario.pane == panes::Tab::AnalyzerSettings
             && scenario.style == harmonigraph_scene::CloudStyle::Stars

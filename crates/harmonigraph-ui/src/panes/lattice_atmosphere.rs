@@ -73,10 +73,9 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             super::block(ui, "Motion");
             if settings.material_style == LatticeMaterial::Stars {
                 super::material::stars_motion(ui, &mut settings.stars);
-            } else {
-                super::material::speed(ui, &mut settings.material_speed);
             }
-            super::material::direction(ui, &mut settings.material_direction);
+            let speed = (settings.material_style != LatticeMaterial::Stars).then_some(&mut settings.material_speed);
+            crate::widgets::drift(ui, &mut settings.material_direction, speed);
             super::block(ui, "Appearance");
             match settings.material_style {
                 LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings),

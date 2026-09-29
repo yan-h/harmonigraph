@@ -272,7 +272,7 @@ pub(super) fn settings_pane_at_width(
 /// controls rather than out of window. [`tab_body_on`] asserts it, because a
 /// bar below the clip skips its paint and a page that outgrew this would
 /// otherwise go quietly unchecked past it.
-pub(super) const PANE_HEIGHT: f32 = 3200.0;
+pub(super) const PANE_HEIGHT: f32 = 5600.0;
 
 /// One tab's body painted into a content box `width` points across on a themed
 /// context of its own, and the frame it produced.

@@ -120,7 +120,7 @@ pub const TIME_SOFTNESS_MAX: f32 = 2000.0;
 /// Bounds shared by the [`SpectralAtmosphere::contours`] control and sanitizer.
 pub const CONTOURS_MIN: f32 = 2.0;
 /// See [`CONTOURS_MIN`].
-pub const CONTOURS_MAX: f32 = 20.0;
+pub const CONTOURS_MAX: f32 = 16.0;
 
 /// Bounds shared by the [`SpectralAtmosphere::contour_softness`] control and sanitizer.
 pub const CONTOUR_SOFTNESS_MIN: f32 = 0.01;
@@ -629,7 +629,7 @@ impl Default for SpectralAtmosphere {
             // Full strength is what the `Lava` style drew, and that style was
             // the fresh one.
             contour_strength: 1.0,
-            contours: 17.0,
+            contours: 16.0,
             contour_softness: 0.492_202_6,
             cloud_depth: 1.0,
             color_pickup: 0.043_984_346,

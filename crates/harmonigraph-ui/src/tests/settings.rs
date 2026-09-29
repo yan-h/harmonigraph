@@ -14,7 +14,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
     let before = ron::to_string(&state.picture.appearance.spectrum).unwrap();
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    let mut harness = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    let mut harness = DockHarness::at(egui::vec2(1000.0, 4000.0));
     let output = harness.frame(&mut state, vec![]);
     assert!(
         output.shapes.iter().any(|shape| {
@@ -135,11 +135,14 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
 /// drifts from the lattice with this still green.
 #[test]
 fn the_shape_bars_preview_is_the_curve_the_notes_run_on() {
-    let shapes: Vec<egui::Shape> = settings_pane_at_width(
-        panes::Tab::LatticeSettings,
-        320.0,
-        harmonigraph_scene::Projection::default(),
-    )
+    // A positive duration reaches the curved transition. Zero now correctly
+    // draws an immediate step rather than a hypothetical one-second fade.
+    let mut seconds = 0.5;
+    let mut shape = harmonigraph_scene::ViewConfig::default().fade_shape;
+    let shapes: Vec<egui::Shape> = super::probe::painted_full(egui::vec2(320.0, 500.0), |ui| {
+        crate::widgets::fade(ui, &mut seconds, &mut shape);
+    })
+    .shapes
     .into_iter()
     .map(|cs| cs.shape)
     .collect();
@@ -319,7 +322,7 @@ fn a_folded_heading_keeps_its_rules_and_chevron_clear() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
     state.workspace.interaction.folded_sections.insert("Analyzer/Analysis".to_owned());
-    let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0));
     h.settle(&mut state);
     let out = h.frame(&mut state, vec![]);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
@@ -416,7 +419,7 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
     assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
 
-/// The bar tracks a pane drew, by width.
+/// The bar tracks a pane drew, including any companion picture in their width.
 ///
 /// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
 /// which the accent fill over it does not answer to — that is the same height in
@@ -428,6 +431,23 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
 /// excusing a rect for being an odd length would excuse the bug.
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
+    let pictures: Vec<_> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r)
+                if r.fill == well
+                    && (r.rect.height() - crate::widgets::direct_plot_height(1.0)).abs() < 0.6 =>
+            {
+                Some(r.rect)
+            }
+            egui::Shape::Mesh(mesh)
+                if (mesh.calc_bounds().height() - crate::theme::ROW_HEIGHT).abs() < 0.6 =>
+            {
+                Some(mesh.calc_bounds())
+            }
+            _ => None,
+        })
+        .collect();
     let dots: Vec<egui::Pos2> = shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
@@ -443,7 +463,19 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
                     && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
             {
-                Some(r.rect.width())
+                if let Some(picture) = pictures.iter().find(|picture| {
+                    r.rect.left() >= picture.right()
+                        && r.rect.top() >= picture.top() - 0.6
+                        && r.rect.bottom() <= picture.bottom() + 0.6
+                }) {
+                    // A paired control must fill the column as a whole. Its
+                    // slider starts immediately after its actual picture,
+                    // rather than being excused for any arbitrary short width.
+                    assert!((r.rect.left() - picture.right() - 8.0).abs() < 0.6);
+                    Some(r.rect.right() - picture.left())
+                } else {
+                    Some(r.rect.width())
+                }
             }
             _ => None,
         })
@@ -481,7 +513,7 @@ fn fresh_mappings() -> usize {
 }
 
 #[test]
-fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
+fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
@@ -873,7 +905,7 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // under the Display pane's headers is layout, not this test's business.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
-        ("a settings bar", Grab::Bar("Pitch softness")),
+        ("a settings bar", Grab::Bar("Wide blur mix")),
     ] {
         for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
             let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
@@ -896,13 +928,13 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
 /// outside the window ends that way every time.
 #[test]
 fn the_console_names_a_drag_the_wheel_had_to_end() {
-    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch softness"), Lose::Nothing);
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Wide blur mix"), Lose::Nothing);
     assert!(
         logged.iter().any(|line| line.starts_with("wheel: a drag on")),
         "the wheel ended a stranded drag without saying so: {logged:?}",
     );
     for quiet in [Lose::Pointer, Lose::Focus] {
-        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Pitch softness"), quiet);
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Wide blur mix"), quiet);
         assert!(
             !logged.iter().any(|line| line.starts_with("wheel:")),
             "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
@@ -1045,7 +1077,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that Release is actually on screen below the view,
+    // Tall enough that Mix is actually on screen below the view,
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -1069,19 +1101,18 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // state read below is the one the frames wrote.
     let ctx = h.ctx.clone();
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Release: a plain 0..=0.5 bar (`settings::BALLISTICS_MAX`), so where the
+    // Mix: a plain 0..=1 bar , so where the
     // pointer is says what the value should be, and the far end of the range is
     // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
-    let name =
-        bar_named(&out, "Live release").expect("the Release bar is drawn on the Analyzer page");
+    let name = bar_named(&out, "Wide blur mix").expect("the Mix bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.picture.appearance.spectrum.release;
+    let before = state.picture.appearance.spectrum.atmosphere.spread;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
     frame(&mut state, vec![press(on_the_bar, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
-    assert!(ctx.dragged_id().is_some(), "the press on the Release bar started no drag");
-    let inside = state.picture.appearance.spectrum.release;
+    assert!(ctx.dragged_id().is_some(), "the press on the Mix bar started no drag");
+    let inside = state.picture.appearance.spectrum.atmosphere.spread;
     assert!(inside != before, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
@@ -1092,7 +1123,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.picture.appearance.spectrum.release, 0.5,
+        state.picture.appearance.spectrum.atmosphere.spread, 1.0,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 
@@ -1618,10 +1649,13 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
             "Pitch span" => zoom,
             // Between the Reading row and Zoom, by position for the same
             // reason: it is the section's own bar or this measures nothing.
-            "Ring threshold" => text_ys(&shapes, "Ring threshold")
-                .into_iter()
-                .find(|y| *y > reading_row && *y < zoom)
-                .expect("the Audio section's Gate bar sits between Reading and Zoom"),
+            "Ring threshold" => {
+                text_ys(&shapes, "Ring threshold")
+                    .into_iter()
+                    .find(|y| *y > reading_row && *y < zoom)
+                    .expect("the threshold diagram sits between Reading and Zoom")
+                    + 35.0
+            }
             other => panic!("{other:?} is not a bar in the Audio section"),
         };
         track_color(&shapes, y)
@@ -1653,36 +1687,35 @@ fn hidden_audio_ring_keeps_restoration_instructions() {
     use harmonigraph_scene::SpectralReading;
 
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
-        let hidden = audio_section_shapes(reading, 0.0);
+        let mut hidden = Vec::new();
+        let hidden_values = crate::widgets::range_probe::collect(|| {
+            hidden = audio_section_shapes(reading, 0.0);
+        });
+        for setting in ["Ring attack", "Ring release"] {
+            assert!(
+                !hidden_values.iter().any(|v| v.label == setting),
+                "{setting} remained visible"
+            );
+        }
         assert_eq!(text_ys(&hidden, "AUDIO RING").len(), 1);
         assert_eq!(text_ys(&hidden, "Audio ring — hidden").len(), 1);
         assert_eq!(text_ys(&hidden, "Increase Audio width in Note layers to show it.").len(), 1);
-        for setting in [
-            "Ring display",
-            "Ring threshold",
-            "Threshold hysteresis",
-            "Ring attack",
-            "Ring release",
-            "Pitch tolerance",
-            "Pitch span",
-        ] {
+        for setting in ["Ring display", "Ring threshold", "Band", "Pitch tolerance", "Pitch span"] {
             assert!(
                 text_ys(&hidden, setting).is_empty(),
                 "{setting:?} remained visible with {reading:?} dialled off",
             );
         }
 
-        let expanded = audio_section_shapes(reading, 0.3);
+        let mut expanded = Vec::new();
+        let expanded_values = crate::widgets::range_probe::collect(|| {
+            expanded = audio_section_shapes(reading, 0.3);
+        });
+        for setting in ["Ring attack", "Ring release"] {
+            assert!(expanded_values.iter().any(|v| v.label == setting), "{setting} did not return");
+        }
         assert_eq!(text_ys(&expanded, "AUDIO RING").len(), 1, "the group lost its name");
-        for setting in [
-            "Ring display",
-            "Ring threshold",
-            "Threshold hysteresis",
-            "Ring attack",
-            "Ring release",
-            "Pitch tolerance",
-            "Pitch span",
-        ] {
+        for setting in ["Ring display", "Ring threshold", "Band", "Pitch tolerance", "Pitch span"] {
             assert_eq!(
                 text_ys(&expanded, setting).len(),
                 1,
@@ -1712,18 +1745,18 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
     };
 
     let blurred = shapes(ShadowKernel::Gaussian);
-    assert!(text_ys(&blurred, "Shadow falloff").is_empty());
-    assert_eq!(text_ys(&blurred, "Shadow width").len(), 4, "Blur lost common shadow controls");
-    assert_eq!(text_ys(&blurred, "Shadow spread").len(), 4, "Blur lost its spread control");
+    assert!(text_ys(&blurred, "Falloff").is_empty());
+    assert_eq!(text_ys(&blurred, "Darkness").len(), 4, "Blur lost common shadow controls");
+    assert_eq!(text_ys(&blurred, "Spread").len(), 4, "Blur lost its spread control");
 
     let contour = shapes(ShadowKernel::Distance);
     assert_eq!(
-        text_ys(&contour, "Shadow falloff").len(),
+        text_ys(&contour, "Falloff").len(),
         4,
         "a Contour shadow group has no falloff control",
     );
-    assert_eq!(text_ys(&contour, "Shadow width").len(), 4, "Contour lost common shadow controls",);
-    assert!(text_ys(&contour, "Shadow spread").is_empty());
+    assert_eq!(text_ys(&contour, "Darkness").len(), 4, "Contour lost common shadow controls",);
+    assert!(text_ys(&contour, "Spread").is_empty());
 }
 
 /// No settings tab draws two sections under one heading. A fold is saved as
@@ -1809,7 +1842,7 @@ fn heading_color(out: &egui::FullOutput, leaf: egui::Rect, heading: &str) -> egu
 fn a_heading_switch_turns_its_feature_off_without_folding_the_section() {
     let mut state = fresh();
     state.workspace.layout.select(panes::Tab::AnalyzerSettings);
-    let mut h = DockHarness::at(egui::vec2(1000.0, 1600.0));
+    let mut h = DockHarness::at(egui::vec2(1000.0, 4000.0));
     h.settle(&mut state);
     let leaf = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
     let out = h.frame(&mut state, vec![]);

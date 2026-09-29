@@ -46,6 +46,36 @@ Renamed sections start unfolded when opening older projects;
 visual values and their saved keys are unchanged.
 Detail folds such as **Map editing** and **Rendering quality** reopen closed with the editor.
 
+## Combined controls
+
+Related settings can be edited directly in diagrams.
+Drag a round handle,
+or focus it and use the arrow keys;
+Shift makes keyboard adjustments finer.
+A fixed-width picture sits beside compact sliders with labels and value readouts.
+Very narrow panes stack the values below the picture.
+The sliders remain independently editable:
+drag a bar or double-click it to type in the displayed units.
+
+| Control | What the handles change |
+| --- | --- |
+| Ring threshold | The upper handle sets the opening threshold; the lower sets hysteresis. The white marker shows the effective closing threshold, including the small floor that prevents silent rings from staying latched. A zero opening threshold deliberately shows silent rings. |
+| Drift | Point the vector along the direction of travel and drag outward for speed. Stars use a direction compass and retain their independent depth-dependent speed profile. |
+| Note fade | Move the endpoint horizontally for duration and the midpoint vertically for curve shape. Duration remains host-automatable. |
+| Cabinet depth axis | Point the endpoint along the depth axis; its distance from the origin sets the depth-step scale. |
+| Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
+| Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
+| Star size and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size uses a logarithmic vertical scale; speed is linear. |
+| Shadow profile | Move the upper-right corner for width and darkness. Contour shadows have a curve handle; Blur shadows expose caster spread and show schematic extent because their actual profile depends on the caster. |
+| Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
+| Contour levels | Drag the integer slider from 2 to 16, or double-click to type; the band preview shows the count. |
+| Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
+
+These controls edit the existing saved values.
+Saved keys are unchanged.
+Contour levels default to 16 and are capped there;
+older values above 16 are clamped when loaded.
+
 ## Note bloom
 
 **Note bloom** is one shared control in **Lattice → Note bloom** and **Analyzer → MIDI ribbons**.
