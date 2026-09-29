@@ -639,13 +639,7 @@ mod tests {
             let view = ViewConfig::default();
             Bench {
                 levels,
-                layout: octave_layout(
-                    MAX_SPAN,
-                    view.octave_center,
-                    0,
-                    view.octave_extra_size,
-                    view.octave_extra_blend,
-                ),
+                layout: octave_layout(MAX_SPAN, view.octave_center),
                 tuning: Tuning::just(),
             }
         }

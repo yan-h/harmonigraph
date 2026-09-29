@@ -1186,7 +1186,7 @@ mod tests {
     }
     #[test]
     fn stagger_spread_spans_starts_and_reverses_without_waiting() {
-        let layout = crate::octave_layout(4, 60.0, 1, 0.3, 0.7);
+        let layout = crate::octave_layout(6, 60.0);
         for order in AnimationOrder::ALL {
             for spread in [0.0, NoteAnimationConfig::default().stagger_spread, 0.9] {
                 let mut view = ViewConfig { fade_shape: 0.0, ..view() };
@@ -1323,7 +1323,7 @@ mod tests {
     }
     #[test]
     fn random_order_and_grow_bounds_are_stable() {
-        let layout = crate::octave_layout(4, 60.0, 1, 0.3, 0.7);
+        let layout = crate::octave_layout(6, 60.0);
         let config = NoteAnimationConfig {
             order: AnimationOrder::RandomStagger,
             radial_start: -1.0,

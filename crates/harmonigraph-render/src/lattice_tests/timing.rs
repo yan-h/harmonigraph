@@ -350,8 +350,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     crate::shader_assets::initialize();
     if let Ok(value) = std::env::var("PROBE_OCTAVES") {
         let count = value.parse().expect("PROBE_OCTAVES is a count");
-        scene.octave_layout =
-            harmonigraph_scene::octave_layout(count, scene.octave_layout.center, 0, 1.0, 0.0);
+        scene.octave_layout = harmonigraph_scene::octave_layout(count, scene.octave_layout.center);
     }
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
         scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");

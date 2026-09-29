@@ -156,8 +156,8 @@ mod tests {
 
     #[test]
     fn circular_and_bidirectional_orders_begin_at_the_low_high_seam() {
-        for (count, extras) in [(2, 0), (7, 0), (4, 1), (5, 2)] {
-            let layout = crate::octave_layout(count, 64.5, extras, 0.3, 0.7);
+        for count in [2, 7, 6, 9] {
+            let layout = crate::octave_layout(count, 64.5);
             let span = layout.span as usize;
             let config = NoteAnimationConfig { stagger_spread: 0.8, ..Default::default() };
 
@@ -174,7 +174,7 @@ mod tests {
             for i in 0..span / 2 {
                 assert!(
                     (both[i] - both[span - 1 - i]).abs() < 1e-5,
-                    "asymmetric seam walk for {count}+2×{extras}: {both:?}",
+                    "asymmetric seam walk for {count}: {both:?}",
                 );
                 if i + 1 < span / 2 {
                     assert!(both[i] < both[i + 1]);

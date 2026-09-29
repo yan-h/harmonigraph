@@ -73,13 +73,7 @@ pub fn derive_scene_with_extra(
     // built once: every node draws the same slice WIDTHS. Which octaves those
     // slices are, and how far the ring is turned to put them on their pitches,
     // is per node — see the fold below.
-    let octave_layout = octave_layout(
-        view.octave_count,
-        view.octave_center,
-        view.octave_extras,
-        view.octave_extra_size,
-        view.octave_extra_blend,
-    );
+    let octave_layout = octave_layout(view.octave_count, view.octave_center);
 
     // Keep the rectangular window's canonical order. Equal-depth GPU draws
     // preserve it, and changing that order changes FP16 light accumulation.

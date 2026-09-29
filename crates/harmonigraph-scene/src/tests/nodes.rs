@@ -883,15 +883,7 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     // does, so the note is still there to see and only its exact octave is
     // given up. Dropping it instead would make a node go dark for notes that
     // are audibly sounding on it.
-    // `octave_extras: 0` explicitly rather than `ViewConfig::default()`: the
-    // fresh-view look is Yan's and is free to ship a fringe, but this test is
-    // about the fold at the ring's own edge, which a fringe would move.
-    let view = ViewConfig {
-        octave_count: 5,
-        octave_center: 60.0,
-        octave_extras: 0,
-        ..ViewConfig::default()
-    };
+    let view = ViewConfig { octave_count: 5, octave_center: 60.0, ..ViewConfig::default() };
     // Five octaves with middle C at the top, so a C node draws five
     // indicators: middle C's octave and two either side. MIDI 36..95 — every
     // note from C1 to B5 in the DAW's numbering — has one of its own, and only
@@ -915,12 +907,8 @@ fn a_note_outside_the_ring_lights_the_outermost_indicator() {
     assert_eq!(lit(24), MIDDLE_C_SLOT - 2, "an octave under the bottom folds into it");
     // The widest span reaches those octaves for real, so the fold is the
     // setting talking and not a ceiling in the packing.
-    let wide = ViewConfig {
-        octave_count: crate::MAX_SPAN,
-        octave_center: 60.0,
-        octave_extras: 0,
-        ..ViewConfig::default()
-    };
+    let wide =
+        ViewConfig { octave_count: crate::MAX_SPAN, octave_center: 60.0, ..ViewConfig::default() };
     let mut tracker = NoteTracker::new();
     tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 96, 1.0));
     let scene = scene_of(&tracker, &Tuning::default(), &wide, &plain_frame(), 0.5);
@@ -945,15 +933,7 @@ fn a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has() {
     // below the node's own numbering: `matches` wraps, so a node at 1195¢ is
     // lit by a played 0¢, and the lowest MIDI C on it comes out as slot -1.
     let tuning = Tuning::from_cents(-5.0, 700.0, 400.0, 1000.0, 5.0);
-    // `octave_extras: 0` explicitly rather than `ViewConfig::default()`: the
-    // fresh-view look is Yan's and is free to ship a fringe, but this test is
-    // about the packing's own edge, which a fringe would move.
-    let view = ViewConfig {
-        octave_count: 5,
-        octave_center: 12.0,
-        octave_extras: 0,
-        ..ViewConfig::default()
-    };
+    let view = ViewConfig { octave_count: 5, octave_center: 12.0, ..ViewConfig::default() };
     let scene = scene_of(&held(0), &tuning, &view, &plain_frame(), 0.5);
     let node_cents = tuning.pitch_class(LatticePos::ORIGIN).to_cents();
     assert!(node_cents > 1190.0, "the origin must sit just under the wrap, got {node_cents}");
@@ -974,7 +954,7 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     // and the COUNT is not: every class draws the span, so the numbers shift
     // and nothing else does. Five octaves centered on middle C gives a C node
     // slots 3..7 and a G node the five that straddle those.
-    let wheel = octave_layout(5, 60.0, 0, DEFAULT_EXTRA_SIZE, DEFAULT_EXTRA_BLEND);
+    let wheel = octave_layout(5, 60.0);
     assert_eq!(
         wheel.slots(0.0),
         (MIDDLE_C_SLOT as i32 - 2, MIDDLE_C_SLOT as i32 + 2),
@@ -990,9 +970,7 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     // exactly on one of the node's octaves breaks the tie downward. Pinned
     // absolutely, because everything else here is measured FROM the ring's
     // base and would read the same with the whole ring an octave out.
-    let even = |center: f32| {
-        octave_layout(4, center, 0, DEFAULT_EXTRA_SIZE, DEFAULT_EXTRA_BLEND).slots(0.0)
-    };
+    let even = |center: f32| octave_layout(4, center).slots(0.0);
     assert_eq!(even(59.0), (3, 6), "a center under the node's octave reaches down");
     assert_eq!(even(61.0), (4, 7), "and one over it reaches up");
     assert_eq!(even(60.0), (3, 6), "a center on the octave itself ties downward");
@@ -1007,33 +985,6 @@ fn each_node_draws_its_own_octaves_nearest_the_center() {
     assert!((turn(700.0) - 5.0 * semitone).abs() < 1e-4, "a G node turned the wrong way");
     assert!((turn(200.0) + 2.0 * semitone).abs() < 1e-4, "a D node turned the wrong way");
     assert!((turn(600.0).abs() - 6.0 * semitone).abs() < 1e-4, "an F# node is half a slice round");
-}
-
-#[test]
-fn the_views_fringe_reaches_the_wheel() {
-    // The count and center are pinned by the fold test above, which reads them
-    // back through the clamp — but nothing there touches the extras or their
-    // size, so hard-coding any of the three at the derive call would leave the
-    // suite green while every ring on screen came out evenly divided.
-    let view = ViewConfig {
-        octave_count: 5,
-        octave_center: 60.0,
-        octave_extras: 2,
-        octave_extra_size: 0.4,
-        octave_extra_blend: 0.25,
-        ..ViewConfig::default()
-    };
-    let scene = scene_of(&sounding(), &Tuning::default(), &view, &plain_frame(), 0.5);
-    assert_eq!(
-        scene.octave_layout,
-        octave_layout(5, 60.0, 2, 0.4, 0.25),
-        "the frame's wheel is the one the view asked for"
-    );
-    assert_ne!(
-        scene.octave_layout,
-        octave_layout(5, 60.0, 0, 0.4, 0.25),
-        "and a fringe is not the even division"
-    );
 }
 
 #[test]

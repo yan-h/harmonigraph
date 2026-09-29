@@ -4,7 +4,7 @@
 //! a scenario/fixture and a visit expectation here. SETTINGS_PANES only checks
 //! our page inventory, not future conditional coverage. Disabled bars are
 //! recorded, while hidden bars need an enabled scenario that makes them draw.
-//! Gradients, StackBar, OctaveStrip, LayerStrip, choices, text fields, RangeBar
+//! Gradients, StackBar, LayerStrip, choices, text fields, RangeBar
 //! ordering/minimum spans and gestures are outside this guard, as are renderer
 //! clamps and semantic unit mappings.
 
@@ -46,7 +46,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     let a = &mut saved.picture.appearance;
     macro_rules! poison { ($owner:expr; $($field:ident),+ $(,)?) => { $( $owner.$field = v; )+ }; }
     poison!(a.view; render_scale, spiral_bloom, note_bloom, sevens_size, label_scale,
-        octave_center, octave_extra_size, octave_extra_blend, mark_delay, fade_shape,
+        octave_center, mark_delay, fade_shape,
         spectral_ring_gate, spectral_ring_hysteresis, spectral_ring_attack, spectral_ring_release,
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
         ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
@@ -71,6 +71,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     a.view.min_sevens = n;
     a.view.max_sevens = n;
     a.view.center_sevens = n;
+    a.view.octave_count = if matches!(edge, Edge::Low) { 0 } else { u32::MAX };
     for shadow in a.view.shadow.groups_mut() {
         poison!(shadow; width, spread, depth, falloff);
     }
@@ -268,7 +269,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::Colors => 2 + 3,
             // The picture, then the background glow and breathing (10) with its texture
             // switched off, then two Gaussian shadow groups of three bars each.
-            panes::Tab::LatticeSettings => 16 + 1 + 10 + 6,
+            panes::Tab::LatticeSettings => 15 + 1 + 10 + 6,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -278,7 +279,7 @@ fn scenarios() -> Vec<Scenario> {
             _ => panic!("add the new settings page's range scenario"),
         };
         cases.push(Scenario { pane, visits, ..base });
-        // Exercise the conditional groups too: labels, fringe, marks, audio
+        // Exercise the conditional groups too: labels, marks, audio
         // reading, sevens, the glow texture, roll/note names, the spectrogram,
         // backdrop, glow and Contour shadow falloff (replacing Gaussian
         // spread in each of a page's two groups).
@@ -298,14 +299,14 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Mosaic,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
         ..base
     });
     for profile in [
@@ -320,7 +321,7 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile: profile,
             expanded: true,
             enabled: true,
-            visits: 16
+            visits: 15
                 + 1
                 + 10
                 + 6
@@ -356,7 +357,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::VelvetScales,
         enabled: true,
-        visits: 16 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
         ..base
     });
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
@@ -382,7 +383,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 22 + 1 + 13 + 6,
+            visits: 21 + 1 + 13 + 6,
             ..base
         });
     }

@@ -489,7 +489,7 @@ pub(super) const MIDDLE_C: u32 = 1 << harmonigraph_scene::MIDDLE_C_SLOT;
 /// capture must not silently shrink the fixtures until their asserted paths are
 /// no longer reached.
 pub(super) fn probe_octave_layout() -> harmonigraph_scene::OctaveLayout {
-    harmonigraph_scene::octave_layout(5, 60.0, 0, 1.0, 0.0)
+    harmonigraph_scene::octave_layout(5, 60.0)
 }
 
 /// Bloom must add light (halo energy over the bloom-off output) —

@@ -889,7 +889,7 @@ fn slice_thickness(thickness: vec3<u32>, i: u32) -> f32 {
 // every node draws the span octaves of ITSELF nearest that center. Three
 // things follow, and they are the whole layout:
 //
-//   - a slice is exactly one octave, so with no extras it is exactly a turn
+//   - a slice is exactly one octave, so it is exactly a turn
 //     over the span — on every node, whatever its pitch class;
 //   - the center pitch is straight up on every node too, which is what makes
 //     the top of the picture mean one pitch across the whole lattice;
@@ -968,10 +968,7 @@ fn oct_ring(cents: f32) -> OctRing {
     }
     var ring: OctRing;
     ring.base = i32(nearest) + low;
-    // Turned so the CENTER pitch lands straight up. Solved for rather than
-    // derived from the ring's middle: with extras the slice the center falls
-    // in is not one span-th of the turn, and the pitch sits at its own
-    // fraction of whatever width that slice has.
+    // Turn the ring so the center pitch lands straight up.
     let along = (oct_center() - oct_slot_pitch(ring.base, cents)) / 12.0 + 0.5;
     ring.seam = OCT_UP + oct_walk(along);
     return ring;
@@ -1866,8 +1863,8 @@ fn sector_fold(uv: vec2<f32>, edges: vec2<f32>) -> SectorFold {
 // The two features a pie has: its arc, and the straight edge running from the
 // center out to it. Which one is nearest is which SIDE of that edge the point
 // falls — inside the wedge the arc is the only way out, outside it the edge is.
-// The sign is what says which, so a wedge past a half turn (which the extras can
-// hand out — see `outer_glyph`) needs no case of its own: the fold puts the
+// The sign is what says which, so a wedge past a half turn
+// needs no case of its own: the fold puts the
 // point on the far side of one edge either way.
 fn sector_pie(f: SectorFold, r: f32) -> f32 {
     let arc = length(f.q) - r;
