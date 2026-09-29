@@ -220,9 +220,6 @@ fn persist_round_trips_camera_and_view() {
     // a blob is entitled to one.
     state.picture.appearance.view.octave_count = 7;
     state.picture.appearance.view.octave_center = 64.5;
-    // A fringe too, with a blend the strip can only reach once there are two
-    // extras a side — the three fields are set together because a wheel is
-    // what they mean together.
     state.picture.appearance.view.plus_arm = 0.5;
     state.picture.appearance.view.plus_taper = 0.07;
     for (index, group) in state.picture.appearance.view.shadow.groups_mut().into_iter().enumerate()

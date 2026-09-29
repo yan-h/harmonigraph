@@ -381,9 +381,7 @@ impl<'a> SpectrumBar<'a> {
     /// either, since the Spectral pane's heatmap has a default of its own and a
     /// reset there landing on the lattice's arc is the same unrecoverable jump
     /// one pane over. Read it off the fresh config rather than restating it,
-    /// for the reason [`reset_wheel`] is.
-    ///
-    /// [`reset_wheel`]: super::octave::reset_wheel
+    /// so a reset follows any later change to the shipped defaults.
     pub fn new(gradient: &'a mut Gradient, home: Gradient) -> Self {
         SpectrumBar { gradient, home }
     }
