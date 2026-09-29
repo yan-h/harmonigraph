@@ -34,7 +34,6 @@ mod value;
 pub(crate) use bend::bend_plot_height;
 pub use bend::BendPlot;
 pub(crate) use fold::{paint_chevron, paint_fold};
-pub(crate) use gradient::track_hue;
 pub use gradient::{GradientPreview, SpectrumBar, SpreadBar};
 pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, GROUP_GAP};
 pub use label::{label, weak};
@@ -60,3 +59,21 @@ pub(crate) use gradient::{flip_button_width, preview_height, spectrum_track_widt
 pub(crate) use mesh::{band_bounds, band_columns};
 #[cfg(test)]
 pub(crate) use value::curve_paths;
+
+mod direction;
+mod pickers;
+mod plot;
+mod profile;
+mod threshold;
+mod timing;
+pub(crate) use direction::{cabinet, drift, softness};
+pub(crate) use pickers::{contours, skin_color, spectrum_edge};
+pub(crate) use profile::{depth, shadow};
+pub(crate) use threshold::threshold;
+pub(crate) use timing::{fade, response};
+
+#[cfg(test)]
+mod direct_tests;
+
+#[cfg(test)]
+pub(crate) use plot::height as direct_plot_height;

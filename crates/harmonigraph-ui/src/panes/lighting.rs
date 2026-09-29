@@ -9,8 +9,7 @@ use crate::AppearanceDocument;
 use harmonigraph_scene::{
     AtmosphereSettings, GlowCurve, ShadowKernel, ShadowStyle, ViewConfig, BREATH_SPEED_MAX,
     BREATH_SPEED_MIN, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
-    GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN,
-    SPECTRAL_SHADOW_MAX,
+    GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
 
 /// The shadows under the lattice's ink, in their own section. They stay
@@ -138,41 +137,31 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 );
         });
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
-            // The INK's own share of the light, where a Shadow depth says the
-            // ground's: one question asked twice, and the answers are free of each
-            // other on purpose — a dark pool with a tinted ring in it is a picture
-            // no single coupled dial can name. Only the LIT ink is dialled, the
-            // rest of the lattice always taking the whole field, for the reason the
-            // hover text gives.
-            ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Light on notes")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "Amount of glow laid over active rings and marks. \
+        // The INK's own share of the light, where a Shadow depth says the
+        // ground's: one question asked twice, and the answers are free of each
+        // other on purpose — a dark pool with a tinted ring in it is a picture
+        // no single coupled dial can name. Only the LIT ink is dialled, the
+        // rest of the lattice always taking the whole field, for the reason the
+        // hover text gives.
+        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Light on notes")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Amount of glow laid over active rings and marks. \
                      0% preserves their original colors; \
                      100% blends them into the surrounding light. \
                      Idle shapes always receive the full glow.",
-                );
-            // The light's own clock, last, under everything it shapes. Its own pair
-            // and not the note Fade in Note animation, because a halo is the slow part of the
-            // picture: on the layers' envelopes it flickers with the marks, which
-            // are meant to be fast.
-            super::block(ui, "Glow response");
-            ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Background glow attack")
-                .unit(1000.0, " ms").decimals(0)
-                .show(ui)
-                .on_hover_text(
-                    "Response time for the background glow to brighten and change color after a note arrives. 0 ms responds immediately.",
-                );
-            ValueBar::new(&mut view.glow_release, 0.0..=GLOW_BALLISTICS_MAX, "Background glow release")
-                .unit(1000.0, " ms").decimals(0)
-                .show(ui)
-                .on_hover_text(
-                    "Response time for the background glow to fade after the node goes silent. \
-                     About 37% remains after one interval; it keeps its last color as it fades. \
-                     0 ms removes it immediately.",
-                );
-        });
+            );
+        super::block(ui, "Glow response");
+        crate::widgets::response(
+            ui,
+            &mut view.glow_attack,
+            &mut view.glow_release,
+            GLOW_BALLISTICS_MAX,
+            ["Background glow attack", "Background glow release"],
+            1000.0,
+        );
+    });
     ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
         ValueBar::new(&mut view.atmosphere.breath_amount, 0.0..=1.0, "Breathing depth")
             .percent().show(ui).on_hover_text("Brightness variation in the background glow, independent of texture and material. 0% keeps it steady.");
@@ -201,47 +190,5 @@ fn shadow_group(
         (ShadowKernel::Gaussian, "Blur", "A soft blur of each shape. Thin strokes cast lighter shadows than thick shapes."),
     ]);
     let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
-    let bar = ValueBar::new(&mut style.width, 0.0..=width_max, "Shadow width");
-    let (bar, hint) = if lattice {
-        (bar.percent(), "Shadow width as a percentage of the node radius. Scales with lattice zoom. 0% removes the shadow.")
-    } else {
-        (bar.unit(harmonigraph_render::SPECTRAL_WIDTH_POINTS, " pt").decimals(2), "Shadow width in screen points. Stays constant when you zoom frequency. 0 pt removes the shadow.")
-    };
-    bar.show(ui).on_hover_text(hint);
-    if style.kernel == ShadowKernel::Gaussian {
-        ValueBar::new(&mut style.spread, 0.0..=1.0, "Shadow spread")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Expands the shadow caster before blurring, without changing the visible ink. \
-                 100% grows the caster by one Shadow width on every side. \
-                 0% keeps its original shape; a Shadow width of 0 still removes the shadow.",
-            );
-    }
-    ValueBar::new(&mut style.depth, 0.0..=1.0, "Shadow darkness").percent().show(ui).on_hover_text(
-        "Maximum darkening beneath this group. \
-                 0% removes the shadow; \
-                 100% turns the area beneath solid shapes black. \
-                 Thin strokes may cast lighter shadows.",
-    );
-    // The Gaussian has its own profile; only Contour uses this bend.
-    if style.kernel.is_distance() {
-        ValueBar::new(
-            &mut style.falloff,
-            SHADOW_FALLOFF_MIN..=SHADOW_FALLOFF_MAX,
-            "Shadow falloff",
-        )
-        .decimals(2)
-        // The curve's x is one Shadow width across, which is the span the bar
-        // redistributes and the span the number is about.
-        .curve(harmonigraph_scene::standoff_level)
-        .show(ui)
-        .on_hover_text(
-            "Where inside the width the shadow spends its darkness. \
-             Negative values fall early; 0 is linear; positive values fall late. \
-             The curve bends in one direction throughout, without an S shape. \
-             Every setting reaches zero at one Shadow width. \
-             Contour shadows only.",
-        );
-    }
+    crate::widgets::shadow(ui, style, width_max, lattice);
 }

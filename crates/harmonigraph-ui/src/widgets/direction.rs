@@ -1,0 +1,108 @@
+//! Direction and length are edited as a vector, with exact numeric entry below.
+use super::plot::{number, Plot};
+use crate::theme;
+use egui::Ui;
+
+pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>) {
+    ui.push_id("drift", |ui| {
+        let mut plot=Plot::new(ui, "Drift · drag the arrow");
+        plot.square();
+        let max=harmonigraph_scene::CLOUD_SPEED_MAX;
+        // Square-root radius keeps slow motion selectable beside the 20× ceiling.
+        let radius=speed.as_deref().map_or(0.85, |s| (*s/max).sqrt());
+        let angle=degrees.to_radians();
+        let x=0.5+0.45*radius*angle.cos();
+        let y=0.5-0.45*radius*angle.sin();
+        let (_, next)=plot.handle(ui,"Direction and speed",x,y);
+        if let Some(p)=next {
+            let v=egui::vec2((p.x-0.5)/0.45,(0.5-p.y)/0.45);
+            if v.length()>0.001 { *degrees=v.y.atan2(v.x).to_degrees().rem_euclid(360.0); }
+            if let Some(s)=speed.as_deref_mut() { *s=v.length().min(1.0).powi(2)*max; }
+        }
+        if number(ui,degrees,0.0..=360.0,"Drift direction",1.0,"°").changed() {
+            *degrees = degrees.rem_euclid(360.0);
+        }
+        if let Some(s)=speed.as_deref_mut() { number(ui,s,0.0..=max,"Drift speed",1.0,"×"); }
+        let radius=speed.as_deref().map_or(0.85, |s| (*s/max).sqrt());
+        let a=degrees.to_radians();
+        let (x,y)=(0.5+0.45*radius*a.cos(),0.5-0.45*radius*a.sin());
+        plot.line(ui,vec![plot.point(0.05,0.5),plot.point(0.95,0.5)],theme::hairline());
+        plot.line(ui,vec![plot.point(0.5,0.05),plot.point(0.5,0.95)],theme::hairline());
+        let start = plot.point(0.5,0.5);
+        let end = plot.point(x,y);
+        if start.distance(end)>0.01 {
+            ui.painter().arrow(start,end-start,egui::Stroke::new(1.5,theme::accent()));
+        }
+        plot.dot(ui,x,y);
+        plot.response.on_hover_text("Right 0° · Down 90° · Left 180° · Up 270°. Arrow keys adjust the handle; Shift gives finer steps. 1× moves the material about a pane-height every four minutes.");
+    });
+}
+
+pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
+    ui.push_id("cabinet", |ui| {
+        let mut plot = Plot::new(ui, "Depth axis · drag the endpoint");
+        plot.square();
+        let (_, next) = plot.handle(ui, "Depth axis", *length * angle.cos(), *length * angle.sin());
+        if let Some(p) = next {
+            if p.length() > 0.001 {
+                *angle = p.y.atan2(p.x);
+            }
+            *length = p.length().clamp(0.1, 1.0);
+        }
+        let mut deg = angle.to_degrees();
+        if number(ui, &mut deg, 0.0..=90.0, "Depth angle", 1.0, "°").changed() {
+            *angle = deg.to_radians();
+        }
+        number(ui, length, 0.1..=1.0, "Depth step scale", 1.0, "×");
+        plot.line(
+            ui,
+            vec![plot.point(0.0, 1.0), plot.point(0.0, 0.0), plot.point(1.0, 0.0)],
+            theme::hairline(),
+        );
+        plot.line(
+            ui,
+            vec![plot.point(0.0, 0.0), plot.point(*length * angle.cos(), *length * angle.sin())],
+            theme::accent(),
+        );
+        plot.dot(ui, *length * angle.cos(), *length * angle.sin());
+    });
+}
+
+pub(crate) fn softness(ui: &mut Ui, pitch: &mut f32, time: &mut f32) {
+    use harmonigraph_scene::{PITCH_SOFTNESS_MAX, TIME_SOFTNESS_MAX};
+    ui.push_id("softness", |ui| {
+        let plot = Plot::new(ui, "Softness · time → / pitch ↑");
+        let (_, next) = plot.handle(
+            ui,
+            "Time and pitch softness",
+            (*time / TIME_SOFTNESS_MAX).sqrt(),
+            (*pitch / PITCH_SOFTNESS_MAX).sqrt(),
+        );
+        if let Some(p) = next {
+            *time = p.x * p.x * TIME_SOFTNESS_MAX;
+            *pitch = p.y * p.y * PITCH_SOFTNESS_MAX;
+        }
+        number(ui, pitch, 0.0..=PITCH_SOFTNESS_MAX, "Pitch softness", 1.0, "¢");
+        number(ui, time, 0.0..=TIME_SOFTNESS_MAX, "Time softness", 1.0, " ms");
+        let w = (*time / TIME_SOFTNESS_MAX).sqrt();
+        let h = (*pitch / PITCH_SOFTNESS_MAX).sqrt();
+        // The handle is the footprint's bounding corner. Guides make both
+        // independently selected widths explicit, including a zero-width blur.
+        plot.line(
+            ui,
+            vec![plot.point(0.0, h), plot.point(w, h), plot.point(w, 0.0)],
+            theme::hairline(),
+        );
+        plot.line(
+            ui,
+            (0..=64)
+                .map(|i| {
+                    let a = i as f32 * std::f32::consts::TAU / 64.0;
+                    plot.point(w * 0.5 * (1.0 + a.cos()), h * 0.5 * (1.0 + a.sin()))
+                })
+                .collect(),
+            theme::accent(),
+        );
+        plot.dot(ui, w, h);
+    });
+}

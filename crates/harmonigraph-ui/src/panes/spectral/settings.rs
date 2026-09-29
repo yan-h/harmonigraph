@@ -2,10 +2,7 @@
 //! audio analysis, then spectrogram appearance. Color tables live on
 //! [`super::super::color`].
 
-use harmonigraph_scene::{
-    CONTOURS_MAX, CONTOURS_MIN, CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN, PITCH_SOFTNESS_MAX,
-    PITCH_SOFTNESS_MIN, TIME_SOFTNESS_MAX, TIME_SOFTNESS_MIN,
-};
+use harmonigraph_scene::{CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN};
 
 use crate::config::BALLISTICS_MAX;
 use crate::panes::{block, edge_bar, section, switched_section};
@@ -63,22 +60,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
             // for an effect that is not drawn. A row whose effect is off is greyed
             // rather than hidden, like every other section of this page, so the page's
             // inventory does not move under a drag.
-            ValueBar::new(
+            crate::widgets::softness(
+                ui,
                 &mut atmosphere.pitch_softness,
-                PITCH_SOFTNESS_MIN..=PITCH_SOFTNESS_MAX,
-                "Pitch softness",
-            )
-            .unit(1.0, "¢")
-            .show(ui)
-            .on_hover_text("Blur width along pitch, in cents; 100 cents is one semitone. 0 leaves pitch unblurred. Applies only to the spectrogram.");
-            ValueBar::new(
                 &mut atmosphere.time_softness,
-                TIME_SOFTNESS_MIN..=TIME_SOFTNESS_MAX,
-                "Time softness",
-            )
-            .unit(1.0, " ms")
-            .show(ui)
-            .on_hover_text("Blur width along time, in milliseconds. 0 leaves time unblurred. Applies only to the spectrogram.");
+            );
             let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
             ui.add_enabled_ui(soft, |ui| {
                 ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Wide blur mix").percent().show(ui)
@@ -94,10 +80,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                      same controls set the stepping of the refracted picture.",
                 );
             ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
-                ValueBar::new(&mut atmosphere.contours, CONTOURS_MIN..=CONTOURS_MAX, "Contour levels")
-                    .integer()
-                    .show(ui)
-                    .on_hover_text("Number of level bands between the low and high audio-color endpoints. More bands make finer steps.");
+                crate::widgets::contours(ui, &mut atmosphere.contours);
                 ValueBar::new(
                     &mut atmosphere.contour_softness,
                     CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
@@ -142,14 +125,12 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 );
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
                 block(ui, "Motion");
-                // The stars' pace is their own two-ended `Star speed`, so this
-                // would be a bar that did nothing on their page.
                 if atmosphere.cloud_style == CloudStyle::Stars {
                     super::super::material::stars_motion(ui, &mut atmosphere.stars);
-                } else {
-                    super::super::material::speed(ui, &mut atmosphere.cloud_speed);
                 }
-                super::super::material::direction(ui, &mut atmosphere.cloud_direction);
+                let speed = (atmosphere.cloud_style != CloudStyle::Stars)
+                    .then_some(&mut atmosphere.cloud_speed);
+                crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
                 block(ui, "Appearance");
                 // Each style has its own controls: nothing a wash carries means
                 // anything to a refracting scale, and a page listing both would be mostly
@@ -164,13 +145,14 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     super::super::material::mosaic(ui, &mut atmosphere.material_settings);
                 }
                 block(ui, "Color response");
-                for (value, label, hint) in [
-                    (&mut atmosphere.color_pickup, "Color pickup", "How quickly color follows brighter sound. After this time, 63% of the change is applied. 0 s responds immediately. Shared by all textures."),
-                    (&mut atmosphere.color_release, "Color release", "How long color persists as sound fades. After this time, 37% remains. 0 s follows fading sound immediately. Shared by all textures."),
-                ] {
-                    ValueBar::new(value, 0.0..=harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX, label)
-                        .eased(true).unit(1.0, " s").show(ui).on_hover_text(hint);
-                }
+                crate::widgets::response(
+                    ui,
+                    &mut atmosphere.color_pickup,
+                    &mut atmosphere.color_release,
+                    harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX,
+                    ["Color pickup", "Color release"],
+                    1.0,
+                );
             });
         },
     );
@@ -272,7 +254,6 @@ pub(crate) fn view_section(
     dock: &mut crate::workspace::Position,
 ) {
     use crate::workspace::Position;
-    use crate::SpectralOrientation;
 
     section(ui, "View", |ui| {
         // Beside the side the spectrum sits on, because the two together decide
@@ -288,33 +269,7 @@ pub(crate) fn view_section(
             ],
         );
         let cfg = &mut state.appearance.spectrum;
-        // Named for the side the now-line is on, which is where the spectrum sits
-        // and where a note arrives — so the setting says where to LOOK rather than
-        // which way the picture travels. There is no Auto: it followed the pane's
-        // shape, and a pane that turns itself over when a window is dragged past
-        // square is one you cannot dial a video's look in on.
-        // Off `ALL` with an exhaustive match, not a hand-written list of four: both
-        // are built from the enum, so a fifth side cannot reach the pane without a
-        // name and a hint of its own.
-        let sides = SpectralOrientation::ALL.map(|side| {
-            let (label, hint) = match side {
-                SpectralOrientation::Left => {
-                    ("Left", "Spectrum on the left; time scrolls rightward, pitch climbs")
-                }
-                SpectralOrientation::Right => {
-                    ("Right", "Spectrum on the right; time scrolls leftward, pitch climbs")
-                }
-                SpectralOrientation::Top => {
-                    ("Top", "Spectrum on top; time scrolls downward, pitch runs left to right")
-                }
-                SpectralOrientation::Bottom => (
-                    "Bottom",
-                    "Spectrum along the bottom; time scrolls upward, pitch runs left to right",
-                ),
-            };
-            (side, label, hint)
-        });
-        choice_row(ui, "Spectrum edge", &mut cfg.orientation, &sides);
+        crate::widgets::spectrum_edge(ui, &mut cfg.orientation);
         // One control for both ends, because the two ends are one thing: the
         // window onto the analyzer's axis. Dragged in MIDI note (which is what
         // makes it a log-frequency zoom) and read out in Hz.
@@ -483,22 +438,14 @@ pub(crate) fn analysis_section(
         ).collect();
         choice_row(ui, "Tilt (dB/oct)", &mut cfg.tilt, &options);
         block(ui, "Live response");
-        // Two bars and not one, because a spectrum's two directions are different
-        // events: a partial arriving is worth seeing when it happens, and the same
-        // partial's noise wobbling down is not worth drawing at all.
-        ValueBar::new(&mut cfg.attack, 0.0..=BALLISTICS_MAX, "Live attack")
-            .unit(1000.0, " ms").decimals(0)
-            .show(ui)
-            .on_hover_text("Response time for levels to rise in the live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps the unsmoothed measurements. 0 ms responds immediately.");
-        ValueBar::new(&mut cfg.release, 0.0..=BALLISTICS_MAX, "Live release")
-            .unit(1000.0, " ms")
-            .decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Response time for levels to fall in the live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps the unsmoothed measurements. \
-                     Increase for a steadier curve. \
-                     0 ms responds immediately.",
-            );
+        crate::widgets::response(
+            ui,
+            &mut cfg.attack,
+            &mut cfg.release,
+            BALLISTICS_MAX,
+            ["Live attack", "Live release"],
+            1000.0,
+        );
     });
 }
 

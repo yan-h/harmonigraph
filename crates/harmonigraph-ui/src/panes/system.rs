@@ -120,40 +120,23 @@ pub(super) fn system_pane(
             .on_hover_text(
                 "Lightness of the settings page. The header, slider tracks and buttons each stand a fixed step lighter than the layer below.",
             );
-        // The hue bars run the Colors tab's fixed rainbow, on the same OKLab
-        // hue axis the skin is mixed on, so a hue reads the same wherever it
-        // is picked. The amount bars' tracks are colours the panel really
-        // wears — the tint's is the labels' dim text, the accent's is the
-        // accent — at every setting of their own dial with the other dials
-        // held where they are, off the same functions the skin is made with.
         let held = *dials;
-        let rainbow = crate::widgets::track_hue();
-        let tint_track = |tint| rgb(skin::text_dim_color(SkinDials { tint, ..held }));
-        let saturation_track = |saturation| rgb(skin::accent_color(held.accent_hue, saturation));
-        ValueBar::new(&mut dials.tint_hue, skin::HUE_RANGE, "Tint hue")
-            .unit(1.0, "°")
-            .decimals(0)
-            .swatch(&rainbow)
-            .show(ui)
-            .on_hover_text("The hue the interface's greys and text lean toward.");
-        ValueBar::new(&mut dials.tint, 0.0..=1.0, "Tint amount")
-            .percent()
-            .swatch(&tint_track)
-            .show(ui)
-            .on_hover_text(
-                "How far the greys lean toward the tint hue. 0% is neutral grey; 100% is still only a slight tint.",
-            );
-        ValueBar::new(&mut dials.accent_hue, skin::HUE_RANGE, "Accent hue")
-            .unit(1.0, "°")
-            .decimals(0)
-            .swatch(&rainbow)
-            .show(ui)
-            .on_hover_text("The hue of slider fills, selections and other highlights.");
-        ValueBar::new(&mut dials.accent_saturation, 0.0..=1.0, "Accent saturation")
-            .percent()
-            .swatch(&saturation_track)
-            .show(ui)
-            .on_hover_text("How colourful the highlights are. 0% is a grey accent.");
+        crate::widgets::skin_color(
+            ui,
+            "Interface tint",
+            &mut dials.tint_hue,
+            &mut dials.tint,
+            ["Tint hue", "Tint amount"],
+            |hue, tint| rgb(skin::text_dim_color(SkinDials { tint_hue: hue, tint, ..held })),
+        );
+        crate::widgets::skin_color(
+            ui,
+            "Interface accent",
+            &mut dials.accent_hue,
+            &mut dials.accent_saturation,
+            ["Accent hue", "Accent saturation"],
+            |hue, amount| rgb(skin::accent_color(hue, amount)),
+        );
         crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );

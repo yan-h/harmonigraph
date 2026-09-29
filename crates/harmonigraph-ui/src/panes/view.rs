@@ -69,27 +69,11 @@ pub(super) fn camera(
         ],
     );
     if appearance.camera.projection == Projection::Cabinet {
-        // Cabinet's two drafting knobs: where the sevens axis points on
-        // screen, and how long a seventh-step draws relative to a
-        // front-plane step (0.5 = classic cabinet, 1.0 = cavalier).
-        let mut degrees = appearance.camera.cabinet_angle.to_degrees();
-        if ValueBar::new(&mut degrees, 0.0..=90.0, "Depth angle")
-            .unit(1.0, "°")
-            .decimals(1)
-            .show(ui)
-            .on_hover_text("Direction of the depth axis, in degrees above horizontal.")
-            .changed()
-        {
-            appearance.camera.cabinet_angle = degrees.to_radians();
-        }
-        ValueBar::new(&mut appearance.camera.cabinet_scale, 0.1..=1.0, "Depth step scale")
-            .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
-                "Length of a depth step relative to a step in the front layer. \
-                     0.5× gives classic cabinet projection; \
-                     1× gives equal step lengths.",
-            );
+        crate::widgets::cabinet(
+            ui,
+            &mut appearance.camera.cabinet_angle,
+            &mut appearance.camera.cabinet_scale,
+        );
     }
     // Camera angles are meaningless under cabinet (fixed viewpoint), so
     // this whole block hides there (the cabinet knobs show instead).

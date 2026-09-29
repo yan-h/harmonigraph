@@ -396,6 +396,7 @@ fn every_bar_has_its_declared_height() {
                     || !r.rect.is_finite()
                     || ((width - PANE_WIDTH).abs() > 1.0 && (width - track).abs() > 1.0)
                     || (r.rect.height() - plot).abs() < 0.01
+                    || (r.rect.height() - crate::widgets::direct_plot_height(scale)).abs() < 0.01
                 {
                     continue;
                 }

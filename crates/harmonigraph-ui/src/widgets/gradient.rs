@@ -71,14 +71,6 @@ fn circle_at(circle: &[glam::Vec4; HUE_CIRCLE_N], hue: f32) -> glam::Vec4 {
     circle[i0].lerp(circle[(i0 + 1) % HUE_CIRCLE_N], f - f.floor())
 }
 
-/// The fixed hue circle a [`SpectrumBar`] turns, as a colour per hue in
-/// degrees, for any other bar picking a hue: one rainbow, so every hue bar in
-/// the panel reads alike, and one memoized table between them.
-pub(crate) fn track_hue() -> impl Fn(f32) -> Color32 {
-    let circle = hue_circle(TRACK_LIGHTNESS, TRACK_CHROMA);
-    move |hue| scene_color(circle_at(&circle, hue), 1.0)
-}
-
 /// Height of a [`GradientPreview`]. Shorter than a row, because it is a
 /// picture and not a control: nothing on it can be dragged, and a band standing
 /// as tall as the bars under it would read as a fourth bar that has lost its

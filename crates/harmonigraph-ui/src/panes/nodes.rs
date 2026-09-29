@@ -1,13 +1,11 @@
 //! Lattice note layers, their sizes and timing. Their light follows on the same page.
 
-use super::param_bar;
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{choice_row, StackBar, ValueBar};
 use harmonigraph_scene::{
     AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MAX_SPAN, MIN_SPAN,
-    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
-    SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
+    PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
+    SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
 
 // The Lattice page's independently folded note controls ([`super::pages`]).
@@ -105,52 +103,20 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // you are watching is a bar that reads as broken.
     //
     ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
-            ValueBar::new(&mut view.spectral_ring_gate, SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX, "Ring threshold")
-                // A percentage of the Level window, which is the axis the ring's
-                // own colours are read off — so what the number names is a colour
-                // on the ring rather than a dB the analyzer's window could move
-                // out from under.
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "Minimum audio level needed to show a ring, as a percentage of the Spectrum level range on Analyzer. \
-                     MIDI notes always show their rings. \
-                     0% also shows silent rings.",
-                );
-            // Under the Gate because it is a property OF the gate rather than a
-            // second decision beside it: what it moves is where the same threshold
-            // sits for a bucket that is already lit.
-            ValueBar::new(
-                &mut view.spectral_ring_hysteresis,
-                0.0..=SPECTRAL_HYSTERESIS_MAX,
-                "Threshold hysteresis",
-            )
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "How far the threshold drops once a ring appears, in percentage points of the Spectrum level range. \
-                     Increase to stop rings flickering near the threshold.",
-            );
-            ValueBar::new(&mut view.spectral_ring_attack, 0.0..=SPECTRAL_BALLISTICS_MAX, "Ring attack")
-                .unit(1000.0, " ms").decimals(0)
-                .show(ui)
-                .on_hover_text(
-                    "Additional response time when audio-ring levels rise, after Live attack/release on Analyzer. \
-                     0 ms responds immediately.",
-                );
-            ValueBar::new(
-                &mut view.spectral_ring_release,
-                0.0..=SPECTRAL_BALLISTICS_MAX,
-                "Ring release",
-            )
-            .unit(1000.0, " ms").decimals(0)
-            .show(ui)
-            .on_hover_text(
-                "Additional response time when audio-ring levels fall, after Live attack/release on Analyzer. \
-                     Increase to steady fluctuating harmonics. \
-                     0 ms responds immediately.",
-            );
-        });
+        crate::widgets::threshold(
+            ui,
+            &mut view.spectral_ring_gate,
+            &mut view.spectral_ring_hysteresis,
+        );
+        crate::widgets::response(
+            ui,
+            &mut view.spectral_ring_attack,
+            &mut view.spectral_ring_release,
+            SPECTRAL_BALLISTICS_MAX,
+            ["Ring attack", "Ring release"],
+            1000.0,
+        );
+    });
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to
@@ -232,48 +198,19 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
 
 /// Shared visibility timing followed by the MIDI slices' motion and ordering.
 pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    // The note's timing and the curve it runs on, in that order. Fade is an
-    // automatable param and Fade curve a view setting, so the two are stored apart
-    // (`ViewConfig::envelope` is where they are put back together); the pane
-    // is where they have to LOOK like the one setting they are.
-    param_bar(ui, params, ParamKey::Fade).on_hover_text(
-            "Fade-in and fade-out duration for MIDI slices, marks and labels, and audio-ring visibility. \
-                     A release during arrival reverses immediately; completed arrivals depart in the selected Slice order. \
-                     0 ms switches immediately.",
-        );
-    // Linear like every bar around it, and for the same reason: the whole
-    // range is one unit, so every hundredth of it — the readout's own
-    // resolution — is already a couple of pixels of travel, and there is no
-    // fine end for an ease to rescue. The one bar in the group that is NOT a
-    // duration, hence no seconds on the readout — it is the shape the Fade
-    // above it is drawn with.
-    //
-    // The one bar in the pane carrying a picture of itself, and the reason is
-    // that its number says nothing: the Fade's seconds are a length anyone can
-    // feel, while a Fade curve is a position on a scale with no unit and no
-    // landmarks. The line is drawn RISING, as an arrival, because that is the
-    // function itself — a release is the same curve upside down, and picking
-    // the falling one would be picking a direction the setting does not have.
-    ValueBar::new(&mut view.fade_shape, 0.0..=1.0, "Fade curve")
-        .percent()
-        .curve(|shape, p| {
-            // The scene's own curve, not a second copy of the formula: the
-            // preview is only worth drawing if it cannot disagree with the
-            // notes, and nothing on screen would show the disagreement. A
-            // one-second arrival read `p` seconds in IS the shape at that
-            // fraction of any duration the Fade actually RUNS, the curve
-            // being in the fraction alone — at a Fade of 0 there is no
-            // transition for it to be a fraction of, and the line goes on
-            // describing a curve the notes are not taking.
-            harmonigraph_core::Envelope { attack_time: 1.0, shape, ..Default::default() }
-                .attack(p as f64, 0.0)
-        })
-        .show(ui)
-        .on_hover_text(
-            "Shape of the note fade. \
-                     0% is linear; higher values change quickly at first and settle slowly. \
-                     The line previews the fade-in.",
-        );
+    let key = ParamKey::Fade;
+    let mut seconds = params.get(key);
+    let before = seconds;
+    let response = crate::widgets::fade(ui, &mut seconds, &mut view.fade_shape);
+    if response.drag_started() {
+        params.begin_set(key);
+    }
+    if seconds != before {
+        params.set(key, seconds);
+    }
+    if response.drag_stopped() {
+        params.end_set(key);
+    }
     ui.add_enabled_ui(view.marks_draw(), |ui| {
         ValueBar::new(&mut view.mark_delay, 0.0..=MARK_DELAY_MAX, "Mark delay")
             .unit(1000.0, " ms")

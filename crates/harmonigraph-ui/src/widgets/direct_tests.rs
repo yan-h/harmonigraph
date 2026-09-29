@@ -1,0 +1,253 @@
+//! Exercise the actual handles rather than only their mapping formulas.
+use super::*;
+use egui::{Event, Modifiers, PointerButton, Pos2, Ui, Vec2};
+
+fn frame(
+    ctx: &egui::Context,
+    events: Vec<Event>,
+    draw: &mut impl FnMut(&mut Ui),
+) -> egui::FullOutput {
+    ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(320.0, 1000.0))),
+            events,
+            ..Default::default()
+        },
+        |ui| draw(ui),
+    )
+}
+fn press(p: Pos2, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+fn drag(mut draw: impl FnMut(&mut Ui), handle: usize, delta: Vec2) {
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let handles: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Circle(c)
+                if (c.radius - 4.0).abs() < 0.01 && c.fill == crate::theme::accent() =>
+            {
+                Some(c.center)
+            }
+            _ => None,
+        })
+        .collect();
+    let p = handles[handle];
+    frame(&ctx, vec![Event::PointerMoved(p)], &mut draw);
+    frame(&ctx, vec![press(p, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(p + delta)], &mut draw);
+    frame(&ctx, vec![press(p + delta, false)], &mut draw);
+}
+
+#[test]
+fn drift_edits_vector_and_compass_keeps_speed_independent() {
+    let (mut angle, mut speed) = (0.0, 5.0);
+    drag(|ui| drift(ui, &mut angle, Some(&mut speed)), 0, egui::vec2(-12.0, 20.0));
+    assert!(angle > 30.0 && angle < 150.0, "{angle}");
+    assert_ne!(speed, 5.0);
+    let before = speed;
+    drag(|ui| drift(ui, &mut angle, None), 0, egui::vec2(-20.0, -20.0));
+    assert_eq!(speed, before);
+}
+#[test]
+fn cabinet_endpoint_sets_angle_and_length_within_the_quadrant() {
+    let (mut a, mut l) = (0.3, 0.4);
+    drag(|ui| cabinet(ui, &mut a, &mut l), 0, egui::vec2(40.0, -60.0));
+    assert!((0.0..=std::f32::consts::FRAC_PI_2).contains(&a));
+    assert!(a > 0.3 && l > 0.4 && l <= 1.0);
+}
+#[test]
+fn softness_handle_edits_both_axes() {
+    let (mut p, mut t) = (20.0, 20.0);
+    drag(|ui| softness(ui, &mut p, &mut t), 0, egui::vec2(30.0, -20.0));
+    assert!(p > 20.0 && t > 20.0);
+}
+#[test]
+fn threshold_can_keep_a_band_below_zero_without_changing_the_gate() {
+    let (mut gate, mut band) = (0.05, 0.1);
+    drag(|ui| threshold(ui, &mut gate, &mut band), 1, egui::vec2(-80.0, 0.0));
+    assert_eq!(gate, 0.05);
+    assert_eq!(band, harmonigraph_scene::SPECTRAL_HYSTERESIS_MAX);
+}
+#[test]
+fn fade_duration_gesture_is_bracketed_and_shape_does_not_edit_time() {
+    let (mut t, mut shape) = (0.5, 0.3);
+    let (mut starts, mut stops) = (0, 0);
+    drag(
+        |ui| {
+            let r = fade(ui, &mut t, &mut shape);
+            starts += usize::from(r.drag_started());
+            stops += usize::from(r.drag_stopped());
+        },
+        0,
+        egui::vec2(45.0, 0.0),
+    );
+    assert!(t > 0.5);
+    assert_eq!((starts, stops), (1, 1));
+    let before = t;
+    drag(
+        |ui| {
+            fade(ui, &mut t, &mut shape);
+        },
+        1,
+        egui::vec2(0.0, 12.0),
+    );
+    assert_eq!(t, before);
+    assert!(shape < 0.3);
+}
+#[test]
+fn response_times_are_independent_and_zero_is_reachable() {
+    let (mut rise, mut fall) = (0.4, 0.7);
+    drag(
+        |ui| response(ui, &mut rise, &mut fall, 2.0, ["Rise", "Fall"], 1000.0),
+        0,
+        egui::vec2(-150.0, 0.0),
+    );
+    assert_eq!(rise, 0.0);
+    assert_eq!(fall, 0.7);
+}
+#[test]
+fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
+    for size in [false, true] {
+        let (mut a, mut b, mut exponent) = if size { (0.7, 32.0, 2.0) } else { (0.1, 0.8, 2.0) };
+        let range = if size { 0.5..=64.0 } else { 0.0..=1.0 };
+        let initial = (a, b, exponent);
+        let ctx = crate::tests::probe::themed_at(1.0);
+        for _ in 0..8 {
+            frame(&ctx, vec![], &mut |ui| {
+                depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size)
+            });
+        }
+        assert_eq!((a, b, exponent), initial);
+        drag(
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            2,
+            egui::vec2(0.0, -12.0),
+        );
+        assert_eq!((a, b), (initial.0, initial.1));
+        assert!(exponent < initial.2);
+    }
+}
+#[test]
+fn shadow_profile_edits_width_and_depth_without_switching_kernel() {
+    let mut s = harmonigraph_scene::ShadowStyle { width: 0.2, depth: 0.3, ..Default::default() };
+    let kernel = s.kernel;
+    drag(|ui| shadow(ui, &mut s, 2.0, true), 0, egui::vec2(35.0, -15.0));
+    assert!(s.width > 0.2 && s.depth > 0.3);
+    assert_eq!(s.kernel, kernel);
+}
+#[test]
+fn contour_stepper_moves_one_band() {
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut n = 7.0;
+    let mut draw = |ui: &mut Ui| contours(ui, &mut n);
+    let output = frame(&ctx, vec![], &mut draw);
+    let plus = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "+" => Some(t.pos + t.galley.size() * 0.5),
+            _ => None,
+        })
+        .unwrap();
+    frame(&ctx, vec![Event::PointerMoved(plus)], &mut draw);
+    frame(&ctx, vec![press(plus, true)], &mut draw);
+    frame(&ctx, vec![press(plus, false)], &mut draw);
+    assert_eq!(n, 8.0);
+}
+#[test]
+fn spectrum_diagram_selects_the_clicked_edge() {
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut edge = crate::SpectralOrientation::Left;
+    let mut draw = |ui: &mut Ui| spectrum_edge(ui, &mut edge);
+    let output = frame(&ctx, vec![], &mut draw);
+    let top = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Top" => Some(t.pos + t.galley.size() * 0.5),
+            _ => None,
+        })
+        .unwrap();
+    frame(&ctx, vec![Event::PointerMoved(top)], &mut draw);
+    frame(&ctx, vec![press(top, true)], &mut draw);
+    frame(&ctx, vec![press(top, false)], &mut draw);
+    assert_eq!(edge, crate::SpectralOrientation::Top);
+}
+
+#[test]
+fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let (mut hue, mut amount) = (180.0, 0.3);
+    let key = crate::panes::pane_content_right();
+    ctx.data_mut(|d| d.insert_temp(key, 300.0f32));
+    let mut draw = |ui: &mut Ui| {
+        skin_color(ui, "Accent", &mut hue, &mut amount, ["Hue", "Amount"], |h, s| {
+            let [r, g, b] = harmonigraph_scene::skin::accent_color(h, s);
+            egui::Color32::from_rgb(r, g, b)
+        })
+    };
+    frame(&ctx, vec![], &mut draw);
+    let click = egui::pos2(30.0, 10.0);
+    frame(&ctx, vec![Event::PointerMoved(click)], &mut draw);
+    frame(&ctx, vec![press(click, true)], &mut draw);
+    frame(&ctx, vec![press(click, false)], &mut draw);
+    let output = frame(&ctx, vec![], &mut draw);
+    let handle = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Circle(c) if (c.radius - 4.0).abs() < 0.01 => Some(c.center),
+            _ => None,
+        })
+        .expect("the color popup must actually be open");
+    frame(&ctx, vec![Event::PointerMoved(handle)], &mut draw);
+    frame(&ctx, vec![press(handle, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(handle + egui::vec2(30.0, -10.0))], &mut draw);
+    frame(&ctx, vec![press(handle + egui::vec2(30.0, -10.0), false)], &mut draw);
+    assert!(hue > 180.0 && amount > 0.3);
+    assert_eq!(ctx.data(|d| d.get_temp::<f32>(key)), Some(300.0));
+}
+
+#[test]
+fn numeric_entries_use_display_units_and_reject_non_finite_input() {
+    for (unit, suffix, text, want) in [
+        (1000.0, " ms", "250", 0.25),
+        (100.0, "%", "75%", 0.75),
+        (1.0, "×", "NaN", 0.5),
+        (1.0, "×", "inf", 0.5),
+    ] {
+        let ctx = crate::tests::probe::themed_at(1.0);
+        let mut value = 0.5;
+        let field = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut draw = |ui: &mut Ui| {
+            field.set(plot::number(ui, &mut value, 0.0..=1.0, "Value", unit, suffix).rect);
+        };
+        frame(&ctx, vec![], &mut draw);
+        let at = field.get().center();
+        frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
+        frame(&ctx, vec![press(at, true)], &mut draw);
+        frame(&ctx, vec![press(at, false)], &mut draw);
+        let key = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        frame(&ctx, vec![key(egui::Key::A, Modifiers::COMMAND)], &mut draw);
+        frame(
+            &ctx,
+            vec![Event::Text(text.to_owned()), key(egui::Key::Enter, Modifiers::NONE)],
+            &mut draw,
+        );
+        assert!((value - want).abs() < 1e-6, "{text} stored {value}");
+    }
+}
