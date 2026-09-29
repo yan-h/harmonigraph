@@ -361,10 +361,12 @@ fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
                     });
                     let after = ui.label("Next setting").rect;
                     assert!(after.top() >= plot.response.rect.bottom());
-                    if width >= 240.0 {
+                    if width >= 220.0 {
+                        let three_rows = crate::theme::row_height(scale) * 3.0
+                            + ui.spacing().item_spacing.y * 2.0;
                         assert!(
-                            plot.response.rect.height() < 80.0 * scale,
-                            "compact control grew extra rows"
+                            (plot.response.rect.height() - three_rows).abs() < 0.1,
+                            "compact control must be three rows tall"
                         );
                     }
                 });

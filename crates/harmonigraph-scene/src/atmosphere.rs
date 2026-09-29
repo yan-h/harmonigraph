@@ -48,9 +48,9 @@ pub enum CloudStyle {
 pub enum StarHaloProfile {
     Uniform,
     /// Shorter-glow far three composited at 75%; near halos at 100% and 60%.
-    #[default]
     P3,
     /// Back three at 50%, foreground at 75%, near halos at 75% and 45%.
+    #[default]
     Medium,
     /// Back three at one third, foreground at half, near halos at 50% and 30%.
     Low,
@@ -498,8 +498,8 @@ pub struct StarSettings {
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
     pub star_halo_resolution: f32,
-    /// Uniform uses `star_halo_resolution`; P3 chooses fixed resolutions
-    /// for the five depths. Saves without a profile use the selected P3 default.
+    /// Uniform uses `star_halo_resolution`; the quality presets choose fixed
+    /// resolutions for the five depths. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
     /// How much every star is widened, equally at every depth.
     /// Runs to [`STAR_DEFOCUS_MAX`].
@@ -522,7 +522,7 @@ impl Default for StarSettings {
             star_fringe: 0.5,
             star_far_fill: 0.0,
             star_halo_resolution: 0.5,
-            star_halo_profile: StarHaloProfile::P3,
+            star_halo_profile: StarHaloProfile::default(),
             star_defocus: 0.35391274,
         }
     }

@@ -12,7 +12,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected instances. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor, Velvet Scales or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
+| Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -37,14 +37,16 @@ Lattice note geometry, animation, labels and light effects fold independently.
 
 Analyzer textures read in decision order:
 choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
-The Stars **Rendering quality** fold holds its quality presets and optional uniform halo resolution in both pictures.
+For Stars, **Stars rendering** sits directly below the style choice in both pictures,
+with Medium selected by default.
+Uniform reveals its halo-resolution control below the quality selector.
 **Color pickup** follows brighter sound;
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
 
 Renamed sections start unfolded when opening older projects;
 visual values and their saved keys are unchanged.
-Detail folds such as **Map editing** and **Rendering quality** reopen closed with the editor.
+Detail folds such as **Map editing** reopen closed with the editor.
 
 ## Combined controls
 

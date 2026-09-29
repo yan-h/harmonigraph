@@ -90,6 +90,7 @@ pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
     let inline = super::bar::bar_width(ui) >= 220.0 * scale;
     let mut preview = None;
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.y;
         if inline {
             preview = Some(
                 ui.allocate_exact_size(

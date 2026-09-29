@@ -5,17 +5,16 @@ use egui::Ui;
 
 pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>) {
     ui.push_id("drift", |ui| {
-        let mut plot=Plot::with_fields(ui, "Drift", if speed.is_some() { 2 } else { 1 });
-        plot.square();
+        let plot=Plot::square_with_fields(ui, "Drift", if speed.is_some() { 2 } else { 1 });
         let max=harmonigraph_scene::CLOUD_SPEED_MAX;
         // Square-root radius keeps slow motion selectable beside the 20× ceiling.
-        let radius=speed.as_deref().map_or(0.85, |s| (*s/max).sqrt());
+        let radius=speed.as_deref().map_or(1.0, |s| (*s/max).sqrt());
         let angle=degrees.to_radians();
-        let x=0.5+0.45*radius*angle.cos();
-        let y=0.5-0.45*radius*angle.sin();
+        let x=0.5+0.5*radius*angle.cos();
+        let y=0.5-0.5*radius*angle.sin();
         let (_, next)=plot.handle(ui,"Direction and speed",x,y);
         if let Some(p)=next {
-            let v=egui::vec2((p.x-0.5)/0.45,(0.5-p.y)/0.45);
+            let v=egui::vec2((p.x-0.5)/0.5,(0.5-p.y)/0.5);
             if v.length()>0.001 { *degrees=v.y.atan2(v.x).to_degrees().rem_euclid(360.0); }
             if let Some(s)=speed.as_deref_mut() { *s=v.length().min(1.0).powi(2)*max; }
         }
@@ -25,11 +24,11 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
         }
         if let Some(s)=speed.as_deref_mut() { value_bar(ui,s,0.0..=max,["Drift speed", "Speed"],1.0,"×"); }
         });
-        let radius=speed.as_deref().map_or(0.85, |s| (*s/max).sqrt());
+        let radius=speed.as_deref().map_or(1.0, |s| (*s/max).sqrt());
         let a=degrees.to_radians();
-        let (x,y)=(0.5+0.45*radius*a.cos(),0.5-0.45*radius*a.sin());
-        plot.line(ui,vec![plot.point(0.05,0.5),plot.point(0.95,0.5)],theme::hairline());
-        plot.line(ui,vec![plot.point(0.5,0.05),plot.point(0.5,0.95)],theme::hairline());
+        let (x,y)=(0.5+0.5*radius*a.cos(),0.5-0.5*radius*a.sin());
+        plot.line(ui,vec![plot.point(0.0,0.5),plot.point(1.0,0.5)],theme::hairline());
+        plot.line(ui,vec![plot.point(0.5,0.0),plot.point(0.5,1.0)],theme::hairline());
         let start = plot.point(0.5,0.5);
         let end = plot.point(x,y);
         if start.distance(end)>0.01 {
@@ -42,8 +41,7 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
 
 pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
     ui.push_id("cabinet", |ui| {
-        let mut plot = Plot::with_fields(ui, "Depth axis", 2);
-        plot.square();
+        let plot = Plot::square_with_fields(ui, "Depth axis", 2);
         let (_, next) = plot.handle(ui, "Depth axis", *length * angle.cos(), *length * angle.sin());
         if let Some(p) = next {
             if p.length() > 0.001 {
