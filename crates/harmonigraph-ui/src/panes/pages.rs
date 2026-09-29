@@ -14,9 +14,8 @@ use crate::params::ParamBackend;
 use crate::PictureState;
 
 /// The Lattice page: the whole lattice picture, read from the camera in front
-/// of it inward. What is framed (View), how a sounding note draws and moves
-/// (Notes), what is there when nothing sounds at all ([`plus_pane`]), and last
-/// the light over all of it.
+/// of it inward. Geometry, motion, labels and each light effect fold independently
+/// so returning to one subject does not require opening all note or light controls.
 pub(super) fn lattice_settings_pane(
     ui: &mut egui::Ui,
     state: &mut PictureState,
@@ -24,24 +23,19 @@ pub(super) fn lattice_settings_pane(
     params: &dyn ParamBackend,
 ) {
     section(ui, "View", |ui| {
-        view::sevens(ui, &mut state.appearance);
         view::camera(ui, &mut state.appearance, interaction);
+        view::sevens(ui, &mut state.appearance);
     });
-    section(ui, "Notes", |ui| {
-        nodes::layers(ui, &mut state.appearance.view);
-        nodes::motion(ui, &mut state.appearance.view, params);
-        labels::labels(ui, state);
-        nodes::octaves(ui, &mut state.appearance.view);
-        nodes::audio_ring(ui, &mut state.appearance.view);
-    });
+    section(ui, "Note layers", |ui| nodes::layers(ui, &mut state.appearance.view));
+    section(ui, "Octave layout", |ui| nodes::octaves(ui, &mut state.appearance.view));
+    section(ui, "Note animation", |ui| nodes::motion(ui, &mut state.appearance.view, params));
+    section(ui, "Note labels", |ui| labels::labels(ui, state));
+    section(ui, "Audio ring", |ui| nodes::audio_ring(ui, &mut state.appearance.view));
     plus_pane(ui, &mut state.appearance);
-    section(ui, "Light", |ui| {
-        let view = &mut state.appearance.view;
-        lighting::note_bloom(ui, &mut view.note_bloom);
-        lighting::glow(ui, view);
-        lattice_atmosphere::settings(ui, view);
-        lighting::lattice_shadows(ui, view);
-    });
+    section(ui, "Note bloom", |ui| lighting::note_bloom(ui, &mut state.appearance.view.note_bloom));
+    section(ui, "Background glow", |ui| lighting::glow(ui, &mut state.appearance.view));
+    lattice_atmosphere::settings(ui, &mut state.appearance.view);
+    section(ui, "Shadows", |ui| lighting::lattice_shadows(ui, &mut state.appearance.view));
 }
 
 /// The Analyzer page, most dialled first: the spectrogram's look and the MIDI

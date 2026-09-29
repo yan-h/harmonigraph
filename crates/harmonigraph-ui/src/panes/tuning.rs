@@ -21,6 +21,10 @@ use harmonigraph_core::tuning;
 #[path = "tuning_instances_tests.rs"]
 mod instance_tests;
 
+#[cfg(test)]
+#[path = "tuning_map_tests.rs"]
+mod map_tests;
+
 /// The param bar for the axis a comma derives — the one whose tuning is not
 /// its own while that comma is tempered out.
 ///
@@ -377,9 +381,6 @@ pub(super) fn tuning_pane(
             }
         });
     });
-    section(ui, "Note matching", |ui| {
-        param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
-    });
 
     // Which commas the lattice tempers out: the same question as the bars
     // above (what IS this tuning), but the answer is a set of identities
@@ -400,24 +401,19 @@ pub(super) fn tuning_pane(
         false
     };
 
+    section(ui, "Note matching", |ui| {
+        param_bar(ui, params, ParamKey::Tolerance).on_hover_text(tuning_hint(ParamKey::Tolerance));
+    });
+
     let mode = map_controls(ui, state, params);
     if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
         adaptive_controls(ui, state, params);
     }
-    section(ui, "Instances", |ui| {
-        instance_controls(ui, params);
-
-        // After every control: `configuration_pending` can come and go between
-        // consecutive frames while a drag submits policy edits and the audio
-        // thread adopts them. A conditional row above Adaptive tuning moves the
-        // bar still held under the pointer, making the gesture feed back into its
-        // own value and the whole section alternate between two positions. The
-        // persistent fault notices stay prominent above the controls; unlike this
-        // ordinary pending transition, they do not alternate within the gesture.
-        if !configuration_notice && state.runtime.configuration_pending {
-            crate::widgets::weak(ui, "Tuning change pending audio adoption");
-        }
-    });
+    instance_section(ui, params);
+    // Keep transient status after every control so it cannot move a held slider.
+    if !configuration_notice && state.runtime.configuration_pending {
+        crate::widgets::weak(ui, "Tuning change pending audio adoption");
+    }
 
     // Hovering a lattice node deliberately reports NOTHING here. Growing a
     // "Hovered: (t, f, s) = pitch" line whenever the pointer is over a node
@@ -550,12 +546,19 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     });
 }
 
-fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
-    use crate::params::InstanceEdit;
+fn instance_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     let instances = params.tuning_instances();
-    if instances.is_empty() {
-        return;
+    if !instances.is_empty() {
+        section(ui, "Instances", |ui| instance_controls(ui, params, &instances));
     }
+}
+
+fn instance_controls(
+    ui: &mut egui::Ui,
+    params: &dyn ParamBackend,
+    instances: &[crate::params::TuningInstance],
+) {
+    use crate::params::InstanceEdit;
     ui.horizontal(|ui| {
         for (label, retune) in [("Retune all", true), ("Show all", false)] {
             let enabled =
@@ -564,7 +567,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
             let mixed = enabled != 0 && !all;
             if ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed)).clicked() {
                 let value = enabled != instances.len();
-                for row in &instances {
+                for row in instances {
                     params.edit_tuning_instance(
                         row.id,
                         if retune {
@@ -588,7 +591,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
         crate::widgets::weak(ui, "Retune");
         crate::widgets::weak(ui, "Show");
         ui.end_row();
-        for row in &instances {
+        for row in instances {
             ui.push_id(row.id, |ui| {
                 ui.vertical(|ui| {
                     ui.set_width(name_width);
@@ -719,7 +722,7 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
                 crate::widgets::label(ui, "Buffers");
                 ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
                 if ui.button("Apply to all tuners").clicked() {
-                    for row in &instances {
+                    for row in instances {
                         if !row.is_hub {
                             params.edit_tuning_instance(row.id, InstanceEdit::Delay(delay));
                         }
@@ -745,7 +748,6 @@ fn instance_controls(ui: &mut egui::Ui, params: &dyn ParamBackend) {
         ui,
         "Retune off: pass notes through without influencing tuning. Show only affects the picture.",
     );
-    ui.separator();
 }
 
 fn monitor_pitch(cents: f64) -> String {
@@ -849,6 +851,7 @@ fn map_controls(
             .find(|(id, _)| *id == selected)
             .map(|(_, name)| &**name)
             .unwrap_or("unavailable");
+        crate::widgets::label(ui, "Saved map");
         crate::widgets::selected_combo(
             ui,
             egui::ComboBox::from_id_salt("saved-lattice-map")
@@ -864,15 +867,20 @@ fn map_controls(
         if view.playback.map.is_none() {
             crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
         }
+        // Audition overrides Saved map even after the editor reopens with its
+        // detail folds closed. Keep the active mode and its exit by the selector.
+        if view.playback.audition {
+            crate::widgets::label(ui, egui::RichText::new("Audition shape · Map selection paused; offset automation remains live").color(theme::armed()));
+            crate::widgets::button_row(ui, |ui| {
+                if ui.button("Return to arrangement").clicked() {
+                    params.edit_lattice_map(MapEdit::Return);
+                }
+            });
+        }
+        subsection(ui, "Map editing", |ui| {
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Audition working copy").clicked() {
                 params.edit_lattice_map(MapEdit::Audition);
-            }
-            if ui
-                .add_enabled(view.playback.audition, egui::Button::new("Return to arrangement"))
-                .clicked()
-            {
-                params.edit_lattice_map(MapEdit::Return);
             }
         });
         crate::widgets::weak(ui, "Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
@@ -922,7 +930,6 @@ fn map_controls(
             }
         });
         if view.playback.audition {
-            crate::widgets::label(ui, egui::RichText::new("Audition shape · Map selection paused; offset automation remains live").color(theme::armed()));
             let mut editing = view.edit_shape;
             if crate::widgets::checkbox(ui, &mut editing, "Edit shape · click destination on lattice").changed() {
                 params.edit_lattice_map(MapEdit::EditShape(editing));
@@ -988,6 +995,7 @@ fn map_controls(
                     ));
                 }
             }
+        });
         });
         mode
     })

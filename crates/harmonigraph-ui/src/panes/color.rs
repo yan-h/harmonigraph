@@ -44,11 +44,11 @@ pub(super) fn color_pane(
         crate::widgets::weak(ui, "Shared by the audio views. Lattice rings use Idle ring brightness and gray at the quiet end.");
         spectrogram_gradient_group(ui, &mut appearance.spectrum);
     });
-    section(ui, "Note intensity", |ui| intensity::show(ui, &mut appearance.view.intensity));
+    section(ui, "MIDI note intensity", |ui| intensity::show(ui, &mut appearance.view.intensity));
 }
 
 /// The tooltip both groups' curve plots carry.
-const BEND_HINT: &str = "Where along the range the switched-on channels spend their change. \
+const BEND_HINT: &str = "Where along the range the selected color components spend their change. \
                  Across is the range, up is how much of the change has happened. \
                  Drag right to hold the change back for the top of the range, for example the loudest few dB. \
                  Double-click straightens it.";

@@ -108,33 +108,8 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
             });
             block(ui, "Texture");
-            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "How strongly the texture replaces the original picture. 0% removes the \
-                     texture; 100% uses only the texture. Mosaic and Watercolor displace levels, \
-                     then Contours and the palette apply. With Color memory, their recent colors blend in linear light; Stars replaces the picture with a \
-                     starfield colored from the palette. Reads whatever the softness above \
-                     leaves: with none, the measured picture itself.",
-                );
-            ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
-                for (value, label) in [
-                    (&mut atmosphere.color_pickup, "Color pickup"),
-                    (&mut atmosphere.color_release, "Color release"),
-                ] {
-                    ValueBar::new(value, 0.0..=harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX, label)
-                        .eased(true)
-                        .unit(1.0, " s")
-                        .show(ui)
-                        .on_hover_text("Color memory time in seconds. Pickup follows brighter sound; Release retains recent color as sound fades. After one time constant, 37% remains. Both zero restores immediate color. Shared by all textures.");
-                }
-                // Two constructions rather than two presets of one, so the dials below
-                // the shared three are per style: nothing a wash carries means anything
-                // to a refracting scale, and the page would otherwise be a list of controls
-                // most of which do nothing.
-                use harmonigraph_scene::CloudStyle;
-                choice_row(
+            use harmonigraph_scene::CloudStyle;
+            choice_row(
                     ui,
                     "Style",
                     &mut atmosphere.cloud_style,
@@ -149,7 +124,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         (
                             CloudStyle::Watercolor,
                             "Watercolor",
-                            "A field of overlapping globs, each reading the sound near its own \
+                            "A field of overlapping patches, each reading the sound near its own \
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
                         (CloudStyle::VelvetScales, "Velvet Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
@@ -161,13 +136,22 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         ),
                     ],
                 );
+            ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
+                .percent().show(ui).on_hover_text(
+                    "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
+                );
+            ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+                block(ui, "Motion");
                 // The stars' pace is their own two-ended `Star speed`, so this
                 // would be a bar that did nothing on their page.
-                if atmosphere.cloud_style != CloudStyle::Stars {
+                if atmosphere.cloud_style == CloudStyle::Stars {
+                    super::super::material::stars_motion(ui, &mut atmosphere.stars);
+                } else {
                     super::super::material::speed(ui, &mut atmosphere.cloud_speed);
                 }
                 super::super::material::direction(ui, &mut atmosphere.cloud_direction);
-                // Two constructions, so two sets of dials: nothing a wash carries means
+                block(ui, "Appearance");
+                // Each style has its own controls: nothing a wash carries means
                 // anything to a refracting scale, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
                 if atmosphere.cloud_style == CloudStyle::Stars {
@@ -178,6 +162,14 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     super::super::material::velvet(ui, &mut atmosphere.material_settings);
                 } else {
                     super::super::material::mosaic(ui, &mut atmosphere.material_settings);
+                }
+                block(ui, "Color response");
+                for (value, label, hint) in [
+                    (&mut atmosphere.color_pickup, "Color pickup", "How quickly color follows brighter sound. After this time, 63% of the change is applied. 0 s responds immediately. Shared by all textures."),
+                    (&mut atmosphere.color_release, "Color release", "How long color persists as sound fades. After this time, 37% remains. 0 s follows fading sound immediately. Shared by all textures."),
+                ] {
+                    ValueBar::new(value, 0.0..=harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX, label)
+                        .eased(true).unit(1.0, " s").show(ui).on_hover_text(hint);
                 }
             });
         },

@@ -27,6 +27,7 @@ pub(super) fn system_pane(
     // edge is already soft-banded before the extra samples see it. Described as
     // "higher supersamples" it read as a quality knob that did nothing.
     section(ui, "Performance", |ui| {
+        super::block(ui, "Editor and exports");
         ValueBar::new(&mut appearance.view.render_scale, 0.5..=2.0, "Lattice resolution")
             .percent()
             .show(ui)
@@ -59,6 +60,7 @@ pub(super) fn system_pane(
         // costs, this sets how many of them there are. Presented as a ceiling
         // rather than a target — the shell decides the actual cadence, and a
         // ceiling above what it can offer simply doesn't bind.
+        super::block(ui, "Editor only");
         choice_row(
             ui,
             "Editor frame limit (fps)",

@@ -19,17 +19,17 @@ use harmonigraph_scene::{NoteNames, ViewConfig};
 
 /// What a label says, which nodes carry one and how big it draws.
 pub(super) fn labels(ui: &mut egui::Ui, state: &mut PictureState) {
-    super::block(ui, "Note labels");
     names_row(ui, &mut state.appearance.view);
     crate::widgets::checkbox(ui, &mut state.appearance.view.show_cents, "Show pitch in cents")
         .on_hover_text("Each node's pitch class in cents, under its name.");
-    ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label scale")
+    ValueBar::new(&mut state.appearance.view.label_scale, crate::SCALE_BAR_RANGE, "Label size")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
             "Text size relative to the node. 1× is the reference size; labels also follow lattice zoom. \
              Also sets how thick the idle crosses are drawn.",
         );
+    crate::widgets::weak(ui, "Also controls cross thickness.");
     clear_button(ui, &state.appearance.view, &mut state.runtime.tracker);
 }
 

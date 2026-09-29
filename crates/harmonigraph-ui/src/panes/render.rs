@@ -50,7 +50,7 @@ pub(crate) fn render_pane(
     section(ui, "Preview", |ui| {
         crate::widgets::weak(
             ui,
-            "Drag pictures to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
+            "Drag the lattice to an edge · Shift-drag pictures to navigate · Scroll or pinch to zoom · Drag dividers to resize",
         );
         let frame = state.appearance.render.frame;
         let avail = ui.available_size();
@@ -435,11 +435,14 @@ fn render_controls(
                 ),
                 (
                     SpectrogramRender::WholeVideo,
-                    "Whole video",
+                    "Fit video (max 10 min)",
                     "Scroll slowly enough that the whole video fits: by its last frame, the MIDI ribbons and spectrogram reach back to its first. Up to 10 minutes. The preview here keeps showing the History duration.",
                 ),
             ],
         );
+        if state.appearance.render.spectrogram == SpectrogramRender::WholeVideo {
+            crate::widgets::weak(ui, "The preview still uses live History duration; export fits the take up to 10 minutes.");
+        }
         if !interaction.take.supported {
             return;
         }

@@ -318,6 +318,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             material: harmonigraph_scene::LatticeMaterial::Stars,
             halo_profile: profile,
+            expanded: true,
             enabled: true,
             visits: 16
                 + 1
@@ -370,6 +371,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::AnalyzerSettings,
             style: harmonigraph_scene::CloudStyle::Stars,
             halo_profile,
+            expanded: true,
             enabled: true,
             visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + bars,
             ..base
@@ -502,7 +504,7 @@ fn check(edge: Edge) {
                 || (scenario.pane == panes::Tab::AnalyzerSettings && scenario.enabled)
         );
         assert_eq!(
-            saw("Jitter"),
+            saw("Position variation"),
             scenario.pane == panes::Tab::AnalyzerSettings
                 && scenario.enabled
                 && scenario.style == harmonigraph_scene::CloudStyle::Stars

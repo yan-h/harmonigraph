@@ -26,7 +26,7 @@
 //! and columns off is the regularity of the field itself.
 //!
 //! Under those pair the marker's LENGTH — how far an arm reaches and how much
-//! of it tapers. Its thickness has no bar here: it follows Label scale, so a
+//! of it tapers. Its thickness has no bar here: it follows Label size, so a
 //! cross weighs what the letters beside it weigh
 //! ([`PLUS_WIDTH_PER_LABEL_SCALE`](harmonigraph_scene::PLUS_WIDTH_PER_LABEL_SCALE)).
 //! There is no bar for what runs
@@ -114,7 +114,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
             |v| format!("{:.1}%", v * 100.0),
         )
         .on_hover_text(
-            "Cross-arm length from the center, as a percentage of the node radius: the full length of the Layers bar in Notes. \
+            "Cross-arm length from the center, as a percentage of the node radius: the full length of the Layers bar in Note layers. \
                      Solid to the inner handle, faded out by the outer handle. \
                      0% hides crosses; named nodes draw none. \
                      Double-click resets.",
