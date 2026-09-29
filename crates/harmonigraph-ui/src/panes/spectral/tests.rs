@@ -2090,13 +2090,9 @@ fn the_pane_paints_in_every_orientation() {
     }
 }
 
-/// The near edge the caller hands in can sit past the newest slab's CENTRE —
-/// half a slab of it live, where the newest column falls inside its own slab
-/// (see `strip_depths`), and the whole take's trailing overhang offline — and
-/// past that centre there is no second tap to blend towards. So the leading
-/// sliver has no data of its own and holds the centre's value instead. The
-/// fixture makes it several slabs wide so the split is unambiguous; the live
-/// path's is narrower than that, not wider.
+/// The near edge sits past the newest slab's centre by the analysis delay.
+/// With no second tap to blend towards, this sliver holds the centre's value.
+/// The fixture makes it several slabs wide so the split is unambiguous.
 ///
 /// Where the slab coordinate stops, the mesh SPLITS: a quad spanning the
 /// corner would interpolate it across itself, and since this is a vertex
@@ -2146,80 +2142,34 @@ fn the_strip_holds_its_leading_sliver_instead_of_running_past_the_run() {
     assert_eq!(ts, [0.0; 6].into_iter().chain([1.0; 6]).collect::<Vec<f32>>());
 }
 
-/// **The live strip stops where the data stops** (#914). A spectrum describes
-/// the window it measured and is stamped at the middle of it, so the newest
-/// column is half an analysis window old by construction and nothing nearer to
-/// the now-line than that has been measured at all. Drawing to the region
-/// boundary anyway filled the rest with the newest column held flat — the band
-/// of identical levels Yan read as the spectrum curve leaking into the heatmap.
-///
-/// What makes the fixture arrive is that these are HEALTHY streams: the newest
-/// column lags `now` by exactly half a window and by nothing else, which is
-/// what the removed grace called fresh (it allowed that lag plus 120 ms on
-/// top). Under the old rule all three of these answered `split`, the now-line,
-/// so the assertion fails on the old code at every window rather than passing
-/// for the wrong reason.
-///
-/// Three windows because the shortfall is the analyzer's own and tracks its
-/// setting — Fast to Precise is a 4x change in how much of the leading edge is
-/// bed, and that is what moving that dial now does to the picture.
+/// Fresh columns fill the analysis delay and delivery jitter with held color;
+/// a stalled stream retreats to its last measurement instead of smearing it.
 #[test]
-fn the_live_strip_stops_half_a_window_short_of_the_now_line() {
+fn the_live_strip_fills_the_analysis_gap_only_while_fresh() {
     let mut state = fresh();
-    state.appearance.spectrum.orientation = SpectralOrientation::Left;
-    state.appearance.spectrum.roll_seconds = 1.5; // the Span #914 measured at
-    let axes = Axes::new(WIDE, &state.appearance.spectrum);
+    state.appearance.spectrum.roll_seconds = 1.5;
     let (split, now) = (0.35, 90.0);
     let time = super::axes::TimeAxis::new(&state, split, now);
-    // A run whose last slab holds the newest column half a bucket past its
-    // centre: the widest leading sliver `heatmap_vertices` can be left with,
-    // and still a fraction of the gap this test is about.
-    let run = |newest: f64| crate::spectrogram::TexLayout {
-        bucket: 0.016,
-        t_origin: newest - 0.64,
-        tex_span: 0.64,
-    };
-
     for window in [SpectrumWindow::Fast, SpectrumWindow::Balanced, SpectrumWindow::Precise] {
-        // Half the analysis window at the rate the analyzer runs at — what
-        // `AudioSpectrum::column_lag` reads back out of it, computed here the
-        // way the plugin's own background tests compute it.
         let lag = 0.5 * window.samples() as f64 / 48_000.0;
-        let newest = now - lag;
-        let (near, far) = super::spectrogram::strip_depths(&time, split, &run(newest), newest);
-
-        // In pixels of the pane, because the depth it came back as is an f32
-        // and the round trip through it is only ever exact to that.
-        let per_point = time.seconds_per_point(&axes);
-        let off = (time.time_at(near) - newest).abs() / per_point;
-        assert!(
-            off < 0.01,
-            "{window:?}: the near edge sits {off:.3} px off the newest column at {newest}",
-        );
-        // A gap anyone can see rather than a rounding error: 5.5 px of this
-        // pane on Fast, 22 on Precise.
-        let px = lag / per_point;
-        assert!(px > 2.0, "{window:?}: {px:.1} px of bed is not the strip this measures");
-        assert!(far > near, "{window:?}: the strip spans no depth at all");
+        for extra_age in [0.0, 0.1, 0.2] {
+            let newest = now - lag - extra_age;
+            let layout = crate::spectrogram::TexLayout {
+                bucket: 0.016,
+                t_origin: newest - 0.64,
+                tex_span: 0.64,
+            };
+            let (near, far) = super::spectrogram::strip_depths(&time, split, &layout, newest, lag);
+            assert!(time.depth_of(newest) > split, "fixture has no analysis gap");
+            if extra_age < 0.12 {
+                assert_eq!(near, split, "{window:?}: fresh strip leaves a gap");
+            } else {
+                assert_eq!(near, time.depth_of(newest), "stale data extends to now");
+            }
+            assert_eq!(far, time.depth_of(layout.t_origin));
+            assert!(far > near, "fixture has no visible history");
+        }
     }
-
-    // And never nearer than the region boundary: a column stamped at or past
-    // `now` — a clock hiccup, or an offline feed running ahead — has a depth
-    // inside the spectrum region, which the heatmap does not own.
-    //
-    // Read this as the RULE being pinned and not as cover for the `max(split)`
-    // that states it. Two clamps stand between this fixture and a failure —
-    // `depth_of`'s own and the `max` — and deleting either one alone leaves
-    // this passing byte for byte. `depth_of_unclamped` is what says the fixture
-    // reaches the situation at all rather than being a column the rule never
-    // had an opinion about.
-    let ahead = now + 0.5;
-    assert!(
-        time.depth_of_unclamped(ahead) < split,
-        "the future column is not actually over the divider, so nothing here is clamped",
-    );
-    let (near, _) = super::spectrogram::strip_depths(&time, split, &run(ahead), ahead);
-    assert_eq!(near, split, "a column from the future dragged the strip over the divider");
 }
 
 /// The now-line is painted after the roll that arrives at it.

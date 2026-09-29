@@ -330,8 +330,7 @@ pub(crate) fn spectral_pane(
     //
     // They stop at the now-line because that is where the spectrum stops. Run
     // the full depth they would outrun the spectrogram's heatmap — which starts
-    // half an analysis window back from the now-line and grows out from there
-    // as history accumulates (#914) — and sit bare on the bed ahead of it.
+    // at the now-line and grows out from there as history accumulates — and sit bare on the bed ahead of it.
     //
     // The guard is that same rule at its limit rather than a crash guard: a
     // `split` of 0 is a roll dragged shut over the curve, so there is nothing

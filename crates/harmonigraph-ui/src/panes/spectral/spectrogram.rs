@@ -163,74 +163,26 @@ pub(super) fn heatmap_vertices(
     vertices
 }
 
-/// The depths the drawn strip spans, near edge first — **both ends stop where
-/// the data stops**, so the strip GROWS from its edges as history accumulates
-/// rather than being stretched to fill the region. Without either cap, the
-/// clamp that holds the run's outermost slab smears a handful of columns across
-/// everything as trails, which is what startup and a cleared spectrogram look
-/// like.
-///
-/// **Live**, the near edge is the newest column's own depth. A spectrum is not
-/// an instant: it describes the `fft_size` samples behind it and is stamped at
-/// the middle of them, so the newest column is HALF AN ANALYSIS WINDOW old by
-/// construction and nothing nearer than it has been measured at all. Drawing to
-/// the region boundary anyway left that half-window filled by the newest column
-/// held flat — a band of identical levels at the now-line that reads as the
-/// spectrum curve leaking into the heatmap (#914). What is left out instead is
-/// the same thing the far edge already leaves out while history is still
-/// filling, rather than a new kind of hole. Its width is the analyzer's alone:
-/// 9 px on Fast, 19 on Balanced, 37 on Precise at a 1.5 s Span over 326 px, and
-/// narrower as the Span lengthens.
-///
-/// **What lands in that width depends on the atmosphere, and at the shipped
-/// defaults it is not a plain strip.** `time_softness` is 120 ms out of the
-/// box, which is WIDER than the band being left out on Fast or Balanced, so the
-/// blur and the cloud reach forward over it and what remains is a leading-edge
-/// DIMMING: on the `spectrogram-short-pane` golden the lit rows near the edge
-/// fall from `(43, 84, 112)` to `(39, 68, 99)` while a cloud-lit row moves by a
-/// couple of levels and the column mean by about 1.5/255. Take Time softness to
-/// 0 — the Plain configuration #914 was measured in — and it is the plain strip
-/// the width above describes, a hard heatmap-to-bed boundary: the same frame
-/// then moves by up to 140/255 and only in its last 19 columns. Both are the
-/// intended picture; which one is on screen is the softness dial's answer, not
-/// this function's.
-///
-/// Never nearer than `split`: a column stamped at or past `now` (a clock hiccup,
-/// or an offline feed running ahead) has a depth inside the spectrum region,
-/// which the heatmap does not own. The `max` **cannot fail today** — `depth_of`
-/// already clamps into the region, so it is a second clamp over a first — and
-/// it is kept as the rule stated where it is meant rather than borrowed from a
-/// helper that is free to stop clamping. Read it as declaration, not as a
-/// guard anything measures; the test beside it says the same.
-///
-/// **The edge steps rather than sliding**, and nothing damps it: columns arrive
-/// on the analyzer's 8 ms hop while the pane scrolls continuously, so `now -
-/// newest` sawtooths across one hop every frame and the edge wobbles by a hop's
-/// worth of depth. Quote that with the pane it is measured on, the way the
-/// widths above are: 1.7 points over 326, but a docked Spectral pane is around
-/// 950 points of depth region on a 1200-point pane at the fresh `roll_fraction`,
-/// and at the Span dial's floor of 1 s that is **about 7.6 points of wobble at
-/// 60 fps** — on a hard heatmap-to-bed boundary, in exactly the Time-softness-0
-/// configuration where the boundary is hard.
-///
-/// That is the flickering sliver the `FRESH` grace was suppressing, and nothing
-/// replaces it. What makes the trade worth taking at every Span rather than at
-/// some of them is that both quantities are times: the wobble is one
-/// [`FFT_INTERVAL`](crate::AudioSpectrum::FFT_INTERVAL) and the band it was
-/// hiding is half an analysis window, so the wobble is a fifth of the artefact
-/// on Fast and a twentieth on Precise whatever the Span converts them to. The
-/// grace bought that fifth by filling the band with held data, which is the bug
-/// above. Stopping at the newest column always is what `7f2b3d38` already did
-/// for a stale stream, now that there is nothing to be graceful about.
-///
+/// The drawn strip reaches the now-line while columns are fresh, holding the
+/// newest slab's color across the analysis delay. Allow another 120 ms for
+/// delivery jitter so the edge does not flicker between analysis hops.
+/// Once stale, stop at the newest column rather than extending old data across
+/// a growing gap. The far edge always stops at the oldest slab so startup and
+/// clearing history do not stretch a few columns across the entire pane.
 pub(super) fn strip_depths(
     time: &TimeAxis,
     split: f32,
     layout: &TexLayout,
     newest: f64,
+    column_lag: f64,
 ) -> (f32, f32) {
-    // Far edge reaches 1 once history spans the window.
-    (time.depth_of(newest).max(split), time.depth_of(layout.t_origin))
+    const FRESH: f64 = 0.12;
+    let near = if time.now - newest <= column_lag + FRESH {
+        split
+    } else {
+        time.depth_of(newest).max(split)
+    };
+    (near, time.depth_of(layout.t_origin))
 }
 
 /// Draw the spectrogram across the roll's depth region (`split..1`), sharing
@@ -292,7 +244,8 @@ pub(crate) fn draw_spectrogram(
         return;
     };
 
-    let (d_near, d_far) = strip_depths(&time, split, &layout, columns.newest);
+    let (d_near, d_far) =
+        strip_depths(&time, split, &layout, columns.newest, spectrum.column_lag());
     let points_per_ms = time.region_depth_len(axes) / (time.window() as f32 * 1000.0);
 
     let vertices = heatmap_vertices(axes, &time, &layout, d_near, d_far);
