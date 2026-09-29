@@ -110,7 +110,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                             "A field of overlapping patches, each reading the sound near its own \
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
-                        (CloudStyle::VelvetScales, "Velvet Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
+                        (CloudStyle::VelvetScales, "Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
                         (
                             CloudStyle::Mosaic,
                             "Mosaic",

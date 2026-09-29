@@ -201,7 +201,7 @@ pub(super) fn velvet(ui: &mut egui::Ui, s: &mut harmonigraph_scene::MaterialSett
         .percent()
         .show(ui)
         .on_hover_text(
-            "Variation in scale radius. 0% makes equal sizes; 50% is the Velvet Scales reference.",
+            "Variation in scale radius. 0% makes equal sizes; 50% is the Scales reference.",
         );
     ValueBar::new(&mut s.velvet_edge, 0.01..=1.0, "Edge softness")
         .percent()
