@@ -56,7 +56,27 @@ fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
 /// subsection would stand a row gap too far from what follows the block.
 pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     group_space(ui);
-    let under = if ui.layout().is_vertical() { extra(ui) } else { 0.0 };
+    label_with_gap_below(ui, text, GROUP_GAP)
+}
+
+/// A block title sits closer to its controls: 13pt above and 5pt below,
+/// sharing the ordinary label's 18pt total. Directly after a section header,
+/// keep the gap that header already supplied.
+pub(crate) fn block_label(ui: &mut Ui, title: &str) -> Response {
+    if ui.layout().is_vertical() && !spaced(ui) {
+        ui.add_space(
+            (13.0 * crate::theme::ui_scale(ui.ctx()) - ui.spacing().item_spacing.y).max(0.0),
+        );
+    }
+    label_with_gap_below(ui, egui::RichText::new(title).strong(), 5.0)
+}
+
+fn label_with_gap_below(ui: &mut Ui, text: impl Into<WidgetText>, gap: f32) -> Response {
+    let under = if ui.layout().is_vertical() {
+        (gap * crate::theme::ui_scale(ui.ctx()) - ui.spacing().item_spacing.y).max(0.0)
+    } else {
+        0.0
+    };
     let galley = text.into().into_galley(ui, None, ui.available_width(), egui::TextStyle::Body);
     let (top, bottom) = cap_trim(ui, &galley);
     let size = egui::vec2(galley.size().x, galley.size().y - top - bottom + under);

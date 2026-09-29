@@ -762,12 +762,12 @@ pub(super) fn subsection<R>(
 }
 
 /// A labelled run of rows inside a section: its name in the strong body face,
-/// then the rows under it at the section's own indent. Not a fold — a section
+/// then the rows tucked closer under it at the section's own indent. Not a fold — a section
 /// is the thing that folds, and a block is only the name of a few of its rows,
 /// so a section reads as its blocks without a click on each.
 ///
 /// Loose rows in a section come before its blocks, so that a row after a
 /// block is never read as the block's.
 pub(super) fn block(ui: &mut egui::Ui, title: &str) -> egui::Response {
-    crate::widgets::label(ui, egui::RichText::new(title).strong())
+    crate::widgets::block_label(ui, title)
 }
