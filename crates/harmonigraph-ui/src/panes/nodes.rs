@@ -10,21 +10,19 @@ use harmonigraph_scene::{
     SPECTRAL_WIDTH_MIN,
 };
 
-// The Lattice page's Notes section ([`super::pages`]): layer geometry and note
-// motion, then the shared octave layout and the audio ring's readings.
+// The Lattice page's independently folded note controls ([`super::pages`]).
 
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
 /// pitch axis shared by the MIDI ring, audio ring and melody/bass marks.
 pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    super::block(ui, "Octave layout");
     // Octaves, Center and the fringe are the axis; how thick the ring they are
-    // drawn on is, and where it sits, is the Layers bar at the top of Notes — the
+    // drawn on is, and where it sits, is the Layers bar in Note layers — the
     // middle of its three handles, named MIDI there. The bar names layers by where each
     // one's reading comes FROM, which is what tells the two middle rings apart:
     // the analyzer's spectrum on the inner one, the played notes on this one.
     // This heading names the pitch axis drawn on it instead, that being what
     // the rows below set. How wide the cut between two indicators is belongs to
-    // neither: it is the shared Gap, at the top of Notes.
+    // neither: it is the shared Gap, in Note layers.
     //
     // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
     // one octave, so an indicator can never stand for less pitch than it
@@ -92,8 +90,13 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      100% widens them gradually toward the center.",
             );
     });
+    if view.octave_extras < 2 {
+        crate::widgets::weak(ui, "Taper requires at least two outer octaves per side.");
+    } else if view.octave_extra_size == 1.0 {
+        crate::widgets::weak(ui, "Reduce Outer octave scale below 1× to use taper.");
+    }
     // The padding between one indicator and the next is NOT here: it is the
-    // shared Gap at the top of Notes. What this block keeps is the axis alone:
+    // shared Gap in Note layers. What this block keeps is the axis alone:
     // how the turn is shared out, rather than how wide the cut between two
     // shares is.
     //
@@ -133,15 +136,14 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// chosen: Tolerance is the fold's kernel and Zoom is the spectrum's window,
 /// and neither means anything to the other. Both are shown either way rather than
 /// swapped in and out, so the section keeps its height and the bars keep their
-/// place as the row is clicked along. The whole group, its name too, is absent
-/// when the layer has no width: the Layers bar is the only control that can
-/// switch it back on, and a name over nothing, or a run of inert settings under
-/// it, is a layer that is not in the picture.
+/// place as the row is clicked along. A hidden layer keeps an explanation of
+/// how to restore it; the Note layers bar remains its only visibility control.
 pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     if !view.spectral_ring_draws() {
+        crate::widgets::weak(ui, "Audio ring — hidden");
+        crate::widgets::weak(ui, "Increase Audio width in Note layers to show it.");
         return;
     }
-    super::block(ui, "Audio ring");
     // "Ring display" and not "Ring", though the ring is what it fills: what this row
     // picks is which of two measurements the ring carries, which is the word the
     // rest of the audio channel uses for it, and a row named for the layer would
@@ -172,7 +174,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
                 ],
             );
         });
-    // WHICH NODES wear the ring, where the Layers bar at the top of Notes is how thick
+    // WHICH NODES wear the ring, where the Layers bar in Note layers is how thick
     // it is: a node whose loudest wedge does not reach this level draws no ring
     // at all. Both readings, so it sits above the pair of bars that are each one
     // reading's own — it is a question about the layer rather than about a
@@ -295,7 +297,7 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // One node-wide padding directly under the bar that draws its radial use.
     // The same value spaces the concentric layers and cuts the sectors, so the
     // two axes carry one rhythm of empty space. It is a whole-note setting
-    // rather than any one layer's, which is what puts it in Note at all.
+    // rather than any one layer's, which is what puts it in Note layers.
     //
     // Read out as a PERCENTAGE of the node's radius, which is what quad uv 1.0
     // is (`scene.node_radius`, a quarter of the lattice spacing, and the edge
@@ -313,7 +315,6 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
 
 /// Shared visibility timing followed by the MIDI slices' motion and ordering.
 pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn ParamBackend) {
-    super::block(ui, "Note animation");
     // The note's timing and the curve it runs on, in that order. Fade is an
     // automatable param and Fade curve a view setting, so the two are stored apart
     // (`ViewConfig::envelope` is where they are put back together); the pane
@@ -401,7 +402,7 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
                 .show(ui)
                 .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together; Simultaneous ignores this setting.");
         });
-    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset")
+    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset & scale")
             .unit(100.0, "%").show(ui)
             .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
 }

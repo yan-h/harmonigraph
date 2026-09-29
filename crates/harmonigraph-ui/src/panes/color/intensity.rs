@@ -85,6 +85,7 @@ fn limits(settings: &IntensitySettings, target: IntensityTarget) -> (f32, f32) {
 }
 
 pub(super) fn show(ui: &mut Ui, settings: &mut IntensitySettings) {
+    widgets::weak(ui, "Start at the base, add each mapped contribution, then limit the result.");
     widgets::weak(ui, "Bands show possible reach. Stripes mark clipping; dashes mark gain boosts.");
     // Apply additions/removals after drawing so rows keep stable geometry this frame.
     let mut route = None;
@@ -138,6 +139,9 @@ fn group(
         IntensityTarget::Thickness => ValueBar::new(&mut settings.thickness_base, 0.0..=settings.thickness_max, "Thickness base")
             .overlay_slot(&mut overlay).unit(1.0, "×").show(ui).on_hover_text("Starting thickness. 1× is Ribbon width in the Analyzer and the MIDI layer width in the Lattice. The mappings add multiples of those same reference widths; a hidden layer remains hidden."),
     };
+    if target == IntensityTarget::Opacity && settings.opacity_rest == 1.0 {
+        widgets::weak(ui, "Lower the base to let velocity, pressure or gain increase opacity.");
+    }
     for &source in &sources {
         ui.push_id(source.name(), |ui| {
             ui.horizontal(|ui| {

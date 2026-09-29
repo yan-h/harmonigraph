@@ -10,10 +10,12 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 
 | Tab | What you will find |
 | --- | --- |
-| Lattice | **View**: seventh layers, camera. **Notes**: note-layer sizes and gap, note animation, labels, shared octave layout, audio ring. **Idle lattice**: idle brightness and crosses. **Light**: bloom and background glow, background glow texture and breathing, and shadows for lattice shapes and text. |
-| Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
-| Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **Note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
-| System | Lattice resolution and spectrogram time sampling; editor frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
+| Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected instances. |
+| Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
+| Analyzer | **Spectrogram**: pitch/time softness and wide blur mix, level contours, Mosaic, Watercolor, Velvet Scales or Stars texture. **MIDI ribbons**: width, opacity, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
+| Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
+| Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
+| System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
 
 Settings opens on Tuning in a fresh workspace.
 Tabs that do not fit the column move, from the right, into a trailing overflow menu.
@@ -24,18 +26,37 @@ Right-clicking the Lattice or Analyzer picture offers a link to its settings tab
 Each tab keeps a single owner for its controls;
 shared settings name their scope in the help text.
 
+## Finding a control
+
+Lattice note geometry, animation, labels and light effects fold independently.
+**Note layers** sits beside **Octave layout**;
+**Audio ring** keeps restoration instructions when its width is zero.
+**Outer octave taper** explains when more outer octaves or a smaller scale are needed.
+**Label size** also controls cross thickness.
+
+Analyzer textures read in decision order:
+choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
+The Stars **Rendering quality** fold holds its quality presets and optional uniform halo resolution in both pictures.
+**Color pickup** follows brighter sound;
+**Color release** retains color as sound fades.
+Both use seconds, with zero responding immediately.
+
+Renamed sections start unfolded when opening older projects;
+visual values and their saved keys are unchanged.
+Detail folds such as **Map editing** and **Rendering quality** reopen closed with the editor.
+
 ## Note bloom
 
-**Note bloom** is one shared control in **Lattice → Light** and **Analyzer → MIDI ribbons**.
+**Note bloom** is one shared control in **Lattice → Note bloom** and **Analyzer → MIDI ribbons**.
 Changing either slider changes both pictures.
 It runs from 0 (off) to 2×,
 with 1× as the reference halo.
 The Spiral keeps its separate **Spiral bloom** control.
 Bloom is independent of the note intensity mappings.
 
-## Note intensity
+## MIDI note intensity
 
-On **Mappings → Note intensity**,
+On **Mappings → MIDI note intensity**,
 below **Audio level colors**,
 the **Opacity** and **Thickness** groups each hold their base and incoming mappings.
 Use **Add mapping** to assign a source;
@@ -143,12 +164,12 @@ press Tab to show them again.
 | Spectrum level range | Analyzer/Spiral height and lattice audio-ring levels. Audio colors have a separate Level color range. |
 | Live attack/release | Live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps unsmoothed measurements. |
 | Ring attack/release | Additional audio-ring smoothing after the shared live response. |
-| History duration | MIDI ribbons and spectrogram; also Video history → Scrolling. Whole video expands both histories to the render length, up to 10 minutes. |
+| History duration | MIDI ribbons and spectrogram; also Video history → Scrolling. Fit video (max 10 min) expands both histories to the render length, up to 10 minutes. |
 | Octave layout | MIDI ring, audio ring and melody/bass marks. The layer stack controls their widths and visibility. |
 | Note fade | MIDI slices, marks and labels, plus audio-ring visibility. Background glow has its own response. |
 | Motion and starting pose | MIDI slices and marks ease smoothly from the selected starting offset and scale. |
 | Audio level colors | Shared palette; lattice rings substitute gray at Idle ring brightness for its quiet endpoint. |
-| Background glow texture and breathing | Requires nonzero Background glow reach and gain. Its bypass preserves the effect settings. |
+| Glow pattern, material and breathing | Require nonzero Background glow reach and gain. Pattern varies the glow; material reshapes the result. Each effect retains its own settings when bypassed. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
 | Editor frame limit, interface scale | Editor only; exports run at 60 fps. |
 
@@ -165,14 +186,24 @@ note matching,
 output **Note retuning**,
 and connected **Instances**.
 **Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies.
+**Temperaments** follows **Lattice tuning**,
+so the constraints sit beside the intervals they control.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
+In Lattice Map mode,
+**Saved map** stays visible above the **Map editing** fold,
+which holds audition, offsets, assignments and map management.
+**Instances** appears only when connected instances are available.
 Host map-offset parameters explicitly name whole generator steps rather than tuning intervals.
 
 Video keeps **Finish recording** and **Stop at bar** with Record take.
 Finishing a take starts rendering;
 **Re-render take** applies the current appearance and video settings to the last take.
 **Output size (px)** shows the actual width and height for the chosen aspect ratio.
-The preview arranges the two pictures directly.
+Drag the lattice to an edge of the preview to arrange the pictures.
+Shift-drag either picture to navigate,
+and scroll or pinch to zoom.
+**Fit video (max 10 min)** changes exported history;
+the preview continues to use live **History duration**.
 
 ## Specialist controls to reconsider
 
@@ -187,7 +218,7 @@ No creative control was removed in this pass.
 | Wide blur mix | Candidate to replace with a fixed blend if comparisons show little practical value. It mixes close and five-times-wider blur; it is not redundant with either softness axis. |
 | Outer octave scale/taper | Specialized layout refinements; could move behind an expandable group. Removing them would lose unequal end-octave layouts. |
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
-| Background glow texture and breathing | Keep together beneath their parent glow. Consider presets if only a few combinations are useful; the master bypass remains useful for comparison. |
+| Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
 | Lattice resolution above 100% | Candidate for removing costly supersampling if visual comparison shows no useful improvement. Existing range is retained. |
 | 144 fps preset and Frame breakdown | Candidates for simplifying the editor controls or moving diagnostics to Console. Neither is a video setting. |
 

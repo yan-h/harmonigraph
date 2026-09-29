@@ -383,7 +383,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
     // Shared by both shells: the section, the row, and the choice on it. The
     // standalone has no transport to record with and still renders, so this is
     // the one thing in Render it can act on.
-    for row in ["RENDER", "Video history", "Whole video"] {
+    for row in ["RENDER", "Video history", "Fit video (max 10 min)"] {
         for supported in [true, false] {
             let (shapes, _) = video_pane_shapes(supported);
             assert!(
@@ -405,7 +405,7 @@ fn the_standalone_keeps_the_render_row_a_take_is_not_needed_for() {
 }
 
 /// Scrolling names the span it scrolls, read live off the Analyzer's History
-/// duration, so it reads as the alternative to Whole video without the Analyzer
+/// duration, so it reads as the alternative to Fit video without the Analyzer
 /// page open. Dialled off the default so a label frozen at the fresh value fails.
 #[test]
 fn the_scrolling_spectrogram_choice_names_its_span() {
@@ -1575,7 +1575,7 @@ fn history_stays_editable_without_midi_ribbons() {
 }
 
 /// Each reading's own bar is the LIVE one — Tolerance under Fold, Zoom under
-/// Spectrum. The entire group is absent with the ring itself, which is sized on
+/// Spectrum. The controls hide with the ring itself, which is sized on
 /// the Layers bar two sections up.
 ///
 /// Nothing else in the tree looks at these gates. They are two `add_enabled_ui`
@@ -1646,17 +1646,17 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
     }
 }
 
-/// With no audio layer in the picture, its settings and their name spend no
-/// vertical room: the Layers bar is what turns the layer on, and it is not in
-/// this group. Giving the layer any drawable width reveals the complete group
-/// again.
+/// A hidden audio ring keeps its heading and restoration instructions, while
+/// its controls return only when the layer has drawable width.
 #[test]
-fn audio_ring_settings_hide_with_the_layer() {
+fn hidden_audio_ring_keeps_restoration_instructions() {
     use harmonigraph_scene::SpectralReading;
 
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
         let hidden = audio_section_shapes(reading, 0.0);
-        assert!(text_ys(&hidden, "Audio ring").is_empty(), "a name stood over no settings");
+        assert_eq!(text_ys(&hidden, "AUDIO RING").len(), 1);
+        assert_eq!(text_ys(&hidden, "Audio ring — hidden").len(), 1);
+        assert_eq!(text_ys(&hidden, "Increase Audio width in Note layers to show it.").len(), 1);
         for setting in [
             "Ring display",
             "Ring threshold",
@@ -1673,7 +1673,7 @@ fn audio_ring_settings_hide_with_the_layer() {
         }
 
         let expanded = audio_section_shapes(reading, 0.3);
-        assert_eq!(text_ys(&expanded, "Audio ring").len(), 1, "the group lost its name");
+        assert_eq!(text_ys(&expanded, "AUDIO RING").len(), 1, "the group lost its name");
         for setting in [
             "Ring display",
             "Ring threshold",

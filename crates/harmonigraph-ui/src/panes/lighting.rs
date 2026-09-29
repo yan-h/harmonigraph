@@ -1,5 +1,5 @@
 //! Light and shadow for each picture: the lattice's bloom, background glow and shadows in
-//! the Lattice page's Light section, and the Spiral's bloom and the Analyzer
+//! separate Lattice sections, and the Spiral's bloom and the Analyzer
 //! and Spiral shadows on the Analyzer page. The spectrogram's own bloom sits
 //! with the MIDI ribbons it lights.
 
@@ -13,7 +13,7 @@ use harmonigraph_scene::{
     SPECTRAL_SHADOW_MAX,
 };
 
-/// The shadows under the lattice's ink, last in the Light section. They stay
+/// The shadows under the lattice's ink, in their own section. They stay
 /// editable with glow off: they also darken the picture behind ink.
 pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
     let shadow = &mut view.shadow;
@@ -73,7 +73,6 @@ pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
 
 /// The background glow: its reach, strength, colour, wash and clock.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    super::block(ui, "Background glow");
     // A share of the node's radius, the unit the shared gap and the Clearance in
     // Note read in, and measured from the same place: the reach is a distance
     // out from the node's edge exactly as the Clearance is. Eased, because the
@@ -155,9 +154,10 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Idle shapes always receive the full glow.",
                 );
             // The light's own clock, last, under everything it shapes. Its own pair
-            // and not the note Fade in Note, because a halo is the slow part of the
+            // and not the note Fade in Note animation, because a halo is the slow part of the
             // picture: on the layers' envelopes it flickers with the marks, which
             // are meant to be fast.
+            super::block(ui, "Glow response");
             ValueBar::new(&mut view.glow_attack, 0.0..=GLOW_BALLISTICS_MAX, "Background glow attack")
                 .unit(1000.0, " ms").decimals(0)
                 .show(ui)

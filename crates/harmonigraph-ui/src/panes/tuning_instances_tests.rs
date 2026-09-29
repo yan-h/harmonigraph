@@ -55,7 +55,7 @@ fn mixed_global_controls_enable_every_instance_then_disable_independently() {
     let size = egui::vec2(300.0, 800.0);
     let frame = |events| {
         events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), events, |ui| {
-            instance_controls(ui, &params)
+            instance_section(ui, &params)
         })
     };
     frame(vec![]);
@@ -110,7 +110,7 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                 vec![],
                 |ui| {
-                    instance_controls(ui, &params);
+                    instance_section(ui, &params);
                     used = ui.min_rect().width();
                 },
             );

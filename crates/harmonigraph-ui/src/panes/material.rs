@@ -7,12 +7,12 @@ fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
 }
 
 pub(super) fn watercolor(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::MaterialSettings) {
-    ValueBar::new(&mut atmosphere.wash_size, cloud_size_range(), "Glob size")
+    ValueBar::new(&mut atmosphere.wash_size, cloud_size_range(), "Patch size")
         .eased(true)
         .unit(1.0, "\u{d7}")
         .show(ui)
         .on_hover_text(
-            "Size of watercolor globs relative to the pane. 1× is about one twentieth of the pane's height; smaller values make finer grain and larger values make broader patches. The size follows the pane height.",
+            "Size of watercolor patches relative to the pane. 1× is about one twentieth of the pane's height; smaller values make finer grain and larger values make broader patches. The size follows the pane height.",
         );
     ValueBar::new(&mut atmosphere.wash_fuzz, 0.0..=1.0, "Edge feathering").percent().show(ui).on_hover_text(
         "Blend between neighboring watercolor patches. 0% makes hard-edged patches; 100% dissolves their edges. Does not change where each patch samples the picture.",
@@ -27,13 +27,13 @@ pub(super) fn watercolor(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene:
         .percent()
         .show(ui)
         .on_hover_text(
-            "Pull the sampled picture toward each glob's center. 0% keeps the original picture; 100% gives each glob the level at its center.",
+            "Pull the sampled picture toward each patch's center. 0% keeps the original picture; 100% gives each patch the level at its center.",
         );
     ValueBar::new(&mut atmosphere.wash_randomness, 0.0..=1.0, "Random brightness")
         .percent()
         .show(ui)
         .on_hover_text(
-            "Vary brightness between watercolor globs with balanced brightening and dimming, preserving the average color. Highlights vary less to avoid clipping. 0% keeps the original brightness.",
+            "Vary brightness between watercolor patches with balanced brightening and dimming, preserving the average color. Highlights vary less to avoid clipping. 0% keeps the original brightness.",
         );
     ValueBar::new(&mut atmosphere.wash_layers, 0.0..=1.0, "Fine layer mix")
         .percent()
@@ -104,9 +104,8 @@ pub(super) fn direction(ui: &mut egui::Ui, value: &mut f32) {
 /// 8's YB3 for how a star is coloured and shaped.
 pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::{
-        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_LIFETIME_MAX,
-        STAR_LIFETIME_MIN, STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
-        STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN, STAR_SPEED_MAX, STAR_SPEED_MIN,
+        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_SIZE_CURVE_MAX,
+        STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
         .unit(1.0, "\u{d7}")
@@ -143,25 +142,42 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
     .on_hover_text(
         "How the star spacing grows from the farthest depth to the nearest. 1 grows it evenly; higher values keep most depths fine dust and save the big stars for the nearest. The line previews it.",
     );
-    ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Randomness")
+    ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Size & brightness variation")
         .percent()
         .show(ui)
         .on_hover_text(
             "How much stars vary in brightness and size. Low values follow the underlying light more evenly; high values make a few bright stars among many faint ones.",
         );
-    ValueBar::new(&mut atmosphere.star_jitter, 0.0..=1.0, "Jitter")
+    ValueBar::new(&mut atmosphere.star_jitter, 0.0..=1.0, "Position variation")
         .percent()
         .show(ui)
         .on_hover_text(
-            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Increasing Jitter also shortens distant halos, except in Uniform rendering. Brightness and size variation are controlled by Randomness.",
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Increasing Position variation also shortens distant halos, except in Uniform rendering. Brightness and size variation are controlled by Size & brightness variation.",
         );
-    use harmonigraph_scene::StarHaloProfile;
-    crate::widgets::preset_row(
-        ui,
-        "Stars rendering",
-        &["Low", "Medium", "High", "Uniform"],
-        |ui, menu| {
-            for (label, profile, hint) in [
+    ValueBar::new(&mut atmosphere.star_far_fill, 0.0..=1.0, "Distant gap fill")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Fills thin background gaps between distant stars using their own colors. 0% keeps the original coverage, 50% fills gently, and 100% fills more strongly. Completely empty gaps remain empty.",
+        );
+    ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Halo strength")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "A faint, wider fringe around every star in the star's own color. 0% draws bare soft points.",
+        );
+    ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Star softness")
+        .percent()
+        .show(ui)
+        .on_hover_text("Widens every star's core and glow by the same proportion, at every depth. 0% keeps their base widths; Halo strength controls the strength of the surrounding glow.");
+    super::subsection(ui, "Rendering quality", |ui| {
+        use harmonigraph_scene::StarHaloProfile;
+        crate::widgets::preset_row(
+            ui,
+            "Stars rendering",
+            &["Low", "Medium", "High", "Uniform"],
+            |ui, menu| {
+                for (label, profile, hint) in [
             ("Low", StarHaloProfile::Low, "Lower rendering cost with softer foreground points and coarser distant detail."),
             ("Medium", StarHaloProfile::Medium, "Faster rendering with softer stars, including the foreground."),
             ("High", StarHaloProfile::P3, "Sharper foreground stars with slightly softer distant stars and shorter distant glow."),
@@ -176,10 +192,10 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
                 }
             }
         }
-        },
-    );
-    if atmosphere.star_halo_profile == StarHaloProfile::Uniform {
-        ValueBar::new(
+            },
+        );
+        if atmosphere.star_halo_profile == StarHaloProfile::Uniform {
+            ValueBar::new(
             &mut atmosphere.star_halo_resolution,
             harmonigraph_scene::STAR_HALO_RESOLUTION_MIN..=harmonigraph_scene::STAR_HALO_RESOLUTION_MAX,
             "Uniform halo resolution",
@@ -189,19 +205,15 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
         .on_hover_text(
             "Halo image width and height relative to the pane. 50% uses a quarter of the pixels; 100% uses native resolution. Lower values soften the glow. Star positions, sharp cores and halo reach stay the same.",
         );
-    }
-    ValueBar::new(&mut atmosphere.star_far_fill, 0.0..=1.0, "Far fill")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Fills thin background gaps between distant stars using their own colors. 0% keeps the original coverage, 50% fills gently, and 100% fills more strongly. Completely empty gaps remain empty.",
-        );
-    ValueBar::new(&mut atmosphere.star_fringe, 0.0..=STAR_FRINGE_MAX, "Fringe")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "A faint, wider fringe around every star in the star's own color. 0% draws bare soft points.",
-        );
+        }
+    });
+}
+
+pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
+    use harmonigraph_scene::{
+        STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
+        STAR_SPEED_MAX, STAR_SPEED_MIN,
+    };
     RangeBar::new(
         &mut atmosphere.star_speed_min,
         &mut atmosphere.star_speed_max,
@@ -234,10 +246,6 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
     .on_hover_text(
         "How long each star lives before a new one takes its place, fading in and out, alike at every depth.",
     );
-    ValueBar::new(&mut atmosphere.star_defocus, 0.0..=STAR_DEFOCUS_MAX, "Star softness")
-        .percent()
-        .show(ui)
-        .on_hover_text("Widens every star's core and glow by the same proportion, at every depth. 0% keeps their base widths; Fringe controls the strength of the surrounding glow.");
 }
 
 /// The S1 body-light material; every body contributes its own sampled light.
