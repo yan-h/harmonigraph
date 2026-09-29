@@ -80,8 +80,8 @@ pub use style::{
     ShadowStyle, REACH_SIGMAS, SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN, SHADOW_STOP,
 };
 pub use view::{
-    AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, RingStack,
-    ViewConfig, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT,
+    AnimationOrder, DrawnWindow, FrameParams, GlowCurve, NoteAnimationConfig, NoteMaterialConfig,
+    NoteMaterialStyle, RingStack, ViewConfig, SCALE_BAR_RANGE, SEVENS_LAYER_LIMIT,
 };
 
 use glam::{Vec3, Vec4};
@@ -744,6 +744,7 @@ pub struct Scene {
     /// Base node radius in world units.
     pub node_radius: f32,
     pub note_animation: NoteAnimationConfig,
+    pub note_material: NoteMaterialConfig,
     /// The outer octave layer's radial band (quad UV units), already
     /// sanitized: outer is always ahead of inner on a band that draws, and
     /// both are 0 when the layer is off (see [`ViewConfig::band_width`]).

@@ -14,9 +14,11 @@ mod ring_stack;
 mod windowing;
 
 pub use animation::{AnimationOrder, NoteAnimationConfig};
+mod note_material;
 pub use drawn_window::DrawnWindow;
 pub use frame_params::FrameParams;
 pub use glow_curve::GlowCurve;
+pub use note_material::{NoteMaterialConfig, NoteMaterialStyle};
 pub use ring_stack::RingStack;
 
 use ring_stack::{slot_start, Stack};
@@ -231,17 +233,10 @@ pub struct ViewConfig {
     /// which is the lattice read as a spectrum with the keys marking only its
     /// outer voices.
     pub band_width: f32,
-    // The octave layer's backdrop and solidity are fixed on in the shader and
-    // have no fields of their own. The backdrop — the silent octaves standing
-    // in the rings' own ground behind the sounding sectors — is what makes
-    // the annulus complete, so a lone octave still reads as a whole note; and
-    // the glyphs are always the crisp classic shapes. How bright that backdrop
-    // is IS a field, and it is [`lattice_ground`](Self::lattice_ground) below, one
-    // number under this layer and the audio ring together. Saved blobs may
-    // still carry the keys the pair rode on (`outer_backdrop`, first a bool
-    // and then an opacity under `outer_backdrop_alpha`, and `outer_solidity`);
-    // serde ignores unknown keys, so such a blob loads intact and simply
-    // drops them on the next save.
+    // Smooth keeps the original full-width quiet backdrop. `note_material`
+    // adds optional pigment surfaces and quiet-guide coverage; all styles
+    // take their neutral colour from `lattice_ground` below, shared with the
+    // audio ring. Retired backdrop/solidity keys are ignored by serde.
     /// Where the stack BEGINS, in quad UV units: the radius the innermost layer
     /// left on puts its inner edge on (see [`rings`](Self::rings)), and so the
     /// size of the empty middle a node carries.
@@ -570,6 +565,8 @@ pub struct ViewConfig {
     pub fade_shape: f32,
     /// Appearance of note arrivals and departures, on the shared Note fade clock.
     pub note_animation: NoteAnimationConfig,
+    /// Surface and quiet guides of the MIDI octave slices.
+    pub note_material: NoteMaterialConfig,
     /// How loud each note is drawn, and how far each display reads that
     /// (see [`crate::intensity`]). Shared by the lattice and the roll.
     pub intensity: crate::IntensitySettings,
@@ -1307,6 +1304,7 @@ impl ViewConfig {
         // duration beside it is the Fade param rather than a blob field, and
         // has no door here to need.
         self.note_animation = self.note_animation.sanitized();
+        self.note_material = self.note_material.sanitized();
         self.intensity = self.intensity.sanitized();
         self.fade_shape = finite_or(self.fade_shape, 0.0).clamp(0.0, 1.0);
 
@@ -1670,6 +1668,7 @@ impl Default for ViewConfig {
             // drag away.
             fade_shape: 0.313_509_55,
             note_animation: NoteAnimationConfig::default(),
+            note_material: NoteMaterialConfig::default(),
             intensity: crate::IntensitySettings::default(),
             note_bloom: 1.022_367_7,
             // A hairline step past the band — about an eighth of the band's

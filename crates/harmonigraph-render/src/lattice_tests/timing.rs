@@ -627,3 +627,23 @@ fn timing_editor_pipeline_startup() {
         eprintln!("opening {opening}: spectrogram {plain:?}, atmosphere {cloud:?}, roll {roll:?}");
     }
 }
+
+#[test]
+#[ignore = "a probe: prints a timing and asserts nothing"]
+fn a_frame_of_note_materials_costs_this_much() {
+    use harmonigraph_scene::{NoteMaterialStyle, ShadowKernel};
+    for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
+        for style in [
+            NoteMaterialStyle::Smooth,
+            NoteMaterialStyle::QuietPigment,
+            NoteMaterialStyle::BrokenTraces,
+        ] {
+            let mut scene = the_live_view();
+            scene.note_material.style = style;
+            for shadow in scene.shadow.groups_mut() {
+                shadow.kernel = kernel;
+            }
+            time_a_frame_of_names(scene, &format!("{style:?} {kernel:?}"));
+        }
+    }
+}

@@ -87,6 +87,12 @@ fn poisoned_view() -> ViewConfig {
         spectral_ring_release: nan,
         fade_shape: nan,
         note_bloom: nan,
+        note_material: NoteMaterialConfig {
+            style: NoteMaterialStyle::QuietPigment,
+            roughness: nan,
+            quiet_visibility: nan,
+            guide_width: nan,
+        },
         note_animation: NoteAnimationConfig {
             order: base.note_animation.order,
             stagger_spread: nan,
@@ -221,6 +227,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         camera,
         node_radius,
         note_animation,
+        note_material,
         outer_inner,
         outer_outer,
         rings_outer,
@@ -304,6 +311,10 @@ fn scene_floats(scene: &Scene) -> Floats {
 
     f.one("node_radius", *node_radius);
 
+    let NoteMaterialConfig { style: _, roughness, quiet_visibility, guide_width } = note_material;
+    f.one("note_material.roughness", *roughness);
+    f.one("note_material.quiet_visibility", *quiet_visibility);
+    f.one("note_material.guide_width", *guide_width);
     let NoteAnimationConfig { order: _, stagger_spread, radial_start } = note_animation;
     f.one("note_animation.stagger_spread", *stagger_spread);
     f.one("note_animation.radial_start", *radial_start);

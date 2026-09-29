@@ -27,6 +27,7 @@ pub(super) fn lattice_settings_pane(
         view::sevens(ui, &mut state.appearance);
     });
     section(ui, "Note layers", |ui| nodes::layers(ui, &mut state.appearance.view));
+    section(ui, "Note material", |ui| nodes::material(ui, &mut state.appearance.view));
     section(ui, "Octave layout", |ui| nodes::octaves(ui, &mut state.appearance.view));
     section(ui, "Note animation", |ui| nodes::motion(ui, &mut state.appearance.view, params));
     section(ui, "Note labels", |ui| labels::labels(ui, state));

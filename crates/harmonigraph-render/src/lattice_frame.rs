@@ -293,8 +293,11 @@ impl LatticeCallback {
             if marked {
                 rim = rim.max(mark_rim);
             }
-            let midi_rim =
-                if scene.outer_outer > scene.outer_inner { scene.outer_outer + swell } else { 0.0 };
+            let midi_rim = if scene.outer_outer > scene.outer_inner {
+                scene.outer_outer + swell + scene.note_material.fringe()
+            } else {
+                0.0
+            };
             let midi_rim = if marked { midi_rim.max(mark_rim) } else { midi_rim };
             rim = rim.max(scene.note_animation.reach(midi_rim));
             if ringing && g.ring > 0.0 {
@@ -467,6 +470,10 @@ impl LatticeCallback {
                     radius: scene.node_radius,
                     band_inner: scene.outer_inner,
                     band_outer: scene.outer_outer,
+                    material_style: scene.note_material.style as u32,
+                    material_roughness: scene.note_material.roughness,
+                    quiet_visibility: scene.note_material.quiet_visibility,
+                    guide_width: scene.note_material.guide_width,
                     rings_outer: scene.rings_outer,
                     mark_inner: scene.mark_inner,
                     angular_gap: scene.octave_gap,

@@ -196,6 +196,7 @@ pub(super) fn parity_scene() -> Scene {
             harmonigraph_scene::ViewConfig::default().lattice_ground,
         ),
         node_radius: 0.34,
+        note_material: Default::default(),
         note_animation: harmonigraph_scene::NoteAnimationConfig::default(),
         mark_thickness: 0.09,
         outer_inner: 0.545,

@@ -53,6 +53,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         plus_arm, plus_taper, glow_reach, glow_strength, glow_accumulation,
         glow_blend, glow_wash, glow_attack, glow_release);
     a.view.glow_curve.shape = v;
+    poison!(a.view.note_material; roughness, quiet_visibility, guide_width);
     poison!(a.view.note_animation; radial_start, stagger_spread);
     poison!(a.view.intensity; opacity_rest, thickness_base, thickness_max);
     for source in [
@@ -269,7 +270,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::Colors => 2 + 3,
             // The picture, then the background glow and breathing (10) with its texture
             // switched off, then two Gaussian shadow groups of three bars each.
-            panes::Tab::LatticeSettings => 15 + 1 + 10 + 6,
+            panes::Tab::LatticeSettings => 18 + 1 + 10 + 6,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -299,14 +300,14 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
+        visits: 18 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Mosaic,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
+        visits: 18 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
         ..base
     });
     for profile in [
@@ -321,7 +322,7 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile: profile,
             expanded: true,
             enabled: true,
-            visits: 15
+            visits: 18
                 + 1
                 + 10
                 + 6
@@ -357,7 +358,7 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::VelvetScales,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
+        visits: 18 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
         ..base
     });
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
@@ -383,7 +384,7 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 21 + 1 + 13 + 6,
+            visits: 24 + 1 + 13 + 6,
             ..base
         });
     }
@@ -405,6 +406,11 @@ fn check(edge: Edge) {
         assert_eq!(state.picture.appearance.view.marvel, scenario.marvel);
         let a = &mut state.picture.appearance;
         a.camera.projection = scenario.projection;
+        a.view.note_material.style = if scenario.enabled {
+            harmonigraph_scene::NoteMaterialStyle::BrokenTraces
+        } else {
+            harmonigraph_scene::NoteMaterialStyle::Smooth
+        };
         a.view.spectral_reading =
             if scenario.enabled { SpectralReading::Spectrum } else { SpectralReading::Fold };
         a.view.spectral_ring_width = if scenario.enabled { 0.1 } else { 0.0 };
@@ -649,6 +655,11 @@ fn the_loaded_state_guard_poisons_every_dialled_view_float() {
         "view.note_animation",
         &old.view.note_animation,
         &new.view.note_animation,
+    );
+    assert_poisoned_float_fields(
+        "view.note_material",
+        &old.view.note_material,
+        &new.view.note_material,
     );
     assert_poisoned_float_fields("view.intensity", &old.view.intensity, &new.view.intensity);
     let sources = |i: &harmonigraph_scene::IntensitySettings| {

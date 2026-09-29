@@ -155,6 +155,7 @@ pub fn derive_scene_with_extra(
         camera,
         node_radius: NODE_RADIUS_FACTOR,
         note_animation: view.note_animation.sanitized(),
+        note_material: view.note_material.sanitized(),
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,

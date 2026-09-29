@@ -192,7 +192,7 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // fraction.
     ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap").percent().show(ui).on_hover_text(
             "Space between concentric layers and between octave sectors, as a percentage of the node radius. \
-                     0% joins both layers and sectors.",
+                     0% joins the layers and Smooth sectors. Pigment surfaces retain a fine seam between octaves.",
         );
 }
 
@@ -259,4 +259,46 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset & scale")
             .unit(100.0, "%").show(ui)
             .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
+}
+
+/// Pigment belongs to the MIDI slices, alongside their geometry and motion.
+pub(super) fn material(ui: &mut egui::Ui, view: &mut ViewConfig) {
+    use harmonigraph_scene::NoteMaterialStyle::*;
+    let material = &mut view.note_material;
+    choice_row(
+        ui,
+        "Surface",
+        &mut material.style,
+        &[
+            (Smooth, "Smooth", "The original smooth octave slices."),
+            (
+                QuietPigment,
+                "Quiet pigment",
+                "Ragged pigment with dim, full-width neutral guides for unplayed octaves.",
+            ),
+            (
+                BrokenTraces,
+                "Broken traces",
+                "The same sounding pigment with thin, grainy neutral guides.",
+            ),
+        ],
+    );
+    ui.add_enabled_ui(material.style != Smooth, |ui| {
+        ValueBar::new(&mut material.roughness, 0.0..=1.0, "Roughness")
+            .percent()
+            .show(ui)
+            .on_hover_text("Amount of stable edge displacement and pigment bleed.");
+        ValueBar::new(&mut material.quiet_visibility, 0.0..=1.0, "Quiet guides")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Visibility of unplayed octave guides while this pitch class is present.",
+            );
+        ui.add_enabled_ui(material.style == BrokenTraces, |ui| {
+            ValueBar::new(&mut material.guide_width, 0.25..=2.0, "Guide width")
+                .unit(100.0, "%")
+                .show(ui)
+                .on_hover_text("Width of the unplayed octave traces.");
+        });
+    });
 }

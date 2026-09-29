@@ -26,6 +26,12 @@ fn dialled() -> SharedState {
     appearance.view.label_scale = 0.7;
     appearance.view.ring_gap = 0.02;
     appearance.view.max_sevens = 3;
+    appearance.view.note_material = harmonigraph_scene::NoteMaterialConfig {
+        style: harmonigraph_scene::NoteMaterialStyle::BrokenTraces,
+        roughness: 0.73,
+        quiet_visibility: 0.41,
+        guide_width: 1.7,
+    };
     appearance.view.note_animation.order = harmonigraph_scene::AnimationOrder::Circular;
     appearance.view.note_animation.stagger_spread = 0.63;
     appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::Contours;
@@ -2246,4 +2252,25 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
     );
     let partial: MaterialSettings = ron::from_str("(wash_fuzz:0.23)").unwrap();
     assert_eq!(partial, MaterialSettings { wash_fuzz: 0.23, ..Default::default() });
+}
+
+#[test]
+fn note_material_styles_roundtrip_and_missing_controls_default() {
+    use harmonigraph_scene::{NoteMaterialConfig, NoteMaterialStyle};
+    for style in [
+        NoteMaterialStyle::Smooth,
+        NoteMaterialStyle::QuietPigment,
+        NoteMaterialStyle::BrokenTraces,
+    ] {
+        let mut state = dialled();
+        state.picture.appearance.view.note_material.style = style;
+        let mut restored = fresh();
+        assert!(restored.load_persist(&state.save_persist()));
+        assert_eq!(
+            restored.picture.appearance.view.note_material,
+            state.picture.appearance.view.note_material
+        );
+    }
+    let partial: NoteMaterialConfig = ron::from_str("(roughness:0.23)").unwrap();
+    assert_eq!(partial, NoteMaterialConfig { roughness: 0.23, ..Default::default() });
 }

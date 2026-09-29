@@ -936,3 +936,136 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
          across the outer ring",
     );
 }
+
+/// Real pixels exercise both material paths, nonunit thickness, and quiet
+/// coverage. The large wheel gives each seam and trace several native pixels.
+#[test]
+fn pigment_styles_share_live_octaves_and_leave_dark_seams() {
+    use harmonigraph_scene::{octave_layout, NoteMaterialStyle};
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let layout = octave_layout(7, 60.0);
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let (mid, wedge) = wedge_of(layout, slot, 0.0);
+    let mut scene = octave_wheel_scene(layout, 0.0);
+    scene.glow_reach = 0.0;
+    scene.bloom_strength = 0.0;
+    for shadow in scene.shadow.groups_mut() {
+        shadow.depth = 0.0;
+    }
+    scene.spectral.outer = scene.spectral.inner;
+    scene.nodes[0].audio_ring = 0.0;
+    scene.nodes[0].octaves.fill(0.0);
+    scene.nodes[0].octaves[slot] = 1.0;
+    let smooth = gpu.shot(&scene);
+    let probe = BandProbe::new(&smooth, SIZE, mid);
+    for progress in [1.0, 0.999] {
+        scene.nodes[0].slice_progress.fill(progress);
+        for thickness in [0.5, 0.984375, 1.5] {
+            scene.nodes[0].thickness[slot] = thickness;
+            scene.note_material.style = NoteMaterialStyle::QuietPigment;
+            let pigment = gpu.shot(&scene);
+            scene.note_material.style = NoteMaterialStyle::BrokenTraces;
+            let traces = gpu.shot(&scene);
+            // The whole active sector is identical, beyond a seam's soft edge.
+            let active_a = probe.mean_across(&pigment, mid, wedge, 0.0, 0.95);
+            let active_b = probe.mean_across(&traces, mid, wedge, 0.0, 0.95);
+            assert_eq!(active_a, active_b, "quiet style changed the sounding octave");
+            assert!(active_a.iter().sum::<f32>() > 30.0, "active fixture drew no pigment");
+            let (quiet_mid, quiet_width) = wedge_of(layout, slot + 1, 0.0);
+            let quiet_a = probe.mean(&pigment, quiet_mid, quiet_width).iter().sum::<f32>();
+            let quiet_b = probe.mean(&traces, quiet_mid, quiet_width).iter().sum::<f32>();
+            assert!(
+                quiet_a > quiet_b + 5.0 && quiet_b > 0.5,
+                "quiet guides did not distinguish body from traces: {quiet_a}, {quiet_b}"
+            );
+            let seam = mid + wedge * 0.5;
+            let radius = (probe.inner + probe.outer) * 0.5;
+            assert!(
+                probe.at(&pigment, radius, seam).iter().sum::<f32>() < 8.0,
+                "pigment crossed the octave seam"
+            );
+            assert!(
+                probe.at(&traces, radius, seam).iter().sum::<f32>() < 8.0,
+                "trace crossed the octave seam"
+            );
+        }
+    }
+    scene.nodes[0].slice_progress.fill(1.0);
+    scene.nodes[0].thickness[slot] = 1.0;
+    scene.note_material.style = NoteMaterialStyle::Smooth;
+    scene.note_material.roughness = 0.1;
+    scene.note_material.quiet_visibility = 0.0;
+    scene.note_material.guide_width = 2.0;
+    assert_eq!(smooth, gpu.shot(&scene), "Smooth consulted pigment controls");
+}
+
+/// A delayed mark's slot bit appears before its ink does. It must not remove
+/// a whole fringe on that first nearly-transparent frame, in either direction.
+#[test]
+fn pigment_clearance_follows_the_matching_marks_envelope() {
+    use harmonigraph_scene::{octave_layout, NoteMaterialStyle};
+    const SIZE: [u32; 2] = [384, 384];
+    let Some(mut gpu) = Shooter::new(SIZE) else {
+        return;
+    };
+    let slot = harmonigraph_scene::MIDDLE_C_SLOT;
+    let layout = octave_layout(7, 60.0);
+    let mut scene = octave_wheel_scene(layout, 0.0);
+    scene.outer_inner = 0.55;
+    scene.outer_outer = 0.85;
+    scene.rings_outer = 0.85;
+    scene.mark_inner = 0.90;
+    scene.mark_thickness = 0.04;
+    scene.octave_gap = 0.10;
+    scene.note_material.style = NoteMaterialStyle::QuietPigment;
+    scene.glow_reach = 0.0;
+    scene.bloom_strength = 0.0;
+    for shadow in scene.shadow.groups_mut() {
+        shadow.depth = 0.0;
+    }
+    scene.spectral.outer = scene.spectral.inner;
+    scene.nodes[0].audio_ring = 0.0;
+    scene.nodes[0].octaves.fill(0.0);
+    scene.nodes[0].octaves[slot] = 1.0;
+    let (mid, wedge) = wedge_of(layout, slot, 0.0);
+    let uv_pixels = scene.camera.points_per_world(SIZE[1] as f32) * scene.node_radius * 1.8;
+    let probe = BandProbe { size: SIZE, inner: 0.55 * uv_pixels, outer: 0.85 * uv_pixels };
+    for progress in [1.0, 0.999] {
+        scene.nodes[0].slice_progress.fill(progress);
+        for melody in [true, false] {
+            scene.nodes[0].melody_slots = 0;
+            scene.nodes[0].bass_slots = 0;
+            scene.nodes[0].melody_level = 0.0;
+            scene.nodes[0].bass_level = 0.0;
+            let absent = gpu.shot(&scene);
+            if melody {
+                scene.nodes[0].melody_slots = 1 << slot;
+                scene.nodes[0].melody_level = 0.0001;
+            } else {
+                scene.nodes[0].bass_slots = 1 << slot;
+                scene.nodes[0].bass_level = 0.0001;
+            }
+            let starting = gpu.shot(&scene);
+            let jump = absent.iter().zip(&starting).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+            assert!(jump <= 2, "a nearly invisible mark cut pigment by {jump} byte levels");
+            if melody {
+                scene.nodes[0].melody_level = 1.0;
+            } else {
+                scene.nodes[0].bass_level = 1.0;
+            }
+            let marked = gpu.shot(&scene);
+            // The gap just beyond the band's edge is before the mark strip,
+            // so its disappearance measures clearance, not the mark's colour.
+            let fringe = probe.mean_across(&absent, mid, wedge, 1.02, 1.06).iter().sum::<f32>();
+            let cleared = probe.mean_across(&marked, mid, wedge, 1.02, 1.06).iter().sum::<f32>();
+            assert!(fringe > 8.0, "fixture has no fringe beside its mark: {fringe}");
+            assert!(
+                cleared < fringe * 0.25,
+                "full mark did not clear pigment: {cleared} vs {fringe}"
+            );
+        }
+    }
+}

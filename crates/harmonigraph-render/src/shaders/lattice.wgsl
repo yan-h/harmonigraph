@@ -31,6 +31,10 @@ struct NodeParams {
     mark_thickness: f32,
     animation: f32,
     pose: vec4<f32>,
+    material_style: u32,
+    material_roughness: f32,
+    quiet_visibility: f32,
+    guide_width: f32,
 };
 
 struct MarkerParams {
@@ -753,6 +757,9 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // (`shadow_reach_uv`), and a quad that stopped at the ink would cut that
     // Gaussian off in a straight line. The cell draw writes the packer's
     // one-texel sampling guard too.
+    if u.node.band_outer > u.node.band_inner {
+        rim = max(rim, swell + pigment_fringe());
+    }
     let midi_rim = select(0.0, rim, u.node.band_outer > u.node.band_inner || ((inst.marks.x | inst.marks.y) != 0u && u.node.mark_thickness > 0.0));
     let bounds = select(rim, max(rim, max(midi_rim * u.node.pose.z, spectral_radii().y)), u.node.animation != 0.0);
     let margin = quad_margin(bounds, shadow_reach_uv(scale));
@@ -1346,6 +1353,116 @@ fn slice_zones(
         NodeLayer(far.sd, far_level, far.coverage),
         rest,
     );
+}
+
+// Stable local pigment: no clock, screen position, or per-press seed. The
+// hash and two-octave field are the selected native-resolution study's.
+fn pigment_fringe() -> f32 {
+    return select(0.3 * u.node.material_roughness, 0.0, u.node.material_style == 0u);
+}
+fn pigment_hash(q: vec2<i32>, seed: u32) -> f32 {
+    var h = bitcast<u32>(q.x) * 374761393u + bitcast<u32>(q.y) * 668265263u + seed * 144269u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    return f32(h ^ (h >> 16u)) / 4294967295.0;
+}
+fn pigment_noise(p: vec2<f32>, seed: u32) -> f32 {
+    let cell = vec2<i32>(floor(p));
+    let f = fract(p);
+    let t = f * f * (3.0 - 2.0 * f);
+    return mix(mix(pigment_hash(cell, seed), pigment_hash(cell + vec2<i32>(1, 0), seed), t.x),
+        mix(pigment_hash(cell + vec2<i32>(0, 1), seed), pigment_hash(cell + vec2<i32>(1, 1), seed), t.x), t.y);
+}
+fn pigment_field(p: vec2<f32>, seed: u32) -> f32 {
+    return (pigment_noise(p, seed) + 0.5 * pigment_noise(p * 2.07 + vec2<f32>(13.1, -7.3), seed + 31u)) / 1.5;
+}
+
+// Both quiet styles share the sounding shape. The quiet body and sounding
+// body carry separate levels so a release continuously uncovers the guide,
+// including a slice whose thickness is changing. Neither is over-composited
+// onto its own antialiased edge.
+fn pigment_layer(
+    uv: vec2<f32>, inner: f32, outer: f32, aa: f32,
+    side: f32, drift: f32, fine: f32, trace: bool, low: f32, high: f32,
+) -> NodeLayer {
+    if outer <= inner { return NodeLayer(EMPTY_DISTANCE, 0.0, 0.0); }
+    let d = length(uv);
+    let rough = u.node.material_roughness;
+    let half_width = select(0.5 * (outer - inner), min(0.5 * (outer - inner), 1.45 / 36.0 * u.node.guide_width), trace);
+    let radial = abs(d - 0.5 * (inner + outer) - drift) - half_width;
+    // The feather never exceeds half coverage outside the contour, so the
+    // distance and Gaussian paths agree on the opaque core's silhouette.
+    let soft = max(aa * 0.5, 0.85 / 36.0);
+    let core_sd = radial - 0.25 / 36.0;
+    let limits = max(low - d, d - high);
+    var sd = max(max(core_sd, side), limits);
+    var coverage = (1.0 - smoothstep(-soft, soft, core_sd));
+    if trace {
+        let holes = (0.30 - fine) * 0.08;
+        sd = max(sd, holes);
+        coverage *= smoothstep(0.22, 0.38, fine) * (0.48 + 0.52 * fine);
+    } else if rough > 0.0 {
+        let bleed = (1.0 - smoothstep(0.0, 5.3 / 36.0 * rough, radial)) * (0.25 + 0.23 * fine);
+        coverage = max(coverage, bleed);
+    }
+    // A hard ownership guard keeps the same dark seam at every zoom. Its
+    // inner edge is feathered; noise may fray radial edges but never recolor
+    // an adjacent octave.
+    coverage *= 1.0 - smoothstep(-max(aa * 0.5, 1.3 / 36.0), 0.0, side);
+    coverage *= 1.0 - smoothstep(-max(aa * 0.5, 0.01), 0.0, limits);
+    return NodeLayer(sd, 1.0, coverage);
+}
+fn pigment_zones(in: VsOut, slot: i32, ring: OctRing, uv: vec2<f32>, aa: f32) -> SliceZones {
+    let inner = u.node.band_inner;
+    let outer = u.node.band_outer;
+    let reach = slice_reach(in, slot, inner, outer);
+    let fold = sector_fold(uv, oct_sector(slot, ring));
+    let side = max(sector_side(fold) + max(slice_gap_half(), 0.7 / 36.0), sector_pie(fold, EMPTY_DISTANCE));
+    // Raster ink needs no noise in a sector it cannot cover. Distance and
+    // spread consumers still evaluate the field outside ink for their shadow.
+    if in.shadow_at.z >= 0.0 && in.params.w < DISTANCE_COVERAGE_KIND - 0.5
+        && (side >= 0.0 || length(uv) > max(outer, reach) + pigment_fringe() + aa) {
+        let empty = NodeLayer(EMPTY_DISTANCE, 0.0, 0.0);
+        return SliceZones(vec4<f32>(0.0), 0.0, empty, empty, 0.0);
+    }
+    let seed = u32(max(round(oct_slot_pitch(slot, in.cents)), 0.0));
+    let p = vec2<f32>(uv.x, -uv.y) * 36.0;
+    let fine = pigment_noise(p / 1.1, seed + 209u);
+    let field = pigment_field(p / 4.4, seed + 73u);
+    let drift = ((field - 0.5) * 9.5 + (fine - 0.5) * 1.4) / 36.0 * u.node.material_roughness;
+    // Preserve clear space beside actual audio and marks, not an invisible
+    // reserved strip. Quiet sectors on an unmarked node retain the full bleed.
+    var low = 0.0;
+    if in.ring > 0.0 && u.spectral.outer > u.spectral.inner {
+        low = min(inner, u.spectral.outer + 0.5 * u.node.angular_gap);
+    }
+    var high = min(QUAD_MARGIN - 0.04, max(outer, reach) + pigment_fringe());
+    if slot >= 0 && slot < i32(OCTAVE_SLOTS) && u.node.mark_thickness > 0.0 {
+        let bit = 1u << u32(slot);
+        let melody = select(0.0, in.params.y, (in.marks.x & bit) != 0u);
+        let bass = select(0.0, in.params.z, (in.marks.y & bit) != 0u);
+        let mark_level = clamp(max(melody, bass), 0.0, 1.0);
+        if mark_level > 0.0 {
+            let marks = mark_radii(in, slot, u.node.mark_inner, u.node.mark_inner + u.node.mark_thickness);
+            // A delayed mark acquires its slot bit at arbitrarily low opacity.
+            // Open its clearance on the same envelope, including releases,
+            // rather than cutting the whole fringe at that first bit.
+            high = mix(high, min(high, marks.x - 0.5 * u.node.angular_gap), mark_level);
+        }
+    }
+    var live = pigment_layer(uv, inner, reach, aa, side, drift, fine, false, low, high);
+    var quiet = pigment_layer(uv, inner, outer, aa, side, drift, fine, u.node.material_style == 2u, low, high);
+    let lit = oct_slot_lit(in.cents, in.octaves, slot);
+    live.level = lit.w;
+    quiet.level = max(in.params.x - lit.w, 0.0) * u.node.quiet_visibility;
+    let live_cov = layer_coverage(live);
+    let quiet_cov = layer_coverage(quiet);
+    let coverage = live_cov + quiet_cov;
+    let density = 0.55 + 0.72 * smoothstep(0.15, 0.8, pigment_field(p / 6.8, seed + 11u))
+        + 0.35 * (pigment_noise(p / 2.1, seed + 119u) - 0.5);
+    let quiet_density = 0.68 + 0.52 * field;
+    let ground = u.lattice_ground.rgb * quiet_density;
+    let rgb = (lit.rgb * density * live_cov + ground * quiet_cov) / max(coverage, 1e-4);
+    return SliceZones(vec4<f32>(rgb, coverage), live.coverage, live, quiet, quiet.coverage);
 }
 
 // The signed field and level of one annular sector. The radial field arrives
@@ -2166,11 +2283,25 @@ fn base_node_ink(
     let swells = swell_out > band_out;
     let in_swell = swells && d < swell_out + aa;
     for (var i = 0u;
-        i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0 || in_swell);
+        i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0 || in_swell
+            || (u.node.material_style != 0u && band_out > band_in && d < max(band_out, swell_out) + pigment_fringe() + aa));
         i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
         if level <= 0.0 && presence <= 0.0 {
+            continue;
+        }
+        if u.node.material_style != 0u {
+            if band_out <= band_in { continue; }
+            let zones = pigment_zones(in, slot, oct, in.uv, aa);
+            glyph_mask = max(glyph_mask, max(zones.near.coverage * mask_level(zones.near.level), zones.far.coverage * mask_level(zones.far.level)));
+            node_sd = layer_distance(node_sd, zones.near, in);
+            node_sd = layer_distance(node_sd, zones.far, in);
+            if zones.ink.w > glyph {
+                glyph = zones.ink.w;
+                glyph_rgb = zones.ink.rgb;
+                glyph_lit = zones.lit * level;
+            }
             continue;
         }
         let shape_layer = outer_glyph(slot, oct, in.uv, band, band_in, band_out, aa);
@@ -2385,7 +2516,21 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
         let uv = anchor + (in.uv - start) / scale;
         let d = length(uv);
         let soft = aa / scale;
-        if band_out > band_in {
+        if band_out > band_in && u.node.material_style != 0u {
+            let zones = pigment_zones(in, slot, oct, uv, soft);
+            let taper = glyph_taper(d, swells);
+            let coverage = zones.ink.w * taper * opacity;
+            let near = zones.near;
+            let far = zones.far;
+            result.sd = layer_distance(result.sd, NodeLayer(near.sd * scale, near.level * opacity, near.coverage), in);
+            result.sd = layer_distance(result.sd, NodeLayer(far.sd * scale, far.level * opacity, far.coverage), in);
+            result.mask = max(result.mask, max(near.coverage * mask_level(near.level * opacity), far.coverage * mask_level(far.level * opacity)) * taper);
+            if coverage > result.alpha {
+                result.rgb = zones.ink.rgb * coverage;
+                result.alpha = coverage;
+                result.lit = zones.lit * near.level / max(zones.ink.w, 1e-4);
+            }
+        } else if band_out > band_in {
             let shape = outer_glyph(slot, oct, uv, glyph_band(d, band_in, band_out, 1.0, soft), band_in, band_out, soft);
             let ink = oct_slot_ink(in, slot);
             let taper = glyph_taper(d, swells);

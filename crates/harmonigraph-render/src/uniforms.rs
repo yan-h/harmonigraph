@@ -80,6 +80,10 @@ uniform_group! {
         mark_thickness: f32,
         animation: f32,
         pose: Float4,
+        material_style: u32,
+        material_roughness: f32,
+        quiet_visibility: f32,
+        guide_width: f32,
     }
 }
 uniform_group! {
