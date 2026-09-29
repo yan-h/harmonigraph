@@ -57,15 +57,17 @@ impl Plot {
             Rect::from_min_max(egui::pos2(bounds.left(), well.bottom() + gap), bounds.max)
         };
         if title_beside {
+            let mut title_rect = fields;
+            title_rect.min.x += super::bar::BAR_TEXT_PAD * scale;
             let mut title = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt(response.id.with("title"))
-                    .max_rect(fields)
+                    .max_rect(title_rect)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
             title
                 .allocate_ui_with_layout(
-                    Vec2::new(fields.width(), theme::row_height(scale)),
+                    Vec2::new(title_rect.width(), theme::row_height(scale)),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| ui.add(egui::Label::new(label).truncate()),
                 )
