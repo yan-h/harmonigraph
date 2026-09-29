@@ -81,6 +81,7 @@ pub struct ValueBar<'a> {
     overlay_slot: Option<&'a mut Option<egui::layers::ShapeIdx>>,
     range: RangeInclusive<f32>,
     label: &'a str,
+    caption: Option<&'a str>,
     /// Ease the low end of the range (geometric when min > 0, cubic
     /// otherwise), so the fine end of a wide range is draggable.
     eased: bool,
@@ -119,6 +120,7 @@ impl<'a> ValueBar<'a> {
             overlay_slot: None,
             range,
             label,
+            caption: None,
             eased: false,
             decimals: 2,
             step: 0.0,
@@ -130,6 +132,13 @@ impl<'a> ValueBar<'a> {
             curve: None,
             swatch: None,
         }
+    }
+
+    /// A shorter visible name where the surrounding diagram supplies context.
+    /// The full label still identifies the setting in the range census.
+    pub(crate) fn caption(mut self, caption: &'a str) -> Self {
+        self.caption = Some(caption);
+        self
     }
 
     /// Tint the value fill while retaining the normal well and interaction states.
@@ -298,6 +307,10 @@ impl<'a> ValueBar<'a> {
     /// Value -> fill fraction in [0, 1].
     fn to_t(&self, v: f32) -> f32 {
         let (min, max) = (self.min(), self.max());
+        // A paired endpoint can leave its sibling only one legal value.
+        if min == max {
+            return 0.0;
+        }
         let v = v.clamp(min, max);
         if !self.eased {
             (v - min) / (max - min)
@@ -520,7 +533,11 @@ impl<'a> ValueBar<'a> {
             let format = egui::TextFormat::simple(body.clone(), theme::text());
             job.append(&format!("{word} · "), 0.0, format);
         }
-        job.append(self.label, 0.0, egui::TextFormat::simple(body, text_color));
+        job.append(
+            self.caption.unwrap_or(self.label),
+            0.0,
+            egui::TextFormat::simple(body, text_color),
+        );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
         let centered =
@@ -916,6 +933,18 @@ mod tests {
 
     /// Enter the units the bar actually paints, through its double-click and
     /// focus-loss path. Fractions, time and screen lengths all share this seam.
+    #[test]
+    fn a_singleton_range_has_a_finite_fill_and_cannot_move() {
+        for fixed in [0.0, 0.5, 64.0] {
+            for eased in [false, true] {
+                let mut value = fixed;
+                let bar = ValueBar::new(&mut value, fixed..=fixed, "Endpoint").eased(eased);
+                assert_eq!(bar.to_t(fixed), 0.0);
+                assert_eq!(bar.value_at(0.25), fixed);
+            }
+        }
+    }
+
     #[test]
     fn numeric_entry_uses_the_displayed_unit() {
         use crate::tests::probe::{events_into, press, themed};

@@ -187,8 +187,9 @@ fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
     let ctx = crate::tests::probe::themed_at(1.0);
     let (mut hue, mut amount) = (180.0, 0.3);
     let key = crate::panes::pane_content_right();
-    ctx.data_mut(|d| d.insert_temp(key, 300.0f32));
+    ctx.data_mut(|d| d.insert_temp(key, 120.0f32));
     let mut draw = |ui: &mut Ui| {
+        ui.set_max_width(120.0);
         skin_color(ui, "Accent", &mut hue, &mut amount, ["Hue", "Amount"], |h, s| {
             let [r, g, b] = harmonigraph_scene::skin::accent_color(h, s);
             egui::Color32::from_rgb(r, g, b)
@@ -213,7 +214,7 @@ fn color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds() {
     frame(&ctx, vec![Event::PointerMoved(handle + egui::vec2(30.0, -10.0))], &mut draw);
     frame(&ctx, vec![press(handle + egui::vec2(30.0, -10.0), false)], &mut draw);
     assert!(hue > 180.0 && amount > 0.3);
-    assert_eq!(ctx.data(|d| d.get_temp::<f32>(key)), Some(300.0));
+    assert_eq!(ctx.data(|d| d.get_temp::<f32>(key)), Some(120.0));
 }
 
 #[test]
@@ -228,13 +229,22 @@ fn numeric_entries_use_display_units_and_reject_non_finite_input() {
         let mut value = 0.5;
         let field = std::cell::Cell::new(egui::Rect::NOTHING);
         let mut draw = |ui: &mut Ui| {
-            field.set(plot::number(ui, &mut value, 0.0..=1.0, "Value", unit, suffix).rect);
+            let plot = plot::Plot::with_fields(ui, "Exact entry", 1);
+            plot.fields(ui, |ui| {
+                field.set(
+                    plot::value_bar(ui, &mut value, 0.0..=1.0, ["Value", "Value"], unit, suffix)
+                        .rect,
+                );
+            });
         };
         frame(&ctx, vec![], &mut draw);
         let at = field.get().center();
         frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
-        frame(&ctx, vec![press(at, true)], &mut draw);
-        frame(&ctx, vec![press(at, false)], &mut draw);
+        for _ in 0..2 {
+            frame(&ctx, vec![press(at, true)], &mut draw);
+            frame(&ctx, vec![press(at, false)], &mut draw);
+        }
+        frame(&ctx, vec![], &mut draw);
         let key = |key, modifiers| Event::Key {
             key,
             physical_key: None,
@@ -249,5 +259,54 @@ fn numeric_entries_use_display_units_and_reject_non_finite_input() {
             &mut draw,
         );
         assert!((value - want).abs() < 1e-6, "{text} stored {value}");
+    }
+}
+
+#[test]
+fn compact_values_fit_beside_the_picture_and_stack_in_narrow_panes() {
+    for scale in [0.7, 1.0, 1.5] {
+        for width in [120.0, 219.0, 220.0, 240.0, 320.0] {
+            let ctx = crate::tests::probe::themed_scaled(scale);
+            let screen = egui::vec2(800.0, 500.0);
+            let pane =
+                egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(width * scale, 450.0));
+            for count in [1, 2, 3] {
+                crate::tests::probe::frame_into(&ctx, screen, pane, |ui| {
+                    let plot = plot::Plot::with_fields(ui, "Control", count);
+                    plot.fields(ui, |ui| {
+                        for i in 0..count {
+                            let field = ui
+                                .push_id(i, |ui| {
+                                    plot::value_bar(
+                                        ui,
+                                        &mut 6.0,
+                                        0.0..=6.0,
+                                        ["Exact value", "Value"],
+                                        1000.0,
+                                        " ms",
+                                    )
+                                })
+                                .inner;
+                            assert!(
+                                plot.response.rect.expand(0.1).contains_rect(field.rect),
+                                "{width}/{scale}: value escaped control"
+                            );
+                            assert!(
+                                !plot.rect.expand(8.0 * scale).intersects(field.rect),
+                                "value covers a plot handle"
+                            );
+                        }
+                    });
+                    let after = ui.label("Next setting").rect;
+                    assert!(after.top() >= plot.response.rect.bottom());
+                    if width >= 240.0 {
+                        assert!(
+                            plot.response.rect.height() < 80.0 * scale,
+                            "compact control grew extra rows"
+                        );
+                    }
+                });
+            }
+        }
     }
 }

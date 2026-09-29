@@ -52,8 +52,10 @@ Related settings can be edited directly in diagrams.
 Drag a round handle,
 or focus it and use the arrow keys;
 Shift makes keyboard adjustments finer.
-The numeric fields below each diagram remain independently editable:
-drag a number or click it to type in the displayed units.
+A fixed-width picture sits beside compact sliders with labels and value readouts.
+Very narrow panes stack the values below the picture.
+The sliders remain independently editable:
+drag a bar or double-click it to type in the displayed units.
 
 | Control | What the handles change |
 | --- | --- |

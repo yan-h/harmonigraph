@@ -1,5 +1,5 @@
 //! Compact color, integer-band and spatial edge selectors.
-use super::plot::{number, Plot};
+use super::plot::{value_bar, Plot};
 use crate::theme;
 use egui::{Color32, Ui};
 
@@ -43,12 +43,12 @@ pub(crate) fn skin_color(
     ui.painter().rect_filled(swatch, 2, color(*hue, *amount));
     let response = response.on_hover_text("Choose hue and color amount");
     egui::Popup::menu(&response).style(super::menu_style(ui.ctx())).show(|ui| {
-        ui.set_width(220.0 * theme::ui_scale(ui.ctx()));
+        ui.set_width(280.0 * theme::ui_scale(ui.ctx()));
         let key = crate::panes::pane_content_right();
         let previous = ui.data(|d| d.get_temp::<f32>(key));
         ui.data_mut(|d| d.insert_temp(key, ui.max_rect().right()));
         ui.push_id(label, |ui| {
-            let plot = Plot::new(ui, "Hue → / amount ↑");
+            let plot = Plot::with_fields(ui, "Hue → / amount ↑", 2);
             // Use the skin's own OKLab conversion and permitted chroma.
             for x in 0..48 {
                 for y in 0..16 {
@@ -67,8 +67,10 @@ pub(crate) fn skin_color(
                 *amount = p.y;
             }
             // Test the real entries when the popup is opened, as well as its closed state.
-            number(ui, hue, 0.0..=360.0, labels[0], 1.0, "°");
-            number(ui, amount, 0.0..=1.0, labels[1], 100.0, "%");
+            plot.fields(ui, |ui| {
+                value_bar(ui, hue, 0.0..=360.0, [labels[0], "Hue"], 1.0, "°");
+                value_bar(ui, amount, 0.0..=1.0, [labels[1], "Amount"], 100.0, "%");
+            });
             plot.dot(ui, *hue / 360.0, *amount);
         });
         ui.data_mut(|d| {
@@ -86,8 +88,20 @@ pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
     #[cfg(test)]
     super::range_probe::record("Contour levels", &[*levels], &(CONTOURS_MIN..=CONTOURS_MAX));
     super::label(ui, "Contour levels");
+    let scale = theme::ui_scale(ui.ctx());
+    let inline = super::bar::bar_width(ui) >= 220.0 * scale;
+    let mut preview = None;
     let mut n = *levels as i32;
     super::button_row(ui, |ui| {
+        if inline {
+            preview = Some(
+                ui.allocate_exact_size(
+                    egui::vec2(112.0 * scale, theme::row_height(scale)),
+                    egui::Sense::hover(),
+                )
+                .0,
+            );
+        }
         if ui.add_enabled(n > CONTOURS_MIN as i32, egui::Button::new("−")).clicked() {
             n -= 1;
         }
@@ -103,10 +117,13 @@ pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
     if n as f32 != *levels {
         *levels = n as f32;
     }
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(super::bar::bar_width(ui), theme::row_height(theme::ui_scale(ui.ctx()))),
-        egui::Sense::hover(),
-    );
+    let rect = preview.unwrap_or_else(|| {
+        ui.allocate_exact_size(
+            egui::vec2(super::bar::bar_width(ui), theme::row_height(scale)),
+            egui::Sense::hover(),
+        )
+        .0
+    });
     let mut mesh = egui::Mesh::default();
     for i in 0..n {
         let left = rect.left() + rect.width() * i as f32 / n as f32;
@@ -124,8 +141,7 @@ pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
 
 pub(crate) fn spectrum_edge(ui: &mut Ui, edge: &mut crate::SpectralOrientation) {
     use crate::SpectralOrientation::*;
-    super::label(ui, "Spectrum edge");
-    let plot = Plot::new(ui, "Click an edge · spectrum at the highlighted side");
+    let plot = Plot::new(ui, "Spectrum edge");
     for value in crate::SpectralOrientation::ALL {
         let (label, a, b) = match value {
             Left => ("Left", (0.0, 0.15), (0.18, 0.85)),

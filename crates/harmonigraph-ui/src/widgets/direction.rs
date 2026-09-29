@@ -1,11 +1,11 @@
-//! Direction and length are edited as a vector, with exact numeric entry below.
-use super::plot::{number, Plot};
+//! Direction and length are edited as a vector, beside exact numeric entry.
+use super::plot::{value_bar, Plot};
 use crate::theme;
 use egui::Ui;
 
 pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>) {
     ui.push_id("drift", |ui| {
-        let mut plot=Plot::new(ui, "Drift · drag the arrow");
+        let mut plot=Plot::with_fields(ui, "Drift", if speed.is_some() { 2 } else { 1 });
         plot.square();
         let max=harmonigraph_scene::CLOUD_SPEED_MAX;
         // Square-root radius keeps slow motion selectable beside the 20× ceiling.
@@ -19,10 +19,12 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
             if v.length()>0.001 { *degrees=v.y.atan2(v.x).to_degrees().rem_euclid(360.0); }
             if let Some(s)=speed.as_deref_mut() { *s=v.length().min(1.0).powi(2)*max; }
         }
-        if number(ui,degrees,0.0..=360.0,"Drift direction",1.0,"°").changed() {
+        plot.fields(ui, |ui| {
+        if value_bar(ui,degrees,0.0..=360.0,["Drift direction", "Direction"],1.0,"°").changed() {
             *degrees = degrees.rem_euclid(360.0);
         }
-        if let Some(s)=speed.as_deref_mut() { number(ui,s,0.0..=max,"Drift speed",1.0,"×"); }
+        if let Some(s)=speed.as_deref_mut() { value_bar(ui,s,0.0..=max,["Drift speed", "Speed"],1.0,"×"); }
+        });
         let radius=speed.as_deref().map_or(0.85, |s| (*s/max).sqrt());
         let a=degrees.to_radians();
         let (x,y)=(0.5+0.45*radius*a.cos(),0.5-0.45*radius*a.sin());
@@ -40,7 +42,7 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
 
 pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
     ui.push_id("cabinet", |ui| {
-        let mut plot = Plot::new(ui, "Depth axis · drag the endpoint");
+        let mut plot = Plot::with_fields(ui, "Depth axis", 2);
         plot.square();
         let (_, next) = plot.handle(ui, "Depth axis", *length * angle.cos(), *length * angle.sin());
         if let Some(p) = next {
@@ -49,11 +51,13 @@ pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
             }
             *length = p.length().clamp(0.1, 1.0);
         }
-        let mut deg = angle.to_degrees();
-        if number(ui, &mut deg, 0.0..=90.0, "Depth angle", 1.0, "°").changed() {
-            *angle = deg.to_radians();
-        }
-        number(ui, length, 0.1..=1.0, "Depth step scale", 1.0, "×");
+        plot.fields(ui, |ui| {
+            let mut deg = angle.to_degrees();
+            if value_bar(ui, &mut deg, 0.0..=90.0, ["Depth angle", "Angle"], 1.0, "°").changed() {
+                *angle = deg.to_radians();
+            }
+            value_bar(ui, length, 0.1..=1.0, ["Depth step scale", "Length"], 1.0, "×");
+        });
         plot.line(
             ui,
             vec![plot.point(0.0, 1.0), plot.point(0.0, 0.0), plot.point(1.0, 0.0)],
@@ -71,7 +75,7 @@ pub(crate) fn cabinet(ui: &mut Ui, angle: &mut f32, length: &mut f32) {
 pub(crate) fn softness(ui: &mut Ui, pitch: &mut f32, time: &mut f32) {
     use harmonigraph_scene::{PITCH_SOFTNESS_MAX, TIME_SOFTNESS_MAX};
     ui.push_id("softness", |ui| {
-        let plot = Plot::new(ui, "Softness · time → / pitch ↑");
+        let plot = Plot::with_fields(ui, "Softness · time → / pitch ↑", 2);
         let (_, next) = plot.handle(
             ui,
             "Time and pitch softness",
@@ -82,8 +86,10 @@ pub(crate) fn softness(ui: &mut Ui, pitch: &mut f32, time: &mut f32) {
             *time = p.x * p.x * TIME_SOFTNESS_MAX;
             *pitch = p.y * p.y * PITCH_SOFTNESS_MAX;
         }
-        number(ui, pitch, 0.0..=PITCH_SOFTNESS_MAX, "Pitch softness", 1.0, "¢");
-        number(ui, time, 0.0..=TIME_SOFTNESS_MAX, "Time softness", 1.0, " ms");
+        plot.fields(ui, |ui| {
+            value_bar(ui, pitch, 0.0..=PITCH_SOFTNESS_MAX, ["Pitch softness", "Pitch"], 1.0, "¢");
+            value_bar(ui, time, 0.0..=TIME_SOFTNESS_MAX, ["Time softness", "Time"], 1.0, " ms");
+        });
         let w = (*time / TIME_SOFTNESS_MAX).sqrt();
         let h = (*pitch / PITCH_SOFTNESS_MAX).sqrt();
         // The handle is the footprint's bounding corner. Guides make both

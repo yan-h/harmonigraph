@@ -6,18 +6,51 @@ use std::ops::RangeInclusive;
 pub(super) struct Plot {
     pub rect: Rect,
     pub response: Response,
+    fields: Rect,
 }
 impl Plot {
     pub fn new(ui: &mut Ui, label: &str) -> Self {
+        Self::with_fields(ui, label, 0)
+    }
+    /// Keep the picture a stable size beside exact values. Very narrow panes
+    /// stack instead of squeezing labels, numbers, and handles into one row.
+    pub fn with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {
         super::label(ui, label);
         let scale = theme::ui_scale(ui.ctx());
-        let (well, response) = ui.allocate_exact_size(
-            Vec2::new(super::bar::bar_width(ui), height(scale)),
-            Sense::hover(),
+        let width = super::bar::bar_width(ui);
+        let gap = ui.spacing().item_spacing.y;
+        let fields_height = (count as f32 * (theme::row_height(scale) + gap) - gap).max(0.0);
+        let beside = count > 0 && width >= 220.0 * scale;
+        let total_height =
+            height(scale) + if count > 0 && !beside { gap + fields_height } else { 0.0 };
+        let (bounds, response) =
+            ui.allocate_exact_size(Vec2::new(width, total_height), Sense::hover());
+        let well = Rect::from_min_size(
+            bounds.min,
+            Vec2::new(if beside { 112.0 * scale } else { width }, height(scale)),
         );
         ui.painter().rect_filled(well, super::bar::bar_radius(scale), theme::well());
-        let rect = well.shrink(10.0 * scale);
-        Self { rect, response }
+        let fields = if beside {
+            Rect::from_min_max(
+                egui::pos2(well.right() + 8.0 * scale, bounds.center().y - fields_height / 2.0),
+                egui::pos2(bounds.right(), bounds.center().y + fields_height / 2.0),
+            )
+        } else {
+            Rect::from_min_max(egui::pos2(bounds.left(), well.bottom() + gap), bounds.max)
+        };
+        Self { rect: well.shrink(10.0 * scale), response, fields }
+    }
+    pub fn fields<R>(&self, ui: &mut Ui, draw: impl FnOnce(&mut Ui) -> R) -> R {
+        // The outer control already allocated the whole rect. A child prevents
+        // the value column from advancing its parent's cursor a second time.
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(self.response.id.with("values"))
+                .max_rect(self.fields)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        child.set_clip_rect(self.fields.intersect(ui.clip_rect()));
+        draw(&mut child)
     }
     pub fn square(&mut self) {
         self.rect = Rect::from_center_size(
@@ -87,47 +120,26 @@ impl Plot {
     }
 }
 
-pub(super) fn number(
+/// A familiar scalar slider beside the combined gesture in the picture.
+pub(super) fn value_bar(
     ui: &mut Ui,
     value: &mut f32,
     range: RangeInclusive<f32>,
-    label: &str,
+    labels: [&str; 2],
     scale: f32,
     suffix: &str,
 ) -> Response {
-    #[cfg(test)]
-    super::range_probe::record(label, &[*value], &range);
-    let mut shown = *value * scale;
-    let width = super::bar::bar_width(ui);
-    let row = theme::row_height(theme::ui_scale(ui.ctx()));
-    let response = ui
-        .horizontal(|ui| {
-            ui.add_sized(
-                [(width - 90.0 * theme::ui_scale(ui.ctx())).max(0.0), row],
-                egui::Label::new(label).truncate().halign(egui::Align::Min),
-            )
-            .on_hover_text(label);
-            ui.add(
-                egui::DragValue::new(&mut shown)
-                    .range(*range.start() * scale..=*range.end() * scale)
-                    .speed((range.end() - range.start()) * scale / 500.0)
-                    .max_decimals(2)
-                    .custom_parser(|text| {
-                        text.trim()
-                            .trim_end_matches(suffix.trim())
-                            .trim()
-                            .parse::<f64>()
-                            .ok()
-                            .filter(|v| v.is_finite())
-                    })
-                    .suffix(suffix),
-            )
-        })
-        .inner;
-    if response.changed() && shown.is_finite() {
-        *value = (shown / scale).clamp(*range.start(), *range.end());
-    }
-    response
+    let decimals = match suffix {
+        " ms" => 0,
+        "%" | " pp" | "°" | "¢" => 1,
+        _ => 2,
+    };
+    super::ValueBar::new(value, range, labels[0])
+        .caption(labels[1])
+        .unit(scale, suffix)
+        .decimals(decimals)
+        .show(ui)
+        .on_hover_text(format!("{} · drag to adjust, double-click to type", labels[0]))
 }
 
 pub(super) fn curve(plot: &Plot, ui: &Ui, sample: impl Fn(f32) -> (f32, f32), color: Color32) {

@@ -419,7 +419,7 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
     assert!(text_y(&shapes, "Scrolling (42.0 s)").is_some(), "Scrolling did not name its span");
 }
 
-/// The bar tracks a pane drew, by width.
+/// The bar tracks a pane drew, including any companion picture in their width.
 ///
 /// A `ValueBar`/`RangeBar` track is a `theme::ROW_HEIGHT`-tall rect in `well()`,
 /// which the accent fill over it does not answer to — that is the same height in
@@ -431,6 +431,18 @@ fn the_scrolling_spectrogram_choice_names_its_span() {
 /// excusing a rect for being an odd length would excuse the bug.
 fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
     let well = crate::theme::well();
+    let pictures: Vec<_> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Rect(r)
+                if r.fill == well
+                    && (r.rect.height() - crate::widgets::direct_plot_height(1.0)).abs() < 0.6 =>
+            {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .collect();
     let dots: Vec<egui::Pos2> = shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
@@ -446,7 +458,19 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
                     && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
             {
-                Some(r.rect.width())
+                if let Some(picture) = pictures.iter().find(|picture| {
+                    r.rect.left() >= picture.right()
+                        && r.rect.top() >= picture.top() - 0.6
+                        && r.rect.bottom() <= picture.bottom() + 0.6
+                }) {
+                    // A paired control must fill the column as a whole. Its
+                    // slider starts immediately after its actual picture,
+                    // rather than being excused for any arbitrary short width.
+                    assert!((r.rect.left() - picture.right() - 8.0).abs() < 0.6);
+                    Some(r.rect.right() - picture.left())
+                } else {
+                    Some(r.rect.width())
+                }
             }
             _ => None,
         })
@@ -484,7 +508,7 @@ fn fresh_mappings() -> usize {
 }
 
 #[test]
-fn every_bar_in_a_settings_pane_is_the_width_of_the_pane() {
+fn every_bar_fills_its_settings_column_or_diagram_value_column() {
     // How much shorter than the column a mapping's weight bar is, as first
     // measured — held to be the same at every width rather than quoted.
     let mut weight_short_by: Option<f32> = None;
@@ -1621,7 +1645,7 @@ fn each_readings_own_bar_is_the_one_that_is_live() {
             // Between the Reading row and Zoom, by position for the same
             // reason: it is the section's own bar or this measures nothing.
             "Ring threshold" => {
-                text_ys(&shapes, "Ring threshold · on / off")
+                text_ys(&shapes, "Ring threshold")
                     .into_iter()
                     .find(|y| *y > reading_row && *y < zoom)
                     .expect("the threshold diagram sits between Reading and Zoom")
@@ -1658,36 +1682,35 @@ fn hidden_audio_ring_keeps_restoration_instructions() {
     use harmonigraph_scene::SpectralReading;
 
     for reading in [SpectralReading::Fold, SpectralReading::Spectrum] {
-        let hidden = audio_section_shapes(reading, 0.0);
+        let mut hidden = Vec::new();
+        let hidden_values = crate::widgets::range_probe::collect(|| {
+            hidden = audio_section_shapes(reading, 0.0);
+        });
+        for setting in ["Ring attack", "Ring release"] {
+            assert!(
+                !hidden_values.iter().any(|v| v.label == setting),
+                "{setting} remained visible"
+            );
+        }
         assert_eq!(text_ys(&hidden, "AUDIO RING").len(), 1);
         assert_eq!(text_ys(&hidden, "Audio ring — hidden").len(), 1);
         assert_eq!(text_ys(&hidden, "Increase Audio width in Note layers to show it.").len(), 1);
-        for setting in [
-            "Ring display",
-            "Ring threshold",
-            "Threshold hysteresis",
-            "Ring attack",
-            "Ring release",
-            "Pitch tolerance",
-            "Pitch span",
-        ] {
+        for setting in ["Ring display", "Ring threshold", "Band", "Pitch tolerance", "Pitch span"] {
             assert!(
                 text_ys(&hidden, setting).is_empty(),
                 "{setting:?} remained visible with {reading:?} dialled off",
             );
         }
 
-        let expanded = audio_section_shapes(reading, 0.3);
+        let mut expanded = Vec::new();
+        let expanded_values = crate::widgets::range_probe::collect(|| {
+            expanded = audio_section_shapes(reading, 0.3);
+        });
+        for setting in ["Ring attack", "Ring release"] {
+            assert!(expanded_values.iter().any(|v| v.label == setting), "{setting} did not return");
+        }
         assert_eq!(text_ys(&expanded, "AUDIO RING").len(), 1, "the group lost its name");
-        for setting in [
-            "Ring display",
-            "Ring threshold",
-            "Threshold hysteresis",
-            "Ring attack",
-            "Ring release",
-            "Pitch tolerance",
-            "Pitch span",
-        ] {
+        for setting in ["Ring display", "Ring threshold", "Band", "Pitch tolerance", "Pitch span"] {
             assert_eq!(
                 text_ys(&expanded, setting).len(),
                 1,
@@ -1717,18 +1740,18 @@ fn shadow_falloff_only_appears_for_contour_shadows() {
     };
 
     let blurred = shapes(ShadowKernel::Gaussian);
-    assert!(text_ys(&blurred, "Shadow falloff").is_empty());
-    assert_eq!(text_ys(&blurred, "Shadow width").len(), 4, "Blur lost common shadow controls");
-    assert_eq!(text_ys(&blurred, "Shadow spread").len(), 4, "Blur lost its spread control");
+    assert!(text_ys(&blurred, "Falloff").is_empty());
+    assert_eq!(text_ys(&blurred, "Darkness").len(), 4, "Blur lost common shadow controls");
+    assert_eq!(text_ys(&blurred, "Spread").len(), 4, "Blur lost its spread control");
 
     let contour = shapes(ShadowKernel::Distance);
     assert_eq!(
-        text_ys(&contour, "Shadow falloff").len(),
+        text_ys(&contour, "Falloff").len(),
         4,
         "a Contour shadow group has no falloff control",
     );
-    assert_eq!(text_ys(&contour, "Shadow width").len(), 4, "Contour lost common shadow controls",);
-    assert!(text_ys(&contour, "Shadow spread").is_empty());
+    assert_eq!(text_ys(&contour, "Darkness").len(), 4, "Contour lost common shadow controls",);
+    assert!(text_ys(&contour, "Spread").is_empty());
 }
 
 /// No settings tab draws two sections under one heading. A fold is saved as

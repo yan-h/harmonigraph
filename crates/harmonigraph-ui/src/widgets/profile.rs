@@ -1,5 +1,5 @@
 //! Spatial profiles edited through their endpoints and curve, with numeric fallbacks.
-use super::plot::{curve, number, Plot};
+use super::plot::{curve, value_bar, Plot};
 use crate::theme;
 use egui::Ui;
 use std::ops::RangeInclusive;
@@ -19,7 +19,7 @@ pub(crate) fn depth(
         ("Star speed", "Speed curve", 100.0, "%")
     };
     ui.push_id(name, |ui| {
-        let plot = Plot::new(ui, &format!("{name} · far → near"));
+        let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 3);
         let encode = |v: f32| {
             if size {
                 (v.log2() - range.start().log2()) / (range.end().log2() - range.start().log2())
@@ -55,9 +55,25 @@ pub(crate) fn depth(
             }
         }
         // No log round-trip on idle frames: values also key star placement.
-        number(ui, low, *range.start()..=*high, &format!("{name} far"), unit, suffix);
-        number(ui, high, *low..=*range.end(), &format!("{name} near"), unit, suffix);
-        number(ui, exponent, curve_range, curve_name, 1.0, "");
+        plot.fields(ui, |ui| {
+            value_bar(
+                ui,
+                low,
+                *range.start()..=*high,
+                [&format!("{name} far"), "Far"],
+                unit,
+                suffix,
+            );
+            value_bar(
+                ui,
+                high,
+                *low..=*range.end(),
+                [&format!("{name} near"), "Near"],
+                unit,
+                suffix,
+            );
+            value_bar(ui, exponent, curve_range, [curve_name, "Curve"], 1.0, "");
+        });
         let a = encode(*low);
         let b = encode(*high);
         curve(&plot, ui, |p| (p, a + (b - a) * p.powf(*exponent)), theme::accent());
@@ -74,7 +90,7 @@ pub(crate) fn shadow(
     lattice: bool,
 ) {
     use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
-    let plot = Plot::new(ui, "Shadow profile · width / darkness / shape");
+    let plot = Plot::with_fields(ui, "Shadow profile", 3);
     let (_, next) = plot.handle(ui, "Width and darkness", (style.width / max).sqrt(), style.depth);
     if let Some(p) = next {
         style.width = p.x * p.x * max;
@@ -105,24 +121,26 @@ pub(crate) fn shadow(
         if let Some(p) = next {
             style.spread = p.x;
         }
-        super::weak(ui, "Blur depends on the shape casting it");
     }
     let (unit, suffix) =
         if lattice { (100.0, "%") } else { (harmonigraph_render::SPECTRAL_WIDTH_POINTS, " pt") };
-    number(ui, &mut style.width, 0.0..=max, "Shadow width", unit, suffix);
-    number(ui, &mut style.depth, 0.0..=1.0, "Shadow darkness", 100.0, "%");
-    if style.kernel.is_distance() {
-        number(
-            ui,
-            &mut style.falloff,
-            SHADOW_FALLOFF_MIN..=SHADOW_FALLOFF_MAX,
-            "Shadow falloff",
-            1.0,
-            "",
-        );
-    } else {
-        number(ui, &mut style.spread, 0.0..=1.0, "Shadow spread", 100.0, "%");
-    }
+    plot.fields(ui, |ui| {
+        value_bar(ui, &mut style.width, 0.0..=max, ["Shadow width", "Width"], unit, suffix);
+        value_bar(ui, &mut style.depth, 0.0..=1.0, ["Shadow darkness", "Darkness"], 100.0, "%");
+        if style.kernel.is_distance() {
+            value_bar(
+                ui,
+                &mut style.falloff,
+                SHADOW_FALLOFF_MIN..=SHADOW_FALLOFF_MAX,
+                ["Shadow falloff", "Falloff"],
+                1.0,
+                "",
+            );
+        } else {
+            value_bar(ui, &mut style.spread, 0.0..=1.0, ["Shadow spread", "Spread"], 100.0, "%");
+        }
+    });
+    plot.response.clone().on_hover_text("Drag the corner for width and darkness. Blur extent is schematic: its profile depends on the shape casting it.");
     plot.line(
         ui,
         vec![

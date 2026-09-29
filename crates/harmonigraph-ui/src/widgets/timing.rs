@@ -1,10 +1,10 @@
 //! Time-domain editors: note envelope and independent rise/fall time constants.
-use super::plot::{curve, number, Plot};
+use super::plot::{curve, value_bar, Plot};
 use crate::theme;
 use egui::{Response, Ui};
 
 pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32) -> Response {
-    let plot = Plot::new(ui, "Note fade · duration and curve");
+    let plot = Plot::with_fields(ui, "Note fade", 2);
     let (duration_response, next) = plot.handle(ui, "Fade duration", *seconds, 1.0);
     if let Some(p) = next {
         *seconds = p.x;
@@ -26,8 +26,11 @@ pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32) -> Response 
         }
         *shape = (lo + hi) * 0.5;
     }
-    let numeric = number(ui, seconds, 0.0..=1.0, "Note fade", 1000.0, " ms");
-    number(ui, shape, 0.0..=1.0, "Fade curve", 100.0, "%");
+    let numeric = plot.fields(ui, |ui| {
+        let numeric = value_bar(ui, seconds, 0.0..=1.0, ["Note fade", "Time"], 1000.0, " ms");
+        value_bar(ui, shape, 0.0..=1.0, ["Fade curve", "Curve"], 100.0, "%");
+        numeric
+    });
     curve(&plot, ui, |p| (p * *seconds, sample(*shape, p as f64)), super::value::curve_color());
     plot.dot(ui, *seconds, 1.0);
     plot.dot(ui, *seconds * 0.5, sample(*shape, 0.5));
@@ -43,7 +46,7 @@ pub(crate) fn response(
     unit: f32,
 ) {
     ui.push_id(labels[0], |ui| {
-        let plot = Plot::new(ui, "Response · rise / fall");
+        let plot = Plot::with_fields(ui, "Response", 2);
         let rise_y = |t:f32| if t == 0.0 { 1.0 } else { 1.0 - (-1.0f32).exp() };
         let fall_y = |t:f32| if t == 0.0 { 0.0 } else { (-1.0f32).exp() };
         let (_,next)=plot.handle(ui,labels[0],0.45*(*rise/max).sqrt(),rise_y(*rise));
@@ -51,8 +54,10 @@ pub(crate) fn response(
         let (_,next)=plot.handle(ui,labels[1],0.55+0.45*(*fall/max).sqrt(),fall_y(*fall));
         if let Some(p)=next { *fall=((p.x-0.55)/0.45).clamp(0.0,1.0).powi(2)*max; }
         let suffix=if unit==1000.0 {" ms"}else{" s"};
-        number(ui,rise,0.0..=max,labels[0],unit,suffix);
-        number(ui,fall,0.0..=max,labels[1],unit,suffix);
+        plot.fields(ui, |ui| {
+        value_bar(ui,rise,0.0..=max,[labels[0], "Rise"],unit,suffix);
+        value_bar(ui,fall,0.0..=max,[labels[1], "Fall"],unit,suffix);
+        });
         curve(&plot,ui,|p| {let t=p*p*max; (0.45*p,if *rise==0.0 {1.0}else{1.0-(-t / *rise).exp()})},theme::accent());
         curve(&plot,ui,|p| {let t=p*p*max; (0.55+0.45*p,if *fall==0.0 {0.0}else{(-t / *fall).exp()})},theme::accent());
         plot.dot(ui,0.45*(*rise/max).sqrt(),rise_y(*rise));
