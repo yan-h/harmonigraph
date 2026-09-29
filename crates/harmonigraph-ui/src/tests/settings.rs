@@ -440,6 +440,11 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
             {
                 Some(r.rect)
             }
+            egui::Shape::Mesh(mesh)
+                if (mesh.calc_bounds().height() - crate::theme::ROW_HEIGHT).abs() < 0.6 =>
+            {
+                Some(mesh.calc_bounds())
+            }
             _ => None,
         })
         .collect();

@@ -85,14 +85,11 @@ pub(crate) fn skin_color(
 
 pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
     use harmonigraph_scene::{CONTOURS_MAX, CONTOURS_MIN};
-    #[cfg(test)]
-    super::range_probe::record("Contour levels", &[*levels], &(CONTOURS_MIN..=CONTOURS_MAX));
     super::label(ui, "Contour levels");
     let scale = theme::ui_scale(ui.ctx());
     let inline = super::bar::bar_width(ui) >= 220.0 * scale;
     let mut preview = None;
-    let mut n = *levels as i32;
-    super::button_row(ui, |ui| {
+    ui.horizontal(|ui| {
         if inline {
             preview = Some(
                 ui.allocate_exact_size(
@@ -102,21 +99,13 @@ pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
                 .0,
             );
         }
-        if ui.add_enabled(n > CONTOURS_MIN as i32, egui::Button::new("−")).clicked() {
-            n -= 1;
-        }
-        ui.add(
-            egui::DragValue::new(&mut n)
-                .range(CONTOURS_MIN as i32..=CONTOURS_MAX as i32)
-                .speed(0.1),
-        );
-        if ui.add_enabled(n < CONTOURS_MAX as i32, egui::Button::new("+")).clicked() {
-            n += 1;
-        }
+        super::ValueBar::new(levels, CONTOURS_MIN..=CONTOURS_MAX, "Contour levels")
+            .caption("Levels")
+            .integer()
+            .show(ui)
+            .on_hover_text("Contour levels · drag to adjust, double-click to type");
     });
-    if n as f32 != *levels {
-        *levels = n as f32;
-    }
+    let n = *levels as i32;
     let rect = preview.unwrap_or_else(|| {
         ui.allocate_exact_size(
             egui::vec2(super::bar::bar_width(ui), theme::row_height(scale)),

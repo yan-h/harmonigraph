@@ -68,11 +68,13 @@ drag a bar or double-click it to type in the displayed units.
 | Star size and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size uses a logarithmic vertical scale; speed is linear. |
 | Shadow profile | Move the upper-right corner for width and darkness. Contour shadows have a curve handle; Blur shadows expose caster spread and show schematic extent because their actual profile depends on the caster. |
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
-| Contour levels | Use the minus/plus buttons or enter a whole number; the band preview shows the count. |
+| Contour levels | Drag the integer slider from 2 to 16, or double-click to type; the band preview shows the count. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
 
 These controls edit the existing saved values.
-No settings, saved keys or parameter ranges have changed.
+Saved keys are unchanged.
+Contour levels default to 16 and are capped there;
+older values above 16 are clamped when loaded.
 
 ## Note bloom
 
