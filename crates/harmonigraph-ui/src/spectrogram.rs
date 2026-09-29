@@ -978,11 +978,8 @@ fn slab_at(layout: &TexLayout, t: f64) -> f32 {
 /// The newest time the run has data for: the CENTRE of its last slab, which is
 /// the last point the slab coordinate may reach.
 ///
-/// The live strip stops at the newest COLUMN (#914), which is not the same
-/// point: the column lands somewhere inside its slab, so up to half a slab of
-/// drawn strip can sit past the last centre with nothing on its far side to
-/// blend towards. That sliver is filled from the newest column, the only thing
-/// the analyzer has said about the stretch.
+/// The live strip extends to the now-line while fresh, beyond the newest
+/// measurement by the analysis delay. That sliver holds this centre's value.
 pub(crate) fn hold_time(layout: &TexLayout) -> f64 {
     layout.t_origin + layout.tex_span - 0.5 * layout.bucket
 }
@@ -992,10 +989,8 @@ pub(crate) fn hold_time(layout: &TexLayout) -> f64 {
 ///
 /// The shader clamps its taps into the run, which covers half a slab at the far
 /// end — the strip stops at the oldest slab's leading edge, half a slab before
-/// its centre. The NEWEST end has no leading edge to stop at: it stops at the
-/// newest column, which sits anywhere in its own slab, so the overrun is up to
-/// half a slab wide and a clamp there would hold only part of it. So the sliver
-/// is filled by pinning the coordinate instead.
+/// its centre. The newest end can extend several slabs past the run while
+/// covering the analysis delay, so pin its coordinate to hold the whole sliver.
 ///
 /// Pinning is safe HERE, at a corner the mesh is split on, and nowhere else:
 /// see the split in
