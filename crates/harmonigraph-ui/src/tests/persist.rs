@@ -1744,7 +1744,7 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
     use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
     let old: SpectralAtmosphere =
         ron::from_str("(star_halo_resolution:0.625,pitch_softness:12.0)").unwrap();
-    assert_eq!(old.stars.star_halo_profile, StarHaloProfile::P3);
+    assert_eq!(old.stars.star_halo_profile, StarHaloProfile::Medium);
     assert_eq!(old.stars, harmonigraph_scene::StarSettings::default());
     assert_eq!(old.pitch_softness, 12.0);
     assert_eq!(old.stars.star_far_fill, 0.0);

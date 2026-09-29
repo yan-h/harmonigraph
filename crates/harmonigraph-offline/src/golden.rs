@@ -378,29 +378,24 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
     check_take("spectrogram-watercolour-wash", shot, take);
 }
 
-/// The starfield draws the frame on record.
-///
-/// Its own frame for the reason the wash has one: nothing else committed here
-/// runs `star_color` end to end — every slice, the palette position, the fringe
-/// and the far-to-near compositing — at the settings the page opens it at. It
-/// is also the one texture that does not go through the shared palette lookup
-/// at the end, so no frame above says anything about it.
+/// High retains its original starfield reference: every slice, palette
+/// position, fringe and far-to-near compositing at full foreground resolution.
 #[test]
-fn the_starfield_draws_the_frame_on_record() {
+fn high_stars_draw_the_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+        a.spectrum.atmosphere.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::P3;
     });
     check_take("spectrogram-starfield", shot, take);
 }
 
-/// Medium must reach its reduced foreground path in the export renderer.
+/// Fresh Stars settings use Medium and reach its reduced foreground export path.
 #[test]
-fn medium_stars_draw_the_frame_on_record() {
+fn default_stars_draw_the_medium_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-        a.spectrum.atmosphere.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
     });
     check_take("spectrogram-starfield-medium", shot, take);
 }

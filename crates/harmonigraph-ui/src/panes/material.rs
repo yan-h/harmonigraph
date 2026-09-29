@@ -124,33 +124,25 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
         .percent()
         .show(ui)
         .on_hover_text("Widens every star's core and glow by the same proportion, at every depth. 0% keeps their base widths; Halo strength controls the strength of the surrounding glow.");
-    super::subsection(ui, "Rendering quality", |ui| {
-        use harmonigraph_scene::StarHaloProfile;
-        crate::widgets::preset_row(
-            ui,
-            "Stars rendering",
-            &["Low", "Medium", "High", "Uniform"],
-            |ui, menu| {
-                for (label, profile, hint) in [
-            ("Low", StarHaloProfile::Low, "Lower rendering cost with softer foreground points and coarser distant detail."),
-            ("Medium", StarHaloProfile::Medium, "Faster rendering with softer stars, including the foreground."),
-            ("High", StarHaloProfile::P3, "Sharper foreground stars with slightly softer distant stars and shorter distant glow."),
-            ("Uniform", StarHaloProfile::Uniform, "Override halo resolution with one value for every depth."),
-        ] {
-            if ui.selectable_label(atmosphere.star_halo_profile == profile, label)
-                .on_hover_text(hint).clicked()
-            {
-                atmosphere.star_halo_profile = profile;
-                if menu {
-                    ui.close();
-                }
-            }
-        }
-            },
-        );
-        if atmosphere.star_halo_profile == StarHaloProfile::Uniform {
-            ValueBar::new(
-            &mut atmosphere.star_halo_resolution,
+}
+
+/// Always visible near the material choice, before motion and appearance controls.
+pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
+    use harmonigraph_scene::StarHaloProfile;
+    crate::widgets::choice_row(
+        ui,
+        "Stars rendering",
+        &mut stars.star_halo_profile,
+        &[
+            (StarHaloProfile::Low, "Low", "Lower rendering cost with softer foreground points and coarser distant detail."),
+            (StarHaloProfile::Medium, "Medium", "Faster rendering with softer stars, including the foreground."),
+            (StarHaloProfile::P3, "High", "Sharper foreground stars with slightly softer distant stars and shorter distant glow."),
+            (StarHaloProfile::Uniform, "Uniform", "Override halo resolution with one value for every depth."),
+        ],
+    );
+    if stars.star_halo_profile == StarHaloProfile::Uniform {
+        ValueBar::new(
+            &mut stars.star_halo_resolution,
             harmonigraph_scene::STAR_HALO_RESOLUTION_MIN..=harmonigraph_scene::STAR_HALO_RESOLUTION_MAX,
             "Uniform halo resolution",
         )
@@ -159,8 +151,7 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
         .on_hover_text(
             "Halo image width and height relative to the pane. 50% uses a quarter of the pixels; 100% uses native resolution. Lower values soften the glow. Star positions, sharp cores and halo reach stay the same.",
         );
-        }
-    });
+    }
 }
 
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {

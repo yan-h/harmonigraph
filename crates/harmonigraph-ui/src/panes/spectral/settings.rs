@@ -119,6 +119,9 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         ),
                     ],
                 );
+            if atmosphere.cloud_style == CloudStyle::Stars {
+                super::super::material::stars_quality(ui, &mut atmosphere.stars);
+            }
             ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                 .percent().show(ui).on_hover_text(
                     "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",

@@ -37,14 +37,16 @@ Lattice note geometry, animation, labels and light effects fold independently.
 
 Analyzer textures read in decision order:
 choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
-The Stars **Rendering quality** fold holds its quality presets and optional uniform halo resolution in both pictures.
+For Stars, **Stars rendering** sits directly below the style choice in both pictures,
+with Medium selected by default.
+Uniform reveals its halo-resolution control below the quality selector.
 **Color pickup** follows brighter sound;
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
 
 Renamed sections start unfolded when opening older projects;
 visual values and their saved keys are unchanged.
-Detail folds such as **Map editing** and **Rendering quality** reopen closed with the editor.
+Detail folds such as **Map editing** reopen closed with the editor.
 
 ## Combined controls
 
