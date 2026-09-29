@@ -191,7 +191,10 @@ so the constraints sit beside the intervals they control.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
 In Lattice Map mode,
 **Saved map** stays visible above the **Map editing** fold,
-which holds audition, offsets, assignments and map management.
+which holds audition setup, offsets, assignments and map management.
+While auditioning,
+the active-mode notice and **Return to arrangement** stay beside **Saved map**,
+even when **Map editing** is closed.
 **Instances** appears only when connected instances are available.
 Host map-offset parameters explicitly name whole generator steps rather than tuning intervals.
 

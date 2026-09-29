@@ -21,6 +21,10 @@ use harmonigraph_core::tuning;
 #[path = "tuning_instances_tests.rs"]
 mod instance_tests;
 
+#[cfg(test)]
+#[path = "tuning_map_tests.rs"]
+mod map_tests;
+
 /// The param bar for the axis a comma derives — the one whose tuning is not
 /// its own while that comma is tempered out.
 ///
@@ -863,16 +867,20 @@ fn map_controls(
         if view.playback.map.is_none() {
             crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
         }
+        // Audition overrides Saved map even after the editor reopens with its
+        // detail folds closed. Keep the active mode and its exit by the selector.
+        if view.playback.audition {
+            crate::widgets::label(ui, egui::RichText::new("Audition shape · Map selection paused; offset automation remains live").color(theme::armed()));
+            crate::widgets::button_row(ui, |ui| {
+                if ui.button("Return to arrangement").clicked() {
+                    params.edit_lattice_map(MapEdit::Return);
+                }
+            });
+        }
         subsection(ui, "Map editing", |ui| {
         crate::widgets::button_row(ui, |ui| {
             if ui.button("Audition working copy").clicked() {
                 params.edit_lattice_map(MapEdit::Audition);
-            }
-            if ui
-                .add_enabled(view.playback.audition, egui::Button::new("Return to arrangement"))
-                .clicked()
-            {
-                params.edit_lattice_map(MapEdit::Return);
             }
         });
         crate::widgets::weak(ui, "Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
@@ -922,7 +930,6 @@ fn map_controls(
             }
         });
         if view.playback.audition {
-            crate::widgets::label(ui, egui::RichText::new("Audition shape · Map selection paused; offset automation remains live").color(theme::armed()));
             let mut editing = view.edit_shape;
             if crate::widgets::checkbox(ui, &mut editing, "Edit shape · click destination on lattice").changed() {
                 params.edit_lattice_map(MapEdit::EditShape(editing));
