@@ -2,9 +2,8 @@
 //! parameter bar (drag anywhere to set, double-click to type a value)
 //! that replaces egui's rail-and-knob `Slider` + separate `DragValue`.
 //! `RangeBar` is its two-handle sibling, for a pair of values that bound a
-//! span rather than one value on a scale. `OctaveStrip` is the octave wheel's
-//! own — two counts and the profile they produce, in one row — and `LayerStrip`
-//! is the septimal stack's, three handles over a cell per sheet.
+//! span rather than one value on a scale. `LayerStrip` is the septimal stack's,
+//! three handles over a cell per sheet.
 //!
 //! One module per control, over a shared spine in [`bar`]: the lengths every
 //! bar is built out of, the reach a handle answers to, and the two readings
@@ -21,7 +20,6 @@ mod label;
 mod layer;
 mod menu;
 mod mesh;
-mod octave;
 #[cfg(test)]
 mod probe;
 mod range;
@@ -42,7 +40,6 @@ pub(crate) use label::{cap_trim, group_end, group_space, mark_spaced, GROUP_GAP}
 pub use label::{label, weak};
 pub use layer::LayerStrip;
 pub(crate) use menu::menu_style;
-pub use octave::OctaveStrip;
 pub use range::RangeBar;
 pub use rows::{
     button_row, checkbox, choice_row, option_label, record_button, row_field, toggle_switch,

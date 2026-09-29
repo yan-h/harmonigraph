@@ -31,7 +31,8 @@ shared settings name their scope in the help text.
 Lattice note geometry, animation, labels and light effects fold independently.
 **Note layers** sits beside **Octave layout**;
 **Audio ring** keeps restoration instructions when its width is zero.
-**Outer octave taper** explains when more outer octaves or a smaller scale are needed.
+**Octaves** divides the ring into 2–11 equal slices;
+**Center pitch** sets the pitch at the top of every ring.
 **Label size** also controls cross thickness.
 
 Analyzer textures read in decision order:
@@ -212,14 +213,12 @@ the preview continues to use live **History duration**.
 
 This is a code-based assessment of complexity and overlapping concepts,
 not evidence of how often a setting is used.
-No creative control was removed in this pass.
 
 | Candidate | Recommendation and tradeoff |
 | --- | --- |
 | Slice order, stagger, starting offset/scale | Best candidate for motion presets with an expandable custom section. Keep the current freedom until preferred presets are known. |
 | Four shadow groups, each with shape/width/darkness/falloff | Prefer basic width/darkness and expandable shape/falloff if the page still feels too long. Falloff is independent of width for Contour shadows. |
 | Wide blur mix | Candidate to replace with a fixed blend if comparisons show little practical value. It mixes close and five-times-wider blur; it is not redundant with either softness axis. |
-| Outer octave scale/taper | Specialized layout refinements; could move behind an expandable group. Removing them would lose unequal end-octave layouts. |
 | Ring hysteresis and extra attack/release | Keep available as advanced response controls: hysteresis prevents threshold flicker, while smoothing changes level motion. |
 | Glow pattern, material and breathing | Pattern and material have their own folds; breathing stays with glow response. Consider presets if only a few combinations prove useful. |
 | Lattice resolution above 100% | Candidate for removing costly supersampling if visual comparison shows no useful improvement. Existing range is retained. |

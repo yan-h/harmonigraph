@@ -77,9 +77,6 @@ fn poisoned_view() -> ViewConfig {
         marker_ink: nan,
         octave_count: base.octave_count,
         octave_center: nan,
-        octave_extras: base.octave_extras,
-        octave_extra_size: nan,
-        octave_extra_blend: nan,
         spectral_reading: base.spectral_reading,
         spectral_width: nan,
         spectral_ring_width: nan,
@@ -338,7 +335,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("spectral.gate", *gate);
     f.one("spectral.hysteresis", *hysteresis);
 
-    let OctaveLayout { center, span: _, count: _, extras: _, bounds } = octave_layout;
+    let OctaveLayout { center, span: _, bounds } = octave_layout;
     f.one("octave_layout.center", *center);
     f.many("octave_layout.bounds", *bounds);
 

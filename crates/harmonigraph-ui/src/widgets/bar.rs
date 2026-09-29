@@ -135,7 +135,7 @@ pub(super) const TEXT_GAP: f32 = 5.0;
 /// merely under the pointer, and the resting one otherwise.
 ///
 /// The three colours are the theme's. What is here is only WHICH of them a
-/// `Response` picks — the one part `ValueBar`, `RangeBar`, `OctaveStrip` and
+/// `Response` picks — the one part `ValueBar`, `RangeBar` and
 /// `SpreadBar` have in common, and a bar that answered the two states in a
 /// different order from its neighbours would be the one control in a pane
 /// lighting differently under the same pointer.

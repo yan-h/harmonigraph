@@ -204,10 +204,7 @@ fn band_profile(px: &[u8], size: u32) -> Vec<bool> {
         px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32 > 24
     };
     // The node is alone at the world origin and the camera looks at it, so
-    // the frame's center is its center. Not the lit pixels' centroid: a
-    // fringed band is heavier on the side its wide octaves fall, which would
-    // pull a centroid off-center by roughly what the measurement below is
-    // trying to see.
+    // the frame's center is its center.
     let drawn = (0..size * size).filter(|k| lit((k % size) as f32, (k / size) as f32)).count();
     assert!(drawn > 100, "nothing drawn to measure ({drawn} lit px)");
     let (cx, cy) = (size as f32 / 2.0, size as f32 / 2.0);
@@ -282,8 +279,8 @@ fn unlit_runs(profile: &[bool]) -> Vec<f32> {
 
 /// The invariant the wheel is built around, checked on the picture rather
 /// than on the layout that feeds it: every octave of the span gets an
-/// indicator and together they close the ring — whatever the counts, the
-/// center, the fringe or the node's pitch class. So the only unlit stretches
+/// indicator and together they close the ring — whatever the count, the
+/// center or the node's pitch class. So the only unlit stretches
 /// are the Octave gap's slits, one per boundary, and the seam is one of them
 /// on every node, wherever that node's turn has carried it.
 ///
@@ -301,40 +298,15 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
         return;
     };
 
-    // The widest wheel, the default, an even count — where the ring reaches an
-    // octave further on one side — a center that is neither a C nor near the
-    // middle of the keyboard, where the ring names octaves the packing has no
-    // room for, and three fringed wheels: the narrowest there is (where the
-    // one full-size octave takes a sector widest and the union branch of the
-    // wedge test is stressed hardest), a plain register with a pair either
-    // side, and a deep fringe filling the budget. Each at a C node (whose
-    // octaves land flush on the center) and at three pitch classes that do
-    // not, one of them the tritone that turns furthest.
-    //
-    // An even wheel, a flat fringe, a graded one, and then a fringe thin
-    // enough to be eaten by the Octave gap.
-    const FRINGES: [(f32, f32); 4] = [(1.0, 0.0), (0.6, 0.0), (0.6, 1.0), (0.15, 0.0)];
-    for (count, extras, center) in [
-        (11u32, 0u32, 60.0f32),
-        (5, 0, 60.0),
-        (4, 0, 60.0),
-        (5, 0, 103.0),
-        (1, 1, 60.0),
-        (5, 2, 60.0),
-        (3, 4, 60.0),
-    ] {
-        for (i, &(size, blend)) in FRINGES.iter().enumerate() {
-            // Both fringe settings are inert without extras, so the other
-            // three would render the same picture at four times the cost.
-            if extras == 0 && i > 0 {
-                continue;
-            }
+    // Every drawable count, a center away from C and near the keyboard's
+    // edge, and pitch classes that turn the ring in both directions.
+    for count in 2..=11 {
+        for center in [60.0, 103.0] {
             for cents in [0.0, 350.0, 600.0, 1150.0] {
-                let layout = octave_layout(count, center, extras, size, blend);
+                let layout = octave_layout(count, center);
                 let px = gpu.shot(&octave_wheel_scene(layout, cents));
                 let profile = band_profile(&px, SIZE[0]);
-                let case =
-                    format!("{count}+2x{extras} at {center}, size {size} blend {blend}, {cents}c");
+                let case = format!("{count} at {center}, {cents}c");
 
                 // One indicator per octave of the wheel, closing the ring:
                 // that is one slit per boundary and no other break. A missing
@@ -343,24 +315,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                 // for octaves no note can reach.
                 let want = layout.span as usize;
                 let runs = unlit_runs(&profile);
-                // Except under a thin fringe, and that is the settings talking
-                // rather than a missing indicator: the Octave gap is cut out of every
-                // sector from both sides at full width, so an extra thinner
-                // than twice that padding has its two slits meet and reads as
-                // no indicator at all. At 0.6 of an even slice they still
-                // resolve; 0.15 is where they go, and only the extras are ever
-                // that thin. `octaves.rs` pins the count exactly, on angles,
-                // where no padding is involved.
-                if size >= 0.4 {
-                    assert_eq!(runs.len(), want, "{case}: unlit runs {runs:?} for {want} sectors");
-                } else {
-                    let lost = 2 * extras as usize;
-                    assert!(
-                        runs.len() + lost >= want && runs.len() <= want,
-                        "{case}: unlit runs {runs:?} for {want} sectors — at most the \
-                         {lost} extras can be lost to the Octave gap"
-                    );
-                }
+                assert_eq!(runs.len(), want, "{case}: unlit runs {runs:?} for {want} sectors");
 
                 // The seam TURNS with the node: it is the bottom only for the
                 // center's own pitch class, and every other class carries it
@@ -374,7 +329,7 @@ fn every_octave_in_the_range_is_drawn_and_they_close_the_ring() {
                 // covers the top — except on the node exactly a tritone from
                 // it, where the center is a boundary and a slit there is the
                 // axis being read rather than a hole.
-                let tritone = (cents - 600.0).abs() < 1e-3;
+                let tritone = ((center - cents / 100.0).rem_euclid(12.0) - 6.0).abs() < 1e-3;
                 if !tritone {
                     assert!(gap_at(&profile, 90.0) == 0.0, "{case}: nothing covers the top");
                 }
@@ -402,18 +357,14 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
 
     let mut pane = 100;
-    for (count, extras, center, size, blend) in
-        [(5u32, 0u32, 60.0f32, 1.0, 0.0), (8, 1, 66.0, 0.3, 0.0)]
-    {
-        let layout = octave_layout(count, center, extras, size, blend);
+    for (count, center) in [(5, 60.0), (10, 66.0)] {
+        let layout = octave_layout(count, center);
         // A C node and a node a fifth up: same slot, pitches 7 semitones
         // apart, so the bright arc must move by exactly that much of the axis.
         // The octave holding the center pitch, and one further round the
         // wheel, where a wrong anchor or a wrong direction shows.
         //
-        // Both held INSIDE the ring rather than at its edges: a thin fringe
-        // leaves the extras narrower than the Octave gap's slits, and a centroid
-        // needs an arc to measure. That the edges reach the seam at all is
+        // Both held inside the ring so a centroid has an arc to measure. That the edges reach the seam at all is
         // `every_octave_in_the_range_is_drawn_and_they_close_the_ring`.
         for (cents, offset) in [(0.0f32, 0i32), (700.0, 0), (0.0, 2), (700.0, 2)] {
             let (first, last) = layout.slots(cents);
@@ -458,7 +409,7 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
             // maximum separates them cleanly whatever the node color is.
             let bright = |i: usize| px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32;
             let peak = (0..px.len() / 4).map(|k| bright(k * 4)).max().unwrap_or(0);
-            assert!(peak > 60, "{count}+2x{extras} at {center}: nothing bright enough");
+            assert!(peak > 60, "{count} at {center}: nothing bright enough");
             let (mut vx, mut vy) = (0f64, 0f64);
             let c = SIZE[0] as f64 / 2.0;
             for y in 0..SIZE[1] {
@@ -472,16 +423,14 @@ fn an_indicator_is_drawn_at_its_own_pitchs_angle() {
                 }
             }
             let drawn = vy.atan2(vx).to_degrees() as f32;
-            // The indicator's own middle, from the layout: the pitch halfway
-            // between its two edges in ANGLE, which a fringe can shift off the
-            // pitch itself.
+            // The indicator's own pitch is halfway between its two edges.
             let (e0, e1) = layout.sector(slot, cents);
             let expected = (0.5 * (e0 + e1)).to_degrees().rem_euclid(360.0);
             let off = (drawn.rem_euclid(360.0) - expected).rem_euclid(360.0);
             let off = off.min(360.0 - off);
             assert!(
                 off < 6.0,
-                "{count}+2x{extras} at {center}, {cents}c, slot {slot}: indicator drawn \
+                "{count} at {center}, {cents}c, slot {slot}: indicator drawn \
                  at {drawn:.1} deg, the axis puts its pitch at {expected:.1}"
             );
         }
@@ -522,7 +471,7 @@ fn a_released_octave_lands_on_its_ghost_without_a_step() {
     };
     // An even five-octave wheel on a C node: a slice is 72 degrees, which is
     // room to sample well inside one and well inside its neighbour.
-    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let layout = octave_layout(5, 60.0);
     let held = harmonigraph_scene::MIDDLE_C_SLOT;
     let (releasing, silent) = (held + 1, held + 2);
     // All three inside the ring this wheel draws. `sector` CLAMPS a slot
@@ -628,7 +577,7 @@ fn a_lone_notes_octave_fades_in_a_straight_line() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let layout = octave_layout(5, 60.0);
     let slot = harmonigraph_scene::MIDDLE_C_SLOT;
     let scene = |envelope: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
@@ -681,7 +630,7 @@ fn a_thin_slice_lights_from_the_inner_edge_and_leaves_a_notch_beyond() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let layout = octave_layout(5, 60.0);
     let slot = harmonigraph_scene::MIDDLE_C_SLOT;
     let scene = |level: f32, thickness: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
@@ -748,7 +697,7 @@ fn a_thick_slice_swells_past_the_band() {
     let Some(mut gpu) = Shooter::new(SIZE) else {
         return;
     };
-    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let layout = octave_layout(5, 60.0);
     let slot = harmonigraph_scene::MIDDLE_C_SLOT;
     let scene = |thickness: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
@@ -820,7 +769,7 @@ fn a_silent_slice_wears_the_ground_the_scene_names() {
     };
     // The even five-octave wheel the release tests use: a 72-degree slice is
     // room to sample well inside one and well inside its neighbour.
-    let layout = octave_layout(5, 60.0, 0, 1.0, 0.0);
+    let layout = octave_layout(5, 60.0);
     let lit = harmonigraph_scene::MIDDLE_C_SLOT;
     let quiet = lit + 1;
     // Both inside the ring this wheel draws: `sector` CLAMPS a slot outside it

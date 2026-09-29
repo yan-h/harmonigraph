@@ -2,9 +2,9 @@
 
 use super::param_bar;
 use crate::params::{ParamBackend, ParamKey};
-use crate::widgets::{choice_row, OctaveStrip, StackBar, ValueBar};
+use crate::widgets::{choice_row, StackBar, ValueBar};
 use harmonigraph_scene::{
-    AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MIN_EXTRA_SIZE,
+    AnimationOrder, SpectralReading, ViewConfig, GAP_MAX, MARK_DELAY_MAX, MAX_SPAN, MIN_SPAN,
     PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_GATE_MAX, SPECTRAL_GATE_MIN,
     SPECTRAL_HYSTERESIS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN, SPECTRAL_WIDTH_MAX,
     SPECTRAL_WIDTH_MIN,
@@ -15,37 +15,12 @@ use harmonigraph_scene::{
 /// Octaves: which octaves of the pitch class are sounding, shown as arcs of a
 /// pitch axis shared by the MIDI ring, audio ring and melody/bass marks.
 pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    // Octaves, Center and the fringe are the axis; how thick the ring they are
-    // drawn on is, and where it sits, is the Layers bar in Note layers — the
-    // middle of its three handles, named MIDI there. The bar names layers by where each
-    // one's reading comes FROM, which is what tells the two middle rings apart:
-    // the analyzer's spectrum on the inner one, the played notes on this one.
-    // This heading names the pitch axis drawn on it instead, that being what
-    // the rows below set. How wide the cut between two indicators is belongs to
-    // neither: it is the shared Gap, in Note layers.
-    //
-    // COUNTS and a CENTER rather than a pitch range: a slice is always exactly
-    // one octave, so an indicator can never stand for less pitch than it
-    // names — which a continuous window cannot promise, its two ends falling
-    // wherever they like between two of a node's octaves and cutting the
-    // indicators there short. Which register the wheel is about is the Center;
-    // how much keyboard reaches round it is the two counts.
-    //
-    // One strip rather than a bar each, because the two are not independent:
-    // they share the eleven-slice budget, and the thing being traded — how
-    // much of the ring each octave keeps — is what the strip draws.
-    OctaveStrip::new(
-            &mut view.octave_count,
-            &mut view.octave_extras,
-            view.octave_extra_size,
-            view.octave_extra_blend,
-        )
+    let mut count = view.octave_count as f32;
+    ValueBar::new(&mut count, MIN_SPAN as f32..=MAX_SPAN as f32, "Octaves")
+        .integer()
         .show(ui)
-        .on_hover_text(
-            "Octaves shared by the MIDI ring, audio ring and marks. \
-                     Drag between the handles for full-size octaves, outside for smaller outer octaves. \
-                     Notes beyond the range use the end slices.",
-        );
+        .on_hover_text("Equal octave slices shared by the MIDI ring, audio ring and marks. Notes beyond the range use the end slices.");
+    view.octave_count = count as u32;
     // Whole semitones, because that is the step the wheel can act on and what
     // the readout can name.
     ValueBar::new(&mut view.octave_center, PITCH_FLOOR..=PITCH_CEIL, "Center pitch")
@@ -56,64 +31,6 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
             .on_hover_text(
                 "Pitch at the top of every octave ring. Each node shows its own octaves nearest this pitch. Type a MIDI note number to set it.",
             );
-    // The fringe is two bars rather than a list of named curves: the size is
-    // the only thing that sets the outermost extra, the blend says how the
-    // ones inside it climb toward the full-size octaves, and a wheel with no
-    // extras is even rather than a mode beside them.
-    //
-    // With no extras there is no second tier, so neither bar has anything to
-    // say. Not the whole of when the strip above is one flat row, though: a
-    // fringe at size 1 is a second tier the same width as the first, and the
-    // size bar is live there to drag back off it.
-    ui.add_enabled_ui(view.octave_extras > 0, |ui| {
-        ValueBar::new(&mut view.octave_extra_size, MIN_EXTRA_SIZE..=1.0, "Outer octave scale")
-            .unit(1.0, "×")
-            .show(ui)
-            .on_hover_text(
-                "Width of each outer octave relative to an equal slice. 1× makes all slices equal.",
-            );
-    });
-    // Inert with one extra a side, where a ramp has nothing to rise between:
-    // the outermost extra is pinned by the size and the full-size octaves take
-    // the rest, so there is no slice in between for a step to land on. Two is
-    // the first fringe the bar can move
-    // (`the_blend_is_inert_below_two_extras`). Equally inert at size 1, where
-    // both tiers are already the same width. The blend can only say how a
-    // fringe falls away, never whether there is one.
-    ui.add_enabled_ui(view.octave_extras > 1 && view.octave_extra_size < 1.0, |ui| {
-        ValueBar::new(&mut view.octave_extra_blend, 0.0..=1.0, "Outer octave taper")
-            .percent()
-            .show(ui)
-            .on_hover_text(
-                "Size transition from outer to inner octaves. \
-                     0% keeps outer slices equally small; \
-                     100% widens them gradually toward the center.",
-            );
-    });
-    if view.octave_extras < 2 {
-        crate::widgets::weak(ui, "Taper requires at least two outer octaves per side.");
-    } else if view.octave_extra_size == 1.0 {
-        crate::widgets::weak(ui, "Reduce Outer octave scale below 1× to use taper.");
-    }
-    // The padding between one indicator and the next is NOT here: it is the
-    // shared Gap in Note layers. What this block keeps is the axis alone:
-    // how the turn is shared out, rather than how wide the cut between two
-    // shares is.
-    //
-    // No size bar under these, and no on/off either: both are the Layers bar's,
-    // where 0 is this layer's off position as it is on every other. The band is
-    // one WIDTH there rather than a pair of radii, because where it sits is the
-    // stack's answer — a gap out from the audio ring, or the stack's own start
-    // where that ring is off — so the only thing left to say about it is how
-    // thick it is.
-    //
-    // No solidity control and no Backdrop switch: the glyphs are always the crisp
-    // classic shapes, and the silent octaves always stand in behind the
-    // sounding ones — that backdrop is what completes the ring, so a lone
-    // octave still reads as a whole note. How BRIGHT it stands is the Idle
-    // lattice section's Idle ring brightness bar at the foot of the page, which
-    // is not this layer's
-    // to own: the audio ring reads its own silence in that same grey.
 }
 
 /// Audio ring: what the ring inside the octave band measures — one reading of

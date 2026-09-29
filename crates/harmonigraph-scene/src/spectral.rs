@@ -1109,13 +1109,7 @@ mod tests {
     /// and a partial can be put on one of them by name.
     fn wheel() -> OctaveLayout {
         let view = ViewConfig::default();
-        crate::octave_layout(
-            view.octave_count,
-            view.octave_center,
-            view.octave_extras,
-            view.octave_extra_size,
-            view.octave_extra_blend,
-        )
+        crate::octave_layout(view.octave_count, view.octave_center)
     }
 
     /// A grid holding one partial: full level within `half` cents of absolute

@@ -347,35 +347,14 @@ pub struct ViewConfig {
     /// hue in this picture is the music's. There is no off position and none is
     /// needed — [`plus_arm`](Self::plus_arm) at 0 takes the field away.
     pub marker_ink: f32,
-    /// How many octaves one turn of a node covers at FULL SIZE (see
-    /// [`octaves`](crate::octaves)), 1..=11 — not how many it draws, which is
-    /// this plus twice [`octave_extras`](Self::octave_extras). Each is exactly
-    /// one octave and they all share whatever the extras leave, so this says
-    /// how many degrees an octave of the main register is worth. Notes past
-    /// either end of the whole wheel light the outermost indicator on their
-    /// side.
+    /// Equal octave slices in one turn of a node, 2..=11. Notes beyond
+    /// either end light the outermost indicator on their side.
     pub octave_count: u32,
     /// The MIDI pitch at the TOP of the wheel — on every node, whatever its
     /// pitch class: a node's ring is turned so that its own octaves land on
     /// their pitches, by up to half a slice either way.
     /// [`sanitize`](Self::sanitize) holds it to the settable limits.
     pub octave_center: f32,
-    /// Extra octaves at EACH end of the wheel, drawn small: 0..=5, and never
-    /// so many that the whole wheel passes eleven slices. Each one reaches an
-    /// octave further up AND down the keyboard for a sliver of the turn, where
-    /// an octave of count is paid for by every full-size octave at once.
-    pub octave_extras: u32,
-    /// How wide one extra is, as a fraction of an EVEN slice (the turn over
-    /// the whole wheel, extras included), 0.1..=1. Under 1 an extra is always
-    /// narrower than a full-size octave, whatever the count and however many
-    /// extras there are, and 1 is an even wheel.
-    pub octave_extra_size: f32,
-    /// How much the extras GRADE from the outermost inward, 0..1: 0 is a flat
-    /// fringe of equal slivers and 1 is a ramp that meets the full-size
-    /// octaves in a step the size of its own. The outermost extra is the size
-    /// above whatever this is, so it is a shape rather than a second
-    /// strength — and it is inert without two extras to differ.
-    pub octave_extra_blend: f32,
     // ---- What the audio ring says ----------------------------------------
     // Which notes are HELD, or which sine waves are SOUNDING. The two are
     // different questions about the same music, and the lattice answers both
@@ -463,7 +442,7 @@ pub struct ViewConfig {
     /// octave) a wedge stands for exactly the octave it names, so neighbouring
     /// wedges meet at the pitch they share and the ring is one continuous
     /// reading — the wheel's own pitch map, painted. It is also the setting at
-    /// which the ring says nothing about the NODE: with no extras the wheel's
+    /// which the ring says nothing about the NODE: the wheel's
     /// map is shared by every node, so every ring on screen is then the same
     /// picture turned, and what is worth looking at is the disagreement
     /// between a node's own pitch and where the energy near it actually sits.
@@ -1299,27 +1278,8 @@ impl ViewConfig {
         // cache on every lookup as well as drawing a NaN.
         self.pitch_gradient = self.pitch_gradient.sanitized();
 
-        // Together, because the pair is what has to fit the boundary table and
-        // either one alone can be legal in a wheel that isn't.
-        (self.octave_count, self.octave_extras) =
-            crate::octaves::clamp_wheel(self.octave_count, self.octave_extras);
+        self.octave_count = crate::octaves::clamp_count(self.octave_count);
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
-
-        // The fringe feeds the wheel's boundary angles, and a non-finite size
-        // or blend poisons every one of them: the widths come out NaN, so does
-        // each `cos`/`sin` in the shader, and the whole octave layer vanishes
-        // with nothing to say why. `clamp` alone does not catch it — NaN is
-        // its own answer — hence the finite check either side of it.
-        self.octave_extra_size = if self.octave_extra_size.is_finite() {
-            self.octave_extra_size.clamp(crate::octaves::MIN_EXTRA_SIZE, 1.0)
-        } else {
-            fresh.octave_extra_size
-        };
-        self.octave_extra_blend = if self.octave_extra_blend.is_finite() {
-            self.octave_extra_blend.clamp(0.0, 1.0)
-        } else {
-            fresh.octave_extra_blend
-        };
 
         // Each off-sheet step multiplies geometry by this value. The draw path
         // stays defensive, while load owns making the stored reading fit the
@@ -1666,14 +1626,10 @@ impl Default for ViewConfig {
             // 2026-09-26: the resting positions stay legible through the glow
             // while sitting further back than a sounding node's white name.
             marker_ink: DEFAULT_MARKER_INK,
-            // Seven full-size octaves to the turn with middle C straight up —
-            // the keyboard's C0..C6 span in the DAW's numbering, with no
-            // smaller fringe at either end.
+            // Seven equal octaves to the turn with middle C straight up —
+            // the keyboard's C0..C6 span in the DAW's numbering.
             octave_count: crate::octaves::DEFAULT_COUNT,
             octave_center: crate::octaves::DEFAULT_CENTER,
-            octave_extras: 0,
-            octave_extra_size: 0.387_534_47,
-            octave_extra_blend: 0.562_241_4,
             // The fold, which is the reading to look at a screenful of nodes
             // with (see [`SpectralReading`]) — and the one to meet the ring on
             // first, a lattice of constellations being what the whole layer is

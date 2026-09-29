@@ -262,14 +262,14 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
     use harmonigraph_scene::{octave_layout, LatticeMaterial};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
-    scene.node_radius *= 2.0; // narrow pigment and extra sectors still span multiple pixels
+    scene.node_radius *= 2.0; // narrow pigment still spans multiple pixels
     scene.atmosphere.material_style = LatticeMaterial::Watercolor;
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.material_shadow_width = 0.2;
     scene.atmosphere.material_shadow_softness = 0.0;
-    // Unequal extra sectors and a detuned seam must agree with the drawn ring.
+    // Center and end sectors at a detuned seam must agree with the drawn ring.
     for cents in [0.0, 1100.0] {
-        scene.octave_layout = octave_layout(5, 60.0, 1, 0.4, 0.7);
+        scene.octave_layout = octave_layout(7, 60.0);
         scene.nodes[0].cents = cents;
         for target_slot in [5, scene.octave_layout.ring(cents).base] {
             for level in [0.0, 0.5, 1.0] {

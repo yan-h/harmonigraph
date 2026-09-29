@@ -257,7 +257,7 @@ fn smooth_grow_draws_complete_pieces_and_settles() {
     let mut scene = single_marked_node(0, 0);
     scene.node_radius = 1.6;
     scene.glow_strength = 0.0;
-    scene.octave_layout = harmonigraph_scene::octave_layout(4, 60.0, 1, 0.3, 0.7);
+    scene.octave_layout = harmonigraph_scene::octave_layout(6, 60.0);
     scene.nodes[0].cents = 350.0;
     scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
     let (low, high) = scene.octave_layout.slots(350.0);
@@ -323,7 +323,7 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
     let mut scene = single_marked_node(0, 0);
     scene.node_radius = 1.6;
     scene.glow_strength = 0.0;
-    scene.octave_layout = harmonigraph_scene::octave_layout(4, 60.0, 1, 0.3, 0.7);
+    scene.octave_layout = harmonigraph_scene::octave_layout(6, 60.0);
     scene.nodes[0].cents = 350.0;
     scene.nodes[0].octaves = [1.0; 11];
     let (low, high) = scene.octave_layout.slots(350.0);

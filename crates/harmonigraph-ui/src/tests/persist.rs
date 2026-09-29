@@ -220,12 +220,6 @@ fn persist_round_trips_camera_and_view() {
     // a blob is entitled to one.
     state.picture.appearance.view.octave_count = 7;
     state.picture.appearance.view.octave_center = 64.5;
-    // A fringe too, with a blend the strip can only reach once there are two
-    // extras a side — the three fields are set together because a wheel is
-    // what they mean together.
-    state.picture.appearance.view.octave_extras = 2;
-    state.picture.appearance.view.octave_extra_size = 0.4;
-    state.picture.appearance.view.octave_extra_blend = 0.5;
     state.picture.appearance.view.plus_arm = 0.5;
     state.picture.appearance.view.plus_taper = 0.07;
     for (index, group) in state.picture.appearance.view.shadow.groups_mut().into_iter().enumerate()
@@ -278,9 +272,6 @@ fn persist_round_trips_camera_and_view() {
         ),
         (7, 64.5)
     );
-    assert_eq!(restored.picture.appearance.view.octave_extras, 2, "the fringe round-trips");
-    assert_eq!(restored.picture.appearance.view.octave_extra_size, 0.4);
-    assert_eq!(restored.picture.appearance.view.octave_extra_blend, 0.5);
     assert_eq!(restored.picture.appearance.view.plus_arm, 0.5);
     assert_eq!(restored.picture.appearance.view.plus_taper, 0.07, "and the taper on their ends");
     assert_eq!(
@@ -342,33 +333,16 @@ fn a_blob_written_before_the_auto_detect_opts_into_it() {
     assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "rest of the blob still restores");
 }
 
-/// A hand-edited blob can name a count and a fringe that do not fit the
-/// eleven slices the boundary table holds, and neither field is illegal on its
-/// own — which is why `sanitize` clamps the PAIR rather than each of them.
-/// Clamping only the count would leave the panes showing a fringe the picture
-/// does not draw, since the layout re-clamps for itself and says nothing.
+/// Loaded counts agree with the drawable range and the setting's readout.
 #[test]
 fn a_blob_naming_more_wheel_than_fits_opens_on_what_fits() {
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    state.picture.appearance.view.octave_count = 9;
-    state.picture.appearance.view.octave_extras = 0;
-    let saved = state.save_persist();
-    // Nine full-size octaves leave room for one extra a side, not five.
-    let overrun = saved.replace("octave_extras:0,", "octave_extras:5,");
-    assert_ne!(overrun, saved, "`octave_extras` is not in the blob to overrun");
-
-    let mut restored = fresh();
-    restored.load_persist(&overrun);
-    assert_eq!(
-        (
-            restored.picture.appearance.view.octave_count,
-            restored.picture.appearance.view.octave_extras
-        ),
-        (9, 1),
-        "the count wins and the fringe yields to what is left"
-    );
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "the rest of the blob still restores");
+    for (stored, expected) in [(0, 2), (1, 2), (99, 11)] {
+        let mut state = fresh();
+        state.picture.appearance.view.octave_count = stored;
+        let mut restored = fresh();
+        assert!(restored.load_persist(&state.save_persist()));
+        assert_eq!(restored.picture.appearance.view.octave_count, expected);
+    }
 }
 
 /// A hand-edited level range comes back drawable, which the pitch pair has
@@ -767,58 +741,22 @@ fn analyzer_scalars_are_normalized_before_any_settings_are_drawn() {
     assert_eq!(restored.picture.appearance.spectrum.backdrop_gap, 3.0);
 }
 
-/// The wheel's two-bar TAPER is gone, and a blob carrying the pair of keys
-/// nothing reads now keeps everything else it says. An unknown field being
-/// ignored rather than refused is the whole of why that works, and it is a
-/// property of how the blob is read rather than anything this crate spells
-/// out, so it is worth a blob to say so.
-///
-/// The fringe the taper predates is dropped from the same blob, which is the
-/// other half of the read: a key that is ABSENT costs its own field and comes
-/// back at the fresh value, where a key that is UNKNOWN costs nothing at all.
+/// Retired outer-octave settings do not prevent restoring the appearance.
 #[test]
-fn a_blob_written_against_the_taper_keeps_what_it_still_says() {
+fn a_blob_with_outer_octave_settings_keeps_its_count_and_camera() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.octave_count = 7;
-    state.picture.appearance.view.octave_extras = 3;
-    state.picture.appearance.view.octave_extra_size = 0.4;
-    state.picture.appearance.view.octave_extra_blend = 0.5;
-    let mut saved = state.save_persist();
-    // Exactly a pre-fringe blob: none of the three keys the fringe added, and
-    // the two the taper wrote where they now sit. One key at a time, each
-    // checked to have hit, so a rename cannot leave a default untested.
-    for key in [
-        format!("octave_extras:{},", state.picture.appearance.view.octave_extras),
-        format!("octave_extra_size:{:?},", state.picture.appearance.view.octave_extra_size),
-        format!("octave_extra_blend:{:?},", state.picture.appearance.view.octave_extra_blend),
-    ] {
-        let stripped = saved.replace(&key, "");
-        assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
-        saved = stripped;
-    }
-    let count = format!("octave_count:{},", state.picture.appearance.view.octave_count);
-    let tapered =
-        saved.replace(&count, &format!("{count}octave_taper_amount:0.6,octave_taper_shape:0.25,"));
-    assert_ne!(tapered, saved, "the taper's keys did not go into the blob");
-
-    let defaults = harmonigraph_scene::ViewConfig::default();
+    let saved = state.save_persist();
+    let old = saved.replace(
+        "octave_count:7,",
+        "octave_count:7,octave_extras:2,octave_extra_size:0.4,octave_extra_blend:0.5,",
+    );
+    assert_ne!(old, saved);
     let mut restored = fresh();
-    restored.load_persist(&tapered);
-    assert_eq!(
-        restored.picture.appearance.view.octave_count, 7,
-        "the count the blob names survives the taper keys"
-    );
-    // The fresh extras as this count can hold them, not the fresh value raw:
-    // `sanitize` clamps the PAIR. Spelling the clamp out keeps this measuring
-    // the fallback rather than failing the day someone retunes the fresh
-    // extras past what fits.
-    let (_, fits) = harmonigraph_scene::clamp_wheel(7, defaults.octave_extras);
-    assert_eq!(
-        restored.picture.appearance.view.octave_extras, fits,
-        "and the extras it is missing come back at the fresh value, as the count can hold them",
-    );
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "the rest of the blob still restores");
+    assert!(restored.load_persist(&old));
+    assert_eq!(restored.picture.appearance.view.octave_count, 7);
+    assert_eq!(restored.picture.appearance.camera.yaw, 1.23);
 }
 
 /// The render frame round-trips its side and the split beside it, through

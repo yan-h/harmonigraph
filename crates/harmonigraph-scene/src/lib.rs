@@ -66,9 +66,8 @@ pub use intensity::{
 };
 pub use motion::NodeMotion;
 pub use octaves::{
-    clamp_center, clamp_wheel, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
-    DEFAULT_EXTRA_BLEND, DEFAULT_EXTRA_SIZE, MAX_EXTRAS, MAX_SPAN, MIDDLE_C_SLOT, MIN_COUNT,
-    MIN_EXTRA_SIZE, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
+    clamp_center, clamp_count, octave_layout, OctaveLayout, Ring, DEFAULT_CENTER, DEFAULT_COUNT,
+    MAX_SPAN, MIDDLE_C_SLOT, MIN_SPAN, OCTAVE_SLOTS, PITCH_CEIL, PITCH_FLOOR,
 };
 pub use spectral::{
     bucket_pitch, ring_gradient, RingFade, RingGate, SpectralLevels, SpectralPaint,
