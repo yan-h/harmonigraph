@@ -55,10 +55,13 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         choice_row(ui, "Material", &mut settings.material_style, &[
             (LatticeMaterial::None, "None", "Keep the textured light as it is; preserves material settings"),
             (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes of the textured note light"),
-            (LatticeMaterial::VelvetScales, "Velvet Scales", "Soft overlapping scallops carrying the note light"),
+            (LatticeMaterial::VelvetScales, "Scales", "Soft overlapping scallops carrying the note light"),
             (LatticeMaterial::Mosaic, "Mosaic", "Soft-edged facets of the textured note light"),
             (LatticeMaterial::Stars, "Stars", "Drifting stars colored by the note light"),
         ]);
+        if settings.material_style == LatticeMaterial::Stars {
+            super::material::stars_quality(ui, &mut settings.stars);
+        }
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");

@@ -1840,19 +1840,14 @@ mod tests {
     #[test]
     fn halo_profiles_group_actual_sizes_and_keep_depth_addresses() {
         use harmonigraph_scene::{SpectralAtmosphere, StarHaloProfile};
-        let settings = SpectralAtmosphere::default();
-        assert_eq!(settings.stars.star_halo_profile, StarHaloProfile::P3);
+        let medium = SpectralAtmosphere::default();
+        assert_eq!(medium.stars.star_halo_profile, StarHaloProfile::Medium);
+        let mut settings = medium;
+        settings.stars.star_halo_profile = StarHaloProfile::P3;
         let layout = super::star_halo_layout([161, 121], settings.stars);
         assert_eq!(layout.groups.map(|g| g.size), [[161, 121], [97, 73], [1, 1]]);
         assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);
         assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
-        let medium = SpectralAtmosphere {
-            stars: harmonigraph_scene::StarSettings {
-                star_halo_profile: StarHaloProfile::Medium,
-                ..settings.stars
-            },
-            ..settings
-        };
         let layout = super::star_halo_layout([161, 121], medium.stars);
         assert_eq!(layout.groups.map(|g| g.size), [[121, 91], [73, 55], [1, 1]]);
         assert_eq!(layout.groups.map(|g| g.layers), [1, 1, 0]);

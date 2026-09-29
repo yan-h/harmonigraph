@@ -12,30 +12,71 @@ impl Plot {
     /// Keep the picture a stable size beside exact values. Very narrow panes
     /// stack instead of squeezing labels, numbers, and handles into one row.
     pub fn with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {
-        super::label(ui, label);
+        Self::new(ui, label, count, false)
+    }
+    pub fn square_with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {
+        Self::new(ui, label, count, true)
+    }
+    fn new(ui: &mut Ui, label: &str, count: usize, square: bool) -> Self {
         let scale = theme::ui_scale(ui.ctx());
         let width = super::bar::bar_width(ui);
         let gap = ui.spacing().item_spacing.y;
-        let fields_height = (count as f32 * (theme::row_height(scale) + gap) - gap).max(0.0);
         let beside = count > 0 && width >= 220.0 * scale;
+        let title_beside = beside && count < 3;
+        if title_beside {
+            super::label::group_space(ui);
+        } else {
+            super::label(ui, label);
+        }
+        let rows = count + usize::from(title_beside);
+        let fields_height = (rows as f32 * (theme::row_height(scale) + gap) - gap).max(0.0);
         let total_height =
             height(scale) + if count > 0 && !beside { gap + fields_height } else { 0.0 };
         let (bounds, response) =
             ui.allocate_exact_size(Vec2::new(width, total_height), Sense::hover());
         let well = Rect::from_min_size(
             bounds.min,
-            Vec2::new(if beside { 112.0 * scale } else { width }, height(scale)),
+            Vec2::new(
+                if square {
+                    height(scale).min(width)
+                } else if beside {
+                    112.0 * scale
+                } else {
+                    width
+                },
+                height(scale),
+            ),
         );
         ui.painter().rect_filled(well, super::bar::bar_radius(scale), theme::well());
-        let fields = if beside {
+        let mut fields = if beside {
             Rect::from_min_max(
-                egui::pos2(well.right() + 8.0 * scale, bounds.center().y - fields_height / 2.0),
+                egui::pos2(well.right() + gap, bounds.center().y - fields_height / 2.0),
                 egui::pos2(bounds.right(), bounds.center().y + fields_height / 2.0),
             )
         } else {
             Rect::from_min_max(egui::pos2(bounds.left(), well.bottom() + gap), bounds.max)
         };
-        Self { rect: well.shrink(10.0 * scale), response, fields }
+        if title_beside {
+            let mut title_rect = fields;
+            title_rect.min.x += super::bar::BAR_TEXT_PAD * scale;
+            let mut title = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(response.id.with("title"))
+                    .max_rect(title_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            title
+                .allocate_ui_with_layout(
+                    Vec2::new(title_rect.width(), theme::row_height(scale)),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| ui.add(egui::Label::new(label).truncate()),
+                )
+                .inner
+                .on_hover_text(label);
+            fields.min.y += theme::row_height(scale) + gap;
+        }
+        // A 4pt handle plus its outline leaves a small visible margin at an endpoint.
+        Self { rect: well.shrink(6.0 * scale), response, fields }
     }
     pub fn fields<R>(&self, ui: &mut Ui, draw: impl FnOnce(&mut Ui) -> R) -> R {
         // The outer control already allocated the whole rect. A child prevents
@@ -48,12 +89,6 @@ impl Plot {
         );
         child.set_clip_rect(self.fields.intersect(ui.clip_rect()));
         draw(&mut child)
-    }
-    pub fn square(&mut self) {
-        self.rect = Rect::from_center_size(
-            self.rect.center(),
-            Vec2::splat(self.rect.width().min(self.rect.height())),
-        );
     }
     pub fn point(&self, x: f32, y: f32) -> Pos2 {
         egui::pos2(
@@ -153,5 +188,6 @@ pub(super) fn curve(plot: &Plot, ui: &Ui, sample: impl Fn(f32) -> (f32, f32), co
 }
 
 pub(crate) fn height(scale: f32) -> f32 {
-    theme::row_height(scale) * 3.5
+    // Three slider rows, including the two standard 4pt gaps between them.
+    (theme::ROW_HEIGHT * 3.0 + 8.0) * scale
 }
