@@ -196,8 +196,8 @@ pub const STAR_LIFETIME_MIN: f32 = 0.5;
 /// See [`STAR_LIFETIME_MIN`].
 pub const STAR_LIFETIME_MAX: f32 = 20.0;
 
-/// Bounds shared by the lattice texture/material size controls and sanitizer.
-pub const NEBULA_SCALE_MIN: f32 = 0.25;
+/// Bounds shared by the lattice pattern size control and sanitizer.
+pub const NEBULA_SCALE_MIN: f32 = 0.031_25;
 /// See [`NEBULA_SCALE_MIN`].
 pub const NEBULA_SCALE_MAX: f32 = 4.0;
 
@@ -756,15 +756,12 @@ impl SpectralAtmosphere {
 }
 
 /// A pattern applied to combined note light before material displacement.
-/// Discriminants are the shader's texture selector.
+/// `None` reaches the shader as zero pattern depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[repr(u32)]
 pub enum LatticeTexture {
     #[default]
-    Clouds = 0,
-    Contours = 1,
-    Interference = 2,
-    None = 3,
+    Clouds,
+    None,
 }
 
 /// A material sampling the textured glow; None bypasses the material pass.

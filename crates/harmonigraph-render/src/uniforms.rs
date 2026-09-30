@@ -130,8 +130,7 @@ uniform_group! {
         scale: f32,
         drift: Float2,
         target_size: Float2,
-        style: u32,
-        padding: f32,
+        padding: Float2,
     }
 }
 uniform_group! {

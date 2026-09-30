@@ -530,8 +530,7 @@ impl LatticeCallback {
                         (texture_time * 0.053).cos() as f32 * 0.9,
                     ]),
                     target_size: Float2([1.0; 2]),
-                    style: atmosphere.texture as u32,
-                    padding: 0.0,
+                    padding: Float2([0.0; 2]),
                 },
                 material: MaterialParams {
                     amount: atmosphere.material_amount,
