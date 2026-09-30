@@ -442,12 +442,16 @@ pub struct StarSettings {
     /// Yan chose, with its levers on bars.
     pub star_density: f32,
     /// How far the stars differ from each other in brightness, spent as a
-    /// palette position in the spectrogram or coverage of the sampled lattice
-    /// hue: the steepness of the brightness rank, how far
-    /// it spreads each star above and below the colour behind it, and the
-    /// spread of core sizes, all together. At 0 every star is the colour
-    /// behind it, lifted a little.
+    /// palette position in the spectrogram or a level of the sampled lattice
+    /// hue: the steepness of the brightness rank and how far it spreads each
+    /// star above and below the colour behind it, keeping their average. At 0
+    /// every star is the colour behind it, lifted a little.
     pub star_randomness: f32,
+    /// How far the stars' cores shrink below their depth's size, each by its
+    /// own draw, independent of its brightness: every star at its depth's
+    /// size at 0, down to 1/11 of it at 1. Only shrinks, so no star grows into
+    /// the cap its spacing sets. Runs over 0..=1.
+    pub star_size_variation: f32,
     /// Positional variation within each cell, from regular centers at 0 to
     /// the original 0.6-cell jitter width at 1. The optimized far-three response
     /// ends at `1.0 - 0.3 * star_jitter` cells; Uniform and the nearest two
@@ -515,6 +519,9 @@ impl Default for StarSettings {
             // Yan's Stars controls captured from the DAW on 2026-09-26.
             star_density: 10.0,
             star_randomness: 0.080912866,
+            // The old shared dial's size spread at its fresh value, anchored
+            // at the top: the same smallest-to-largest ratio, now 0.69..1.
+            star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
             star_size_min: 2.315533,
             star_size_max: 14.752405,
@@ -565,6 +572,8 @@ impl StarSettings {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_size_variation =
+            clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
         self.star_size_min = clamp(self.star_size_min, fresh.star_size_min, size_low, size_high);
         self.star_size_max = clamp(self.star_size_max, fresh.star_size_max, size_low, size_high);

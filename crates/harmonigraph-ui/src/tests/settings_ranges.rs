@@ -102,7 +102,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     );
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
-        star_density, star_randomness, star_jitter, star_fringe, star_far_fill, star_halo_resolution,
+        star_density, star_randomness, star_size_variation, star_jitter, star_fringe, star_far_fill, star_halo_resolution,
         star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
         star_size_curve, star_speed_curve, star_lifetime);
     }
@@ -328,7 +328,7 @@ fn scenarios() -> Vec<Scenario> {
                 + 3
                 + 6
                 + 2
-                + 11
+                + 12
                 + 4
                 + usize::from(profile == harmonigraph_scene::StarHaloProfile::Uniform),
             ..base
@@ -363,10 +363,10 @@ fn scenarios() -> Vec<Scenario> {
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
-        (harmonigraph_scene::StarHaloProfile::P3, 11),
-        (harmonigraph_scene::StarHaloProfile::Medium, 11),
-        (harmonigraph_scene::StarHaloProfile::Low, 11),
-        (harmonigraph_scene::StarHaloProfile::Uniform, 12),
+        (harmonigraph_scene::StarHaloProfile::P3, 12),
+        (harmonigraph_scene::StarHaloProfile::Medium, 12),
+        (harmonigraph_scene::StarHaloProfile::Low, 12),
+        (harmonigraph_scene::StarHaloProfile::Uniform, 13),
     ] {
         cases.push(Scenario {
             pane: panes::Tab::AnalyzerSettings,

@@ -1850,6 +1850,9 @@ mod tests {
         (s.pitch_softness, s.time_softness) = (0.0, 0.0);
         (s.stars.star_speed_min, s.stars.star_speed_max, s.cloud_direction) = (SPEED, SPEED, 0.0);
         s.stars.star_lifetime = 20.0;
+        // Equal sizes: the smallest stars' cores resample unevenly in the
+        // reduced halo images under a whole-pixel shift, which is not drift.
+        s.stars.star_size_variation = 0.0;
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().now +=

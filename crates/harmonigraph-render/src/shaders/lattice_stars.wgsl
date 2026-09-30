@@ -28,6 +28,7 @@ fn star_size() -> vec2<f32> { return settings.stars.size; }
 fn star_ppp() -> f32 { return settings.stars.ppp; }
 fn star_randomness() -> f32 { return settings.stars.star_randomness; }
 fn star_life() -> f32 { return settings.stars.star_life; }
+fn star_size_variation() -> f32 { return settings.stars.star_size_variation; }
 fn star_far() -> vec4<f32> { return settings.stars.star_far; }
 fn star_near() -> vec4<f32> { return settings.stars.star_near; }
 fn star_geometry() -> vec4<f32> { return settings.stars.star_geometry; }

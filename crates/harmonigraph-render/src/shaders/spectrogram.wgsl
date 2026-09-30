@@ -302,6 +302,11 @@ struct Cloud {
     // none of the textures above.
     star_randomness: f32,
     star_life: f32,
+    // The starfield's `Size variation`, then the rest of its row.
+    star_size_variation: f32,
+    star_pad0: u32,
+    star_pad1: u32,
+    star_pad2: u32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
     // Jitter width, compact-core reach, fade-start fraction and far fill, computed once
@@ -1083,6 +1088,7 @@ fn star_size() -> vec2<f32> { return cloud.size; }
 fn star_ppp() -> f32 { return cloud.ppp; }
 fn star_randomness() -> f32 { return cloud.star_randomness; }
 fn star_life() -> f32 { return cloud.star_life; }
+fn star_size_variation() -> f32 { return cloud.star_size_variation; }
 fn star_far() -> vec4<f32> { return cloud.star_far; }
 fn star_near() -> vec4<f32> { return cloud.star_near; }
 fn star_geometry() -> vec4<f32> { return cloud.star_geometry; }
