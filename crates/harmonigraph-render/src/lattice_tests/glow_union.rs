@@ -1257,9 +1257,14 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
                 "premultiplied {profile:?}: {p:?}"
             );
             assert!(p.iter().all(|c| *c <= 154), "fixed glow ceiling {profile:?}: {p:?}");
-            if p[3] > 30 {
+            // A star is its source's hue at the star's own level, so channels
+            // keep the source's proportions while alpha follows coverage.
+            let brightest = *p[..3].iter().max().unwrap();
+            if brightest > 30 {
+                let source = *hue[..3].iter().max().unwrap();
                 for channel in 0..3 {
-                    let expected = f32::from(hue[channel]) / f32::from(hue[3]) * f32::from(p[3]);
+                    let expected =
+                        f32::from(hue[channel]) / f32::from(source) * f32::from(brightest);
                     assert!(
                         (f32::from(p[channel]) - expected).abs() <= 3.0,
                         "source hue {profile:?}: {p:?}, source {hue:?}"
@@ -1281,6 +1286,33 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
         scene.nodes[0].glow.level = 1.0;
         scene.glow_timing.as_mut().unwrap().now = 1.0;
     }
+}
+
+/// Stars carry the light's level in their colour, so dense stars with wide
+/// fringes, which sum past full coverage, still follow the light's darkness.
+/// Carried as opacity, the level clipped away: at these defaults the field was
+/// 1.54x the plain glow and full Pattern contrast left 57% of it, not 33%.
+#[test]
+fn dense_stars_follow_the_pattern_darkness_of_their_light() {
+    use harmonigraph_scene::{LatticeMaterial, LatticeTexture};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0, 1.0, 0.6], 0.75, true);
+    scene.atmosphere.breath_amount = 0.0;
+    scene.atmosphere.texture = LatticeTexture::Clouds;
+    scene.atmosphere.material_amount = 1.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
+    let mut mean = |material, depth| {
+        scene.atmosphere.material_style = material;
+        scene.atmosphere.texture_depth = depth;
+        let px = glow(&mut shooter, &scene);
+        px.chunks_exact(4).map(luminance).sum::<f64>() / (px.len() / 4) as f64
+    };
+    let plain = [mean(LatticeMaterial::None, 0.0), mean(LatticeMaterial::None, 1.0)];
+    let stars = [mean(LatticeMaterial::Stars, 0.0), mean(LatticeMaterial::Stars, 1.0)];
+    assert!(stars[0] < plain[0] * 1.3, "stars stay near their light: {stars:?} {plain:?}");
+    let (kept, plain_kept) = (stars[1] / stars[0], plain[1] / plain[0]);
+    assert!(kept < plain_kept * 1.25, "contrast darkens stars: {kept} vs {plain_kept}");
 }
 
 #[test]
