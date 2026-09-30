@@ -1,5 +1,6 @@
 //! Spatial profiles edited through their endpoints and curve, with numeric fallbacks.
 use super::plot::{curve, value_bar, Plot};
+use super::RangeBar;
 use crate::theme;
 use egui::Ui;
 use std::ops::RangeInclusive;
@@ -13,13 +14,10 @@ pub(crate) fn depth(
     curve_range: RangeInclusive<f32>,
     size: bool,
 ) {
-    let (name, curve_name, unit, suffix) = if size {
-        ("Star size", "Size curve", 1.0, " px")
-    } else {
-        ("Star speed", "Speed curve", 100.0, "%")
-    };
+    let (name, curve_name) =
+        if size { ("Star size", "Size curve") } else { ("Star speed", "Speed curve") };
     ui.push_id(name, |ui| {
-        let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 3);
+        let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 2);
         let encode = |v: f32| {
             if size {
                 (v.log2() - range.start().log2()) / (range.end().log2() - range.start().log2())
@@ -54,24 +52,35 @@ pub(crate) fn depth(
                     .clamp(*curve_range.start(), *curve_range.end());
             }
         }
-        // No log round-trip on idle frames: values also key star placement.
         plot.fields(ui, |ui| {
-            value_bar(
-                ui,
-                low,
-                *range.start()..=*high,
-                [&format!("{name} far"), "Far"],
-                unit,
-                suffix,
-            );
-            value_bar(
-                ui,
-                high,
-                *low..=*range.end(),
-                [&format!("{name} near"), "Near"],
-                unit,
-                suffix,
-            );
+            if size {
+                // Dragged in octaves, like the plot, so the small end has room
+                // on the track. Written back only on a change: the round trip
+                // is not exact, and the values key star placement.
+                let (mut far, mut near) = (low.log2(), high.log2());
+                let response = RangeBar::new(
+                    &mut far,
+                    &mut near,
+                    range.start().log2()..=range.end().log2(),
+                    name,
+                )
+                .display(|octaves| format!("{:.1} px", octaves.exp2()))
+                .show(ui)
+                .on_hover_text(
+                    "The smallest and biggest stars: the farthest dust at the low end, the nearest stars at the high end.",
+                );
+                if response.changed() {
+                    *low = far.exp2();
+                    *high = near.exp2();
+                }
+            } else {
+                RangeBar::new(low, high, range.clone(), name)
+                    .display(|speed| format!("{:.0}%", speed * 100.0))
+                    .show(ui)
+                    .on_hover_text(
+                        "How fast the farthest stars drift at the low end and the nearest at the high end. A wider range deepens the parallax; equal ends move every depth together.",
+                    );
+            }
             value_bar(ui, exponent, curve_range, [curve_name, "Curve"], 1.0, "");
         });
         let a = encode(*low);
