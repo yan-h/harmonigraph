@@ -84,7 +84,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings),
                 LatticeMaterial::VelvetScales => super::material::velvet(ui, &mut settings.material_settings),
                 LatticeMaterial::Mosaic => super::material::mosaic(ui, &mut settings.material_settings),
-                LatticeMaterial::Stars => super::material::stars(ui, &mut settings.stars),
+                LatticeMaterial::Stars => super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
                 LatticeMaterial::None => {},
             }
         }

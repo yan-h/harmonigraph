@@ -126,7 +126,7 @@ fn poisoned_view() -> ViewConfig {
             material_color_pickup: nan,
             material_shadow_width: nan,
             material_shadow_softness: nan,
-            stars: crate::StarSettings::default(),
+            stars: crate::StarSettings::lattice(),
             material_settings: crate::MaterialSettings {
                 velvet_size: nan,
                 velvet_variety: nan,

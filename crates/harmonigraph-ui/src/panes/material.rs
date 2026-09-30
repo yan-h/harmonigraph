@@ -76,10 +76,15 @@ pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Mat
 /// a bar here rather than a choice made in the shader, because Yan's pick was a
 /// starting point "with sliders exposed". The fresh values are that pick, V3, with round
 /// 8's YB3 for how a star is coloured and shaped.
-pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
+/// `size_scale` is how many times the spectrogram's sizes this pane's run.
+pub(super) fn stars(
+    ui: &mut egui::Ui,
+    atmosphere: &mut harmonigraph_scene::StarSettings,
+    size_scale: f32,
+) {
     use harmonigraph_scene::{
-        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX, STAR_SIZE_CURVE_MAX,
-        STAR_SIZE_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN,
+        StarSettings, STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX,
+        STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
         .unit(1.0, "\u{d7}")
@@ -92,7 +97,7 @@ pub(super) fn stars(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Star
         &mut atmosphere.star_size_min,
         &mut atmosphere.star_size_max,
         &mut atmosphere.star_size_curve,
-        STAR_SIZE_MIN..=STAR_SIZE_MAX,
+        StarSettings::size_range(size_scale),
         STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
         true,
     );
