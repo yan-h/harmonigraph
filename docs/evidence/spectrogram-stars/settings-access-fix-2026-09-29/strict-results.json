@@ -1,0 +1,34 @@
+[
+  {
+    "label": "baseline",
+    "sha256": "66589674729f651808fdc66a260d7b7b69c17f074209a785e348562ca8964fba",
+    "rows": [
+      "stars, medium / 1.00 / 10.0: 45.905/47.629/53.726/62.440/75.161; wall 58.022; CPU 0.149; source px Some([1024, 2160])",
+      "stars, medium memory / 1.00 / 10.0: 46.703/47.946/54.381/62.952/69.098; wall 58.078; CPU 0.148; source px Some([1024, 2160])"
+    ]
+  },
+  {
+    "label": "strict",
+    "sha256": "5e1f533a47b3215dd35cfa672b6c49566a52e85d6ac98aa229cc5ddfad08b28c",
+    "rows": [
+      "stars, medium / 1.00 / 10.0: 9.015/9.259/9.519/9.954/10.874; wall 11.292; CPU 0.131; source px Some([1024, 2160])",
+      "stars, medium memory / 1.00 / 10.0: 9.371/9.560/9.861/10.265/10.749; wall 11.748; CPU 0.133; source px Some([1024, 2160])"
+    ]
+  },
+  {
+    "label": "strict",
+    "sha256": "5e1f533a47b3215dd35cfa672b6c49566a52e85d6ac98aa229cc5ddfad08b28c",
+    "rows": [
+      "stars, medium / 1.00 / 10.0: 9.076/9.214/9.517/10.629/13.168; wall 10.679; CPU 0.130; source px Some([1024, 2160])",
+      "stars, medium memory / 1.00 / 10.0: 9.427/9.527/9.887/11.140/13.547; wall 11.799; CPU 0.133; source px Some([1024, 2160])"
+    ]
+  },
+  {
+    "label": "baseline",
+    "sha256": "66589674729f651808fdc66a260d7b7b69c17f074209a785e348562ca8964fba",
+    "rows": [
+      "stars, medium / 1.00 / 10.0: 48.667/51.051/56.014/65.096/72.651; wall 57.900; CPU 0.140; source px Some([1024, 2160])",
+      "stars, medium memory / 1.00 / 10.0: 49.122/51.337/56.891/65.691/76.180; wall 58.699; CPU 0.142; source px Some([1024, 2160])"
+    ]
+  }
+]
