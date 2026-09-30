@@ -14,8 +14,7 @@ The earlier 2×2 rejection (#1170 round 1, Yan: "I do prefer A") was for ALL fiv
 so it did not settle this narrower case.
 
 He then asked whether a star could keep its footprint while more of it becomes glow:
-Yan, verbatim: *"I want the option of maintaining the star footprint, but decrease the core so more of it is glow."*
-That is the `HARMONIGRAPH_STARS_NEAR_CORE` knob below.
+Yan, verbatim: *"I want the option of maintaining the star footprint, but decrease the core so more of it is glow."* That is the `HARMONIGRAPH_STARS_NEAR_CORE` knob below.
 
 ## The geometry, in one paragraph
 
