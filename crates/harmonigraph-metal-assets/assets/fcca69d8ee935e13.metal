@@ -42,9 +42,9 @@ struct StarUniforms {
 struct Settings {
     StarUniforms stars;
     float depth;
-    float strength;
-    float accumulation;
-    float padding;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct TileVertex {
     metal::float4 position;
@@ -141,7 +141,8 @@ metal::float4 star_source(
     float randomness = settings.stars.star_randomness;
     float spread = (1.0 - randomness) + (randomness * (0.35 + (0.65 * rank)));
     float lift = (0.09 * rank) * metal::smoothstep(0.0, 0.15, light.w);
-    return metal::float4(light.xyz / metal::float3(light.w), metal::clamp((light.w * spread) + lift, 0.0, 1.0));
+    float level = metal::clamp((light.w * spread) + lift, 0.0, 1.0);
+    return metal::float4((light.xyz / metal::float3(light.w)) * level, 1.0);
 }
 
 uint naga_f2u32(float value) {

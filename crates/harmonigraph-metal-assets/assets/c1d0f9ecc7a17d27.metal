@@ -42,9 +42,9 @@ struct StarUniforms {
 struct Settings {
     StarUniforms stars;
     float depth;
-    float strength;
-    float accumulation;
-    float padding;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct TileVertex {
     metal::float4 position;

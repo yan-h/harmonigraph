@@ -42,9 +42,9 @@ struct StarUniforms {
 struct Settings {
     StarUniforms stars;
     float depth;
-    float strength;
-    float accumulation;
-    float padding;
+    float _pad0_;
+    float _pad1_;
+    float _pad2_;
 };
 struct TileVertex {
     metal::float4 position;
@@ -71,7 +71,7 @@ constant uint STAR_LIFE_PERIOD = 4096u;
 constant float STAR_FADE = 0.2;
 constant float STAR_LIFT = 0.18;
 constant uint STAR_FAR_LAYERS = 3u;
-constant bool STAR_SPLIT = false;
+constant bool STAR_SPLIT = true;
 
 metal::int2 atlas_texel(
     int index
@@ -467,12 +467,16 @@ fragment fs_lattice_starsOutput fs_lattice_stars(
     metal::float4 raw = source.sample(cloud_sampler, in.position.xy / _e8, metal::level(0.0));
     metal::float4 _e14 = star_color(in.position.xy, settings, cloud_sampler, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone);
     result = _e14;
-    float _e19 = settings.strength;
-    float _e26 = settings.accumulation;
-    float ceiling = metal::mix(metal::clamp(GLOW_BASE * _e19, 0.0, 1.0), 1.0, _e26);
-    metal::float4 _e29 = result;
-    result = _e29 * ceiling;
-    metal::float4 _e31 = result;
-    float _e34 = settings.depth;
-    return fs_lattice_starsOutput { metal::mix(raw, _e31, _e34) };
+    float _e17 = result.x;
+    float _e19 = result.y;
+    float _e22 = result.z;
+    float brightest = metal::max(metal::max(_e17, _e19), _e22);
+    float _e26 = result.w;
+    result.w = metal::max(brightest, metal::min(_e26, 1.0) * raw.w);
+    metal::float4 _e32 = result;
+    float _e34 = result.w;
+    result = _e32 / metal::float4(metal::max(_e34, 1.0));
+    metal::float4 _e39 = result;
+    float _e42 = settings.depth;
+    return fs_lattice_starsOutput { metal::mix(raw, _e39, _e42) };
 }
