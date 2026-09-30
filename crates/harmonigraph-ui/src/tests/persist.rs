@@ -28,7 +28,7 @@ fn dialled() -> SharedState {
     appearance.view.max_sevens = 3;
     appearance.view.note_animation.order = harmonigraph_scene::AnimationOrder::Circular;
     appearance.view.note_animation.stagger_spread = 0.63;
-    appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::Contours;
+    appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
     appearance.spectrum.orientation = crate::SpectralOrientation::Left;
     appearance.spectrum.roll_thickness = 1.75;
     appearance.spectrum.low_midi = 40.5;
@@ -1668,7 +1668,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        texture: harmonigraph_scene::LatticeTexture::Interference,
+        texture: harmonigraph_scene::LatticeTexture::None,
         material_style: harmonigraph_scene::LatticeMaterial::Mosaic,
         material_amount: 0.63,
         material_settings: harmonigraph_scene::MaterialSettings {

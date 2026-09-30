@@ -2,7 +2,7 @@
 
 ## Intent
 
-The lattice separates Clouds, Contours and Interference patterns from the Watercolor and Mosaic displacement materials,
+The lattice separates the Clouds pattern from the Watercolor and Mosaic displacement materials,
 so a cloudy glow can feed either material.
 The fixed order is note illumination and breathing → texture → optional segment pickup → material → lattice composition.
 Texture remains lit by notes;
@@ -14,7 +14,7 @@ This is not a general layer stack or a new ambient background.
 Keep `ViewConfig::atmosphere` as the owner of lattice glow effects.
 Replace its combined enable/material controls with two independently selectable stages:
 
-- Texture: None, Clouds, Contours, Interference; depth, size and speed.
+- Texture: None, Clouds; depth, size and speed.
 - Material: None, Watercolor, Mosaic, Stars; amount and drift direction.
 Watercolor and Mosaic use Drift speed;
 Stars uses its depth-dependent Star speed range.
@@ -37,7 +37,7 @@ Keep texture defaults numerically equal to today's Clouds settings and preserve 
 Material defaults to None, with amount 1 ready when selected.
 Geometry and motion defaults match the spectrogram’s captured defaults.
 The material size range is 1/16× to 2×;
-the texture size range remains 1/4× to 4×.
+the texture size range is 1/32× to 4×, on an eased (logarithmic) bar.
 Reset texture and material independently;
 breathing has its own reset beside the glow controls.
 Hide stage-specific controls when None is selected;

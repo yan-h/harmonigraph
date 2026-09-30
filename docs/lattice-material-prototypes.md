@@ -4,6 +4,9 @@ This document records the original prototype experiments and measurements.
 The current controls and rendering contract are in [Independent lattice texture and material](design/lattice-texture-material.md).
 Source roughness has since been removed,
 and Watercolor/Mosaic now share the spectrogram’s geometry controls.
+Contours and Interference were later removed as patterns Yan did not like in use,
+leaving Clouds the only pattern;
+the notes on them below are history.
 
 Clouds, Contours, Interference and Watercolor are the selectable materials in **Lattice → Light → Background glow texture and breathing → Material**.
 They texture the combined note light;

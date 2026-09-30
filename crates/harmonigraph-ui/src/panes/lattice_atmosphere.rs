@@ -22,14 +22,15 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         choice_row(ui, "Pattern", &mut settings.texture, &[
             (LatticeTexture::None, "None", "Smooth note light; keeps the pattern settings"),
             (LatticeTexture::Clouds, "Clouds", "Softly drifting clouds in the note light"),
-            (LatticeTexture::Contours, "Contours", "Nested bands following the combined note light"),
-            (LatticeTexture::Interference, "Interference", "Curved wave fringes illuminated by the notes"),
         ]);
         if settings.texture != LatticeTexture::None {
             ValueBar::new(&mut settings.texture_depth, 0.0..=1.0, "Pattern contrast")
                 .percent().show(ui).on_hover_text("Pattern contrast before the material shapes the light. 0% restores smooth halos; material settings remain active.");
-            multiplier(ui, &mut settings.texture_scale, "Pattern size", NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX)
-                .on_hover_text("Larger values make broader patterns and fewer contour bands. The material can reshape this pattern.");
+            ValueBar::new(&mut settings.texture_scale, NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX, "Pattern size")
+                .eased(true)
+                .unit(1.0, "×")
+                .show(ui)
+                .on_hover_text("Larger values make broader patterns. The material can reshape this pattern.");
             multiplier(ui, &mut settings.texture_speed, "Pattern speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
                 .on_hover_text("Pattern motion before the material. 0 freezes this motion; notes and the material can still change the picture.");
         }

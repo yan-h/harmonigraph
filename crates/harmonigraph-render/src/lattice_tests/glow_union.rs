@@ -110,84 +110,68 @@ fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
 fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     use harmonigraph_scene::LatticeTexture;
-    let mut patterns = Vec::new();
-    for material in [LatticeTexture::Clouds, LatticeTexture::Contours, LatticeTexture::Interference]
-    {
-        for (levels, accumulation) in
-            [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)]
-        {
-            let mut scene = scene(&levels, 0.75, levels.len() == 2);
-            scene.glow_accumulation = accumulation;
-            scene.camera = harmonigraph_scene::Camera {
-                projection: harmonigraph_scene::Projection::Orthographic,
-                distance: 28.0,
-                yaw: 0.0,
-                pitch: 0.0,
-                ..Default::default()
-            };
-            scene.atmosphere.texture = material;
-            // The glow target is half-resolution: resolve the wave fringes
-            // rather than testing their subpixel average at this small size.
-            scene.atmosphere.texture_scale = 4.0;
-            scene.atmosphere.breath_amount = 0.0;
-            scene.glow_timing =
-                Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
-            let smooth = glow(&mut shooter, &scene);
-            scene.atmosphere.texture_depth = 1.0;
-            let textured = glow(&mut shooter, &scene);
-            if levels.len() == 1 {
-                assert!(
-                    patterns.iter().all(|previous| previous != &textured),
-                    "{material:?} must have its own visible pattern"
-                );
-                patterns.push(textured.clone());
+    let material = LatticeTexture::Clouds;
+    for (levels, accumulation) in [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)] {
+        let mut scene = scene(&levels, 0.75, levels.len() == 2);
+        scene.glow_accumulation = accumulation;
+        scene.camera = harmonigraph_scene::Camera {
+            projection: harmonigraph_scene::Projection::Orthographic,
+            distance: 28.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            ..Default::default()
+        };
+        scene.atmosphere.texture = material;
+        // The glow target is half-resolution: resolve the clouds rather
+        // than testing their subpixel average at this small size.
+        scene.atmosphere.texture_scale = 4.0;
+        scene.atmosphere.breath_amount = 0.0;
+        scene.glow_timing =
+            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+        let smooth = glow(&mut shooter, &scene);
+        scene.atmosphere.texture_depth = 1.0;
+        let textured = glow(&mut shooter, &scene);
+        let mut changed = 0;
+        let mut empty = 0;
+        let mut darkest_ratio = 1.0f32;
+        let mut brightest_ratio = 0.0f32;
+        for (before, after) in smooth.chunks_exact(4).zip(textured.chunks_exact(4)) {
+            if before[3] == 0 {
+                assert_eq!(after, before, "texture cannot create light outside a halo");
+                empty += 1;
+                continue;
             }
-            let mut changed = 0;
-            let mut empty = 0;
-            let mut darkest_ratio = 1.0f32;
-            let mut brightest_ratio = 0.0f32;
-            for (before, after) in smooth.chunks_exact(4).zip(textured.chunks_exact(4)) {
-                if before[3] == 0 {
-                    assert_eq!(after, before, "texture cannot create light outside a halo");
-                    empty += 1;
-                    continue;
+            assert!(after.iter().zip(before).all(|(a, b)| a <= b));
+            if before[3] > 30 && after[3] > 5 {
+                let ratio = f32::from(after[3]) / f32::from(before[3]);
+                darkest_ratio = darkest_ratio.min(ratio);
+                brightest_ratio = brightest_ratio.max(ratio);
+                for c in 0..3 {
+                    assert!(
+                        (f32::from(after[c]) - f32::from(before[c]) * ratio).abs() < 2.0,
+                        "the material mask must preserve the glow's hue"
+                    );
                 }
-                assert!(after.iter().zip(before).all(|(a, b)| a <= b));
-                if before[3] > 30 && after[3] > 5 {
-                    let ratio = f32::from(after[3]) / f32::from(before[3]);
-                    darkest_ratio = darkest_ratio.min(ratio);
-                    brightest_ratio = brightest_ratio.max(ratio);
-                    for c in 0..3 {
-                        assert!(
-                            (f32::from(after[c]) - f32::from(before[c]) * ratio).abs() < 2.0,
-                            "the material mask must preserve the glow's hue"
-                        );
-                    }
-                    changed += usize::from(before[3] - after[3] > 5);
-                }
+                changed += usize::from(before[3] - after[3] > 5);
             }
-            assert!(
-                changed > 1000 && empty > 1000,
-                "measure both a broad halo and unlit ground: changed={changed}, empty={empty}"
-            );
-            assert!(
+        }
+        assert!(
+            changed > 1000 && empty > 1000,
+            "measure both a broad halo and unlit ground: changed={changed}, empty={empty}"
+        );
+        assert!(
                 brightest_ratio - darkest_ratio > 0.25,
                 "{material:?}: texture must vary spatially, not just dim the halo ({darkest_ratio}..{brightest_ratio})"
             );
-            scene.glow_timing.as_mut().unwrap().now = 8.0;
-            shooter.shot_again(&scene);
-            let later = read_glow(&shooter);
-            assert_ne!(textured, later, "materials must drift inside a held glow");
-            assert_eq!(later, glow(&mut shooter, &scene), "texture cannot depend on history");
-            scene.atmosphere.texture_speed = 0.0;
-            assert_eq!(
-                textured,
-                glow(&mut shooter, &scene),
-                "zero speed freezes the material field"
-            );
-            scene.atmosphere.texture = LatticeTexture::None;
-            assert_eq!(smooth, glow(&mut shooter, &scene), "texture off restores the smooth glow");
-        }
+        scene.glow_timing.as_mut().unwrap().now = 8.0;
+        shooter.shot_again(&scene);
+        let later = read_glow(&shooter);
+        assert_ne!(textured, later, "materials must drift inside a held glow");
+        assert_eq!(later, glow(&mut shooter, &scene), "texture cannot depend on history");
+        scene.atmosphere.texture_speed = 0.0;
+        assert_eq!(textured, glow(&mut shooter, &scene), "zero speed freezes the material field");
+        scene.atmosphere.texture = LatticeTexture::None;
+        assert_eq!(smooth, glow(&mut shooter, &scene), "texture off restores the smooth glow");
     }
 }
 
@@ -696,78 +680,76 @@ fn textures_feed_materials_before_sampling() {
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count()
     };
-    for texture in [LatticeTexture::Clouds, LatticeTexture::Contours, LatticeTexture::Interference]
-    {
-        for material in [
-            LatticeMaterial::Watercolor,
-            LatticeMaterial::Mosaic,
-            LatticeMaterial::VelvetScales,
-            LatticeMaterial::Stars,
-        ] {
-            let mut scene = scene(&[1.0, 1.0], 0.75, true);
-            scene.atmosphere.breath_amount = 0.0;
-            scene.atmosphere.texture = texture;
-            scene.atmosphere.texture_depth = 0.85;
-            scene.atmosphere.texture_scale = 4.0;
-            scene.glow_timing =
-                Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
-            let texture_only = glow(&mut shooter, &scene);
-            scene.atmosphere.material_settings.wash_size = 1.0;
-            scene.atmosphere.material_settings.scale_size = 1.0;
-            scene.atmosphere.material_style = material;
-            let combined = glow(&mut shooter, &scene);
-            // Read the actual material input, proving order rather than just two visible effects.
-            let resources = shooter.resources.get::<LatticeResources>().unwrap();
-            let source = &resources.panes[&shooter.pane]
-                .offscreen
-                .as_ref()
-                .unwrap()
-                .glow
-                .as_ref()
-                .unwrap()
-                .material_source
-                .as_ref()
-                .unwrap()
-                .view;
-            let source_binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("test_material_input"),
-                layout: &resources.compiled.filter_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
-                    },
-                ],
-            });
-            assert_eq!(texture_only, read_glow_binding(&shooter, &source_binding));
-            scene.atmosphere.texture = LatticeTexture::None;
-            let material_only = glow(&mut shooter, &scene);
-            assert!(
-                changed(&combined, &texture_only) > 500,
-                "{texture:?}/{material:?}: visible displacement"
-            );
-            assert!(
-                changed(&combined, &material_only) > 500,
-                "{texture:?}/{material:?}: visible texture"
-            );
-            for pixel in combined.chunks_exact(4) {
-                assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1));
-                assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
-            }
-            scene.atmosphere.texture = texture;
-            for node in &mut scene.nodes {
-                node.glow.level = 0.0;
-            }
-            shooter.shot_again(&scene);
-            assert!(
-                read_glow(&shooter).iter().all(|c| *c == 0),
-                "combined stages must clear in silence"
-            );
+    let texture = LatticeTexture::Clouds;
+    for material in [
+        LatticeMaterial::Watercolor,
+        LatticeMaterial::Mosaic,
+        LatticeMaterial::VelvetScales,
+        LatticeMaterial::Stars,
+    ] {
+        let mut scene = scene(&[1.0, 1.0], 0.75, true);
+        scene.atmosphere.breath_amount = 0.0;
+        scene.atmosphere.texture = texture;
+        scene.atmosphere.texture_depth = 0.85;
+        scene.atmosphere.texture_scale = 4.0;
+        scene.glow_timing =
+            Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
+        let texture_only = glow(&mut shooter, &scene);
+        scene.atmosphere.material_settings.wash_size = 1.0;
+        scene.atmosphere.material_settings.scale_size = 1.0;
+        scene.atmosphere.material_style = material;
+        let combined = glow(&mut shooter, &scene);
+        // Read the actual material input, proving order rather than just two visible effects.
+        let resources = shooter.resources.get::<LatticeResources>().unwrap();
+        let source = &resources.panes[&shooter.pane]
+            .offscreen
+            .as_ref()
+            .unwrap()
+            .glow
+            .as_ref()
+            .unwrap()
+            .material_source
+            .as_ref()
+            .unwrap()
+            .view;
+        let source_binding = shooter.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("test_material_input"),
+            layout: &resources.compiled.filter_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&resources.compiled.sampler),
+                },
+            ],
+        });
+        assert_eq!(texture_only, read_glow_binding(&shooter, &source_binding));
+        scene.atmosphere.texture = LatticeTexture::None;
+        let material_only = glow(&mut shooter, &scene);
+        assert!(
+            changed(&combined, &texture_only) > 500,
+            "{texture:?}/{material:?}: visible displacement"
+        );
+        assert!(
+            changed(&combined, &material_only) > 500,
+            "{texture:?}/{material:?}: visible texture"
+        );
+        for pixel in combined.chunks_exact(4) {
+            assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1));
+            assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
         }
+        scene.atmosphere.texture = texture;
+        for node in &mut scene.nodes {
+            node.glow.level = 0.0;
+        }
+        shooter.shot_again(&scene);
+        assert!(
+            read_glow(&shooter).iter().all(|c| *c == 0),
+            "combined stages must clear in silence"
+        );
     }
 }
 
@@ -807,7 +789,7 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         );
     }
     // Texture edits and positive material amount never invalidate active geometry.
-    scene.atmosphere.texture = LatticeTexture::Interference;
+    scene.atmosphere.texture_depth = 0.4;
     scene.atmosphere.texture_scale = 4.0;
     scene.atmosphere.material_amount = 0.6;
     shooter.shot_again(&scene);
