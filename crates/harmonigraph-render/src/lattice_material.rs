@@ -377,8 +377,6 @@ pub(super) fn prepare(
                 direction: callback.material_direction,
                 now: callback.glow_timing.map_or(0.0, |clock| clock.now),
                 amount: settings.amount,
-                strength: callback.uniforms.glow.strength,
-                accumulation: callback.uniforms.glow.accumulation,
             },
         );
         return;

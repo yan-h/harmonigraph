@@ -2,9 +2,9 @@
 struct Settings {
     stars: StarUniforms,
     depth: f32,
-    strength: f32,
-    accumulation: f32,
-    padding: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 };
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -34,23 +34,20 @@ fn star_geometry() -> vec4<f32> { return settings.stars.star_geometry; }
 fn star_slice(k: u32) -> StarSlice { return settings.stars.star_slices[k]; }
 fn star_halo_sample(k: u32) -> StarHaloSample { return settings.stars.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }
-// The note-glow overlap ceiling: the top of the lattice's "palette".
-fn star_ceiling() -> f32 {
-    return mix(clamp(GLOW_BASE * settings.strength, 0.0, 1.0), 1.0, settings.accumulation);
-}
-// A star is fully present and carries the light's LEVEL in its colour, as the
-// spectrogram's palette position does. Carried as opacity instead, the level
-// was lost wherever dense stars and fringes summed past full coverage: faint
-// tails painted at the ceiling and Pattern contrast barely darkened them.
-// The ceiling stands for the palette's top, so the lift is measured in it.
+// The spectrogram's star over a linear palette: the light's hue from black at
+// level 0 to full brightness at 1, the level being the light's opacity. The
+// star is whole and its level is in its colour, as a palette position is.
+// Carried as opacity instead, the level was lost wherever dense stars and
+// fringes summed past full coverage: faint tails painted at the glow's
+// ceiling and Pattern contrast barely darkened them. Pinned at that ceiling
+// instead of full brightness, Variation could only dim a glow's centre.
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     let light = textureSampleLevel(source, cloud_sampler, pt / settings.stars.size, 0.0);
     if light.a <= 0.0 { return vec4<f32>(0.0); }
-    let ceiling = star_ceiling();
     let randomness = settings.stars.star_randomness;
     let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
-    let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, light.a / ceiling);
-    let level = clamp(light.a * spread + lift * ceiling, 0.0, ceiling);
+    let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, light.a);
+    let level = clamp(light.a * spread + lift, 0.0, 1.0);
     return vec4<f32>(light.rgb / light.a * level, 1.0);
 }
 @fragment
@@ -62,8 +59,8 @@ fn fs_lattice_stars(in: TileVertex) -> @location(0) vec4<f32> {
     // does, so dark pickup stays dark pigment rather than turning transparent.
     // Alpha rises past that only to contain a star brighter than its light.
     let brightest = max(max(result.r, result.g), result.b);
-    result.a = clamp(max(brightest, min(result.a, 1.0) * raw.a), 0.0, 1.0);
-    // Distant gap fill can push past the ceiling; scale, retaining hue.
-    result *= min(1.0, star_ceiling() / max(result.a, 1e-6));
+    result.a = max(brightest, min(result.a, 1.0) * raw.a);
+    // Distant gap fill can push past full brightness; scale, retaining hue.
+    result /= max(result.a, 1.0);
     return mix(raw, result, settings.depth);
 }
