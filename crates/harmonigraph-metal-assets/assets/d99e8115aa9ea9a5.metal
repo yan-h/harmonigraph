@@ -15,12 +15,10 @@ struct ShadowCaster {
     metal::float4 shade;
 };
 typedef ShadowCaster type_6[1];
-struct SceneOut {
+struct SplitOut {
     metal::float4 other;
     metal::float4 ink;
     metal::float4 transmission;
-    metal::float4 bloom_other;
-    metal::float4 bloom_ink;
 };
 struct CompositeParams {
     float darkest_pitch;
@@ -153,16 +151,11 @@ struct Uniforms {
     type_13 spectrum_color;
     type_14 ink_kernel;
 };
-struct ShadowThrough {
-    float seen;
-    float bloom;
-};
 struct Painted {
     metal::packed_float3 rgb;
     float seen;
-    float bloom;
     float ink_alpha;
-    char _pad4[8];
+    char _pad3[12];
 };
 struct PlusVsOut {
     metal::float4 clip_pos;
@@ -304,7 +297,7 @@ uint naga_f2u32(float value) {
     return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
 }
 
-ShadowThrough shadow_through(
+float shadow_through(
     float who_1,
     metal::float2 points_1,
     float level_1,
@@ -315,11 +308,11 @@ ShadowThrough shadow_through(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     if (level_1 <= 0.0) {
-        return ShadowThrough {1.0, 1.0};
+        return 1.0;
     }
-    float _e12 = shadow_kernel(naga_f2u32(metal::max(who_1, 0.0)), points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
-    float _e13 = local_shadow_transmittance(_e12, depth_1, level_1);
-    return ShadowThrough {_e13, 1.0};
+    float _e10 = shadow_kernel(naga_f2u32(metal::max(who_1, 0.0)), points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    float _e11 = local_shadow_transmittance(_e10, depth_1, level_1);
+    return _e11;
 }
 
 bool shadow_is_distance(
@@ -335,7 +328,7 @@ bool shadow_is_distance(
     return _e12 >= 0.5;
 }
 
-ShadowThrough plus_shadow_through(
+float plus_shadow_through(
     float who_3,
     float d_points,
     metal::float2 points_2,
@@ -348,21 +341,21 @@ ShadowThrough plus_shadow_through(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     if (level_2 <= 0.0) {
-        return ShadowThrough {1.0, 1.0};
+        return 1.0;
     }
     uint caster_1 = naga_f2u32(metal::max(who_3, 0.0));
-    bool _e13 = shadow_is_distance(who_3, shadow_casters, _buffer_sizes);
-    if (!(_e13)) {
-        float _e15 = plus_shadow_depth(u);
-        ShadowThrough _e16 = shadow_through(who_3, points_2, level_2, _e15, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
-        return _e16;
+    bool _e11 = shadow_is_distance(who_3, shadow_casters, _buffer_sizes);
+    if (!(_e11)) {
+        float _e13 = plus_shadow_depth(u);
+        float _e14 = shadow_through(who_3, points_2, level_2, _e13, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+        return _e14;
     }
-    float _e21 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.z;
-    float _e28 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.w;
-    float _e29 = standoff_coverage(d_points, 2.0 * _e21, _e28);
-    float _e30 = plus_shadow_depth(u);
-    float _e31 = local_shadow_transmittance(_e29, _e30, distance_level);
-    return ShadowThrough {_e31, 1.0};
+    float _e19 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.z;
+    float _e26 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.w;
+    float _e27 = standoff_coverage(d_points, 2.0 * _e19, _e26);
+    float _e28 = plus_shadow_depth(u);
+    float _e29 = local_shadow_transmittance(_e27, _e28, distance_level);
+    return _e29;
 }
 
 float aa_inside(
@@ -479,7 +472,7 @@ Painted plus_paint(
     float _e17 = plus_sd(in_1.uv, u);
     float d_points_1 = _e17 * in_1.shadow_box.y;
     float distance_level_1 = in_1.shadow_at.z;
-    ShadowThrough _e29 = plus_shadow_through(in_1.shadow_box.x, d_points_1, in_1.shadow_at.xy, in_1.shadow_at.z, distance_level_1, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
+    float _e29 = plus_shadow_through(in_1.shadow_box.x, d_points_1, in_1.shadow_at.xy, in_1.shadow_at.z, distance_level_1, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
     shadow_uv = in_1.uv;
     bool _e34 = shadow_is_distance(in_1.shadow_box.x, shadow_casters, _buffer_sizes);
     if (!(_e34)) {
@@ -498,35 +491,31 @@ Painted plus_paint(
     metal::float2 _e66 = shadow_uv;
     float _e67 = plus_shadow_taper(_e66, u);
     float shadow_exposure = (1.0 - _e10) * _e67;
-    float seen_through = 1.0 - ((1.0 - _e29.seen) * shadow_exposure);
-    float bloom_through = 1.0 - ((1.0 - _e29.bloom) * shadow_exposure);
+    float seen_through = 1.0 - ((1.0 - _e29) * shadow_exposure);
     float final_alpha = 1.0 - ((1.0 - alpha_1) * seen_through);
-    float bloom_alpha = 1.0 - ((1.0 - alpha_1) * bloom_through);
-    if (metal::max(final_alpha, bloom_alpha) <= 0.0) {
+    if (final_alpha <= 0.0) {
         metal::discard_fragment();
     }
     metal::float3 ink_1 = in_1.color.xyz * alpha_1;
-    metal::float2 _e99 = light_coord(in_1.clip_pos.xy, u);
-    metal::float4 _e100 = glow_light(_e99, glow_tex, glow_sampler);
-    metal::float3 _e103 = wash_over(ink_1, alpha_1, _e100.xyz, 1.0);
-    return Painted {_e103, final_alpha, bloom_alpha, alpha_1};
+    metal::float2 _e86 = light_coord(in_1.clip_pos.xy, u);
+    metal::float4 _e87 = glow_light(_e86, glow_tex, glow_sampler);
+    metal::float3 _e90 = wash_over(ink_1, alpha_1, _e87.xyz, 1.0);
+    return Painted {_e90, final_alpha, alpha_1};
 }
 
-struct fs_plus_sceneInput {
+struct fs_plus_splitInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
     metal::float4 shadow_box [[user(loc3), flat]];
     metal::float4 shadow_at [[user(loc4), center_no_perspective]];
 };
-struct fs_plus_sceneOutput {
+struct fs_plus_splitOutput {
     metal::float4 other [[color(0)]];
     metal::float4 ink [[color(1)]];
     metal::float4 transmission [[color(2)]];
-    metal::float4 bloom_other [[color(3)]];
-    metal::float4 bloom_ink [[color(4)]];
 };
-fragment fs_plus_sceneOutput fs_plus_scene(
-  fs_plus_sceneInput varyings [[stage_in]]
+fragment fs_plus_splitOutput fs_plus_split(
+  fs_plus_splitInput varyings [[stage_in]]
 , metal::float4 clip_pos [[position]]
 , metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
 , metal::sampler glow_sampler [[sampler(0)]]
@@ -539,6 +528,6 @@ fragment fs_plus_sceneOutput fs_plus_scene(
     const PlusVsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = plus_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
     metal::float4 _e2 = seen_of(_e1);
-    const auto _tmp = SceneOut {_e2, metal::float4(0.0, 0.0, 0.0, _e1.seen), metal::float4(_e1.ink_alpha, 0.0, 0.0, _e1.seen), metal::float4(_e1.rgb, _e1.bloom), metal::float4(0.0, 0.0, 0.0, _e1.bloom)};
-    return fs_plus_sceneOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom_other, _tmp.bloom_ink };
+    const auto _tmp = SplitOut {_e2, metal::float4(0.0, 0.0, 0.0, _e1.seen), metal::float4(_e1.ink_alpha, 0.0, 0.0, _e1.seen)};
+    return fs_plus_splitOutput { _tmp.other, _tmp.ink, _tmp.transmission };
 }
