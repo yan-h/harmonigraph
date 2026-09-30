@@ -1473,159 +1473,41 @@ fn a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold() {
     }
 }
 
-/// A name's shadow reaches the BLOOM.
+/// A node's shadow at the bottom of the Shadow darkness bar is next to no
+/// shadow at all, with the bloom open over its own halo.
 ///
-/// One of three: the ring and the cross make the same claim just below, the
-/// depth every caster's shadow lands at on the bright pass's copy being a
-/// WHOLE one (see [`ShadowThrough`] in lattice.wgsl) rather than a name's
-/// alone.
-///
-/// One of three: the ring and the cross make the same claim just below, the bar
-/// being one number every caster reads.
-///
-/// The composite is `scene + bloom * strength` into an eight-bit target, so
-/// over a bright halo the pixel beside a name is already past 1 and pins to
-/// white — and a shadow spent on `scene` alone arrives as nothing however deep
-/// it is dialled. The shader spends the same shadow a second time, deeper, on
-/// the SECOND attachment instead, the one the bright pass reads, so what comes
-/// off is the light being ADDED rather than darkness being added to a picture
-/// with no range left to hold it.
-///
-/// There is no bar left to gate this with — every caster's shadow reaches the
-/// bloom whenever there is a shadow at all — so what the fixture reads is the
-/// Shadow bar's own on/off (`glow_shadow`) with the name's ink held constant
-/// in both readings, rather than a control over the reach itself.
+/// The darkness is the whole of how dark a node's shadow lands: it no longer
+/// darkens the bright pass's copy of the picture at full depth whatever the bar
+/// says, which left 1% visibly darker than 0 and made 0 a jump rather than an
+/// end. At 1% the shadow may take at most a hundredth off the frame under it, so
+/// no channel moves more than a few codes from the frame with the group off.
 #[test]
-fn a_names_shadow_reaches_the_bloom() {
+fn a_nodes_faintest_shadow_is_next_to_none_over_its_bloom() {
     const SHADOW: f32 = 0.6;
-    const DEPTH: f32 = 0.85;
+    const FAINTEST: f32 = 0.01;
     let Some(mut shooter) = Shooter::new(SIZE) else {
         return;
     };
-    // The pane's own clear stays BLACK: the bright pass reads the scene's
-    // offscreen attachment rather than the pane, and a reading of what the
-    // bloom did wants the lattice to be the only bright thing in the frame.
-    let scene_of = |bloom: f32, shadow: f32| -> Scene {
-        let mut scene = lit_node_and_a_name(1.6, shadow, DEPTH);
-        scene.bloom_strength = bloom;
-        scene
-    };
-    let mut shot = |bloom: f32, shadow: f32| -> Vec<u8> {
-        let scene = scene_of(bloom, shadow);
-        let named = name_at(&scene, SIZE, name_on_the_band(&scene));
-        shooter.shot_with(&scene, named)
-    };
-
-    // The fixture has to be carrying a bloom at all, or the reading below is
-    // taken on a frame with nothing in it for a shadow to darken.
-    let (lit, dark) = (shot(1.0, SHADOW), shot(0.0, SHADOW));
-    let bloomed = differing_pixels(&lit, &dark);
-    assert!(bloomed > 1000, "opening the Bloom moved {bloomed} pixels, so this frame carries none");
-
-    let moved = differing_pixels(&lit, &shot(1.0, 0.0));
-    assert!(
-        moved > 100,
-        "taking the name's shadow off the bloomed halo moved {moved} pixels, so its shadow is not \
-         reaching the bloom's copy of the picture",
-    );
-}
-
-/// A NODE's shadow reaches the bloom the same way a name's does.
-///
-/// Every caster reads the same depth on the bright pass's copy (`ShadowThrough`
-/// in lattice.wgsl), so the frame this reads carries no label at all: what
-/// darkens the copy the bright pass sees is the node's own rings, over the
-/// node's own halo. The lattice's casters were the half of the picture the
-/// fix above did not reach until PR #535, which is what makes a frame with
-/// nothing but a node in it the measurement.
-#[test]
-fn a_nodes_own_shadow_reaches_the_bloom() {
-    const SHADOW: f32 = 0.6;
-    const DEPTH: f32 = 0.85;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let mut shot = |bloom: f32, shadow: f32| -> Vec<u8> {
-        // No labels: `shot` hands the pass an empty `LatticeLabels`, so the
-        // only ink in the frame is the node's and the only shadow is its own.
-        let mut scene = lit_node_and_a_name(1.6, shadow, DEPTH);
-        scene.bloom_strength = bloom;
-        shooter.shot(&scene)
-    };
-
-    // The frame has to be carrying a bloom at all, or the reading below is
-    // taken on a picture with nothing in it for a shadow to darken.
-    let (lit, dark) = (shot(1.0, SHADOW), shot(0.0, SHADOW));
-    let bloomed = differing_pixels(&lit, &dark);
-    assert!(bloomed > 1000, "opening the Bloom moved {bloomed} pixels, so this frame carries none");
-
-    let moved = differing_pixels(&lit, &shot(1.0, 0.0));
-    assert!(
-        moved > 100,
-        "taking a node's own shadow off the bloomed halo moved {moved} pixels, so a node's own \
-         shadow is not reaching the bloom's copy of the picture",
-    );
-}
-
-/// And a resting CROSS's does, on top of what the node beside it already
-/// spends.
-///
-/// A DIFFERENCE of two frames rather than one reading, because a marker cannot
-/// be the only caster in a frame: the node it stands beside paints the light it
-/// stands in and casts its own shadow into both. What turning the Shadow on
-/// moves with the cross present, less what it moves with the cross gone, is
-/// the cross's own half.
-///
-/// The LIGHT is the whole of what makes that subtraction a reading of the
-/// cross. A shadow takes bloom away and can take none where there is none, so
-/// a cross standing in a faint tail of the halo moves a hundred pixels of its
-/// own while the ink it adds moves five times that many by changing how the
-/// NODE's shadow reads under it — a difference that clears a small threshold
-/// with the cross's own term switched off. Dialled to carry to the cross
-/// (`REACH`, `STRENGTH`) the cross's own term is thousands of pixels and the
-/// cross-ink term is tens, which is what the margin below is sized against.
-///
-/// The cross stands at 3 world units, clear of the node's outermost ring at
-/// 1.57 and of the reach of that ring's blur.
-#[test]
-fn a_resting_crosss_shadow_reaches_the_bloom_too() {
-    const SHADOW: f32 = 0.6;
-    const DEPTH: f32 = 0.85;
-    /// A light that carries past the cross at 3, so the cross's shadow has
-    /// bloom under it to take away.
-    const REACH: f32 = 5.0;
-    const STRENGTH: f32 = 4.0;
-    let Some(mut shooter) = Shooter::new(SIZE) else {
-        return;
-    };
-    let mut shot = |kernel, cross: bool, shadow: f32| -> Vec<u8> {
-        let mut scene = lit_node_and_a_name(REACH, shadow, DEPTH);
-        scene.glow_strength = STRENGTH;
-        scene.bloom_strength = 1.0;
-        for style in scene.shadow.groups_mut() {
-            style.kernel = kernel;
-        }
-        if cross {
-            scene.pluses = vec![standalone_marker(
-                &mut scene.nodes,
-                glam::Vec3::new(3.0, 0.0, 0.0),
-                0.8,
-                CROSS_INK,
-                1.0,
-            )];
-        }
-        shooter.shot(&scene)
-    };
-
     for kernel in
         [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
     {
-        let alone = differing_pixels(&shot(kernel, false, 0.0), &shot(kernel, false, SHADOW));
-        let with_cross = differing_pixels(&shot(kernel, true, 0.0), &shot(kernel, true, SHADOW));
+        let mut shot = |bloom: f32, depth: f32| -> Vec<u8> {
+            let mut scene = lit_node_and_a_name(1.6, SHADOW, depth);
+            scene.bloom_strength = bloom;
+            for style in scene.shadow.groups_mut() {
+                style.kernel = kernel;
+            }
+            shooter.shot(&scene)
+        };
+        // The frame has to be carrying a bloom at all, or the reading below is
+        // taken on a picture with nothing in it for a shadow to darken.
+        let bloomed = differing_pixels(&shot(1.0, FAINTEST), &shot(0.0, FAINTEST));
+        assert!(bloomed > 1000, "{kernel:?}: opening the Bloom moved {bloomed} pixels");
+        let (faint, off) = (shot(1.0, FAINTEST), shot(1.0, 0.0));
+        let worst = faint.iter().zip(&off).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
         assert!(
-            with_cross > alone + 1000,
-            "{kernel:?}: turning the Shadow on moved {with_cross} pixels with a cross in the \
-             frame and {alone} without, so its shadow is not reaching the bloom's copy",
+            worst <= 3,
+            "{kernel:?}: a 1% shadow moved a channel {worst} codes from no shadow at all",
         );
     }
 }
