@@ -391,7 +391,10 @@ fn export(args: Args) -> Result<(), String> {
     let appearance = render::appearance_for(&take, replacement.as_deref());
     let render_config = &appearance.render;
     let frame = render_config.frame;
+    let spectral_only = std::env::var_os("HARMONIGRAPH_OFFLINE_SPECTRAL_ONLY").is_some();
     let layout = match &args.layout {
+        // RESEARCH (worktree-stars-cheap-proto): the spectral pane alone.
+        _ if spectral_only => frames::single_pane(harmonigraph_ui::Pane::Spectral),
         Some(spec) => Layout::preset(spec)
             .ok_or_else(|| format!("unknown layout {spec:?}; choose {}", PRESETS.join(" or ")))?,
         None => Layout::split(frame.lattice, frame.split),

@@ -20,8 +20,9 @@ use harmonigraph_render::wgpu;
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Full-frame composition for pixel fixtures and scratch look prototypes.
-/// This is test-only; the public export interface composes both panes.
-#[cfg(test)]
+/// The public export interface composes both panes; RESEARCH branch
+/// worktree-stars-cheap-proto also reaches this through
+/// `HARMONIGRAPH_OFFLINE_SPECTRAL_ONLY=1`.
 pub(crate) fn single_pane(pane: harmonigraph_ui::Pane) -> harmonigraph_ui::Layout {
     use harmonigraph_ui::{LatticeSide, Layout, Placement};
     Layout {

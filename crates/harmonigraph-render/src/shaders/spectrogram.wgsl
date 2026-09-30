@@ -914,7 +914,13 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // The starfield is colour, not a level: `Cloud depth` blends the plain
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
-        return vec4<f32>(mix(density_color(level).rgb, star_color(pt).rgb, cloud.cloud_depth), 1.0);
+        var stars: vec4<f32>;
+        if STAR_PROTO != 0u {
+            stars = proto_star_color(pt);
+        } else {
+            stars = star_color(pt);
+        }
+        return vec4<f32>(mix(density_color(level).rgb, stars.rgb, cloud.cloud_depth), 1.0);
     }
     if cloud.memory_enabled != 0u {
         let dimensions = cloud.memory_extent;
@@ -1104,4 +1110,115 @@ fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     }
     if level <= 0.0 { return vec4<f32>(0.0); }
     return vec4<f32>(star_paint(level, rank), 1.0);
+}
+
+// ========================= RESEARCH PROTOTYPES ==============================
+// Branch worktree-stars-cheap-proto only; `StarsProto` in stars.rs says what
+// each draws. Every function here is reached only when `STAR_PROTO` is set.
+
+// The final star colour under a prototype, gamma-coded like `star_color`.
+fn proto_star_color(pt: vec2<f32>) -> vec4<f32> {
+    if STAR_PROTO == 3u {
+        return proto_tile_color(pt);
+    }
+    // P1/P1x: the profile's far image and the two native cores, no halo,
+    // plus the blurred (stars - floor) light at the halo array's binding.
+    let stars = star_near_color(pt);
+    let bloom = textureSampleLevel(star_halos, cloud_sampler, pt / star_size(), 0, 0.0).rgb;
+    let light = linear_from_gamma_rgb(stars.rgb) + cloud.star_near.w * bloom;
+    return vec4<f32>(gamma_from_linear_rgb(light), 1.0);
+}
+
+// One Gaussian pass of the P1 bloom over `cloud_tone`, which the bloom groups
+// bind to the star image (horizontal) or the horizontal result (vertical).
+// `star_near.z` is sigma in bloom texels.
+fn proto_bloom(in: TileVertex, axis: vec2<i32>, first: bool) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(cloud_tone));
+    let centre = vec2<i32>(floor(in.position.xy));
+    let sigma = max(cloud.star_near.z, 0.3);
+    let radius = min(i32(ceil(3.0 * sigma)), 32);
+    let floor_light = linear_from_gamma_rgb(star_floor().rgb);
+    var sum = vec3<f32>(0.0);
+    var weight = 0.0;
+    for (var i = -radius; i <= radius; i += 1) {
+        let w = exp(-0.5 * f32(i * i) / (sigma * sigma));
+        var tap = textureLoad(cloud_tone, clamp(centre + axis * i, vec2<i32>(0), size - 1), 0).rgb;
+        if first {
+            tap = max(linear_from_gamma_rgb(tap) - floor_light, vec3<f32>(0.0));
+        }
+        sum += w * tap;
+        weight += w;
+    }
+    return vec4<f32>(sum / weight, 1.0);
+}
+@fragment
+fn fs_star_bloom_h(in: TileVertex) -> @location(0) vec4<f32> {
+    return proto_bloom(in, vec2<i32>(1, 0), true);
+}
+@fragment
+fn fs_star_bloom_v(in: TileVertex) -> @location(0) vec4<f32> {
+    return proto_bloom(in, vec2<i32>(0, 1), false);
+}
+
+// P2: each depth's tile turned by its own angle (`proto_tile_angle` in
+// stars.rs). `offset` is the drift in tile coordinates, reduced on the CPU.
+fn proto_tile_uv(sp: vec2<f32>, s: StarSlice, k: u32) -> vec2<f32> {
+    let q = sp / s.cell;
+    let a = 0.5 + 1.3 * f32(k);
+    let c = cos(a);
+    let n = sin(a);
+    return vec2<f32>(c * q.x - n * q.y, n * q.x + c * q.y) / f32(s.grid.x) - s.offset;
+}
+
+// P2 per pixel: one filtered repeating read a depth, dotted with the four
+// twinkle groups' weights (`star_near`), summed, times the light and the gain
+// (`star_far.w`), spent as a palette position. Silence stays the floor.
+fn proto_tile_color(pt: vec2<f32>) -> vec4<f32> {
+    let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
+    var field = 0.0;
+    for (var k = 0u; k < STAR_SLICES; k += 1u) {
+        let uv = proto_tile_uv(sp, star_slice(k), k);
+        field += dot(textureSampleLevel(star_halos, tile_sampler, uv, i32(k), 0.0), cloud.star_near);
+    }
+    let level = cloud.star_far.w * star_level_at(pt) * field;
+    return vec4<f32>(palette_color(clamp(level, 0.0, 1.0)), 1.0);
+}
+
+// P2's once-only bake of depth `in.layer`'s tile: every star within the
+// production halo reach (1.2 cells, full fringe), coverage times brightness
+// draw, into its twinkle group's channel. The hash wraps at the tile's period
+// in cells, so the tile repeats seamlessly.
+@fragment
+fn fs_star_tile_bake(in: TileVertex) -> @location(0) vec4<f32> {
+    let k = in.layer;
+    let s = star_slice(k);
+    let period = s.grid.x;
+    let c = in.position.xy / star_halo_sample(k).size * f32(period);
+    let o = vec2<i32>(floor(c));
+    let salt = 1000u + 3u * k;
+    let randomness = star_randomness();
+    let outer = STAR_HALO_REACH * s.cell;
+    var acc = vec4<f32>(0.0);
+    for (var y = -2; y <= 2; y += 1) {
+        for (var x = -2; x <= 2; x += 1) {
+            let j = o + vec2<i32>(x, y);
+            let h = ((j % period) + period) % period;
+            let a = star_hash(h, salt);
+            let b = star_hash(h, salt + 1u);
+            let centre = 0.5 + star_geometry().x * (a.xy - 0.5);
+            let dist = length(c - (vec2<f32>(j) + centre)) * s.cell;
+            if dist >= outer { continue; }
+            let rank = pow(b.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness);
+            let bright = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
+            let size = exp(-2.4 * star_size_variation() * b.y);
+            let sigma = min(s.sigma * size, s.cap) * s.defocus;
+            let d = dist / sigma;
+            var full = exp(-0.5 * d * d);
+            if s.fringe > 0.0 { full += s.fringe * exp(-0.4 * d); }
+            full = min(full, 1.0) * (1.0 - smoothstep(STAR_HALO_FADE * outer, outer, dist));
+            let group = min(u32(a.z * 4.0), 3u);
+            acc += select(vec4<f32>(0.0), vec4<f32>(full * bright), vec4<u32>(0u, 1u, 2u, 3u) == vec4<u32>(group));
+        }
+    }
+    return acc;
 }

@@ -151,6 +151,34 @@ const CASES: &[(&str, Option<Turn>)] = &[
     ),
 ];
 
+/// RESEARCH (worktree-stars-cheap-proto): production High and Medium beside
+/// the prototypes, each case its own `CallbackResources` and so its own
+/// pipelines and targets, interleaved frame by frame like every other case.
+/// `PROBE_CASE=stars-proto` selects all five.
+const PROTO_CASES: &[(&str, Turn, crate::stars::StarsProto)] = {
+    use crate::stars::StarsProto;
+    // Explicit: the fresh profile is Medium, not High.
+    fn high(s: &mut SpectralAtmosphere) {
+        s.cloud_style = CloudStyle::Stars;
+        s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::P3;
+    }
+    fn medium(s: &mut SpectralAtmosphere) {
+        s.cloud_style = CloudStyle::Stars;
+        s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
+    }
+    // P1 keeps the profile's far image (High 75%, Medium 50%) under native
+    // cores; P2 reads no profile.
+    &[
+        ("stars-proto: production high", high, StarsProto::Off),
+        ("stars-proto: production medium", medium, StarsProto::Off),
+        ("stars-proto: p1 high-far", high, StarsProto::P1),
+        ("stars-proto: p1 medium-far", medium, StarsProto::P1),
+        ("stars-proto: p1x high-far", high, StarsProto::P1x),
+        ("stars-proto: p1x medium-far", medium, StarsProto::P1x),
+        ("stars-proto: p2 tiles", high, StarsProto::P2),
+    ]
+};
+
 struct Case {
     name: &'static str,
     fill: f32,
@@ -304,19 +332,24 @@ fn cloud_costs_by_style_and_dial() {
 
     let mut cases: Vec<Case> = CASES
         .iter()
-        .filter(|(name, _)| {
+        .map(|&(name, turn)| (name, turn, crate::stars::StarsProto::Off))
+        .chain(PROTO_CASES.iter().map(|&(name, turn, proto)| (name, Some(turn), proto)))
+        .filter(|(name, _, _)| {
             std::env::var("PROBE_CASE")
                 .ok()
                 .is_none_or(|v| v.split(',').any(|v| name.contains(v.trim())))
         })
-        .flat_map(|&(name, turn)| fills.clone().into_iter().map(move |fill| (name, turn, fill)))
-        .flat_map(|(name, turn, fill)| {
-            histories.iter().map(move |&history_seconds| (name, turn, fill, history_seconds))
+        .flat_map(|(name, turn, proto)| {
+            fills.clone().into_iter().map(move |fill| (name, turn, proto, fill))
         })
-        .map(|(name, turn, fill, history_seconds)| {
+        .flat_map(|(name, turn, proto, fill)| {
+            histories.iter().map(move |&history_seconds| (name, turn, proto, fill, history_seconds))
+        })
+        .map(|(name, turn, proto, fill, history_seconds)| {
             let mut cb = callback(quad(fill), &grid, &read);
             cb.rect = rect;
             let mut resources = CallbackResources::default();
+            resources.insert(proto);
             let mut sampling = atmosphere::CloudSampling::default();
             if let Some(pixel) = cloud_pixel {
                 sampling.pixel_points = pixel;
@@ -460,14 +493,19 @@ fn cloud_costs_by_style_and_dial() {
             median(&case.cpu_prepare),
             source
         );
-        let baseline =
-            if case.name.ends_with("memory") { "mosaic, memory" } else { "mosaic, defaults" };
+        let baseline = if case.name.starts_with("stars-proto") {
+            "stars-proto: production high"
+        } else if case.name.ends_with("memory") {
+            "mosaic, memory"
+        } else {
+            "mosaic, defaults"
+        };
         if let Some(mosaic) = cases.iter().find(|c| {
             c.name == baseline && c.fill == case.fill && c.history_seconds == case.history_seconds
         }) {
             let mosaic_ms = median(&mosaic.gpu_total);
             eprintln!(
-                "  {:.3}x Mosaic ({mosaic_ms:.3} ms, {baseline})",
+                "  {:.3}x baseline ({mosaic_ms:.3} ms, {baseline})",
                 median(&case.gpu_total) / mosaic_ms
             );
         }

@@ -523,6 +523,12 @@ pub(super) struct Pipelines {
     /// The tile's repeating sampler — see the shader's `tile_sampler`, where
     /// the reason the other reads must keep clamping is spelled out.
     tile_sampler: wgpu::Sampler,
+    /// RESEARCH: which starfield every star pipeline here was specialized for.
+    pub proto: StarsProto,
+    /// RESEARCH: P1's two bloom passes, horizontal then vertical.
+    pub proto_bloom: Option<[wgpu::RenderPipeline; 2]>,
+    /// RESEARCH: P2's once-only tile bake, one draw per depth.
+    pub proto_tiles: Option<wgpu::RenderPipeline>,
 }
 
 impl Pipelines {
@@ -530,6 +536,7 @@ impl Pipelines {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         source_layout: &wgpu::BindGroupLayout,
+        proto: StarsProto,
     ) -> Self {
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
@@ -661,7 +668,25 @@ impl Pipelines {
             })
         });
         let spectrogram = super::spectrogram_shader(device);
+        let proto_pipeline = |entry| {
+            tile_pipeline(
+                device,
+                &spectrogram,
+                source_layout,
+                &composite_layout,
+                entry,
+                &[Some(STAR_FAR_FORMAT)],
+                proto,
+            )
+        };
+        let proto_bloom = proto
+            .bloom()
+            .then(|| ["fs_star_bloom_h", "fs_star_bloom_v"].map(|entry| proto_pipeline(entry)));
+        let proto_tiles = (proto == StarsProto::P2).then(|| proto_pipeline("fs_star_tile_bake"));
         Self {
+            proto,
+            proto_bloom,
+            proto_tiles,
             source: create_spectrogram_pipeline(
                 device,
                 &spectrogram,
@@ -670,6 +695,7 @@ impl Pipelines {
                 None,
                 "fs_density_source",
                 false,
+                proto,
             ),
             bake: create_spectrogram_pipeline(
                 device,
@@ -679,6 +705,7 @@ impl Pipelines {
                 Some(&composite_layout),
                 "fs_cloud_light",
                 false,
+                proto,
             ),
             velvet: create_spectrogram_pipeline(
                 device,
@@ -688,6 +715,7 @@ impl Pipelines {
                 Some(&composite_layout),
                 "fs_velvet_tone",
                 false,
+                proto,
             ),
             tone: create_spectrogram_pipeline(
                 device,
@@ -697,6 +725,7 @@ impl Pipelines {
                 Some(&composite_layout),
                 "fs_cloud_tone",
                 false,
+                proto,
             ),
             tile: tile_pipeline(
                 device,
@@ -705,6 +734,7 @@ impl Pipelines {
                 &composite_layout,
                 "fs_cloud_tile",
                 &[Some(TILE_FORMAT), Some(TILE_FORMAT)],
+                proto,
             ),
             stars: tile_pipeline(
                 device,
@@ -713,6 +743,7 @@ impl Pipelines {
                 &composite_layout,
                 "fs_star_bake",
                 &[Some(STAR_FORMAT)],
+                proto,
             ),
             star_halo: tile_pipeline(
                 device,
@@ -721,6 +752,7 @@ impl Pipelines {
                 &composite_layout,
                 "fs_star_halo",
                 &[Some(STAR_FAR_FORMAT)],
+                proto,
             ),
             star_far: tile_pipeline(
                 device,
@@ -729,6 +761,7 @@ impl Pipelines {
                 &composite_layout,
                 "fs_star_far",
                 &[Some(STAR_FAR_FORMAT)],
+                proto,
             ),
             star_near: tile_pipeline(
                 device,
@@ -737,6 +770,7 @@ impl Pipelines {
                 &composite_layout,
                 "fs_star_near",
                 &[Some(STAR_FAR_FORMAT)],
+                proto,
             ),
             memory: tile_pipeline(
                 device,
@@ -745,6 +779,7 @@ impl Pipelines {
                 &composite_layout,
                 "fs_color_memory",
                 &[Some(MEMORY_FORMAT)],
+                proto,
             ),
             composite: create_spectrogram_pipeline(
                 device,
@@ -758,6 +793,7 @@ impl Pipelines {
                     "fs_cloud_gamma"
                 },
                 false,
+                proto,
             ),
             backdrop: create_spectrogram_pipeline(
                 device,
@@ -771,6 +807,7 @@ impl Pipelines {
                     "fs_cloud_backdrop_gamma"
                 },
                 false,
+                proto,
             ),
             star_composite: create_spectrogram_pipeline(
                 device,
@@ -784,6 +821,7 @@ impl Pipelines {
                     "fs_cloud_gamma"
                 },
                 true,
+                proto,
             ),
             star_backdrop: create_spectrogram_pipeline(
                 device,
@@ -797,6 +835,7 @@ impl Pipelines {
                     "fs_cloud_backdrop_gamma"
                 },
                 true,
+                proto,
             ),
             filter_layout,
             composite_layout,
@@ -833,7 +872,9 @@ fn tile_pipeline(
     composite_layout: &wgpu::BindGroupLayout,
     entry: &str,
     formats: &[Option<wgpu::TextureFormat>],
+    proto: StarsProto,
 ) -> wgpu::RenderPipeline {
+    let constants = proto_constants(false, proto);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectral_cloud_tile_pipeline_layout"),
         bind_group_layouts: &[Some(source_layout), Some(composite_layout)],
@@ -861,7 +902,10 @@ fn tile_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(entry),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            },
             targets: &targets,
         }),
         primitive: Default::default(),
@@ -1080,6 +1124,15 @@ pub(super) struct Targets {
     star_group: Option<wgpu::BindGroup>,
     pub composite_group: wgpu::BindGroup,
     memory: Option<Memory>,
+    /// RESEARCH: the starfield these targets were allocated for.
+    proto: StarsProto,
+    /// RESEARCH: P1's two bloom targets and the groups that read the star
+    /// image (horizontal) and the horizontal result (vertical).
+    proto_bloom: Option<([wgpu::TextureView; 2], [wgpu::BindGroup; 2], [u32; 2])>,
+    /// RESEARCH: what P2's tiles were last baked for, and what this frame's
+    /// settings ask for (set in `update`).
+    proto_tiles_baked: std::sync::atomic::AtomicU64,
+    proto_tiles_wanted: u64,
 }
 
 /// Target shapes for the light field, optional tone/tile, star atlas, halos,
@@ -1303,9 +1356,34 @@ impl Targets {
                 halo_view,
             )
         });
-        let final_tone = near.as_ref().or(tone.as_ref()).map_or(&views[0], |(view, _)| view);
-        let composite_group =
-            cloud_group(&source_view, final_tone, tile_views, star_view, &views[0], halo_view);
+        let proto = pipelines.proto;
+        // RESEARCH: P1 reuses the reduced foreground pass as its bloom source,
+        // so the composite reads the far image itself, plus the bloom at the
+        // halo array's binding.
+        let final_tone =
+            if proto.bloom() { tone.as_ref() } else { near.as_ref().or(tone.as_ref()) }
+                .map_or(&views[0], |(view, _)| view);
+        let bloom_images = proto
+            .bloom()
+            .then(|| proto_bloom_images(device, near.as_ref().expect("P1 bloom source").1));
+        let composite_halos = bloom_images
+            .as_ref()
+            .map(|[_, (_, array)]| [array.clone(), halo_view[1].clone(), halo_view[2].clone()]);
+        let composite_group = cloud_group(
+            &source_view,
+            final_tone,
+            tile_views,
+            star_view,
+            &views[0],
+            composite_halos.as_ref().unwrap_or(halo_view),
+        );
+        let proto_bloom = bloom_images.map(|[(h, _), (v, _)]| {
+            let near_view = &near.as_ref().expect("P1 bloom source").0;
+            let groups = [near_view, &h].map(|input| {
+                cloud_group(&source_view, input, tile_views, star_view, &views[0], halo_view)
+            });
+            ([h, v], groups, near.as_ref().expect("P1 bloom source").1)
+        });
         let memory = memory_views.map(|history| Memory {
             groups: std::array::from_fn(|i| {
                 cloud_group(
@@ -1370,6 +1448,10 @@ impl Targets {
             star_group,
             composite_group,
             memory,
+            proto,
+            proto_bloom,
+            proto_tiles_baked: std::sync::atomic::AtomicU64::new(0),
+            proto_tiles_wanted: 0,
         }
     }
 
@@ -1400,6 +1482,25 @@ impl Targets {
         coverage: [u32; 4],
         near_coverage: Option<[u32; 4]>,
     ) {
+        // RESEARCH: P2 draws nothing per frame; its tiles are baked once for
+        // the settings they depend on, one draw per depth.
+        if self.proto == StarsProto::P2 {
+            if self.proto_tiles_baked.load(std::sync::atomic::Ordering::Relaxed)
+                != self.proto_tiles_wanted
+            {
+                let halos = self.halos.as_ref().expect("P2 tiles");
+                let groups = [&self.source_group, self.halo_group.as_ref().expect("halo group")];
+                let pipeline = pipelines.proto_tiles.as_ref().expect("P2 bake pipeline");
+                for (layer, view) in halos.layers.iter().enumerate() {
+                    let view = view.as_ref().expect("every P2 depth has a tile");
+                    crate::stars::Pass { view, pipeline, groups: &groups, scissor: None }
+                        .draw(encoder, layer as u32);
+                }
+                self.proto_tiles_baked
+                    .store(self.proto_tiles_wanted, std::sync::atomic::Ordering::Relaxed);
+            }
+            return;
+        }
         let Some((atlas, atlas_group)) = self.star_pass() else { return };
         let halos = self.halos.as_ref().expect("star halos");
         let bake = [&self.source_group, atlas_group];
@@ -1441,6 +1542,20 @@ impl Targets {
                 scissor: near_coverage,
             }),
         );
+        // RESEARCH: P1's bloom over the reduced star image the near pass drew.
+        if let Some((views, groups, _)) = &self.proto_bloom {
+            let blur = pipelines.proto_bloom.as_ref().expect("P1 bloom pipelines");
+            for pass in 0..2 {
+                let groups = [&self.source_group, &groups[pass]];
+                crate::stars::Pass {
+                    view: &views[pass],
+                    pipeline: &blur[pass],
+                    groups: &groups,
+                    scissor: None,
+                }
+                .draw(encoder, 0);
+            }
+        }
     }
 
     /// The star atlas and the group the pass that fills it binds.
@@ -1636,7 +1751,7 @@ impl Targets {
                 life,
             });
         }
-        let uniforms = Uniforms {
+        let mut uniforms = Uniforms {
             velvet: Float4([
                 settings.material_settings.velvet_edge,
                 settings.material_settings.velvet_irregularity,
@@ -1712,6 +1827,29 @@ impl Targets {
                 .unwrap_or_else(|| StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES], 0))
                 .samples(),
         };
+        // RESEARCH: the prototypes' rows, in the star words production leaves
+        // as padding or does not read under them.
+        match (self.proto, stars) {
+            (StarsProto::P1 | StarsProto::P1x, Some(_)) => {
+                let [amount, sigma] = proto_bloom();
+                let rows = self.near_size().expect("P1 bloom source")[1] as f32;
+                uniforms.star_near.0[2] = sigma * rows / STAR_PANE;
+                uniforms.star_near.0[3] = amount;
+            }
+            (StarsProto::P2, Some(layout)) => {
+                let slices = proto_tile_slices(
+                    settings.stars,
+                    settings.cloud_direction,
+                    atmosphere.now,
+                    &layout,
+                );
+                self.proto_tiles_wanted = proto_tile_key(&slices, settings.stars);
+                uniforms.star_slices = slices;
+                uniforms.star_near = proto_twinkle(settings.stars, atmosphere.now);
+                uniforms.star_far.0[3] = proto_p2_gain();
+            }
+            _ => {}
+        }
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
 

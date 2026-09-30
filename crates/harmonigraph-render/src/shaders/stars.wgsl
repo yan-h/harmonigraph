@@ -211,6 +211,8 @@ fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
 // uniform across fragments, so selecting its array introduces no spatially
 // divergent branch. Uniform sampling retains the original first-array lookup.
 fn star_halo_at(pt: vec2<f32>, k: u32) -> vec4<f32> {
+    // RESEARCH: the prototypes draw no halo images.
+    if STAR_PROTO != 0u { return vec4<f32>(0.0); }
     let sample = star_halo_sample(k);
     let uv = pt / star_size();
     switch sample.group {
@@ -239,7 +241,16 @@ fn star_far_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     return vec4<f32>(colour * cover, cover);
 }
 
+// RESEARCH: P1x's far read, the star's own cell only, its core windowed
+// inside it like the near native core.
+fn star_far_own(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
+    let o = floor(r);
+    let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
+    return star_texel(s, r - o, s.base + local.y * s.grid.x + local.x, false);
+}
+
 fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
+    if STAR_PROTO == 2u { return star_far_own(s, r); }
     let o = floor(r - 0.5);
     let f = r - o;
     let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
@@ -304,6 +315,9 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
 // All profiles share the far-three partition. Uniform preserves native texel
 // addressing; High, Medium and Low filter smaller complete far-layer images.
 override STAR_SPLIT: bool = false;
+// RESEARCH ONLY (worktree-stars-cheap-proto): 0 production, 1 P1 cores +
+// bloom, 2 P1x (1x1 far reads), 3 P2 pre-drawn tiles. See `StarsProto`.
+override STAR_PROTO: u32 = 0u;
 const STAR_FAR_LAYERS: u32 = 3u;
 
 fn star_near_color(pt: vec2<f32>) -> vec4<f32> {

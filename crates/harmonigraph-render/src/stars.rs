@@ -609,3 +609,238 @@ pub(crate) fn image(
         })
         .create_view(&Default::default())
 }
+
+// ============================ RESEARCH PROTOTYPES ============================
+//
+// Branch `worktree-stars-cheap-proto` only; never merged. Two drastic look
+// changes measured against the shipped spectrogram Stars (lattice untouched):
+//
+// - `P1` / `P1x`, cores + bloom: no per-star fringe or halo anywhere. The far
+//   three draw a Gaussian core through the High far path (2x2 gather, or for
+//   `P1x` the star's own cell only with the core windowed inside it), the near
+//   two their native core, and one shared separable blur of (stars - floor) at
+//   about a star pixel per texel is added back as light.
+// - `P2`, pre-drawn tiles: each depth's field (cores + fringes, brightness
+//   folded in) is drawn ONCE into a repeating 1024^2 RGBA16F tile, four twinkle
+//   groups in the four channels; per pixel each depth is one filtered read
+//   dotted with the groups' weights, and the summed field spends the light as
+//   a palette position. No per-frame star bake, no lives, no colour per star.
+//
+// Chosen per `CallbackResources` (the timing probe inserts one per case) or,
+// absent that, by `HARMONIGRAPH_STARS_PROTO=off|p1|p1x|p2`. `Off` draws
+// production. Colour memory is forced off under every prototype.
+
+/// Which starfield the spectrogram draws. RESEARCH ONLY.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StarsProto {
+    #[default]
+    Off,
+    P1,
+    P1x,
+    P2,
+}
+
+impl StarsProto {
+    pub(crate) fn from_env() -> Self {
+        static PROTO: std::sync::OnceLock<StarsProto> = std::sync::OnceLock::new();
+        *PROTO.get_or_init(|| {
+            match std::env::var("HARMONIGRAPH_STARS_PROTO").as_deref().map(str::trim) {
+                Err(_) | Ok("" | "off") => Self::Off,
+                Ok("p1") => Self::P1,
+                Ok("p1x") => Self::P1x,
+                Ok("p2") => Self::P2,
+                Ok(other) => panic!("HARMONIGRAPH_STARS_PROTO={other}: want off, p1, p1x or p2"),
+            }
+        })
+    }
+
+    /// The shaders' `STAR_PROTO` override.
+    pub(crate) fn code(self) -> u32 {
+        match self {
+            Self::Off => 0,
+            Self::P1 => 1,
+            Self::P1x => 2,
+            Self::P2 => 3,
+        }
+    }
+
+    pub(crate) fn bloom(self) -> bool {
+        matches!(self, Self::P1 | Self::P1x)
+    }
+}
+
+/// A spectrogram pipeline's override constants. `Off` passes exactly what
+/// production passes, so its pipelines are production's.
+pub(crate) fn proto_constants(split: bool, proto: StarsProto) -> Vec<(&'static str, f64)> {
+    let mut constants = Vec::new();
+    if split {
+        constants.push(("STAR_SPLIT", 1.0));
+    }
+    if proto != StarsProto::Off {
+        constants.push(("STAR_PROTO", f64::from(proto.code())));
+    }
+    constants
+}
+
+/// `HARMONIGRAPH_STARS_BLOOM=amount,sigma` — the P1 bloom's gain on the
+/// blurred (stars - floor) linear light, and its sigma in star pixels. P1's
+/// cores alone already match production's mean luma (66.0 against 66.8 of 255
+/// on the still the P2 gain was matched on), so the bloom is added glow: at
+/// these defaults about +10 luma (76.7); 1.0 at sigma 3 reads as haze.
+pub(crate) fn proto_bloom() -> [f32; 2] {
+    static BLOOM: std::sync::OnceLock<[f32; 2]> = std::sync::OnceLock::new();
+    *BLOOM.get_or_init(|| {
+        std::env::var("HARMONIGRAPH_STARS_BLOOM")
+            .ok()
+            .map(|v| {
+                let (a, s) = v.split_once(',').expect("HARMONIGRAPH_STARS_BLOOM=amount,sigma");
+                [a.trim().parse().expect("bloom amount"), s.trim().parse().expect("bloom sigma")]
+            })
+            .unwrap_or([PROTO_BLOOM_AMOUNT, PROTO_BLOOM_SIGMA])
+    })
+}
+const PROTO_BLOOM_AMOUNT: f32 = 0.35;
+const PROTO_BLOOM_SIGMA: f32 = 2.0;
+
+/// `HARMONIGRAPH_STARS_P2_GAIN` — P2's palette position per unit of light
+/// times summed field. 0.23 matched production's mean luma (64.8 against
+/// 66.8 of 255) over the history of take-2026-09-25_22-16-27 at 1920x1080;
+/// 1.0 saturates, since five depths of fringes sum to several.
+pub(crate) fn proto_p2_gain() -> f32 {
+    static GAIN: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *GAIN.get_or_init(|| {
+        std::env::var("HARMONIGRAPH_STARS_P2_GAIN")
+            .ok()
+            .map(|v| v.trim().parse().expect("P2 gain"))
+            .unwrap_or(PROTO_P2_GAIN)
+    })
+}
+const PROTO_P2_GAIN: f32 = 0.23;
+
+/// The P1 bloom target: about one texel per star pixel, never finer than the
+/// pane, so its cost does not grow with the output resolution.
+pub(crate) fn proto_bloom_size(pixels: [u32; 2]) -> [u32; 2] {
+    let factor = (STAR_PANE / pixels[1].max(1) as f32).min(1.0);
+    star_halo_size(pixels, factor)
+}
+
+/// The P1 bloom's two blur targets, each also viewed as a one-layer array so
+/// the composite can read the finished one at the halo array's binding.
+pub(crate) fn proto_bloom_images(
+    device: &wgpu::Device,
+    size: [u32; 2],
+) -> [(wgpu::TextureView, wgpu::TextureView); 2] {
+    ["proto_star_bloom_h", "proto_star_bloom_v"].map(|label| {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: STAR_FAR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        (
+            texture.create_view(&Default::default()),
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            }),
+        )
+    })
+}
+
+/// Every P2 tile's side in texels.
+pub(crate) const PROTO_TILE_TEXELS: u32 = 1024;
+/// Tile texels per star pixel, far to near: dust needs two, the big near stars
+/// get fewer so their period is longer than the pane is wide.
+const PROTO_TILE_DENSITY: [f64; STAR_SLICES] = [2.0, 2.0, 2.0, 1.5, 1.25];
+
+/// P2 draws every depth into one array of equal tiles.
+pub(crate) fn proto_tile_layout() -> StarHaloLayout {
+    StarHaloLayout::from_sizes([[PROTO_TILE_TEXELS; 2]; STAR_SLICES], 0)
+}
+
+/// A depth's tile period in its own cells.
+pub(crate) fn proto_tile_period(cell: f32, k: usize) -> i32 {
+    (f64::from(PROTO_TILE_TEXELS) / (PROTO_TILE_DENSITY[k] * f64::from(cell))).round().max(1.0)
+        as i32
+}
+
+/// Each depth's tile is turned by its own angle and shifted by its own
+/// fraction, so no two depths repeat along the same axes. The shader's
+/// `proto_tile_angle` holds the same numbers.
+fn proto_tile_angle(k: usize) -> f64 {
+    0.5 + 1.3 * k as f64
+}
+fn proto_tile_shift(k: usize) -> [f64; 2] {
+    [(0.37 * k as f64).fract(), (0.61 * k as f64).fract()]
+}
+
+/// P2's slices: the same cells, cores and fringes, with `grid` the tile period
+/// and `offset` the drift already turned into the depth's tile coordinates and
+/// reduced modulo one in f64 there (the shader samples
+/// `R (sp / cell) / period - offset`), so the wrap is seamless and exact.
+pub(crate) fn proto_tile_slices(
+    settings: harmonigraph_scene::StarSettings,
+    direction: f32,
+    now: f64,
+    layout: &StarLayout,
+) -> [StarSlice; STAR_SLICES] {
+    let mut slices = star_slices(settings, direction, now, layout);
+    let travel = now * star_px_per_second();
+    let (sin, cos) = f64::from(direction).to_radians().sin_cos();
+    for (k, slice) in slices.iter_mut().enumerate() {
+        let cell = f64::from(slice.cell);
+        let period = proto_tile_period(slice.cell, k);
+        let speed = f64::from(star_speed(settings, k));
+        let drift = [cos * travel * speed / cell, sin * travel * speed / cell];
+        let (s, c) = proto_tile_angle(k).sin_cos();
+        let turned = [c * drift[0] - s * drift[1], s * drift[0] + c * drift[1]];
+        let shift = proto_tile_shift(k);
+        slice.offset = Float2(std::array::from_fn(|axis| {
+            (turned[axis] / f64::from(period) + shift[axis]).rem_euclid(1.0) as f32
+        }));
+        slice.grid = Int2([period; 2]);
+        slice.base = 0;
+        slice.origin = Int2([0; 2]);
+    }
+    slices
+}
+
+/// P2's four twinkle groups' weights: each fades out and back in once per
+/// `Star lifetime`, a quarter of a cycle apart, with the production life's
+/// fade shape (`STAR_FADE` smoothsteps at both ends).
+pub(crate) fn proto_twinkle(settings: harmonigraph_scene::StarSettings, now: f64) -> Float4 {
+    let cycle = now / f64::from(settings.star_lifetime);
+    let smooth = |x: f64| {
+        let t = (x / 0.2).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    Float4(std::array::from_fn(|g| {
+        let x = (cycle + g as f64 / 4.0).rem_euclid(1.0);
+        (smooth(x) * smooth(1.0 - x)) as f32
+    }))
+}
+
+/// What a P2 bake is a function of: every slice's shape and period, and the
+/// per-star draws' dials. Drift and the clock are not in it.
+pub(crate) fn proto_tile_key(
+    slices: &[StarSlice; STAR_SLICES],
+    settings: harmonigraph_scene::StarSettings,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for slice in slices {
+        [slice.cell, slice.sigma, slice.cap, slice.defocus, slice.fringe]
+            .map(f32::to_bits)
+            .hash(&mut h);
+        slice.grid.0.hash(&mut h);
+    }
+    [settings.star_jitter, settings.star_randomness, settings.star_size_variation]
+        .map(f32::to_bits)
+        .hash(&mut h);
+    // Never zero, which is what a target that has baked nothing holds.
+    h.finish() | 1
+}

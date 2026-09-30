@@ -349,7 +349,12 @@ pub(super) fn timing_pipeline_startup(
     let resources = SpectrogramResources::new(device, format);
     let plain = started.elapsed();
     let started = std::time::Instant::now();
-    let _cloud = atmosphere::Pipelines::new(device, format, &resources.layout);
+    let _cloud = atmosphere::Pipelines::new(
+        device,
+        format,
+        &resources.layout,
+        crate::stars::StarsProto::Off,
+    );
     [plain, started.elapsed()]
 }
 
@@ -403,6 +408,7 @@ impl SpectrogramResources {
                     "fs_heatmap_gamma"
                 },
                 false,
+                crate::stars::StarsProto::Off,
             ),
             cloud: None,
             layout,
@@ -467,7 +473,9 @@ fn create_spectrogram_pipeline(
     extra_layout: Option<&wgpu::BindGroupLayout>,
     fragment: &str,
     split_stars: bool,
+    proto: crate::stars::StarsProto,
 ) -> wgpu::RenderPipeline {
+    let constants = crate::stars::proto_constants(split_stars, proto);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectrogram_pipeline_layout"),
         bind_group_layouts: &std::iter::once(Some(layout))
@@ -488,7 +496,7 @@ fn create_spectrogram_pipeline(
             module: shader,
             entry_point: Some(fragment),
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: if split_stars { &[("STAR_SPLIT", 1.0)] } else { &[] },
+                constants: &constants,
                 ..Default::default()
             },
             targets: &[Some(wgpu::ColorTargetState {
@@ -521,6 +529,11 @@ impl CallbackTrait for SpectrogramCallback {
         #[cfg(test)]
         let sampling =
             callback_resources.get::<atmosphere::CloudSampling>().copied().unwrap_or(sampling);
+        // RESEARCH: which starfield to draw (see `StarsProto`).
+        let proto = callback_resources
+            .get::<crate::stars::StarsProto>()
+            .copied()
+            .unwrap_or_else(crate::stars::StarsProto::from_env);
         let recreate = callback_resources
             .get::<SpectrogramResources>()
             .is_none_or(|r| r.target_format != self.target_format);
@@ -727,6 +740,23 @@ impl CallbackTrait for SpectrogramCallback {
             .atmosphere
             .map(|mut atmosphere| {
                 atmosphere.settings = atmosphere.settings.sanitized();
+                // RESEARCH: no prototype keeps colour memory. P1 keeps the
+                // profile's far-image size (Uniform, which has no reduced far
+                // image, becomes High) and drops the fringe the far path
+                // would draw; P2 reads no profile at all.
+                let stars = &mut atmosphere.settings;
+                if proto != crate::stars::StarsProto::Off
+                    && stars.cloud_style == harmonigraph_scene::CloudStyle::Stars
+                {
+                    use harmonigraph_scene::StarHaloProfile;
+                    if stars.stars.star_halo_profile == StarHaloProfile::Uniform {
+                        stars.stars.star_halo_profile = StarHaloProfile::P3;
+                    }
+                    (stars.color_pickup, stars.color_release) = (0.0, 0.0);
+                    if proto.bloom() {
+                        stars.stars.star_fringe = 0.0;
+                    }
+                }
                 atmosphere
             })
             // The measured picture is every effect at zero, and it takes the
@@ -746,8 +776,12 @@ impl CallbackTrait for SpectrogramCallback {
                 pane.cloud.as_ref().map(|c| c.size),
             );
             if size.iter().all(|&v| v > 0) {
+                if cloud.as_ref().is_some_and(|c| c.proto != proto) {
+                    *cloud = None;
+                    pane.cloud = None;
+                }
                 let cloud = cloud.get_or_insert_with(|| {
-                    atmosphere::Pipelines::new(device, self.target_format, layout)
+                    atmosphere::Pipelines::new(device, self.target_format, layout, proto)
                 });
                 let rect = egui::Rect::from_min_size(
                     egui::pos2(viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp),
@@ -791,8 +825,18 @@ impl CallbackTrait for SpectrogramCallback {
                         });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
-                let near_size =
-                    stars.and_then(|_| atmosphere::star_near_size(pixels, settings.settings.stars));
+                use crate::stars::StarsProto;
+                // RESEARCH: P1 draws its bloom source through the reduced
+                // foreground pass; P2 has no far image, atlas or foreground.
+                let tone_size =
+                    if proto == StarsProto::P2 && stars.is_some() { None } else { tone_size };
+                let near_size = stars.and_then(|_| match proto {
+                    StarsProto::Off => atmosphere::star_near_size(pixels, settings.settings.stars),
+                    StarsProto::P1 | StarsProto::P1x => {
+                        Some(crate::stars::proto_bloom_size(pixels))
+                    }
+                    StarsProto::P2 => None,
+                });
                 let near_coverage = near_size.map(|size| {
                     atmosphere::star_far_scissor(
                         star_coverage.expect("Stars coverage"),
@@ -800,9 +844,16 @@ impl CallbackTrait for SpectrogramCallback {
                         size,
                     )
                 });
-                let halos =
-                    stars.map(|_| atmosphere::star_halo_layout(pixels, settings.settings.stars));
-                let star_size = stars.map(|layout| {
+                let halos = stars.map(|_| match proto {
+                    StarsProto::Off => {
+                        atmosphere::star_halo_layout(pixels, settings.settings.stars)
+                    }
+                    StarsProto::P1 | StarsProto::P1x => {
+                        atmosphere::StarHaloLayout::from_sizes([[1, 1]; 5], 5)
+                    }
+                    StarsProto::P2 => crate::stars::proto_tile_layout(),
+                });
+                let star_size = stars.filter(|_| proto != StarsProto::P2).map(|layout| {
                     atmosphere::star_atlas_size(
                         layout.size(),
                         pane.cloud.as_ref().and_then(atmosphere::Targets::star_size),
@@ -4601,5 +4652,10 @@ pub(super) fn asset_catalog(device: &wgpu::Device, format: wgpu::TextureFormat) 
     let resources = SpectrogramResources::new(device, format);
     // Runtime creation stays lazy, but the strict Metal catalog must cover
     // every production route before the first enabled atmospheric frame.
-    drop(atmosphere::Pipelines::new(device, format, &resources.layout));
+    drop(atmosphere::Pipelines::new(
+        device,
+        format,
+        &resources.layout,
+        crate::stars::StarsProto::Off,
+    ));
 }
