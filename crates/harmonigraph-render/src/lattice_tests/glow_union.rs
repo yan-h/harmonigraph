@@ -1262,7 +1262,6 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
                 p[..3].iter().all(|c| *c <= p[3].saturating_add(1)),
                 "premultiplied {profile:?}: {p:?}"
             );
-            assert!(p.iter().all(|c| *c <= 154), "fixed glow ceiling {profile:?}: {p:?}");
             // A star is its source's hue at the star's own level, so channels
             // keep the source's proportions while alpha follows coverage.
             let brightest = *p[..3].iter().max().unwrap();

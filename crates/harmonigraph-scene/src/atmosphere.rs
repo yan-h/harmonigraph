@@ -520,7 +520,8 @@ impl Default for StarSettings {
             star_density: 10.0,
             star_randomness: 0.080912866,
             // The old shared dial's size spread at its fresh value, anchored
-            // at the top: the same smallest-to-largest ratio, now 0.69..1.
+            // at the top: the same smallest-to-largest ratio, now 0.47..1
+            // where it was 0.69..1.45.
             star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
             star_size_min: 2.315533,
