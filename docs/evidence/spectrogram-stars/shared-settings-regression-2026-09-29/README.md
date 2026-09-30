@@ -1,9 +1,10 @@
 # Stars Medium regression introduced by #1269
 
-The shared Stars refactor in [#1269](https://github.com/yan-h/harmonigraph/pull/1269) increases this full-4K Medium workload from approximately 10 ms to 49–56 ms on Apple M1 Pro / Metal.
+The shared Stars refactor in [#1269](https://github.com/yan-h/harmonigraph/pull/1269) increases this full-4K Medium workload from approximately 10 ms to 48–59 ms on Apple M1 Pro / Metal.
 A temporary spectrogram-only probe on current main restores approximately 10 ms by replacing the shared settings-struct return with direct uniform reads.
 The shipped precompiled Metal assets reproduce the regression with source fallback disabled.
 No production fix is included in this report.
+[Issue #1282](https://github.com/yan-h/harmonigraph/issues/1282) tracks the confirmed regression and remaining fix.
 
 ## Results
 
