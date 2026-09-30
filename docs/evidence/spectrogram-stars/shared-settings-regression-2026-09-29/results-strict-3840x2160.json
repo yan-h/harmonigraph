@@ -1,0 +1,62 @@
+[
+  {
+    "label": "before",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 1,
+    "start": 1790730727.634666,
+    "log": "strict-3840x2160-01-before.log",
+    "gpu_min": 9.083,
+    "gpu_p10": 9.413,
+    "gpu_median": 9.962,
+    "gpu_p90": 10.491,
+    "gpu_max": 11.161,
+    "wall_median": 11.766,
+    "cpu_median": 0.131
+  },
+  {
+    "label": "current",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 2,
+    "start": 1790730730.763652,
+    "log": "strict-3840x2160-02-current.log",
+    "gpu_min": 46.066,
+    "gpu_p10": 49.841,
+    "gpu_median": 56.415,
+    "gpu_p90": 62.369,
+    "gpu_max": 82.519,
+    "wall_median": 58.101,
+    "cpu_median": 0.134
+  },
+  {
+    "label": "current",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 3,
+    "start": 1790730745.801086,
+    "log": "strict-3840x2160-03-current.log",
+    "gpu_min": 47.115,
+    "gpu_p10": 51.329,
+    "gpu_median": 56.032,
+    "gpu_p90": 65.828,
+    "gpu_max": 70.848,
+    "wall_median": 57.978,
+    "cpu_median": 0.136
+  },
+  {
+    "label": "before",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 4,
+    "start": 1790730760.735462,
+    "log": "strict-3840x2160-04-before.log",
+    "gpu_min": 9.295,
+    "gpu_p10": 9.459,
+    "gpu_median": 9.91,
+    "gpu_p90": 12.824,
+    "gpu_max": 15.795,
+    "wall_median": 11.789,
+    "cpu_median": 0.129
+  }
+]

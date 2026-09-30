@@ -1,0 +1,62 @@
+[
+  {
+    "label": "before",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 1,
+    "start": 1790730566.49437,
+    "log": "refactor-3840x2160-01-before.log",
+    "gpu_min": 9.06,
+    "gpu_p10": 9.129,
+    "gpu_median": 9.476,
+    "gpu_p90": 10.003,
+    "gpu_max": 10.614,
+    "wall_median": 10.625,
+    "cpu_median": 0.13
+  },
+  {
+    "label": "refactor",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 2,
+    "start": 1790730569.450411,
+    "log": "refactor-3840x2160-02-refactor.log",
+    "gpu_min": 46.402,
+    "gpu_p10": 46.85,
+    "gpu_median": 48.422,
+    "gpu_p90": 56.04,
+    "gpu_max": 61.647,
+    "wall_median": 50.266,
+    "cpu_median": 0.139
+  },
+  {
+    "label": "refactor",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 3,
+    "start": 1790730586.4208698,
+    "log": "refactor-3840x2160-03-refactor.log",
+    "gpu_min": 45.828,
+    "gpu_p10": 46.721,
+    "gpu_median": 48.644,
+    "gpu_p90": 58.033,
+    "gpu_max": 62.834,
+    "wall_median": 50.492,
+    "cpu_median": 0.135
+  },
+  {
+    "label": "before",
+    "size": "3840x2160",
+    "ppp": "4",
+    "run": 4,
+    "start": 1790730599.654001,
+    "log": "refactor-3840x2160-04-before.log",
+    "gpu_min": 8.903,
+    "gpu_p10": 9.113,
+    "gpu_median": 9.341,
+    "gpu_p90": 9.655,
+    "gpu_max": 10.904,
+    "wall_median": 10.547,
+    "cpu_median": 0.131
+  }
+]

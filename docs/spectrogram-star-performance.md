@@ -146,6 +146,11 @@ A small static or stale-field speedup is insufficient evidence for their complex
 
 ## Measuring the next change
 
+A [2026-09-29 regression investigation](evidence/spectrogram-stars/shared-settings-regression-2026-09-29/README.md) confirms that #1269 made the full-4K Medium workload roughly five times slower on Apple M1 Pro.
+A temporary direct-uniform-access probe restores the earlier performance;
+the production fix is still outstanding.
+Use that report when interpreting the older optimization baselines below.
+
 The maintained probe is `spectrogram::tests::timing::cloud_costs_by_style_and_dial`.
 A synthetic baseline can be run without the private recording:
 

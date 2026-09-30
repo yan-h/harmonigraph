@@ -1,0 +1,87 @@
+{
+  "purpose": "Investigate reported Stars Medium 4K regression around PR #1269",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "mode": "release, source shaders, standalone offscreen GPU source BEGIN to dependent composite END",
+  "frames_per_run": 240,
+  "warmup_frames": 10,
+  "case": "stars, medium",
+  "color_memory": false,
+  "fill": 1,
+  "slabs": 1024,
+  "bins": 3828,
+  "history_seconds": 10,
+  "span_semitones": 96,
+  "order": [
+    "before",
+    "before",
+    "current",
+    "current",
+    "before",
+    "current",
+    "current",
+    "before"
+  ],
+  "known_fixture_difference": "Contours default 17 before versus 16 current; Stars color path bypasses contours, full texture depth is 1.0. No saved state is loaded.",
+  "binaries": {
+    "before": {
+      "commit": "2ec5052b500b236ced7810712d8127690faff939",
+      "sha256": "5a757e0b9bc38ccd20d79ab1c21c91b49851e3cc1965323b87be531b3009ed13"
+    },
+    "current": {
+      "commit": "56b6da43f0450c86b1b7db6d7e7cb6a4298d5911",
+      "sha256": "ee6a0f6517ca9d08ede778ecb4784c57edd88851863d8c83af135ede606a13b6"
+    },
+    "refactor": {
+      "commit": "9bb46cad90c639a38e42c81a1faea05ab78106a4",
+      "sha256": "48afd22c32a882e588b6c8984474b05b1dbe5bd2d3b98112488bbc78fec89818"
+    },
+    "direct": {
+      "commit": "56b6da43f0450c86b1b7db6d7e7cb6a4298d5911",
+      "probe": "apply-direct-probe.py: replace 36 star_settings(). accesses with cloud. only for the spectrogram consumer",
+      "sha256": "4a503b2253dcf0bda742cfabbf89efc453439e1effe555f2c544104e74aeb8f1"
+    }
+  },
+  "adapter": "Apple M1 Pro / Metal",
+  "comparisons": {
+    "initial": {
+      "assets": "source",
+      "order": [
+        "before",
+        "before",
+        "current",
+        "current",
+        "before",
+        "current",
+        "current",
+        "before"
+      ]
+    },
+    "refactor": {
+      "assets": "source",
+      "order": [
+        "before",
+        "refactor",
+        "refactor",
+        "before"
+      ]
+    },
+    "direct": {
+      "assets": "source",
+      "order": [
+        "current",
+        "direct",
+        "direct",
+        "current"
+      ]
+    },
+    "strict": {
+      "assets": "strict",
+      "order": [
+        "before",
+        "current",
+        "current",
+        "before"
+      ]
+    }
+  }
+}
