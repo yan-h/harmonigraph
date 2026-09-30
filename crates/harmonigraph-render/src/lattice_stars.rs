@@ -13,9 +13,9 @@ uniform_group! {
     struct Settings {
         stars: StarUniforms,
         depth: f32,
-        strength: f32,
-        accumulation: f32,
-        padding: f32,
+        _pad0: f32,
+        _pad1: f32,
+        _pad2: f32,
     }
 }
 #[derive(Clone)]
@@ -134,8 +134,6 @@ pub(super) struct Frame {
     pub direction: f32,
     pub now: f64,
     pub amount: f32,
-    pub strength: f32,
-    pub accumulation: f32,
 }
 
 #[derive(PartialEq, Eq)]
@@ -258,7 +256,7 @@ impl Targets {
         size: [u32; 2],
         frame: Frame,
     ) {
-        let Frame { settings: stars, direction, now, amount, strength, accumulation } = frame;
+        let Frame { settings: stars, direction, now, amount } = frame;
         let layout = stars::star_layout(stars, size[0] as f32 / size[1] as f32);
         let split = stars.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform
             || u64::from(size[0]) * u64::from(size[1]) >= stars::STAR_SPLIT_PIXELS;
@@ -276,9 +274,9 @@ impl Targets {
         let settings = Settings {
             stars: StarUniforms::new(stars, direction, now, size, &layout, held.allocation.halos),
             depth: amount,
-            strength,
-            accumulation,
-            padding: 0.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         queue.write_buffer(&held.uniform, 0, bytemuck::bytes_of(&settings));
     }

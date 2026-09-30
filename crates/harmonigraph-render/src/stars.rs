@@ -484,7 +484,7 @@ uniform_group! {
         ppp: f32,
         star_randomness: f32,
         star_life: f32,
-        padding: f32,
+        star_size_variation: f32,
         star_far: Float4,
         star_near: Float4,
         star_geometry: Float4,
@@ -509,7 +509,7 @@ impl StarUniforms {
             ppp: 1.0,
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, now),
-            padding: 0.0,
+            star_size_variation: settings.star_size_variation,
             star_far: Float4([
                 far[0] as f32,
                 far[1] as f32,

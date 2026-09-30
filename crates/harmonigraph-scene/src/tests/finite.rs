@@ -126,7 +126,7 @@ fn poisoned_view() -> ViewConfig {
             material_color_pickup: nan,
             material_shadow_width: nan,
             material_shadow_softness: nan,
-            stars: crate::StarSettings::default(),
+            stars: crate::StarSettings::lattice(),
             material_settings: crate::MaterialSettings {
                 velvet_size: nan,
                 velvet_variety: nan,
@@ -410,6 +410,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     } = atmosphere;
     f.one("atmosphere.stars.star_density", stars.star_density);
     f.one("atmosphere.stars.star_randomness", stars.star_randomness);
+    f.one("atmosphere.stars.star_size_variation", stars.star_size_variation);
     f.one("atmosphere.stars.star_jitter", stars.star_jitter);
     f.one("atmosphere.stars.star_size_min", stars.star_size_min);
     f.one("atmosphere.stars.star_size_max", stars.star_size_max);

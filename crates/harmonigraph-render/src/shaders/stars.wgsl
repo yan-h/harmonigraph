@@ -26,7 +26,7 @@ struct StarUniforms {
     ppp: f32,
     star_randomness: f32,
     star_life: f32,
-    padding: f32,
+    star_size_variation: f32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
     star_geometry: vec4<f32>,
@@ -113,7 +113,9 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     let paint = star_source(at, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness), index);
     if paint.a <= 0.0 { return vec4<u32>(0u); }
     let colour = paint.rgb;
-    let size = exp((0.3 + 0.9 * randomness) * (c.y - 0.5) * 2.0);
+    // Its own draw, shrinking from its depth's size: a star that grew would
+    // meet the cap its spacing sets.
+    let size = exp(-2.4 * star_size_variation() * c.y);
     let sigma = min(s.sigma * size, s.cap) * s.defocus;
     // It fades in over the start of its life and out over the end.
     var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);

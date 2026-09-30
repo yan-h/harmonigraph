@@ -139,7 +139,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 // anything to a refracting scale, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
                 if atmosphere.cloud_style == CloudStyle::Stars {
-                    super::super::material::stars(ui, &mut atmosphere.stars);
+                    super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
                 } else if atmosphere.cloud_style == CloudStyle::Watercolor {
                     super::super::material::watercolor(ui, &mut atmosphere.material_settings);
                 } else if atmosphere.cloud_style == CloudStyle::VelvetScales {

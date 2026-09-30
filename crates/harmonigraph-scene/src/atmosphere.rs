@@ -165,6 +165,9 @@ pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 pub const STAR_SIZE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_MIN`].
 pub const STAR_SIZE_MAX: f32 = 64.0;
+/// The lattice's `Star size` range and fresh ends over the spectrogram's.
+/// The glow has no fine detail for stars to pick up, so its stars run bigger.
+pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
 /// Bounds shared by the [`StarSettings::star_size_curve`] control and
 /// sanitizer.
 pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
@@ -439,12 +442,16 @@ pub struct StarSettings {
     /// Yan chose, with its levers on bars.
     pub star_density: f32,
     /// How far the stars differ from each other in brightness, spent as a
-    /// palette position in the spectrogram or coverage of the sampled lattice
-    /// hue: the steepness of the brightness rank, how far
-    /// it spreads each star above and below the colour behind it, and the
-    /// spread of core sizes, all together. At 0 every star is the colour
-    /// behind it, lifted a little.
+    /// palette position in the spectrogram or a level of the sampled lattice
+    /// hue: the steepness of the brightness rank and how far it spreads each
+    /// star above and below the colour behind it, keeping their average. At 0
+    /// every star is the colour behind it, lifted a little.
     pub star_randomness: f32,
+    /// How far the stars' cores shrink below their depth's size, each by its
+    /// own draw, independent of its brightness: every star at its depth's
+    /// size at 0, down to 1/11 of it at 1. Only shrinks, so no star grows into
+    /// the cap its spacing sets. Runs over 0..=1.
+    pub star_size_variation: f32,
     /// Positional variation within each cell, from regular centers at 0 to
     /// the original 0.6-cell jitter width at 1. The optimized far-three response
     /// ends at `1.0 - 0.3 * star_jitter` cells; Uniform and the nearest two
@@ -457,7 +464,8 @@ pub struct StarSettings {
     /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
     /// the old fixed curve did. Every cell holds a star, so how many a depth
     /// has follows its spacing alone. Runs over
-    /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], never above
+    /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], times
+    /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
     /// [`Self::star_size_max`].
     pub star_size_min: f32,
     /// The nearest depth's star size: the biggest stars in the field. See
@@ -511,6 +519,10 @@ impl Default for StarSettings {
             // Yan's Stars controls captured from the DAW on 2026-09-26.
             star_density: 10.0,
             star_randomness: 0.080912866,
+            // The old shared dial's size spread at its fresh value, anchored
+            // at the top: the same smallest-to-largest ratio, now 0.47..1
+            // where it was 0.69..1.45.
+            star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
             star_size_min: 2.315533,
             star_size_max: 14.752405,
@@ -528,8 +540,29 @@ impl Default for StarSettings {
     }
 }
 impl StarSettings {
-    pub fn sanitized(mut self) -> Self {
+    /// The lattice's fresh stars: the spectrogram's, sized by
+    /// [`LATTICE_STAR_SIZE_SCALE`].
+    pub fn lattice() -> Self {
         let fresh = Self::default();
+        Self {
+            star_size_min: fresh.star_size_min * LATTICE_STAR_SIZE_SCALE,
+            star_size_max: fresh.star_size_max * LATTICE_STAR_SIZE_SCALE,
+            ..fresh
+        }
+    }
+    /// The `Star size` bounds for a pane whose sizes run `scale` times the
+    /// spectrogram's.
+    pub fn size_range(scale: f32) -> std::ops::RangeInclusive<f32> {
+        STAR_SIZE_MIN * scale..=STAR_SIZE_MAX * scale
+    }
+    pub fn sanitized(self) -> Self {
+        self.sanitized_at(Self::default(), 1.0)
+    }
+    pub fn lattice_sanitized(self) -> Self {
+        self.sanitized_at(Self::lattice(), LATTICE_STAR_SIZE_SCALE)
+    }
+    fn sanitized_at(mut self, fresh: Self, size_scale: f32) -> Self {
+        let (size_low, size_high) = Self::size_range(size_scale).into_inner();
         let clamp = |value: f32, fallback: f32, low, high| {
             if value.is_finite() {
                 value.clamp(low, high)
@@ -540,11 +573,11 @@ impl StarSettings {
         self.star_density =
             clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
+        self.star_size_variation =
+            clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
-        self.star_size_min =
-            clamp(self.star_size_min, fresh.star_size_min, STAR_SIZE_MIN, STAR_SIZE_MAX);
-        self.star_size_max =
-            clamp(self.star_size_max, fresh.star_size_max, STAR_SIZE_MIN, STAR_SIZE_MAX);
+        self.star_size_min = clamp(self.star_size_min, fresh.star_size_min, size_low, size_high);
+        self.star_size_max = clamp(self.star_size_max, fresh.star_size_max, size_low, size_high);
         // One control with two handles, so its ends cannot cross on screen;
         // a blob that holds them crossed is drawn, and kept, as the one pair.
         if self.star_size_min > self.star_size_max {
@@ -786,7 +819,7 @@ impl Default for AtmosphereSettings {
             material_shadow_width: 1.5,
             material_shadow_softness: 2.0,
             material_settings: MaterialSettings::default(),
-            stars: StarSettings::default(),
+            stars: StarSettings::lattice(),
             material_speed: MATERIAL_SPEED_DEFAULT,
             material_direction: MATERIAL_DIRECTION_DEFAULT,
             texture_depth: 0.134_627_85,
@@ -826,7 +859,7 @@ impl AtmosphereSettings {
             SHADOW_PICKUP_SIZE_MAX,
         );
         self.material_settings = self.material_settings.sanitized();
-        self.stars = self.stars.sanitized();
+        self.stars = self.stars.lattice_sanitized();
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.material_direction = if self.material_direction.is_finite() {

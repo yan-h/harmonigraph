@@ -417,6 +417,11 @@ struct Uniforms {
     /// The geometry and slice rows that follow both start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
+    /// The starfield's size variation; the rest of its row is padding.
+    star_size_variation: f32,
+    star_pad0: u32,
+    star_pad1: u32,
+    star_pad2: u32,
     /// Exact far target dimensions, optimized-far flag, and padding.
     star_far: Float4,
     /// Exact reduced foreground dimensions; zero means native foreground.
@@ -932,6 +937,7 @@ fn memory_key(
             harmonigraph_scene::StarSettings {
                 star_density,
                 star_randomness,
+                star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter,
                 star_size_min,
                 star_size_max,
@@ -1669,6 +1675,10 @@ impl Targets {
             pitch_vertical: u32::from(pitch_vertical),
             star_randomness: settings.stars.star_randomness,
             star_life: star_life(settings.stars, atmosphere.now),
+            star_size_variation: settings.stars.star_size_variation,
+            star_pad0: 0,
+            star_pad1: 0,
+            star_pad2: 0,
             star_far: {
                 let [width, height] = self.tone_size().unwrap_or([1, 1]);
                 Float4([
