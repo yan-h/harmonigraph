@@ -1180,7 +1180,10 @@ fn proto_tile_color(pt: vec2<f32>) -> vec4<f32> {
         let uv = proto_tile_uv(sp, star_slice(k), k);
         field += dot(textureSampleLevel(star_halos, tile_sampler, uv, i32(k), 0.0), cloud.star_near);
     }
-    let level = cloud.star_far.w * star_level_at(pt) * field;
+    let raw = cloud.star_far.w * star_level_at(pt) * field;
+    // A soft knee: near identity below ~0.6, approaching the palette top
+    // instead of clipping to it where loud harmonics sum past one.
+    let level = raw / pow(1.0 + raw * raw * raw * raw, 0.25);
     return vec4<f32>(palette_color(clamp(level, 0.0, 1.0)), 1.0);
 }
 
