@@ -288,7 +288,10 @@ fn star_near_texel(s: StarSlice, f: vec2<f32>, index: i32, residual: bool) -> ve
         if star_near_glow() {
             let draw = (f32(t.x & 0xffu) + 0.5) / 256.0;
             let size = exp(-2.4 * star_size_variation() * draw);
-            full += s.fringe * exp(-3.0 * dist / (outer * size));
+            // 1.5, not 3: the glow still holds ~a fifth of its centre at
+            // the support's edge, so it fills the footprint and the fade
+            // ends it rather than its own falloff.
+            full += s.fringe * exp(-1.5 * dist / (outer * size));
         } else {
             full += s.fringe * exp(-0.4 * d);
         }

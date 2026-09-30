@@ -1,0 +1,24 @@
+    Finished `release` profile [optimized] target(s) in 0.30s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-6209358007c8e797)
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 3840x2160 px at 4 px/pt, 1024 slabs of 3828 buckets
+case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median
+blur only / 1.00 / 10.0: 3.331/3.350/3.360/3.374/3.445; wall 4.811; CPU 0.110; source px Some([1024, 2160])
+stars-near: production high / 1.00 / 10.0: 14.239/14.274/14.288/14.307/14.520; wall 15.525; CPU 0.103; source px Some([1024, 2160])
+  1.000x baseline (14.289 ms, stars-near: production high)
+stars-near: production medium / 1.00 / 10.0: 8.879/8.898/8.909/8.921/9.147; wall 11.087; CPU 0.149; source px Some([1024, 2160])
+  1.000x baseline (8.909 ms, stars-near: production medium)
+stars-near: n1 high / 1.00 / 10.0: 12.637/12.669/12.681/12.704/12.931; wall 14.066; CPU 0.140; source px Some([1024, 2160])
+  0.887x baseline (14.289 ms, stars-near: production high)
+stars-near: n1 medium / 1.00 / 10.0: 7.901/7.925/7.939/7.958/8.195; wall 9.530; CPU 0.136; source px Some([1024, 2160])
+  0.891x baseline (8.909 ms, stars-near: production medium)
+stars-near: n2 high / 1.00 / 10.0: 13.169/13.191/13.208/13.222/13.411; wall 15.488; CPU 0.131; source px Some([1024, 2160])
+  0.924x baseline (14.289 ms, stars-near: production high)
+stars-near: n2 medium / 1.00 / 10.0: 7.346/7.375/7.389/7.422/7.545; wall 9.462; CPU 0.133; source px Some([1024, 2160])
+  0.829x baseline (8.909 ms, stars-near: production medium)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 384 filtered out; finished in 20.49s
+
