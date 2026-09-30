@@ -1676,7 +1676,11 @@ impl Targets {
         let drift = cloud_drift(settings, atmosphere.now);
         let slices = stars
             .map(|layout| {
-                star_slices(settings.stars, settings.cloud_direction, atmosphere.now, &layout)
+                let mut slices =
+                    star_slices(settings.stars, settings.cloud_direction, atmosphere.now, &layout);
+                // RESEARCH: N1/N2's `HARMONIGRAPH_STARS_NEAR_CORE`.
+                proto_scale_near(&mut slices, self.proto);
+                slices
             })
             .unwrap_or_default();
         let life = star_life(settings.stars, atmosphere.now);
@@ -1847,6 +1851,9 @@ impl Targets {
                 uniforms.star_slices = slices;
                 uniforms.star_near = proto_twinkle(settings.stars, atmosphere.now);
                 uniforms.star_far.0[3] = proto_p2_gain();
+            }
+            (StarsProto::N1 | StarsProto::N2, Some(_)) if proto_near_glow(self.proto) => {
+                uniforms.star_near.0[2] = 1.0;
             }
             _ => {}
         }

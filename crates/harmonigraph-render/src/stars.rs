@@ -626,9 +626,18 @@ pub(crate) fn image(
 //   dotted with the groups' weights, and the summed field spends the light as
 //   a palette position. No per-frame star bake, no lives, no colour per star.
 //
+// - `N1` / `N2` (branch `worktree-stars-near-2x2`), the near two depths only,
+//   far three and everything else production's (colour memory included):
+//   `N1` keeps the native cores and the profile's halo images but fills them
+//   from a 2x2 residual gather out to the far path's `1 - 0.3 jitter` cells;
+//   `N2` draws no near halo at all and reads each near depth's complete
+//   response through the same 2x2 walk (`star_near_gather`, the far path's
+//   math) at the near layers' own resolution. `HARMONIGRAPH_STARS_NEAR_CORE`
+//   switches both to a support-tied glow (see `proto_near_core`).
+//
 // Chosen per `CallbackResources` (the timing probe inserts one per case) or,
-// absent that, by `HARMONIGRAPH_STARS_PROTO=off|p1|p1x|p2`. `Off` draws
-// production. Colour memory is forced off under every prototype.
+// absent that, by `HARMONIGRAPH_STARS_PROTO=off|p1|p1x|p2|n1|n2`. `Off` draws
+// production. Colour memory is forced off under P1, P1x and P2.
 
 /// Which starfield the spectrogram draws. RESEARCH ONLY.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -638,6 +647,8 @@ pub(crate) enum StarsProto {
     P1,
     P1x,
     P2,
+    N1,
+    N2,
 }
 
 impl StarsProto {
@@ -649,7 +660,11 @@ impl StarsProto {
                 Ok("p1") => Self::P1,
                 Ok("p1x") => Self::P1x,
                 Ok("p2") => Self::P2,
-                Ok(other) => panic!("HARMONIGRAPH_STARS_PROTO={other}: want off, p1, p1x or p2"),
+                Ok("n1") => Self::N1,
+                Ok("n2") => Self::N2,
+                Ok(other) => {
+                    panic!("HARMONIGRAPH_STARS_PROTO={other}: want off, p1, p1x, p2, n1 or n2")
+                }
             }
         })
     }
@@ -661,7 +676,15 @@ impl StarsProto {
             Self::P1 => 1,
             Self::P1x => 2,
             Self::P2 => 3,
+            Self::N1 => 4,
+            Self::N2 => 5,
         }
+    }
+
+    /// P1, P1x and P2 replace the look (no colour memory, their own final
+    /// colour); N1 and N2 change only how the near two depths are gathered.
+    pub(crate) fn replaces_look(self) -> bool {
+        matches!(self, Self::P1 | Self::P1x | Self::P2)
     }
 
     pub(crate) fn bloom(self) -> bool {
@@ -716,6 +739,39 @@ pub(crate) fn proto_p2_gain() -> f32 {
     })
 }
 const PROTO_P2_GAIN: f32 = 0.23;
+
+/// `HARMONIGRAPH_STARS_NEAR_CORE=<factor>` — N1/N2 only, unset by default.
+/// Set (to any value, 1 included) it switches the near two depths to a
+/// support-tied glow: their Gaussian core's `sigma` and `cap` are multiplied
+/// by the factor (before defocus), and their fringe stops decaying in sigma
+/// units and runs `exp(-3 dist / (R size))` instead, R the 2x2 support's `1 -
+/// 0.3 jitter` cells and `size` the star's own size draw, faded out over R's
+/// last .15 like the far path. The star keeps its footprint while more of it
+/// glows. Unset, N1/N2 draw today's star shape (sigma-tied fringe).
+pub(crate) fn proto_near_core() -> Option<f32> {
+    static CORE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+    *CORE.get_or_init(|| {
+        std::env::var("HARMONIGRAPH_STARS_NEAR_CORE")
+            .ok()
+            .map(|v| v.trim().parse().expect("HARMONIGRAPH_STARS_NEAR_CORE=<factor>"))
+    })
+}
+
+/// Whether this starfield draws N1/N2's support-tied glow (the shader's
+/// `star_near_glow`, set through `star_near.z`).
+pub(crate) fn proto_near_glow(proto: StarsProto) -> bool {
+    matches!(proto, StarsProto::N1 | StarsProto::N2) && proto_near_core().is_some()
+}
+
+/// Applies [`proto_near_core`]'s factor to the near two slices' cores under
+/// glow; every other starfield's slices are left as `star_slices` made them.
+pub(crate) fn proto_scale_near(slices: &mut [StarSlice; STAR_SLICES], proto: StarsProto) {
+    let Some(factor) = proto_near_core().filter(|_| proto_near_glow(proto)) else { return };
+    for slice in &mut slices[3..] {
+        slice.sigma *= factor;
+        slice.cap *= factor;
+    }
+}
 
 /// The P1 bloom target: about one texel per star pixel, never finer than the
 /// pane, so its cost does not grow with the output resolution.

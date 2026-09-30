@@ -740,10 +740,11 @@ impl CallbackTrait for SpectrogramCallback {
             .atmosphere
             .map(|mut atmosphere| {
                 atmosphere.settings = atmosphere.settings.sanitized();
-                // RESEARCH: no prototype keeps colour memory. P1 keeps the
-                // profile's far-image size (Uniform, which has no reduced far
-                // image, becomes High) and drops the fringe the far path
-                // would draw; P2 reads no profile at all.
+                // RESEARCH: no look-replacing prototype keeps colour memory
+                // (N1/N2 do). Every prototype keeps the profile's far-image
+                // size (Uniform, which has no reduced far image, becomes
+                // High); P1 drops the fringe the far path would draw; P2
+                // reads no profile at all.
                 let stars = &mut atmosphere.settings;
                 if proto != crate::stars::StarsProto::Off
                     && stars.cloud_style == harmonigraph_scene::CloudStyle::Stars
@@ -752,7 +753,9 @@ impl CallbackTrait for SpectrogramCallback {
                     if stars.stars.star_halo_profile == StarHaloProfile::Uniform {
                         stars.stars.star_halo_profile = StarHaloProfile::P3;
                     }
-                    (stars.color_pickup, stars.color_release) = (0.0, 0.0);
+                    if proto.replaces_look() {
+                        (stars.color_pickup, stars.color_release) = (0.0, 0.0);
+                    }
                     if proto.bloom() {
                         stars.stars.star_fringe = 0.0;
                     }
@@ -831,7 +834,9 @@ impl CallbackTrait for SpectrogramCallback {
                 let tone_size =
                     if proto == StarsProto::P2 && stars.is_some() { None } else { tone_size };
                 let near_size = stars.and_then(|_| match proto {
-                    StarsProto::Off => atmosphere::star_near_size(pixels, settings.settings.stars),
+                    StarsProto::Off | StarsProto::N1 | StarsProto::N2 => {
+                        atmosphere::star_near_size(pixels, settings.settings.stars)
+                    }
                     StarsProto::P1 | StarsProto::P1x => {
                         Some(crate::stars::proto_bloom_size(pixels))
                     }
@@ -845,10 +850,11 @@ impl CallbackTrait for SpectrogramCallback {
                     )
                 });
                 let halos = stars.map(|_| match proto {
-                    StarsProto::Off => {
+                    StarsProto::Off | StarsProto::N1 => {
                         atmosphere::star_halo_layout(pixels, settings.settings.stars)
                     }
-                    StarsProto::P1 | StarsProto::P1x => {
+                    // N2 reads each near depth's complete response directly.
+                    StarsProto::P1 | StarsProto::P1x | StarsProto::N2 => {
                         atmosphere::StarHaloLayout::from_sizes([[1, 1]; 5], 5)
                     }
                     StarsProto::P2 => crate::stars::proto_tile_layout(),

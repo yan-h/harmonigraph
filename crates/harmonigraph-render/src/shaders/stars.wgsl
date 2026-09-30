@@ -121,8 +121,15 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
     if paint.a != 1.0 { fade *= paint.a; }
+    var centre_x = bitcast<u32>(centre.x);
+    // RESEARCH N1/N2 support-tied glow: a near star's size draw rides in its
+    // centre's lowest mantissa byte (under 3e-5 of a cell), because the baked
+    // inverse sigma loses it wherever the cap binds.
+    if star_near_glow() && salt >= 1000u + 3u * STAR_FAR_LAYERS {
+        centre_x = (centre_x & 0xffffff00u) | u32(c.y * 256.0);
+    }
     return vec4<u32>(
-        bitcast<u32>(centre.x),
+        centre_x,
         bitcast<u32>(centre.y),
         (tens.r << 20u) | (tens.g << 10u) | tens.b,
         pack2x16float(vec2<f32>(1.0 / sigma, fade)),
@@ -196,6 +203,7 @@ fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
     let f = r - o;
     let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
     let index = s.base + local.y * s.grid.x + local.x;
+    if STAR_PROTO == 4u { return star_near_gather(s, r, true); }
     var halo = vec4<f32>(0.0);
     for (var y = -1; y <= 1; y += 1) {
         let row = index + y * s.grid.x;
@@ -211,8 +219,8 @@ fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
 // uniform across fragments, so selecting its array introduces no spatially
 // divergent branch. Uniform sampling retains the original first-array lookup.
 fn star_halo_at(pt: vec2<f32>, k: u32) -> vec4<f32> {
-    // RESEARCH: the prototypes draw no halo images.
-    if STAR_PROTO != 0u { return vec4<f32>(0.0); }
+    // RESEARCH: the prototypes draw no halo images, except N1's.
+    if STAR_PROTO != 0u && STAR_PROTO != 4u { return vec4<f32>(0.0); }
     let sample = star_halo_sample(k);
     let uv = pt / star_size();
     switch sample.group {
@@ -247,6 +255,67 @@ fn star_far_own(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
     let o = floor(r);
     let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
     return star_texel(s, r - o, s.base + local.y * s.grid.x + local.x, false);
+}
+
+// RESEARCH N1/N2 (branch worktree-stars-near-2x2): whether
+// `HARMONIGRAPH_STARS_NEAR_CORE` is set, which ties the near fringe's length
+// to the 2x2 support instead of to sigma. Reached only under N1/N2.
+fn star_near_glow() -> bool {
+    return STAR_PROTO >= 4u && star_near().z > 0.0;
+}
+
+// RESEARCH N1/N2: one near star's far-path response (support R = `1 - 0.3
+// jitter` cells, fade over its last .15). Without the glow knob the fringe is
+// `star_far_texel`'s, `exp(-0.4 d)` in sigma units, and the full response is
+// exactly that function's; with it the fringe is `exp(-3 dist / (R size))`,
+// `size` the star's own size draw. `residual` subtracts the native core
+// `star_texel(..., false)` draws (N1's halo), so core + residual is the full
+// response with the core unchanged; the core's reach, `0.5 - 0.3 jitter`
+// cells, ends before the fade starts, so the max is a guard only.
+fn star_near_texel(s: StarSlice, f: vec2<f32>, index: i32, residual: bool) -> vec4<f32> {
+    let t = textureLoad(star_atlas, atlas_texel(index), 0);
+    if t.w == 0u { return vec4<f32>(0.0); }
+    let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
+    let radius = 1.0 - star_geometry().x * 0.5;
+    let outer = radius * s.cell;
+    if dist >= outer { return vec4<f32>(0.0); }
+    let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
+    let shape = unpack2x16float(t.w);
+    let d = dist * shape.x;
+    let gaussian = exp(-0.5 * d * d);
+    var full = gaussian;
+    if s.fringe > 0.0 {
+        if star_near_glow() {
+            let draw = (f32(t.x & 0xffu) + 0.5) / 256.0;
+            let size = exp(-2.4 * star_size_variation() * draw);
+            full += s.fringe * exp(-3.0 * dist / (outer * size));
+        } else {
+            full += s.fringe * exp(-0.4 * d);
+        }
+    }
+    full = min(full, 1.0) * (1.0 - smoothstep((radius - 0.15) * s.cell, outer, dist));
+    var cover = full;
+    if residual {
+        let reach = star_geometry().y * s.cell;
+        let core = gaussian * (1.0 - smoothstep(star_geometry().z * reach, reach, dist));
+        cover = max(full - core, 0.0);
+    }
+    cover *= shape.y;
+    return vec4<f32>(colour * cover, cover);
+}
+
+// RESEARCH N1/N2: the nearest 2x2 cells, as `star_far_gather` walks them.
+fn star_near_gather(s: StarSlice, r: vec2<f32>, residual: bool) -> vec4<f32> {
+    let o = floor(r - 0.5);
+    let f = r - o;
+    let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
+    let index = s.base + local.y * s.grid.x + local.x;
+    var result = vec4<f32>(0.0);
+    result += star_near_texel(s, f, index, residual);
+    result += star_near_texel(s, f - vec2<f32>(1.0, 0.0), index + 1, residual);
+    result += star_near_texel(s, f - vec2<f32>(0.0, 1.0), index + s.grid.x, residual);
+    result += star_near_texel(s, f - vec2<f32>(1.0, 1.0), index + s.grid.x + 1, residual);
+    return result;
 }
 
 fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
@@ -285,6 +354,10 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
         var slice = vec4<f32>(0.0);
         if star_far().z > 0.0 && k < STAR_FAR_LAYERS {
             slice = star_far_gather(s, r);
+        } else if STAR_PROTO == 5u {
+            // RESEARCH N2: the near depths' complete response through the
+            // same 2x2 gather, with no halo image.
+            slice = star_near_gather(s, r, false);
         } else {
             slice = star_texel(s, f, index, false);
             slice += star_halo_at(pt, k);
@@ -316,7 +389,9 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
 // addressing; High, Medium and Low filter smaller complete far-layer images.
 override STAR_SPLIT: bool = false;
 // RESEARCH ONLY (worktree-stars-cheap-proto): 0 production, 1 P1 cores +
-// bloom, 2 P1x (1x1 far reads), 3 P2 pre-drawn tiles. See `StarsProto`.
+// bloom, 2 P1x (1x1 far reads), 3 P2 pre-drawn tiles; branch
+// worktree-stars-near-2x2: 4 N1 2x2 residual halos, 5 N2 direct 2x2 near
+// depths. See `StarsProto`.
 override STAR_PROTO: u32 = 0u;
 const STAR_FAR_LAYERS: u32 = 3u;
 

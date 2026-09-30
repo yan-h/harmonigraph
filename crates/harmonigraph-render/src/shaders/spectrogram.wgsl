@@ -915,7 +915,8 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
         var stars: vec4<f32>;
-        if STAR_PROTO != 0u {
+        // N1 and N2 (4, 5) draw through production's `star_color`.
+        if STAR_PROTO != 0u && STAR_PROTO < 4u {
             stars = proto_star_color(pt);
         } else {
             stars = star_color(pt);

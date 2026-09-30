@@ -176,6 +176,14 @@ const PROTO_CASES: &[(&str, Turn, crate::stars::StarsProto)] = {
         ("stars-proto: p1x high-far", high, StarsProto::P1x),
         ("stars-proto: p1x medium-far", medium, StarsProto::P1x),
         ("stars-proto: p2 tiles", high, StarsProto::P2),
+        // Branch worktree-stars-near-2x2: `PROBE_CASE=stars-near` selects
+        // these six, the near two depths only (far three production's).
+        ("stars-near: production high", high, StarsProto::Off),
+        ("stars-near: production medium", medium, StarsProto::Off),
+        ("stars-near: n1 high", high, StarsProto::N1),
+        ("stars-near: n1 medium", medium, StarsProto::N1),
+        ("stars-near: n2 high", high, StarsProto::N2),
+        ("stars-near: n2 medium", medium, StarsProto::N2),
     ]
 };
 
@@ -493,7 +501,14 @@ fn cloud_costs_by_style_and_dial() {
             median(&case.cpu_prepare),
             source
         );
-        let baseline = if case.name.starts_with("stars-proto") {
+        let baseline = if case.name.starts_with("stars-near") {
+            // Each near-2x2 case against production at its own profile.
+            if case.name.ends_with("medium") {
+                "stars-near: production medium"
+            } else {
+                "stars-near: production high"
+            }
+        } else if case.name.starts_with("stars-proto") {
             "stars-proto: production high"
         } else if case.name.ends_with("memory") {
             "mosaic, memory"
