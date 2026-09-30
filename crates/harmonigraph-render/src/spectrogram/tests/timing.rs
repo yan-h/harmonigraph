@@ -15,7 +15,8 @@
 //! `PROBE_SIZE=WxH` (pixels, default 3840x2160), `PROBE_PPP` (default 2),
 //! `PROBE_FRAMES` (default 60) and `PROBE_CASE` (comma-separated substrings of
 //! the case names, any of which selects a case) narrow it, and `PROBE_FILLS`
-//! replaces the pair of coverages below.
+//! replaces the pair of coverages below. `PROBE_CASE=medium` selects both the
+//! explicit Medium memory-off and Medium memory-on cases.
 //! `docs/spectrogram-cloud-performance.md` holds the readings.
 //! `PROBE_HISTORY_SECONDS` (default 10) is the visible span, not elapsed age;
 //! it controls the time-softness scale, without changing the supplied grid.
@@ -141,9 +142,10 @@ const CASES: &[(&str, Option<Turn>)] = &[
         }),
     ),
     (
-        "stars, memory",
+        "stars, medium memory",
         Some(|s| {
             s.cloud_style = CloudStyle::Stars;
+            s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Medium;
             memory(s);
         }),
     ),

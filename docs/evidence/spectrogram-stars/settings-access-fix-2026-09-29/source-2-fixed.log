@@ -1,0 +1,11 @@
+
+running 1 test
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... adapter: AdapterInfo { name: "Apple M1 Pro", vendor: 0, device: 0, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "", driver_info: "", backend: Metal, subgroup_min_size: 4, subgroup_max_size: 64, transient_saves_memory: true }
+pane 3840x2160 px at 4 px/pt, 1024 slabs of 3828 buckets
+case / fill / span s: source/full GPU min/p10/med/p90/max ms; wall median; CPU prepare median
+stars, medium / 1.00 / 10.0: 9.099/9.187/9.566/9.915/11.193; wall 11.198; CPU 0.132; source px Some([1024, 2160])
+stars, medium memory / 1.00 / 10.0: 9.246/9.516/9.903/10.289/11.310; wall 11.782; CPU 0.136; source px Some([1024, 2160])
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 386 filtered out; finished in 9.03s
+

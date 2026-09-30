@@ -443,3 +443,70 @@ Changing source resolution needs an explicit quality check for narrow transients
 A CPU cache rewrite is not justified by the measurements here.
 
 [Issue #1015](https://github.com/yan-h/harmonigraph/issues/1015) tracked that remaining optimization work and was closed completed with no production change retained.
+
+## Shared Stars settings access (2026-09-29)
+
+[Issue #1282](https://github.com/yan-h/harmonigraph/issues/1282) isolated a regression in the shared Stars shader's aggregate-return settings adapter.
+Field getters and indexed slice/halo getters restore the earlier GPU cost while retaining the shared rendering calculations.
+No resolution,
+pass count,
+uniform layout,
+or saved setting changes.
+
+The same Apple M1 Pro / Metal ran the baseline (`56b6da43`) and fix in A/B/B/A order,
+with all builds finished before timing.
+Each executable interleaves Medium with memory off and on:
+3840×2160 pixels,
+4 pixels per point,
+1024 slabs,
+full coverage,
+240 measured frames after ten warmups.
+The existing memory case now explicitly selects Medium.
+
+| Shader mode | Color memory | Baseline GPU medians (ms) | Fixed GPU medians (ms) |
+| --- | --- | --- | --- |
+| Source | Off | 51.179, 50.650 | 9.566, 9.526 |
+| Source | On | 51.477, 51.418 | 9.903, 9.924 |
+| Embedded, strict | Off | 53.726, 56.014 | 9.519, 9.517 |
+| Embedded, strict | On | 54.381, 56.891 | 9.861, 9.887 |
+
+These are real source-BEGIN through dependent-composite-END offscreen intervals,
+not DAW frame times.
+CPU callback preparation stays around 0.13–0.15 ms.
+The ordinary desktop remained active;
+these measurements establish the improvement on this GPU rather than a universal timing threshold.
+
+Before/after captures from the existing partial-pane quality-profile test and lattice Stars color test match byte-for-byte:
+135 spectrogram frames across profiles,
+formats,
+color-memory settings,
+and evolving history,
+plus four lattice Stars profile frames (13,773,136 bytes total).
+The fixtures assert visible stars and exercise Medium's foreground pass and retained color.
+Both unchanged golden-image suites also pass.
+The capture instrumentation was temporary;
+no reference image was re-baselined.
+
+To repeat the timing cases after building each test executable separately,
+run each saved executable with:
+
+```sh
+HARMONIGRAPH_REQUIRE_GPU=1 HARMONIGRAPH_SHADER_ASSETS=source \
+PROBE_CASE=medium PROBE_SIZE=3840x2160 PROBE_PPP=4 \
+PROBE_FRAMES=240 PROBE_FILLS=1 ./renderer-test-binary \
+cloud_costs_by_style_and_dial --ignored --nocapture --test-threads=1
+```
+
+Use `HARMONIGRAPH_SHADER_ASSETS=strict` to test the embedded corpus without source fallback.
+
+The [source results](evidence/spectrogram-stars/settings-access-fix-2026-09-29/source-results.json) and [strict results](evidence/spectrogram-stars/settings-access-fix-2026-09-29/strict-results.json) retain executable hashes and each run's readings;
+adjacent logs retain the complete probe output.
+The baseline and source candidate used the same explicit Medium-memory case and temporary frame-capture hooks;
+the final strict candidate has no capture hooks.
+The [runner regeneration](https://github.com/yan-h/harmonigraph/actions/runs/36654837596) passed strict catalog,
+renderer/offline goldens,
+and provider controls.
+The imported 110-library corpus also passes the local strict catalog (1,348 loads,
+zero source fallback,
+load failures,
+or rejections).

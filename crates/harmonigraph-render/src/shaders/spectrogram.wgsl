@@ -1078,11 +1078,16 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
     let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
     return palette_color(clamp(level * spread + lift, 0.0, 1.0));
 }
-fn star_settings() -> StarUniforms {
-    return StarUniforms(cloud.origin, cloud.size, cloud.ppp, cloud.star_randomness,
-        cloud.star_life, 0.0, cloud.star_far, cloud.star_near, cloud.star_geometry,
-        cloud.star_slices, cloud.star_halo_samples);
-}
+fn star_origin() -> vec2<f32> { return cloud.origin; }
+fn star_size() -> vec2<f32> { return cloud.size; }
+fn star_ppp() -> f32 { return cloud.ppp; }
+fn star_randomness() -> f32 { return cloud.star_randomness; }
+fn star_life() -> f32 { return cloud.star_life; }
+fn star_far() -> vec4<f32> { return cloud.star_far; }
+fn star_near() -> vec4<f32> { return cloud.star_near; }
+fn star_geometry() -> vec4<f32> { return cloud.star_geometry; }
+fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
+fn star_halo_sample(k: u32) -> StarHaloSample { return cloud.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     let level = star_level_at(pt);

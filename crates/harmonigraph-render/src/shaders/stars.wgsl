@@ -1,4 +1,7 @@
-// Shared star geometry and premultiplied composition. Consumers supply light and floor adapters.
+// Shared star geometry and premultiplied composition. Consumers supply light,
+// floor, and field-level settings adapters. Keep arrays behind indexed getters:
+// returning all of StarUniforms by value made Metal's spectrogram fragment path
+// about 5x slower at 4K Medium (#1282).
 struct StarHaloSample {
     size: vec2<f32>,
     group: u32,
@@ -95,18 +98,18 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // below is keyed on the life, so each is a new star. The high half of the
     // key is the life plus one: the stagger hashes at zero there, and the
     // slices' salts all sit in the low half.
-    let age = star_settings().star_life + star_hash(hashed, salt + 2u).x;
+    let age = star_life() + star_hash(hashed, salt + 2u).x;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
     // Jitter. Every life holds a star, so a depth's count is its cell size
     // alone.
     let a = star_hash(hashed, key);
     let through = fract(age);
-    let centre = 0.5 + star_settings().star_geometry.x * (a.xy - 0.5);
+    let centre = 0.5 + star_geometry().x * (a.xy - 0.5);
     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
-        * (star_settings().size.y / STAR_PANE) + star_settings().size * 0.5;
+        * (star_size().y / STAR_PANE) + star_size() * 0.5;
     let c = star_hash(hashed, key + 1u);
-    let randomness = star_settings().star_randomness;
+    let randomness = star_randomness();
     let paint = star_source(at, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness), index);
     if paint.a <= 0.0 { return vec4<u32>(0u); }
     let colour = paint.rgb;
@@ -132,7 +135,7 @@ fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
     let texel = vec2<i32>(floor(in.position.xy));
     let index = texel.y * STAR_ATLAS_WIDTH + texel.x;
     for (var k = 0u; k < STAR_SLICES; k += 1u) {
-        let s = star_settings().star_slices[k];
+        let s = star_slice(k);
         let at = index - s.base;
         if at >= 0 && at < s.grid.x * s.grid.y {
             let local = vec2<i32>(at % s.grid.x, at / s.grid.x);
@@ -154,7 +157,7 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     );
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    let reach = star_settings().star_geometry.y * s.cell;
+    let reach = star_geometry().y * s.cell;
     if dist >= select(reach, STAR_HALO_REACH * s.cell, halo) {
         return vec4<f32>(0.0);
     }
@@ -162,7 +165,7 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     let shape = unpack2x16float(t.w);
     let d = dist * shape.x;
     let gaussian = exp(-0.5 * d * d);
-    let core = gaussian * (1.0 - smoothstep(star_settings().star_geometry.z * reach, reach, dist));
+    let core = gaussian * (1.0 - smoothstep(star_geometry().z * reach, reach, dist));
     var cover = core;
     if halo {
         var full = gaussian;
@@ -180,10 +183,10 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
 // usual far-to-near over; flattening all halos would change the depth order.
 @fragment
 fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
-    let step = star_settings().size / star_settings().star_halo_samples[in.layer].size;
+    let step = star_size() / star_halo_sample(in.layer).size;
     let pt = in.position.xy * step;
-    let sp = (pt - star_settings().size * 0.5) * (STAR_PANE / star_settings().size.y);
-    let s = star_settings().star_slices[in.layer];
+    let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
+    let s = star_slice(in.layer);
     // Keep the fractional coordinate small across drift wraps so the two
     // passes do not round differently while subtracting an offset near 65536.
     let r = sp / s.cell - fract(s.offset);
@@ -206,8 +209,8 @@ fn fs_star_halo(in: TileVertex) -> @location(0) vec4<f32> {
 // uniform across fragments, so selecting its array introduces no spatially
 // divergent branch. Uniform sampling retains the original first-array lookup.
 fn star_halo_at(pt: vec2<f32>, k: u32) -> vec4<f32> {
-    let sample = star_settings().star_halo_samples[k];
-    let uv = pt / star_settings().size;
+    let sample = star_halo_sample(k);
+    let uv = pt / star_size();
     switch sample.group {
         case 0u: { return textureSampleLevel(star_halos, cloud_sampler, uv, i32(sample.layer), 0.0); }
         case 1u: { return textureSampleLevel(star_halos_b, cloud_sampler, uv, i32(sample.layer), 0.0); }
@@ -222,7 +225,7 @@ fn star_far_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     let t = textureLoad(star_atlas, atlas_texel(index), 0);
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    let radius = 1.0 - star_settings().star_geometry.x * 0.5;
+    let radius = 1.0 - star_geometry().x * 0.5;
     let outer = radius * s.cell;
     if dist >= outer { return vec4<f32>(0.0); }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
@@ -258,16 +261,16 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
 fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f32> {
     var out = under;
     var far_gap = 1.0;
-    let sp = (pt - star_settings().size * 0.5) * (STAR_PANE / star_settings().size.y);
+    let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
     for (var k = first; k < last; k += 1u) {
-        let s = star_settings().star_slices[k];
+        let s = star_slice(k);
         let r = sp / s.cell - fract(s.offset);
         let o = floor(r);
         let f = r - o;
         let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
         let index = s.base + local.y * s.grid.x + local.x;
         var slice = vec4<f32>(0.0);
-        if star_settings().star_far.z > 0.0 && k < STAR_FAR_LAYERS {
+        if star_far().z > 0.0 && k < STAR_FAR_LAYERS {
             slice = star_far_gather(s, r);
         } else {
             slice = star_texel(s, f, index, false);
@@ -278,14 +281,14 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
             // Preserve the spectral RGB arithmetic; alpha independently follows over.
             out = vec4<f32>(mix(out.rgb, slice.rgb / slice.w, cover), out.a + (1.0 - out.a) * cover);
         }
-        if star_settings().star_geometry.w > 0.0 && k < STAR_FAR_LAYERS {
+        if star_geometry().w > 0.0 && k < STAR_FAR_LAYERS {
             far_gap *= 1.0 - min(slice.w, 1.0);
             if k + 1u == STAR_FAR_LAYERS && first == 0u {
                 // Fill only background leakage from the far group. Applying
                 // at its boundary also covers Uniform's unsplit small panes.
                 // 0/50/100% reproduce original / gap^2 / gap^4 coverage;
                 // bounded polynomial gains stay stable at zero coverage.
-                let amount = star_settings().star_geometry.w * 2.0;
+                let amount = star_geometry().w * 2.0;
                 let gentle = min(amount, 1.0);
                 let strong = max(amount - 1.0, 0.0);
                 let gain = (1.0 + gentle * far_gap) * (1.0 + strong * far_gap * far_gap);
@@ -303,18 +306,18 @@ const STAR_FAR_LAYERS: u32 = 3u;
 
 fn star_near_color(pt: vec2<f32>) -> vec4<f32> {
     var far = vec4<f32>(0.0);
-    if star_settings().star_far.z > 0.0 {
-        far = textureSampleLevel(cloud_tone, cloud_sampler, pt / star_settings().size, 0.0);
+    if star_far().z > 0.0 {
+        far = textureSampleLevel(cloud_tone, cloud_sampler, pt / star_size(), 0.0);
     } else {
-        far = textureLoad(cloud_tone, vec2<i32>(pt * star_settings().ppp), 0);
+        far = textureLoad(cloud_tone, vec2<i32>(pt * star_ppp()), 0);
     }
     return star_layers(pt, STAR_FAR_LAYERS, STAR_SLICES, far);
 }
 
 fn star_color(pt: vec2<f32>) -> vec4<f32> {
     if STAR_SPLIT {
-        if star_settings().star_near.x > 0.0 {
-            return textureSampleLevel(cloud_tone, cloud_sampler, pt / star_settings().size, 0.0);
+        if star_near().x > 0.0 {
+            return textureSampleLevel(cloud_tone, cloud_sampler, pt / star_size(), 0.0);
         }
         return star_near_color(pt);
     }
@@ -326,7 +329,7 @@ fn fs_star_near(in: TileVertex) -> @location(0) vec4<f32> {
     // Use actual rounded dimensions, including odd panes at fractional scale.
     // This pass binds the far image; final painting binds this pass's output
     // at the same slot. Texture mix and output color conversion stay native.
-    let pt = in.position.xy / star_settings().star_near.xy * star_settings().size;
+    let pt = in.position.xy / star_near().xy * star_size();
     return star_near_color(pt);
 }
 
@@ -334,10 +337,10 @@ fn fs_star_near(in: TileVertex) -> @location(0) vec4<f32> {
 fn fs_star_far(in: TileVertex) -> @location(0) vec4<f32> {
     // Repeat clouded's global-pixel-to-pane-point arithmetic, including its
     // rounding at fractional display scales and nonzero pane origins.
-    let position = in.position.xy + round(star_settings().origin * star_settings().ppp);
-    var pt = position / star_settings().ppp - star_settings().origin;
-    if star_settings().star_far.z > 0.0 {
-        pt = in.position.xy / star_settings().star_far.xy * star_settings().size;
+    let position = in.position.xy + round(star_origin() * star_ppp());
+    var pt = position / star_ppp() - star_origin();
+    if star_far().z > 0.0 {
+        pt = in.position.xy / star_far().xy * star_size();
     }
     // Layer compositing remains gamma-coded here. Depth mixing and the final
     // target's color conversion are applied once, in the final composite.

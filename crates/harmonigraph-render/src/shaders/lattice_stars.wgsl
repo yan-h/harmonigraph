@@ -23,7 +23,16 @@ fn vs_stars(@builtin(vertex_index) vertex: u32, @builtin(instance_index) layer: 
     let uv = vec2<f32>(f32((vertex << 1u) & 2u), f32(vertex & 2u));
     return TileVertex(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0), layer);
 }
-fn star_settings() -> StarUniforms { return settings.stars; }
+fn star_origin() -> vec2<f32> { return settings.stars.origin; }
+fn star_size() -> vec2<f32> { return settings.stars.size; }
+fn star_ppp() -> f32 { return settings.stars.ppp; }
+fn star_randomness() -> f32 { return settings.stars.star_randomness; }
+fn star_life() -> f32 { return settings.stars.star_life; }
+fn star_far() -> vec4<f32> { return settings.stars.star_far; }
+fn star_near() -> vec4<f32> { return settings.stars.star_near; }
+fn star_geometry() -> vec4<f32> { return settings.stars.star_geometry; }
+fn star_slice(k: u32) -> StarSlice { return settings.stars.star_slices[k]; }
+fn star_halo_sample(k: u32) -> StarHaloSample { return settings.stars.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     let light = textureSampleLevel(source, cloud_sampler, pt / settings.stars.size, 0.0);
