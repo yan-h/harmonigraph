@@ -169,7 +169,14 @@
 set -uo pipefail
 
 MIN_IDLE_MINUTES=${RECLAIM_MIN_IDLE_MINUTES:-120}
-PRUNE_IDLE_MINUTES=${RECLAIM_PRUNE_IDLE_MINUTES:-480}
+# The prune gate is depth behind the live-lock check (see prune_caches), so it
+# only has to outlast one build step: a cold release build runs ~4 minutes and a
+# running build keeps writing under target/debug. An hour clears that easily.
+# It was 480 until the disk sat at 11G free while 3.1G of an idle worktree's
+# debug cache waited out the eight hours (2026-09-29). Pruning a paused
+# worktree costs it a debug rebuild, mostly sccache hits; target/release is
+# never pruned, so its handover build survives.
+PRUNE_IDLE_MINUTES=${RECLAIM_PRUNE_IDLE_MINUTES:-60}
 # 80G is about ten concurrent release builds' headroom (~5G each, and a
 # disk-full mid-build fails every running agent, not just the newest). Above
 # it there is room to spare and the scan is not worth its ~185ms per
