@@ -110,7 +110,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
         poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
-            wash_pool, wash_rim, velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
+            wash_pool, velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
     }
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
@@ -336,15 +336,15 @@ fn scenarios() -> Vec<Scenario> {
         });
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
-    // section and puts eight of its own there, and nothing else on the page moves.
+    // section and puts seven of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the base
-    // scenario selects the mosaic, so without this the eight are drawn by no case
+    // scenario selects the mosaic, so without this the seven are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Watercolor,
         enabled: true,
-        visits: 13 + 14 + 5 + 2 + 2 - 3 + 8,
+        visits: 13 + 14 + 5 + 2 + 2 - 3 + 7,
         ..base
     });
     cases.push(Scenario {

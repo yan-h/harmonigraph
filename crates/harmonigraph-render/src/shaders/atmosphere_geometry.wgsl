@@ -303,12 +303,11 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
 }
 
 // Each octave stores its lookup offset, an independent signed brightness draw,
-// and the two pigment SHAPES the spectrogram's `Rim shade` and `Edge pooling`
-// scale: each 0..1, and neither yet carrying a dial, so a drag is not a rebake.
+// and the tide line's SHAPE, which the spectrogram's `Edge pooling` scales:
+// 0..1 and not yet carrying the dial, so a drag is not a rebake.
 struct Wet {
     offset: vec2<f32>,
     brightness: f32,
-    rim: f32,
     tide: f32,
 };
 
@@ -349,19 +348,22 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     let brightness = mix(
         mix(centre, under, fa),
         wash_brightness(f.front, salt, period), bl);
-    // Pigment settling toward the glob's own rim, and the tide line: a broad
-    // soft crescent lying on the OVERLAPPED glob, hugging the outside of the
-    // front glob's arc. Both squared, so they come on gently. Neither is
-    // feathered, as before #1038; how hard each bites is the dial's and `Edge feathering`'s.
-    let rim = clamp(f.edge, 0.0, 1.0);
+    // The tide line: a broad soft crescent lying on the OVERLAPPED glob,
+    // hugging the outside of the front glob's arc. Squared, so it comes on
+    // gently. Not feathered, as before #1038; how hard it bites is the dial's
+    // and `Edge feathering`'s.
+    //
+    // #909's surface pigment (each glob darkening toward its own rim) is not
+    // here: without that version's paper lift it measured as a near-uniform
+    // dim over 99% of the pane rather than a shape, and Yan dropped it.
     let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
-    return Wet(look - r, brightness, rim * rim, crescent * crescent);
+    return Wet(look - r, brightness, crescent * crescent);
 }
 
 // The whole of the wash's geometry at a point, in cells: what each octave
 // carries and how much of the pixel the finer one covers.
 //
-// Eleven numbers, none of which reads the light, the sound or the clock —
+// Nine numbers, none of which reads the light, the sound or the clock —
 // which is exactly why `fs_cloud_tile` can bake them into three tile targets
 // and the per-frame shader can read them back. The bake always walks
 // both octaves, because `Fine layer mix` is a mix over channels the tile already holds

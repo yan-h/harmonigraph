@@ -141,7 +141,6 @@ fn poisoned_view() -> ViewConfig {
                 wash_layers: nan,
                 wash_randomness: nan,
                 wash_pool: nan,
-                wash_rim: nan,
             },
             material_speed: nan,
             material_direction: nan,
@@ -446,7 +445,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         wash_layers,
         wash_randomness,
         wash_pool,
-        wash_rim,
     } = material_settings;
     f.one("atmosphere.material_settings.velvet_size", *velvet_size);
     f.one("atmosphere.material_settings.velvet_variety", *velvet_variety);
@@ -463,7 +461,6 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.material_settings.wash_layers", *wash_layers);
     f.one("atmosphere.material_settings.wash_randomness", *wash_randomness);
     f.one("atmosphere.material_settings.wash_pool", *wash_pool);
-    f.one("atmosphere.material_settings.wash_rim", *wash_rim);
 
     f.one("atmosphere.material_speed", *material_speed);
     f.one("atmosphere.material_direction", *material_direction);

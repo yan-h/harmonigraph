@@ -3967,7 +3967,6 @@ fn cs_wrap_probe() {
             let plain = fresh_frame(&device, &queue, &cb);
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.material_settings.wash_pool = 1.0;
-            s.material_settings.wash_rim = 1.0;
             (plain, fresh_frame(&device, &queue, &cb))
         };
         let (plain, pigmented) = pair(150);
@@ -4013,7 +4012,6 @@ fn cs_wrap_probe() {
             ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
             ("Edge pooling", |s| s.material_settings.wash_pool = 1.0),
-            ("Rim shade", |s| s.material_settings.wash_rim = 1.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
@@ -4562,7 +4560,6 @@ fn cs_rotation_probe() {
             ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
             ("Edge pooling", |s| s.material_settings.wash_pool = 1.0),
-            ("Rim shade", |s| s.material_settings.wash_rim = 1.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),

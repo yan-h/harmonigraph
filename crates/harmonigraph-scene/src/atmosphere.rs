@@ -276,9 +276,6 @@ pub struct MaterialSettings {
     /// so it never lifts anything and silence stays on the palette's floor.
     /// Spectrogram only; the lattice's watercolor glow does not read it.
     pub wash_pool: f32,
-    /// Pigment settling toward each glob's own rim, 0 for none, on the same
-    /// terms as [`Self::wash_pool`].
-    pub wash_rim: f32,
 }
 impl Default for MaterialSettings {
     fn default() -> Self {
@@ -298,7 +295,6 @@ impl Default for MaterialSettings {
             wash_layers: 0.5,
             wash_randomness: 0.0,
             wash_pool: 0.0,
-            wash_rim: 0.0,
         }
     }
 }
@@ -339,7 +335,6 @@ impl MaterialSettings {
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
         self.wash_randomness = clamp(self.wash_randomness, fresh.wash_randomness, 0.0, 1.0);
         self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
-        self.wash_rim = clamp(self.wash_rim, fresh.wash_rim, 0.0, 1.0);
         self
     }
 }
@@ -759,7 +754,6 @@ impl SpectralAtmosphere {
                         self.material_settings.wash_refract != 0.0
                             || self.material_settings.wash_randomness > 0.0
                             || self.material_settings.wash_pool > 0.0
-                            || self.material_settings.wash_rim > 0.0
                             || self.color_pickup > 0.0
                             || self.color_release > 0.0
                     }

@@ -17,9 +17,9 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// because what is stored is a cell offset of order one, where the eleven-bit
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// The third tile target: the wash's two pigment shapes per octave, each a
-/// square of a 0..1 fraction, so eight bits are plenty.
-const PIGMENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+/// The third tile target: the wash's tide-line shape per octave, a square of a
+/// 0..1 fraction, so eight bits are plenty.
+const PIGMENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 // Half-float feedback can stall far from the target when alpha is small.
 const MEMORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
@@ -236,8 +236,8 @@ const WASH_CELLS: f32 = 5.25;
 /// Quantised because the pane's own pixels feed it: at one texel per pixel a
 /// resize drag would rebake a 20 to 40 ms walk on EVERY frame of the drag, where
 /// a 256-texel grain crosses a boundary a handful of times across a whole
-/// window. The ceiling is memory — two `Rgba16Float` targets and an `Rgba8Unorm`
-/// one, so 2048 is 84 MB —
+/// window. The ceiling is memory — two `Rgba16Float` targets and an `Rg8Unorm`
+/// one, so 2048 is 75 MB —
 /// and past it the tile is simply coarser than the pane, which is the same
 /// trade as reducing the tone target.
 const TILE_STEP: u32 = 256;
@@ -346,7 +346,6 @@ pub(super) fn tile_key(
                 wash_layers: _,     // applied after the tile bake
                 wash_randomness: _, // applied after coloring
                 wash_pool: _,       // the tile holds the shape, the dial scales it after
-                wash_rim: _,        // the tile holds the shape, the dial scales it after
             },
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
@@ -451,7 +450,7 @@ struct Uniforms {
     star_halo_samples: [StarHaloSample; STAR_SLICES],
     velvet: Float4,
     velvet_size: Float4,
-    /// The wash's `Edge pooling` and `Rim shade`; the rest of the row is padding.
+    /// The wash's `Edge pooling`; the rest of the row is padding.
     wash_pigment: Float4,
 }
 }
@@ -980,7 +979,6 @@ fn memory_key(
                 wash_layers,
                 wash_randomness: _, // display brightness does not change held color
                 wash_pool,
-                wash_rim,
             },
     } = s;
     let mut values = vec![
@@ -1042,7 +1040,6 @@ fn memory_key(
             wash_refract,
             wash_layers,
             wash_pool,
-            wash_rim,
             contours,
             contour_softness,
             contour_strength,
@@ -1666,12 +1663,7 @@ impl Targets {
                 settings.material_settings.velvet_variety,
             ]),
             velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
-            wash_pigment: Float4([
-                settings.material_settings.wash_pool,
-                settings.material_settings.wash_rim,
-                0.0,
-                0.0,
-            ]),
+            wash_pigment: Float4([settings.material_settings.wash_pool, 0.0, 0.0, 0.0]),
             origin: Float2(rect.min.into()),
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
