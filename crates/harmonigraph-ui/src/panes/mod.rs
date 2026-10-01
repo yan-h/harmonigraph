@@ -260,7 +260,7 @@ impl Viewer<'_> {
                 // all three compose from.
                 self.interaction.analyzer_regions.draw(ui, self.state, self.now);
             }
-            Tab::Spiral => spiral_pane(ui, self.state, self.now, DOCKED_SURFACE),
+            Tab::Spiral => spiral_pane(ui, self.state, &mut self.interaction.spiral, self.now),
             Tab::Video => render_pane(ui, self.state, self.interaction, self.now),
         }
     }

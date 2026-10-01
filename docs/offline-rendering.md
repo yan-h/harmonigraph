@@ -39,8 +39,8 @@ cargo build --release -p harmonigraph-offline
 ## Saved appearance
 
 Takes use format v5 and carry a version-1 appearance document captured when recording starts.
-It contains camera, view, spectrum, spiral framing and the whole video configuration;
-dock layout, selected editor page and other workspace settings stay in the editor save.
+It contains camera, view, spectrum and the whole video configuration;
+dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
 Automatic export uses that recorded appearance, with the resolution selected when the take stops.
 **Re-render take** replaces the recorded appearance with the current one.
 Camera gestures and settings changes during a take are not recorded.

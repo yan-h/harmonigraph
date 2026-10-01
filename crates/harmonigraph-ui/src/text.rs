@@ -244,7 +244,7 @@ const MAX_GLYPH_PX: f32 = 512.0;
 const FLUSHES_PER_SURFACE: u64 = 3;
 
 /// One surface's block of ids: `slot` picks the flush within it.
-fn batch(surface: usize, slot: u64) -> u64 {
+const fn batch(surface: usize, slot: u64) -> u64 {
     surface as u64 * FLUSHES_PER_SURFACE + slot
 }
 
@@ -253,10 +253,10 @@ pub(crate) fn lattice_learn(surface: usize) -> u64 {
     batch(surface, 0)
 }
 
-/// The spiral's rim names.
-pub(crate) fn spiral_names(surface: usize) -> u64 {
-    batch(surface, 1)
-}
+/// The spiral's rim names. One id rather than one per surface: the docked tab
+/// is the Spiral's only copy (#974), so its slot is filled in the docked
+/// block alone.
+pub(crate) const SPIRAL_NAMES: u64 = batch(crate::panes::DOCKED_SURFACE, 1);
 
 /// The analyzer's pitch and level labels.
 pub(crate) fn spectral_labels(surface: usize) -> u64 {
@@ -268,9 +268,9 @@ pub(crate) fn spectral_shadow_surface(surface: usize) -> u64 {
     surface as u64 * 2
 }
 
-pub(crate) fn spiral_shadow_surface(surface: usize) -> u64 {
-    surface as u64 * 2 + 1
-}
+/// The Spiral's shadow target: the docked surface's odd id, the Spiral having
+/// no other copy.
+pub(crate) const SPIRAL_SHADOW_SURFACE: u64 = crate::panes::DOCKED_SURFACE as u64 * 2 + 1;
 
 /// One glyph as the mirror identifies it: its size, its character, and the
 /// TEXEL it was found at.
@@ -1890,15 +1890,17 @@ mod tests {
     /// lands wherever the second's was.
     ///
     /// Swept across surfaces rather than checked at the two the editor draws,
-    /// because every id here is a FUNCTION of the surface: a slot standing
-    /// outside its own block collides with nothing until a surface is added,
+    /// because every id here but the Spiral's one is a FUNCTION of the
+    /// surface: a slot standing outside its own block collides with nothing
+    /// until a surface is added,
     /// and then collides in silence. An offline layout naming one pane eight
     /// times is what reaches surface 7.
     const SURFACES: usize = 8;
     #[test]
     fn every_batch_drawn_in_a_frame_has_an_id_of_its_own() {
         let ids: Vec<u64> = (0..SURFACES)
-            .flat_map(|s| [lattice_learn(s), spiral_names(s), spectral_labels(s)])
+            .flat_map(|s| [lattice_learn(s), spectral_labels(s)])
+            .chain([SPIRAL_NAMES])
             .collect();
         let distinct: std::collections::HashSet<u64> = ids.iter().copied().collect();
         assert_eq!(distinct.len(), ids.len(), "two batches share an id: {ids:?}");

@@ -647,7 +647,7 @@ mod tests {
         recorded.camera.yaw = 1.23;
         recorded.view.max_sevens = 3;
         recorded.spectrum.low_midi = 40.5;
-        recorded.spiral.zoom = 2.75;
+        recorded.spectrum.roll_thickness = 1.75;
         recorded.render.short_edge = 2160;
         let mut take = take();
         take.header.appearance = Some(recorded.serialize());
@@ -657,7 +657,7 @@ mod tests {
         replacement.camera.yaw = -0.5;
         replacement.view.max_sevens = 2;
         replacement.spectrum.low_midi = 45.0;
-        replacement.spiral.zoom = 1.5;
+        replacement.spectrum.roll_thickness = 0.5;
         replacement.render.short_edge = 720;
         let selected = appearance_for(&take, Some(&replacement.serialize()));
         assert_eq!(selected.serialize(), replacement.serialize());

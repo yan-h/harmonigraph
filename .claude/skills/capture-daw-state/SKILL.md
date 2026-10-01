@@ -39,7 +39,6 @@ An output showing only Tune instances means the scan stopped short, not that the
 - The fresh look is the `Default` of every group in `AppearanceDocument` (`crates/harmonigraph-ui/src/appearance.rs`):
 `ViewConfig` (`crates/harmonigraph-scene/src/view/mod.rs`),
 `SpectrumConfig` (`crates/harmonigraph-ui/src/config.rs`),
-`SpiralView`,
 and the video block's `RenderConfig` and `RenderFrame` (`crates/harmonigraph-take/src/render.rs`).
 A capture edits each group's `impl Default`, not only `ViewConfig`'s —
 `--rust` prints the view fields alone, so read the other groups off `--appearance`.
@@ -57,7 +56,8 @@ defaults.
 
 `.bwproject` is a "BtWg" tagged binary.
 Plugin state sits in a raw-DEFLATE section (wbits=-15, no zlib header) as nice-plug's plain JSON `{"version","params","fields"}`, and `fields["ui-state"]` is the RON from `SharedState::save_persist`.
-The version-7 editor save nests camera, view, spectrum, spiral framing and the whole video configuration under `appearance`.
+The version-7 editor save nests camera, view, spectrum and the whole video configuration under `appearance`;
+the Spiral's framing is a top-level editor key beside it.
 `--appearance` extracts that document for `harmonigraph-offline --appearance FILE`, requiring exactly one editor appearance in the project.
 The take carries that appearance independently of the editor layout and its folds.
 nice-plug can also zstd the JSON.
