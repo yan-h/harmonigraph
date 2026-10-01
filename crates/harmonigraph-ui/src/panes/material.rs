@@ -119,7 +119,7 @@ pub(super) fn stars(
         .percent()
         .show(ui)
         .on_hover_text(
-            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Increasing Position variation also shortens distant halos, except in Uniform rendering. Brightness and size variation are controlled by Size & brightness variation.",
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Increasing Position variation also shortens distant halos, except in Uniform rendering. Brightness and size have their own bars, Brightness variation and Size variation.",
         );
     ValueBar::new(&mut atmosphere.star_far_fill, 0.0..=1.0, "Distant gap fill")
         .percent()

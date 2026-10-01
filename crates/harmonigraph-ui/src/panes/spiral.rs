@@ -168,7 +168,7 @@ const VOICE_OVERHANG: f32 = 0.25;
 /// ribbons, so they follow the picture — its `REFERENCE_PITCH_LEN` and the
 /// pitch zoom both. These stand outside the picture, like an axis label, and
 /// the only thing that can crowd them is the band they are set in: they take
-/// their dialled size wherever it fits and scale with the band where it does
+/// [`NAME_PT`] wherever it fits and scale with the band where it does
 /// not, which is on any pane whose short side is under about 395 points —
 /// [`NAME_BAND_SHARE`] against the whole of [`NAME_BAND_PT`] is where that
 /// number comes from. A dock split two ways sits above it and a dock split

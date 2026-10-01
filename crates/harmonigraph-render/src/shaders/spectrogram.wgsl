@@ -266,8 +266,9 @@ struct Cloud {
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
     // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
-    // clouds, or native-resolution RGB of the three far Stars layers. 0 works
-    // the tone out per pixel in the final composite, from the tile.
+    // clouds, or RGB of the three far Stars layers (75%, 50% or a third of the
+    // pane at High, Medium and Low; native at Uniform on a large pane). 0 works
+    // the texture out per pixel in the composite instead.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
     // are the sanitized settings. The filter shader declares only the head of
