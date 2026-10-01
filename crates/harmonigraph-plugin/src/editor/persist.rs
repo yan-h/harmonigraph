@@ -89,7 +89,7 @@ const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 ///
 /// The blob is written by the host's restore and by the editor window's
 /// `Drop`, and nothing else. A save that only read it would store the settings
-/// of the last CLOSE, so with a window open, [`map`](Self::map) — which is the
+/// of the last CLOSE, so with a window open, [`PersistentField::map`](nice_plug::params::persist::PersistentField::map) — which is the
 /// one thing a host save calls — serializes what the window is showing
 /// instead. The blob itself is left alone: the background analyzer adopts it
 /// whenever it changes with the window shut, and that has to keep meaning a
