@@ -562,15 +562,17 @@ impl LatticeCallback {
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.
+                // A group that casts nothing packs no width either, so no quad
+                // is grown for a shadow no draw spends (`glow_shadow`).
                 geometry_shadow: ShadowParams {
-                    width: geometry.width,
+                    width: if geometry.casts() { geometry.width } else { 0.0 },
                     reach_sigmas: geometry.kernel.reach_sigmas()
                         + if geometry.casts() { geometry.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: geometry.depth,
                     occlusion: 1.0,
                 },
                 marker_shadow: ShadowParams {
-                    width: text.width,
+                    width: if text.casts() { text.width } else { 0.0 },
                     reach_sigmas: text.kernel.reach_sigmas()
                         + if text.casts() { text.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: text.depth,

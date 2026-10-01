@@ -225,7 +225,9 @@ const INK_STRIP_N: u32 = 64u;
 // rather than a share of each item.
 //
 // Zero is the geometry group off — its nodes pack no cells and each multiplies
-// by 1. NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
+// by 1. The CPU also packs 0 here for a group at Darkness 0, which casts
+// nothing either, so its quads are not grown for a shadow no draw spends.
+// NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
 // a shadow being cast with no light in the picture at all.
 fn glow_shadow() -> f32 {
     return max(u.geometry_shadow.width, 0.0);
@@ -241,8 +243,13 @@ fn glow_shadow_depth() -> f32 {
 // σ (`u.geometry_shadow.reach_sigmas`, `ShadowKernel::reach_sigmas`), which is what every quad is
 // grown by.
 //
-// Floored at `SHADOW_REACH_SIGMAS` so a frame with nothing packed sizes its
-// quads as one Gaussian does.
+// Floored at `SHADOW_REACH_SIGMAS`, which grows a distance quad to 3σ where its
+// profile ends at 2σ. That slack is load-bearing rather than discarded
+// fragments: σ is fixed in POINTS at the camera's focus (`sigma_points`) while
+// this reach is converted to a node's uv by its sheet scale alone, so a node
+// standing further from the camera holds the same points in more of its uv,
+// and without the floor its quad cuts the distance tail off in a straight line
+// (six lattice goldens moved by up to 7/255 when it was removed, #1310).
 fn glow_shadow_reach() -> f32 {
     return max(u.geometry_shadow.reach_sigmas, SHADOW_REACH_SIGMAS);
 }
