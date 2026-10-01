@@ -37,6 +37,10 @@ pub struct FrameParams {
     pub brightest_pitch: f32,
 }
 
+/// Round numbers for tests and hand-built scenes rather than the params' own
+/// defaults, which differ for Fade (about 0.29 s, `ParamKey::default_value` in
+/// harmonigraph-take). A shell overwrites all three from its param backend
+/// every frame.
 impl Default for FrameParams {
     fn default() -> Self {
         FrameParams { fade_time: 1.0, darkest_pitch: 24.0, brightest_pitch: 108.0 }

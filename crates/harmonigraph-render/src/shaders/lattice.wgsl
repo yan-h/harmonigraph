@@ -145,7 +145,7 @@ const TAU: f32 = 6.2831853;
 
 // Billboard headroom past the octave band's outer edge (uv 1.0): the quad
 // and its uv are both scaled by this, so the uv->world mapping is
-// unchanged (disc, band, glyphs, glow all render identically) but there is
+// unchanged (slices, band, glyphs, glow all render identically) but there is
 // margin out to this radius for things that live OUTSIDE the band -- the
 // marks, which at the default band (outer 1.0) sit entirely out here.
 // Costs a bit of fill (bigger quads, which alpha-blend and discard where
@@ -711,10 +711,10 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // so sheets off it draw smaller — in both directions, since that is
     // distance from the ground and not depth toward the eye. The uv is
     // deliberately NOT scaled with it, so every layer inside the node keeps
-    // its proportions and only the node's size on screen changes. (The 2.0
-    // below is what makes uv 1.0 the disc's diameter rather than its radius —
-    // one uv in world units, which `Scene::marker_unit` is the CPU's copy of —
-    // and QUAD_MARGIN is the outer glyphs' soft edge on top of it.)
+    // its proportions and only the node's size on screen changes. (The
+    // `0.90 * 2.0` below puts uv 1.0 at 1.8 node radii — one uv in world
+    // units, which `Scene::marker_unit` is the CPU's copy of — and QUAD_MARGIN
+    // is the outer glyphs' soft edge on top of it.)
     let scale = max(inst.scale, 0.05);
     // A lit slice swelled past the band reaches past the stack's own edge, and
     // carries its mark out with it (`mark_radii`).
@@ -1374,7 +1374,7 @@ fn outer_glyph(
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
-// octave glyph is the same hue as the disc that pitch would light.
+// octave glyph is the same hue as the slice that pitch would light.
 fn pitch_lut_color(pitch: f32) -> vec3<f32> {
     let t = clamp((pitch - u.composite.darkest_pitch) / max(u.composite.brightest_pitch - u.composite.darkest_pitch, 0.01), 0.0, 1.0);
     let f = lut_position(t, u.lut_spacing.xy) * f32(PITCH_LUT_N - 1u);
@@ -1675,10 +1675,10 @@ fn spectral_ring(
 // ground exactly — weigh nothing (`ink_at`, `fs_ink_strip`, then `glow_ink`).
 // What is left here is the angular tightness that blend is laid out at.
 
-// An unlit node's own billboard paints no disc, no trail mark and no
-// placeholder. What says the position is there is the MARKER standing at it,
-// which is a separate instance drawn under the home sheet (`fs_plus`) rather
-// than anything this node paints. So every DISC on screen is a note.
+// An unlit node's own billboard paints no trail mark and no placeholder.
+// What says the position is there is the MARKER standing at it, which is a
+// separate instance drawn under the home sheet (`fs_plus`) rather than
+// anything this node paints.
 //
 // The audio ring is the one thing an idle node does paint, and it is not the
 // node speaking — it is the analyzer, drawn on the node's own ground (see
@@ -1934,7 +1934,7 @@ struct NodeGeom {
 
 fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
     let in = src;
-    let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
+    let d = length(in.uv); // 0 at center, 1 at the octave band's outer edge (1.8 node radii)
 
     // Screen-constant soft-band width: uv units per fragment (uv.x is linear
     // across the billboard, so fwidth is uniform over the quad and safe to
@@ -2320,7 +2320,7 @@ fn base_node_ink(
     glyph = mark + glyph * (1.0 - mark);
     glyph_mask = mark_mask + glyph_mask * (1.0 - mark_mask);
 
-    // The active note: glyph over (disc + glow), premultiplied.
+    // The active note: the glyphs over the empty ground above, premultiplied.
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
     // Out as a FRACTION of the ink rather than as the coverage it was carried
@@ -2980,11 +2980,11 @@ fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
 /// How lit this node is, for the purpose of the light it gives off — carried on
 /// the glow's own attack and release, and handed over per instance.
 ///
-/// Its TARGET is the largest of every level that puts ink on the node, and the
-/// note's own envelope is only one of them: a mark rides the marked VOICE's
-/// level rather than the node's, and the audio ring rides the analyzer through
-/// the view's Gate, so a node with no key down and a ring showing is a node
-/// with something on screen. But this is where that target has GOT to, not the
+/// Its TARGET is the largest of the node's MIDI levels, read before the Opacity
+/// mapping, and the note's own envelope is only one of them: a mark rides the
+/// marked VOICE's level rather than the node's. The audio ring is not among
+/// them — a halo says something is being played here, where the ring says
+/// something is being heard. But this is where that target has GOT to, not the
 /// target — a light runs slower than every layer under it, which is what makes
 /// it read as light, and it can stand above zero on a node that has gone
 /// silent entirely.
@@ -3195,7 +3195,7 @@ fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsO
     out.uv = vec2<f32>(corner.x, 0.0);
     // A node with no light was handed no ROW either, and the two facts are one
     // fact: `GlowFade` gives a row only to a node that has a light and hands
-    // everything else `GlowStep::default()`, whose row is 0 and whose mix is 1.
+    // everything else `GlowStep::default()`, whose level and row are both 0.
     // Such a node is still SHIPPED whenever it draws anything at all — an audio
     // ring is enough — so writing its ink here would settle it whole into the
     // row belonging to whichever node lit first. Collapsed to a point instead,

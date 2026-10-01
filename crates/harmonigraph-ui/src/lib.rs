@@ -408,14 +408,14 @@ pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64
 /// Only the *views* are here. The settings panes edit state that a
 /// non-interactive renderer cannot change and a viewer should not see, so
 /// they are deliberately unreachable this way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+///
+/// The Spiral is not one: it is an editor tab only, never exported (#974).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pane {
     /// The 3D lattice.
     Lattice,
-    /// The spectrum, voice bars and piano roll.
+    /// The spectrum curve, spectrogram and piano roll.
     Spectral,
-    /// The same spectrum wound onto a chroma spiral.
-    Spiral,
 }
 
 /// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
@@ -458,7 +458,6 @@ pub fn draw_pane(
             1.0,
             panes::spectral::Navigation::None,
         ),
-        Pane::Spiral => panes::spiral::spiral_pane(ui, state, now, surface),
     }
 }
 
@@ -483,9 +482,6 @@ fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
     }
 }
 
-/// Whether the piano roll still has something moving across it: its window
-/// reaches back to a note that was sounding. Goes quiet once the last note
-/// has scrolled off the far edge, so an idle plugin still idles.
 /// Whether a lattice note is still departing after its voice was pruned: an
 /// ordered release holds its presence for the stagger, so it runs
 /// `1 + stagger_spread` fades past the off where the voice lasts one.
@@ -503,6 +499,9 @@ fn releasing(state: &SharedState, now: f64) -> bool {
             .is_some_and(|last| now - last <= span)
 }
 
+/// Whether the piano roll still has something moving across it: its window
+/// reaches back to a note that was sounding. Goes quiet once the last note
+/// has scrolled off the far edge, so an idle plugin still idles.
 fn roll_scrolling(state: &SharedState, now: f64) -> bool {
     let cfg = &state.picture.appearance.spectrum;
     cfg.show_roll

@@ -160,9 +160,7 @@ pub(super) fn drag_split(
 /// window's size would decide a video's composition, and dragging the plugin
 /// wider would restyle a render nobody touched. The Video tab is where a
 /// video's look is dialled in and its preview reads the same field, so it has
-/// to sit still while the editor around it moves — the same call
-/// [`view_section`](super::view_section) makes in refusing
-/// an automatic orientation.
+/// to sit still while the editor around it moves.
 ///
 /// Held for the docked pane alone, and by its tab dispatch (see
 /// [`crate::panes`]), which is the one surface a window can resize: the Video
@@ -337,10 +335,10 @@ pub(crate) const ZOOM_PER_SCROLL_POINT: f32 = 0.008;
 /// learning the code's seam rather than the pane's.
 ///
 /// Sized on the time axis, which is the wider range of the two: the whole
-/// 1 s..600 s sweep is ~1070 points of drag. The captured seventy-two-second
-/// default leaves about 710 points toward the past to reach 1 s and 360 the
-/// other way to reach 600 s. The level range is shorter at the same gain — its
-/// whole 12..60 dB sweep is ~270 points — because a dB window has less room to
+/// 1 s..600 s sweep is ~1070 points of drag. The captured 39-second default
+/// leaves about 610 points toward the past to reach 1 s and 455 the other way
+/// to reach 600 s. The level range is shorter at the same gain — its whole
+/// 12..100 dB sweep is ~350 points — because a dB window has less room to
 /// travel, not because it is dialled differently.
 pub(crate) const DEPTH_ZOOM_PER_DRAG_POINT: f32 = 0.006;
 

@@ -18,6 +18,17 @@ fn watercolor_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec
     ) / period;
 }
 
+// The cell a hash is taken at, folded onto the tile when one is being baked.
+//
+// The tile is square in its OWN coordinates. Rotating the already-periodic
+// result where it is read keeps every lattice the walk uses exact; trying
+// instead to wrap the world-cell hashes on the 3-4-5 vectors would leave the
+// 2.1x and 0.9x octaves on fractional cells and draw a seam.
+//
+// WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
+// what lands a negative cell in the range. A period of 0 returns the cell
+// whole: no production pass asks for it, but it is the unwrapped walk the
+// tests hold the tile against.
 fn wrap_cell_for_tile(cell: vec2<i32>, period: i32) -> vec2<i32> {
     if period <= 0 {
         return cell;
@@ -74,7 +85,7 @@ const WASH_JITTER: f32 = 0.40;
 const WASH_RADIUS_MIN: f32 = 1.17;
 const WASH_RADIUS_MAX: f32 = 1.91;
 
-// How many cells cross one cloud unit at `Glob size` 1x — see `wash_cloud_tone`,
+// How many cells cross one cloud unit at `Patch size` 1x — see `wash_cloud_tone`,
 // where it is chosen so a glob comes out the width the prototype's J2 drew
 // rather than so the CELLS come out at J2's count.
 const WASH_CELLS: f32 = 5.25;
@@ -185,7 +196,7 @@ fn wash_glob(cell: vec2<i32>, salt: u32, r: vec2<f32>, occupancy: f32, period: i
     // allows. That was the top of a `Variety` dial, which is where it shipped
     // and where it stays: the band is 1.63:1 and the paint order decides which
     // glob a pixel shows, so the dial moved a twentieth of the pane end to end,
-    // and the size range the look is after comes from `Layers` instead.
+    // and the size range the look is after comes from `Fine layer mix` instead.
     //
     // A `Wander` dial turned each centre about its own cell here, on a hashed
     // rate. It could only ever TURN the jitter — a travel would break the reach
@@ -305,7 +316,7 @@ struct Wet {
 // radii.
 const WASH_POOL_WIDTH: f32 = 0.55;
 
-// The cell walk chooses the lookup. Fuzz feathers and bleeds that lookup
+// The cell walk chooses the lookup. `Edge feathering` feathers and bleeds that lookup
 // across glob boundaries. Brightness follows the same feathering, with a hash
 // independent of paint order, occupancy, size and position jitter.
 fn wash_brightness(centre: vec2<f32>, salt: u32, period: i32) -> f32 {
@@ -341,7 +352,7 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     // Pigment settling toward the glob's own rim, and the tide line: a broad
     // soft crescent lying on the OVERLAPPED glob, hugging the outside of the
     // front glob's arc. Both squared, so they come on gently. Neither is
-    // feathered, as before #1038; how hard each bites is the dial's and Fuzz's.
+    // feathered, as before #1038; how hard each bites is the dial's and `Edge feathering`'s.
     let rim = clamp(f.edge, 0.0, 1.0);
     let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
     return Wet(look - r, brightness, rim * rim, crescent * crescent);
@@ -353,7 +364,7 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
 // Eleven numbers, none of which reads the light, the sound or the clock —
 // which is exactly why `fs_cloud_tile` can bake them into three tile targets
 // and the per-frame shader can read them back. The bake always walks
-// both octaves, because `Layers` is a mix over channels the tile already holds
+// both octaves, because `Fine layer mix` is a mix over channels the tile already holds
 // and so is deliberately not in the tile's key.
 struct WashField {
     coarse: Wet,
@@ -412,7 +423,7 @@ fn cloud_hash4(cell: vec2<i32>) -> vec4<f32> {
 }
 
 // How far a dome reaches past its own cell, how far its centre may wander
-// inside it, and the band `Variety` draws each dome's own radius from.
+// inside it, and the band `Size variation` draws each dome's own radius from.
 //
 // THESE FOUR ARE A PROOF, not four independent tastes, and the two inequalities
 // they have to satisfy are held by `the_dome_grid_covers_the_plane_and_the_ring_holds_it`.
@@ -435,7 +446,7 @@ fn cloud_hash4(cell: vec2<i32>) -> vec4<f32> {
 // were 22% empty then, so the pinholes were being drawn on purpose, and a dome
 // two cells out reaching in is a step on the cell grid every time `floor(r)`
 // moves. Dropping the jitter to 0.30 opens a band of [0.919, 1.350] and leaves
-// room for `Variety` inside it.
+// room for `Size variation` inside it.
 const DOME_RADIUS: f32 = 1.15;
 const DOME_JITTER: f32 = 0.30;
 const DOME_RADIUS_MIN: f32 = 0.95;
@@ -443,15 +454,15 @@ const DOME_RADIUS_MAX: f32 = 1.32;
 // Hardness of the soft union. Low is putty, high is a crease; this is where a
 // pile of domes still has faces and does not yet have edges.
 const DOME_UNION: f32 = 9.0;
-// How many octaves of weight `Variety` may give or take from one dome, and the
+// How many octaves of weight `Size variation` may give or take from one dome, and the
 // reason the dial is worth turning at all.
 //
-// **The radius band above is not what `Variety` reads as.** What the eye calls
+// **The radius band above is not what `Size variation` reads as.** What the eye calls
 // one scale here is the TERRITORY a dome wins from the soft union, and the grid
 // that sets the territory is one dome per cell however wide each dome is drawn.
 // Measured over an interior patch of the field, the shipped radius band moved
-// the 10th-to-90th-percentile territory from 1.22:1 at `Variety` 0 to 1.51:1 at
-// `Variety` 1 — a band already nearly uniform, opened by a quarter. That is the
+// the 10th-to-90th-percentile territory from 1.22:1 at `Size variation` 0 to 1.51:1 at
+// `Size variation` 1 — a band already nearly uniform, opened by a quarter. That is the
 // whole of what the dial used to buy, and it is why it read as doing nothing.
 //
 // A weight gain moves the BISECTORS instead, which is the same measurement's
@@ -463,7 +474,7 @@ const DOME_UNION: f32 = 9.0;
 //
 // The ceiling is smoothness, not coverage. The steepest single-pixel step in
 // the face field is 9.3 per cell here, BELOW the 9.8 the shipped dial already
-// drew at `Variety` 1; at 7 octaves it is 15.4 and at 8 it is 21.3, which is a
+// drew at `Size variation` 1; at 7 octaves it is 15.4 and at 8 it is 21.3, which is a
 // swallowed dome's influence ending in a visible ring rather than fading.
 const DOME_VARIETY_GAIN: f32 = 5.0;
 // What turns a dome's analytic slope into the FACE the light is bent by.
@@ -474,7 +485,7 @@ const DOME_VARIETY_GAIN: f32 = 5.0;
 // Multiplying by `R^2 / (1.5 * DOME_RADIUS^2)` instead leaves `-2 * root * d *
 // R / DOME_RADIUS^2`: a peak of `R / DOME_RADIUS`, so a glob carries the light
 // as far as it is wide, and a dome at the base radius bends exactly what it did
-// before `Variety` existed.
+// before `Size variation` existed.
 const DOME_FACE: f32 = 2.0 / (DOME_RADIUS * DOME_RADIUS);
 struct Pile {
     // The face the scales here present to the light: each covering dome's own
@@ -518,7 +529,7 @@ fn dome_octave(r: vec2<f32>, period: i32, variety: f32) -> Pile {
             let h4 = cloud_hash4(wrap_cell(cell, period));
             let centre = base + vec2<f32>(f32(i), f32(j)) + 0.5
                 + (h4.xy - 0.5) * DOME_JITTER;
-            // Each dome's own width. `Variety` opens the band from the single
+            // Each dome's own width. `Size variation` opens the band from the single
             // shared radius, never below `DOME_RADIUS_MIN`, so every step of the
             // dial is still a proof that the plane is covered.
             let radius = mix(
@@ -534,7 +545,7 @@ fn dome_octave(r: vec2<f32>, period: i32, variety: f32) -> Pile {
             let root = sqrt(q);
             let h = q * root;
             // Each dome's own say in the union, log-symmetric about the shared
-            // weight so `Variety` gives one dome a neighbour's cell exactly as
+            // weight so `Size variation` gives one dome a neighbour's cell exactly as
             // often as it takes its own away. Behind a knob because an `exp2`
             // per dome per pixel is real work for a gain that is exactly 1, and
             // the branch is on a uniform, so no two lanes ever disagree about
@@ -550,7 +561,7 @@ fn dome_octave(r: vec2<f32>, period: i32, variety: f32) -> Pile {
             // the union arriving at once, which draws the hard ring this whole
             // construction exists not to draw. Subtracting the pedestal lets a
             // rim contribution fade to nothing however loud the dome is, and it
-            // retires the old step at `Variety` 0 as well.
+            // retires the old step at `Size variation` 0 as well.
             let w = gain * (exp(DOME_UNION * h) - 1.0);
             weight += w;
             face += w * (-(DOME_FACE * root * radius)) * d;

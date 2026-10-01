@@ -53,8 +53,8 @@ struct StarSlice {
     offset: Float2,
     /// The cell one star is hashed into: `Star size`'s low end at the far end
     /// over the square root of half the density, times the ratio of its ends
-    /// raised to `d^Size curve` — at the fresh 2 to 32 and 2, 32 at the near
-    /// end and most of the depth fine dust.
+    /// raised to `d^Size curve` — at the prototype's 2 to 32 and 2, 32 at the
+    /// near end and most of the depth fine dust.
     cell: f32,
     /// The core's base sigma, before the per-star size draw.
     sigma: f32,
@@ -244,9 +244,10 @@ pub(crate) fn star_slices(
         let d = star_depth(k);
         let along = d.powf(settings.star_size_curve);
         let cell = layout.cells[k];
-        // The core and its cap grow with this depth's spacing over the fresh
-        // 2-to-32 one at the same depth, so a bigger `Star size` is bigger
-        // stars and not only sparser ones, and the fresh ends are 1 here.
+        // The core and its cap grow with this depth's spacing over the
+        // prototype's 2-to-32 one at the same depth, so a bigger `Star size` is
+        // bigger stars and not only sparser ones, and ends of 2 and 32 are 1
+        // here.
         let scale = small / 2.0 * (big / small / 16.0).powf(along);
         let sigma = (0.5 + 0.8 * d) * scale;
         let cap = (0.33 * cell).min(1.8 * scale);

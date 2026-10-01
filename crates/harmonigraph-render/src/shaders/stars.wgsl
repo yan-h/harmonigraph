@@ -39,7 +39,7 @@ fn atlas_texel(index: i32) -> vec2<i32> {
 const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
 // Original full-jitter halo bounds. The nominal cell and its eight neighbors
-// cover this radius at every Jitter setting; a missing cell starts at 1.2.
+// cover this radius at every `Position variation`; a missing cell starts at 1.2.
 const STAR_HALO_REACH: f32 = 1.2;
 const STAR_HALO_FADE: f32 = 0.7;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
@@ -101,7 +101,7 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     let age = star_life() + star_hash(hashed, salt + 2u).x;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
-    // Jitter. Every life holds a star, so a depth's count is its cell size
+    // Position variation. Every life holds a star, so a depth's count is its cell size
     // alone.
     let a = star_hash(hashed, key);
     let through = fract(age);

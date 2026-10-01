@@ -22,8 +22,8 @@ pub(super) fn color_pane(
         // The gradient above the range because it is the coarser of the two: it
         // says what the colors ARE, the range says which pitches they are spread
         // over. Both feed the one table every pitch-colored shape reads, so a
-        // change here repaints the discs, the octave glyphs, the trail and the
-        // piano roll together.
+        // change here repaints the octave glyphs, the melody and bass marks and
+        // the piano roll together.
         spectrum_group(ui, &mut appearance.view);
         super::param_range_bar(
             ui,
@@ -93,16 +93,9 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .on_hover_text("MIDI note colors from low pitch on the left to high pitch on the right.");
 }
 
-/// The heatmap's level->color gradient on the same preview and three bars
-/// [`spectrum_group`] above dials the lattice's pitch gradient with, over a row
+/// The heatmap's level->color gradient on the same preview, bars and curve plot
+/// [`spectrum_group`] above dials the lattice's pitch gradient with, under a row
 /// of presets.
-///
-/// Three bars and not six: the group is the gradient itself across the top, and
-/// under it the arc on the spectrum bar, the brightness pair on one of its own
-/// and the chroma pair on another, each a picture of what its numbers COMPOSE —
-/// see [`spectrum_group`], which is the same set over the same type and says
-/// why a six-number gradient costs three rows and a preview rather than six
-/// rows.
 ///
 /// **What differs is the axis, and only the readouts show it.** There the range
 /// is pitch, so a bar's two ends are the lowest and highest notes; here it is
@@ -117,10 +110,10 @@ fn spectrum_group(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// code for different quantities, and a reader dialling either wants the axis
 /// its bars are named for.
 ///
-/// **The presets come first**, ahead of the preview the group above opens with,
-/// and deliberate: a heatmap palette is a thing people pick by name before they
-/// dial it, and the three names are the whole of what a heatmap offers before it
-/// offers any knobs at all. They write the bars below and are not a mode — see
+/// **The presets come first**, ahead of the preview, and deliberate: a heatmap
+/// palette is a thing people pick by name before they dial it, and the three
+/// names are the whole of what a heatmap offers before it offers any knobs at
+/// all. They write the bars below and are not a mode — see
 /// [`crate::SpectrogramPreset`]. The preview then sits between the names and the
 /// bars, which is where both of them are read against it.
 fn spectrogram_gradient_group(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {

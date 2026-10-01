@@ -27,9 +27,10 @@
 //! it down and rebuild it twice within a frame, and the first then stretches
 //! the second's quarter A, laid out in the second's local coordinates, across
 //! its own rect. [`crate::roll`] spends a pane map on exactly that, and this
-//! one is the same map for the same reason: a hand-written offline layout can
-//! name `Spiral` twice at unequal rects, which is the arrangement that reaches
-//! it (`harmonigraph_ui::draw_pane` hands each placement its index).
+//! one is the same map for the same reason. Nothing reaches a second copy
+//! today: the one caller, the Spiral, is an editor tab and never exported
+//! (#974), so only its docked copy draws. The arrangement that once did, an
+//! offline layout naming `Spiral` twice at unequal rects, went with the export.
 //!
 //! **A copy is evicted when it stops preparing**, on the clock of `prepare`
 //! calls [`crate::roll`] keeps for the same purpose: there is no teardown to
@@ -67,9 +68,9 @@ const GLOW_ENTRY_POINTS: &[&str] = &["vs_disc", "fs_disc_gamma", "fs_disc_linear
 /// and a caller with a different shape is better served by widening this than
 /// by a second callback growing a second halo out of the same strength.
 ///
-/// A DARK companion mark is not one of these: the spiral backs each dot with a
-/// black disc and the roll wraps each note in a black outline, and black is the
-/// one thing that cannot bloom. Drawn here it would only take light out of the
+/// A DARK companion mark is not one of these: the shadow under a spiral dot or
+/// the roll's black outline round a note, and dark is the one thing that
+/// cannot bloom. Drawn here it would only take light out of the
 /// halo the colored mark does grow.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -102,7 +103,7 @@ impl GlowDot {
 /// before anything that must stay out of the light (a label, most of all: see
 /// `crate::text`).
 ///
-/// `strength` is the lattice's own bloom strength, through
+/// `strength` is the caller's bloom strength (the Spiral's, today), through
 /// [`crate::bloom_strength`] for the reason that function exists. 0 skips the
 /// whole thing — no chain is built and no pass runs.
 ///

@@ -87,7 +87,7 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 
 /// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
 /// as pitches rather than bare numbers. Shared by the Octaves section's Center
-/// and the Colors page's color range, which is why it is here rather than in
+/// and the Mappings page's Pitch color range, which is why it is here rather than in
 /// either.
 ///
 /// It ROUNDS, which is exact for the octave Center (its bar lands on whole
@@ -355,7 +355,7 @@ pub(super) fn param_bar(
 }
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (the Colors page's color range).
+/// range whose ends are both automatable params (the Mappings page's Pitch color range).
 /// `label` names the bar and `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed

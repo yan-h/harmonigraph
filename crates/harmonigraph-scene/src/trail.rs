@@ -57,7 +57,9 @@ impl TrailField {
         }
         // A memory never fades: the point of the feature is a whole piece's
         // territory rather than a rolling window, so every visit counts the
-        // same however long ago it sounded.
+        // same however long ago it sounded. It is forgotten only when the
+        // history evicts it, the least recently played going once more than
+        // `NoteHistory::MAX_VISITS` distinct pitches have sounded.
         // History bounds this frame-local scratch at 384 pitch classes (1.5 KiB),
         // which avoids a per-frame heap allocation. Sorted, so each home node
         // finds its nearest memory in a binary search rather than a scan of

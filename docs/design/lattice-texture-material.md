@@ -15,11 +15,12 @@ Keep `ViewConfig::atmosphere` as the owner of lattice glow effects.
 Replace its combined enable/material controls with two independently selectable stages:
 
 - Texture: None, Clouds; depth, size and speed.
-- Material: None, Watercolor, Mosaic, Stars; amount and drift direction.
-Watercolor and Mosaic use Drift speed;
+- Material: None, Watercolor, Mosaic, Stars, Scales; amount and drift direction.
+Watercolor, Mosaic and Scales use Drift speed;
 Stars uses its depth-dependent Star speed range.
-- Watercolor: glob size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
+- Watercolor: patch size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
 - Mosaic: cell size, size variation and signed refraction.
+- Scales: cell size, size variation, edge softness, irregularity and scale shape.
 - Breathing: depth and speed in the Background glow controls, independent of either stage.
 
 `AtmosphereSettings` owns texture, material selection/amount/motion and breathing.

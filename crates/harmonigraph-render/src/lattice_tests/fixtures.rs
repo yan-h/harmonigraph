@@ -76,6 +76,7 @@ pub(super) fn standalone_marker(
         lattice_pos: harmonigraph_core::LatticePos::new(node as i32, 0, 0),
         world_pos: glam::vec3(0.0, 0.0, -0.001),
         activation: 0.0,
+        envelope: 0.0,
         departing: false,
         slice_progress: [1.0; 11],
         thickness: [1.0; 11],
@@ -122,12 +123,14 @@ pub(super) fn parity_scene() -> Scene {
         let mut octaves = [0.0f32; harmonigraph_scene::OCTAVE_SLOTS];
         octaves[slot(i as usize)] = 1.0 - f * 0.1;
         octaves[slot(i as usize + 5)] = 0.4;
+        let activation = if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 };
         nodes.push(harmonigraph_scene::NodeInstance {
             lattice_pos: LatticePos::new(i as i32 - 3, i as i32 % 2, 0),
             // Cluster tightly around the origin so discs overlap and
             // draw order shows in the output.
             world_pos: Vec3::new(f * 0.45 - 1.1, (f % 3.0) * 0.4 - 0.4, f * 0.3 - 0.75),
-            activation: if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 },
+            activation,
+            envelope: activation,
             // Nothing the shader draws reads this — it is the label layer's,
             // and labels are the UI crate's text pass, not the lattice pass.
             departing: false,
@@ -253,8 +256,10 @@ pub(super) fn parity_scene() -> Scene {
         // existed — under the renderer every reading here is calibrated
         // against.
         shadow: one_shadow(0.16, 0.85, harmonigraph_scene::ShadowKernel::Gaussian),
-        // The share a lit slice's own ink takes of the light, so a test that
-        // says nothing about it measures the fresh picture.
+        // The share a lit slice's own ink takes of the light: the whole of it,
+        // as idle ink always takes, rather than the fresh value (about 0.4), so
+        // a test that says nothing about it reads one field over lit and idle
+        // ink alike.
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
@@ -511,6 +516,7 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         lattice_pos: LatticePos::ORIGIN,
         world_pos: Vec3::ZERO,
         activation: 1.0,
+        envelope: 1.0,
         // Held at full, so neither end of the envelope is running.
         departing: false,
         slice_progress: [1.0; 11],

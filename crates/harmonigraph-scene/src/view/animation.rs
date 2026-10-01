@@ -52,8 +52,8 @@ impl NoteAnimationConfig {
     /// The fallback is the FRESH value rather than each range's low bound,
     /// which is the departure the rest of the picture's repairs do not make
     /// and is the same one [`GlowCurve::sanitized`] makes. These values are a
-    /// POSE rather than a size: `radial_start`'s range is signed and
-    /// `radial_start`'s neutral is 0, so a low bound here would be one extreme
+    /// POSE rather than a size: `radial_start`'s range is signed and its
+    /// neutral is 0, so a low bound here would be one extreme
     /// of an animation rather than the least of one. Fresh is also the answer
     /// [`ViewConfig::sanitize`] gives each of them, so the door and the
     /// picture cannot disagree about what a broken pose looks like.

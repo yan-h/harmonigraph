@@ -234,9 +234,9 @@ impl SpectrogramPreset {
     /// chroma share that silence and a full bucket are drawn at — and composed
     /// into the middle-and-signed-ramp pair the gradient stores, so that what is
     /// written here is what the pane says back. Every one of them opens at `L*`
-    /// 0, which is the heatmap's own requirement rather than a taste: the region
-    /// is laid on a black bed, so silence has to BE black or the plane's edge
-    /// shows.
+    /// 0, so silence recedes into black. That is a look rather than a
+    /// requirement: the region's bed takes the gradient's floor, whatever it
+    /// is.
     ///
     /// The chroma pair is where a fraction of the gamut earns its keep. It does
     /// not fall to 0 at the quiet end and does not need to: what the fraction is
@@ -382,7 +382,7 @@ pub struct SpectrumConfig {
     pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
     /// Displayed pitch range, as (fractional) MIDI note numbers. The
     /// analyzer always covers `SPECTRUM_MIN_MIDI..=SPECTRUM_MAX_MIDI`
-    /// (~16 Hz to ~16.7 kHz); this only zooms the view.
+    /// (20 Hz to 20 kHz); this only zooms the view.
     ///
     /// MIDI rather than Hz because the axis is linear in MIDI note, which
     /// makes this both the number the pane wants and — since a semitone is a
@@ -558,12 +558,10 @@ pub struct SpectrumConfig {
     /// carries each. [`SpectrogramPreset`] is where the four names went — a row
     /// of buttons that WRITE these six, rather than a mode the picture is in.
     ///
-    /// Its bottom wants to sit at `L*` 0 and the presets all do, the heatmap
-    /// being laid on a black bed (see `spectral_pane`): silence drawn at
-    /// anything else puts a visible plane edge where the analyzer's history
-    /// runs out. Nothing enforces it — a gradient that lifts the floor is a
-    /// legal picture and an occasionally useful one, showing exactly how far
-    /// back the history reaches.
+    /// The presets all open at `L*` 0. Nothing enforces it — a gradient that
+    /// lifts the floor is a legal picture, and the region's bed (see
+    /// `spectral_pane`) takes the same floor, so silence reads as one surface
+    /// whether or not history covers it.
     ///
     /// The audio colors have their own dB window. It controls where this
     /// gradient reaches its quiet and loud ends without changing the analyzer
@@ -753,7 +751,7 @@ impl SpectrumConfig {
 /// ([`SpectrumConfig::sanitize`]), takes included — so a video rendered
 /// from an old take renders at the wider range too.
 ///
-/// The analyzer's alone, and read by nothing else. The Colors page's Color range
+/// The analyzer's alone, and read by nothing else. The Mappings page's Pitch color range
 /// is the span the color gradient is spread over, and it
 /// is bounded by [`COLOR_RANGE_MIN_SPAN`] rather than by this: the reasoning
 /// above is about the size of TYPE and says nothing whatever about how tightly
@@ -773,7 +771,7 @@ pub(crate) fn sane_scale(scale: f32) -> f32 {
     }
 }
 
-/// Closest the two ends of the Colors page's Color range may come — the span the
+/// Closest the two ends of the Mappings page's Pitch color range may come — the span the
 /// color gradient covers, which is a different bar from the analyzer's window
 /// on the same axis. An octave: a gradient aimed tighter than one has notes a
 /// semitone apart at opposite ends of the spectrum, and nothing about the
@@ -830,7 +828,7 @@ pub(crate) const LEVEL_MAX_DB: f32 = 0.0;
 /// by zero in `loudness` and paints the NaN geometry egui panics on.
 ///
 /// Three controls hold to it, as with the Span: the Analyzer section's Level
-/// range bar, the drag across the spectrum, and the Colors page's Volume range
+/// range bar, the drag across the spectrum, and the Mappings page's Level color range
 /// bar. A gesture clamping to its own idea of how close the pair may come
 /// would push the bar past its own end.
 pub(crate) const LEVEL_RANGE_MIN_SPAN: f32 = 12.0;

@@ -271,8 +271,8 @@ Both styles run a second octave at a lacunarity of 2.1, so the fine octave tiles
 `P = 20` gives 42 and 18.
 A ragged noise at 2.8 was the third constraint until `Ragged` was retired (below).
 The noise's own second octave is at 2.07, which no `P` makes whole, so the tiled path runs it at 2.0 — the one constant the tile changes, and only when the tile is on.
-- **The key** is the style, `P`, the tile's texel size, the Watercolor pane orientation and the dials the walk reads: `Variety` for Mosaic; `Lobe shape`, `Fuzz` and `Pool` for Watercolor.
-NOT the drift, the clock, the light, the palette, the softness, `Refraction`, `Relief`, `Cloud depth` or `Layers` — none of them reaches the baked channels, and the bake always walks the fine octave so `Layers` is a mix over channels already held.
+- **The key** is the style, `P`, the tile's texel size, the Watercolor pane orientation and the dials the walk reads: `Size variation` for Mosaic; `Shape warp` and `Edge feathering` for Watercolor.
+NOT the drift, the clock, the light, the palette, the softness, `Refraction`, `Texture mix` or `Fine layer mix` — none of them reaches the baked channels, and the bake always walks the fine octave so `Fine layer mix` is a mix over channels already held.
 The size dials and the pane reach it only through the texel size, which is as fine as the pane draws a cell, rounded up to a multiple of 256 and capped at 2048, so a resize drag does not rebake on every frame.
 The tile is also carried across a rebuild of the light field's targets, which a zoom or a Span drag forces.
 - **`Rock` and `Grain` were retired with it, on Yan's call.**
@@ -293,7 +293,8 @@ Watercolor's stored texture and every hash lattice inside it remain square and s
 Its two repeat vectors are `(4P/5, 3P/5)` and `(-3P/5, 4P/5)` in `(time, pitch)`, so neither recurrence axis follows a pane axis.
 At `P = 20` the same geometry returns to a pitch row after 100 time cells; at `P = 40` it takes 200.
 The Watercolor rotation follows the pane's time and pitch axes when its orientation changes, and as an isometry it needs none of the extra tile resolution the stagger's shear did.
-Whether the eye finds that is Yan's call, and the dial exists so he can compare `P` against the live walk in the DAW.
+Whether the eye finds that was Yan's call, made against the live walk on the since-retired `Cloud tile` dial;
+sampling is now fixed at 40 cells ([#1042](https://github.com/yan-h/harmonigraph/pull/1042)).
 
 ### The never-taken live arm still cost the composite (2026-09-25, #1100)
 
@@ -327,9 +328,9 @@ as removing `Rock`'s accumulator did above.
 
 ### The alternative if repetition shows: a scrolling window
 
-A pane-sized bake with toroidal addressing, walking only the strip the drift newly exposes each frame — a column every ten frames or so at `Cloud speed` 1x, two columns a frame at 20x.
+A pane-sized bake with toroidal addressing, walking only the strip the drift newly exposes each frame — a column every ten frames or so at `Drift speed` 1x, two columns a frame at 20x.
 It never repeats.
-What it costs over the tile: about 130 MB of `Rgba16Float` at native 4K for Watercolor (it stacks with a coarser bake, as `Cloud pixel size` does); a full 35 ms walk on every frame of a dial drag or a pane resize, which is no worse than today; and incremental validity state — which strips are current — that is exactly the carry-forward cache this repo's `CLAUDE.md` warns about.
+What it costs over the tile: about 130 MB of `Rgba16Float` at native 4K for Watercolor (it would stack with a coarser bake, as the retired `Cloud pixel size` did); a full 35 ms walk on every frame of a dial drag or a pane resize, which is no worse than today; and incremental validity state — which strips are current — that is exactly the carry-forward cache this repo's `CLAUDE.md` warns about.
 Unbuilt and unmeasured.
 Try it only if the tile's repetition is rejected at every `P` that fits in memory.
 

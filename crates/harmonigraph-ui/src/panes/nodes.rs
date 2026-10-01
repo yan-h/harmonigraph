@@ -48,11 +48,12 @@ pub(super) fn octaves(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// picture nobody can read.
 ///
 /// Each reading's own setting sits under the row, greyed when the other is
-/// chosen: Tolerance is the fold's kernel and Zoom is the spectrum's window,
-/// and neither means anything to the other. Both are shown either way rather than
-/// swapped in and out, so the section keeps its height and the bars keep their
-/// place as the row is clicked along. A hidden layer keeps an explanation of
-/// how to restore it; the Note layers bar remains its only visibility control.
+/// chosen: Pitch tolerance is the fold's kernel and Pitch span is the
+/// spectrum's window, and neither means anything to the other. Both are shown
+/// either way rather than swapped in and out, so the section keeps its height
+/// and the bars keep their place as the row is clicked along. A hidden layer
+/// keeps an explanation of how to restore it; the Note layers bar remains its
+/// only visibility control.
 pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     if !view.spectral_ring_draws() {
         crate::widgets::weak(ui, "Audio ring — hidden");
@@ -69,26 +70,23 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Off here would be a second switch for this one layer, in a place no other
     // layer keeps one, and the two would then have to be read together to know
     // whether there is a ring.
-    //
-    ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
-            choice_row(
-                ui,
-                "Ring display",
-                &mut view.spectral_reading,
-                &[
-                    (
-                        SpectralReading::Fold,
-                        "Octave levels",
-                        "One audio level per octave slice. Useful for seeing which harmonics are present across many nodes.",
-                    ),
-                    (
-                        SpectralReading::Spectrum,
-                        "Spectrum",
-                        "The detailed spectrum within each octave slice. Useful for inspecting detuning on one node at close zoom.",
-                    ),
-                ],
-            );
-        });
+    choice_row(
+        ui,
+        "Ring display",
+        &mut view.spectral_reading,
+        &[
+            (
+                SpectralReading::Fold,
+                "Octave levels",
+                "One audio level per octave slice. Useful for seeing which harmonics are present across many nodes.",
+            ),
+            (
+                SpectralReading::Spectrum,
+                "Spectrum",
+                "The detailed spectrum within each octave slice. Useful for inspecting detuning on one node at close zoom.",
+            ),
+        ],
+    );
     // WHICH NODES wear the ring, where the Layers bar in Note layers is how thick
     // it is: a node whose loudest wedge does not reach this level draws no ring
     // at all. Both readings, so it sits above the pair of bars that are each one
@@ -101,27 +99,20 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // section's Fade rather than at the instant the level crosses. Both are in
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
-    //
-    ui.add_enabled_ui(view.spectral_ring_draws(), |ui| {
-        crate::widgets::threshold(
-            ui,
-            &mut view.spectral_ring_gate,
-            &mut view.spectral_ring_hysteresis,
-        );
-        crate::widgets::response(
-            ui,
-            &mut view.spectral_ring_attack,
-            &mut view.spectral_ring_release,
-            SPECTRAL_BALLISTICS_MAX,
-            ["Ring attack", "Ring release"],
-            1000.0,
-        );
-    });
+    crate::widgets::threshold(ui, &mut view.spectral_ring_gate, &mut view.spectral_ring_hysteresis);
+    crate::widgets::response(
+        ui,
+        &mut view.spectral_ring_attack,
+        &mut view.spectral_ring_release,
+        SPECTRAL_BALLISTICS_MAX,
+        ["Ring attack", "Ring release"],
+        1000.0,
+    );
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to
-    // resolve. Its own setting is the Zoom bar below.
-    let folding = view.spectral_ring_draws() && view.spectral_reading == SpectralReading::Fold;
+    // resolve. Its own setting is the Pitch span bar below.
+    let folding = view.spectral_reading == SpectralReading::Fold;
     ui.add_enabled_ui(folding, |ui| {
         ValueBar::new(
             &mut view.spectral_width,
@@ -138,10 +129,10 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Used by Octave levels only.",
         );
     });
-    // The SPECTRUM reading's zoom, under the Tolerance it stands opposite: how
-    // much pitch a wedge shows, where Tolerance is how much of it counts as the
-    // node's.
-    let zoomed = view.spectral_ring_draws() && view.spectral_reading == SpectralReading::Spectrum;
+    // The SPECTRUM reading's zoom, under the Pitch tolerance it stands opposite:
+    // how much pitch a wedge shows, where Pitch tolerance is how much of it
+    // counts as the node's.
+    let zoomed = view.spectral_reading == SpectralReading::Spectrum;
     ui.add_enabled_ui(zoomed, |ui| {
             ValueBar::new(
                 &mut view.spectral_ring_range,
@@ -182,12 +173,11 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // two axes carry one rhythm of empty space. It is a whole-note setting
     // rather than any one layer's, which is what puts it in Note layers.
     //
-    // Read out as a PERCENTAGE of the node's radius, which is what quad uv 1.0
-    // is (`scene.node_radius`, a quarter of the lattice spacing, and the edge
-    // no ring may cross). That makes the whole stack a budget of
-    // 100%, which is the picture the Layers bar draws, and it is the same unit
-    // the Clearance below reads in. A tenth of a percent is exactly the
-    // resolution three decimals of the stored number gives. Numeric entry uses
+    // Read out as a PERCENTAGE of quad uv 1.0, the edge no ring may cross:
+    // 1.8 × `scene.node_radius` in the world (`marker_world` in
+    // harmonigraph-scene). That makes the whole stack a budget of
+    // 100%, which is the picture the Layers bar draws. A tenth of a percent is
+    // exactly the resolution three decimals of the stored number gives. Numeric entry uses
     // the displayed percentage too; the widget converts it back to the stored
     // fraction.
     ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap").percent().show(ui).on_hover_text(

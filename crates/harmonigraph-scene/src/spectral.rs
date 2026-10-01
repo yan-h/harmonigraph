@@ -5,8 +5,8 @@
 //! second one:
 //!
 //! - **MIDI** — [`ViewConfig::pitch_gradient`](crate::ViewConfig) spread over
-//!   the Color range, read through
-//!   [`pitch_lut_color`](crate::pitch_lut_color). A note's disc, its octave
+//!   the Pitch color range, read through
+//!   [`pitch_lut_color`](crate::pitch_lut_color). A note's octave
 //!   wedges, its melody and bass marks and its ribbon on the piano roll all
 //!   come off that one table, so a pitch is one colour wherever it is drawn.
 //! - **FREQUENCY** — the volume-color ramp
@@ -18,9 +18,9 @@
 //!   the surface under it has.
 //!
 //! One light rather than one colour, because the two surfaces have different
-//! grounds. The analyzer's panes are bedded on BLACK — a spectrogram cell at
-//! silence has to be black or the plane's edge shows — so there the light and
-//! the colour are the same thing and the picture is the gradient itself. The
+//! grounds. The analyzer's panes draw the gradient untouched — the
+//! spectrogram's bed is the gradient's own floor — so there the light and the
+//! colour are the same thing and the picture is the gradient itself. The
 //! ring is bedded on the LATTICE, so it reads a copy of that gradient whose
 //! silent end is anchored on the node's own ground ([`ring_gradient`]): a ramp
 //! opening at black punches a hole through a grey lattice at every node, which
@@ -547,7 +547,7 @@ impl RingGate {
 /// the decision makes that a ring dimming and coming back, which is the same
 /// reading drawn at a speed an eye can follow — and it is the Fade rather than
 /// a smoothing of its own because the ring is a LAYER OF A NODE: the node's
-/// disc, its band and its marks all leave on that one duration, so a release
+/// slices, its band and its marks all leave on that one duration, so a release
 /// reads as a single gesture instead of the ring snapping off part way through
 /// it.
 ///
@@ -784,10 +784,10 @@ fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {
 ///
 /// The FREQUENCY scheme's invariant is that a loudness is one LIGHT wherever it
 /// is drawn, over whatever ground that surface has — not one colour, which is
-/// only the same thing where the ground is black. The analyzer's own panes are
-/// that case: the spectrogram's plane IS black (silence there has to be black
-/// or the plane's edge shows), so the gradient reaches them untouched and their
-/// picture is the gradient itself. The ring's ground is the LATTICE, so its
+/// only the same thing where the ground is black. The analyzer's own panes
+/// stand on the gradient's own floor instead — the spectrogram's bed is
+/// painted in it — so the gradient reaches them untouched and their picture is
+/// the gradient itself. The ring's ground is the LATTICE, so its
 /// copy of the ramp is re-anchored to stand on it — a ramp opening at black
 /// punches a hole through a grey lattice at every node in the window, which is
 /// a picture of a gap where the table means silence.
@@ -1005,9 +1005,8 @@ mod tests {
         assert!(!raw.folded, "the raw spectrum lost its window across the wedge");
     }
 
-    /// The shape every analyzer preset has: a ramp whose bottom is BLACK,
-    /// because the spectrogram's plane is black and silence there has to be
-    /// black. Carries chroma at both ends, which is what makes the ring's
+    /// The shape every analyzer preset has: a ramp whose bottom is BLACK.
+    /// Carries chroma at both ends, which is what makes the ring's
     /// silent end a question rather than a shade of grey by default.
     fn analyzers() -> Gradient {
         Gradient {

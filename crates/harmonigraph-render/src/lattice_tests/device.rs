@@ -306,8 +306,11 @@ fn offscreen_composite_matches_direct_draw() {
         None,
     );
 
-    // Compare the split storage against the ordinary compositing reference.
-    // Replacement occlusion has its own depth-independence GPU regression.
+    // Compare the split storage against the ordinary compositing reference,
+    // with ring occlusion zeroed. The renderer always sets it to 1
+    // (`LatticeCallback::from_scene`), so this compares the two paths on a
+    // configuration the product never draws;
+    // replacement occlusion has its own depth-independence GPU regression.
     cb.uniforms.geometry_shadow.occlusion = 0.0;
 
     // prepare(): uploads buffers and renders the offscreen scene pass.
