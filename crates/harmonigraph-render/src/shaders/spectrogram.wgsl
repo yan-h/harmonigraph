@@ -666,10 +666,11 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // bisector between two, which is the straight crossing that made the z-buffered
 // version read as cracked mud.
 //
-// Each glob reads the displaced scalar level, and pigment is the one tone
-// adjustment: off by default, and only ever subtracted, so it can darken a glob
-// but never lift one. `Fine layer mix` mixes the levels before the shared Contours and
-// palette transfer.
+// Each glob reads the displaced scalar level, and `Edge pooling` is the one
+// tone adjustment: off by default, darkening along an edge above 0 and
+// lightening below it, and never moving silence off the palette's floor.
+// `Fine layer mix` mixes the levels before the shared Contours and palette
+// transfer.
 //
 // **Feather is the fuzziness.** A visible glob dissolves at its OWN rim into
 // whatever lies beneath it, reaching half and half exactly on the boundary so
@@ -685,8 +686,9 @@ const WASH_POOL: f32 = 0.44;
 const WASH_PIG_DEPTH: f32 = 0.35;
 // A negative `Edge pooling` lifts by `level * (1 - level)` times this, which
 // matches the darkening's bite at mid level (`0.35 + 0.65 * 0.5 = 2.7 / 4`)
-// and is zero at both ends: silence stays black and nothing is pushed past 1
-// until the dial is well past 100%.
+// and is zero at both ends, so silence stays black. It can still overshoot 1
+// on a bright band — from level 0.84 up at -100% with hard edges — and clamps
+// there, flattening that stretch of edge to the palette's top.
 const WASH_BLOOM: f32 = 2.7;
 
 fn wash_pigmented() -> bool {

@@ -3963,9 +3963,9 @@ fn cs_wrap_probe() {
             s.material_settings.wash_refract = 0.0;
             s.material_settings.wash_fuzz = 0.5;
             s.material_settings.wash_randomness = 0.0;
-            s.material_settings.wash_pool = pool;
-            s.material_settings.wash_pool_width = width;
-            s.material_settings.wash_pool_softness = softness;
+            s.wash_pool = pool;
+            s.wash_pool_width = width;
+            s.wash_pool_softness = softness;
             s.color_pickup = 0.0;
             s.color_release = 0.0;
             fresh_frame(&device, &queue, &cb)
@@ -4030,7 +4030,7 @@ fn cs_wrap_probe() {
             ("Shape warp", |s| s.material_settings.wash_lobe = 0.0),
             ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
-            ("Edge pooling", |s| s.material_settings.wash_pool = 1.0),
+            ("Edge pooling", |s| s.wash_pool = 1.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
@@ -4578,9 +4578,9 @@ fn cs_rotation_probe() {
             ("Refraction", |s| s.material_settings.wash_refract = 0.2),
             ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
-            ("Edge pooling", |s| s.material_settings.wash_pool = 1.0),
-            ("Pooling width", |s| s.material_settings.wash_pool_width = 0.2),
-            ("Pooling softness", |s| s.material_settings.wash_pool_softness = 0.0),
+            ("Edge pooling", |s| s.wash_pool = 1.0),
+            ("Pooling width", |s| s.wash_pool_width = 0.2),
+            ("Pooling softness", |s| s.wash_pool_softness = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),

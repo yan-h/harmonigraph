@@ -149,13 +149,13 @@ pub const SCALE_REFRACT_MIN: f32 = -1.0;
 /// See [`SCALE_REFRACT_MIN`].
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
 
-/// Top of the [`MaterialSettings::wash_pool`] control and sanitizer: four times
+/// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
 /// bottom is its mirror, where the edge lightens instead.
 pub const WASH_POOL_MAX: f32 = 4.0;
 /// See [`WASH_POOL_MAX`].
 pub const WASH_POOL_MIN: f32 = -WASH_POOL_MAX;
-/// Bounds of [`MaterialSettings::wash_pool_width`], in radii of the glob whose
+/// Bounds of [`SpectralAtmosphere::wash_pool_width`], in radii of the glob whose
 /// arc the tide line lies against. The top is the whole of what the tile's
 /// distance channel holds.
 pub const WASH_POOL_WIDTH_MIN: f32 = 0.05;
@@ -284,17 +284,6 @@ pub struct MaterialSettings {
     /// Balanced per-glob brightness variation after coloring, from 0 to 1.
     /// Highlight headroom limits both signs equally, preserving expected RGB.
     pub wash_randomness: f32,
-    /// Pigment pooled on a glob along the arc of the glob painted over it: the
-    /// tide line, 0 for none. Above 0 it darkens the level before Contours and
-    /// the palette; below 0 it lightens it in proportion to `level * (1 -
-    /// level)`. Silence stays on the palette's floor either way. Spectrogram
-    /// only; the lattice's watercolor glow does not read it.
-    pub wash_pool: f32,
-    /// How far out from the arc the tide line reaches, in that glob's radii.
-    pub wash_pool_width: f32,
-    /// The tide line's fade: 0 a flat hard-edged band, 1 a long soft tail.
-    /// See [`MaterialSettings::pool_exponent`].
-    pub wash_pool_softness: f32,
 }
 impl Default for MaterialSettings {
     fn default() -> Self {
@@ -313,9 +302,6 @@ impl Default for MaterialSettings {
             wash_refract: 0.950_153_47,
             wash_layers: 0.5,
             wash_randomness: 0.0,
-            wash_pool: 0.0,
-            wash_pool_width: 0.55,
-            wash_pool_softness: 0.75,
         }
     }
 }
@@ -327,13 +313,6 @@ impl MaterialSettings {
         let distance = now * f64::from(speed) * 0.047_169_905_660_283_02;
         let (sin, cos) = f64::from(direction).to_radians().sin_cos();
         [-distance * cos, 0.6 - distance * sin]
-    }
-
-    /// The exponent `Softness` raises the tide line's linear fade to: 1/4 at 0,
-    /// a nearly flat band with a hard outer edge, through 2 at the fresh 0.75,
-    /// which is #909's squared crescent, to 4 at 1.
-    pub fn pool_exponent(softness: f32) -> f32 {
-        (4.0 * softness - 2.0).exp2()
     }
 
     pub fn sanitized(mut self) -> Self {
@@ -362,15 +341,6 @@ impl MaterialSettings {
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
         self.wash_randomness = clamp(self.wash_randomness, fresh.wash_randomness, 0.0, 1.0);
-        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, WASH_POOL_MIN, WASH_POOL_MAX);
-        self.wash_pool_width = clamp(
-            self.wash_pool_width,
-            fresh.wash_pool_width,
-            WASH_POOL_WIDTH_MIN,
-            WASH_POOL_WIDTH_MAX,
-        );
-        self.wash_pool_softness =
-            clamp(self.wash_pool_softness, fresh.wash_pool_softness, 0.0, 1.0);
         self
     }
 }
@@ -467,6 +437,18 @@ pub struct SpectralAtmosphere {
     /// Constant visible texture drift direction in screen degrees: 0 points
     /// right, 90 down, 180 left and 270 up.
     pub cloud_direction: f32,
+    /// Watercolor's tide line: a glob shaded along the arc of the glob painted
+    /// over it, 0 for none. Above 0 it darkens the level before Contours and
+    /// the palette; below 0 it lightens it in proportion to `level * (1 -
+    /// level)`. Silence stays on the palette's floor either way. Here rather
+    /// than in [`MaterialSettings`] because the lattice's watercolor glow,
+    /// which shares that struct, draws no pigment.
+    pub wash_pool: f32,
+    /// How far out from the arc the tide line reaches, in that glob's radii.
+    pub wash_pool_width: f32,
+    /// The tide line's fade: 0 a flat hard-edged band, 1 a long soft tail.
+    /// See [`Self::pool_exponent`].
+    pub wash_pool_softness: f32,
     pub material_settings: MaterialSettings,
     /// Which texture the layer draws; [`CloudStyle`] says what each is. Each
     /// reads its own settings and no other's: `scale_*` for `Mosaic`, `wash_*`
@@ -715,6 +697,9 @@ impl Default for SpectralAtmosphere {
             color_release: 0.711_714_74,
             cloud_speed: MATERIAL_SPEED_DEFAULT,
             cloud_direction: MATERIAL_DIRECTION_DEFAULT,
+            wash_pool: 0.0,
+            wash_pool_width: 0.55,
+            wash_pool_softness: 0.75,
             cloud_style: CloudStyle::Stars,
             material_settings: MaterialSettings::default(),
             stars: StarSettings::default(),
@@ -765,9 +750,25 @@ impl SpectralAtmosphere {
         } else {
             fresh.cloud_direction
         };
+        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, WASH_POOL_MIN, WASH_POOL_MAX);
+        self.wash_pool_width = clamp(
+            self.wash_pool_width,
+            fresh.wash_pool_width,
+            WASH_POOL_WIDTH_MIN,
+            WASH_POOL_WIDTH_MAX,
+        );
+        self.wash_pool_softness =
+            clamp(self.wash_pool_softness, fresh.wash_pool_softness, 0.0, 1.0);
         self.material_settings = self.material_settings.sanitized();
         self.stars = self.stars.sanitized();
         self
+    }
+
+    /// The exponent `Pooling softness` raises the tide line's linear fade to:
+    /// 1/4 at 0, a nearly flat band with a hard outer edge, through 2 at the
+    /// fresh 0.75, which is #909's squared crescent, to 4 at 1.
+    pub fn pool_exponent(softness: f32) -> f32 {
+        (4.0 * softness - 2.0).exp2()
     }
 
     /// Which effects these settings draw. Read off SANITIZED values — a NaN
@@ -789,7 +790,7 @@ impl SpectralAtmosphere {
                     CloudStyle::Watercolor => {
                         self.material_settings.wash_refract != 0.0
                             || self.material_settings.wash_randomness > 0.0
-                            || self.material_settings.wash_pool != 0.0
+                            || self.wash_pool != 0.0
                             || self.color_pickup > 0.0
                             || self.color_release > 0.0
                     }

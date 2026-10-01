@@ -98,7 +98,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
-            cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction
+            cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, wash_pool, wash_pool_width,
+            wash_pool_softness
     );
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
@@ -110,7 +111,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
         poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
-            wash_pool, wash_pool_width, wash_pool_softness, velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
+            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
     }
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);

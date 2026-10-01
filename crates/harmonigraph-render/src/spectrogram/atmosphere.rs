@@ -315,18 +315,21 @@ pub(super) fn tile_key(
         return None;
     }
     let harmonigraph_scene::SpectralAtmosphere {
-        pitch_softness: _,   // applied after the tile bake
-        time_softness: _,    // applied after the tile bake
-        spread: _,           // applied after the tile bake
-        blur_time_step: _,   // applied after the tile bake
-        contour_strength: _, // applied after the tile bake
-        contours: _,         // applied after the tile bake
-        contour_softness: _, // applied after the tile bake
-        cloud_depth: _,      // does not change the baked cell walk
-        color_pickup: _,     // does not change the baked cell walk
-        color_release: _,    // does not change the baked cell walk
-        cloud_speed: _,      // does not change the baked cell walk
-        cloud_direction: _,  // does not change the baked cell walk
+        pitch_softness: _,     // applied after the tile bake
+        time_softness: _,      // applied after the tile bake
+        spread: _,             // applied after the tile bake
+        blur_time_step: _,     // applied after the tile bake
+        contour_strength: _,   // applied after the tile bake
+        contours: _,           // applied after the tile bake
+        contour_softness: _,   // applied after the tile bake
+        cloud_depth: _,        // does not change the baked cell walk
+        color_pickup: _,       // does not change the baked cell walk
+        color_release: _,      // does not change the baked cell walk
+        cloud_speed: _,        // does not change the baked cell walk
+        cloud_direction: _,    // does not change the baked cell walk
+        wash_pool: _,          // the tile holds the distance, the dials shape it after
+        wash_pool_width: _,    // the tile holds the distance, the dials shape it after
+        wash_pool_softness: _, // the tile holds the distance, the dials shape it after
         cloud_style,
         stars: _, // Stars do not use a displacement tile.
         material_settings:
@@ -342,12 +345,9 @@ pub(super) fn tile_key(
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
-                wash_refract: _,       // applied after the tile bake
-                wash_layers: _,        // applied after the tile bake
-                wash_randomness: _,    // applied after coloring
-                wash_pool: _,          // the tile holds the distance, the dials shape it after
-                wash_pool_width: _,    // the tile holds the distance, the dials shape it after
-                wash_pool_softness: _, // the tile holds the distance, the dials shape it after
+                wash_refract: _,    // applied after the tile bake
+                wash_layers: _,     // applied after the tile bake
+                wash_randomness: _, // applied after coloring
             },
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
@@ -945,6 +945,9 @@ fn memory_key(
         color_release: _, // response/coverage changes do not change material identity
         cloud_speed,
         cloud_direction,
+        wash_pool,
+        wash_pool_width,
+        wash_pool_softness,
         cloud_style,
         stars:
             harmonigraph_scene::StarSettings {
@@ -981,9 +984,6 @@ fn memory_key(
                 wash_refract,
                 wash_layers,
                 wash_randomness: _, // display brightness does not change held color
-                wash_pool,
-                wash_pool_width,
-                wash_pool_softness,
             },
     } = s;
     let mut values = vec![
@@ -1045,8 +1045,10 @@ fn memory_key(
             wash_refract,
             wash_layers,
             wash_pool,
-            wash_pool_width,
-            wash_pool_softness,
+            // Width and softness decide nothing while there is no tide line,
+            // so they reset the history only once one is drawn.
+            if wash_pool != 0.0 { wash_pool_width } else { 0.0 },
+            if wash_pool != 0.0 { wash_pool_softness } else { 0.0 },
             contours,
             contour_softness,
             contour_strength,
@@ -1671,11 +1673,9 @@ impl Targets {
             ]),
             velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
             wash_pigment: Float4([
-                settings.material_settings.wash_pool,
-                settings.material_settings.wash_pool_width,
-                harmonigraph_scene::MaterialSettings::pool_exponent(
-                    settings.material_settings.wash_pool_softness,
-                ),
+                settings.wash_pool,
+                settings.wash_pool_width,
+                harmonigraph_scene::SpectralAtmosphere::pool_exponent(settings.wash_pool_softness),
                 0.0,
             ]),
             origin: Float2(rect.min.into()),
