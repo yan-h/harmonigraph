@@ -2449,22 +2449,34 @@ mod tests {
         }
         cb.grid.set_bytes(&bytes);
         // The three looks the retired style enum named, each reached by the
-        // dials that replaced it at their fresh values: the fresh softness
-        // alone, the same with the fresh terraces, and everything off. Not
-        // the fixture's own blur and terraces, which are the dial set the
-        // fresh appearance had before #1205 captured today's. The fresh
-        // terraces are soft enough that on this smooth field the second frame
-        // is within 2/255 of the first.
+        // dials that replaced it and set where each frame covers its path: a
+        // blur wide on both axes with half of it from the wide kernel, so the
+        // wide filter passes run; the same under few hard-edged terraces, so
+        // they read as terraces; and everything off. Not the fresh dials: a
+        // fresh `Wide blur mix` of 0 skips the wide passes, and on this
+        // smooth field the fresh terraces are within 2/255 of no terraces.
         let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
-        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        let apart = |a: &[u8], b: &[u8]| {
+            let total: u32 = a.iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
+            f64::from(total) / a.len() as f64
+        };
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-        (s.pitch_softness, s.time_softness, s.spread, s.blur_time_step) =
-            (fresh.pitch_softness, fresh.time_softness, fresh.spread, fresh.blur_time_step);
-        gate.check("spectrogram-style-blur", SIZE, &fresh_frame(&device, &queue, &cb));
+        (s.pitch_softness, s.time_softness, s.spread, s.blur_time_step) = (60.0, 200.0, 0.5, 1.0);
+        let mut resources = CallbackResources::default();
+        let blur = frame_with(&device, &queue, &mut resources, &cb);
+        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
+        assert_eq!(passes, 6, "the blur frame skipped the wide passes");
+        cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
+        let close = fresh_frame(&device, &queue, &cb);
+        assert!(apart(&blur, &close) > 1.0, "the wide kernel adds nothing to the blur frame");
+        cb.atmosphere.as_mut().unwrap().settings.spread = 0.5;
+        gate.check("spectrogram-style-blur", SIZE, &blur);
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-        (s.contour_strength, s.contours, s.contour_softness) =
-            (fresh.contour_strength, fresh.contours, fresh.contour_softness);
-        gate.check("spectrogram-style-lava", SIZE, &fresh_frame(&device, &queue, &cb));
+        (s.contour_strength, s.contours, s.contour_softness) = (1.0, 5.0, 0.05);
+        let lava = fresh_frame(&device, &queue, &cb);
+        assert!(apart(&lava, &blur) > 2.0, "the terraces do not show over the blur");
+        gate.check("spectrogram-style-lava", SIZE, &lava);
         every_effect_off(&mut cb);
         gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
     }
