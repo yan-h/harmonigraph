@@ -335,9 +335,8 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("spectral.gate", *gate);
     f.one("spectral.hysteresis", *hysteresis);
 
-    let OctaveLayout { center, span: _, bounds } = octave_layout;
+    let OctaveLayout { center, span: _ } = octave_layout;
     f.one("octave_layout.center", *center);
-    f.many("octave_layout.bounds", *bounds);
 
     for (i, plus) in pluses.iter().enumerate() {
         let PlusInstance { node: _, pos, radius, color, strength } = plus;

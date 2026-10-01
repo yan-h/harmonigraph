@@ -493,9 +493,6 @@ impl LatticeCallback {
                     span: scene.octave_layout.span as f32,
                     center: scene.octave_layout.center,
                     padding: Float2([0.0; 2]),
-                    bounds: std::array::from_fn(|row| {
-                        Float4(std::array::from_fn(|col| scene.octave_layout.bounds[row * 4 + col]))
-                    }),
                 },
                 spectral: SpectralParams {
                     inner: scene.spectral.inner,

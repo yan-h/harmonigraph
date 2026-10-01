@@ -44,7 +44,6 @@ struct OctaveParams {
     @align(16) span: f32,
     center: f32,
     padding: vec2<f32>,
-    bounds: array<vec4<f32>, 3>,
 };
 
 struct SpectralParams {
@@ -778,8 +777,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
 // (octave_level unpacks without that guard, and is not the one to reach for.)
 const OCTAVE_SLOTS: u32 = 11u;
 
-// Octaves one turn can be cut into (harmonigraph_scene::MAX_SPAN). One fewer
-// than the boundary table's entries, since a slice needs a boundary each end.
+// Octaves one turn can be cut into (harmonigraph_scene::MAX_SPAN).
 const MAX_SPAN: u32 = 11u;
 
 // Length of the pitch->color LUT (mirrors harmonigraph_scene::PITCH_LUT_N
@@ -887,13 +885,12 @@ fn slice_thickness(thickness: vec3<u32>, i: u32) -> f32 {
 // at the bottom for the center's own pitch class and turns away from it with
 // everything else.
 //
-// The widths are computed on the CPU (harmonigraph_scene's `octave_layout`)
-// and read out of `oct_bounds` here — one table, shared by every node, giving
-// the angle from a ring's own seam to each of its slice boundaries.
+// Every slice is one span-th of the turn, so the angle from a ring's own seam
+// to any point along it is the closed form in oct_walk (harmonigraph_scene's
+// `OctaveLayout::walk`, in the same operation order).
 
-// The span, held inside the boundary table it indexes (oct_walk reads
-// bound(span)), so a stale or oversized uniform draws a wrong sector rather
-// than reading past the last row.
+// The span, held to the drawable range so a zero uniform cannot divide by zero
+// and a stale or oversized one cannot run the per-slice loops past the slots.
 fn oct_span() -> u32 {
     return clamp(u32(u.octave.span), 1u, MAX_SPAN);
 }
@@ -904,18 +901,13 @@ fn oct_center() -> f32 {
 // Straight up, in these angles: the bottom of a node is a quarter turn back
 // from zero and clockwise — the direction pitch rises — subtracts.
 const OCT_UP: f32 = -0.75 * TAU;
-// Boundary `j` of a ring, four to a uniform row. j runs 0..span: 0 is the seam
-// and span is the same seam a full turn on.
-fn oct_bound(j: u32) -> f32 {
-    return u.octave.bounds[j / 4u][j % 4u];
-}
-// Angle from a ring's seam to `x` slices along it, walking clockwise. Linear
-// inside a slice, so a pitch stands at the same fraction of its own octave's
-// wedge as it does of the octave.
+// Angle from a ring's seam to `x` slices along it, walking clockwise: 0 is the
+// seam and span is the same seam a full turn on. Linear in x, so a pitch
+// stands at the same fraction of its own octave's wedge as it does of the
+// octave.
 fn oct_walk(x: f32) -> f32 {
-    let c = clamp(x, 0.0, f32(oct_span()));
-    let j = min(u32(max(floor(c), 0.0)), oct_span() - 1u);
-    return mix(oct_bound(j), oct_bound(j + 1u), c - f32(j));
+    let span = f32(oct_span());
+    return TAU * clamp(x, 0.0, span) / span;
 }
 // MIDI pitch of octave slot `s` on a node whose pitch class is `cents`: slot
 // s is the octave whose C is MIDI 12*s. Signed, since a ring at the pitch
@@ -963,7 +955,7 @@ fn oct_ring(cents: f32) -> OctRing {
 // keeps the indicators meeting edge to edge and closing the ring.
 fn oct_sector(s: i32, ring: OctRing) -> vec2<f32> {
     let i = u32(clamp(s - ring.base, 0, i32(oct_span()) - 1));
-    return vec2<f32>(ring.seam - oct_bound(i), ring.seam - oct_bound(i + 1u));
+    return vec2<f32>(ring.seam - oct_walk(f32(i)), ring.seam - oct_walk(f32(i + 1u)));
 }
 // Where an indicator "points": the angle of its own pitch, which is the middle
 // of its wedge — for anything that needs one angle for the whole of it rather
