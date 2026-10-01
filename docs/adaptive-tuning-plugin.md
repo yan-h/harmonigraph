@@ -55,7 +55,8 @@ Repetitions refresh one contribution within the configured absolute-pitch tolera
 Octaves and comma-shifted returns remain distinct when outside that tolerance.
 Released memory holds at most 24 contributions, counted separately from held ones, and a release beyond that evicts the one struck longest ago.
 The 24 is a storage bound with no control rather than a musical rule:
-every entry decays on the half-life, and even at a one-second half-life the entries beyond the 24th carry under 2% of the weight at four notes a second.
+every entry decays on the half-life, so at four notes a second an entry beyond the 24th weighs under 0.03% of the newest at the default half-life and under 2% at one second.
+Longer half-lives, up to the control's 20 seconds, or no decay at all, do drop weight that would still count.
 A larger bound measured costly on the audio thread, since every decision scores each candidate against every entry.
 Released memory fades by time alone, so a progression keeps moving when its chords are at least about one half-life apart.
 Closer than that, the chords before pull each new root back:
@@ -163,7 +164,7 @@ Defaults match the simulator's baseline profile.
 The precision profile used by the paired intentional-E examples is obtained by setting Pitch flexibility to 50 cents.
 
 Adaptive next-note outlines were retired in [#970](https://github.com/yan-h/harmonigraph/issues/970).
-Musical neighborhood eligibility and the separate Lattice Map assignment outlines remain.
+Musical neighborhood eligibility and the separate Lattice Map assignment dots remain.
 The removed outline toggle was runtime-only;
 no saved setting or take metadata is removed.
 The Hub adopts current musical configuration before silence expiry on every callback,

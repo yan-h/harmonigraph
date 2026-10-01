@@ -701,8 +701,8 @@ pub struct ViewConfig {
     /// reaches either by [`Comma`] rather than by name.
     ///
     /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
-    /// releasing it is always an edit of the major third (or this switch,
-    /// while the auto-detect is off).
+    /// releasing it is an edit of the major third or a learned chord (or this
+    /// switch, while the auto-detect is off).
     pub meantone: bool,
     /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
     /// params land within `TEMPER_TOLERANCE` of the meantone identity —
@@ -714,7 +714,9 @@ pub struct ViewConfig {
     /// FIFTH, which moves the derived third out from under a third param
     /// that is inert while the lock holds. So the release is the one edit
     /// that can mean nothing else — pulling the major third itself more
-    /// than the tolerance away from the derived value.
+    /// than the tolerance away from the derived value. Learn is the other:
+    /// a learned chord that evidences every axis the comma depends on sets
+    /// the lock either way, since a played third is not a dragged fifth.
     ///
     /// On by default: a project at 12-TET (400 = 4·700 − 2400) is meantone
     /// whether or not anyone said so, and its E and E- name one pitch, so

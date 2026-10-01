@@ -1,6 +1,6 @@
-//! Audio-owned effective tuning and observed direct pitches. This is the
-//! configuration/confirmed-state part of #617, not session aggregation or an
-//! accepted performance-output model.
+//! Audio-owned effective tuning and the confirmed pitches Learn reads. Session
+//! aggregation, which supplies those pitches every callback, is the Hub in
+//! `tuning`.
 use harmonigraph_core::configuration::{
     ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
 };

@@ -231,7 +231,7 @@ impl VisualRuntime {
         }
         if !classes.is_empty() {
             let learned = harmonigraph_core::learn_tuning(&classes);
-            // The audio owner's rule (`ConfigMutation::Learn`): with a source
+            // The audio owner's rule (`Owner::group_end`): with a source
             // retuning, the lattice is the target and only the C offset moves.
             let retuning = params.tuning_instances().iter().any(|row| row.retune);
             for (value, key) in [
