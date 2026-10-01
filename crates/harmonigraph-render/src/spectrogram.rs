@@ -2448,12 +2448,22 @@ mod tests {
             }
         }
         cb.grid.set_bytes(&bytes);
-        // The three looks the retired style enum named, each reached by its
-        // dials, against the frames that enum drew: the blur the fixture pins,
-        // the same with the terraces at full strength, and everything off.
+        // The three looks the retired style enum named, each reached by the
+        // dials that replaced it at their fresh values: the fresh softness
+        // alone, the same with the fresh terraces, and everything off. Not
+        // the fixture's own blur and terraces, which are the dial set the
+        // fresh appearance had before #1205 captured today's. The fresh
+        // terraces are soft enough that on this smooth field the second frame
+        // is within 2/255 of the first.
         let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        (s.pitch_softness, s.time_softness, s.spread, s.blur_time_step) =
+            (fresh.pitch_softness, fresh.time_softness, fresh.spread, fresh.blur_time_step);
         gate.check("spectrogram-style-blur", SIZE, &fresh_frame(&device, &queue, &cb));
-        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        (s.contour_strength, s.contours, s.contour_softness) =
+            (fresh.contour_strength, fresh.contours, fresh.contour_softness);
         gate.check("spectrogram-style-lava", SIZE, &fresh_frame(&device, &queue, &cb));
         every_effect_off(&mut cb);
         gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
