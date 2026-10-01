@@ -1287,8 +1287,10 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.texture = LatticeTexture::Clouds;
     scene.atmosphere.material_amount = 1.0;
-    // The spectrogram's sizes: small and dense enough to sum past coverage.
-    scene.atmosphere.stars = harmonigraph_scene::StarSettings::default();
+    // The spectrogram's sizes, small and dense enough to sum past coverage:
+    // the lattice draws what it stores `LATTICE_STAR_SIZE_SCALE` times over.
+    scene.atmosphere.stars = harmonigraph_scene::StarSettings::default()
+        .scaled(1.0 / harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
     let mut mean = |material, depth| {
