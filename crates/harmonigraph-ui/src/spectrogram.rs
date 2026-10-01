@@ -39,8 +39,8 @@ use harmonigraph_scene::Gradient;
 /// about 120 MiB, four times the former byte store. What the larger one buys is the SHORT
 /// spans, which is where a halving still lands somewhere the data can tell
 /// apart: a 12 s close-up is cut into 16 ms slabs here and 32 ms ones at half
-/// this, against an 8 ms column rate. At the three-minute Span a fresh view
-/// opens on it is 256 ms against 512, and both are far coarser than the data —
+/// this, against an 8 ms column rate. At a three-minute Span it is 256 ms
+/// against 512, and both are far coarser than the data —
 /// the cap still doubles the resolution there, but neither is drawing grain.
 ///
 /// It is a CEILING on the count, not the count itself: [`live_slab`] picks the
@@ -82,9 +82,9 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 /// pane buys nothing, so the picture can hold half the slabs the depth axis has
 /// pixels. What that gives up depends on the Span, and the two ends differ in
 /// kind. At a close-up — a 12 s window cuts into 16 ms slabs — the slab is well
-/// under the 171 ms analysis window, so the stepping loses detail the FFT never
-/// had. At the three-minute Span a fresh view opens on, the slab is 256 ms and
-/// the CAP is what sets the resolution: those slabs merge detail the FFT did
+/// under the analysis window (85 ms at the fresh Fast setting and 48 kHz), so
+/// the stepping loses detail the FFT never had. At a three-minute Span the
+/// slab is 256 ms and the CAP is what sets the resolution: those slabs merge detail the FFT did
 /// resolve. That is what a long Span is for rather than a flaw in it — the
 /// shape of a piece instead of the grain of a phrase — and zooming in is what
 /// asks for the grain back.
@@ -249,12 +249,24 @@ fn what_decides_a_texel(g: Gradient) -> Gradient {
 /// 1.25% of texels differing, always by exactly one level of one channel.
 ///
 /// That is the same order as the store's OWN quantization, which moves a colour
-/// by about a level at the default window (half a dB step of a 60 dB range,
+/// by under two levels at the default window (half a dB step of a 36 dB range,
 /// across a 255-level ramp) and was settled by eye against a sixteen-bit store
 /// — see `quantizing_a_bucket_does_not_move_its_colour`, which is the same
 /// judgement made one layer down. Exactness would need a table per ROW, which is
 /// several megabytes of texture per pane and slower than the read it serves.
 pub(crate) const SHADES: usize = 4096;
+
+/// Entry `i` of the gradient's table, which samples the gradient at each
+/// entry's centre.
+fn shade(gradient: Gradient, i: usize) -> egui::Color32 {
+    crate::panes::spectral::spectrogram::cell_color(gradient, (i as f32 + 0.5) / SHADES as f32)
+}
+
+/// The colour the heatmap draws silence in: the table's first entry, which the
+/// shader holds flat for every level under that entry's centre.
+pub(crate) fn silence_color(gradient: Gradient) -> egui::Color32 {
+    shade(gradient, 0)
+}
 
 /// The gradient's table as the shader reads it, and the gradient it stands for.
 struct ShadeLut {
@@ -330,15 +342,7 @@ impl FoldedGrid {
     fn shades(&mut self, cfg: &SpectrumConfig) -> SpectrogramShades {
         let gradient = what_decides_a_texel(cfg.spectrogram_gradient.sanitized());
         if self.lut.as_ref().is_none_or(|held| held.gradient != gradient) {
-            let lut = (0..SHADES)
-                .map(|i| {
-                    crate::panes::spectral::spectrogram::cell_color(
-                        cfg.spectrogram_gradient,
-                        (i as f32 + 0.5) / SHADES as f32,
-                    )
-                    .to_array()
-                })
-                .collect();
+            let lut = (0..SHADES).map(|i| shade(cfg.spectrogram_gradient, i).to_array()).collect();
             self.lut = Some(ShadeLut { gradient, lut: Arc::new(lut) });
         }
         let held = self.lut.as_ref().expect("built above when the fold moved");
@@ -715,11 +719,12 @@ impl SlabGrid {
                 for slot in (k + 1).max(min_key.unwrap_or(i64::MIN))..key {
                     self.centers.push((slot as f64 + 0.5) * bucket);
                     if empty <= JITTER_SLABS {
-                        // Hold the previous column: at this width one empty
-                        // slab is just a long frame, and painting it black
-                        // would leave a stripe of false silence scrolling
-                        // across the display for the rest of the window. The
-                        // held slab is already final, so the copy shares it.
+                        // Hold the previous column: a gap this short is a seam
+                        // in the sample stream (see `JITTER_SLABS`), and
+                        // painting it silent would leave a stripe of false
+                        // silence scrolling across the display for the rest
+                        // of the window. The held slab is already final, so
+                        // the copy shares it.
                         let held = self.power.last().expect("a current slab").clone();
                         self.power.push(held);
                     } else {
@@ -1445,12 +1450,13 @@ mod tests {
                     next - here,
                 );
             }
-            // And the bottom byte is black at every window, so silence still
-            // recedes into the region's bed rather than glowing.
+            // And the bottom byte is level 0 at every window, so silence
+            // still draws the gradient's floor, the region's bed, rather than
+            // glowing.
             assert_eq!(
                 bin_level_for_test(&cfg, 0, 60.0),
                 0.0,
-                "floor {floor}: silence must be black"
+                "floor {floor}: silence must be level 0"
             );
         }
     }

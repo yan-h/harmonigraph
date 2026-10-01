@@ -33,9 +33,8 @@ use harmonigraph_core::LatticePos;
 /// levels at all but REPLACES the picture — pinpoint stars in depth, each one
 /// palette colour picked by the sound under it — so Contours do not reach it and
 /// every `star_` setting belongs to it alone.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
-    #[default]
     Mosaic,
     Watercolor,
     Stars,
@@ -56,9 +55,10 @@ pub enum StarHaloProfile {
     Low,
 }
 
-/// The band both cloud size dials run over — [`MaterialSettings::scale_size`]
-/// and [`MaterialSettings::wash_size`], which mean the same thing about two
-/// different textures and so are worth one pair of numbers rather than two.
+/// The band the cloud size dials run over — [`MaterialSettings::scale_size`],
+/// [`MaterialSettings::wash_size`] and [`MaterialSettings::velvet_size`], which
+/// mean the same thing about different textures and so are worth one pair of
+/// numbers rather than three.
 ///
 /// **Exported because the dial and the load-door clamp have to be the SAME
 /// range.** A bar that stops at one number over a clamp that stops at another
@@ -81,7 +81,12 @@ pub enum StarHaloProfile {
 /// 0.05. 1/16 is where it turns over, which is about 1.6 points to a cell, so
 /// that is where the bar stops.
 ///
-/// It is one floor over two textures and a pane whose height varies about
+/// Scales' `Cell size` (`velvet_size`) runs over the same band, but the floor
+/// was not measured on it, and its 1x is a coarser cell — about 6% of the
+/// pane's height — so on that pane the floor stops it at about 2.6 points to a
+/// cell rather than at the mosaic's turnover.
+///
+/// It is one floor over three textures and a pane whose height varies about
 /// threefold, so it cannot be exactly right everywhere: the watercolour's
 /// globs are averaging toward a flat film by 1/8 already, and on a short
 /// editor pane the last of the travel aliases where on a tall portrait render
@@ -145,8 +150,7 @@ pub const SCALE_REFRACT_MIN: f32 = -1.0;
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
 
 /// Bounds shared by the [`StarSettings::star_density`] control and
-/// sanitizer, as a multiplier on stars per area. Past about 3x the farthest
-/// dust is finer than a pixel of a 540-point pane and merges into texture.
+/// sanitizer, as a multiplier on stars per area.
 pub const STAR_DENSITY_MIN: f32 = 0.5;
 /// See [`STAR_DENSITY_MIN`].
 pub const STAR_DENSITY_MAX: f32 = 10.0;
@@ -421,9 +425,10 @@ pub struct SpectralAtmosphere {
     /// right, 90 down, 180 left and 270 up.
     pub cloud_direction: f32,
     pub material_settings: MaterialSettings,
-    /// Which texture the layer draws. `Mosaic` is the refracting scale clouds
-    /// above; `Watercolor` is the glob field below, and every `wash_` setting
-    /// belongs to it alone; `Stars` is the starfield, and so is every `star_`.
+    /// Which texture the layer draws; [`CloudStyle`] says what each is. Each
+    /// reads its own settings and no other's: `scale_*` for `Mosaic`, `wash_*`
+    /// for `Watercolor` and `velvet_*` for `VelvetScales`, all in
+    /// [`Self::material_settings`], and [`Self::stars`] for `Stars`.
     pub cloud_style: CloudStyle,
     pub stars: StarSettings,
 }
@@ -436,10 +441,7 @@ pub struct StarSettings {
     /// stars are hashed into shrink by its square root. Runs over
     /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
     ///
-    /// Shared by [`CloudStyle::Stars`] and [`LatticeMaterial::Stars`]. Each
-    /// fresh value is the prototype's pick — V3 of round 4 for the motion,
-    /// YB3 of round 8 for the colour and shape — so the page opens on the look
-    /// Yan chose, with its levers on bars.
+    /// Shared by [`CloudStyle::Stars`] and [`LatticeMaterial::Stars`].
     pub star_density: f32,
     /// How far the stars differ from each other in brightness, spent as a
     /// palette position in the spectrogram or a level of the sampled lattice
@@ -460,10 +462,10 @@ pub struct StarSettings {
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
     /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
-    /// each star's core and its cap with that spacing's ratio to the fresh
-    /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
-    /// the old fixed curve did. Every cell holds a star, so how many a depth
-    /// has follows its spacing alone. Runs over
+    /// each star's core and its cap with that spacing's ratio to the
+    /// prototype's 2-to-32 spacing at the same depth, so ends of 2 and 32 draw
+    /// exactly what its fixed curve did. Every cell holds a star, so how many
+    /// a depth has follows its spacing alone. Runs over
     /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], times
     /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
     /// [`Self::star_size_max`].
@@ -506,8 +508,9 @@ pub struct StarSettings {
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
     pub star_halo_resolution: f32,
-    /// Uniform uses `star_halo_resolution`; the quality presets choose fixed
-    /// resolutions for the five depths. Saves without a profile use Medium.
+    /// Uniform uses `star_halo_resolution`; the quality presets fix their own
+    /// resolutions, for the far three depths' one shared image and the
+    /// nearest two's halos. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
     /// How much every star is widened, equally at every depth.
     /// Runs to [`STAR_DEFOCUS_MAX`].
@@ -747,7 +750,7 @@ impl SpectralAtmosphere {
                             || self.color_release > 0.0
                     }
                     // Light rather than a displacement, so it has no dial at
-                    // which it draws the ordinary picture: `Cloud depth` alone
+                    // which it draws the ordinary picture: `Texture mix` alone
                     // switches it off.
                     CloudStyle::Stars | CloudStyle::VelvetScales => true,
                 },

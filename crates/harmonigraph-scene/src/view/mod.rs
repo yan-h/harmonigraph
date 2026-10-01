@@ -1672,8 +1672,9 @@ impl Default for ViewConfig {
             marvel_auto: true,
             frameless: false,
             render_scale: 1.0,
-            // The shared note bloom strength (`note_bloom`),
-            // which the Spiral shared until it had its own.
+            // The lattice's bloom strength (`bloom_strength`, retired into
+            // `note_bloom` by #1140), which the Spiral shared until it had its
+            // own (#1083).
             spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
             // into a shared field, at just over half strength as captured

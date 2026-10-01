@@ -104,7 +104,7 @@ fn bucket_x(t: f32) -> f32 {
 /// Clamped per bucket and not after the combine, which is what makes the
 /// picture an image of the spectrum rather than of a mean of it: a partial
 /// standing above the window's ceiling contributes a full-bright bucket to
-/// whatever covers it, and a floor below the window contributes black, so a
+/// whatever covers it, and a floor below the window contributes level 0, so a
 /// feature narrower than a pixel dims in proportion to its share of that pixel
 /// instead of being dragged off the ramp by its neighbours.
 // Artistic brightness weighting of display intensity, not audio power or
@@ -133,7 +133,7 @@ fn bucket_level(slot: u32, b: u32, density: bool) -> f32 {
 /// axis, so the footprints TILE it — and which of it and the bucket grid is
 /// finer picks the arm.
 ///
-/// For Plain, MINIFYING (a pixel wider than a bucket) is the AREA-WEIGHTED MEAN of the
+/// On the plain path, MINIFYING (a pixel wider than a bucket) is the AREA-WEIGHTED MEAN of the
 /// levels under `[x0, x1)`: fractional weights where the footprint cuts its
 /// first and last bucket, unit weights between. That is what a GPU does to a
 /// texture it draws small, and it is the whole of why the pane's pixel height
@@ -217,7 +217,7 @@ fn field_level(in: VertexOut, density: bool) -> f32 {
 }
 
 // Literal domain arguments specialize the shared resampler for each entry
-// point; Plain keeps its original display-level area mean exactly.
+// point; the plain path keeps its original display-level area mean exactly.
 fn heatmap_level(in: VertexOut) -> f32 {
     return field_level(in, false);
 }
@@ -266,8 +266,8 @@ struct Cloud {
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
     // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
-    // clouds, or native-resolution RGB of the three far Stars layers. 0 keeps
-    // the complete walk in the final composite.
+    // clouds, or native-resolution RGB of the three far Stars layers. 0 works
+    // the tone out per pixel in the final composite, from the tile.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
     // are the sanitized settings. The filter shader declares only the head of
@@ -277,8 +277,8 @@ struct Cloud {
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
-    // Which texture the layer draws: 0 the refracting scales above, 1 the
-    // watercolour wash below, 2 the starfield after them. Nothing is shared
+    // Which texture the layer draws: 0 the refracting scales above (Mosaic), 1
+    // the watercolour wash below, 2 the starfield after them, 3 Scales. Nothing is shared
     // between them but the blurred light, the palette, the clock and
     // `cloud_depth`.
     cloud_style: u32,
@@ -287,17 +287,18 @@ struct Cloud {
     wash_lobe: f32,
     wash_refract: f32,
     wash_layers: f32,
-    // The tile's period in cells, above zero whenever a cloud is drawn. The
-    // cell a hash is taken at is folded onto the square period described
-    // beside `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the two
-    // paths below read that texture instead of walking the ring per pixel. The
+    // The tile's period in cells, above zero whenever a mosaic or wash is
+    // drawn. The cell a hash is taken at is folded onto the square period
+    // described beside `wrap_cell`, `fs_cloud_tile` bakes one period of it, and
+    // the two paths below read that texture instead of walking the ring per
+    // pixel. The
     // wash rotates that read; the mosaic keeps the square tile's original axes.
     tile_cells: u32,
     // 1 when pitch is the pane's Y axis, 0 when it is X. The wash's 3-4-5
     // rotation is defined in (time, pitch), so its basis follows this
     // orientation. The unrotated mosaic does not read it.
     pitch_vertical: u32,
-    // The starfield's `Randomness`, and its life clock in lives, already
+    // The starfield's `Brightness variation`, and its life clock in lives, already
     // reduced by `STAR_LIFE_PERIOD` (`star_life` in atmosphere.rs). Read by
     // none of the textures above.
     star_randomness: f32,
@@ -520,16 +521,16 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // face and everything else keyed on it together.
 //
 // **The slope is normalised before it bends anything.** A dome's slope goes as
-// one over its radius, so a raw slope would make Scale size silently a second
+// one over its radius, so a raw slope would make `Cell size` silently a second
 // refraction knob — halve the scale and the picture bends twice as far.
 // `DOME_FACE` takes that out, and takes out the same effect WITHIN one field now
-// that `Variety` gives each glob its own radius.
+// that `Size variation` gives each glob its own radius.
 //
 // Cloud space is the pane's, aspect-corrected and independent of DPI, and it is
 // FIXED: ten cloud units across the pane's height, which is what the shipped
 // `Cloud size` of 0.5x drew before the dial was retired.
 //
-// It was a dial, and it was a second copy of `Scale size` and `Glob size`. The
+// It was a dial, and it was a second copy of `Cell size` and `Patch size`. The
 // texture's size on the pane came out as a PRODUCT — `cloud_scale * scale_size`
 // reached the dome grid and nothing read either on its own — so the two dials
 // named one number between them, and the picture could not tell which of them
@@ -542,7 +543,8 @@ fn density_color(raw_level: f32) -> vec4<f32> {
 // These qualities are on DIALS rather than decided here, because describing
 // which of them Yan wants has failed in words repeatedly: the NEGATIVE half of
 // `Refraction` carries the lookup from this round's continuous slope onto round
-// 1's flat per-glob patch, and `Variety` is how much the globs differ in size.
+// 1's flat per-glob patch, and `Size variation` is how much the globs differ in
+// size.
 const CLOUD_UNITS: f32 = 10.0;
 // The tiled WASH is turned by the exact 3-4-5 rotation: cosine 4/5, sine 3/5,
 // or 36.87 degrees. Its square walk is baked in its own coordinates and this
@@ -551,23 +553,12 @@ const CLOUD_UNITS: f32 = 10.0;
 // deliberately keeps the square tile's original axes: turning its scale pile
 // changed the look rather than merely hiding its repetition.
 
-// How many dome cells cross one cloud unit at `Scale size` 1x. Carries the
+// How many dome cells cross one cloud unit at `Cell size` 1x. Carries the
 // retired `Cloud size` default: the shipped picture was 6 cells per unit over a
-// frame half this one's, and `6 / 2.2` at the old `Scale size` default is what
+// frame half this one's, and `6 / 2.2` at the old `Cell size` default is what
 // puts the same scales on the pane with the dial reading a plain 1x.
 const SCALE_CELLS: f32 = 6.0 / 2.2;
 
-// The cell a hash is taken at, folded onto the tile when one is being baked.
-//
-// The tile is square in its OWN coordinates. Rotating the already-periodic
-// result below keeps every lattice the walk uses exact; trying instead to wrap
-// the world-cell hashes on the 3-4-5 vectors would leave the 2.1x and 0.9x
-// octaves on fractional cells and draw a seam.
-//
-// WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
-// what lands a negative cell in the range. A period of 0 returns the cell
-// whole: no production pass asks for it, but it is the unwrapped walk the
-// tests hold the tile against.
 // Watercolor texture coordinates in the rotated basis. `semantic` is `(time, pitch)`
 // whichever way the pane is oriented; multiplying by R^-1 turns the world
 // point back into the square tile's coordinates. The repeating sampler then
@@ -617,7 +608,7 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 
     // THE REFRACTION. `DOME_FACE` has already put the offset in scale widths
     // whatever the scale size is, and in each glob's OWN width whatever
-    // `Variety` has made of it.
+    // `Size variation` has made of it.
     let face = pile.face;
     let bend = max(cloud.scale_refract, 0.0) * scale_points;
     // The dial's NEGATIVE half swings the reading off the face the scale
@@ -748,7 +739,7 @@ fn cloud_tone_at(pt: vec2<f32>) -> f32 {
 // The cloud's tone reduced to a target of its own, one texel per cloud sample
 // (a fixed 0.5 pt) of pane. The coverage quad carries the pane-relative 0..1 fraction in
 // its `slab`/`t`, which is what makes this the same `pt` the composite would
-// have walked under each of its own pixels.
+// have read under each of its own pixels.
 @fragment
 fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(cloud_tone_at(vec2<f32>(in.slab, in.t) * cloud.size), 0.0, 0.0, 1.0);
@@ -769,7 +760,7 @@ fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
 // no pane, no drift and no light in it: it is one square period of whichever
 // walk the style selects. The Watercolor read turns that whole field by 36.87
 // degrees; the Mosaic read leaves it square. That is why a resize, a drift or
-// a note never touches it and `Scale size` reaches it only
+// a note never touches it and `Cell size` reaches it only
 // through how many texels the renderer spends on a cell.
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
@@ -810,8 +801,8 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
-        // Seven channels of glob geometry and brightness, the fine octave whatever `Layers`
-        // says, so turning that dial up is a mix and never a rebake.
+        // Seven channels of glob geometry and brightness, the fine octave whatever
+        // `Fine layer mix` says, so turning that dial up is a mix and never a rebake.
         let field = wash_field(wash_cell, period, cloud.wash_fuzz, cloud.wash_lobe);
         out.a = vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0);
         out.b = vec4<f32>(field.fine.offset, field.fine.brightness, field.cover);
@@ -911,7 +902,7 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
         return density_color(level);
     }
     let pt = position / cloud.ppp - cloud.origin;
-    // The starfield is colour, not a level: `Cloud depth` blends the plain
+    // The starfield is colour, not a level: `Texture mix` blends the plain
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
         return vec4<f32>(mix(density_color(level).rgb, star_color(pt).rgb, cloud.cloud_depth), 1.0);
@@ -928,18 +919,20 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
         let base = linear_from_gamma_rgb(density_color(level).rgb);
         return vec4<f32>(gamma_from_linear_rgb(mix(base, held, cloud.cloud_depth)), 1.0);
     }
-    // Either the walk under this pixel, or one bilinear tap into what
-    // `fs_cloud_tone` already walked. The palette lookup and the mix stay HERE
-    // whichever it was, so the base picture, its terraces and the gradient are
-    // full resolution even where the texture over them is not.
+    // Either the tone worked out under this pixel (a tile tap and its
+    // refraction), or one bilinear tap into what `fs_cloud_tone` already worked
+    // out. The palette lookup and the mix stay HERE whichever it was, so the
+    // base picture, its terraces and the gradient are full resolution even
+    // where the texture over them is not.
     var tone: f32;
     if cloud.tone_baked == 1u {
         tone = textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).r;
     } else {
         tone = cloud_tone_at(pt);
     }
-    // Mix levels before the one shared style/palette lookup: Cloud depth and
-    // Watercolor Layers cannot introduce RGB blends outside the authored ramp.
+    // Mix levels before the one shared style/palette lookup: `Texture mix` and
+    // Watercolor's `Fine layer mix` cannot introduce RGB blends outside the
+    // authored ramp.
     return density_color(mix(level, tone, cloud.cloud_depth));
 }
 // Brightness is a display adjustment, after the palette and color memory.
@@ -1016,12 +1009,11 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // ideally looking as if they're all independent, yet overall all drifting in the
 // same direction"*, with stars that *"take on the color of the place they drift
 // over as they move, but not look like a flat effect pasted on the spectrogram"*.
-// Prototyped in numpy over a real take (round 4's `drift.py`); the fresh dials are
-// its V3.
+// Prototyped in numpy over a real take (round 4's `drift.py`).
 //
 // **Depth slices, not octaves.** Five jittered star grids from far (fine dust,
-// two-pixel cells, many and faint) to near (32-pixel cells at the fresh `Size
-// range`, few, bright, soft), each sliding at the shared drift times its own
+// cells of `Star size`'s far end, many and faint) to near (cells of its near
+// end, few, bright, soft), each sliding at the shared drift times its own
 // parallax factor. The CPU works out every slice's numbers and its drift
 // (`star_slices`); native composition reads one core per slice and its halo image.
 //
@@ -1039,8 +1031,8 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // fading the old one out and the new one in over the ends of their lives. Cells
 // turn over at hashed times, so the field never does at once. The life a star
 // is in is hashed into everything about it. Each depth moves as one sheet: a
-// `Speed spread` that let each star stray at its own speed paid for it out of
-// every star's reach, and cut the soft edges off the whole field.
+// per-star speed spread that let each star stray at its own speed paid for it
+// out of every star's reach, and cut the soft edges off the whole field.
 //
 // **One light tap per star, at the star's CURRENT centre.** So a star is one
 // colour and one brightness, never a smear of the pixels under it, and as it
@@ -1069,11 +1061,11 @@ fn star_level_at(pt: vec2<f32>) -> f32 {
 }
 // A star's one colour, its brightness spent as a palette position. `rank` is
 // the star's brightness draw normalised to a mean of ONE: most stars below it,
-// a rare bright one far above, steeper with `Randomness`. Both the spread and
-// the lift are linear in it with a mean of one and of `STAR_LIFT / 2`, so the
-// field's average palette position is the light behind it plus that lift at
-// every Randomness — the dial redistributes brightness, it does not darken
-// (it did before, by about a quarter at 0.6). Only the palette's top clips.
+// a rare bright one far above, steeper with `Brightness variation`. Both the
+// spread and the lift are linear in it with a mean of one and of
+// `STAR_LIFT / 2`, so the field's average palette position is the light behind
+// it plus that lift at every `Brightness variation` — the dial redistributes
+// brightness, it does not darken (it did before, by about a quarter at 0.6). Only the palette's top clips.
 // At 0 every star is the colour behind it lifted by its draw, as before. The
 // lift fades in with the level, so a star over near-silence cannot climb the
 // palette on its rank alone. The mean rank, 1, paints the mean star.

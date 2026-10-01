@@ -78,6 +78,8 @@ Four full offline side-by-side histories contain both the lattice and spectral p
 Each renders 192 frames at 640×400/60 fps:
 the existing two-second golden tone/noise generator is made stereo (right channel offset 97 samples and scaled by 0.8), followed by 1.2 seconds of silence.
 Default and largest/five-taper configurations each run Fold and Spectrum with the ring enabled, gate 0.5 and hysteresis 0.1.
+"Default" throughout this report is the default at the time, Balanced (8192 samples) with one taper;
+the fresh window has since become Fast (4096 samples), which these measurements do not cover.
 Every RGBA byte is compared, including intermediate frames and fading rings.
 The synthetic waveform's right-channel wrap is part of this fixed fixture;
 this is not a recorded-music corpus.

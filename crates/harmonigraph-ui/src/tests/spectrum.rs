@@ -6,27 +6,37 @@ use crate::*;
 
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
-    let mut spectrum = AudioSpectrum::default();
-    // The 8192-sample window, whose bins resolve A4 to within a bucket; the
-    // 4096-sample one draws it on its nearest bin, about 21¢ sharp.
-    let config = SpectrumConfig { window: SpectrumWindow::Balanced, ..SpectrumConfig::default() };
-    assert!(spectrum.display(0.0).is_none(), "no audio yet");
+    // The fresh 4096-sample window draws A4 on its nearest bin, about 21¢
+    // (seven buckets) sharp; the 8192-sample one resolves it to within a
+    // bucket.
+    for (window, buckets) in [(SpectrumWindow::Fast, 8), (SpectrumWindow::Balanced, 1)] {
+        let mut spectrum = AudioSpectrum::default();
+        let config = SpectrumConfig { window, ..SpectrumConfig::default() };
+        assert!(spectrum.display(0.0).is_none(), "no audio yet");
 
-    // A 440 Hz sine, long enough to fill the analysis window.
-    let sine: Vec<f32> = (0..9_000)
-        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
-        .collect();
-    spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
-    let levels = spectrum.display(1.0).expect("audio is flowing");
-    let peak =
-        levels.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| i as i32).unwrap();
-    // A4 is MIDI 69; its bucket scales with the axis resolution.
-    let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
-        * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
-    assert!((peak - a4).abs() <= 1, "440 Hz should peak at A4 (bucket {a4}), got {peak}");
+        // A 440 Hz sine, long enough to fill the analysis window.
+        let sine: Vec<f32> = (0..9_000)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        spectrum.push_samples(&sine, 1, 48_000.0, 1.0, &config);
+        let levels = spectrum.display(1.0).expect("audio is flowing");
+        let peak = levels
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i as i32)
+            .unwrap();
+        // A4 is MIDI 69; its bucket scales with the axis resolution.
+        let a4 = ((69.0 - harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI)
+            * harmonigraph_core::spectrum::BINS_PER_SEMITONE as f32) as i32;
+        assert!(
+            (peak - a4).abs() <= buckets,
+            "{window:?}: 440 Hz should peak at A4 (bucket {a4}), got {peak}"
+        );
 
-    // Once samples stop, the curve hides instead of freezing.
-    assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
+        // Once samples stop, the curve hides instead of freezing.
+        assert!(spectrum.display(1.0 + AudioSpectrum::HOLD_SECONDS + 0.1).is_none());
+    }
 }
 
 /// Quiet music fills most of the analyzer's height, rather than disappearing

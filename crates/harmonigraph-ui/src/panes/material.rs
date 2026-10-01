@@ -74,8 +74,8 @@ pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Mat
 ///
 /// Every quality that differed between the prototype's four motion variants is
 /// a bar here rather than a choice made in the shader, because Yan's pick was a
-/// starting point "with sliders exposed". The fresh values are that pick, V3, with round
-/// 8's YB3 for how a star is coloured and shaped.
+/// starting point "with sliders exposed". The fresh values are his controls as
+/// captured from the DAW on 2026-09-26.
 /// `size_scale` is how many times the spectrogram's sizes this pane's run.
 pub(super) fn stars(
     ui: &mut egui::Ui,
@@ -86,12 +86,14 @@ pub(super) fn stars(
         StarSettings, STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX,
         STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
     };
-    ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
-        .unit(1.0, "\u{d7}")
-        .show(ui)
-        .on_hover_text(
-            "How many stars at every depth. Higher values pack them closer; past about 3\u{d7} the faintest dust is finer than a pixel and merges into texture.",
-        );
+    ValueBar::new(
+        &mut atmosphere.star_density,
+        STAR_DENSITY_MIN..=STAR_DENSITY_MAX,
+        "Star density",
+    )
+    .unit(1.0, "\u{d7}")
+    .show(ui)
+    .on_hover_text("How many stars at every depth. Higher values pack them closer.");
     crate::widgets::depth(
         ui,
         &mut atmosphere.star_size_min,

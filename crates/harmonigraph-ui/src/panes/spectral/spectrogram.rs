@@ -194,9 +194,10 @@ pub(super) fn strip_depths(
 /// bright patches floating on the background.
 ///
 /// The heatmap is opaque and untinted, sharing the spectrum curve's
-/// [`cell_color`] ramp. The styles soften its display levels before that ramp
-/// is applied once, keeping the data and its surrounding body on one palette.
-/// Plain preserves the original per-pixel level read.
+/// [`cell_color`] ramp. The atmosphere's effects soften its display levels
+/// before that ramp is applied once, keeping the data and its surrounding body
+/// on one palette. With every effect off, the plain path keeps the original
+/// per-pixel level read.
 pub(crate) fn draw_spectrogram(
     painter: &egui::Painter,
     axes: &Axes,
@@ -282,10 +283,10 @@ pub(crate) fn draw_spectrogram(
 }
 
 /// A cell's opaque color: `level` (0..1 loudness) mapped through the heatmap's
-/// gradient. The gradient's dark end is black at every preset, matching the
-/// region's black bed (laid down in `spectral_pane`), so silence recedes while
-/// energy stands out — and the heatmap is drawn untinted, so what this answers
-/// is what lands. Shared with the spectrum curve so the two read in the same
+/// gradient. The gradient's dark end is black at every preset, so silence
+/// recedes while energy stands out, and the region's bed (laid down in
+/// `spectral_pane`) is that same floor at any gradient — and the heatmap is
+/// drawn untinted, so what this answers is what lands. Shared with the spectrum curve so the two read in the same
 /// scheme.
 ///
 /// Through the same table the lattice's own colors come off

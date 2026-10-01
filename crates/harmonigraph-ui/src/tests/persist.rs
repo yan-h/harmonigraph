@@ -1098,7 +1098,7 @@ fn an_appearance_missing_any_one_group_keeps_the_rest() {
 /// drawable.
 ///
 /// Persisted for the reason the camera beside it is — a framing is dialled in by
-/// hand and a take renders from the blob — so what has to hold is that the pair
+/// hand and comes back when the editor reopens — so what has to hold is that the pair
 /// SURVIVES rather than being re-derived from the fit, and that a nonsense one
 /// cannot reach the pane: both fields multiply the geometry it paints, and NaN
 /// geometry is a panic inside egui's tessellator.

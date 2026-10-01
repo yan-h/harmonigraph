@@ -168,7 +168,8 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
     extent.map(|n| n.div_ceil(64).saturating_mul(64).min(limit))
 }
 
-/// The precomposite size, or `None` for the complete per-pixel walk.
+/// The precomposite size, or `None` to work the texture out per pixel in the
+/// composite.
 ///
 /// High, Medium and Low Stars composite their far three layers at 75%, 50% and one-third dimensions.
 /// Uniform Stars retain a native RGB split on large regions. The caller retains
@@ -178,7 +179,7 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
 /// Other styles stay native at sample spacing at or under one DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
 /// where a reduced target would be the pane's own resolution or larger and the
 /// extra pass would buy nothing. Above that each axis is divided by the same
-/// number of pixels per sample, so the walk's cost falls with its square.
+/// number of pixels per sample, so the per-pixel cost falls with its square.
 pub(super) fn tone_size(
     pixels: [u32; 2],
     ppp: f32,
@@ -245,8 +246,8 @@ const TILE_MAX: u32 = 2048;
 /// picture; anything carried here that decides nothing rebakes a full cell walk
 /// at the rate of whatever it should not be watching. So the key is the STYLE,
 /// the period, the texel size, the wash's pane orientation, and the dials the
-/// WALK reads — `Variety` for the mosaic; `Lobe shape` and `Fuzz` for the
-/// wash, which are the warp and the feather/bleed widths. Orientation decides
+/// WALK reads — `Size variation` for the mosaic; `Shape warp` and `Edge
+/// feathering` for the wash, which are the warp and the feather/bleed widths. Orientation decides
 /// the rotated wash basis; the unrotated mosaic neither bakes nor reads it.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
@@ -254,10 +255,10 @@ const TILE_MAX: u32 = 2048;
 /// cell coordinate — so it is a texture coordinate here rather than an input,
 /// and a tile is never rebaked because time passed.
 ///
-/// Not the light, the palette, the softness or `Cloud depth`: none of them
-/// reaches the walk at all. Not `Refraction` or `Layers`, which are
-/// read AFTER the tile, out of channels it already holds. Not `Scale size` or
-/// `Glob size`, which decide how many cells cross the pane rather than what a
+/// Not the light, the palette, the softness or `Texture mix`: none of them
+/// reaches the walk at all. Not `Refraction` or `Fine layer mix`, which are
+/// read AFTER the tile, out of channels it already holds. Not `Cell size` or
+/// `Patch size`, which decide how many cells cross the pane rather than what a
 /// cell draws, and not the pane's pixels: both reach this only through
 /// [`Self::texels`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -399,17 +400,18 @@ struct Uniforms {
     scale_size: f32,
     scale_variety: f32,
     scale_refract: f32,
-    /// 0 for the refracting scales, 1 for the watercolour wash, 2 for the
-    /// starfield. None reads another's own settings; all share what sits above
-    /// them.
+    /// 0 for the refracting scales (Mosaic), 1 for the watercolour wash, 2 for
+    /// the starfield, 3 for Scales. None reads another's own settings; all
+    /// share what sits above them.
     cloud_style: u32,
     wash_size: f32,
     wash_fuzz: f32,
     wash_lobe: f32,
     wash_refract: f32,
     wash_layers: f32,
-    /// The tile's period in cells, 0 only when no cloud is drawn and the shader
-    /// never reads it. See [`TileKey`].
+    /// The tile's period in cells, 0 when no tile is baked — no cloud drawn, or
+    /// Stars or Scales, which read none — and the shader never reads it then.
+    /// See [`TileKey`].
     tile_cells: u32,
     /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
@@ -494,7 +496,7 @@ pub(super) struct Pipelines {
     pub source: wgpu::RenderPipeline,
     pub bake: wgpu::RenderPipeline,
     /// The cloud's scalar tone into its own reduced target, for the composite to
-    /// read instead of walking the cells per pixel.
+    /// read instead of working it out (a tile tap and its refraction) per pixel.
     pub tone: wgpu::RenderPipeline,
     pub velvet: wgpu::RenderPipeline,
     /// One period of the cell walk into the two tile targets, for both of the
@@ -1051,7 +1053,7 @@ pub(super) struct Targets {
     views: [wgpu::TextureView; 3],
     /// The precomposite and its size: reduced scalar cloud tone or RGB
     /// of the three far Stars layers (75% for High, 50% for Medium, one third for Low, native for Uniform).
-    /// None draws the full walk in the composite.
+    /// None works the texture out per pixel in the composite.
     /// Part of the allocation key beside [`Self::size`] — see
     /// `SpectrogramCallback::prepare`.
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
@@ -1522,7 +1524,7 @@ impl Targets {
             [region.left_top(), region.right_top(), region.right_bottom(), region.left_bottom()];
         // `slab` and `t` carry the corner's PANE-RELATIVE fraction here rather
         // than a run position, which is what `fs_cloud_tone` reads to recover
-        // the same point the composite would have walked under its own pixel.
+        // the same point the composite would have read under its own pixel.
         // The region is a sub-rect of the pane, so these need not reach 0 and 1.
         // Nothing else reads these two on this quad: the bake and the backdrop
         // both work off `in.position` alone.

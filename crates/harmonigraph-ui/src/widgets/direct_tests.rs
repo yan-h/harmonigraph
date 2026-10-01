@@ -128,10 +128,26 @@ fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
         assert_eq!((a, b, exponent), initial);
         drag(
             |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            0,
+            egui::vec2(0.0, -12.0),
+        );
+        assert!(a > initial.0);
+        assert_eq!((b, exponent), (initial.1, initial.2));
+        let far = a;
+        drag(
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            1,
+            egui::vec2(0.0, 12.0),
+        );
+        assert!(b < initial.1);
+        assert_eq!((a, exponent), (far, initial.2));
+        let ends = (a, b);
+        drag(
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
             2,
             egui::vec2(0.0, -12.0),
         );
-        assert_eq!((a, b), (initial.0, initial.1));
+        assert_eq!((a, b), ends);
         assert!(exponent < initial.2);
     }
 }

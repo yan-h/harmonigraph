@@ -118,7 +118,13 @@ const CASES: &[(&str, Option<Turn>)] = &[
             (s.material_settings.wash_lobe, s.material_settings.wash_layers) = (0.0, 0.0);
         }),
     ),
-    ("stars, defaults", Some(|s| s.cloud_style = CloudStyle::Stars)),
+    (
+        "stars, high",
+        Some(|s| {
+            s.cloud_style = CloudStyle::Stars;
+            s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::P3;
+        }),
+    ),
     (
         "stars, medium",
         Some(|s| {

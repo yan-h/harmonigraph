@@ -7,6 +7,7 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
     ui.push_id("drift", |ui| {
         let plot=Plot::square_with_fields(ui, "Drift", if speed.is_some() { 2 } else { 1 });
         let max=harmonigraph_scene::CLOUD_SPEED_MAX;
+        let has_speed=speed.is_some();
         // Square-root radius keeps slow motion selectable beside the 20× ceiling.
         let radius=speed.as_deref().map_or(1.0, |s| (*s/max).sqrt());
         let angle=degrees.to_radians();
@@ -35,7 +36,12 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
             ui.painter().arrow(start,end-start,egui::Stroke::new(1.5,theme::accent()));
         }
         plot.dot(ui,x,y);
-        plot.response.on_hover_text("Right 0° · Down 90° · Left 180° · Up 270°. Arrow keys adjust the handle; Shift gives finer steps. 1× moves the material about a pane-height every four minutes.");
+        // Stars set their own pace under Star speed and pass no speed here.
+        plot.response.on_hover_text(if has_speed {
+            "Right 0° · Down 90° · Left 180° · Up 270°. Arrow keys adjust the handle; Shift gives finer steps. 1× moves the material about a pane-height every four minutes."
+        } else {
+            "Right 0° · Down 90° · Left 180° · Up 270°. Arrow keys adjust the handle; Shift gives finer steps."
+        });
     });
 }
 

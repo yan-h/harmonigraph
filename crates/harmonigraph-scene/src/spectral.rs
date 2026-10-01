@@ -18,9 +18,9 @@
 //!   the surface under it has.
 //!
 //! One light rather than one colour, because the two surfaces have different
-//! grounds. The analyzer's panes are bedded on BLACK — a spectrogram cell at
-//! silence has to be black or the plane's edge shows — so there the light and
-//! the colour are the same thing and the picture is the gradient itself. The
+//! grounds. The analyzer's panes draw the gradient untouched — the
+//! spectrogram's bed is the gradient's own floor — so there the light and the
+//! colour are the same thing and the picture is the gradient itself. The
 //! ring is bedded on the LATTICE, so it reads a copy of that gradient whose
 //! silent end is anchored on the node's own ground ([`ring_gradient`]): a ramp
 //! opening at black punches a hole through a grey lattice at every node, which
@@ -784,10 +784,10 @@ fn grid_at(pitch: f32) -> Option<(usize, usize, f32)> {
 ///
 /// The FREQUENCY scheme's invariant is that a loudness is one LIGHT wherever it
 /// is drawn, over whatever ground that surface has — not one colour, which is
-/// only the same thing where the ground is black. The analyzer's own panes are
-/// that case: the spectrogram's plane IS black (silence there has to be black
-/// or the plane's edge shows), so the gradient reaches them untouched and their
-/// picture is the gradient itself. The ring's ground is the LATTICE, so its
+/// only the same thing where the ground is black. The analyzer's own panes
+/// stand on the gradient's own floor instead — the spectrogram's bed is
+/// painted in it — so the gradient reaches them untouched and their picture is
+/// the gradient itself. The ring's ground is the LATTICE, so its
 /// copy of the ramp is re-anchored to stand on it — a ramp opening at black
 /// punches a hole through a grey lattice at every node in the window, which is
 /// a picture of a gap where the table means silence.
@@ -1005,9 +1005,8 @@ mod tests {
         assert!(!raw.folded, "the raw spectrum lost its window across the wedge");
     }
 
-    /// The shape every analyzer preset has: a ramp whose bottom is BLACK,
-    /// because the spectrogram's plane is black and silence there has to be
-    /// black. Carries chroma at both ends, which is what makes the ring's
+    /// The shape every analyzer preset has: a ramp whose bottom is BLACK.
+    /// Carries chroma at both ends, which is what makes the ring's
     /// silent end a question rather than a shade of grey by default.
     fn analyzers() -> Gradient {
         Gradient {
