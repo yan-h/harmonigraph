@@ -17,7 +17,7 @@
 //! One RON-encoded [`Record`] per line, appendable and streamable:
 //!
 //! ```text
-//! Header((version:5,sample_rate:48000.0,...))
+//! Header((version:6,sample_rate:48000.0,...))
 //! Note((t:0.5,source:0,channel:0,note:60,kind:On(velocity:0.8)))
 //! Param((t:0.0,id:"pitch-class-fade",value:2.0))
 //! ```
@@ -58,8 +58,10 @@ use serde::{Deserialize, Serialize};
 /// canonical baselines, sample provenance and publication gaps. Refusing an old
 /// header prevents its final record from looking like an interrupted write.
 /// Version 4 carried full editor persistence instead of dedicated appearance.
-/// There are no compatibility shims.
-pub const FORMAT_VERSION: u32 = 5;
+/// Version 5 named a baseline's Show flag `participating`; read under the new
+/// key `shown` it defaults to false and hides every source, so the rename is a
+/// version rather than a silent blank render. There are no compatibility shims.
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Conventional file extension. Not enforced anywhere.
 pub const EXTENSION: &str = "take";

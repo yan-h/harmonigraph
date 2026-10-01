@@ -108,7 +108,7 @@ for name, rate, seconds in [('short', 48000, 5), ('medium', 192000, 60), ('long'
         f.write(b'RIFF' + struct.pack('<I', 36 + size) + b'WAVEfmt ' + struct.pack('<IHHIIHH', 16, 3, 2, rate, rate * 8, 8, 32) + b'data' + struct.pack('<I', size))
         for _ in range(seconds):
             f.write(data)
-(root / 'probe.take').write_text('Header((version:5))\nNote((t:0.0,source:1,channel:0,note:69,kind:On(velocity:0.8)))\nNote((t:4.5,source:1,channel:0,note:69,kind:Off))\n')
+(root / 'probe.take').write_text('Header((version:6))\nNote((t:0.0,source:1,channel:0,note:69,kind:On(velocity:0.8)))\nNote((t:4.5,source:1,channel:0,note:69,kind:Off))\n')
 ```
 
 Historical only — `--audio` and `--playhead` no longer parse:

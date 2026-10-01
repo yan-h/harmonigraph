@@ -256,7 +256,7 @@ pub struct BaselineRecord {
     pub id: u64,
     pub t: f64,
     pub output_cut: u64,
-    pub participating: bool,
+    pub shown: bool,
     pub voices: Vec<VoiceRecord>,
 }
 impl From<&SourceBaseline> for BaselineRecord {
@@ -266,7 +266,7 @@ impl From<&SourceBaseline> for BaselineRecord {
             id: b.id,
             t: b.time,
             output_cut: b.output_cut,
-            participating: b.participating,
+            shown: b.shown,
             voices: b.voices().iter().copied().map(Into::into).collect(),
         }
     }
@@ -285,7 +285,7 @@ impl BaselineRecord {
             self.id,
             self.t,
             self.output_cut,
-            self.participating,
+            self.shown,
             &voices[..self.voices.len()],
         )
     }
@@ -426,7 +426,7 @@ impl CanonicalRecord {
     }
     pub fn voiced(&self) -> bool {
         match self {
-            Self::Baseline(b) => b.participating && !b.voices.is_empty(),
+            Self::Baseline(b) => b.shown && !b.voices.is_empty(),
             _ => self.note().is_some_and(|n| matches!(n.kind, crate::NoteKind::On { .. })),
         }
     }

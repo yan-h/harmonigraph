@@ -27,6 +27,14 @@ mod instance_tests;
 #[path = "tuning_map_tests.rs"]
 mod map_tests;
 
+/// Configuration status bit 2: the audio owner refuses every edit and fails a
+/// recording's configuration until the host resets the plugin.
+pub(crate) const CONFIGURATION_FAULT_NOTICE: &str =
+    "Tuning changes refused: configuration fault. Deactivate and reactivate the plugin in the host to recover.";
+/// Configuration status bit 1: the held notes cannot be read for Learn.
+pub(crate) const HELD_STATE_INCOMPLETE_NOTICE: &str =
+    "Learning unavailable: held state is incomplete. Reset to recover.";
+
 /// The param bar for the axis a comma derives — the one whose tuning is not
 /// its own while that comma is tempered out.
 ///
@@ -391,8 +399,20 @@ pub(super) fn tuning_pane(
     section(ui, "Temperaments", |ui| comma_controls(ui, state, params));
     // Under the section rather than in it, so a folded Temperaments cannot hide
     // a fault — and with it the pending line below, which a notice suppresses.
-    let configuration_notice = if state.runtime.configuration_status & 3 != 0 {
-        crate::widgets::label(ui, egui::RichText::new("Learning unavailable: configuration or held state is incomplete. Reset to recover.").color(theme::armed()));
+    // A fault (bit 2) latches until the host resets the plugin, so the pane's
+    // own Reset is the wrong advice for it; incomplete held state (bit 1)
+    // clears as soon as the held notes are complete again.
+    let configuration_notice = if state.runtime.configuration_status & 2 != 0 {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(CONFIGURATION_FAULT_NOTICE).color(theme::armed()),
+        );
+        true
+    } else if state.runtime.configuration_status & 1 != 0 {
+        crate::widgets::label(
+            ui,
+            egui::RichText::new(HELD_STATE_INCOMPLETE_NOTICE).color(theme::armed()),
+        );
         true
     } else if state.runtime.configuration_status & 4 != 0 {
         crate::widgets::weak(ui, "Tuning applied; host notification was rejected");
