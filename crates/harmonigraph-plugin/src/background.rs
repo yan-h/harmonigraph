@@ -210,10 +210,12 @@ impl Restore {
     ///
     /// Called with the window SHUT and the state's lock held, and both halves
     /// are load-bearing. `Opening` applies the same blob through the same call
-    /// whenever a window is built, so an open window is already served; and
-    /// applying it under one would revert everything the user has changed since
-    /// they opened it, since the blob is only written on the way out (a save
-    /// with the window open serializes the live state and stores nothing). The lock
+    /// whenever a window is built, and the window's frames apply a restore
+    /// that lands while it is open (see [`UiState`](crate::editor::UiState)),
+    /// so an open window is already served; and applying it under one would
+    /// revert everything the user has changed since the window last applied it
+    /// (a save with the window open serializes the live state and stores
+    /// nothing). The lock
     /// is what makes reading `blob` here safe to order this way — the close
     /// path takes the same two in the same order (`shared`, then `ui_state`).
     ///
@@ -707,11 +709,13 @@ mod tests {
         );
     }
 
-    /// The trap in fixing it. `params.ui_state` is only written on the way OUT
-    /// of an editor session — a host save with the window open serializes the
-    /// live state rather than storing it — so it names what the user had when
-    /// they last closed the window, and re-applying that under an open one
-    /// would revert everything they have changed since.
+    /// The trap in fixing it. `params.ui_state` is written only by a host
+    /// restore and on the way OUT of an editor session — a host save with the
+    /// window open serializes the live state rather than storing it — so it
+    /// names something the open window has already applied, and re-applying
+    /// that under it would revert everything the user has changed since. (A
+    /// restore that lands while the window is open reaches it through the
+    /// window's own frame instead; see `UiState`.)
     ///
     /// The guard is [`tick`]'s existing open-window check, which is why this
     /// test lives next to the drain it also guards: anything that moved the
