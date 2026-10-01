@@ -524,8 +524,8 @@ impl Spiral {
 /// are single instances in their renderers, and the rim names' instance buffer
 /// and their shadow target take the docked surface's ids. Were a second copy
 /// ever drawn, each of those would need a key per copy again, and inside a
-/// scrolling settings tab it would want the
-/// Analyzer's own `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel
+/// scrolling settings tab it would want the Analyzer's own `DOCKED_SURFACE`
+/// gate for the Analyzer's reason — a wheel
 /// spent zooming inside a scrolling settings tab is a wheel that tab cannot be
 /// scrolled with.
 pub(crate) fn spiral_pane(
@@ -564,8 +564,8 @@ pub(crate) fn spiral_pane(
         marks.clone(),
         dot_shadow,
         state.surfaces.target_format,
-        painter.ctx().cumulative_pass_nr(),
         crate::text::SPIRAL_SHADOW_SURFACE,
+        painter.ctx().cumulative_pass_nr(),
     ));
     for mark in &marks {
         painter.circle_filled(
@@ -1326,11 +1326,11 @@ mod tests {
     /// The dot is the only painted thing on the disc that reaches past the
     /// track it sits on, so it is the only one whose extent the disc's own fit
     /// does not already answer for — and the pane paints through a clipping
-    /// painter, so what overruns is cut off rather than merely tight. At the
-    /// docked pane and the cramped column, the two docked sizes `FRAMES` names.
+    /// painter, so what overruns is cut off rather than merely tight. Over
+    /// small and large panes alike, since the dot's floor is in points.
     #[test]
     fn a_notes_dot_stays_inside_the_pane() {
-        for (name, rect) in [FRAMES[2], FRAMES[3]] {
+        for (name, rect) in FRAMES {
             for (low, high) in [(60.0f32, 84.0f32), (36.0, 96.0), (15.5, 135.1)] {
                 let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
                 let s = Spiral::new(rect, &cfg);

@@ -238,20 +238,24 @@ def main() -> None:
             else:
                 print("\n(no ui-state field — the editor was never open before a save)")
             continue
-        # The spiral's framing is persisted beside the camera and for the same
-        # reason — a take renders from the blob, so a disc dialled in on its
-        # inner turns has to export the picture it was dialled to. Left out,
-        # a capture silently drops half the framing of one of the two pictures.
         appearance = block(ui, "appearance")
         if appearance is None:
             print("\n(no appearance document — older editor format is unsupported)")
             continue
-        for name in ("camera", "spiral", "view", "spectrum", "render"):
+        for name in ("camera", "view", "spectrum", "render"):
             body = block(f"({appearance})", name)
             if body is None:
                 continue
             print(f"\n--- {name} ---")
             for field, value in split_ron(body):
+                print(f"  {field}: {value}")
+        # The Spiral's framing is editor state, a top-level key beside the
+        # appearance rather than in it, since takes never draw the Spiral.
+        # Left out, a capture would silently drop the framing of one picture.
+        spiral = block(ui, "spiral")
+        if spiral is not None:
+            print("\n--- spiral (editor framing) ---")
+            for field, value in split_ron(spiral):
                 print(f"  {field}: {value}")
 
 

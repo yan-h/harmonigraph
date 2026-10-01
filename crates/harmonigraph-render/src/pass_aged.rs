@@ -3,9 +3,10 @@
 //! The renderers here that can draw more than one copy keep GPU resources per
 //! live pane — a bloom chain, a grid copy, a shadow atlas — and none of them is
 //! told when a pane goes away. A closed tab simply stops calling back. There is
-//! no teardown to hang the release on, so the panes still PREPARING are the only evidence of which ones
-//! exist, and the rule every renderer needs is the same one: stamp an entry
-//! each pass it is used, and drop the entries that stopped being stamped.
+//! no teardown to hang the release on, so the panes still PREPARING are the
+//! only evidence of which ones exist, and the rule every renderer needs is the
+//! same one: stamp an entry each pass it is used, and drop the entries that
+//! stopped being stamped.
 //!
 //! Which makes "still drawn" and "still preparing" one claim, and it is the
 //! CALLER that has to keep them so. A pane that adds its callback only on the

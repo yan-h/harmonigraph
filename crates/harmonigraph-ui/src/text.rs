@@ -1891,8 +1891,8 @@ mod tests {
     ///
     /// Swept across surfaces rather than checked at the two the editor draws,
     /// because every id here but the Spiral's one is a FUNCTION of the
-    /// surface: a slot standing
-    /// outside its own block collides with nothing until a surface is added,
+    /// surface: a slot standing outside its own block collides with nothing
+    /// until a surface is added,
     /// and then collides in silence. An offline layout naming one pane eight
     /// times is what reaches surface 7.
     const SURFACES: usize = 8;
