@@ -535,7 +535,10 @@ impl LatticeCallback {
                         atmosphere.material_settings.velvet_shape,
                         atmosphere.material_settings.velvet_variety,
                     ]),
-                    padding: Float2([0.0; 2]),
+                    velvet_form: Float2([
+                        atmosphere.material_settings.velvet_square,
+                        atmosphere.material_settings.velvet_tilt,
+                    ]),
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },

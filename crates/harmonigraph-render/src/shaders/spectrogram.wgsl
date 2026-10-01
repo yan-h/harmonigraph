@@ -322,7 +322,8 @@ struct Cloud {
     previous_slices: array<StarSlice, 5>,
     star_halo_samples: array<StarHaloSample, 5>,
     velvet: vec4<f32>,
-    velvet_size: vec4<f32>,
+    // Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
+    velvet_form: vec4<f32>,
     // The wash's `Edge pooling` (signed), its width in front-glob radii, and
     // the exponent its `Softness` makes of the fade; w is padding.
     wash_pigment: vec4<f32>,
@@ -666,10 +667,10 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
-    let cell = cloud.size.y * (24.0 / 405.0) * cloud.velvet_size.x;
+    let cell = cloud.size.y * (24.0 / 405.0) * cloud.velvet_form.x;
     let drift = (cloud.drift - vec2<f32>(0.0, 0.6)) * cloud.size.y / (10.0 * cell);
     let level = velvet_material(close_light, cloud_sampler, vec2<f32>(in.slab, in.t) * cloud.size,
-        cloud.size, cell, drift, cloud.velvet).r;
+        cloud.size, cell, drift, cloud.velvet, cloud.velvet_form.yz).r;
     return vec4<f32>(level, 0.0, 0.0, 1.0);
 }
 

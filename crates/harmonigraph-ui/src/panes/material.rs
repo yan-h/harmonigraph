@@ -466,4 +466,11 @@ pub(super) fn velvet(ui: &mut egui::Ui, s: &mut harmonigraph_scene::MaterialSett
         .percent()
         .show(ui)
         .on_hover_text("Round bodies at 0%; tapered overlapping scallops at 100%.");
+    ValueBar::new(&mut s.velvet_square, 0.0..=1.0, "Squareness")
+        .percent()
+        .show(ui)
+        .on_hover_text("Round scales at 0%; squares at 100%. For a tiled grid, also set Tilt, Irregularity and Scale shape to 0%.");
+    ValueBar::new(&mut s.velvet_tilt, 0.0..=1.0, "Tilt").percent().show(ui).on_hover_text(
+        "How far each scale turns off the pane's axes. 0% lines every scale up with the grid.",
+    );
 }

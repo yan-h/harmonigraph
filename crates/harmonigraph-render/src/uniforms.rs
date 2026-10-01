@@ -142,7 +142,8 @@ uniform_group! {
         refract: f32,
         layers: f32,
         randomness: f32,
-        padding: Float2,
+        /// Scales' `Squareness` and `Tilt`.
+        velvet_form: Float2,
         velvet: Float4,
     }
 }

@@ -363,6 +363,8 @@ pub(super) fn tile_key(
                 velvet_edge: _,
                 velvet_irregularity: _,
                 velvet_shape: _,
+                velvet_square: _,
+                velvet_tilt: _,
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
@@ -458,7 +460,8 @@ struct Uniforms {
     /// Actual rounded dimensions and array address for each depth.
     star_halo_samples: [StarHaloSample; STAR_SLICES],
     velvet: Float4,
-    velvet_size: Float4,
+    /// Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
+    velvet_form: Float4,
     /// The wash's `Edge pooling`, its width, and its softness as an exponent;
     /// w is padding.
     wash_pigment: Float4,
@@ -988,6 +991,8 @@ fn memory_key(
                 velvet_edge,
                 velvet_irregularity,
                 velvet_shape,
+                velvet_square,
+                velvet_tilt,
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
@@ -1026,6 +1031,8 @@ fn memory_key(
             velvet_edge,
             velvet_irregularity,
             velvet_shape,
+            velvet_square,
+            velvet_tilt,
             contours,
             contour_softness,
             contour_strength,
@@ -1676,7 +1683,12 @@ impl Targets {
                 settings.material_settings.velvet_shape,
                 settings.material_settings.velvet_variety,
             ]),
-            velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
+            velvet_form: Float4([
+                settings.material_settings.velvet_size,
+                settings.material_settings.velvet_square,
+                settings.material_settings.velvet_tilt,
+                0.0,
+            ]),
             wash_pigment: Float4([
                 settings.wash_pool,
                 settings.wash_pool_width,

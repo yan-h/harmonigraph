@@ -424,7 +424,18 @@ fn velvet_warp(p: vec2<f32>, irregularity: f32) -> vec2<f32> {
         0.40 * sin(p.x * 0.53 + sin(p.y * 0.31))) * (irregularity / 0.8);
 }
 struct VelvetBody { center: vec2<f32>, weight: f32 };
-fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>) -> VelvetBody {
+// The body's radius under a superellipse norm: exponent 2 is the circle, and
+// `Squareness` raises it exponentially toward 12, where the scale is a square
+// with barely rounded corners. Divided through by the larger axis first so the
+// powers stay near one.
+fn velvet_square_radius(v: vec2<f32>, square: f32) -> f32 {
+    let a = abs(v);
+    let m = max(max(a.x, a.y), 1e-6);
+    let p = 2.0 * pow(6.0, square);
+    return m * pow(pow(a.x / m, p) + pow(a.y / m, p), 1.0 / p);
+}
+// `form` is x `Squareness`, y `Tilt`.
+fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>, form: vec2<f32>) -> VelvetBody {
     let a = velvet_hash(cell, 0u);
     let b = velvet_hash(cell, 1u);
     let center = vec2<f32>(cell) + 0.5 + (vec2<f32>(a, b) - 0.5) * dials.y;
@@ -436,12 +447,17 @@ fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>) -> VelvetBody {
     }
     let c = velvet_hash(cell, 2u);
     let d = velvet_hash(cell, 3u);
-    let angle = 0.2 + (c - 0.5) * 0.85;
+    let angle = (0.2 + (c - 0.5) * 0.85) * form.y;
     let ca = cos(angle); let sa = sin(angle);
     let size = 0.875 + 0.9 * dials.w * (d - 0.5);
     let rotated = vec2<f32>(delta.x * ca + delta.y * sa, -delta.x * sa + delta.y * ca) / size;
     let rx = rotated.x / mix(1.0, clamp(1.0 - 0.38 * rotated.y, 0.52, 1.3), dials.z);
-    let r = length(vec2<f32>(rx, rotated.y + dials.z * 0.17 * rx * rx));
+    let shaped = vec2<f32>(rx, rotated.y + dials.z * 0.17 * rx * rx);
+    // Branched so Squareness 0 pays for no powers and keeps the round scale's own `length`.
+    var r = length(shaped);
+    if form.x > 0.0 {
+        r = velvet_square_radius(shaped, form.x);
+    }
     let support = (1.0 - smoothstep(1.5, 1.9, abs(delta.x))) * (1.0 - smoothstep(1.5, 1.9, abs(delta.y)));
     let body = 1.0 - smoothstep(0.85 - dials.x, 0.85 + dials.x, r);
     let weight = (body + 0.025 * exp(-2.0 * r * r)) * exp(2.8 * (c - 0.5)) * support;
@@ -454,7 +470,7 @@ fn velvet_light(source: texture_2d<f32>, source_sampler: sampler, uv: vec2<f32>,
         + textureSampleLevel(source, source_sampler, uv + vec2<f32>(0.0, radius.y), 0.0)
         + textureSampleLevel(source, source_sampler, uv - vec2<f32>(0.0, radius.y), 0.0));
 }
-fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f32>, size: vec2<f32>, cell_size: f32, drift: vec2<f32>, dials: vec4<f32>) -> vec4<f32> {
+fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f32>, size: vec2<f32>, cell_size: f32, drift: vec2<f32>, dials: vec4<f32>, form: vec2<f32>) -> vec4<f32> {
     let p = pt / cell_size + drift;
     let q = p + velvet_warp(p, dials.y);
     let base = vec2<i32>(floor(q));
@@ -462,7 +478,7 @@ fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f3
     var weight = 0.0;
     for (var j = -2; j <= 2; j++) {
         for (var i = -2; i <= 2; i++) {
-            let body = velvet_body(q, base + vec2<i32>(i, j), dials);
+            let body = velvet_body(q, base + vec2<i32>(i, j), dials, form);
             if body.weight > 0.0 {
                 let uv = (body.center - drift) * cell_size / size;
                 light += body.weight * velvet_light(source, source_sampler, uv, vec2<f32>(0.14 * cell_size) / size);

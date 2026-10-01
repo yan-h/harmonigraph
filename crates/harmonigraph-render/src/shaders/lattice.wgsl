@@ -82,7 +82,8 @@ struct MaterialParams {
     refract: f32,
     layers: f32,
     randomness: f32,
-    padding: vec2<f32>,
+    // Scales' `Squareness` and `Tilt`; only the material pass reads them.
+    velvet_form: vec2<f32>,
     velvet: vec4<f32>,
 };
 

@@ -1731,6 +1731,26 @@ mod tests {
             "structured fixture did not reach body-light replacement"
         );
         cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        // Squareness and Tilt each move the bodies' edges. Scale shape 0, or
+        // its scallop taper would hide much of the corner.
+        let moved = |cb: &mut SpectrogramCallback,
+                     turn: fn(&mut harmonigraph_scene::MaterialSettings)| {
+            let mut resources = CallbackResources::default();
+            let before = frame_with(&device, &queue, &mut resources, cb);
+            turn(&mut cb.atmosphere.as_mut().unwrap().settings.material_settings);
+            let after = frame_with(&device, &queue, &mut resources, cb);
+            before.iter().zip(&after).filter(|(a, b)| a.abs_diff(**b) > 4).count()
+        };
+        cb.atmosphere.as_mut().unwrap().settings.material_settings.velvet_shape = 0.0;
+        let squared = moved(&mut cb, |m| m.velvet_square = 1.0);
+        let straightened = moved(&mut cb, |m| m.velvet_tilt = 0.0);
+        assert!(squared > bodies.len() / 50, "Squareness did not reach the bodies: {squared}");
+        assert!(
+            straightened > bodies.len() / 50,
+            "Tilt did not reach square bodies: {straightened}"
+        );
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings.material_settings;
+        (s.velvet_shape, s.velvet_square, s.velvet_tilt) = (1.0, 0.0, 1.0);
         for value in [0, 64, 150, 255] {
             cb.grid.fill(value);
             let bodies = frame_with(&device, &queue, &mut resources, &cb);

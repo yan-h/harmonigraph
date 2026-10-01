@@ -112,7 +112,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
         poison!(material; wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
-            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
+            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape, velvet_square,
+            velvet_tilt);
     }
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
@@ -331,19 +332,19 @@ fn scenarios() -> Vec<Scenario> {
         });
     }
     // Scales' own inventory: it takes the wash's nine bars off the Spectrogram
-    // section and puts five of its own there, and nothing else on the page moves.
+    // section and puts seven of its own there, and nothing else on the page moves.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::VelvetScales,
         enabled: true,
-        visits: 13 + 20 + 5 + 2 + 2 - 9 + 5,
+        visits: 13 + 20 + 5 + 2 + 2 - 9 + 7,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::VelvetScales,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 7 + 4,
         ..base
     });
     // Stars replace the wash's bars and shared Drift speed. Only the Uniform

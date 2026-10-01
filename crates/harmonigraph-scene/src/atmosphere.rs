@@ -249,6 +249,13 @@ pub struct MaterialSettings {
     pub velvet_irregularity: f32,
     /// Round bodies at zero, tapered overlapping scallops at one.
     pub velvet_shape: f32,
+    /// Round bodies at zero, squares with barely rounded corners at one. With
+    /// `velvet_tilt`, `velvet_irregularity` and `velvet_shape` at zero the
+    /// squares stand on the grid: the tiled look the deleted Mosaic drew.
+    pub velvet_square: f32,
+    /// How far each body turns off the pane's axes, as a share of S1's
+    /// random 0.2 ± 0.43 radian turn. Invisible on round bodies.
+    pub velvet_tilt: f32,
     /// How big one glob is, as a multiplier on that size: how many of them
     /// cross the cloud frame moves the other way, because the count is divided
     /// by this. Larger is bigger, like `velvet_size`, and over the same
@@ -278,6 +285,8 @@ impl Default for MaterialSettings {
             velvet_edge: 0.34,
             velvet_irregularity: 0.8,
             velvet_shape: 1.0,
+            velvet_square: 0.0,
+            velvet_tilt: 1.0,
             wash_size: 0.181_260_21,
             wash_fuzz: 1.0,
             wash_lobe: 1.0,
@@ -313,6 +322,8 @@ impl MaterialSettings {
         self.velvet_irregularity =
             clamp(self.velvet_irregularity, fresh.velvet_irregularity, 0.0, 1.0);
         self.velvet_shape = clamp(self.velvet_shape, fresh.velvet_shape, 0.0, 1.0);
+        self.velvet_square = clamp(self.velvet_square, fresh.velvet_square, 0.0, 1.0);
+        self.velvet_tilt = clamp(self.velvet_tilt, fresh.velvet_tilt, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
