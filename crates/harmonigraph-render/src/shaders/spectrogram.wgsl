@@ -330,6 +330,9 @@ struct Cloud {
     star_halo_samples: array<StarHaloSample, 5>,
     velvet: vec4<f32>,
     velvet_size: vec4<f32>,
+    // The wash's `Edge pooling` (signed), its width in front-glob radii, and
+    // the exponent its `Softness` makes of the fade; w is padding.
+    wash_pigment: vec4<f32>,
 };
 @group(1) @binding(9) var color_memory: texture_2d<f32>;
 @group(1) @binding(0) var close_light: texture_2d<f32>;
@@ -347,6 +350,9 @@ struct Cloud {
 /// `to_centre`); the wash fills both (see `WashField`).
 @group(1) @binding(5) var cloud_tile_a: texture_2d<f32>;
 @group(1) @binding(6) var cloud_tile_b: texture_2d<f32>;
+/// The wash's distances out from the front glob's arc, coarse then fine, read
+/// only while `Edge pooling` is not zero.
+@group(1) @binding(13) var cloud_tile_c: texture_2d<f32>;
 /// The tile's own sampler, and the only REPEATING one here: the mosaic divides
 /// its cell coordinate by the period, while the wash first turns it into the
 /// rotated basis; either texture coordinate wraps. `cloud_sampler` clamps,
@@ -660,8 +666,11 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // bisector between two, which is the straight crossing that made the z-buffered
 // version read as cracked mud.
 //
-// Each glob reads the displaced scalar level without a tone adjustment.
-// Layers mixes those levels before the shared Contours and palette transfer.
+// Each glob reads the displaced scalar level, and `Edge pooling` is the one
+// tone adjustment: off by default, darkening along an edge above 0 and
+// lightening below it, and never moving silence off the palette's floor.
+// `Fine layer mix` mixes the levels before the shared Contours and palette
+// transfer.
 //
 // **Feather is the fuzziness.** A visible glob dissolves at its OWN rim into
 // whatever lies beneath it, reaching half and half exactly on the boundary so
@@ -669,8 +678,43 @@ fn scale_tone(pt: vec2<f32>) -> f32 {
 // here and the prototype's final renders had none either, precisely so they
 // showed what a fragment shader would really draw.
 
+// At 50% `Edge pooling` is the strength the first Watercolor shipped with (#909).
+const WASH_POOL: f32 = 0.44;
+// Pigment bites in proportion to the level under it, plus this much: one that
+// took the same bite out of a dark tone as out of a light one turns every
+// crevice black, which reads as mortar between stones rather than paint.
+const WASH_PIG_DEPTH: f32 = 0.35;
+// A negative `Edge pooling` lifts by `level * (1 - level)` times this, which
+// matches the darkening's bite at mid level (`0.35 + 0.65 * 0.5 = 2.7 / 4`)
+// and is zero at both ends, so silence stays black. It can still overshoot 1
+// on a bright band — from level 0.84 up at -100% with hard edges — and clamps
+// there, flattening that stretch of edge to the palette's top.
+const WASH_BLOOM: f32 = 2.7;
+
+fn wash_pigmented() -> bool {
+    return cloud.wash_pigment.x != 0.0;
+}
+
 fn wash_level(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> f32 {
-    return cloud_light(pt + wet.offset * pane_per_cell * cloud.wash_refract);
+    let level = cloud_light(pt + wet.offset * pane_per_cell * cloud.wash_refract);
+    if !wash_pigmented() {
+        return level;
+    }
+    // The tide line: full against the front glob's arc, gone `Width` radii
+    // out, and the fade between them raised to the `Softness` exponent — a
+    // flat hard-edged band at one end, a long soft tail at the other. The
+    // fresh 0.55 and 2 are #909's crescent exactly.
+    let shape = pow(clamp(1.0 - wet.gap / cloud.wash_pigment.y, 0.0, 1.0), cloud.wash_pigment.z);
+    // The tide line has to fade as the edge dissolves: a crisp dark crescent
+    // on a boundary that is no longer there reads as a line floating in fog.
+    let fuzz = cloud.wash_fuzz;
+    let pigment = WASH_POOL * cloud.wash_pigment.x * (1.0 - 0.75 * fuzz) * shape;
+    if pigment < 0.0 {
+        return min(level - pigment * WASH_BLOOM * level * (1.0 - level), 1.0);
+    }
+    // Over silence the bite is negative and clamps away: the floor stays the
+    // palette's floor with no black point needed.
+    return max(level - pigment * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * level), 0.0);
 }
 
 // The same field out of the baked tile: the cell coordinate is turned into the
@@ -681,12 +725,16 @@ fn wash_tile_field(r: vec2<f32>) -> WashField {
     let uv = watercolor_tile_uv(r);
     let a = textureSampleLevel(cloud_tile_a, tile_sampler, uv, 0.0);
     var out: WashField;
-    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy), a.z);
-    out.fine = Wet(vec2<f32>(0.0), 0.0);
+    var c = vec4<f32>(0.0);
+    if wash_pigmented() {
+        c = textureSampleLevel(cloud_tile_c, tile_sampler, uv, 0.0);
+    }
+    out.coarse = Wet(rotate_watercolor_tile_vector(a.xy), a.z, c.x);
+    out.fine = Wet(vec2<f32>(0.0), 0.0, 0.0);
     out.cover = 0.0;
     if cloud.wash_layers > 0.0 {
         let b = textureSampleLevel(cloud_tile_b, tile_sampler, uv, 0.0);
-        out.fine = Wet(rotate_watercolor_tile_vector(b.xy), b.z);
+        out.fine = Wet(rotate_watercolor_tile_vector(b.xy), b.z, c.y);
         out.cover = b.w;
     }
     return out;
@@ -785,6 +833,7 @@ fn vs_cloud_tile(@builtin(vertex_index) vertex: u32, @builtin(instance_index) la
 struct TileBake {
     @location(0) a: vec4<f32>,
     @location(1) b: vec4<f32>,
+    @location(2) c: vec4<f32>,
 };
 @fragment
 fn fs_cloud_tile(in: TileVertex) -> TileBake {
@@ -801,12 +850,15 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
     var out: TileBake;
     out.a = vec4<f32>(0.0);
     out.b = vec4<f32>(0.0);
+    out.c = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
-        // Seven channels of glob geometry and brightness, the fine octave whatever
-        // `Fine layer mix` says, so turning that dial up is a mix and never a rebake.
+        // Seven channels of glob geometry and brightness and two of distance
+        // out from the front glob's arc, the fine octave whatever `Fine layer mix` says, so turning that
+        // dial up is a mix and never a rebake.
         let field = wash_field(wash_cell, period, cloud.wash_fuzz, cloud.wash_lobe);
         out.a = vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0);
         out.b = vec4<f32>(field.fine.offset, field.fine.brightness, field.cover);
+        out.c = vec4<f32>(field.coarse.gap, field.fine.gap, 0.0, 0.0);
     } else {
         // The mosaic's whole walk is these two vectors, so its second target is
         // never read. It is still allocated and still written, which is what
