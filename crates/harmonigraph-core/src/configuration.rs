@@ -143,8 +143,9 @@ pub enum ConfigMutation {
     /// judgement follows the learned chord only while no source is
     /// `retuning`: with retuning off the lattice is a picture of the input,
     /// with it on it is the target. `raw` is what the learned edit committed,
-    /// which is where the axes it moved arrive, so host modulation can change
-    /// them while the judgement still describes the chord that was heard.
+    /// which is where the axes it moved arrive, and host modulation may have
+    /// moved them since. A comma the chord engages stays engaged; one it
+    /// releases `resolve` may engage again from that `raw`.
     LearnResolved {
         learned: LearnedTuning,
         retuning: bool,

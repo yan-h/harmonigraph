@@ -4,12 +4,11 @@
 //! tuning instances.
 //!
 //! The bars and the commas share a tab because they are two halves of one
-//! question: where
-//! the lattice's nodes sit in pitch, the bars answering it by number and the
-//! commas by identity. Which of those nodes you are then looking at is
-//! [`super::view`], and it is a tab rather than a third section here because a
-//! tab called Tuning is not where anyone looks for a camera. Everything else in
-//! the settings dock is about how what is there gets drawn.
+//! question: where the lattice's nodes sit in pitch, the bars answering it by
+//! number and the commas by identity. Which of those nodes you are then
+//! looking at is [`super::view`], and it is a tab rather than a third section
+//! here because a tab called Tuning is not where anyone looks for a camera.
+//! Everything else in the settings dock is about how what is there gets drawn.
 
 use super::learn_pulse;
 use super::param_bar;
@@ -361,7 +360,7 @@ pub(super) fn tuning_pane(
             }
             // Learn: while engaged, the tuning re-learns whenever the set of
             // held notes changes. The plugin's audio owner does it
-            // (`Owner::group_end`); without one, `Runtime::learn_step`.
+            // (`Owner::group_end`); without one, `VisualRuntime::learn_step`.
             let mut learn_active = state.runtime.learn_active;
             let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
                 .on_hover_text(

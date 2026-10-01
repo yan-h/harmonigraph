@@ -701,8 +701,9 @@ pub struct ViewConfig {
     /// reaches either by [`Comma`] rather than by name.
     ///
     /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
-    /// releasing it is an edit of the major third or a learned chord (or this
-    /// switch, while the auto-detect is off).
+    /// releasing it is an edit of the major third (or this switch, while the
+    /// auto-detect is off), or a learned chord while the auto-detect is on
+    /// and no source has Retune on.
     pub meantone: bool,
     /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
     /// params land within `TEMPER_TOLERANCE` of the meantone identity —
@@ -710,13 +711,14 @@ pub struct ViewConfig {
     /// of either bar). The major third then snaps to four perfect fifths
     /// and the comma marks go.
     ///
-    /// Engage-only, deliberately: the lock has to survive dragging the
-    /// FIFTH, which moves the derived third out from under a third param
-    /// that is inert while the lock holds. So the release is the one edit
-    /// that can mean nothing else — pulling the major third itself more
-    /// than the tolerance away from the derived value. Learn is the other:
-    /// a learned chord that evidences every axis the comma depends on sets
-    /// the lock either way, since a played third is not a dragged fifth.
+    /// No other drag releases it, deliberately: the lock has to survive
+    /// dragging the FIFTH, which moves the derived third out from under a
+    /// third param that is inert while the lock holds. So the releasing drag
+    /// is the one edit that can mean nothing else — pulling the major third
+    /// itself more than the tolerance away from the derived value. Learn is
+    /// the other release: while no source has Retune on, a learned chord
+    /// that evidences every axis the comma depends on sets the lock either
+    /// way, since a played third is not a dragged fifth.
     ///
     /// On by default: a project at 12-TET (400 = 4·700 − 2400) is meantone
     /// whether or not anyone said so, and its E and E- name one pitch, so
@@ -735,10 +737,11 @@ pub struct ViewConfig {
     /// the pair composes into septimal meantone (a seventh of ten fifths) and
     /// every name on the lattice comes out a plain letter.
     pub marvel: bool,
-    /// Auto-detect marvel: [`Self::meantone_auto`]'s twin, engage-only for
-    /// the same reason — the lock has to survive dragging the fifth or the
-    /// third, either of which moves the derived seventh out from under a
-    /// seventh param that is inert while the lock holds.
+    /// Auto-detect marvel: [`Self::meantone_auto`]'s twin, which no drag but
+    /// the seventh's own releases, for the same reason — the lock has to
+    /// survive dragging the fifth or the third, either of which moves the
+    /// derived seventh out from under a seventh param that is inert while
+    /// the lock holds.
     ///
     /// On by default, on the same grounds as the meantone detect: 12-TET
     /// tempers 225/224 out as well (1000 = 2·700 + 2·400 − 1200), so a
