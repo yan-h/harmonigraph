@@ -68,11 +68,37 @@ pub struct SpectrogramAtmosphere {
 }
 
 /// Cloud-space sampling offset for a texture travelling at a constant visible
-/// screen direction. The shader samples `screen + drift`, so the sampling
-/// offset moves opposite the texture itself.
-fn cloud_drift(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f32; 2] {
+/// screen direction, unreduced and still in f64. The shader samples
+/// `screen + drift`, so the sampling offset moves opposite the texture itself.
+fn cloud_offset(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [f64; 2] {
     harmonigraph_scene::MaterialSettings::drift(settings.cloud_speed, settings.cloud_direction, now)
-        .map(|v| v as f32)
+}
+
+/// [`cloud_offset`] as the shader takes it. Mosaic and Watercolor repeat their
+/// `tile`, so the offset is reduced by whole repeats before it narrows to f32,
+/// as Stars and the lattice reduce theirs: unreduced, a long clock leaves the
+/// f32 fewer and fewer bits of the cell it lands in. A screen-axis repeat of
+/// the Watercolor tile is five periods, because its basis is the 3-4-5
+/// rotation. Reduced about zero rather than onto `[0, repeat)`, so an offset
+/// already inside half a repeat — every one in a render's first minutes at the
+/// fresh speed — passes bit for bit.
+///
+/// Scales' warp is nonperiodic, and Stars drift by their own slices, so
+/// neither has a tile or a repeat, and their offset passes unreduced.
+fn cloud_drift(
+    settings: harmonigraph_scene::SpectralAtmosphere,
+    offset: [f64; 2],
+    tile: Option<TileKey>,
+) -> [f32; 2] {
+    let repeat = tile.map(|tile| {
+        let material = settings.material_settings;
+        let (cells, periods) = match settings.cloud_style {
+            harmonigraph_scene::CloudStyle::Watercolor => (WASH_CELLS / material.wash_size, 5),
+            _ => (SCALE_CELLS / material.scale_size, 1),
+        };
+        f64::from(tile.period() * periods) / f64::from(cells)
+    });
+    offset.map(|v| repeat.map_or(v, |r| v - r * (v / r).round()) as f32)
 }
 
 /// The starfield's layout for a pane of `pixels`, or `None` where no starfield
@@ -1589,7 +1615,8 @@ impl Targets {
         // A constant crossing in the direction the setting names, in cloud
         // units — ten across the pane's height, so 1x travels about one pane
         // height every four minutes.
-        let drift = cloud_drift(settings, atmosphere.now);
+        let offset = cloud_offset(settings, atmosphere.now);
+        let drift = cloud_drift(settings, offset, tile);
         let slices = stars
             .map(|layout| {
                 star_slices(settings.stars, settings.cloud_direction, atmosphere.now, &layout)
@@ -1604,11 +1631,17 @@ impl Targets {
         let mut memory_fraction = [0.0; 2];
         if let Some(memory) = self.memory.as_mut() {
             memory.extent = memory_extent.expect("allocated history has a logical extent");
+            // Off the UNREDUCED offset: the history's lattice has to run on
+            // continuously where the shader's drift jumps a whole repeat, or
+            // every wrap would read as a seek and reset it.
             let origin = std::array::from_fn(|a| {
-                let offset = drift[a] * rect.height() / CLOUD_UNITS * (memory.extent[a] - 2) as f32
-                    / rect.size()[a];
-                let integer = offset.floor();
-                memory_fraction[a] = offset - integer;
+                let texels = offset[a]
+                    * f64::from(
+                        rect.height() / CLOUD_UNITS * (memory.extent[a] - 2) as f32
+                            / rect.size()[a],
+                    );
+                let integer = texels.floor();
+                memory_fraction[a] = (texels - integer) as f32;
                 integer as i32
             });
             let mut key = memory_key(settings, rect.size().into(), pitch_vertical, &read);
@@ -1844,10 +1877,10 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, retained_size, source_size, star_geometry, star_layout, star_slices, tile_key,
-        tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS, STAR_ATLAS_WIDTH,
-        STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
-        WASH_CELLS,
+        cloud_drift, cloud_offset, retained_size, source_size, star_geometry, star_layout,
+        star_slices, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
+        STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX,
+        TILE_STEP, WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -2271,14 +2304,12 @@ mod tests {
     #[test]
     fn drift_follows_the_dial_at_a_constant_direction() {
         let at = |direction, speed, now| {
-            cloud_drift(
-                harmonigraph_scene::SpectralAtmosphere {
-                    cloud_speed: speed,
-                    cloud_direction: direction,
-                    ..Default::default()
-                },
-                now,
-            )
+            let settings = harmonigraph_scene::SpectralAtmosphere {
+                cloud_speed: speed,
+                cloud_direction: direction,
+                ..Default::default()
+            };
+            cloud_drift(settings, cloud_offset(settings, now), None)
         };
         let phase = at(0.0, 1.0, 0.0);
         let travelled = |direction| {
@@ -2303,6 +2334,62 @@ mod tests {
         };
         close(second, first);
         close(at(220.0, 0.0, 10_000.0), phase);
+    }
+
+    /// A tiled texture's drift reaches the shader reduced by whole repeats of
+    /// its tile, so a long clock lands on the cell the f64 offset names — the
+    /// 3-4-5 rotated basis included — within a millionth of a cell, where a
+    /// plain cast to f32 misses it by 1.1 cells (Mosaic) and 2.4 (Watercolor)
+    /// at this clock. A short clock passes bit for bit.
+    #[test]
+    fn a_tiled_drift_is_reduced_by_whole_repeats_before_it_narrows() {
+        use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
+        let period = super::CloudSampling::default().tile_cells;
+        // Four months at the fresh speed: two million cloud units.
+        let long = 1.0e7;
+        for style in [Mosaic, Watercolor] {
+            let settings = harmonigraph_scene::SpectralAtmosphere {
+                cloud_style: style,
+                cloud_direction: 37.0,
+                ..Default::default()
+            };
+            let atmosphere = SpectrogramAtmosphere {
+                settings,
+                region: egui::Rect::ZERO,
+                pitch_vertical: true,
+                points_per_cent: 0.03,
+                points_per_ms: 0.01,
+                points_per_slab: 0.0,
+                now: 0.0,
+            };
+            let tile = tile_key([1920, 1080], atmosphere, period);
+            assert!(tile.is_some(), "{style:?} drew no tile");
+            let short = cloud_offset(settings, 2.0);
+            assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32), "{style:?}");
+            // The tile coordinate the shader samples, in periods: a whole
+            // number apart is the same texel.
+            let cells = f64::from(match style {
+                Watercolor => WASH_CELLS / settings.material_settings.wash_size,
+                _ => SCALE_CELLS / settings.material_settings.scale_size,
+            });
+            let uv = |q: [f64; 2]| {
+                let r = q.map(|v| v * cells / f64::from(period));
+                match style {
+                    Watercolor => [0.8 * r[0] + 0.6 * r[1], -0.6 * r[0] + 0.8 * r[1]],
+                    _ => r,
+                }
+            };
+            let off = |a: [f64; 2], b: [f64; 2]| {
+                let (a, b) = (uv(a), uv(b));
+                (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
+                    * f64::from(period)
+            };
+            let exact = cloud_offset(settings, long);
+            let reduced = cloud_drift(settings, exact, tile).map(f64::from);
+            let cast = exact.map(|v| f64::from(v as f32));
+            assert!(off(reduced, exact) < 1e-4, "{style:?}: {} cells off", off(reduced, exact));
+            assert!(off(cast, exact) > 0.01, "{style:?}: the clock is too short to need reducing");
+        }
     }
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
