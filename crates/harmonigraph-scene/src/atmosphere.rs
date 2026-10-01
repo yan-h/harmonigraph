@@ -149,6 +149,10 @@ pub const SCALE_REFRACT_MIN: f32 = -1.0;
 /// See [`SCALE_REFRACT_MIN`].
 pub const SCALE_REFRACT_MAX: f32 = 1.0;
 
+/// Top of the [`MaterialSettings::wash_pool`] control and sanitizer: four times
+/// the strength #909 shipped as its whole range, where 0.5 is its default.
+pub const WASH_POOL_MAX: f32 = 4.0;
+
 /// Bounds shared by the [`StarSettings::star_density`] control and
 /// sanitizer, as a multiplier on stars per area.
 pub const STAR_DENSITY_MIN: f32 = 0.5;
@@ -334,7 +338,7 @@ impl MaterialSettings {
         self.wash_refract = clamp(self.wash_refract, fresh.wash_refract, 0.0, 1.0);
         self.wash_layers = clamp(self.wash_layers, fresh.wash_layers, 0.0, 1.0);
         self.wash_randomness = clamp(self.wash_randomness, fresh.wash_randomness, 0.0, 1.0);
-        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, 1.0);
+        self.wash_pool = clamp(self.wash_pool, fresh.wash_pool, 0.0, WASH_POOL_MAX);
         self
     }
 }

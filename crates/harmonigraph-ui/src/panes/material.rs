@@ -47,11 +47,11 @@ pub(super) fn watercolor(
             "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
         );
     if pigment {
-        ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
+        ValueBar::new(&mut atmosphere.wash_pool, 0.0..=harmonigraph_scene::WASH_POOL_MAX, "Edge pooling")
             .percent()
             .show(ui)
             .on_hover_text(
-                "Darken a patch in a soft crescent where another patch is painted over it, like pigment pooling at a dried edge. Only darkens, so silence stays black. Softer edges take less of it. 0% adds none; 50% is the strength Watercolor first shipped with.",
+                "Darken a patch in a soft crescent where another patch is painted over it, like pigment pooling at a dried edge. Only darkens, so silence stays black. Softer edges take less of it. 0% adds none; 50% is the strength Watercolor first shipped with, and 400% can pool to black at hard edges.",
             );
     }
 }
