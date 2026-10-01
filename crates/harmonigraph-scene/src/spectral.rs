@@ -547,7 +547,7 @@ impl RingGate {
 /// the decision makes that a ring dimming and coming back, which is the same
 /// reading drawn at a speed an eye can follow — and it is the Fade rather than
 /// a smoothing of its own because the ring is a LAYER OF A NODE: the node's
-/// disc, its band and its marks all leave on that one duration, so a release
+/// slices, its band and its marks all leave on that one duration, so a release
 /// reads as a single gesture instead of the ring snapping off part way through
 /// it.
 ///

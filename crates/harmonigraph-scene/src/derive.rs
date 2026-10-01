@@ -289,9 +289,10 @@ fn marker_world(uv: f32) -> f32 {
     NODE_RADIUS_FACTOR * 1.8 * uv
 }
 
-/// The lattice's resting picture: idle positions draw no disc, so a small
-/// cross stands at each one and carries the structure instead. Only the home
-/// (center) sheet gets them.
+/// The lattice's resting picture: an idle position paints nothing of its
+/// own (its node draws at most the analyzer's ring), so a small cross stands
+/// at each one and carries the structure instead. Only the home (center)
+/// sheet gets them.
 ///
 /// A marker at each position rather than a line between them, and the
 /// difference is what the picture claims. Lines draw the INTERVALS — one

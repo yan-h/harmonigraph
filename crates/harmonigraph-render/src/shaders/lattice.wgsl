@@ -145,7 +145,7 @@ const TAU: f32 = 6.2831853;
 
 // Billboard headroom past the octave band's outer edge (uv 1.0): the quad
 // and its uv are both scaled by this, so the uv->world mapping is
-// unchanged (disc, band, glyphs, glow all render identically) but there is
+// unchanged (slices, band, glyphs, glow all render identically) but there is
 // margin out to this radius for things that live OUTSIDE the band -- the
 // marks, which at the default band (outer 1.0) sit entirely out here.
 // Costs a bit of fill (bigger quads, which alpha-blend and discard where
@@ -711,10 +711,10 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
     // so sheets off it draw smaller — in both directions, since that is
     // distance from the ground and not depth toward the eye. The uv is
     // deliberately NOT scaled with it, so every layer inside the node keeps
-    // its proportions and only the node's size on screen changes. (The 2.0
-    // below is what makes uv 1.0 the disc's diameter rather than its radius —
-    // one uv in world units, which `Scene::marker_unit` is the CPU's copy of —
-    // and QUAD_MARGIN is the outer glyphs' soft edge on top of it.)
+    // its proportions and only the node's size on screen changes. (The
+    // `0.90 * 2.0` below puts uv 1.0 at 1.8 node radii — one uv in world
+    // units, which `Scene::marker_unit` is the CPU's copy of — and QUAD_MARGIN
+    // is the outer glyphs' soft edge on top of it.)
     let scale = max(inst.scale, 0.05);
     // A lit slice swelled past the band reaches past the stack's own edge, and
     // carries its mark out with it (`mark_radii`).
@@ -1374,7 +1374,7 @@ fn outer_glyph(
 }
 
 // Color at absolute MIDI `pitch`, read from the pitch gradient LUT so an
-// octave glyph is the same hue as the disc that pitch would light.
+// octave glyph is the same hue as the slice that pitch would light.
 fn pitch_lut_color(pitch: f32) -> vec3<f32> {
     let t = clamp((pitch - u.composite.darkest_pitch) / max(u.composite.brightest_pitch - u.composite.darkest_pitch, 0.01), 0.0, 1.0);
     let f = lut_position(t, u.lut_spacing.xy) * f32(PITCH_LUT_N - 1u);
@@ -1934,7 +1934,7 @@ struct NodeGeom {
 
 fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
     let in = src;
-    let d = length(in.uv); // 0 at center, 1 at quad edge (2x disc radius)
+    let d = length(in.uv); // 0 at center, 1 at the octave band's outer edge (1.8 node radii)
 
     // Screen-constant soft-band width: uv units per fragment (uv.x is linear
     // across the billboard, so fwidth is uniform over the quad and safe to

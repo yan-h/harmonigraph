@@ -451,8 +451,8 @@ pub struct NodeInstance {
     /// one dial and never overlap, which is what makes a single flag enough
     /// to tell them apart — a voice is arriving, or full, or departing.
     ///
-    /// What needs it is anything that reads a low activation as "nearly
-    /// gone" and acts on it, which is only true on the way out. The kept
+    /// What needs it is anything that reads a low activation or envelope as
+    /// "nearly gone" and acts on it, which is only true on the way out. The kept
     /// note names are the case: their level is reserved ahead of the trail
     /// record that takes over when the release finishes, and reserving that
     /// on the way IN draws a name ahead of the note it names.

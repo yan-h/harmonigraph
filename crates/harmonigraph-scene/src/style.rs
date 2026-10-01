@@ -16,7 +16,7 @@ use crate::view::finite_or;
 /// **What the range IS belongs to whoever holds one**, and two things in the
 /// picture do. `ViewConfig::pitch_gradient` spans the lattice's color range, so
 /// its low end is the darkest pitch and its high end the brightest — that is
-/// the gradient the discs, the octave glyphs, the trail and the piano roll's
+/// the gradient the octave slices, the octave glyphs, the trail and the piano roll's
 /// ribbons all read. The Spectral pane's heatmap holds a second one spanning
 /// the analyzer's Level, where low is silence and high is a full-scale bucket.
 /// Everything below is stated in "the bottom of the range" and "the top" for

@@ -567,7 +567,7 @@ pub(crate) fn draw_node_labels(
         };
         // Per NODE and off the note's own activation, which is what puts the
         // crossing between the two ends on the Fade: `activation` is the same
-        // ramp the node's light rides, so a name brightens and dims with the
+        // ramp the node's ink rides, so a name brightens and dims with the
         // thing it names rather than on a clock of its own. Opacity included,
         // where the name's strength above reads the unfaded envelope: a soft
         // note is named whole in a greyer ink.
@@ -1254,7 +1254,7 @@ mod tests {
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
         assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");
         assert!(
-            node.activation < 1.0,
+            node.envelope < 1.0,
             "sampled past the reserve's band at {}, so this cannot see the plateau",
             node.activation,
         );
@@ -1277,7 +1277,7 @@ mod tests {
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
         assert!(
-            node.activation < 1.0,
+            node.envelope < 1.0,
             "sampled at {}, above the reserve, so this cannot see it hold",
             node.activation,
         );
