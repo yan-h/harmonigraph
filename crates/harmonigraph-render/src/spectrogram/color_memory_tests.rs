@@ -450,13 +450,6 @@ fn halo_resolution_changes_carry_stars_color_history() {
         prior_layout = layout;
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
     }
-    // Composition-only fill edits must not erase held star colors, even
-    // when the current input is dark and the clock is paused.
-    for fill in [0.5, 1.0, 0.0] {
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = fill;
-        prepare_once(&device, &queue, &mut changed, &cb);
-        assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
-    }
     cb.atmosphere.as_mut().unwrap().now += 0.05;
     prepare_once(&device, &queue, &mut changed, &cb);
     prepare_once(&device, &queue, &mut control, &cb);

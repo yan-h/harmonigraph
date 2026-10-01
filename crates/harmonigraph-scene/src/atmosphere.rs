@@ -530,17 +530,6 @@ pub struct StarSettings {
     /// high draws it in as a tight bloom round the core. Runs over
     /// [`STAR_FALLOFF_MIN`]..=[`STAR_FALLOFF_MAX`].
     pub star_falloff: f32,
-    /// Coverage of the farthest three layers: 0 preserves their response,
-    /// 0.5 squares remaining background leakage, and 1 raises it to the fourth
-    /// power. Interpolates between those responses without adding stars.
-    pub star_far_fill: f32,
-    /// How stars that overlap within one depth combine past full coverage,
-    /// where their summed coverage tops one. Below that their light already
-    /// adds; past it 0 averages their colours, so a crowd is no brighter than
-    /// its mean star, and 1 adds the rest of their light too, eased into each
-    /// channel's headroom so it never passes full brightness: a crowd grows
-    /// brighter and paler as its channels fill. Runs over 0..=1.
-    pub star_overlap_light: f32,
     /// Halo image width and height relative to the pane's device pixels.
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
@@ -592,8 +581,6 @@ impl Default for StarSettings {
             star_core_far: 1.0,
             star_core_near: 0.35,
             star_falloff: 0.7,
-            star_far_fill: 0.0,
-            star_overlap_light: 0.0,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
             test_bed: None,
@@ -686,9 +673,6 @@ impl StarSettings {
             clamp(self.star_core_near, fresh.star_core_near, STAR_CORE_MIN, STAR_CORE_MAX);
         self.star_falloff =
             clamp(self.star_falloff, fresh.star_falloff, STAR_FALLOFF_MIN, STAR_FALLOFF_MAX);
-        self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);
-        self.star_overlap_light =
-            clamp(self.star_overlap_light, fresh.star_overlap_light, 0.0, 1.0);
         self.star_halo_resolution = clamp(
             self.star_halo_resolution,
             fresh.star_halo_resolution,

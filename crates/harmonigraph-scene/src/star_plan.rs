@@ -11,8 +11,8 @@ use crate::{StarHaloProfile, StarSettings};
 /// How many depths the starfield draws, far (0) to near. The renderer's
 /// `STAR_SLICES`.
 pub const STAR_DEPTHS: usize = 5;
-/// The farthest depths, which share the far image when there is one and take
-/// `Distant gap fill`. The shader's `STAR_FAR_LAYERS`.
+/// The farthest depths, which share the far image when there is one. The
+/// shader's `STAR_FAR_LAYERS`.
 pub const STAR_FAR_DEPTHS: usize = 3;
 /// How many halo resolutions a plan may use at once: the renderer binds one
 /// halo image array per resolution, and the spectrogram's shader has no room

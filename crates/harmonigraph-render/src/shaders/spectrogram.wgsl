@@ -304,9 +304,6 @@ struct Cloud {
     star_pad1: u32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
-    // Overlap light, unused, the core's fade-start fraction and far fill, computed
-    // once per frame by star_geometry in stars.rs. Each slice carries its own width and core.
-    star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
@@ -993,7 +990,6 @@ fn star_life() -> f32 { return cloud.star_life; }
 fn star_size_variation() -> f32 { return cloud.star_size_variation; }
 fn star_far() -> vec4<f32> { return cloud.star_far; }
 fn star_near() -> vec4<f32> { return cloud.star_near; }
-fn star_geometry() -> vec4<f32> { return cloud.star_geometry; }
 fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
 fn star_halo_sample(k: u32) -> StarHaloSample { return cloud.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }

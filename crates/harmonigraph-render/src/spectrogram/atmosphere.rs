@@ -432,7 +432,7 @@ struct Uniforms {
     /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
     /// The starfield's brightness variation and life clock ([`star_life`]).
-    /// The geometry and slice rows that follow both start on 16-byte boundaries.
+    /// The far, near and slice rows that follow all start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
     /// The starfield's size variation; the rest of its row is padding.
@@ -443,9 +443,6 @@ struct Uniforms {
     star_far: Float4,
     /// Exact reduced foreground dimensions; zero means native foreground.
     star_near: Float4,
-    /// Overlap light, the core's fade-start fraction and far fill; see
-    /// [`star_geometry`].
-    star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
     memory_valid: u32,
@@ -980,8 +977,6 @@ fn memory_key(
                 star_core_far: _, // response/coverage changes do not change material identity
                 star_core_near: _, // response/coverage changes do not change material identity
                 star_falloff: _, // response/coverage changes do not change material identity
-                star_far_fill: _, // composition does not change material identity
-                star_overlap_light: _, // composition does not change material identity
                 test_bed: _,  // its cells and bands are appended where the cells are
             },
         material_settings:
@@ -1738,7 +1733,6 @@ impl Targets {
                 let [width, height] = self.near_size().unwrap_or([0, 0]);
                 Float4([width as f32, height as f32, 0.0, 0.0])
             },
-            star_geometry: star_geometry(settings.stars),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -1851,10 +1845,9 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, cloud_offset, retained_size, source_size, star_geometry, star_layout,
-        star_slices, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH,
-        STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
-        WASH_CELLS,
+        cloud_drift, cloud_offset, retained_size, source_size, star_layout, star_slices, tile_key,
+        tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
+        STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -2026,7 +2019,7 @@ mod tests {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        let fade = star_geometry(Default::default()).0[2];
+        let fade = shader_number("STAR_INNER_FADE");
         assert!(fade > 0.0 && fade < 1.0);
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let jitter = star_jitter_width(dial);

@@ -1842,7 +1842,6 @@ mod tests {
         let targets = targets.cloud.as_ref().unwrap();
         assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
         assert!(targets.memory_size().is_some(), "the fresh Stars ran without their history");
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = 1.0;
         cb.grid.fill(0);
         cb.atmosphere.as_mut().unwrap().now += 7.0 * f64::from(fresh.color_release);
         let silent = frame_with(&device, &queue, &mut resources, &cb);
