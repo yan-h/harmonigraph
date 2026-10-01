@@ -941,18 +941,21 @@ fn memory_key(
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter,
-                star_size_min,
-                star_size_max,
-                star_size_curve,
-                star_speed_min: _,   // carried by absolute cell and per-cell life
-                star_speed_max: _,   // carried by absolute cell and per-cell life
-                star_speed_curve: _, // carried by absolute cell and per-cell life
-                star_lifetime: _,    // carried by absolute cell and per-cell life
+                star_spacing_min,
+                star_spacing_max,
+                star_spacing_curve,
+                star_diameter_min: _, // core sizes do not change a star's colour
+                star_diameter_max: _, // core sizes do not change a star's colour
+                star_diameter_curve: _, // core sizes do not change a star's colour
+                star_speed_min: _,    // carried by absolute cell and per-cell life
+                star_speed_max: _,    // carried by absolute cell and per-cell life
+                star_speed_curve: _,  // carried by absolute cell and per-cell life
+                star_lifetime: _,     // carried by absolute cell and per-cell life
                 star_halo_resolution: _, // sampling does not change material identity
                 star_halo_profile: _, // sampling does not change material identity
-                star_fringe: _,      // response/coverage changes do not change material identity
-                star_far_fill: _,    // composition does not change material identity
-                star_defocus: _,     // response/coverage changes do not change material identity
+                star_fringe: _,       // response/coverage changes do not change material identity
+                star_far_fill: _,     // composition does not change material identity
+                star_defocus: _,      // response/coverage changes do not change material identity
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -988,9 +991,9 @@ fn memory_key(
         CloudStyle::Stars => values.extend([
             2.0,
             star_density,
-            star_size_min,
-            star_size_max,
-            star_size_curve,
+            star_spacing_min,
+            star_spacing_max,
+            star_spacing_curve,
             star_randomness,
             star_jitter,
         ]),
@@ -1821,6 +1824,27 @@ mod tests {
         )
     }
 
+    /// One `Star size` value is one core at every depth, whatever the spacing
+    /// does across them, until a depth's cap (a third of its cell) binds.
+    /// 0.5 star pixels is under every fresh cap, the far three's included.
+    #[test]
+    fn one_star_size_is_one_core_at_every_depth() {
+        let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
+        (settings.stars.star_diameter_min, settings.stars.star_diameter_max) = (0.5, 0.5);
+        let fine = slices(settings, 0.0);
+        assert!(fine[0].cell < fine[STAR_SLICES - 1].cell / 4.0, "spacing must vary");
+        for slice in &fine {
+            assert!(slice.sigma < slice.cap, "{} capped at {}", slice.sigma, slice.cap);
+            assert_eq!(slice.sigma, 0.125);
+        }
+        // And the cap is what stops a core past a third of its cell.
+        (settings.stars.star_diameter_min, settings.stars.star_diameter_max) = (32.0, 32.0);
+        for slice in slices(settings, 0.0) {
+            assert!(slice.cap < slice.sigma);
+            assert_eq!(slice.cap, 0.33 * slice.cell);
+        }
+    }
+
     fn shader_number(name: &str) -> f64 {
         crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, name)
             .trim_end_matches('u')
@@ -1958,7 +1982,7 @@ mod tests {
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_min: harmonigraph_scene::STAR_SPACING_MIN,
                 ..fresh.stars
             },
 
@@ -2023,8 +2047,8 @@ mod tests {
         let coarse = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_density: 1.0,
-                star_size_min: 3.0,
-                star_size_curve: 1.0,
+                star_spacing_min: 3.0,
+                star_spacing_curve: 1.0,
                 ..Default::default()
             },
 
@@ -2037,7 +2061,7 @@ mod tests {
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_min: harmonigraph_scene::STAR_SPACING_MIN,
                 ..coarse.stars
             },
 

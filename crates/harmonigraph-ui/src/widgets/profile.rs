@@ -5,6 +5,16 @@ use crate::theme;
 use egui::Ui;
 use std::ops::RangeInclusive;
 
+/// Which star property a [`depth`] control spreads from far to near. A size
+/// or spacing carries how many times the stored value the pane draws and
+/// shows it: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Depth {
+    Size(f32),
+    Spacing(f32),
+    Speed,
+}
+
 pub(crate) fn depth(
     ui: &mut Ui,
     low: &mut f32,
@@ -12,10 +22,18 @@ pub(crate) fn depth(
     exponent: &mut f32,
     range: RangeInclusive<f32>,
     curve_range: RangeInclusive<f32>,
-    size: bool,
+    kind: Depth,
 ) {
-    let (name, curve_name) =
-        if size { ("Star size", "Size curve") } else { ("Star speed", "Speed curve") };
+    let (name, curve_name) = match kind {
+        Depth::Size(_) => ("Star size", "Size curve"),
+        Depth::Spacing(_) => ("Star spacing", "Spacing curve"),
+        Depth::Speed => ("Star speed", "Speed curve"),
+    };
+    // Sizes and spacings run in octaves, speed linearly.
+    let (size, shown) = match kind {
+        Depth::Size(shown) | Depth::Spacing(shown) => (true, shown),
+        Depth::Speed => (false, 1.0),
+    };
     ui.push_id(name, |ui| {
         let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 2);
         let encode = |v: f32| {
@@ -57,21 +75,26 @@ pub(crate) fn depth(
                 // Dragged in octaves, like the plot, so the small end has room
                 // on the track. Written back only on a change: the round trip
                 // is not exact, and the values key star placement.
-                let (mut far, mut near) = (low.log2(), high.log2());
+                // The octaves are of the value as shown, so the bar's own
+                // display can stay a plain function of them.
+                let octaves = |v: f32| (v * shown).log2();
+                let (mut far, mut near) = (octaves(*low), octaves(*high));
                 let response = RangeBar::new(
                     &mut far,
                     &mut near,
-                    range.start().log2()..=range.end().log2(),
+                    octaves(*range.start())..=octaves(*range.end()),
                     name,
                 )
                 .display(|octaves| format!("{:.1} px", octaves.exp2()))
                 .show(ui)
-                .on_hover_text(
-                    "The smallest and biggest stars: the farthest dust at the low end, the nearest stars at the high end.",
-                );
+                .on_hover_text(if matches!(kind, Depth::Size(_)) {
+                    "How big the stars are, the farthest at the low end and the nearest at the high end. One value is one size at every depth. A star never grows past a third of its depth's spacing, so wider spacing or lower density leaves room for bigger stars."
+                } else {
+                    "How far apart the stars are, the farthest at the low end and the nearest at the high end. Every place holds a star, so wider spacing is fewer stars; Star density packs every depth closer."
+                });
                 if response.changed() {
-                    *low = far.exp2();
-                    *high = near.exp2();
+                    *low = far.exp2() / shown;
+                    *high = near.exp2() / shown;
                 }
             } else {
                 RangeBar::new(low, high, range.clone(), name)

@@ -126,8 +126,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                 let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
                 settings.stars.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
                 settings.stars.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
-                settings.stars.star_size_min = harmonigraph_scene::STAR_SIZE_MIN;
-                settings.stars.star_size_max = harmonigraph_scene::STAR_SIZE_MAX;
+                settings.stars.star_spacing_min = harmonigraph_scene::STAR_SPACING_MIN;
+                settings.stars.star_spacing_max = harmonigraph_scene::STAR_SPACING_MAX;
                 settings.cloud_depth = 1.0;
             }
             let a = {

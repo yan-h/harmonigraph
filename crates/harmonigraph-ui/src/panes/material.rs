@@ -76,15 +76,17 @@ pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::Mat
 /// a bar here rather than a choice made in the shader, because Yan's pick was a
 /// starting point "with sliders exposed". The fresh values are his controls as
 /// captured from the DAW on 2026-09-26.
-/// `size_scale` is how many times the spectrogram's sizes this pane's run.
+/// `size_scale` is how many times its stored sizes and spacings this pane draws and shows.
 pub(super) fn stars(
     ui: &mut egui::Ui,
     atmosphere: &mut harmonigraph_scene::StarSettings,
     size_scale: f32,
 ) {
+    use crate::widgets::Depth;
     use harmonigraph_scene::{
-        StarSettings, STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX,
-        STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
+        STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_DEPTH_CURVE_MAX,
+        STAR_DEPTH_CURVE_MIN, STAR_DIAMETER_MAX, STAR_DIAMETER_MIN, STAR_FRINGE_MAX,
+        STAR_SPACING_MAX, STAR_SPACING_MIN,
     };
     ValueBar::new(
         &mut atmosphere.star_density,
@@ -96,12 +98,21 @@ pub(super) fn stars(
     .on_hover_text("How many stars at every depth. Higher values pack them closer.");
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_size_min,
-        &mut atmosphere.star_size_max,
-        &mut atmosphere.star_size_curve,
-        StarSettings::size_range(size_scale),
-        STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
-        true,
+        &mut atmosphere.star_diameter_min,
+        &mut atmosphere.star_diameter_max,
+        &mut atmosphere.star_diameter_curve,
+        STAR_DIAMETER_MIN..=STAR_DIAMETER_MAX,
+        STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
+        Depth::Size(size_scale),
+    );
+    crate::widgets::depth(
+        ui,
+        &mut atmosphere.star_spacing_min,
+        &mut atmosphere.star_spacing_max,
+        &mut atmosphere.star_spacing_curve,
+        STAR_SPACING_MIN..=STAR_SPACING_MAX,
+        STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
+        Depth::Spacing(size_scale),
     );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
@@ -179,7 +190,7 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
         &mut atmosphere.star_speed_curve,
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
-        false,
+        crate::widgets::Depth::Speed,
     );
     ValueBar::new(
         &mut atmosphere.star_lifetime,

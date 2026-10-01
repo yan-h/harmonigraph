@@ -115,19 +115,20 @@ fn response_times_are_independent_and_zero_is_reachable() {
 }
 #[test]
 fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
-    for size in [false, true] {
+    for kind in [Depth::Speed, Depth::Size(1.0)] {
+        let size = kind != Depth::Speed;
         let (mut a, mut b, mut exponent) = if size { (0.7, 32.0, 2.0) } else { (0.1, 0.8, 2.0) };
         let range = if size { 0.5..=64.0 } else { 0.0..=1.0 };
         let initial = (a, b, exponent);
         let ctx = crate::tests::probe::themed_at(1.0);
         for _ in 0..8 {
             frame(&ctx, vec![], &mut |ui| {
-                depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size)
+                depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind)
             });
         }
         assert_eq!((a, b, exponent), initial);
         drag(
-            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind),
             0,
             egui::vec2(0.0, -12.0),
         );
@@ -135,7 +136,7 @@ fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
         assert_eq!((b, exponent), (initial.1, initial.2));
         let far = a;
         drag(
-            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind),
             1,
             egui::vec2(0.0, 12.0),
         );
@@ -143,7 +144,7 @@ fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
         assert_eq!((a, exponent), (far, initial.2));
         let ends = (a, b);
         drag(
-            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, size),
+            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind),
             2,
             egui::vec2(0.0, -12.0),
         );
