@@ -424,14 +424,18 @@ impl StarHaloLayout {
 }
 
 /// A halo image for each depth the plan gathers 3x3, at its tier's
-/// resolution: High, Medium and Low need them only for the nearest two depths.
-/// Material history keeps the same identity across profiles, independent of
-/// their sampling.
+/// resolution. Material history keeps the same identity across profiles,
+/// independent of their sampling.
+///
+/// From the plan of `settings` exactly as given, like every other reader of
+/// the plan: sanitizing here would clamp the lattice's scaled sizes back into
+/// the stored range and allocate halos for a different set of 3x3 depths
+/// than the one drawn.
 pub(crate) fn star_halo_layout(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
 ) -> StarHaloLayout {
-    let plan = settings.sanitized().plan();
+    let plan = settings.plan();
     StarHaloLayout::from_sizes(plan.depths.map(|depth| {
         (depth.gather == StarGather::Three)
             .then(|| star_halo_size(pixels, plan.halo_tiers[depth.tier]))

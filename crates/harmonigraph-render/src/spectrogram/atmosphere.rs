@@ -1988,6 +1988,20 @@ mod tests {
         assert_eq!(slices.map(|s| s.gather), [0, 2, 3, 1, 3]);
     }
 
+    /// The halo images are allocated for exactly the depths the plan draws
+    /// 3x3, even where the settings are the lattice's, scaled past the range
+    /// a stored value can hold: Star size 20 shows as 100 there, which at
+    /// the stored scale would gather depth 2 by 2x2.
+    #[test]
+    fn halos_follow_the_drawn_plan_at_the_lattice_scale() {
+        use harmonigraph_scene::star_plan::StarGather;
+        let stored = harmonigraph_scene::StarSettings { star_size_max: 20.0, ..Default::default() };
+        let lattice = stored.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
+        let three = lattice.plan().depths.map(|depth| depth.gather == StarGather::Three);
+        assert_ne!(three, lattice.sanitized().plan().depths.map(|d| d.gather == StarGather::Three));
+        assert_eq!(super::star_halo_layout([161, 121], lattice).active, three);
+    }
+
     /// Both walks include every star that can reach the pixel: one nominal
     /// cell for a star's inner part, and a 3x3 ring for the whole star. Every
     /// plan holds its stars inside its gather's bound, however big the dials

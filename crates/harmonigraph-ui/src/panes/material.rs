@@ -217,8 +217,8 @@ pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::S
         &[
             (StarHaloProfile::Low, "Low", "Lower rendering cost with softer foreground points and coarser distant detail."),
             (StarHaloProfile::Medium, "Medium", "Faster rendering with softer stars, including the foreground."),
-            (StarHaloProfile::P3, "High", "Sharper foreground stars with slightly softer distant stars and shorter distant glow."),
-            (StarHaloProfile::Uniform, "Uniform", "Override halo resolution with one value for every depth."),
+            (StarHaloProfile::P3, "High", "Sharper foreground stars with slightly softer distant stars."),
+            (StarHaloProfile::Uniform, "Uniform", "Draw at the pane's resolution, with one halo resolution for every depth that needs a halo."),
         ],
     );
     if stars.star_halo_profile == StarHaloProfile::Uniform {

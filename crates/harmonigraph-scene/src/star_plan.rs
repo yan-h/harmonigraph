@@ -197,17 +197,19 @@ impl StarSettings {
     /// The plan the renderer draws: the `Stars rendering` profile's images and
     /// halo tiers, every depth's cell and star from the dials, each gathered
     /// by the cheapest read that holds its stars whole, and the test bed's
-    /// overrides on top.
+    /// overrides on top. The test bed is sanitized here, and only here, so
+    /// every reader of the plan draws the same values.
     pub fn plan(self) -> StarPlan {
         let bed = self.test_bed.map(StarTestBed::sanitized).unwrap_or_default();
-        // The far tier is where a far depth's halo goes when it is gathered
-        // 3x3, at the far image's own resolution.
-        let (halo_tiers, far, near) = match self.star_halo_profile {
-            StarHaloProfile::Uniform => ([self.star_halo_resolution, 1.0, 1.0], 1.0, 1.0),
-            StarHaloProfile::P3 => ([1.0, 0.6, 0.75], 0.75, 1.0),
-            StarHaloProfile::Medium => ([0.75, 0.45, 0.5], 0.5, 0.75),
-            StarHaloProfile::Low => ([0.5, 0.3, 1.0 / 3.0], 1.0 / 3.0, 0.5),
+        let ([nearer, nearest], far, near) = match self.star_halo_profile {
+            StarHaloProfile::Uniform => ([self.star_halo_resolution, 1.0], 1.0, 1.0),
+            StarHaloProfile::P3 => ([1.0, 0.6], 0.75, 1.0),
+            StarHaloProfile::Medium => ([0.75, 0.45], 0.5, 0.75),
+            StarHaloProfile::Low => ([0.5, 0.3], 1.0 / 3.0, 0.5),
         };
+        // The third tier is where a far depth's halo goes when it is gathered
+        // 3x3: at the far image's own resolution.
+        let halo_tiers = [nearer, nearest, far];
         let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
         let solo = bed.depths.iter().any(|depth| depth.solo);
         let packing = (self.star_density / 2.0).sqrt();

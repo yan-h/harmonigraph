@@ -41,12 +41,15 @@ pub enum CloudStyle {
     VelvetScales,
 }
 
-/// Stars rendering policy. P3 is the High preset; `Uniform`
-/// keeps native cores and uses the adjustable halo resolution for every depth.
+/// Stars rendering resolutions: the far image, the near image and the halo
+/// images. Which depths are drawn 2x2 or 3x3 is not the profile's choice but
+/// their stars' size ([`crate::star_plan`]). P3 is the High preset; `Uniform`
+/// draws at the pane's resolution and gives every 3x3 depth the adjustable
+/// halo resolution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StarHaloProfile {
     Uniform,
-    /// Shorter-glow far three composited at 75%; near halos at 100% and 60%.
+    /// Far three at 75%; near halos at 100% and 60%.
     P3,
     /// Back three at 50%, foreground at 75%, near halos at 75% and 45%.
     #[default]
@@ -721,7 +724,6 @@ impl StarSettings {
             STAR_HALO_RESOLUTION_MIN,
             STAR_HALO_RESOLUTION_MAX,
         );
-        self.test_bed = self.test_bed.map(crate::star_plan::StarTestBed::sanitized);
         self
     }
 }

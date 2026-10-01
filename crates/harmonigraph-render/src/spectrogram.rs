@@ -1832,7 +1832,8 @@ mod tests {
     /// and near 75%: 8 pixels is 4 and 6, and the nearest halo held at 50%
     /// rather than Medium's 45%, which would move 3.6 texels), so resampling
     /// is not read as a move. A longer step instead moves fading stars past
-    /// the threshold. Lives are long and the step short, so a star's fade moves a
+    /// the threshold. The 50% is the dev test bed's halo override, the only
+    /// lever on one tier; without the test bed this needs its own. Lives are long and the step short, so a star's fade moves a
     /// couple of levels at most, and a life that turns over is at zero at both
     /// ends of the turn. An ignored offset leaves the field where it was, and
     /// a flipped one moves it the other way: either fails the first assert.
