@@ -431,13 +431,13 @@ pub(crate) fn analysis_section(
         .display(db_readout)
         .show(ui)
         .on_hover_text(
-            "Levels mapped to zero and full height in the Analyzer and Spiral, also used by lattice audio rings. \
+            "Levels mapped to zero and full height in the Analyzer, also used by lattice audio rings. \
                      Lower the upper end to enlarge quiet signals. \
-                     Audio colors have their own Level color range on Mappings.",
+                     Audio colors, including the Spiral's, have their own Level color range on Mappings.",
         );
         let labels: Vec<_> = crate::TILT_STEPS.iter().map(|step| format!("{step:.1}")).collect();
         let options: Vec<_> = crate::TILT_STEPS.iter().zip(&labels).map(|(&step, label)|
-            (step, label.as_str(), "Reference slope in dB/oct. 0 shows raw power; -3 makes pink noise appear flat; more negative values lift high frequencies. Affects every audio view.")
+            (step, label.as_str(), "Reference slope in dB/oct, pivoting at 1 kHz. 0 shows raw power; -3 makes pink noise appear flat; more negative values lower the bass as much as they lift the treble. Affects every audio view, in height and in color: the curve, spectrogram, Spiral and lattice audio rings.")
         ).collect();
         choice_row(ui, "Tilt (dB/oct)", &mut cfg.tilt, &options);
         block(ui, "Live response");

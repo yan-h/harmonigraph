@@ -395,8 +395,8 @@ pub const PICTURE_OFF_SCALE: [u8; 3] = [236, 142, 132];
 /// rect with — the spectral pane, the spiral, the render preview, and the
 /// lattice — and so the default ground a lattice pass is composited over.
 ///
-/// BLACK, because the spectrogram's plane is black and has to be (a cell at
-/// silence that is not black shows the plane's edge), and every other picture
+/// BLACK, because the fresh analyzer gradient and every preset open at `L*` 0,
+/// so the spectrogram's plane is black at silence, and every other picture
 /// stands beside it. On any other ground the analyzer's curve and the lattice
 /// read as a grey card with the spectrogram cut out of it as a hole — faint in
 /// the editor, where grey chrome surrounds it, and plain in a video, where the

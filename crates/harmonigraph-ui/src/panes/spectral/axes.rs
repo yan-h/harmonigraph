@@ -84,11 +84,6 @@ pub(super) fn label_anchor(split: f32) -> (f32, f32) {
 
 /// Point size of an axis marking's label — a dozen standing marks that
 /// should stay quiet.
-///
-/// Quoted at the size the pane is actually read at, so the Marking size bar
-/// reads 1 there: the bar is where the size gets dialled, and a built-in nobody
-/// opens on turns every view into a correction of it. When the bar settles
-/// somewhere other than 1, this number is what moves.
 pub(super) const MARKING_PT: f32 = 16.0;
 
 /// The whole pitch axis, in semitones — the widest the range opens, and the
@@ -463,9 +458,7 @@ impl Axes {
 
 /// How the depth axis is shared out: the spectrum owns `0..split`, the
 /// roll (and/or spectrogram) `split..1`. With that far region off the
-/// spectrum owns all of it, which reproduces the pre-roll layout exactly —
-/// that equality is what keeps the voice bars and the curve calibrated
-/// against each other. The spectrogram shares the roll's region and time
+/// spectrum owns all of it. The spectrogram shares the roll's region and time
 /// axis, so it carves out the same share.
 pub(super) fn spectrum_share(cfg: &crate::SpectrumConfig) -> f32 {
     if cfg.show_roll || cfg.show_spectrogram {

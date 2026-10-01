@@ -362,13 +362,13 @@ fn a_zoomed_in_pane_draws_the_frame_on_record() {
 
 /// The watercolour wash draws the frame on record.
 ///
-/// Every frame above is drawn with the OTHER cloud texture, the refracting
-/// scales, which is what makes the three of them the proof that a second texture
-/// landed without disturbing the first. This is the one that has the wash in
-/// it, and it earns its place because nothing else committed here executes
-/// `wash_cloud_tone` end to end — the claim tests beside the shader each turn one
-/// dial and compare two frames, where this pins the whole construction, every
-/// constant in it, at the settings the page opens the texture at.
+/// The three frames above are drawn with the fresh appearance's texture, which
+/// has been Stars since #1205, so none of them reaches the wash. This is the
+/// one that has the wash in it, and it earns its place because nothing else
+/// committed here executes `wash_cloud_tone` end to end — the claim tests
+/// beside the shader each turn one dial and compare two frames, where this pins
+/// the whole construction, every constant in it, at the settings the page opens
+/// the texture at.
 #[test]
 fn the_watercolour_wash_draws_the_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };

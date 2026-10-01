@@ -154,16 +154,16 @@ fn level_label_into(joined: bool) -> f32 {
     }
 }
 
-/// Three views of the same music over one shared MIDI-pitch axis: the
-/// audio spectrum as a curve (FFT of the selected input, every partial at its
-/// actual pitch), the sounding MIDI voices as bars, and the piano roll of
-/// what has been played. All are optional; the settings live in
-/// [`view_section`] and the sections beside it on the Analyzer page.
+/// Views of the same music over one shared MIDI-pitch axis: the audio
+/// spectrum as a curve (FFT of the selected input, every partial at its
+/// actual pitch), its history as a spectrogram, and the piano roll of what
+/// has been played. All are optional; the settings live in [`view_section`]
+/// and the sections beside it on the Analyzer page.
 ///
 /// The depth axis is shared out between the roll (the far end) and the
-/// spectrum (the baseline end) at `split`, which is also where the voice
-/// bars hang from: a note crosses that one line out of the roll and into
-/// the spectrum peak it is making.
+/// spectrum (the baseline end) at `split`, which is also the now-line the
+/// roll's ribbons run into: a note crosses that one line out of the roll and
+/// into the spectrum peak it is making.
 ///
 /// A pointer over this pane changes nothing on it and nothing on the
 /// lattice, in either direction. Hovering here to light the matching lattice
@@ -283,17 +283,16 @@ pub(crate) fn spectral_pane(
     // against.
     let level_d = |level: f32| sd(level * budget);
 
-    // A uniform dark bed under the whole spectrogram region, so it reads as one
+    // A uniform bed under the whole spectrogram region, so it reads as one
     // surface. The heatmap mesh only covers the depths that actually have
-    // columns, and its silence is black; without this bed the un-covered depths
-    // (before history fills the window, or past its oldest column) show the
-    // lighter pane `well` in jarring patches. Black is the heatmap's own silence
-    // color, so covered and un-covered silence match whatever the quad is tinted
-    // with: `Color32` is premultiplied, so a black texel over this bed
-    // composites to black at every alpha.
+    // columns; without this bed the un-covered depths (before history fills the
+    // window, or past its oldest column) show the lighter pane `well` in
+    // jarring patches. The bed is the heatmap's own silence color, the
+    // gradient's floor (#934), so covered and un-covered silence match.
     if show_history && cfg.show_spectrogram && split < 1.0 {
         let bed = egui::Rect::from_two_pos(axes.at(0.0, split), axes.at(1.0, 1.0));
-        painter.rect_filled(bed, 0.0, egui::Color32::BLACK);
+        let floor = crate::spectrogram::silence_color(cfg.spectrogram_gradient);
+        painter.rect_filled(bed, 0.0, floor);
     }
 
     // Axis markings: one frequency ladder, ruled faintly across the spectrum
@@ -385,7 +384,7 @@ pub(crate) fn spectral_pane(
     }
 
     // Audio spectrum: the FFT of the shell's audio source, every partial
-    // at its actual pitch. Fundamentals line up under their voice bars;
+    // at its actual pitch. Fundamentals line up with their notes' ribbons;
     // the harmonic series marches up the axis from each note.
     if show_spectrum && split > 0.0 {
         if let Some(levels) = state.runtime.spectrum.display(now) {
@@ -516,8 +515,8 @@ pub(crate) fn spectral_pane(
         );
     }
 
-    // Axis labels last, riding on top of the spectrogram, spectrum, and
-    // voice bars: a label only earns its place if you can read which
+    // Axis labels last, riding on top of the spectrogram, spectrum and
+    // ribbons: a label only earns its place if you can read which
     // frequency it marks, and a loud slab would otherwise bury it.
     // Haloed exactly like the lattice's node labels, and for the same reason:
     // whatever is behind them is a picture, not a background. A pitch label

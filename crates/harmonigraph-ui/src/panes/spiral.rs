@@ -25,8 +25,9 @@
 //!
 //! It shares the Analyzer's [`SpectrumConfig`](crate::SpectrumConfig) whole
 //! rather than carrying settings of its own. Its geometry follows the
-//! analyzer's pitch and level windows, while color comes from the volume-color
-//! range and gradient dialled on the Mappings page.
+//! analyzer's pitch window, while color comes from the volume-color range and
+//! gradient dialled on the Mappings page; the analyzer's level window does not
+//! reach it (#486).
 //!
 //! One consequence of sharing worth expecting: `tilt` pivots at 1 kHz, so on a
 //! spiral it lifts by RADIUS rather than along a straight axis — a brightness
@@ -104,9 +105,10 @@ const SEAM: (f32, f32) = (0.28, 1.0);
 /// the seam is one hairline all the way round.
 ///
 /// What that saves depends on the pane, both curves being cut by arc length and
-/// only then capped at one step per bucket. At the fresh range: on a docked pane
-/// the seam is under a quarter of the strip's 3826 steps and cutting it at the
-/// strip's grain would roughly double what the pane hands the tessellator; at
+/// only then capped at one step per bucket. At the full ten-octave range: on a
+/// docked pane the seam is under a quarter of the strip's 3826 steps and
+/// cutting it at the strip's grain would roughly double what the pane hands the
+/// tessellator; at
 /// 1080p it is two thirds; and at 3840x2160 the seam runs into the cap, which is
 /// where the coarser grain stops saving anything and starts being the reason the
 /// cap is not felt. The sagitta holds at every one of those, so what grows is a
@@ -156,16 +158,17 @@ const VOICE_OVERHANG: f32 = 0.25;
 /// Points of type a sounding note's name is set in on the rim, on a pane large
 /// enough to give the names their whole band.
 ///
-/// The size the analyzer's names are dialled at (`names::LABEL_PT`), quoted
-/// rather than picked afresh: these are the same names, drawn by the same
-/// [`draw_stacked_name`](crate::marks::draw_stacked_name).
+/// The analyzer's names' built-in size (`names::LABEL_PT`), quoted rather than
+/// picked afresh: these are the same names, drawn by the same
+/// [`draw_stacked_name`](crate::marks::draw_stacked_name). A fixed size: the
+/// analyzer's `Label scale` bar does not reach it.
 ///
 /// What each pane does to that size from there is its own, and the two differ
 /// because the names are doing different jobs. The analyzer's are written OVER
 /// ribbons, so they follow the picture — its `REFERENCE_PITCH_LEN` and the
 /// pitch zoom both. These stand outside the picture, like an axis label, and
 /// the only thing that can crowd them is the band they are set in: they take
-/// their dialled size wherever it fits and scale with the band where it does
+/// [`NAME_PT`] wherever it fits and scale with the band where it does
 /// not, which is on any pane whose short side is under about 395 points —
 /// [`NAME_BAND_SHARE`] against the whole of [`NAME_BAND_PT`] is where that
 /// number comes from. A dock split two ways sits above it and a dock split
@@ -241,12 +244,13 @@ const LOOK_MAX: f32 = 1.0;
 /// different thing: it changes what the disc is SHOWING. The two compose, and
 /// [`INNER_HOLE`] says which is which.
 ///
-/// Persisted, like the lattice's [`Camera`](harmonigraph_scene::Camera) and for
-/// the lattice's reason: a framing is dialled in by hand, a take renders from
-/// the blob, and a disc dialled in on its inner turns has to export the picture
-/// it was dialled to. What that costs is that a framing left somewhere odd is
-/// still there next session — the same trade the camera already makes, and the
-/// double-click is the way out of it.
+/// Persisted, like the lattice's [`Camera`](harmonigraph_scene::Camera): a
+/// framing is dialled in by hand, so a disc dialled in on its inner turns
+/// comes back framed that way when the editor reopens. The Spiral is never
+/// exported (#974), so the editor's own framing is the only reason. What that
+/// costs is that a framing left somewhere odd is still there next session —
+/// the same trade the camera already makes, and the double-click is the way
+/// out of it.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpiralView {
@@ -258,11 +262,10 @@ pub struct SpiralView {
     /// is somewhere on the rim (see [`LOOK_MAX`]).
     ///
     /// A point of the PICTURE rather than an offset in points, which is what
-    /// makes one saved framing the same framing at every size it is drawn at —
-    /// the docked pane, the Video preview and an export at any resolution alike.
-    /// The same argument the roll's own divider is a share for
-    /// (`SpectrumConfig::roll_fraction`), and the reason a magnified disc can be
-    /// composed into a video at all.
+    /// makes one saved framing the same framing at every size the docked pane
+    /// is drawn at, so a resized editor keeps looking at the same turn. The
+    /// same argument the roll's own divider is a share for
+    /// (`SpectrumConfig::roll_fraction`).
     pub look: glam::Vec2,
 }
 
@@ -412,8 +415,8 @@ impl Spiral {
     ///
     /// The names' [`band`](Self::band) is the one thing not magnified. It is
     /// measured in points because it holds TYPE, and the type it holds is set at
-    /// the size the Analyzer settings dialled it to (see [`NAME_PT`]) — a name grown
-    /// eight times over would be a word across the pane. So a magnified disc
+    /// a fixed size (see [`NAME_PT`]) — a name grown eight times over would be a
+    /// word across the pane. So a magnified disc
     /// carries the same names at the same size, standing off the rim by the same
     /// air. The band still comes off the FIT's radius, since reserving room is
     /// only ever a question at the fit: magnified, the rim it stands outside is
@@ -461,8 +464,9 @@ impl Spiral {
         self.half() * (1.0 + VOICE_OVERHANG)
     }
 
-    /// The dot a sounding note is marked with: its whole radius, backing
-    /// included, and the coloured fill inside that. See [`DOT`].
+    /// The radius of the coloured dot a sounding note is marked with: the
+    /// extent [`DOT`] sets, less the retired backing's inset
+    /// ([`DOT_RING_PT`]).
     ///
     /// Capped at HALF the track, which is the bound that is not a matter of
     /// taste: a dot past it crosses into the octaves either side, and which
@@ -473,15 +477,14 @@ impl Spiral {
     /// floor in [`DOT`], which is a length in points and would otherwise draw a
     /// dot a quarter wider than the track on a small enough pane.
     fn dot(&self) -> f32 {
-        let backed = (self.half() * DOT.0).max(DOT.1).min(self.half());
-        // The fill is never under half the dot, so a track thin enough to
-        // shrink the mark below two rings' worth still has a fill to carry the
-        // note's colour — which is the half of the pair that says WHICH note
-        // this is.
-        (backed - DOT_RING_PT).max(backed * 0.5)
+        let extent = (self.half() * DOT.0).max(DOT.1).min(self.half());
+        // Never under half the extent, so a track thin enough to shrink the
+        // mark below two insets' worth still has a dot to carry the note's
+        // colour, which is what says WHICH note this is.
+        (extent - DOT_RING_PT).max(extent * 0.5)
     }
 
-    /// How much of its dialled size the rim names are drawn at: the whole band
+    /// How much of [`NAME_PT`] the rim names are drawn at: the whole band
     /// scales together, so the air in front of a name and the room behind it
     /// keep their proportions to the type on a pane too small for the full one.
     fn name_scale(&self) -> f32 {
@@ -514,20 +517,16 @@ impl Spiral {
 /// [`navigate`], which runs before the picture is drawn so that a drag lands in
 /// the frame the hand moved in rather than the one after it.
 ///
-/// Every copy of the pane answers whatever pointer is over IT, which today is
-/// the docked one and nothing else: the offline renderer has no pointer, and the
-/// Video tab's preview cannot reach a spiral at all (`panes::render`'s
-/// `Pane::Spiral` arm). Were that arm ever to become live, this would want the
-/// Analyzer's own `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel
-/// spent zooming inside a scrolling settings tab is a wheel that tab cannot be
-/// scrolled with.
+/// The docked tab is the only copy of this pane: the Spiral is an editor tab,
+/// never exported or previewed for video (#974). Were a second copy ever
+/// drawn inside a scrolling settings tab, this would want the Analyzer's own
+/// `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel spent zooming
+/// inside a scrolling settings tab is a wheel that tab cannot be scrolled with.
 ///
 /// `surface` is which live copy this is, and the two things the pane holds
 /// between frames are keyed on it: the halo's bloom chain and the rim names'
-/// instance buffer. The docked tab is 0; offline a layout hands each placement
-/// its index (see [`draw_pane`](crate::draw_pane)), so a `.ron` naming the
-/// spiral twice grows a chain per rect instead of tearing one down and
-/// rebuilding it between the two.
+/// instance buffer. Only the docked copy draws today, so the keying has one
+/// key in use.
 pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64, surface: usize) {
     let cfg = state.appearance.spectrum;
     let (rect, response) =
@@ -699,9 +698,9 @@ fn navigate(ui: &egui::Ui, response: &egui::Response, fit: &Spiral, view: &mut S
 /// vertices per step (the track's two edges), coloured by the analyzer's own
 /// gradient through its own loudness mapping.
 ///
-/// Drawn even with no audio flowing, as a black annulus. That is not a spare
-/// case to skip — it is the pane saying where its picture IS, the same job the
-/// Spectral pane's black bed does under its heatmap, and without it a silent
+/// Drawn even with no audio flowing, as an annulus in the gradient's floor
+/// colour. That is not a spare case to skip — it is the pane saying where its
+/// picture IS, the same job the Spectral pane's bed does under its heatmap, and without it a silent
 /// pane is an empty rectangle with no spiral in it to start reading.
 fn strip(
     spiral: &Spiral,
@@ -736,9 +735,9 @@ fn strip(
     let mut mesh = egui::Mesh::default();
     for i in 0..=steps {
         let midi = spiral.min_midi + span * i as f32 / steps as f32;
-        // Opaque, and untinted by anything of this pane's: the gradient's dark
-        // end is black, so silence recedes into the disc rather than letting
-        // the pane's own `well` through in rings between the turns.
+        // Opaque, and untinted by anything of this pane's: silence draws the
+        // gradient's floor, so it reads as the disc rather than letting the
+        // pane's own `well` through in rings between the turns.
         let color =
             cell_color(cfg.spectrogram_gradient, spectrogram_level_db(cfg, level(midi), midi));
         mesh.colored_vertex(spiral.at(midi, -spiral.half()), color);
@@ -880,10 +879,6 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
 /// rather than derived a second time beside it, so the halo cannot grow from a
 /// dot the picture does not have: one loop decides where a mark is, how big,
 /// and what colour, and the light follows it by construction.
-///
-/// The BACKING is not in that list. It is black, and black is the one thing
-/// that cannot bloom — handed over it would only take light out of the halo the
-/// coloured disc does grow, which is the rule the roll's outline follows too.
 fn dots(
     spiral: &Spiral,
     state: &PictureState,
@@ -996,16 +991,16 @@ mod tests {
 
     const SCREEN: egui::Vec2 = egui::vec2(500.0, 500.0);
 
-    /// The four shapes of frame anything about FITTING has to hold in: the
-    /// square a render can be, the 16:9 one it usually is — where the fit's
-    /// short side is the height and the disc sits closest to an edge — the
-    /// docked pane, and a column narrow enough to cap the name band by its
+    /// The four shapes of frame anything about FITTING has to hold in: a large
+    /// square, a 16:9 one — where the fit's short side is the height and the
+    /// disc sits closest to an edge — the docked pane, and a column narrow
+    /// enough to cap the name band by its
     /// SHARE of the radius rather than by its point size.
     ///
     /// That last one is a separate frame because `PANE` is not it and misses
     /// by five points: the share binds below a short side of about 395, and a
     /// 400-point pane takes the point size. Every frame above "cramped" draws
-    /// its names at exactly their dialled size, so without it nothing here
+    /// its names at exactly [`NAME_PT`], so without it nothing here
     /// reaches [`Spiral::name_scale`]'s other answer at all.
     const FRAMES: [(&str, egui::Rect); 4] = [
         ("square", egui::Rect { min: egui::pos2(0.0, 0.0), max: egui::pos2(900.0, 900.0) }),
@@ -1332,14 +1327,14 @@ mod tests {
             for (low, high) in [(60.0f32, 84.0f32), (36.0, 96.0), (15.5, 135.1)] {
                 let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
                 let s = Spiral::new(rect, &cfg);
-                let backed = s.dot();
+                let dot = s.dot();
                 for pitch in [s.min_midi, s.max_midi] {
                     // Round the dot rather than out along the ray alone: it is
                     // a disc, so the point of it nearest the pane edge is not
                     // on the radius at any angle but the four cardinals.
                     for step in 0..12 {
                         let a = std::f32::consts::TAU * step as f32 / 12.0;
-                        let edge = s.at(pitch, 0.0) + egui::vec2(a.cos(), a.sin()) * backed;
+                        let edge = s.at(pitch, 0.0) + egui::vec2(a.cos(), a.sin()) * dot;
                         assert!(
                             rect.contains(edge),
                             "{name} {low}..{high}: a dot at {pitch} reaches {edge:?}, \
@@ -1367,9 +1362,13 @@ mod tests {
     /// of a docked column split three ways.
     #[test]
     fn a_notes_dot_sits_inside_its_own_turn() {
-        // The fresh Analyzer range, which is the ~10 octaves that makes a
-        // track thin enough for any of this to bind.
-        let cfg = SpectrumConfig::default();
+        // The analyzer's full range, the ~10 octaves that make a track thin
+        // enough for any of this to bind.
+        let cfg = SpectrumConfig {
+            low_midi: harmonigraph_core::spectrum::SPECTRUM_MIN_MIDI,
+            high_midi: harmonigraph_core::spectrum::SPECTRUM_MAX_MIDI,
+            ..Default::default()
+        };
         for side in [400.0f32, 300.0, 277.0, 250.0, 200.0, 160.0, 134.0, 120.0] {
             let rect = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(side, side));
             let s = Spiral::new(rect, &cfg);
@@ -1417,8 +1416,7 @@ mod tests {
             state.appearance.spectrum.high_midi = 84.0;
             let fill = Spiral::new(PANE, &state.appearance.spectrum).dot();
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
-            // The COLOURED disc of the pair, not its backing: both are circles,
-            // and counting either alone counts the notes once.
+            // The coloured disc, by its radius, so each note counts once.
             painted(&mut state, 0.1)
                 .iter()
                 .filter(|s| matches!(s, egui::Shape::Circle(c) if c.radius == fill))
@@ -1431,7 +1429,7 @@ mod tests {
 
     /// The halo grows from the dots the picture HAS: every mark handed to the
     /// renderer is one of the coloured discs on the painter, at its centre, its
-    /// radius and its colour, and the black backing is not among them.
+    /// radius and its colour.
     ///
     /// Asked of [`dots`] rather than of the callback, whose payload is the
     /// render crate's own type and opaque from here. That is where the pair is

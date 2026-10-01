@@ -39,7 +39,9 @@ The current note `ClockMapper` offset converts the source origin to GUI seconds 
 The analyzer does not estimate another offset from arrival time or smooth at callback boundaries.
 Consequently complete columns are identical across callback/drain partitions and consumer delays when the shared heartbeat mapping is held equal.
 The mapper fixes its offset at the first heartbeat, which includes initial delivery latency,
-and afterwards moves it only forward, by the length of any callback pause over a second.
+and afterwards moves it only forward:
+by the length of any callback pause over a second,
+and on a source rewind by re-anchoring the newest sample at the shown time or later.
 Its shown time never rewinds,
 so mapped dates only advance and audio does not pin a separate permanent offset that could drift away from notes.
 A clock that corrected backwards could place new columns at or before the retained history tail.

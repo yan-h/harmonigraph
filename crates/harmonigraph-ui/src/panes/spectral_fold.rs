@@ -623,7 +623,7 @@ mod tests {
         /// question and its own tests.
         fn on(samples: &[f32]) -> Bench {
             let mut state = fresh();
-            // The display's EMA is the Analyzer's Smoothing control, and it is
+            // The display's EMA is the Analyzer's Live response, and it is
             // an inheritance the fold is glad of in the plugin and cannot use
             // here: it would make every number below a function of how many
             // hops the fixture happened to push.

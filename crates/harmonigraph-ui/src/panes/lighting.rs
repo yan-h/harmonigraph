@@ -54,7 +54,13 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             false,
             &mut shadow.spectral_geometry,
         );
-        shadow_group(ui, "Labels", "Note names and axis labels", false, &mut shadow.spectral_text);
+        shadow_group(
+            ui,
+            "Labels",
+            "Analyzer note names and axis labels, and Spiral note names",
+            false,
+            &mut shadow.spectral_text,
+        );
     });
 }
 
