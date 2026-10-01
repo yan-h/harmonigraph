@@ -76,7 +76,7 @@ const SECONDS: f64 = 2.0;
 /// short rather than of the heatmap.
 ///
 /// Every fixture that dials it in also pins the render's spectrogram to
-/// Scrolling. The fresh choice is "Whole video", which replaces the span with
+/// Scrolling. The fresh choice is "Fit video", which replaces the span with
 /// the render's own length — [`SECONDS`] — so this would be dead and the
 /// window's oldest part the bed.
 const WINDOW: f32 = 1.5;

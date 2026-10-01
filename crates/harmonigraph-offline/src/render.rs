@@ -112,7 +112,7 @@ pub struct Settings {
     pub end: f64,
     /// Take time of the audio's first sample. Non-zero when recording
     /// was armed part-way into a song: without it the spectrum would
-    /// read the wrong part of the bounce, by exactly however far in you
+    /// read the wrong part of the recording, by exactly however far in you
     /// started.
     pub audio_start: f64,
 }
@@ -183,17 +183,19 @@ pub fn render(
     state.runtime.learn_active = false;
     state.surfaces.hovered = None;
     // The comma auto-detects are interactive too, in the sense that matters
-    // here: they answer a tuning EDIT, and a replay has no editor. Left on,
-    // they judge the take's tuning afresh on frame 0 — and a session that
-    // switched one off at a tuning that IS that temperament (12-TET, which is
-    // both of them) would export with it on, respelling names and collapsing
-    // comma-equivalent nodes the recorded session showed. The blob carries
-    // what was on screen; the render's job is to reproduce it, not to
-    // re-decide it.
+    // here: they answer a tuning EDIT, and a replay has no editor. This only
+    // governs LEAD-IN frames, before the take's first configuration record:
+    // from that record on, `Replay::advance_to` hands the recorded
+    // configuration to `observe_configuration`, which applies it verbatim
+    // every frame (#709). Before it, nothing is replayed and the reducer runs
+    // on these flags; left on, it would judge the take's tuning afresh — and
+    // a session that switched one off at a tuning that IS that temperament
+    // (12-TET, which is both of them) would open its export with it on,
+    // respelling names the recorded session did not show.
     for comma in harmonigraph_core::Comma::ALL {
         *state.appearance.view.temper_auto_mut(comma) = false;
     }
-    // "Spectrogram: Whole video" — the one setting only a render can answer,
+    // "Spectrogram: Fit video" — the one setting only a render can answer,
     // since the render window is its length. Set once before the first frame,
     // so no cache keyed on the analyzer config sees it move.
     let spectrogram = state.appearance.render.spectrogram;
@@ -587,7 +589,7 @@ mod tests {
         assert_ne!(first, run(None).unwrap(), "the audio must change the rendered picture");
     }
 
-    /// "Spectrogram: Whole video" draws exactly what the History duration dialled to
+    /// "Spectrogram: Fit video" draws exactly what the History duration dialled to
     /// the render's own length draws — and Scrolling at the default span draws
     /// something else, or the equality would hold for a render that ignored the
     /// setting.
@@ -627,14 +629,14 @@ mod tests {
         let Some(spanned) = run(|a, _| a.render.spectrogram = SpectrogramRender::WholeVideo) else {
             return;
         };
-        // Scrolling named on both of these, Whole video being the default: left
-        // to it, the dialled run would be Whole video too and equal by itself.
+        // Scrolling named on both of these, Fit video being the default: left
+        // to it, the dialled run would be Fit video too and equal by itself.
         let dialled = run(|a, window| {
             a.render.spectrogram = SpectrogramRender::Scrolling;
             a.spectrum.roll_seconds = window;
         })
         .unwrap();
-        assert_eq!(spanned, dialled, "Whole video must span exactly the render's window");
+        assert_eq!(spanned, dialled, "Fit video must span exactly the render's window");
         let scrolling = run(|a, _| a.render.spectrogram = SpectrogramRender::Scrolling).unwrap();
         assert_ne!(spanned, scrolling, "the default span drew the same picture");
     }

@@ -3,8 +3,9 @@
 //!
 //! One page per picture rather than a page per aspect (Lighting, Colors across
 //! both): a setting is found by looking at the picture it changes, which is
-//! also where a right-click on that picture lands. Colors are the exception,
-//! shared by every picture, and keep a tab of their own.
+//! also where a right-click on that picture lands. Mappings (note and level
+//! colors, and how a note's playing draws it) are the exception, shared by
+//! every picture, and keep a tab of their own.
 
 use super::lighting::analyzer_lighting;
 use super::plus::plus_pane;

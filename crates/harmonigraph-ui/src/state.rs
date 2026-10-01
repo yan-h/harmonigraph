@@ -152,8 +152,8 @@ pub struct SurfaceState {
     pub(crate) lattice_pipelines: std::sync::Arc<harmonigraph_render::LatticePipelineCache>,
     /// The ground the lattice pane paints its rect with, which it also hands
     /// the scene (see [`harmonigraph_scene::Scene::background`]). Defaults to
-    /// the skin's well, the recessed grey every picture pane paints — right for
-    /// the plugin and the standalone harness.
+    /// [`harmonigraph_scene::skin::picture_color`], the black every picture
+    /// pane paints — right for the plugin and the standalone harness.
     ///
     /// ONE field doing both jobs deliberately: the pane paints exactly what it
     /// hands over, so the fill and the ground the picture is composited against
@@ -217,8 +217,8 @@ pub struct Interaction {
     /// `None` leaves it uncapped (as fast as the display can present).
     /// Persisted.
     ///
-    /// Read by the shells to pace themselves, and by [`root_ui`](crate::root_ui) only to
-    /// schedule repaints — never by any drawing code. The offline renderer
+    /// Read by the plugin to pace its window, and by [`root_ui`](crate::root_ui)
+    /// only to schedule repaints — never by any drawing code. The offline renderer
     /// steps its own clock and never reaches `root_ui`, so a recorded frame
     /// cannot depend on this and the determinism test stays honest.
     ///
@@ -261,6 +261,26 @@ pub struct Interaction {
     /// stays outside recorded appearance; only [`root_ui`](crate::root_ui)
     /// reads it and the offline renderer never draws the HUD.
     pub perf_pos: Option<egui::Pos2>,
+    /// Show the performance overlay (a small draggable HUD with frame rate,
+    /// memory and workload counts; per-stage CPU time waits for
+    /// [`Self::show_perf_detail`]). Persisted.
+    ///
+    /// Off by default: the HUD is a development instrument, and it sits over
+    /// the picture the plugin exists to draw. The System tab, under
+    /// Performance, is where it gets switched on.
+    ///
+    /// Here rather than in `view` for the reason `perf_pos` above it is: the
+    /// overlay is what the picture is read AGAINST while it is dialled, not
+    /// part of the picture, so it rides in no take and no recorded appearance.
+    /// `the_performance_overlay_ships_off` holds the default.
+    pub show_perf: bool,
+    /// Expand the overlay from the headline numbers into the full per-stage
+    /// breakdown of where a frame goes. Persisted.
+    ///
+    /// Off by default: the breakdown exists to answer "which stage is eating
+    /// the frame", and once it has, a dozen rows of scaffolding is not what
+    /// you want sitting over the picture. Inert while `show_perf` is off.
+    pub show_perf_detail: bool,
     pub(crate) reset_layout: bool,
     /// Where the Analyzer section is docked, copied from the workspace layout
     /// before the panes draw and back after. Runtime only: the layout persists
@@ -463,9 +483,10 @@ impl SharedState {
     /// (section layout, camera, view settings). Parameters are NOT included —
     /// they live in the host's plugin state.
     ///
-    /// `LatticeEditorHandle::Drop` writes this enclosing editor document into
-    /// `params.ui_state` when the window closes. Recording instead serializes
-    /// the live appearance directly, so capture never depends on that last save.
+    /// The plugin writes this enclosing editor document into `params.ui_state`
+    /// when the window closes, and serializes it live for a host save made
+    /// with the window open. Recording instead serializes the live appearance
+    /// directly, so capture never depends on either.
     pub fn save_persist(&self) -> String {
         // Keep the editor document in the same RON format as appearance.
         ron::to_string(&UiPersist {
@@ -479,6 +500,8 @@ impl SharedState {
             ui_scale: self.workspace.interaction.ui_scale,
             skin_dials: self.workspace.interaction.skin_dials,
             perf_pos: self.workspace.interaction.perf_pos,
+            show_perf: self.workspace.interaction.show_perf,
+            show_perf_detail: self.workspace.interaction.show_perf_detail,
         })
         .unwrap_or_default()
     }
@@ -493,14 +516,12 @@ impl SharedState {
             // SAYING SO is the whole point of this arm. Nothing in the tree
             // reads an older spelling any more, so a blob naming a variant
             // this build has dropped — a retired orientation or sweep mode, or
-            // the `Notes` TAB #975 retired, which every default layout carried
-            // and which therefore reaches nearly every saved dock — fails the
-            // parse HERE, and what falls out is the dock, the camera
-            // and every view setting reverting at once. A dropped KEY is the
-            // other case entirely and costs nothing: serde skips one it has no
-            // field for, which is how a blob still naming `node_style` or
-            // `spectrogram_color` loads intact. The
-            // version floor cannot catch it: the version is read out of a
+            // a selected tab that no longer exists — fails the parse HERE, and
+            // what falls out is the layout, the camera and every view setting
+            // reverting at once. A dropped KEY is the other case entirely and
+            // costs nothing: serde skips one it has no field for, which is how
+            // a blob still carrying the retired `dock` loads intact, tabs and
+            // all. The version floor cannot catch it: the version is read out of a
             // value that never parsed. An accepted break, but not a silent
             // one — a project opening at defaults with no explanation reads
             // as data loss, and this is the difference between that and a
@@ -544,17 +565,19 @@ impl SharedState {
         self.workspace.interaction.skin_dials = persist.skin_dials;
         self.workspace.interaction.skin_dials.sanitize();
         // A hand-edited NaN is dropped rather than honoured, on the grounds
-        // the spiral framing above is repaired on: it positions drawn
-        // geometry, and NaN geometry is a panic inside egui's tessellator. A
-        // dropped position opens the HUD where an undragged one opens, which
-        // is a place the user can see it and drag it from.
+        // `AppearanceDocument::normalize` repairs the spiral framing on: it
+        // positions drawn geometry, and NaN geometry is a panic inside egui's
+        // tessellator. A dropped position opens the HUD where an undragged one
+        // opens, which is a place the user can see it and drag it from.
         self.workspace.interaction.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
+        self.workspace.interaction.show_perf = persist.show_perf;
+        self.workspace.interaction.show_perf_detail = persist.show_perf_detail;
         true
     }
 
-    /// Reject a saved document loudly. The Console normally ships folded
-    /// because it is a diagnostic rather than a pane watched while playing;
-    /// refusal is the exceptional case where the diagnostic is the only thing
+    /// Reject a saved document loudly. The Console is the last settings tab,
+    /// a diagnostic rather than a page visited while playing, so refusal
+    /// selects it and unfolds the settings: the diagnostic is the only thing
     /// that explains why the editor opened on fresh state.
     fn refuse_persist(&mut self, reason: String) -> bool {
         self.log(format!("persist ignored — {reason}"));
@@ -575,10 +598,9 @@ fn default_ui_scale() -> f32 {
 
 /// The current [`UiPersist`] layout version, and the FLOOR under it. Bumped
 /// when a saved shape changes in a way that still parses but would load
-/// wrong. 1 to 6 below bumped for `Tab` set changes, which stranded a saved
-/// dock with missing or doubled tabs; since #1056 the layout is fixed and
-/// every tab is always placed, so a tab change no longer owes one (#1083
-/// replaced Display without a bump).
+/// wrong. Versions 1 to 6 were bumped for tab set changes, which stranded a
+/// saved dock with missing or doubled tabs; since #1056 the layout is fixed
+/// and every tab is always placed, so a tab change no longer owes one.
 ///
 /// A bump costs the whole blob, not the layout alone: `load_persist` refuses
 /// anything below this outright, so camera, view, spectrum and render settings
@@ -594,48 +616,6 @@ fn default_ui_scale() -> f32 {
 /// which is the worse trade; the refusal is made audible instead. See
 /// [`SharedState::load_persist`], which sets out both halves and which of its
 /// callers each covers.
-///
-/// 2: Tuning and Frame merged into one tab. A version-1 layout has both, and
-/// they now name the same variant — kept as the floor's worked example, since
-/// a dock opening with the merged pane in it twice is what the refusal avoids.
-///
-/// 3: that merge undone, and `Panel` renamed to `System`. Two breaks, and only
-/// one of them would reach this check. The RENAME fails the parse outright —
-/// `Panel` is a variant no build has any more — so a version-2 blob dies in
-/// `load_persist`'s `Err` arm before the version is ever read, which is loud
-/// and is why that arm says what it says. The SPLIT is the one this floor is
-/// for, and it is the quieter of the two: a version-2 dock names only `Tuning`,
-/// which still parses and still draws, so without a bump an old project would
-/// open with the tuning bars intact and the whole camera simply absent, no tab
-/// to reach it by and nothing said. That is the silent break the floor exists
-/// to turn into an audible one.
-///
-/// 4: `View`, `Nodes`, `Scene` and `Analyzer` merged into the Display tab's
-/// collapsible sections (#287 — four tabs is what fits the default window).
-/// The same two-break shape as 3. A version-3 dock still holding any of the
-/// four names a retired variant and dies in the `Err` arm, loudly, before the
-/// version is read. The floor is for the layout that had CLOSED all four: it
-/// parses and draws, and without a bump it would open with no Display tab —
-/// camera, note styling and analyzer knobs all unreachable, nothing said, and
-/// no mechanism to re-add a missing tab but "Reset layout".
-///
-/// 5: the Spiral pane added (#342). The only ADDITION in this list, and it is
-/// the quiet half of 3 and 4 on its own: nothing in a version-4 blob names a
-/// variant this build has dropped, so it parses and draws perfectly — with no
-/// Spiral tab anywhere in it, and no way to add one but "Reset layout". A tab
-/// that exists in the binary and in no project is the same silent break from
-/// the other direction, so it is the same floor that answers it.
-///
-/// 6: the System tab retired into the Display tab's System page. The same
-/// two-break shape as 3 and 4, and the loud half takes nearly every real blob:
-/// a saved dock holding `System` names a variant no build has any more, so it
-/// dies in `load_persist`'s `Err` arm before the version is read. The floor is
-/// for the dock that had already dragged the tab away — it parses and draws,
-/// and what it then carries is a tab list the binary and the project disagree
-/// about, with the Display tab possibly dropped too and the four pages behind
-/// it reachable only by "Reset layout". That is the same silent break 5's
-/// addition is, from the subtraction side, and it is the same floor that
-/// answers it.
 ///
 /// 7: camera, view, spectrum, spiral and render moved into one appearance
 /// document. Previous editor saves are refused whole, with no migration.
@@ -667,6 +647,11 @@ pub(crate) struct UiPersist {
     /// Where the performance overlay was dragged to; a blob without one opens
     /// it where an undragged HUD opens. See [`Interaction::perf_pos`].
     pub(crate) perf_pos: Option<egui::Pos2>,
+    /// See [`Interaction::show_perf`]; a blob without it opens with the
+    /// overlay off.
+    pub(crate) show_perf: bool,
+    /// See [`Interaction::show_perf_detail`].
+    pub(crate) show_perf_detail: bool,
 }
 
 impl Default for UiPersist {
@@ -682,6 +667,8 @@ impl Default for UiPersist {
             ui_scale: default_ui_scale(),
             skin_dials: Default::default(),
             perf_pos: None,
+            show_perf: false,
+            show_perf_detail: false,
         }
     }
 }
@@ -725,6 +712,8 @@ impl Default for Interaction {
             ui_scale: default_ui_scale(),
             skin_dials: Default::default(),
             perf_pos: None,
+            show_perf: false,
+            show_perf_detail: false,
             reset_layout: false,
             dock: workspace::Position::default(),
             open_settings: None,

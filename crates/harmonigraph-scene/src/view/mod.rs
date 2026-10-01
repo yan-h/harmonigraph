@@ -756,28 +756,6 @@ pub struct ViewConfig {
     /// is the same in both modes and a take framed in one is framed in the
     /// other.
     pub frameless: bool,
-    /// Show the performance overlay (a small draggable HUD with frame rate,
-    /// memory and workload counts; per-stage CPU time waits for
-    /// [`Self::show_perf_detail`]). Interactive shells only — the offline
-    /// renderer never draws it, keeping its frames deterministic.
-    ///
-    /// Off by default: the HUD is a development instrument, and it sits over
-    /// the picture the plugin exists to draw. The System tab,
-    /// under Performance, is where it gets switched on.
-    ///
-    /// It was ON in the DAW when the 2026-09-07 look was captured, and stayed
-    /// out of that capture for the reason above — the overlay is what the
-    /// picture is read AGAINST while it is dialled, not part of the picture.
-    /// `the_performance_overlay_ships_off` holds it.
-    ///
-    pub show_perf: bool,
-    /// Expand the overlay from the headline numbers into the full per-stage
-    /// breakdown of where a frame goes.
-    ///
-    /// Off by default: the breakdown exists to answer "which stage is eating
-    /// the frame", and once it has, a dozen rows of scaffolding is not what
-    /// you want sitting over the picture. Inert while `show_perf` is off.
-    pub show_perf_detail: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -1704,8 +1682,6 @@ impl Default for ViewConfig {
             marvel: true,
             marvel_auto: true,
             frameless: false,
-            show_perf: false,
-            show_perf_detail: false,
             render_scale: 1.0,
             // The shared note bloom strength (`note_bloom`),
             // which the Spiral shared until it had its own.

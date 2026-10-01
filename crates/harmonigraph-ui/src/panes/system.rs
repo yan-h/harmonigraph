@@ -81,13 +81,13 @@ pub(super) fn system_pane(
                 (Some(144.0), "144", "For a high-refresh display."),
             ],
         );
-        crate::widgets::checkbox(ui, &mut appearance.view.show_perf, "Performance overlay")
+        crate::widgets::checkbox(ui, &mut interaction.show_perf, "Performance overlay")
             .on_hover_text(
                 "A draggable HUD: frame rate, worst recent frame, memory, and the \
              voice/node workload.",
             );
-        if appearance.view.show_perf {
-            crate::widgets::checkbox(ui, &mut appearance.view.show_perf_detail, "Frame breakdown")
+        if interaction.show_perf {
+            crate::widgets::checkbox(ui, &mut interaction.show_perf_detail, "Frame breakdown")
                 .on_hover_text(
                     "Expands the overlay into every stage of the frame, to see which \
                  one is costing you.",

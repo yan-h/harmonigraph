@@ -99,14 +99,14 @@ impl EditorShared {
             // Silent-but-harmless if no audio reaches that input.
             self.take.start(sample_rate, self.ui.picture.appearance.serialize(), true);
         } else if !self.ui.workspace.interaction.take.recording && recording {
-            self.take.stop(harmonigraph_record::RenderRequest::from_config(
+            self.take.stop(Some(harmonigraph_record::RenderRequest::from_config(
                 &self.ui.picture.appearance.render,
-            ));
+            )));
         }
 
         // "Re-render take": render the last finished take with the CURRENT settings.
-        // The appearance rides along as --appearance, so the frame, bounce, and
-        // offset dialed in after recording all reach the video.
+        // The appearance rides along as --appearance, so the framing and look
+        // dialed in after recording reach the video.
         self.ui.workspace.interaction.take.last_ready = self.take.last_take().is_some();
         if std::mem::take(&mut self.ui.workspace.interaction.take.render_now) {
             self.take.render_now(harmonigraph_record::RenderRequest::render_now(
@@ -177,9 +177,9 @@ impl EditorShared {
         let ended = (ends_at_rewind && self.take.hit_rewind()) || self.take.hit_stop_bar();
         if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;
-            self.take.stop(harmonigraph_record::RenderRequest::from_config(
+            self.take.stop(Some(harmonigraph_record::RenderRequest::from_config(
                 &self.ui.picture.appearance.render,
-            ));
+            )));
         }
 
         // "The take is done" as soon as the transport stops, if asked —
@@ -197,9 +197,9 @@ impl EditorShared {
                 self.take_still_frames += 1;
                 if self.take_still_frames >= Self::STOP_FRAMES {
                     self.ui.workspace.interaction.take.recording = false;
-                    self.take.stop(harmonigraph_record::RenderRequest::from_config(
+                    self.take.stop(Some(harmonigraph_record::RenderRequest::from_config(
                         &self.ui.picture.appearance.render,
-                    ));
+                    )));
                 }
             }
         } else {

@@ -164,10 +164,10 @@ pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 /// [`row_height`].
 pub(crate) const ROW_HEIGHT: f32 = 20.0;
 
-/// Height of a leaf's tab bar, which is also the thickness a folded pane is
-/// squeezed to (see [`crate::workspace`]) and the depth of dock chrome along the
-/// top of the window: tab titles and the collapse arrow at the left of every
-/// bar. Anything drawn OVER the dock keeps clear of it.
+/// Height of a section's tab bar, which is also the thickness a folded section
+/// is squeezed to (see [`crate::workspace`]) and the depth of the chrome along
+/// the top of the window: tab titles and the collapse arrow at the left of
+/// every bar. Anything drawn OVER the sections keeps clear of it.
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`tab_bar_height`].

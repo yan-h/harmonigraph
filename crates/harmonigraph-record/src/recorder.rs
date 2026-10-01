@@ -808,7 +808,7 @@ impl Control {
     }
 
     /// Render the last finished take now, in the background, with `request`
-    /// (which carries the current look, bounce, and offset).
+    /// (which carries the current look and output size).
     pub fn render_now(&self, request: RenderRequest) {
         match self.last_take() {
             Some(path) => spawn_render(

@@ -125,9 +125,7 @@ no offset to work out.
 While the transport is stopped the status line says so.
 - **The look is captured when you arm**, from what is on screen at that
 moment.
-(Unlike the project's saved `ui-state` blob, which only updates when the editor window closes —
-the trap `read-plugin-state.py` documents.
-You can also override it at render time with `--appearance`.)
+(You can override it at render time with `--appearance`.)
 - **The device has to receive both the notes and the selected audio input.**
 The notes drive the lattice, and the WAV recorded from Main or Sidechain drives the spectrum and soundtrack in the automatic render.
 A device on a pure note track records silence unless the wanted audio is routed to its sidechain.
@@ -193,7 +191,7 @@ The flags it could reach are all reachable by running the renderer on the take b
 The Video preview scales spectral shadows with the output frame and follows audio time during a faster-than-realtime bounce,
 so shadow width stays representative of the export.
 So does spectrogram duration under **Scrolling**;
-under **Whole video**, the fresh choice, the export spans the render's own length while the preview keeps the Analyzer's history span.
+under **Fit video**, the fresh choice, the export spans the render's own length while the preview keeps the Analyzer's history span.
 The display can skip ahead between updates during a fast bounce;
 it does not need to draw every video frame to preserve those proportions.
 
@@ -250,7 +248,7 @@ The flags worth knowing (`--help` lists them all):
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
 | `--layout` | `side-by-side` or `stacked`; omitted uses the captured placement and proportion |
-| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Resolution, whose fresh short edge is 1440 |
+| `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Output size, whose fresh short edge is 720 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
@@ -282,7 +280,7 @@ the recording already begins at the start, so there is nothing to trim.
 
 `--size` is a *size*, not a shape.
 Left off, it takes the aspect and short edge the take was framed at —
-fresh 1440, so 16:9 renders 2560x1440 and 9:16 renders 1440x2560. Given a different aspect it does not letterbox or crop:
+fresh 720, so 16:9 renders 1280x720 and 9:16 renders 720x1280. Given a different aspect it does not letterbox or crop:
 the layout recomposes at whatever pixels it is handed, so the split falls elsewhere and the lattice camera exposes a different amount of the board.
 That is a legitimate thing to ask for, so it is allowed, but it renders a different picture from the preview and the renderer says so.
 
@@ -293,7 +291,7 @@ raise it for chunkier text, lower it to fit more lattice in.
 
 The spectrogram and roll scroll past a fixed now-line.
 Under **Scrolling** they span the Analyzer's history;
-under **Whole video**, the fresh choice, that span is the render's own length, capped at 10 minutes.
+under **Fit video**, the fresh choice, that span is the render's own length, capped at 10 minutes.
 
 Rendering is faster than realtime on an M-series Mac (roughly 19 s of 1080p60 in 17 s), so a five-minute piece is a coffee, not an afternoon.
 
@@ -361,7 +359,7 @@ the fonts, the panes and the lattice's paint callback all work the same off a pl
 ## Crates
 
 - `harmonigraph-take` — the take format. Line-oriented RON, appendable,
-flushed per record so an interrupted export still renders everything up to the cut.
+flushed once per batch of records so an interrupted export still renders everything up to its last flushed batch.
 Deliberately tiny:
 it is linked into the plugin.
 - `harmonigraph-record` — the recording end. The audio thread's ring

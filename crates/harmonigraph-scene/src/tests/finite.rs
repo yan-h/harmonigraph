@@ -113,8 +113,6 @@ fn poisoned_view() -> ViewConfig {
         marvel: base.marvel,
         marvel_auto: base.marvel_auto,
         frameless: base.frameless,
-        show_perf: base.show_perf,
-        show_perf_detail: base.show_perf_detail,
         render_scale: nan,
         spiral_bloom: nan,
         glow_reach: nan,
