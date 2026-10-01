@@ -816,6 +816,28 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
             "{style:?}/{label}: carried and fresh panes agree"
         );
     }
+    // Scales bake no tile, so their dials only need to reach the light. Scale
+    // shape 0, or its scallop taper hides much of the corner; Tilt is turned
+    // over the squares, since a round body has no rotation to show.
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere = base.atmosphere;
+    scene.atmosphere.material_style = LatticeMaterial::VelvetScales;
+    scene.atmosphere.material_settings.velvet_shape = 0.0;
+    for (label, turn) in [
+        ("squareness", (|s: &mut MaterialSettings| s.velvet_square = 1.0) as Turn),
+        ("tilt", |s| s.velvet_tilt = 0.0),
+    ] {
+        let before = glow(&mut shooter, &scene);
+        turn(&mut scene.atmosphere.material_settings);
+        shooter.shot_again(&scene);
+        let after = read_glow(&shooter);
+        let changed = before
+            .chunks_exact(4)
+            .zip(after.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+            .count();
+        assert!(changed > 100, "Scales/{label}: fixture must reach the effect ({changed} pixels)");
+    }
     // The inactive style must neither change the picture nor rebake the tile.
     base.atmosphere.material_style = LatticeMaterial::Watercolor;
     let before = glow(&mut shooter, &base);

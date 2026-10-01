@@ -26,18 +26,9 @@ fn watercolor_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec
 // 2.1x and 0.9x octaves on fractional cells and draw a seam.
 //
 // WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
-// what lands a negative cell in the range. A period of 0 returns the cell
-// whole: no production pass asks for it, but it is the unwrapped walk the
-// tests hold the tile against.
-fn wrap_cell_for_tile(cell: vec2<i32>, period: i32) -> vec2<i32> {
-    if period <= 0 {
-        return cell;
-    }
-    return ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
-}
-
+// what lands a negative cell in the range.
 fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
-    return wrap_cell_for_tile(cell, period);
+    return ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
 }
 
 // The ring each octave walks, and the four numbers that decide whether walking
@@ -134,20 +125,15 @@ fn wash_noise(p: vec2<f32>, salt: u32, period: i32) -> f32 {
     let n11 = wash_hash(wrap_cell(i + vec2<i32>(1, 1), period), salt).x;
     return mix(mix(n00, n10, t.x), mix(n01, n11, t.x), t.y);
 }
-// Where this noise's second octave sits, and the one constant the TILE changes.
-//
-// `WASH_FBM_FINE` is an irrational-looking 2.07 exactly so the two octaves never
-// line up, and no tile period makes `2.07 * P` a whole number of the finer
-// lattice's cells — so a tiled walk runs it at exactly 2 instead, which doubles
-// the period with it and tiles for every `P` the coarse lattice already does.
-// A period of 0, the unwrapped walk that no production pass draws since #1100,
-// keeps 2.07 bit for bit.
-const WASH_FBM_FINE: f32 = 2.07;
-const WASH_FBM_FINE_TILED: f32 = 2.0;
+// Where this noise's second octave sits. Exactly 2, because the walk is only
+// ever drawn as a tile: an irrational-looking lacunarity would keep the two
+// octaves from lining up, but no period makes it a whole number of the finer
+// lattice's cells. 2 doubles the period with it and tiles for every `P` the
+// coarse lattice already does.
+const WASH_FBM_FINE: f32 = 2.0;
 fn wash_fbm(p: vec2<f32>, salt: u32, period: i32) -> f32 {
-    let lacunarity = select(WASH_FBM_FINE, WASH_FBM_FINE_TILED, period > 0);
     let coarse = wash_noise(p, salt, period);
-    let fine = wash_noise(p * lacunarity + vec2<f32>(13.1, -7.3), salt + 31u, period * 2);
+    let fine = wash_noise(p * WASH_FBM_FINE + vec2<f32>(13.1, -7.3), salt + 31u, period * 2);
     return (coarse + 0.5 * fine) / 1.5;
 }
 
@@ -424,18 +410,16 @@ fn velvet_warp(p: vec2<f32>, irregularity: f32) -> vec2<f32> {
         0.40 * sin(p.x * 0.53 + sin(p.y * 0.31))) * (irregularity / 0.8);
 }
 struct VelvetBody { center: vec2<f32>, weight: f32 };
-// The body's radius under a superellipse norm: exponent 2 is the circle, and
-// `Squareness` raises it exponentially toward 12, where the scale is a square
-// with barely rounded corners. Divided through by the larger axis first so the
-// powers stay near one.
-fn velvet_square_radius(v: vec2<f32>, square: f32) -> f32 {
+// The body's radius under a superellipse norm of exponent `p`. Divided through
+// by the larger axis, so that axis's term is exactly 1 and the other stays at
+// most 1.
+fn velvet_square_radius(v: vec2<f32>, p: f32) -> f32 {
     let a = abs(v);
     let m = max(max(a.x, a.y), 1e-6);
-    let p = 2.0 * pow(6.0, square);
-    return m * pow(pow(a.x / m, p) + pow(a.y / m, p), 1.0 / p);
+    return m * pow(1.0 + pow(min(a.x, a.y) / m, p), 1.0 / p);
 }
-// `form` is x `Squareness`, y `Tilt`.
-fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>, form: vec2<f32>) -> VelvetBody {
+// `tilt` is the `Tilt` dial; `p` the superellipse exponent `Squareness` makes.
+fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>, tilt: f32, p: f32) -> VelvetBody {
     let a = velvet_hash(cell, 0u);
     let b = velvet_hash(cell, 1u);
     let center = vec2<f32>(cell) + 0.5 + (vec2<f32>(a, b) - 0.5) * dials.y;
@@ -447,7 +431,7 @@ fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>, form: vec2<f32>)
     }
     let c = velvet_hash(cell, 2u);
     let d = velvet_hash(cell, 3u);
-    let angle = (0.2 + (c - 0.5) * 0.85) * form.y;
+    let angle = (0.2 + (c - 0.5) * 0.85) * tilt;
     let ca = cos(angle); let sa = sin(angle);
     let size = 0.875 + 0.9 * dials.w * (d - 0.5);
     let rotated = vec2<f32>(delta.x * ca + delta.y * sa, -delta.x * sa + delta.y * ca) / size;
@@ -455,8 +439,8 @@ fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>, form: vec2<f32>)
     let shaped = vec2<f32>(rx, rotated.y + dials.z * 0.17 * rx * rx);
     // Branched so Squareness 0 pays for no powers and keeps the round scale's own `length`.
     var r = length(shaped);
-    if form.x > 0.0 {
-        r = velvet_square_radius(shaped, form.x);
+    if p > 2.0 {
+        r = velvet_square_radius(shaped, p);
     }
     let support = (1.0 - smoothstep(1.5, 1.9, abs(delta.x))) * (1.0 - smoothstep(1.5, 1.9, abs(delta.y)));
     let body = 1.0 - smoothstep(0.85 - dials.x, 0.85 + dials.x, r);
@@ -474,11 +458,14 @@ fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f3
     let p = pt / cell_size + drift;
     let q = p + velvet_warp(p, dials.y);
     let base = vec2<i32>(floor(q));
+    // `Squareness` (form.x) as an exponent: 2 is the circle, and it rises
+    // exponentially to 12, a square with barely rounded corners.
+    let exponent = 2.0 * pow(6.0, form.x);
     var light = vec4<f32>(0.0);
     var weight = 0.0;
     for (var j = -2; j <= 2; j++) {
         for (var i = -2; i <= 2; i++) {
-            let body = velvet_body(q, base + vec2<i32>(i, j), dials, form);
+            let body = velvet_body(q, base + vec2<i32>(i, j), dials, form.y, exponent);
             if body.weight > 0.0 {
                 let uv = (body.center - drift) * cell_size / size;
                 light += body.weight * velvet_light(source, source_sampler, uv, vec2<f32>(0.14 * cell_size) / size);

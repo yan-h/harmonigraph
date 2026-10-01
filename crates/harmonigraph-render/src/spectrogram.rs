@@ -3523,9 +3523,8 @@ mod tests {
     /// The walk does not run on one lattice. It has a second octave at its own
     /// lacunarity, and reads a shared warp noise whose cells are
     /// `WASH_WARP_SCALE` across, with a second octave of its own.
-    /// `WASH_FBM_FINE`'s 2.07 is the one no period can make whole, which is why
-    /// the tiled path runs that octave at `WASH_FBM_FINE_TILED` — so that
-    /// constant is read here too, and moving it off a whole number fails this.
+    /// `WASH_FBM_FINE` sets that second octave, so it is read here too, and
+    /// moving it off a whole number fails this.
     ///
     /// Read off the shipped shader text rather than a transcription of it, for
     /// the reason the ring proof above gives.
@@ -3534,7 +3533,7 @@ mod tests {
         let number = |name: &str| -> f32 {
             crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
         };
-        let fine = number("WASH_FBM_FINE_TILED");
+        let fine = number("WASH_FBM_FINE");
         let warp = number("WASH_WARP_SCALE");
         let lattices = [
             ("the wash's fine octave", number("WASH_LACUNARITY")),
@@ -3556,7 +3555,7 @@ mod tests {
     /// The production shader's hash fold closes on both axes of every derived
     /// lattice, including on their negative sides.
     ///
-    /// This probes `wrap_cell_for_tile` itself through a compute entry point.
+    /// This probes `wrap_cell` itself through a compute entry point.
     /// Sampling a baked texture cannot prove this: a repeating sampler repeats
     /// even a texture whose own two edges do not meet, hiding the seam this
     /// contract exists to prevent.
@@ -3576,18 +3575,18 @@ struct WrapProbe { cells: array<vec2<i32>, 12> }
 @compute @workgroup_size(1)
 fn cs_wrap_probe() {
     // Base, +x period, +y period for P40 and every derived P40 lattice.
-    wrap_probe.cells[0] = wrap_cell_for_tile(vec2<i32>(-41, 7), 40);
-    wrap_probe.cells[1] = wrap_cell_for_tile(vec2<i32>(-1, 7), 40);
-    wrap_probe.cells[2] = wrap_cell_for_tile(vec2<i32>(-41, 47), 40);
-    wrap_probe.cells[3] = wrap_cell_for_tile(vec2<i32>(-85, 7), 84);
-    wrap_probe.cells[4] = wrap_cell_for_tile(vec2<i32>(-1, 7), 84);
-    wrap_probe.cells[5] = wrap_cell_for_tile(vec2<i32>(-85, 91), 84);
-    wrap_probe.cells[6] = wrap_cell_for_tile(vec2<i32>(-37, 7), 36);
-    wrap_probe.cells[7] = wrap_cell_for_tile(vec2<i32>(-1, 7), 36);
-    wrap_probe.cells[8] = wrap_cell_for_tile(vec2<i32>(-37, 43), 36);
-    wrap_probe.cells[9] = wrap_cell_for_tile(vec2<i32>(-73, 7), 72);
-    wrap_probe.cells[10] = wrap_cell_for_tile(vec2<i32>(-1, 7), 72);
-    wrap_probe.cells[11] = wrap_cell_for_tile(vec2<i32>(-73, 79), 72);
+    wrap_probe.cells[0] = wrap_cell(vec2<i32>(-41, 7), 40);
+    wrap_probe.cells[1] = wrap_cell(vec2<i32>(-1, 7), 40);
+    wrap_probe.cells[2] = wrap_cell(vec2<i32>(-41, 47), 40);
+    wrap_probe.cells[3] = wrap_cell(vec2<i32>(-85, 7), 84);
+    wrap_probe.cells[4] = wrap_cell(vec2<i32>(-1, 7), 84);
+    wrap_probe.cells[5] = wrap_cell(vec2<i32>(-85, 91), 84);
+    wrap_probe.cells[6] = wrap_cell(vec2<i32>(-37, 7), 36);
+    wrap_probe.cells[7] = wrap_cell(vec2<i32>(-1, 7), 36);
+    wrap_probe.cells[8] = wrap_cell(vec2<i32>(-37, 43), 36);
+    wrap_probe.cells[9] = wrap_cell(vec2<i32>(-73, 7), 72);
+    wrap_probe.cells[10] = wrap_cell(vec2<i32>(-1, 7), 72);
+    wrap_probe.cells[11] = wrap_cell(vec2<i32>(-73, 79), 72);
 }
 "#,
         );
