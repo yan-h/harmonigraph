@@ -233,7 +233,7 @@ pub(super) fn stars_test_bed(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::
             ui.push_id(k, |ui| {
                 choice_row(ui, "Gather", &mut depth.gather, &[
                     (StarGather::Off, "Off", "Not drawn or baked."),
-                    (StarGather::Core, "1×1", "A compact core inside its own cell, no glow, one read."),
+                    (StarGather::Core, "1×1", "The whole star from one read, faded out where it would leave its own cell."),
                     (StarGather::Two, "2×2", "The whole star, glow included, from the four surrounding cells."),
                     (StarGather::Three, "3×3", "The core plus a halo image gathered from nine cells."),
                 ]);
@@ -268,7 +268,7 @@ pub(super) fn stars_test_bed(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::
                                 Some(window) => format!(
                                     "How far the glow reaches, in cells. Fits up to {bound:.2} cells at this variation. Past that, the {window} read drops stars and the glow shows seams.",
                                 ),
-                                None => "How far the glow reaches, in cells. 1×1 draws no glow.".to_owned(),
+                                None => format!("1×1 reaches as far as its own cell allows: {bound:.2} cells at this variation."),
                             });
                     });
                     ui.add_enabled_ui(depth.gather == StarGather::Three, |ui| {

@@ -26,8 +26,8 @@ struct StarSlice {
     // The glow's reach in cells: the 2x2 star's, or the 3x3 halo's.
     glow: f32,
     gain: f32,
-    // 0 not drawn, 1 the core alone, 2 the whole star from a 2x2 read, 3 the
-    // core plus a 3x3 halo image.
+    // 0 not drawn, 1 the whole star held inside its own cell, 2 the whole star
+    // from a 2x2 read, 3 the core plus a 3x3 halo image.
     gather: u32,
     pad0: u32,
     pad1: u32,
@@ -233,12 +233,18 @@ fn star_halo_at(pt: vec2<f32>, k: u32) -> vec4<f32> {
 
 // A 2x2 gather sees every center within 1 - width/2 cells, which is where
 // production puts the glow; a test bed glow past it drops the stars outside
-// the four cells. Fade over the final .15 cells.
+// the four cells.
 fn star_far_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
+    return star_whole_texel(s, f, index, s.glow);
+}
+
+// One star's whole response, fringe included, out to `radius` cells and
+// faded over the final .15 of them: the 2x2 star, and the 1x1 star held
+// inside its own cell.
+fn star_whole_texel(s: StarSlice, f: vec2<f32>, index: i32, radius: f32) -> vec4<f32> {
     let t = textureLoad(star_atlas, atlas_texel(index), 0);
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    let radius = s.glow;
     let outer = radius * s.cell;
     if dist >= outer { return vec4<f32>(0.0); }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
@@ -285,9 +291,11 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
         var slice = vec4<f32>(0.0);
         if s.gather == 2u {
             slice = star_far_gather(s, r);
-        } else if s.gather != 0u {
+        } else if s.gather == 1u {
+            slice = star_whole_texel(s, f, index, s.core);
+        } else if s.gather == 3u {
             slice = star_texel(s, f, index, false);
-            if s.gather == 3u { slice += star_halo_at(pt, k); }
+            slice += star_halo_at(pt, k);
         }
         if slice.w > 0.0 {
             let cover = min(slice.w, 1.0);

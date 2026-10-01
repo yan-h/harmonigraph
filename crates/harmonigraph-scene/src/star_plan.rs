@@ -43,7 +43,8 @@ pub const STAR_IMAGE_RESOLUTION_MAX: f32 = 1.0;
 pub enum StarGather {
     /// The depth is not drawn, baked or allocated.
     Off,
-    /// Its own cell only: a compact core that fits inside the cell, no glow.
+    /// Its own cell only: the whole star, fringe included, faded out where it
+    /// would leave the cell, which is [`Self::bound`].
     Core,
     /// The four cells whose centres surround the pixel, drawing the whole
     /// star, glow included, in one pass.
@@ -88,7 +89,8 @@ pub struct StarDepthPlan {
     pub gain: f32,
     /// `Position variation` for this depth alone.
     pub jitter: f32,
-    /// How far the glow reaches, in cells. [`StarGather::Core`] draws none.
+    /// How far the glow reaches, in cells. [`StarGather::Core`] reaches its
+    /// bound instead.
     pub reach: f32,
     /// Which of [`StarPlan::halo_tiers`] a [`StarGather::Three`] halo is
     /// drawn at.

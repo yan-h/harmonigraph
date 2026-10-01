@@ -276,7 +276,7 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
             "slice += textureSampleLevel(star_halos, cloud_sampler, pt / cloud.size, i32(k), 0.0);",
         ));
     }
-    let read = "slice = star_texel(s, f, index, false);\n            if s.gather == 3u { slice += star_halo_at(pt, k); }";
+    let read = "slice = star_texel(s, f, index, false);\n            slice += star_halo_at(pt, k);";
     assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Stars read moved");
     let core = "slice = star_texel(s, f, index, false);";
     let full = r#"
