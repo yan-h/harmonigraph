@@ -18,7 +18,7 @@ pub(crate) const STAR_SLICES: usize = 5;
 ///
 /// The price is the offset's own precision: an f32 near 65536 resolves a 256th
 /// of a cell, which is 0.03 star pixels in the fresh nearest cells and half a
-/// star pixel only in the biggest cell `Star size` and `Star density` allow.
+/// star pixel only in the biggest cell `Star spacing` and `Star density` allow.
 pub(crate) const STAR_HASH_PERIOD: f64 = 65536.0;
 /// The period the life clock is reduced by, in lives: a power of two, so the
 /// shader's mask on the life index wraps with it and a star's life runs
@@ -93,7 +93,7 @@ pub(crate) const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb
 pub(crate) const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
 /// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
 /// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
-/// million; only the finest `Star size` at a high `Star density`, or a
+/// million; only the finest `Star spacing` at a high `Star density`, or a
 /// still wider pane, asks for more (see [`star_layout`]).
 const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
@@ -110,9 +110,9 @@ const STAR_GRID_MARGIN: u32 = 1;
 /// dial that sizes cells reallocates at steps rather than every frame.
 const STAR_ATLAS_STEP: u32 = 64;
 
-/// Each slice's cell as the dials ask for it, in star pixels: `Star size`'s
-/// low end at the far end over the square root of half the density, times the
-/// ratio of its ends raised to `d^Size curve`.
+/// Each slice's cell as the dials ask for it, in star pixels: `Star
+/// spacing`'s low end at the far end over the square root of half the
+/// density, times the ratio of its ends raised to `d^Spacing curve`.
 pub(crate) fn star_cells(settings: harmonigraph_scene::StarSettings) -> [f32; STAR_SLICES] {
     let packing = (settings.star_density / 2.0).sqrt();
     let (small, big) = (settings.star_spacing_min, settings.star_spacing_max);
@@ -178,7 +178,7 @@ impl StarLayout {
 /// The starfield's layout for a pane `aspect` wide per unit of height.
 ///
 /// Where the dials' cells would take more atlas than [`STAR_ATLAS_TEXELS`] —
-/// the finest `Star size` at a high `Star density`, where a far cell is a
+/// the finest `Star spacing` at a high `Star density`, where a far cell is a
 /// fraction of a pixel on any real pane — the finest cells are raised to the
 /// smallest floor that fits, so those slices hold fewer, sparser stars and
 /// every other slice is untouched.

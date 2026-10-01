@@ -21,6 +21,9 @@ pub(crate) fn depth(
     range: RangeInclusive<f32>,
     curve_range: RangeInclusive<f32>,
     kind: Depth,
+    // How many times the stored value a size or spacing is drawn and shown:
+    // the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1.
+    shown: f32,
 ) {
     let (name, curve_name) = match kind {
         Depth::Size => ("Star size", "Size curve"),
@@ -70,11 +73,14 @@ pub(crate) fn depth(
                 // Dragged in octaves, like the plot, so the small end has room
                 // on the track. Written back only on a change: the round trip
                 // is not exact, and the values key star placement.
-                let (mut far, mut near) = (low.log2(), high.log2());
+                // The octaves are of the value as shown, so the bar's own
+                // display can stay a plain function of them.
+                let octaves = |v: f32| (v * shown).log2();
+                let (mut far, mut near) = (octaves(*low), octaves(*high));
                 let response = RangeBar::new(
                     &mut far,
                     &mut near,
-                    range.start().log2()..=range.end().log2(),
+                    octaves(*range.start())..=octaves(*range.end()),
                     name,
                 )
                 .display(|octaves| format!("{:.1} px", octaves.exp2()))
@@ -85,8 +91,8 @@ pub(crate) fn depth(
                     "How far apart the stars are, the farthest at the low end and the nearest at the high end. Every place holds a star, so wider spacing is fewer stars; Star density packs every depth closer."
                 });
                 if response.changed() {
-                    *low = far.exp2();
-                    *high = near.exp2();
+                    *low = far.exp2() / shown;
+                    *high = near.exp2() / shown;
                 }
             } else {
                 RangeBar::new(low, high, range.clone(), name)

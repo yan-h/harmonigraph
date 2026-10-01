@@ -1822,6 +1822,27 @@ mod tests {
         )
     }
 
+    /// One `Star size` value is one core at every depth, whatever the spacing
+    /// does across them, until a depth's cap (a third of its cell) binds.
+    /// 0.5 star pixels is under every fresh cap, the far three's included.
+    #[test]
+    fn one_star_size_is_one_core_at_every_depth() {
+        let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
+        (settings.stars.star_diameter_min, settings.stars.star_diameter_max) = (0.5, 0.5);
+        let fine = slices(settings, 0.0);
+        assert!(fine[0].cell < fine[STAR_SLICES - 1].cell / 4.0, "spacing must vary");
+        for slice in &fine {
+            assert!(slice.sigma < slice.cap, "{} capped at {}", slice.sigma, slice.cap);
+            assert_eq!(slice.sigma, 0.125);
+        }
+        // And the cap is what stops a core past a third of its cell.
+        (settings.stars.star_diameter_min, settings.stars.star_diameter_max) = (32.0, 32.0);
+        for slice in slices(settings, 0.0) {
+            assert!(slice.cap < slice.sigma);
+            assert_eq!(slice.cap, 0.33 * slice.cell);
+        }
+    }
+
     fn shader_number(name: &str) -> f64 {
         crate::shadow::tests::shader_const(crate::spectrogram::SPECTROGRAM_SRC, name)
             .trim_end_matches('u')

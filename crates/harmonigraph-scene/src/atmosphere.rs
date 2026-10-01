@@ -171,9 +171,11 @@ pub const STAR_SPACING_MAX: f32 = 64.0;
 pub const STAR_DIAMETER_MIN: f32 = 0.25;
 /// See [`STAR_DIAMETER_MIN`].
 pub const STAR_DIAMETER_MAX: f32 = 32.0;
-/// The lattice's `Star size` and `Star spacing` ranges and fresh ends over
-/// the spectrogram's. The glow has no fine detail for stars to pick up, so
-/// its stars run bigger.
+/// How many times its stored `Star size` and `Star spacing` the lattice draws
+/// and shows them. The glow has no fine detail for stars to pick up, so its
+/// stars run bigger. Applied where the lattice draws and in its bars, never
+/// stored, so both panes share one [`StarSettings::default`] and a key a blob
+/// lacks takes the right fresh value in either.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
 /// Bounds shared by the two depth curves, [`StarSettings::star_spacing_curve`]
 /// and [`StarSettings::star_diameter_curve`], and their sanitizer.
@@ -468,8 +470,8 @@ pub struct StarSettings {
     /// `d` from 0 (far) to 1 (near) spaces its stars at `min · (max /
     /// min)^(d^curve)`, divided by the square root of half the density. Every
     /// cell holds a star, so how many a depth has follows its spacing alone.
-    /// Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`], times
-    /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
+    /// Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`] (the lattice
+    /// draws it [`LATTICE_STAR_SIZE_SCALE`] times over), never above
     /// [`Self::star_spacing_max`].
     pub star_spacing_min: f32,
     /// The nearest depth's star spacing. See [`Self::star_spacing_min`].
@@ -485,8 +487,8 @@ pub struct StarSettings {
     /// A core never exceeds a third of its depth's spacing (a sigma of a
     /// third of a cell), which keeps the dust pinpoint and every star inside
     /// the cells a pixel reads. Runs over
-    /// [`STAR_DIAMETER_MIN`]..=[`STAR_DIAMETER_MAX`], times
-    /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
+    /// [`STAR_DIAMETER_MIN`]..=[`STAR_DIAMETER_MAX`] (the lattice draws it
+    /// [`LATTICE_STAR_SIZE_SCALE`] times over), never above
     /// [`Self::star_diameter_max`].
     pub star_diameter_min: f32,
     /// The nearest depth's star size. See [`Self::star_diameter_min`].
@@ -564,34 +566,19 @@ impl Default for StarSettings {
     }
 }
 impl StarSettings {
-    /// The lattice's fresh stars: the spectrogram's, sized by
-    /// [`LATTICE_STAR_SIZE_SCALE`].
-    pub fn lattice() -> Self {
-        let fresh = Self::default();
+    /// These settings with every size and spacing `scale` times over: what
+    /// the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
+    pub fn scaled(self, scale: f32) -> Self {
         Self {
-            star_spacing_min: fresh.star_spacing_min * LATTICE_STAR_SIZE_SCALE,
-            star_spacing_max: fresh.star_spacing_max * LATTICE_STAR_SIZE_SCALE,
-            star_diameter_min: fresh.star_diameter_min * LATTICE_STAR_SIZE_SCALE,
-            star_diameter_max: fresh.star_diameter_max * LATTICE_STAR_SIZE_SCALE,
-            ..fresh
+            star_spacing_min: self.star_spacing_min * scale,
+            star_spacing_max: self.star_spacing_max * scale,
+            star_diameter_min: self.star_diameter_min * scale,
+            star_diameter_max: self.star_diameter_max * scale,
+            ..self
         }
     }
-    /// The `Star spacing` bounds for a pane whose sizes run `scale` times the
-    /// spectrogram's.
-    pub fn spacing_range(scale: f32) -> std::ops::RangeInclusive<f32> {
-        STAR_SPACING_MIN * scale..=STAR_SPACING_MAX * scale
-    }
-    /// The `Star size` bounds, likewise.
-    pub fn diameter_range(scale: f32) -> std::ops::RangeInclusive<f32> {
-        STAR_DIAMETER_MIN * scale..=STAR_DIAMETER_MAX * scale
-    }
-    pub fn sanitized(self) -> Self {
-        self.sanitized_at(Self::default(), 1.0)
-    }
-    pub fn lattice_sanitized(self) -> Self {
-        self.sanitized_at(Self::lattice(), LATTICE_STAR_SIZE_SCALE)
-    }
-    fn sanitized_at(mut self, fresh: Self, size_scale: f32) -> Self {
+    pub fn sanitized(mut self) -> Self {
+        let fresh = Self::default();
         let clamp = |value: f32, fallback: f32, low, high| {
             if value.is_finite() {
                 value.clamp(low, high)
@@ -623,13 +610,13 @@ impl StarSettings {
             &mut self.star_spacing_min,
             &mut self.star_spacing_max,
             [fresh.star_spacing_min, fresh.star_spacing_max],
-            Self::spacing_range(size_scale),
+            STAR_SPACING_MIN..=STAR_SPACING_MAX,
         );
         pair(
             &mut self.star_diameter_min,
             &mut self.star_diameter_max,
             [fresh.star_diameter_min, fresh.star_diameter_max],
-            Self::diameter_range(size_scale),
+            STAR_DIAMETER_MIN..=STAR_DIAMETER_MAX,
         );
         self.star_spacing_curve = clamp(
             self.star_spacing_curve,
@@ -870,7 +857,7 @@ impl Default for AtmosphereSettings {
             material_shadow_width: 1.5,
             material_shadow_softness: 2.0,
             material_settings: MaterialSettings::default(),
-            stars: StarSettings::lattice(),
+            stars: StarSettings::default(),
             material_speed: MATERIAL_SPEED_DEFAULT,
             material_direction: MATERIAL_DIRECTION_DEFAULT,
             texture_depth: 0.134_627_85,
@@ -910,7 +897,7 @@ impl AtmosphereSettings {
             SHADOW_PICKUP_SIZE_MAX,
         );
         self.material_settings = self.material_settings.sanitized();
-        self.stars = self.stars.lattice_sanitized();
+        self.stars = self.stars.sanitized();
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.material_direction = if self.material_direction.is_finite() {
