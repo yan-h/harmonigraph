@@ -746,7 +746,7 @@ impl Hub {
         // that identity, so no release will ever address the lifetime it
         // displaces: it leaves policy context here or never.
         //
-        // Forgotten rather than released, and those are NOT the same picture.
+        // Forgotten rather than released, and those are NOT the same context.
         // A real note-off feeds `Memory`, and with nothing else held `fill`
         // scores from that memory, so an off-then-on IS scored with its
         // predecessor's pitch present where a replacement is not.
@@ -756,9 +756,8 @@ impl Hub {
         // moved the chosen spelling. With anything held it is not in the
         // context at all, and when the retrigger keeps its predecessor's
         // spelling `Memory::attack` deletes it again on that same decision.
-        // Where it does show, with nothing else held, is the published reach:
-        // a replacement draws one fewer released node, which is the answer to
-        // want, since nothing ended and released memory owes this no entry.
+        // Forgetting is still the answer to want: nothing ended, so released
+        // memory owes this no entry.
         //
         // Before the score rather than after, because after `fill` the
         // displaced voice would still be there at HELD weight — a second
@@ -1192,8 +1191,10 @@ impl Hub {
     pub fn retuning(&self) -> bool {
         self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
     }
-    /// The configuration owner refused an evaluation. Like every other fault
-    /// here it is a status bit: nothing is silenced and nothing latches.
+    /// The configuration owner refused an evaluation. Here it is a status bit
+    /// that silences nothing and holds until the cut like the Hub's other
+    /// faults. The owner's own fault bit, which refuses every tuning edit,
+    /// holds until a host reset.
     pub fn configuration_exhausted(&mut self) {
         self.status |= session::POLICY;
     }

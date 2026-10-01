@@ -6,10 +6,12 @@ use crate::{LatticePos, Tempered};
 
 pub const MAX_CONTEXT: usize = 256;
 /// Released notes remembered. A storage bound with no control rather than a
-/// musical rule: every entry decays on the half-life, so at one second the
-/// entries past the 24th carry under 2% of the weight even at four notes a
-/// second, while each one more costs every decision a pass over the
-/// candidates on the audio thread.
+/// musical rule: every entry decays on the half-life, so at four notes a
+/// second an entry past the 24th weighs under 0.03% of the newest at the
+/// default half-life and under 2% at one second. Longer half-lives, up to the
+/// control's 20 s, or no decay at all, do drop weight that would still count.
+/// Each entry more costs every decision a pass over the candidates on the
+/// audio thread.
 pub const MAX_MEMORY: usize = 24;
 const OCTAVE: i64 = crate::tuning::OCTAVE_MICROCENTS as i64;
 /// How far a key may sit from the keyboard tuning's rendering of a node and

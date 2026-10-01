@@ -575,12 +575,14 @@ fn learn_the_played_third(retune: bool) {
             key,
             velocity: 0.8,
         }));
-        // A just triad, so the keyboard tuning Learn derives is not 12-TET's.
-        let bend = match key {
-            64 => harmonigraph_core::tuning::FIVE_JUST - 400.0,
-            67 => harmonigraph_core::tuning::THREE_JUST - 700.0,
-            _ => continue,
-        };
+        // A just triad, so the keyboard tuning Learn derives is not 12-TET's,
+        // played 10¢ sharp throughout, so the C offset it learns is not 0.
+        let bend = 10.0
+            + match key {
+                64 => harmonigraph_core::tuning::FIVE_JUST - 400.0,
+                67 => harmonigraph_core::tuning::THREE_JUST - 700.0,
+                _ => 0.0,
+            };
         events.push(Input::Tuning(clap_event_note_expression {
             header: header::<clap_event_note_expression>(CLAP_EVENT_NOTE_EXPRESSION, 0),
             expression_id: CLAP_NOTE_EXPRESSION_TUNING,
@@ -601,6 +603,8 @@ fn learn_the_played_third(retune: bool) {
     assert_eq!(keyboard, harmonigraph_core::tuning::fifth_generated(keyboard[0]));
     let fifth = harmonigraph_core::tuning::microcents(harmonigraph_core::tuning::THREE_JUST);
     assert!((keyboard[0] - fifth).abs() < 1_000);
+    // The C offset is learned either way; it is not part of the target.
+    assert!((learned.raw[0] - 10.0).abs() < 0.001, "C offset {}", learned.raw[0]);
     // Retune on anywhere makes the lattice the target, so Learn leaves it.
     if retune {
         assert!(resolved.modes.tempered.syntonic);

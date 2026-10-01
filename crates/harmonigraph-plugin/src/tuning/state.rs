@@ -126,8 +126,9 @@ impl State {
     /// What learning may read from this source: the pitch the PLAYER supplied,
     /// with the adaptive correction taken back off.
     ///
-    /// Every row is tuned now, the Hub's own included, so publishing what was
-    /// emitted would make Learn a fixed point — it would infer the axes it had
+    /// Any row may be retuned, the Hub's own included once its Retune is on
+    /// (it defaults off), so publishing what was emitted would make Learn a
+    /// fixed point for that row — it would infer the axes it had
     /// already chosen and never move. The old design got away with it only
     /// because the Hub's own track was the one thing it did not retune.
     ///

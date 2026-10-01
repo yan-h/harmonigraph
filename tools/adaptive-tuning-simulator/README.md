@@ -40,7 +40,8 @@ closer than that, the chords before pull each new root back.
 Every weight shares that clock and the score normalizes them, so waiting changes no decision and a chord's simultaneous onsets weigh alike.
 A release does not restart a note's age, so memory is ordered by attack, not by release.
 Released memory keeps the 24 released entries struck most recently, counted separately from held voices, which are never evicted to make room.
-The 24 is a fixed storage bound with no control: even at a one-second half-life, entries beyond it carry under 2% of the weight at four notes a second.
+The 24 is a fixed storage bound with no control: at four notes a second an entry beyond it weighs under 0.03% of the newest at the baseline half-life and under 2% at one second.
+Longer half-lives, or no decay at all, do drop weight that would still count.
 
 The same-note tolerance compares actual absolute onset pitches, including register.
 A repetition refreshes a contribution rather than multiplying its weight; different octaves and diesis-shifted returns remain distinct under the default 0.5-cent tolerance.
@@ -85,6 +86,12 @@ Order dependence is expected, and changing the last note of a phrase can affect 
 The “intentional Pythagorean E” example works through exponential pitch error and a different declared pitch flexibility, not a separate hard match or chord exception.
 There is no automatic retuning and no special-case branch for any musical fixture.
 
+The plugin's selector has one rule this model lacks.
+Since [#854](https://github.com/yan-h/harmonigraph/pull/854) it first restricts the winner to nodes the declared keyboard tuning renders within 5 cents of the pressed key, and lets every local node compete only when none does.
+The model has no keyboard tuning and no such filter.
+The Rust parity test agrees with it only because no fixture makes that filter bind, so parity says nothing about the keyboard rule;
+the Rust policy tests cover it on their own.
+
 The baseline uses pitch flexibility 100 cents, half-life 0.5 seconds and register weight 0.7 per octave.
 The paired precision examples use pitch flexibility 50 cents with the same explicit seeded context and zero initial displacement.
 The flexibility replaces both old scoring controls; it is the displacement where pitch cost equals the maximum possible harmonic benefit, so an entire flexibility-unit move cannot beat staying unsnapped.
@@ -104,24 +111,6 @@ A loop optionally clears released memory and displacement while leaving existing
 Start does not itself reset.
 An explicit reset event releases all voices and clears memory and displacement.
 Pedals and real DAW transport semantics are not implemented here; these choices are documented hypotheses for the reference model.
-
-## Reachability
-
-`Simulator.reachability` distinguishes eligible nodes from nodes that can actually win for some input.
-Its range argument defines the absolute register span being inspected.
-The reported set is the union across that entire range and all seventh layers, not just a single octave.
-The range is limited to ten octaves per calculation; this is an inspection bound, not a limit on accumulated drift.
-It makes no claim about inputs outside the given range.
-
-Each candidate/octave realization has constant harmonic benefit because its register weights use its realized output `q`.
-First solve the interval where its pitch cost is smaller than that benefit.
-The difference between two shifted exponential pitch curves is strictly monotone, so overlapping intervals have at most one crossing, found by bisection.
-Inputs where every node costs more than staying unsnapped leave gaps in the reported ranges.
-Boundary-only winners are also evaluated explicitly using the selector's tie behaviour.
-Calculations use JavaScript floating-point arithmetic.
-
-The result is not a coarse pitch sweep: narrow winning intervals count, and `model.test.mjs` checks selected-node results against direct selection at their input boundaries.
-No context or candidate set is silently truncated to make that work cheaper.
 
 ## Worked examples and program text
 
@@ -156,7 +145,7 @@ Pitch strings may use sharps or flats; event IDs name note lifetimes.
 node --test tools/adaptive-tuning-simulator/model.test.mjs
 ```
 
-The suite checks the eighteen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility, an onset no node is worth snapping to, and analytic reachability against direct selection.
+The suite checks the eighteen musical fixtures with declared profiles, 101 full major-third cycles with over three octaves of unwrapped drift, octave transposition, release-recency replacement, repeated pitches, frozen corrections and player bends, reset settings, axis eligibility, and an onset no node is worth snapping to.
 Changing parameters may produce a different result and the current example reports that difference rather than declaring every run a pass.
 The workspace group in `ci.sh` runs this suite on every pull request.
 
