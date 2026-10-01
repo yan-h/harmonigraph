@@ -778,7 +778,7 @@ impl CallbackTrait for SpectrogramCallback {
                     [start[0], start[1], end[0] - start[0], end[1] - start[1]]
                 });
                 let drawn_pixels = star_coverage.map_or(pixels, |r| [r[2], r[3]]);
-                let tone_size =
+                let reduced =
                     atmosphere::tone_size(drawn_pixels, ppp, settings, sampling.pixel_points)
                         // Keep pane-relative texel addressing; the scissor bounds
                         // work while the intermediate retains the full pane size.
@@ -817,11 +817,24 @@ impl CallbackTrait for SpectrogramCallback {
                         || settings.settings.color_release > 0.0))
                     .then(|| {
                         star_size.unwrap_or_else(|| {
-                            tone_size
+                            reduced
                                 .unwrap_or(pixels)
                                 .map(|n| (n + 2).min(device.limits().max_texture_dimension_2d))
                         })
                     });
+                // Mosaic and Watercolor with a history work their tone out per
+                // history texel in `fs_color_memory` and display the history, so
+                // the reduced size is the history's grid and a tone target would
+                // be drawn into by nothing. Scales draw their tone and then
+                // remember it, and Stars composite their far depths into it.
+                let tone_size = reduced.filter(|_| {
+                    memory_extent.is_none()
+                        || !matches!(
+                            settings.settings.cloud_style,
+                            harmonigraph_scene::CloudStyle::Mosaic
+                                | harmonigraph_scene::CloudStyle::Watercolor
+                        )
+                });
                 let memory_size = memory_extent.map(|extent| {
                     if stars.is_some() {
                         extent
@@ -1000,11 +1013,8 @@ impl CallbackTrait for SpectrogramCallback {
                             star_coverage.expect("Stars coverage"),
                             near_coverage,
                         );
-                    } else if let Some(((tone_view, _), tone_group)) = target
-                        .tone
-                        .as_ref()
-                        .filter(|_| velvet || target.memory_size().is_none())
-                        .zip(target.tone_group.as_ref())
+                    } else if let Some(((tone_view, _), tone_group)) =
+                        target.tone.as_ref().zip(target.tone_group.as_ref())
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
@@ -1347,7 +1357,7 @@ mod tests {
     /// that number where [`cloud_fixture`] set it draws its light field at the
     /// resolution of a pane it no longer has — measuring the wrong picture
     /// without a word about it.
-    fn relay_quad(cb: &mut SpectrogramCallback, slabs: u32) {
+    pub(super) fn relay_quad(cb: &mut SpectrogramCallback, slabs: u32) {
         let pane = pane_of(cb);
         cb.vertices = full_quad_in(slabs, pane);
         if let Some(atmosphere) = cb.atmosphere.as_mut() {
