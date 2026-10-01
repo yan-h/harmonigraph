@@ -302,10 +302,15 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
     return out;
 }
 
-// Each octave stores its lookup offset and an independent signed brightness draw.
+// Each octave stores its lookup offset, an independent signed brightness draw,
+// and how far the pixel lies outside the arc of the glob painted over it: in
+// that glob's radii, clamped to 0..1, and 1 where no later glob is near. The
+// spectrogram's `Edge pooling` dials shape a tide line out of that distance
+// after the bake, so dragging any of them is not a rebake.
 struct Wet {
     offset: vec2<f32>,
     brightness: f32,
+    gap: f32,
 };
 
 // The cell walk chooses the lookup. `Edge feathering` feathers and bleeds that lookup
@@ -341,15 +346,22 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     let brightness = mix(
         mix(centre, under, fa),
         wash_brightness(f.front, salt, period), bl);
-    return Wet(look - r, brightness);
+    // Where the tide line lies: on the OVERLAPPED glob, measured out from the
+    // front glob's arc. `near` is never above 0, since the front is a glob
+    // that does not cover the pixel. Not feathered, as before #1038.
+    //
+    // #909's surface pigment (each glob darkening toward its own rim) is not
+    // here: without that version's paper lift it measured as a near-uniform
+    // dim over 99% of the pane rather than a shape, and Yan dropped it.
+    return Wet(look - r, brightness, clamp(-f.near, 0.0, 1.0));
 }
 
 // The whole of the wash's geometry at a point, in cells: what each octave
 // carries and how much of the pixel the finer one covers.
 //
-// Seven numbers, none of which reads the light, the sound or the clock —
-// which is exactly why `fs_cloud_tile` can bake them into two `Rgba16Float`
-// targets and the per-frame shader can read them back. The bake always walks
+// Nine numbers, none of which reads the light, the sound or the clock —
+// which is exactly why `fs_cloud_tile` can bake them into three tile targets
+// and the per-frame shader can read them back. The bake always walks
 // both octaves, because `Fine layer mix` is a mix over channels the tile already holds
 // and so is deliberately not in the tile's key.
 struct WashField {

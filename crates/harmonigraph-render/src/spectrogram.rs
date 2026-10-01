@@ -973,6 +973,7 @@ impl CallbackTrait for SpectrogramCallback {
                                         color_attachments: &[
                                             attachment(&views[0]),
                                             attachment(&views[1]),
+                                            attachment(&views[2]),
                                         ],
                                         ..Default::default()
                                     });
@@ -3946,6 +3947,59 @@ fn cs_wrap_probe() {
         }
     }
 
+    /// Edge pooling shades one way only: above 0 it darkens glob edges over a
+    /// lit flat field and brightens nothing, below 0 the reverse, and over
+    /// silence it draws nothing at all, so the palette's floor needs no black
+    /// point. Width narrows the band and Softness reshapes it. A grey ramp makes
+    /// "darker" one comparison per pixel.
+    #[test]
+    fn edge_pooling_shades_one_way_and_leaves_silence_alone() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let frame = |fill: u8, pool: f32, width: f32, softness: f32| {
+            let mut cb = wash_fixture();
+            cb.grid.fill(fill);
+            cb.shades.lut = Arc::new((0..=255u8).map(|v| [v, v, v, 255]).collect());
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_refract = 0.0;
+            s.material_settings.wash_fuzz = 0.5;
+            s.material_settings.wash_randomness = 0.0;
+            s.wash_pool = pool;
+            s.wash_pool_width = width;
+            s.wash_pool_softness = softness;
+            s.color_pickup = 0.0;
+            s.color_release = 0.0;
+            fresh_frame(&device, &queue, &cb)
+        };
+        let share = |a: &[u8], b: &[u8], moved: fn(u8, u8) -> bool| {
+            let n = a.len() / 4;
+            a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(a, b)| moved(a[0], b[0])).count()
+                as f32
+                / n as f32
+        };
+        let plain = frame(150, 0.0, 0.55, 0.75);
+        let dark = frame(150, 1.0, 0.55, 0.75);
+        assert_eq!(share(&plain, &dark, |a, b| b > a), 0.0, "darkening lifted a pixel");
+        let darker = share(&plain, &dark, |a, b| a > b + 4);
+        assert!(darker > 0.05, "pooling darkened almost none of a lit pane: {darker}");
+        let light = frame(150, -1.0, 0.55, 0.75);
+        assert_eq!(share(&plain, &light, |a, b| b < a), 0.0, "lightening darkened a pixel");
+        let lighter = share(&plain, &light, |a, b| b > a + 4);
+        assert!(lighter > 0.05, "negative pooling lightened almost none of a lit pane: {lighter}");
+        let narrow = share(&plain, &frame(150, 1.0, 0.2, 0.75), |a, b| a > b + 4);
+        assert!(narrow < 0.7 * darker, "a narrower width reached as much: {narrow} vs {darker}");
+        let hard = share(&plain, &frame(150, 1.0, 0.55, 0.0), |a, b| a > b + 4);
+        assert!(
+            hard > 1.3 * darker,
+            "a hard band darkened no more than the fade: {hard} vs {darker}"
+        );
+        let silence = frame(0, 0.0, 0.55, 0.75);
+        for pool in [4.0, -4.0] {
+            assert_eq!(silence, frame(0, pool, 0.55, 0.75), "pooling {pool} drew over silence");
+        }
+    }
+
     /// Each retained wash control changes the displacement over structured sound.
     #[test]
     fn the_wash_dials_each_reach_the_globs() {
@@ -3978,6 +4032,7 @@ fn cs_wrap_probe() {
             ("Shape warp", |s| s.material_settings.wash_lobe = 0.0),
             ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
+            ("Edge pooling", |s| s.wash_pool = 1.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
@@ -4405,6 +4460,11 @@ fn cs_rotation_probe() {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fine_view),
                 },
+                // The pigment tile, never sampled: the probe's pigment dials are 0.
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&coarse_view),
+                },
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::Sampler(&sampler),
@@ -4520,6 +4580,9 @@ fn cs_rotation_probe() {
             ("Refraction", |s| s.material_settings.wash_refract = 0.2),
             ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
+            ("Edge pooling", |s| s.wash_pool = 1.0),
+            ("Pooling width", |s| s.wash_pool_width = 0.2),
+            ("Pooling softness", |s| s.wash_pool_softness = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),

@@ -98,7 +98,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
     poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
-            cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction
+            cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, wash_pool, wash_pool_width,
+            wash_pool_softness
     );
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
@@ -337,15 +338,15 @@ fn scenarios() -> Vec<Scenario> {
         });
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
-    // section and puts six of its own there, and nothing else on the page moves.
+    // section and puts nine of its own there, and nothing else on the page moves.
     // Its own scenario rather than a flag on the loop above because the base
-    // scenario selects the mosaic, so without this the six are drawn by no case
+    // scenario selects the mosaic, so without this the nine are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::Watercolor,
         enabled: true,
-        visits: 13 + 14 + 5 + 2 + 2 - 3 + 6,
+        visits: 13 + 14 + 5 + 2 + 2 - 3 + 9,
         ..base
     });
     cases.push(Scenario {

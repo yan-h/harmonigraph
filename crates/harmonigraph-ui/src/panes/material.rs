@@ -43,6 +43,33 @@ pub(super) fn watercolor(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene:
         );
 }
 
+/// Watercolor's tide line, which only the spectrogram draws.
+pub(super) fn edge_pooling(
+    ui: &mut egui::Ui,
+    atmosphere: &mut harmonigraph_scene::SpectralAtmosphere,
+) {
+    let pool = harmonigraph_scene::WASH_POOL_MIN..=harmonigraph_scene::WASH_POOL_MAX;
+    ValueBar::new(&mut atmosphere.wash_pool, pool, "Edge pooling")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "Shade a patch along the edge of the patch painted over it, like pigment pooling at a dried edge. Above 0% it darkens; below 0% it lightens instead, like a bloom. Silence stays black either way. Softer edges take less of it. 50% is the strength Watercolor first shipped with, and 400% can pool to black at hard edges.",
+        );
+    let width = harmonigraph_scene::WASH_POOL_WIDTH_MIN..=harmonigraph_scene::WASH_POOL_WIDTH_MAX;
+    ValueBar::new(&mut atmosphere.wash_pool_width, width, "Pooling width")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How far the edge shading reaches out from the edge, as a share of a patch's radius. Low values draw a thin line; high values a broad shadow. Does nothing while Edge pooling is 0%.",
+        );
+    ValueBar::new(&mut atmosphere.wash_pool_softness, 0.0..=1.0, "Pooling softness")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How the edge shading fades. 0% is a nearly even band with a hard outer edge; 100% is strongest at the edge with a long soft tail. 75% is the original crescent. Does nothing while Edge pooling is 0%.",
+        );
+}
+
 pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::MaterialSettings) {
     ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
                         .eased(true)
