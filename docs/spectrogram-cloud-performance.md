@@ -3,7 +3,9 @@
 The historical independent-pass timing columns below retain their original meaning.
 Issue #1203 demonstrated that the old `end/full` bracket can reverse or undercount;
 the corrected probe reports `source/full` from the first real source pass to the composite end.
-Current probe cases explicitly select Mosaic and turn color memory off except in named memory cases (#1182).
+Current probe cases explicitly select Watercolor and turn color memory off except in named memory cases (#1182).
+The Mosaic texture measured throughout below was removed on 2026-10-01;
+its rows and decisions are history.
 These changes do not revise the historical values or the later dependency-ordered Stars split measurements.
 
 Audit of `8b4edf4e` on 2026-09-19, prompted by the Mosaic and Watercolor textures dropping a 4K pane from 144 fps to 60-100 while the plain spectrogram holds 144.
@@ -234,7 +236,7 @@ including recorded appearances used for video export.
 The timing probe can still override sampling for comparisons,
 but never to a period of 0:
 the composite's live-walk arm was retired in #1100 (below),
-and the unwrapped walk survives only as the Mosaic tile test's reference.
+and the Mosaic tile test that kept the unwrapped walk as its reference left with Mosaic.
 The measurements and dial descriptions below record the exploration that led to this choice.
 
 Wrap the cell hash every `P` cells and the field is periodic, so ONE tile of `P` by `P` cells, baked once and read through a repeat sampler, is the whole plane.
@@ -271,7 +273,8 @@ Both styles run a second octave at a lacunarity of 2.1, so the fine octave tiles
 `P = 20` gives 42 and 18.
 A ragged noise at 2.8 was the third constraint until `Ragged` was retired (below).
 The noise's own second octave is at 2.07, which no `P` makes whole, so the tiled path runs it at 2.0 — the one constant the tile changes, and only when the tile is on.
-- **The key** is the style, `P`, the tile's texel size, the Watercolor pane orientation and the dials the walk reads: `Size variation` for Mosaic; `Shape warp` and `Edge feathering` for Watercolor.
+- **The key** is `P`, the tile's texel size, the pane orientation and the dials the walk reads: `Shape warp` and `Edge feathering`.
+It also carried the style and Mosaic's `Size variation` while Mosaic baked a tile of its own.
 NOT the drift, the clock, the light, the palette, the softness, `Refraction`, `Texture mix` or `Fine layer mix` — none of them reaches the baked channels, and the bake always walks the fine octave so `Fine layer mix` is a mix over channels already held.
 The size dials and the pane reach it only through the texel size, which is as fine as the pane draws a cell, rounded up to a multiple of 256 and capped at 2048, so a resize drag does not rebake on every frame.
 The tile is also carried across a rebuild of the light field's targets, which a zoom or a Span drag forces.
@@ -281,7 +284,7 @@ The tile is also carried across a rebuild of the light field's targets, which a 
 Removing `Rock`'s accumulator moved `spectrogram-zoomed-in` by 1/255 on three pixels: the Metal compiler scheduling the dome ring differently, isolated by putting a dead accumulator back, which restores the frame.
 - **Inside the first period the tile IS the live field**, since a wrapped hash equals the unwrapped one for cells in `[0, P)`.
 That is what makes "tiled matches walked" testable, up to bilinear resampling, half-float storage and the 2.07 to 2.0 change.
-`a_tiled_cloud_draws_the_live_walk_inside_its_first_period` held it (since #1021 `the_mosaic_tile_keeps_the_live_walk_inside_its_first_period` does, for the square Mosaic tile only): mean difference 0.02/255 for the mosaic and 0.37/255 for the wash, worst channel 1 and 21 — the 21 is where the wash's stored offset steps because the glob UNDER the visible one changes, a discontinuity the live walk has too and one texel of bilinear smooths.
+`a_tiled_cloud_draws_the_live_walk_inside_its_first_period` held it (from #1021 until Mosaic's removal, `the_mosaic_tile_keeps_the_live_walk_inside_its_first_period` did, for the square Mosaic tile only): mean difference 0.02/255 for the mosaic and 0.37/255 for the wash, worst channel 1 and 21 — the 21 is where the wash's stored offset steps because the glob UNDER the visible one changes, a discontinuity the live walk has too and one texel of bilinear smooths.
 
 What it spends of "similar": up to half a texel of bilinear softening that varies with the drift's phase; half-float offsets, under a tenth of a pixel of lookup error; and visible REPETITION, which is the open question.
 At the fresh sizes a 4K pane is about 52 by 93 wash cells and 27 by 48 mosaic cells, so `P = 20` repeats the glob outlines 2.6 by 4.6 times (wash) and 1.4 by 2.4 times (mosaic), each repeat refracting different sound.
@@ -352,9 +355,9 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 ### Open questions for whoever continues
 
 1. Yan selected `P = 40`; revisit only if its repetition becomes visible over real music.
-2. Does the drift-phase softening shimmer at `Fuzz` 0 and on Mosaic's creases? If it does, bake at 1.5x texel density before reaching for anything cleverer.
+2. Does the drift-phase softening shimmer at `Fuzz` 0? If it does, bake at 1.5x texel density before reaching for anything cleverer.
 3. Resolved: fixed 40-cell tiles, with updated golden frames. The shader and pipeline layouts are unchanged; strict catalog validation checks the existing Metal corpus.
-4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk left the composite in #1100; the Mosaic tile test builds its reference by swapping the unwrapped walk back into a test-only copy of the shader.
+4. Resolved: `Cloud pixel size` is fixed at 0.5 pt and its control is retired. The live walk left the composite in #1100; no test holds the tile against an unwrapped walk since the Mosaic tile test left with Mosaic.
 5. ~~`Ragged`~~ RETIRED in the PR stacked on #991. It shipped at 1.0 and its wobble was one-sided, so the radius band was scaled by 1.15 (`WASH_RADIUS_MIN` 1.02 → 1.17, `WASH_RADIUS_MAX` 1.66 → 1.91) to keep the default globs their size. The reach bound stopped carrying `(1 + RAGGED)` and `RADIUS_MAX` now sits 1.91 against a bound of 2.217, so a band WIDER than 1.63:1 is available and deliberately untaken — a look change for Yan's eye (#992).
 6. The scrolling window above, only if 1 fails.
 

@@ -240,7 +240,7 @@ mod tests {
         view.center_sevens = 0;
         view.glow_reach = 0.1;
         view.glow_strength = 1.0;
-        view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Mosaic;
+        view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
         view.atmosphere.material_amount = 1.0;
         view.atmosphere.material_color_pickup = 1.0;
         view.atmosphere.material_shadow_width = 8.0;

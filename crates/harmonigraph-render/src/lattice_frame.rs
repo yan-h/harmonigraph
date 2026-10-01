@@ -38,27 +38,17 @@ impl LatticeCallback {
         // Reduce the decorative clock in f64 before uploading bounded phases.
         let texture_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
-        let watercolor =
-            atmosphere.material_style == harmonigraph_scene::LatticeMaterial::Watercolor;
         let velvet = atmosphere.material_style == harmonigraph_scene::LatticeMaterial::VelvetScales;
         let material_scale = if velvet {
             atmosphere.material_settings.velvet_size
-        } else if watercolor {
+        } else {
             atmosphere.material_settings.wash_size
-        } else {
-            atmosphere.material_settings.scale_size
         };
-        let cells = if velvet {
-            405.0 / 240.0
-        } else if watercolor {
-            5.25
-        } else {
-            6.0 / 2.2
-        };
+        let cells = if velvet { 405.0 / 240.0 } else { 5.25 };
         // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling
         // its 40-cell tile. A screen-axis wrap must span five tile periods
         // so that the rotated jump is still a whole-number tile repeat.
-        let drift_period = if watercolor { 200.0 } else { 40.0 };
+        let drift_period = 200.0;
         let offsets = harmonigraph_scene::MaterialSettings::drift(
             atmosphere.material_speed,
             atmosphere.material_direction,
@@ -536,14 +526,7 @@ impl LatticeCallback {
                     style: atmosphere.material_style as u32,
                     fuzz: atmosphere.material_settings.wash_fuzz,
                     lobe: atmosphere.material_settings.wash_lobe,
-                    variety: atmosphere.material_settings.scale_variety,
-                    refract: if atmosphere.material_style
-                        == harmonigraph_scene::LatticeMaterial::Watercolor
-                    {
-                        atmosphere.material_settings.wash_refract
-                    } else {
-                        atmosphere.material_settings.scale_refract
-                    },
+                    refract: atmosphere.material_settings.wash_refract,
                     layers: atmosphere.material_settings.wash_layers,
                     randomness: atmosphere.material_settings.wash_randomness,
                     velvet: Float4([
@@ -552,7 +535,10 @@ impl LatticeCallback {
                         atmosphere.material_settings.velvet_shape,
                         atmosphere.material_settings.velvet_variety,
                     ]),
-                    padding: 0.0,
+                    velvet_form: Float2([
+                        atmosphere.material_settings.velvet_square,
+                        atmosphere.material_settings.velvet_tilt,
+                    ]),
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },

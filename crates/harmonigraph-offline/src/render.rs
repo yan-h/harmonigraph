@@ -826,8 +826,8 @@ mod tests {
     ///
     /// Both halves are non-vacuous, and either could be silently absent. The
     /// wash has to be REACHED — the texture sits behind an enum whose fresh
-    /// value is the other one, so the frame is held against the same take drawn
-    /// with the scales — and the clock has to MOVE something, or this is the
+    /// value is another one, so the frame is held against the same take drawn
+    /// with `Texture mix` at 0 — and the clock has to MOVE something, or this is the
     /// test above with one more uniform in it. The second is held against the
     /// same run with the drift speed alone at 0 and NOT against another frame of
     /// the run itself: over a fixture with light in it the spectrogram scrolls,
@@ -855,11 +855,15 @@ mod tests {
     }
 
     fn drifting_texture_renders_twice_to_the_same_bytes(style: harmonigraph_scene::CloudStyle) {
-        let clouded = |wash: bool, speed: f32| {
+        let clouded = |textured: bool, speed: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
-            // Against the Mosaic's scales, whatever the fresh style is.
-            a.cloud_style = if wash { style } else { harmonigraph_scene::CloudStyle::Mosaic };
+            // Against the same picture with the texture mixed out, whatever the
+            // fresh style is.
+            a.cloud_style = style;
+            if !textured {
+                a.cloud_depth = 0.0;
+            }
             // A blur wide on both axes and spread into the dark, so the pane
             // is mostly lit (see the assert below); the fresh sharp field
             // leaves half of it on black.
@@ -907,13 +911,13 @@ mod tests {
         };
         let Some(first) = run(&clouded(true, 8.0)) else { return };
         assert!(first == run(&clouded(true, 8.0)).expect("a second GPU run"), "{style:?} differs");
-        let scales = run(&clouded(false, 8.0)).expect("a third GPU run");
+        let bare = run(&clouded(false, 8.0)).expect("a third GPU run");
         let still = run(&clouded(true, 0.0)).expect("a fourth GPU run");
         let mid = first.len() / 2;
         // The pane has light in it, which is the assumption under BOTH asserts
         // below and the one that quietly stopped holding: a silent pane sits on
-        // the palette's floor for either texture, so a dark fixture makes them
-        // agree and makes a stirred frame identical to a still one. The old
+        // the palette's floor with or without the texture, so a dark fixture
+        // makes them agree and makes a stirred frame identical to a still one. The old
         // fixture was one sample of ±1 read a second past the end of its own
         // buffer — 97% digital silence, which both asserts passed over only
         // because the wash then painted it with a lift nothing held back.
@@ -924,7 +928,7 @@ mod tests {
             "the fixture draws a mostly black pane, so neither assert below is about \
              {style:?}: {lit} of {pane} pixels lit",
         );
-        assert!(first[mid] != scales[mid], "{style:?} drew the scales' frame {mid}");
+        assert!(first[mid] != bare[mid], "{style:?} drew the untextured frame {mid}");
         assert!(first[mid] != still[mid], "{style:?}'s clock moved nothing in frame {mid}");
     }
 

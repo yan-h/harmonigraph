@@ -1,6 +1,5 @@
 //! Shared material controls; each pane supplies its own saved settings.
 use crate::widgets::ValueBar;
-use harmonigraph_scene::{SCALE_REFRACT_MAX, SCALE_REFRACT_MIN};
 use std::ops::RangeInclusive;
 
 fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
@@ -69,32 +68,6 @@ pub(super) fn edge_pooling(
         .on_hover_text(
             "How the edge shading fades. 0% is a nearly even band with a hard outer edge; 100% is strongest at the edge with a long soft tail. 75% is the original crescent. Does nothing while Edge pooling is 0%.",
         );
-}
-
-pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::MaterialSettings) {
-    ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
-                        .eased(true)
-                        .unit(1.0, "\u{d7}")
-                        .show(ui)
-                        .on_hover_text(
-                            "Size of each mosaic cell relative to the pane. 1× is the reference size; larger values make broader cells. Refraction is a fraction of each cell's width, so larger cells also displace the picture farther.",
-                        );
-    ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Size variation")
-                        .percent()
-                        .show(ui)
-                        .on_hover_text(
-                            "Variation in mosaic cell size. 0% makes an even grid; 100% mixes small and large cells, with the largest about four times the smallest. The cells continue to cover the whole picture.",
-                        );
-    ValueBar::new(
-                        &mut atmosphere.scale_refract,
-                        SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
-                        "Refraction",
-                    )
-                    .unit(100.0, "%")
-                    .show(ui)
-                    .on_hover_text(
-                        "Displacement of the picture within each mosaic cell, as a percentage of cell width. Positive values bend bands outward; negative values pull toward the center. -100% gives each cell one level; 0% leaves the picture unchanged.",
-                    );
 }
 
 /// The starfield: pinpoints in depth drifting with parallax, and the one texture
@@ -493,4 +466,11 @@ pub(super) fn velvet(ui: &mut egui::Ui, s: &mut harmonigraph_scene::MaterialSett
         .percent()
         .show(ui)
         .on_hover_text("Round bodies at 0%; tapered overlapping scallops at 100%.");
+    ValueBar::new(&mut s.velvet_square, 0.0..=1.0, "Squareness")
+        .percent()
+        .show(ui)
+        .on_hover_text("Round scales at 0%; squares at 100%. For a tiled grid, also set Tilt, Irregularity and Scale shape to 0%.");
+    ValueBar::new(&mut s.velvet_tilt, 0.0..=1.0, "Tilt").percent().show(ui).on_hover_text(
+        "How far each scale turns off the pane's axes. 0% lines every scale up with the grid.",
+    );
 }

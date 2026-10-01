@@ -2711,7 +2711,7 @@ mod tests {
             |c: &mut SpectrumConfig| c.atmosphere.contours = 12.0,
             |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
             |c: &mut SpectrumConfig| c.atmosphere.cloud_depth = 0.9,
-            |c: &mut SpectrumConfig| c.atmosphere.material_settings.scale_refract = -0.8,
+            |c: &mut SpectrumConfig| c.atmosphere.material_settings.wash_refract = 0.8,
         ] {
             let mut moved = cfg;
             edit(&mut moved);

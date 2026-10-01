@@ -43,7 +43,6 @@ No case meets the issue's requirement of at most .95 in every run.
 Keep the shared shader and avoid additional style pipelines.
 Memory dials do not allocate memory when cloud depth is zero;
 those controls retain that production behavior.
-The dependent single-target Mosaic tile variant remains deferred too.
 
 ## Retain F32 color history
 

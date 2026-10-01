@@ -79,11 +79,11 @@ struct MaterialParams {
     style: u32,
     fuzz: f32,
     lobe: f32,
-    variety: f32,
     refract: f32,
     layers: f32,
     randomness: f32,
-    padding: f32,
+    // Scales' `Squareness` and `Tilt`; only the material pass reads them.
+    velvet_form: vec2<f32>,
     velvet: vec4<f32>,
 };
 

@@ -8,9 +8,11 @@ struct Settings {
     refract: f32,
     layers: f32,
     randomness: f32,
+    // Scales' `Squareness` and `Tilt`.
+    velvet_form: vec2<f32>,
     velvet: vec4<f32>,
 };
-struct Geometry { fuzz: f32, lobe: f32, variety: f32, padding: f32 };
+struct Geometry { fuzz: f32, lobe: f32, padding: vec2<f32> };
 @group(0) @binding(3) var<uniform> geometry: Geometry;
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -56,28 +58,10 @@ fn fs_material(in: Vertex) -> @location(0) vec4<f32> {
     return mix(raw, varied, settings.depth);
 }
 
-// Same soft-union geometry and flat-centre reading as spectrogram Mosaic.
-// Its one RGBA tile carries both face and centre offsets; no second tile is needed.
-@fragment
-fn fs_mosaic_tile(in: Vertex) -> @location(0) vec4<f32> {
-    let pile = mosaic_field(in.uv * PERIOD, i32(PERIOD), geometry.variety);
-    return vec4<f32>(pile.face, pile.to_centre);
-}
-@fragment
-fn fs_mosaic(in: Vertex) -> @location(0) vec4<f32> {
-    let p = (in.uv * settings.size - settings.size * 0.5) / settings.cell;
-    let uv = (p + settings.drift) / PERIOD;
-    let tile = textureSampleLevel(tile_a, tile_sampler, uv, 0.0);
-    let offset = (-tile.xy * max(settings.refract, 0.0) + tile.zw * max(-settings.refract, 0.0)) * settings.cell / settings.size;
-    let raw = textureSampleLevel(source, source_sampler, in.uv, 0.0);
-    let facet = textureSampleLevel(source, source_sampler, in.uv + offset, 0.0);
-    return mix(raw, facet, settings.depth);
-}
-
 @fragment
 fn fs_velvet(in: Vertex) -> @location(0) vec4<f32> {
     let body = velvet_material(source, source_sampler, in.uv * settings.size,
-        settings.size, settings.cell, settings.drift, settings.velvet);
+        settings.size, settings.cell, settings.drift, settings.velvet, settings.velvet_form);
     let raw = textureSampleLevel(source, source_sampler, in.uv, 0.0);
     return mix(raw, body, settings.depth);
 }
