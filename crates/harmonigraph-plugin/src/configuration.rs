@@ -414,8 +414,13 @@ impl Owner {
 
     /// `retuning`: some source has Retune on, so the lattice is the target
     /// and Learn moves only the C offset there, besides the keyboard tuning.
+    ///
+    /// Status bit 1 reports this evaluation alone rather than latching. The
+    /// held state is rebuilt every callback, so the bit clears as soon as a
+    /// departure or a Reset's cut makes it complete again.
     pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
-        if self.snapshot.status != 0
+        self.snapshot.status &= !1;
+        if self.snapshot.status & 2 != 0
             || self.maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
         {
             return None;
