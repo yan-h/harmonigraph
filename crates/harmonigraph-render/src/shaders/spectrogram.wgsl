@@ -311,8 +311,8 @@ struct Cloud {
     star_pad2: u32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
-    // Unused, unused, the core's fade-start fraction and far fill, computed once per
-    // frame by star_geometry in stars.rs. Each slice carries its own width and core.
+    // Overlap light, unused, the core's fade-start fraction and far fill, computed
+    // once per frame by star_geometry in stars.rs. Each slice carries its own width and core.
     star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).

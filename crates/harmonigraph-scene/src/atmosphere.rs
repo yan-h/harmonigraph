@@ -576,7 +576,8 @@ pub struct StarSettings {
     /// where their summed coverage tops one. Below that their light already
     /// adds; past it 0 averages their colours, so a crowd is no brighter than
     /// its mean star, and 1 adds the rest of their light too, eased into each
-    /// channel's headroom so it never passes full brightness. Runs over 0..=1.
+    /// channel's headroom so it never passes full brightness: a crowd grows
+    /// brighter and paler as its channels fill. Runs over 0..=1.
     pub star_overlap_light: f32,
     /// Halo image width and height relative to the pane's device pixels.
     /// Lower values soften the halo sampling without moving stars or changing

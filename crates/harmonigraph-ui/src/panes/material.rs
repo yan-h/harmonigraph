@@ -171,7 +171,7 @@ pub(super) fn stars(
         .percent()
         .show(ui)
         .on_hover_text(
-            "How overlapping stars at the same depth combine where together they cover the background completely. 0% averages their colors, so a cluster is no brighter than its average star; 100% adds their light, brightening toward full intensity. Stars that do not fully cover the background already add their light either way.",
+            "How overlapping stars at the same depth combine where together they cover the background completely. 0% averages their colors, so a cluster is no brighter than its average star; 100% adds their light, so a cluster grows brighter and paler as its colors fill. Stars that do not fully cover the background already add their light either way.",
         );
     ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
         .percent()

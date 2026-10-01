@@ -465,7 +465,8 @@ struct Uniforms {
     star_far: Float4,
     /// Exact reduced foreground dimensions; zero means native foreground.
     star_near: Float4,
-    /// The core's fade-start fraction and far fill; see [`star_geometry`].
+    /// Overlap light, the core's fade-start fraction and far fill; see
+    /// [`star_geometry`].
     star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
