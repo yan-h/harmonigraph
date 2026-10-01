@@ -246,11 +246,12 @@ const LOOK_MAX: f32 = 1.0;
 ///
 /// Persisted, like the lattice's [`Camera`](harmonigraph_scene::Camera): a
 /// framing is dialled in by hand, so a disc dialled in on its inner turns
-/// comes back framed that way when the editor reopens. The Spiral is never
-/// exported (#974), so the editor's own framing is the only reason. What that
-/// costs is that a framing left somewhere odd is still there next session —
-/// the same trade the camera already makes, and the double-click is the way
-/// out of it.
+/// comes back framed that way when the editor reopens. Unlike the camera it is
+/// editor state ([`Interaction::spiral`](crate::Interaction::spiral)) rather
+/// than appearance: the Spiral is never exported (#974), so no take carries
+/// it. What persisting costs is that a framing left somewhere odd is still
+/// there next session — the same trade the camera already makes, and the
+/// double-click is the way out of it.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpiralView {
@@ -518,16 +519,21 @@ impl Spiral {
 /// the frame the hand moved in rather than the one after it.
 ///
 /// The docked tab is the only copy of this pane: the Spiral is an editor tab,
-/// never exported or previewed for video (#974). Were a second copy ever
-/// drawn inside a scrolling settings tab, this would want the Analyzer's own
-/// `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel spent zooming
-/// inside a scrolling settings tab is a wheel that tab cannot be scrolled with.
-///
-/// `surface` is which live copy this is, and the two things the pane holds
-/// between frames are keyed on it: the halo's bloom chain and the rim names'
-/// instance buffer. Only the docked copy draws today, so the keying has one
-/// key in use.
-pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64, surface: usize) {
+/// never exported or previewed for video (#974). So what it holds between
+/// frames is one of each: the halo's bloom chain and the dots' shadow buffers
+/// are single instances in their renderers, and the rim names' instance buffer
+/// and their shadow target take the docked surface's ids. Were a second copy
+/// ever drawn, each of those would need a key per copy again, and inside a
+/// scrolling settings tab it would want the
+/// Analyzer's own `DOCKED_SURFACE` gate for the Analyzer's reason — a wheel
+/// spent zooming inside a scrolling settings tab is a wheel that tab cannot be
+/// scrolled with.
+pub(crate) fn spiral_pane(
+    ui: &mut egui::Ui,
+    state: &mut PictureState,
+    view: &mut SpiralView,
+    now: f64,
+) {
     let cfg = state.appearance.spectrum;
     let (rect, response) =
         ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -538,8 +544,8 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
     painter.rect_filled(rect, 0.0, crate::theme::picture());
 
     let fit = Spiral::new(rect, &cfg);
-    navigate(ui, &response, &fit, &mut state.appearance.spiral);
-    let spiral = fit.framed(&state.appearance.spiral);
+    navigate(ui, &response, &fit, view);
+    let spiral = fit.framed(view);
     painter.add(egui::Shape::mesh(strip(&spiral, state, &cfg, now)));
     seam(&painter, &spiral);
     rays(&painter, &spiral);
@@ -551,22 +557,15 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         .shadow
         .spectral_geometry
         .clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-    // Unconditionally, for the halo's reason below and by the same mechanism:
-    // the callback declines a frame with nothing to shadow itself, without
-    // building its pipelines, and it is the only thing that can — its sweep
-    // retires this pane's buffers on the clock of these calls, so a gate here
-    // aged them out after two silent seconds and rebuilt them inside the frame
-    // the next note arrived in.
+    // Unconditionally, as the halo below is: the callback declines a frame
+    // with nothing to shadow itself, without building its pipelines.
     painter.add(harmonigraph_render::dot_shadow_paint_callback(
         rect,
         marks.clone(),
         dot_shadow,
         state.surfaces.target_format,
-        harmonigraph_render::PaneIds {
-            pane: crate::panes::lattice::pane_id(surface),
-            pass_nr: painter.ctx().cumulative_pass_nr(),
-        },
-        crate::text::spiral_shadow_surface(surface),
+        painter.ctx().cumulative_pass_nr(),
+        crate::text::SPIRAL_SHADOW_SURFACE,
     ));
     for mark in &marks {
         painter.circle_filled(
@@ -584,19 +583,14 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
     //
     // Unconditionally, including on the frames with no strength and nothing
     // sounding. The callback declines those itself without allocating, and it
-    // is the only thing that can: its sweep retires a chain on the clock of
-    // these calls, so a gate here aged the disc's own chain out after two
-    // silent seconds and rebuilt it inside the frame the next note arrived in.
+    // is the one place that can also tell a rect too thin to have a device
+    // pixel.
     let bloom = harmonigraph_render::bloom_strength(state.appearance.view.spiral_bloom);
     painter.add(harmonigraph_render::glow_paint_callback(
         rect,
         marks,
         bloom,
         state.surfaces.target_format,
-        harmonigraph_render::PaneIds {
-            pane: crate::panes::lattice::pane_id(surface),
-            pass_nr: painter.ctx().cumulative_pass_nr(),
-        },
     ));
     // The names last, and outside the disc, so nothing in the picture is over
     // them and they are over nothing in it — the halo above included, which is
@@ -607,7 +601,7 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         &painter,
         rect,
         state,
-        crate::text::spiral_names(surface),
+        crate::text::SPIRAL_NAMES,
         // Nothing here scrolls: a name sits on its note's ray for as long as
         // the note sounds, so the filter has no travel to follow and takes the
         // axis every still surface takes. A pan is travel, but it is a
@@ -616,11 +610,11 @@ pub(crate) fn spiral_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64,
         // lattice's orbiting camera is the same answer.
         harmonigraph_render::SlideAxis::Across,
         Some(state.appearance.view.shadow.spectral_text),
-        Some(crate::text::spiral_shadow_surface(surface)),
+        Some(crate::text::SPIRAL_SHADOW_SURFACE),
     );
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
         rect,
-        crate::text::spiral_shadow_surface(surface),
+        crate::text::SPIRAL_SHADOW_SURFACE,
         painter.ctx().cumulative_pass_nr(),
     ));
 }
@@ -1035,8 +1029,13 @@ mod tests {
 
     /// One frame of the whole pane on a context of `frames`' own, with events
     /// delivered — what every gesture fixture below is built from.
-    fn frame(ctx: &egui::Context, state: &mut PictureState, events: Vec<egui::Event>) {
-        let _ = events_into(ctx, SCREEN, PANE, events, |ui| spiral_pane(ui, state, 100.0, 0));
+    fn frame(
+        ctx: &egui::Context,
+        state: &mut PictureState,
+        view: &mut SpiralView,
+        events: Vec<egui::Event>,
+    ) {
+        let _ = events_into(ctx, SCREEN, PANE, events, |ui| spiral_pane(ui, state, view, 100.0));
     }
 
     /// The framing a drag from `from` by `delta` leaves behind, driven through
@@ -1047,14 +1046,18 @@ mod tests {
     /// needs a frame before it, and a drag registers only once the pointer has
     /// moved while held.
     fn dragged(start: SpiralView, from: egui::Pos2, delta: egui::Vec2) -> SpiralView {
-        let mut state = fresh();
-        state.appearance.spiral = start;
+        let (mut state, mut view) = (fresh(), start);
         let ctx = themed();
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from + delta)]);
-        frame(&ctx, &mut state, vec![press(from + delta, false)]);
-        state.appearance.spiral
+        frame(&ctx, &mut state, &mut view, vec![egui::Event::PointerMoved(from)]);
+        frame(
+            &ctx,
+            &mut state,
+            &mut view,
+            vec![egui::Event::PointerMoved(from), press(from, true)],
+        );
+        frame(&ctx, &mut state, &mut view, vec![egui::Event::PointerMoved(from + delta)]);
+        frame(&ctx, &mut state, &mut view, vec![press(from + delta, false)]);
+        view
     }
 
     /// The framing `points` of wheel with the pointer at `at` leaves behind.
@@ -1063,14 +1066,14 @@ mod tests {
     /// spread over the frames after it, so a fixture asks where the picture has
     /// got to rather than what one frame did.
     fn scrolled(start: SpiralView, at: egui::Pos2, points: f32) -> SpiralView {
-        let mut state = fresh();
-        state.appearance.spiral = start;
+        let (mut state, mut view) = (fresh(), start);
         let ctx = themed();
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(at)]);
+        frame(&ctx, &mut state, &mut view, vec![egui::Event::PointerMoved(at)]);
         for _ in 0..6 {
             frame(
                 &ctx,
                 &mut state,
+                &mut view,
                 vec![egui::Event::MouseWheel {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, points),
@@ -1079,7 +1082,7 @@ mod tests {
                 }],
             );
         }
-        state.appearance.spiral
+        view
     }
 
     /// The framing ONE frame carrying both a drag and a pinch leaves behind: the
@@ -1096,21 +1099,26 @@ mod tests {
         delta: egui::Vec2,
         pinch: f32,
     ) -> SpiralView {
-        let mut state = fresh();
-        state.appearance.spiral = start;
+        let (mut state, mut view) = (fresh(), start);
         let ctx = themed();
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
+        frame(&ctx, &mut state, &mut view, vec![egui::Event::PointerMoved(from)]);
         frame(
             &ctx,
             &mut state,
+            &mut view,
+            vec![egui::Event::PointerMoved(from), press(from, true)],
+        );
+        frame(
+            &ctx,
+            &mut state,
+            &mut view,
             vec![egui::Event::PointerMoved(from + delta), egui::Event::Zoom(pinch)],
         );
-        state.appearance.spiral
+        view
     }
 
-    fn painted(state: &mut PictureState, now: f64) -> Vec<egui::Shape> {
-        painted_into(SCREEN, PANE, |ui| spiral_pane(ui, state, now, 0))
+    fn painted(state: &mut PictureState, mut framing: SpiralView, now: f64) -> Vec<egui::Shape> {
+        painted_into(SCREEN, PANE, |ui| spiral_pane(ui, state, &mut framing, now))
             .shapes
             .into_iter()
             .map(|s| s.shape)
@@ -1251,7 +1259,7 @@ mod tests {
         state.runtime.spectrum.push_samples(&samples, 1, sr, 1.0, &cfg);
         let tone_midi = 69.0 + 12.0 * (1_000.0f32 / 440.0).log2();
 
-        let meshes: Vec<egui::Mesh> = painted(&mut state, 1.0)
+        let meshes: Vec<egui::Mesh> = painted(&mut state, SpiralView::default(), 1.0)
             .into_iter()
             .filter_map(|s| match s {
                 egui::Shape::Mesh(m) => Some((*m).clone()),
@@ -1318,12 +1326,11 @@ mod tests {
     /// The dot is the only painted thing on the disc that reaches past the
     /// track it sits on, so it is the only one whose extent the disc's own fit
     /// does not already answer for — and the pane paints through a clipping
-    /// painter, so what overruns is cut off rather than merely tight. Landscape
-    /// as well as square because the fit is driven by the SHORT side: a 16:9
-    /// frame is where the outermost turn sits closest to an edge.
+    /// painter, so what overruns is cut off rather than merely tight. At the
+    /// docked pane and the cramped column, the two docked sizes `FRAMES` names.
     #[test]
     fn a_notes_dot_stays_inside_the_pane() {
-        for (name, rect) in FRAMES {
+        for (name, rect) in [FRAMES[2], FRAMES[3]] {
             for (low, high) in [(60.0f32, 84.0f32), (36.0, 96.0), (15.5, 135.1)] {
                 let cfg = SpectrumConfig { low_midi: low, high_midi: high, ..Default::default() };
                 let s = Spiral::new(rect, &cfg);
@@ -1396,7 +1403,7 @@ mod tests {
             state.appearance.spectrum.low_midi = low;
             state.appearance.spectrum.high_midi = high;
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 69, 1.0));
-            let shapes = painted(&mut state, 0.1);
+            let shapes = painted(&mut state, SpiralView::default(), 0.1);
             assert!(!shapes.is_empty(), "{low}..{high} drew nothing at all");
             for shape in &shapes {
                 let bounds = shape.visual_bounding_rect();
@@ -1417,7 +1424,7 @@ mod tests {
             let fill = Spiral::new(PANE, &state.appearance.spectrum).dot();
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, note, 1.0));
             // The coloured disc, by its radius, so each note counts once.
-            painted(&mut state, 0.1)
+            painted(&mut state, SpiralView::default(), 0.1)
                 .iter()
                 .filter(|s| matches!(s, egui::Shape::Circle(c) if c.radius == fill))
                 .count()
@@ -1481,7 +1488,7 @@ mod tests {
                     1.0,
                 ));
             }
-            painted(&mut state, 0.1)
+            painted(&mut state, SpiralView::default(), 0.1)
                 .iter()
                 .filter(|s| matches!(s, egui::Shape::Callback(_)))
                 .count()
@@ -1529,7 +1536,7 @@ mod tests {
         state.appearance.spectrum.low_midi = 36.0;
         state.appearance.spectrum.high_midi = 96.0;
         let s = Spiral::new(PANE, &state.appearance.spectrum);
-        let points = painted(&mut state, 0.1)
+        let points = painted(&mut state, SpiralView::default(), 0.1)
             .into_iter()
             .find_map(|shape| match shape {
                 egui::Shape::Path(path) => Some(path.points.clone()),
@@ -1987,20 +1994,21 @@ mod tests {
     /// that panned it would re-zoom the pane beside it.
     #[test]
     fn a_drag_leaves_the_analyzers_own_settings_alone() {
-        let mut state = fresh();
+        let (mut state, mut view) = (fresh(), SpiralView::default());
         let before = state.appearance.spectrum;
         let ctx = themed();
         let from = PANE.center() + egui::vec2(-30.0, 20.0);
         let delta = egui::vec2(60.0, -45.0);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from)]);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from), press(from, true)]);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(from + delta)]);
-        frame(&ctx, &mut state, vec![press(from + delta, false)]);
-        assert_ne!(
-            state.appearance.spiral.look,
-            SpiralView::default().look,
-            "the drag never reached the pane",
+        frame(&ctx, &mut state, &mut view, vec![egui::Event::PointerMoved(from)]);
+        frame(
+            &ctx,
+            &mut state,
+            &mut view,
+            vec![egui::Event::PointerMoved(from), press(from, true)],
         );
+        frame(&ctx, &mut state, &mut view, vec![egui::Event::PointerMoved(from + delta)]);
+        frame(&ctx, &mut state, &mut view, vec![press(from + delta, false)]);
+        assert_ne!(view.look, SpiralView::default().look, "the drag never reached the pane",);
         assert_eq!(
             (before.low_midi, before.high_midi, before.roll_seconds, before.ceiling_db),
             (
@@ -2017,16 +2025,15 @@ mod tests {
     /// reset, and what makes the freedom of the other two gestures safe.
     #[test]
     fn a_double_click_returns_to_the_whole_disc() {
-        let mut state = fresh();
-        state.appearance.spiral = view(5.0, egui::vec2(0.8, -0.4));
+        let (mut state, mut framing) = (fresh(), view(5.0, egui::vec2(0.8, -0.4)));
         let ctx = themed();
         let at = PANE.center() + egui::vec2(40.0, 40.0);
-        frame(&ctx, &mut state, vec![egui::Event::PointerMoved(at)]);
+        frame(&ctx, &mut state, &mut framing, vec![egui::Event::PointerMoved(at)]);
         for _ in 0..2 {
-            frame(&ctx, &mut state, vec![press(at, true)]);
-            frame(&ctx, &mut state, vec![press(at, false)]);
+            frame(&ctx, &mut state, &mut framing, vec![press(at, true)]);
+            frame(&ctx, &mut state, &mut framing, vec![press(at, false)]);
         }
-        let after = state.appearance.spiral;
+        let after = framing;
         assert_eq!(
             (after.zoom, after.look),
             (SpiralView::default().zoom, SpiralView::default().look),
@@ -2123,8 +2130,7 @@ mod tests {
                 // And the repaired framing paints finite geometry, which is the
                 // claim the ranges above are only a proxy for.
                 let mut state = fresh();
-                state.appearance.spiral = framing;
-                for shape in painted(&mut state, 0.1) {
+                for shape in painted(&mut state, framing, 0.1) {
                     assert!(
                         !shape.visual_bounding_rect().any_nan(),
                         "zoom {zoom}, look {look} painted NaN geometry",
@@ -2147,12 +2153,11 @@ mod tests {
     fn a_magnified_disc_is_cut_no_finer_than_the_analyzers_grain() {
         use harmonigraph_core::spectrum::BINS_PER_SEMITONE;
         let rect = FRAMES[1].1;
-        let mut state = fresh();
-        state.appearance.spiral = view(ZOOM.1, egui::Vec2::ZERO);
+        let (mut state, mut framing) = (fresh(), view(ZOOM.1, egui::Vec2::ZERO));
         let cfg = state.appearance.spectrum;
         let span = cfg.high_midi - cfg.low_midi;
         let shapes: Vec<egui::Shape> =
-            painted_into(rect.size(), rect, |ui| spiral_pane(ui, &mut state, 0.1, 0))
+            painted_into(rect.size(), rect, |ui| spiral_pane(ui, &mut state, &mut framing, 0.1))
                 .shapes
                 .into_iter()
                 .map(|s| s.shape)

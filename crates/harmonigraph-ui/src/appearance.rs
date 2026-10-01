@@ -1,6 +1,6 @@
 //! The settings shared by the live picture, editor saves and recorded takes.
 
-use crate::{panes::spiral::SpiralView, RenderConfig, SpectrumConfig};
+use crate::{RenderConfig, SpectrumConfig};
 use harmonigraph_scene::{Camera, ViewConfig};
 
 const APPEARANCE_VERSION: u32 = 1;
@@ -14,7 +14,6 @@ pub struct AppearanceDocument {
     pub camera: Camera,
     pub view: ViewConfig,
     pub spectrum: SpectrumConfig,
-    pub spiral: SpiralView,
     pub render: RenderConfig,
 }
 
@@ -25,7 +24,6 @@ impl Default for AppearanceDocument {
             camera: Camera::default(),
             view: ViewConfig::default(),
             spectrum: SpectrumConfig::default(),
-            spiral: SpiralView::default(),
             render: RenderConfig::default(),
         }
     }
@@ -55,7 +53,6 @@ impl AppearanceDocument {
         self.camera.sanitize();
         self.view.sanitize();
         self.spectrum.sanitize();
-        self.spiral.sanitize();
         self.render.sanitize();
         Ok(self)
     }

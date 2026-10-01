@@ -310,8 +310,8 @@ fn a_dragged_perf_overlay_is_persisted() {
     );
 
     // NaN reaches the tessellator as geometry, and a blob is a file someone
-    // can edit — see `load_persist`, and `AppearanceDocument::normalize`,
-    // which repairs the spiral framing for the same reason.
+    // can edit — see `load_persist`, which repairs the spiral framing for the
+    // same reason.
     let mut restored = fresh();
     let saved = state.save_persist();
     let edited = saved.replacen("x:123.0", "x:NaN", 1);

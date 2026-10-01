@@ -21,33 +21,24 @@
 //! the marks from everything drawn under them — on the spiral, a spectrum that
 //! fills the disc — which is not something a pixel can be asked.
 //!
-//! **A chain per live copy, keyed on `pane_id`.** egui-wgpu runs every
-//! `prepare` before any `paint`, and the chain is sized in device pixels off
-//! the rect it covers — so two copies sharing one chain at different sizes tear
-//! it down and rebuild it twice within a frame, and the first then stretches
-//! the second's quarter A, laid out in the second's local coordinates, across
-//! its own rect. [`crate::roll`] spends a pane map on exactly that, and this
-//! one is the same map for the same reason. Nothing reaches a second copy
-//! today: the one caller, the Spiral, is an editor tab and never exported
-//! (#974), so only its docked copy draws. The arrangement that once did, an
-//! offline layout naming `Spiral` twice at unequal rects, went with the export.
+//! **One chain, for the one copy.** The only caller is the Spiral, an editor
+//! tab that is never exported (#974), so only its docked copy draws and one
+//! chain is all there is to hold. Were a second copy ever drawn this would want
+//! a chain per copy again — the chain is sized in device pixels off the rect it
+//! covers, and egui-wgpu runs every `prepare` before any `paint`, so two copies
+//! at different sizes would tear one chain down twice a frame and stretch the
+//! second's halo across the first's rect. [`crate::roll`] keeps a pane map for
+//! exactly that.
 //!
-//! **A copy is evicted when it stops preparing**, on the clock of `prepare`
-//! calls [`crate::roll`] keeps for the same purpose: there is no teardown to
-//! hang the drop on, so the copies still preparing are the only evidence of
-//! which ones exist, and the sweep runs from whichever one is. What it reclaims
-//! is a chain's worth of textures per retired copy — the half-size copy, the
-//! thresholded half and the two quarters, about 2.7 MB for a 600x450-point tab
-//! on a Retina display.
-//!
-//! The LAST copy is the one it cannot reclaim: the spiral is the only caller
-//! here, so a hidden Spiral tab leaves nothing preparing to sweep with and its
-//! chain stands until something asks for a halo again. That holds one chain,
-//! not one per tab ever opened, which is what makes the sweep worth its map.
+//! Once something has asked for a halo the chain stands for as long as these
+//! resources do, hidden tab included: nothing tells this crate a tab closed, so
+//! there is nothing to drop it on. It is rebuilt only when the rect's device
+//! size changes. What it holds is the
+//! half-size copy, the thresholded half and the two quarters, about 2.7 MB for
+//! a 600x450-point tab on a Retina display.
 
 use egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
 
-use crate::pass_aged::PassAged;
 use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 const GLOW_SRC: &str = include_str!("shaders/glow.wgsl");
@@ -107,33 +98,21 @@ impl GlowDot {
 /// [`crate::bloom_strength`] for the reason that function exists. 0 skips the
 /// whole thing — no chain is built and no pass runs.
 ///
-/// Added on EVERY frame the pane draws, including the frames with no strength
-/// and no marks: the skipping is this callback's to do, and the sweep that
-/// retires a copy nobody draws any more runs on the clock of these calls (see
-/// [`crate::pass_aged`]). A caller that gates instead pays a rebuilt
-/// chain on the first frame after a quiet stretch and saves nothing, because
-/// the declined frame allocates nothing here.
+/// Safe to add on every frame the pane draws, including the frames with no
+/// strength and no marks: the skipping is this callback's to do, and a declined
+/// frame allocates nothing here.
 ///
-/// See [`crate::PaneIds`]: each pane id keeps a chain of its own, so an id
-/// minted per frame would build a chain per frame and hold every one of them
-/// until the sweep aged it out.
+/// One chain serves every call (see the module's own note), so this is for one
+/// live copy of one pane.
 pub fn glow_paint_callback(
     rect: egui::Rect,
     dots: Vec<GlowDot>,
     strength: f32,
     target_format: wgpu::TextureFormat,
-    ids: crate::PaneIds,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
-        GlowCallback {
-            rect,
-            dots,
-            strength,
-            target_format,
-            pane_id: ids.pane,
-            pass_nr: ids.pass_nr,
-        },
+        GlowCallback { rect, dots, strength, target_format },
     )
 }
 
@@ -146,8 +125,6 @@ struct GlowCallback {
     dots: Vec<GlowDot>,
     strength: f32,
     target_format: wgpu::TextureFormat,
-    pane_id: u64,
-    pass_nr: u64,
 }
 
 /// The disc pass's own uniforms (`Locals` in glow.wgsl).
@@ -192,12 +169,10 @@ struct GlowResources {
     add_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     target_format: wgpu::TextureFormat,
-    /// One chain per live copy of a pane. A copy appears on the first frame
-    /// that asks it for a halo — a strength of 0 pays for none of it — and
-    /// leaves on the sweep in [`crate::pass_aged`], at
-    /// [`crate::pass_aged::TTL_PASSES`]. What a closed copy would otherwise
-    /// hold is four textures.
-    panes: PassAged<GlowPane>,
+    /// The one copy's chain. Built on the first frame that asks for a halo — a
+    /// strength of 0 pays for none of it — and rebuilt when the rect's device
+    /// size changes.
+    pane: Option<GlowPane>,
 }
 
 /// The picture to bloom and the lattice's own [`crate::BloomChain`] over it:
@@ -334,7 +309,7 @@ impl GlowResources {
                 ..Default::default()
             }),
             target_format,
-            panes: PassAged::new(),
+            pane: None,
         }
     }
 }
@@ -501,11 +476,8 @@ impl CallbackTrait for GlowCallback {
         let wants = self.strength > 0.0 && !self.dots.is_empty() && size.iter().all(|&d| d > 0);
 
         // Nothing to light and nothing built: the pipelines are not built
-        // either. This is the whole of what the caller used to buy by skipping
-        // the callback — a reader who never turns the bloom on never pays for
-        // its five pipelines — and it belongs here, because the caller cannot
-        // skip the callback without also stopping the clock `evict_unseen`
-        // runs on (see `crate::pass_aged`).
+        // either, so a reader who never turns the bloom on never pays for its
+        // five pipelines.
         if !wants && callback_resources.get::<GlowResources>().is_none() {
             return Vec::new();
         }
@@ -517,34 +489,28 @@ impl CallbackTrait for GlowCallback {
         }
         let resources: &mut GlowResources =
             callback_resources.get_mut().expect("inserted above when missing");
-        // A copy's id is its surface, and one that is no longer drawn simply
-        // stops calling back — so the copies still preparing are the only
-        // evidence of which ones exist. Swept from whichever copy IS preparing,
-        // so a lone survivor still clears the others.
-        resources.panes.evict_unseen(self.pass_nr);
 
         // Held whether or not it is wanted this frame, since a strength dialled
         // to 0 and back is one drag: what is skipped is the work, not the
         // textures. They go when the pane's size changes, which is the one
         // thing that invalidates them.
-        if resources.panes.get(self.pane_id).is_some_and(|p| p.size != size) {
-            resources.panes.remove(self.pane_id);
+        if resources.pane.as_ref().is_some_and(|p| p.size != size) {
+            resources.pane = None;
         }
         if !wants {
-            // Stamped without being built: the copy is still on screen — a
-            // strength dialled to 0 and back is one drag — and a frame that
-            // draws no halo has no business allocating one.
-            if let Some(pane) = resources.panes.touch(self.pane_id, self.pass_nr) {
+            // Kept without being built: a frame that draws no halo has no
+            // business allocating one.
+            if let Some(pane) = &mut resources.pane {
                 pane.ready = false;
             }
             return Vec::new();
         }
-        if !resources.panes.contains_key(self.pane_id) {
+        if resources.pane.is_none() {
             // Built and then stored, rather than assigned in one expression:
-            // the constructor reads the layouts and the sampler beside the map
-            // it lands in.
+            // the constructor reads the layouts and the sampler beside the
+            // field it lands in.
             let pane = GlowPane::new(device, resources, size);
-            resources.panes.insert(self.pane_id, pane, self.pass_nr);
+            resources.pane = Some(pane);
         }
 
         // Split apart so the pane can be borrowed mutably while the pipelines
@@ -555,10 +521,10 @@ impl CallbackTrait for GlowCallback {
             downsample_pipeline,
             blur_h_pipeline,
             blur_v_pipeline,
-            panes,
+            pane,
             ..
         } = resources;
-        let pane = panes.touch(self.pane_id, self.pass_nr).expect("built above when missing");
+        let pane = pane.as_mut().expect("built above when missing");
 
         if self.dots.len() > pane.capacity {
             pane.capacity = self.dots.len().next_power_of_two();
@@ -641,7 +607,7 @@ impl CallbackTrait for GlowCallback {
         let Some(resources) = callback_resources.get::<GlowResources>() else {
             return;
         };
-        let Some(pane) = resources.panes.get(self.pane_id).filter(|p| p.ready) else {
+        let Some(pane) = resources.pane.as_ref().filter(|p| p.ready) else {
             return;
         };
         // Over the pane's rect rather than the surface: quarter A covers
@@ -672,11 +638,6 @@ mod tests {
     /// is a distance in pixels.
     const SIZE: [u32; 2] = [256, 256];
     const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-    /// The id a test drawing one halo claims. Which id it is decides nothing —
-    /// the map is keyed on it and holds no other — so it stands for "the only
-    /// copy on screen" rather than for the Spiral tab's own surface.
-    const ONE_PANE: u64 = 0;
 
     /// A mark in the middle of the surface: bright enough to clear the chain's
     /// threshold, dim enough that brightening it has somewhere to go.
@@ -717,14 +678,7 @@ mod tests {
         dots: Vec<GlowDot>,
         strength: f32,
     ) -> (Vec<u8>, CallbackResources) {
-        let cb = GlowCallback {
-            rect,
-            dots,
-            strength,
-            target_format: FORMAT,
-            pane_id: ONE_PANE,
-            pass_nr: 0,
-        };
+        let cb = GlowCallback { rect, dots, strength, target_format: FORMAT };
         let mut resources = CallbackResources::default();
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: ppp };
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -833,9 +787,9 @@ mod tests {
     ///
     /// The PIPELINES are the half that reaches a reader who never turns the
     /// bloom on. Their absence is what lets the spiral add this callback on
-    /// every frame it draws, silent ones included, so that the sweep's clock
-    /// keeps running — and it has to be read off a first prepare, since
-    /// anything already built is deliberately held through a quiet stretch.
+    /// every frame it draws, silent ones included — and it has to be read off
+    /// a first prepare, since anything already built is deliberately held
+    /// through a quiet stretch.
     #[test]
     fn nothing_to_light_builds_no_chain() {
         let Some((device, queue)) = headless_device() else {
@@ -844,7 +798,7 @@ mod tests {
         let resources_of =
             |dots: Vec<GlowDot>, strength: f32| draw(&device, &queue, dots, strength).1;
         let chained = |resources: &CallbackResources| {
-            resources.get::<GlowResources>().is_some_and(|glow| glow.panes.contains_key(ONE_PANE))
+            resources.get::<GlowResources>().is_some_and(|glow| glow.pane.is_some())
         };
         for (dots, strength, what) in
             [(vec![centered_dot()], 0.0, "a strength of 0"), (Vec::new(), 1.5, "an empty frame")]
@@ -888,25 +842,12 @@ mod tests {
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             queue.submit(bufs.into_iter().chain([encoder.finish()]));
         };
-        let lit = GlowCallback {
-            rect,
-            dots: vec![centered_dot()],
-            strength: 1.5,
-            target_format: FORMAT,
-            pane_id: ONE_PANE,
-            pass_nr: 0,
-        };
+        let lit =
+            GlowCallback { rect, dots: vec![centered_dot()], strength: 1.5, target_format: FORMAT };
         prepare(&lit, &mut resources);
         // ...and now a frame with the marks gone, over the chain the first one
         // filled.
-        let quiet = GlowCallback {
-            rect,
-            dots: Vec::new(),
-            strength: 1.5,
-            target_format: FORMAT,
-            pane_id: ONE_PANE,
-            pass_nr: 1,
-        };
+        let quiet = GlowCallback { rect, dots: Vec::new(), strength: 1.5, target_format: FORMAT };
         prepare(&quiet, &mut resources);
         let texture =
             render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::BLACK, |pass| {
@@ -994,7 +935,7 @@ mod tests {
 
         let vp = egui::epaint::ViewportInPixels::from_points(&rect, ppp, SIZE);
         let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-        let pane = glow.panes.get(ONE_PANE).expect("a strength of 1.5 asks for a chain");
+        let pane = glow.pane.as_ref().expect("a strength of 1.5 asks for a chain");
         assert_eq!(
             pane.size,
             [vp.width_px as u32, vp.height_px as u32],
@@ -1012,142 +953,6 @@ mod tests {
         );
     }
 
-    /// Two copies in one frame at UNEQUAL rects each keep a chain of their own,
-    /// and each paints the halo of its own marks.
-    ///
-    /// egui-wgpu runs every `prepare` before any `paint`, so one chain between
-    /// them is not merely shared: the second prepare rebuilds it at its own
-    /// size, and the first then stretches quarter A — laid out in the second
-    /// copy's local coordinates — across its own rect. The sizes are the
-    /// issue's own measurement (76 then 180 device pixels across one 256-pixel
-    /// surface), and unequal is what reaches it: at equal rects a shared chain
-    /// is rebuilt at the size it already had and the picture comes out right by
-    /// accident.
-    #[test]
-    fn two_copies_at_unequal_rects_each_keep_their_own_chain() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let tall = SIZE[1] as f32;
-        let narrow = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(76.0, tall));
-        let wide = egui::Rect::from_min_max(egui::pos2(76.0, 0.0), egui::pos2(256.0, tall));
-        // One mark deep in the narrow copy, one high in the wide copy, far
-        // enough apart in the surface's own coordinates that neither halo can
-        // reach where the other's would land.
-        let narrow_mark = GlowDot { center: [20.0, 200.0], ..centered_dot() };
-        let wide_mark = GlowDot { center: [106.0, 40.0], ..centered_dot() };
-        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let mut resources = CallbackResources::default();
-        let callback = |rect, dots, pane_id| GlowCallback {
-            rect,
-            dots,
-            strength: 1.5,
-            target_format: FORMAT,
-            pane_id,
-            pass_nr: 0,
-        };
-        let prepare = |cb: &GlowCallback, resources: &mut CallbackResources| {
-            let mut encoder = device.create_command_encoder(&Default::default());
-            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
-            queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        };
-
-        let first = callback(narrow, vec![narrow_mark], 0);
-        let second = callback(wide, vec![wide_mark], 1);
-        prepare(&first, &mut resources);
-        prepare(&second, &mut resources);
-
-        {
-            let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-            let size_of = |id| glow.panes.get(id).map(|p: &GlowPane| p.size);
-            assert_eq!(
-                size_of(0),
-                Some([76, SIZE[1]]),
-                "the narrow copy lost its chain to the wide one",
-            );
-            assert_eq!(size_of(1), Some([180, SIZE[1]]), "the wide copy has no chain of its own");
-        }
-
-        // ...and the narrow copy paints ITS marks. Where the wide copy's mark
-        // lands is the whole symptom: through the narrow rect it comes out at
-        // that fraction of the narrow copy's own size, which is a reading of
-        // 198 with the two sharing a chain and 0 with a chain each.
-        let texture =
-            render_to_texture(&device, &queue, SIZE, FORMAT, wgpu::Color::BLACK, |pass| {
-                first.paint(
-                    egui::PaintCallbackInfo {
-                        viewport: narrow,
-                        clip_rect: narrow,
-                        pixels_per_point: 1.0,
-                        screen_size_px: SIZE,
-                    },
-                    pass,
-                    &resources,
-                );
-            });
-        let frame = readback(&device, &queue, &texture, SIZE);
-        let red = |x: u32, y: u32| f32::from(pixel(&frame, x, y)[0]);
-        assert!(red(20, 200) > 8.0, "no light on the narrow copy's own mark: {}", red(20, 200));
-        let stray = (13u32, 40u32);
-        assert_eq!(
-            red(stray.0, stray.1),
-            0.0,
-            "light at {stray:?}, where the wide copy's mark lands stretched across this rect",
-        );
-        // Non-vacuous: one halo cannot reach the other's reading.
-        assert!(
-            (stray.0 as f32 - 20.0).hypot(stray.1 as f32 - 200.0) > 100.0,
-            "the fixture put the two readings within one halo of each other",
-        );
-    }
-
-    /// A copy that stops preparing loses its chain, and the one still preparing
-    /// keeps its own.
-    ///
-    /// The sweep runs from whichever copy IS preparing — nothing here is told
-    /// that a pane closed — so the survivor is what makes the eviction happen
-    /// at all, and is the reading that would still pass if the sweep took
-    /// everything.
-    #[test]
-    fn a_copy_that_stops_preparing_is_evicted() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(32.0, 32.0));
-        let mark = GlowDot { center: [16.0, 16.0], radius: 4.0, color: [200, 120, 60, 255] };
-        let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-        let mut resources = CallbackResources::default();
-        let prepare = |pane_id, pass_nr, resources: &mut CallbackResources| {
-            let cb = GlowCallback {
-                rect,
-                dots: vec![mark],
-                strength: 1.5,
-                target_format: FORMAT,
-                pane_id,
-                pass_nr,
-            };
-            let mut encoder = device.create_command_encoder(&Default::default());
-            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
-            queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        };
-        let live = |resources: &CallbackResources, id| {
-            let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-            glow.panes.contains_key(id)
-        };
-
-        prepare(0, 0, &mut resources);
-        prepare(1, 0, &mut resources);
-        assert!(live(&resources, 0) && live(&resources, 1), "two copies, two chains");
-
-        // Only one of them keeps drawing, past the age the other's chain is
-        // held for.
-        for pass_nr in 1..=crate::pass_aged::TTL_PASSES {
-            prepare(1, pass_nr, &mut resources);
-        }
-        assert!(!live(&resources, 0), "the retired copy is still holding a chain");
-        assert!(live(&resources, 1), "the sweep took the copy that never stopped drawing");
-    }
-
     /// A pane resized mid-run rebuilds its chain at the new size, and a frame
     /// with more marks than the buffer holds grows it.
     ///
@@ -1163,21 +968,14 @@ mod tests {
         let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
         let mut resources = CallbackResources::default();
         let prepare = |dots: Vec<GlowDot>, rect: egui::Rect, resources: &mut CallbackResources| {
-            let cb = GlowCallback {
-                rect,
-                dots,
-                strength: 1.5,
-                target_format: FORMAT,
-                pane_id: ONE_PANE,
-                pass_nr: 0,
-            };
+            let cb = GlowCallback { rect, dots, strength: 1.5, target_format: FORMAT };
             let mut encoder = device.create_command_encoder(&Default::default());
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             queue.submit(bufs.into_iter().chain([encoder.finish()]));
         };
         let pane_of = |resources: &CallbackResources| {
             let glow: &GlowResources = resources.get().expect("prepare inserts its resources");
-            let pane = glow.panes.get(ONE_PANE).expect("a strength of 1.5 asks for a chain");
+            let pane = glow.pane.as_ref().expect("a strength of 1.5 asks for a chain");
             (pane.size, pane.capacity, pane.count)
         };
 

@@ -26,13 +26,14 @@ pub(crate) struct Layouts {
 pub(crate) enum ProducerKey {
     Roll(u64),
     Text(u64),
-    Dot(u64),
+    /// The Spiral's dots, which have one copy and so need no id.
+    Dot,
 }
 
 impl ProducerKey {
     fn order(self) -> u8 {
         match self {
-            Self::Roll(_) | Self::Dot(_) => 0,
+            Self::Roll(_) | Self::Dot => 0,
             Self::Text(_) => 1,
         }
     }
