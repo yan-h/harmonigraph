@@ -111,10 +111,13 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
                 let fresh = ViewConfig::default();
                 (fresh.plus_arm, fresh.plus_taper)
             },
-            |v| format!("{:.1}%", v * 100.0),
+            // In true node radii, as the Gap and the Reach read
+            // (`QUAD_UV_PERCENT`); the stored pair stays in quad uv.
+            |v| format!("{:.1}%", v * super::QUAD_UV_PERCENT),
         )
         .on_hover_text(
-            "Cross-arm length from the center, as a percentage of the node radius: the full length of the Layers bar in Note layers. \
+            "Cross-arm length from the center, as a percentage of the node radius. \
+                     180% reaches the edge no ring crosses on the Layers bar in Note layers. \
                      Solid to the inner handle, faded out by the outer handle. \
                      0% hides crosses; named nodes draw none. \
                      Double-click resets.",

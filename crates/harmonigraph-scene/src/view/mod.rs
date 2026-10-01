@@ -1397,7 +1397,9 @@ impl ViewConfig {
         // nothing else.
         self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink).clamp(0.0, 100.0);
         // The node glow's pair, each repaired to its fresh value and clamped
-        // to its bar.
+        // to its bar. Deliberately fresh rather than 0 for the Reach (#1327):
+        // a corrupt Reach opens with the fresh glow like every other repaired
+        // value, rather than with the light switched off.
         self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
