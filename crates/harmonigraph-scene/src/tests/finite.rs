@@ -412,9 +412,12 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.stars.star_randomness", stars.star_randomness);
     f.one("atmosphere.stars.star_size_variation", stars.star_size_variation);
     f.one("atmosphere.stars.star_jitter", stars.star_jitter);
-    f.one("atmosphere.stars.star_size_min", stars.star_size_min);
-    f.one("atmosphere.stars.star_size_max", stars.star_size_max);
-    f.one("atmosphere.stars.star_size_curve", stars.star_size_curve);
+    f.one("atmosphere.stars.star_spacing_min", stars.star_spacing_min);
+    f.one("atmosphere.stars.star_spacing_max", stars.star_spacing_max);
+    f.one("atmosphere.stars.star_spacing_curve", stars.star_spacing_curve);
+    f.one("atmosphere.stars.star_diameter_min", stars.star_diameter_min);
+    f.one("atmosphere.stars.star_diameter_max", stars.star_diameter_max);
+    f.one("atmosphere.stars.star_diameter_curve", stars.star_diameter_curve);
     f.one("atmosphere.stars.star_speed_min", stars.star_speed_min);
     f.one("atmosphere.stars.star_speed_max", stars.star_speed_max);
     f.one("atmosphere.stars.star_speed_curve", stars.star_speed_curve);

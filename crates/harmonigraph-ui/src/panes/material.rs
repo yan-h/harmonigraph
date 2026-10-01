@@ -82,9 +82,10 @@ pub(super) fn stars(
     atmosphere: &mut harmonigraph_scene::StarSettings,
     size_scale: f32,
 ) {
+    use crate::widgets::Depth;
     use harmonigraph_scene::{
-        StarSettings, STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_FRINGE_MAX,
-        STAR_SIZE_CURVE_MAX, STAR_SIZE_CURVE_MIN,
+        StarSettings, STAR_DEFOCUS_MAX, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_DEPTH_CURVE_MAX,
+        STAR_DEPTH_CURVE_MIN, STAR_FRINGE_MAX,
     };
     ValueBar::new(&mut atmosphere.star_density, STAR_DENSITY_MIN..=STAR_DENSITY_MAX, "Star density")
         .unit(1.0, "\u{d7}")
@@ -94,12 +95,21 @@ pub(super) fn stars(
         );
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_size_min,
-        &mut atmosphere.star_size_max,
-        &mut atmosphere.star_size_curve,
-        StarSettings::size_range(size_scale),
-        STAR_SIZE_CURVE_MIN..=STAR_SIZE_CURVE_MAX,
-        true,
+        &mut atmosphere.star_diameter_min,
+        &mut atmosphere.star_diameter_max,
+        &mut atmosphere.star_diameter_curve,
+        StarSettings::diameter_range(size_scale),
+        STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
+        Depth::Size,
+    );
+    crate::widgets::depth(
+        ui,
+        &mut atmosphere.star_spacing_min,
+        &mut atmosphere.star_spacing_max,
+        &mut atmosphere.star_spacing_curve,
+        StarSettings::spacing_range(size_scale),
+        STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
+        Depth::Spacing,
     );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
@@ -177,7 +187,7 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
         &mut atmosphere.star_speed_curve,
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
-        false,
+        crate::widgets::Depth::Speed,
     );
     ValueBar::new(
         &mut atmosphere.star_lifetime,

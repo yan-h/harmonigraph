@@ -159,20 +159,27 @@ pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
 
 /// The top of [`StarSettings::star_defocus`].
 pub const STAR_DEFOCUS_MAX: f32 = 1.5;
+/// Bounds shared by the two ends of the `Star spacing` control
+/// ([`StarSettings::star_spacing_min`], [`StarSettings::star_spacing_max`])
+/// and their sanitizer, in star pixels at density 2.
+pub const STAR_SPACING_MIN: f32 = 0.5;
+/// See [`STAR_SPACING_MIN`].
+pub const STAR_SPACING_MAX: f32 = 64.0;
 /// Bounds shared by the two ends of the `Star size` control
-/// ([`StarSettings::star_size_min`], [`StarSettings::star_size_max`])
-/// and their sanitizer, in star pixels of spacing at density 2.
-pub const STAR_SIZE_MIN: f32 = 0.5;
-/// See [`STAR_SIZE_MIN`].
-pub const STAR_SIZE_MAX: f32 = 64.0;
-/// The lattice's `Star size` range and fresh ends over the spectrogram's.
-/// The glow has no fine detail for stars to pick up, so its stars run bigger.
+/// ([`StarSettings::star_diameter_min`], [`StarSettings::star_diameter_max`])
+/// and their sanitizer, in star pixels.
+pub const STAR_DIAMETER_MIN: f32 = 0.25;
+/// See [`STAR_DIAMETER_MIN`].
+pub const STAR_DIAMETER_MAX: f32 = 32.0;
+/// The lattice's `Star size` and `Star spacing` ranges and fresh ends over
+/// the spectrogram's. The glow has no fine detail for stars to pick up, so
+/// its stars run bigger.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
-/// Bounds shared by the [`StarSettings::star_size_curve`] control and
-/// sanitizer.
-pub const STAR_SIZE_CURVE_MIN: f32 = 0.5;
-/// See [`STAR_SIZE_CURVE_MIN`].
-pub const STAR_SIZE_CURVE_MAX: f32 = 4.0;
+/// Bounds shared by the two depth curves, [`StarSettings::star_spacing_curve`]
+/// and [`StarSettings::star_diameter_curve`], and their sanitizer.
+pub const STAR_DEPTH_CURVE_MIN: f32 = 0.5;
+/// See [`STAR_DEPTH_CURVE_MIN`].
+pub const STAR_DEPTH_CURVE_MAX: f32 = 4.0;
 /// Bounds shared by the two ends of the `Star speed` control
 /// ([`StarSettings::star_speed_min`], [`StarSettings::star_speed_max`])
 /// and their sanitizer, as a share of the prototype's pace: at the top a depth
@@ -457,25 +464,35 @@ pub struct StarSettings {
     /// ends at `1.0 - 0.3 * star_jitter` cells; Uniform and the nearest two
     /// layers retain the wide 1.2-cell response.
     pub star_jitter: f32,
-    /// The farthest depth's star size, as its spacing in star pixels at
-    /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
-    /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and draws
-    /// each star's core from that value alone, so one value is one star size
-    /// at every depth (capped at a third of the depth's spacing, which
-    /// density shrinks). Every cell holds a star, so how many a depth
-    /// has follows its spacing alone. Runs over
-    /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], times
+    /// The farthest depth's star spacing in star pixels at density 2. A depth
+    /// `d` from 0 (far) to 1 (near) spaces its stars at `min · (max /
+    /// min)^(d^curve)`, divided by the square root of half the density. Every
+    /// cell holds a star, so how many a depth has follows its spacing alone.
+    /// Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`], times
     /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
-    /// [`Self::star_size_max`].
-    pub star_size_min: f32,
-    /// The nearest depth's star size: the biggest stars in the field. See
-    /// [`Self::star_size_min`].
-    pub star_size_max: f32,
-    /// The exponent on depth in the star size's spacing: 1 spreads
-    /// the sizes evenly over the depths, higher puts most depths in the fine
-    /// dust. The prototype's 2. Runs over
-    /// [`STAR_SIZE_CURVE_MIN`]..=[`STAR_SIZE_CURVE_MAX`].
-    pub star_size_curve: f32,
+    /// [`Self::star_spacing_max`].
+    pub star_spacing_min: f32,
+    /// The nearest depth's star spacing. See [`Self::star_spacing_min`].
+    pub star_spacing_max: f32,
+    /// The exponent on depth in the spacing: 1 spreads it evenly over the
+    /// depths, higher puts most depths in the fine dust. Runs over
+    /// [`STAR_DEPTH_CURVE_MIN`]..=[`STAR_DEPTH_CURVE_MAX`].
+    pub star_spacing_curve: f32,
+    /// The farthest depth's star size: its core's diameter in star pixels,
+    /// four of its sigmas. A depth `d` spreads it like the spacing, `min ·
+    /// (max / min)^(d^curve)`, and the size is a function of that value
+    /// alone, so one value on the control is one star size at every depth.
+    /// A core never exceeds a third of its depth's spacing (a sigma of a
+    /// third of a cell), which keeps the dust pinpoint and every star inside
+    /// the cells a pixel reads. Runs over
+    /// [`STAR_DIAMETER_MIN`]..=[`STAR_DIAMETER_MAX`], times
+    /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
+    /// [`Self::star_diameter_max`].
+    pub star_diameter_min: f32,
+    /// The nearest depth's star size. See [`Self::star_diameter_min`].
+    pub star_diameter_max: f32,
+    /// The exponent on depth in the size, as [`Self::star_spacing_curve`].
+    pub star_diameter_curve: f32,
     /// The farthest depth's drift speed: the slowest stars. A depth `d` from 0
     /// (far) to 1 (near) drifts at `min + (max - min) d^curve`, along the
     /// shared `Drift direction`; the stars never read `cloud_speed`, which is
@@ -524,9 +541,16 @@ impl Default for StarSettings {
             // where it was 0.69..1.45.
             star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
-            star_size_min: 2.315533,
-            star_size_max: 14.752405,
-            star_size_curve: 2.1178954,
+            star_spacing_min: 2.315533,
+            star_spacing_max: 14.752405,
+            star_spacing_curve: 2.1178954,
+            // Fitted to the cores the 2026-09-26 capture drew when size and
+            // spacing were one control: the far four depths unchanged (the
+            // far three at their spacing's cap), the nearest no longer
+            // smaller than the one behind it (1.03 star px sigma, was 0.60).
+            star_diameter_min: 1.37,
+            star_diameter_max: 4.1,
+            star_diameter_curve: 1.04,
             star_speed_min: 0.08931082,
             star_speed_max: 0.16860056,
             star_speed_curve: 3.179647,
@@ -545,15 +569,21 @@ impl StarSettings {
     pub fn lattice() -> Self {
         let fresh = Self::default();
         Self {
-            star_size_min: fresh.star_size_min * LATTICE_STAR_SIZE_SCALE,
-            star_size_max: fresh.star_size_max * LATTICE_STAR_SIZE_SCALE,
+            star_spacing_min: fresh.star_spacing_min * LATTICE_STAR_SIZE_SCALE,
+            star_spacing_max: fresh.star_spacing_max * LATTICE_STAR_SIZE_SCALE,
+            star_diameter_min: fresh.star_diameter_min * LATTICE_STAR_SIZE_SCALE,
+            star_diameter_max: fresh.star_diameter_max * LATTICE_STAR_SIZE_SCALE,
             ..fresh
         }
     }
-    /// The `Star size` bounds for a pane whose sizes run `scale` times the
+    /// The `Star spacing` bounds for a pane whose sizes run `scale` times the
     /// spectrogram's.
-    pub fn size_range(scale: f32) -> std::ops::RangeInclusive<f32> {
-        STAR_SIZE_MIN * scale..=STAR_SIZE_MAX * scale
+    pub fn spacing_range(scale: f32) -> std::ops::RangeInclusive<f32> {
+        STAR_SPACING_MIN * scale..=STAR_SPACING_MAX * scale
+    }
+    /// The `Star size` bounds, likewise.
+    pub fn diameter_range(scale: f32) -> std::ops::RangeInclusive<f32> {
+        STAR_DIAMETER_MIN * scale..=STAR_DIAMETER_MAX * scale
     }
     pub fn sanitized(self) -> Self {
         self.sanitized_at(Self::default(), 1.0)
@@ -562,7 +592,6 @@ impl StarSettings {
         self.sanitized_at(Self::lattice(), LATTICE_STAR_SIZE_SCALE)
     }
     fn sanitized_at(mut self, fresh: Self, size_scale: f32) -> Self {
-        let (size_low, size_high) = Self::size_range(size_scale).into_inner();
         let clamp = |value: f32, fallback: f32, low, high| {
             if value.is_finite() {
                 value.clamp(low, high)
@@ -576,18 +605,43 @@ impl StarSettings {
         self.star_size_variation =
             clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
-        self.star_size_min = clamp(self.star_size_min, fresh.star_size_min, size_low, size_high);
-        self.star_size_max = clamp(self.star_size_max, fresh.star_size_max, size_low, size_high);
-        // One control with two handles, so its ends cannot cross on screen;
-        // a blob that holds them crossed is drawn, and kept, as the one pair.
-        if self.star_size_min > self.star_size_max {
-            std::mem::swap(&mut self.star_size_min, &mut self.star_size_max);
-        }
-        self.star_size_curve = clamp(
-            self.star_size_curve,
-            fresh.star_size_curve,
-            STAR_SIZE_CURVE_MIN,
-            STAR_SIZE_CURVE_MAX,
+        // Each is one control with two handles, so its ends cannot cross on
+        // screen; a blob that holds them crossed is drawn, and kept, as the
+        // one pair.
+        let pair = |min: &mut f32,
+                    max: &mut f32,
+                    fresh: [f32; 2],
+                    range: std::ops::RangeInclusive<f32>| {
+            let (low, high) = range.into_inner();
+            *min = clamp(*min, fresh[0], low, high);
+            *max = clamp(*max, fresh[1], low, high);
+            if *min > *max {
+                std::mem::swap(min, max);
+            }
+        };
+        pair(
+            &mut self.star_spacing_min,
+            &mut self.star_spacing_max,
+            [fresh.star_spacing_min, fresh.star_spacing_max],
+            Self::spacing_range(size_scale),
+        );
+        pair(
+            &mut self.star_diameter_min,
+            &mut self.star_diameter_max,
+            [fresh.star_diameter_min, fresh.star_diameter_max],
+            Self::diameter_range(size_scale),
+        );
+        self.star_spacing_curve = clamp(
+            self.star_spacing_curve,
+            fresh.star_spacing_curve,
+            STAR_DEPTH_CURVE_MIN,
+            STAR_DEPTH_CURVE_MAX,
+        );
+        self.star_diameter_curve = clamp(
+            self.star_diameter_curve,
+            fresh.star_diameter_curve,
+            STAR_DEPTH_CURVE_MIN,
+            STAR_DEPTH_CURVE_MAX,
         );
         self.star_speed_min =
             clamp(self.star_speed_min, fresh.star_speed_min, STAR_SPEED_MIN, STAR_SPEED_MAX);

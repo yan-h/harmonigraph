@@ -5,6 +5,14 @@ use crate::theme;
 use egui::Ui;
 use std::ops::RangeInclusive;
 
+/// Which star property a [`depth`] control spreads from far to near.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Depth {
+    Size,
+    Spacing,
+    Speed,
+}
+
 pub(crate) fn depth(
     ui: &mut Ui,
     low: &mut f32,
@@ -12,10 +20,15 @@ pub(crate) fn depth(
     exponent: &mut f32,
     range: RangeInclusive<f32>,
     curve_range: RangeInclusive<f32>,
-    size: bool,
+    kind: Depth,
 ) {
-    let (name, curve_name) =
-        if size { ("Star size", "Size curve") } else { ("Star speed", "Speed curve") };
+    let (name, curve_name) = match kind {
+        Depth::Size => ("Star size", "Size curve"),
+        Depth::Spacing => ("Star spacing", "Spacing curve"),
+        Depth::Speed => ("Star speed", "Speed curve"),
+    };
+    // Sizes and spacings run in octaves, speed linearly.
+    let size = kind != Depth::Speed;
     ui.push_id(name, |ui| {
         let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 2);
         let encode = |v: f32| {
@@ -66,9 +79,11 @@ pub(crate) fn depth(
                 )
                 .display(|octaves| format!("{:.1} px", octaves.exp2()))
                 .show(ui)
-                .on_hover_text(
-                    "The smallest and biggest stars: the farthest dust at the low end, the nearest stars at the high end.",
-                );
+                .on_hover_text(if kind == Depth::Size {
+                    "How big the stars are, the farthest at the low end and the nearest at the high end. One value is one size at every depth. A star never grows past a third of its depth's spacing, so wider spacing or lower density leaves room for bigger stars."
+                } else {
+                    "How far apart the stars are, the farthest at the low end and the nearest at the high end. Every place holds a star, so wider spacing is fewer stars; Star density packs every depth closer."
+                });
                 if response.changed() {
                     *low = far.exp2();
                     *high = near.exp2();

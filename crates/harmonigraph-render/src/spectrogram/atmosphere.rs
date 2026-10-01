@@ -939,18 +939,21 @@ fn memory_key(
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter,
-                star_size_min,
-                star_size_max,
-                star_size_curve,
-                star_speed_min: _,   // carried by absolute cell and per-cell life
-                star_speed_max: _,   // carried by absolute cell and per-cell life
-                star_speed_curve: _, // carried by absolute cell and per-cell life
-                star_lifetime: _,    // carried by absolute cell and per-cell life
+                star_spacing_min,
+                star_spacing_max,
+                star_spacing_curve,
+                star_diameter_min: _, // core sizes do not change a star's colour
+                star_diameter_max: _, // core sizes do not change a star's colour
+                star_diameter_curve: _, // core sizes do not change a star's colour
+                star_speed_min: _,    // carried by absolute cell and per-cell life
+                star_speed_max: _,    // carried by absolute cell and per-cell life
+                star_speed_curve: _,  // carried by absolute cell and per-cell life
+                star_lifetime: _,     // carried by absolute cell and per-cell life
                 star_halo_resolution: _, // sampling does not change material identity
                 star_halo_profile: _, // sampling does not change material identity
-                star_fringe: _,      // response/coverage changes do not change material identity
-                star_far_fill: _,    // composition does not change material identity
-                star_defocus: _,     // response/coverage changes do not change material identity
+                star_fringe: _,       // response/coverage changes do not change material identity
+                star_far_fill: _,     // composition does not change material identity
+                star_defocus: _,      // response/coverage changes do not change material identity
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -986,9 +989,9 @@ fn memory_key(
         CloudStyle::Stars => values.extend([
             2.0,
             star_density,
-            star_size_min,
-            star_size_max,
-            star_size_curve,
+            star_spacing_min,
+            star_spacing_max,
+            star_spacing_curve,
             star_randomness,
             star_jitter,
         ]),
@@ -1956,7 +1959,7 @@ mod tests {
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_min: harmonigraph_scene::STAR_SPACING_MIN,
                 ..fresh.stars
             },
 
@@ -2021,8 +2024,8 @@ mod tests {
         let coarse = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_density: 1.0,
-                star_size_min: 3.0,
-                star_size_curve: 1.0,
+                star_spacing_min: 3.0,
+                star_spacing_curve: 1.0,
                 ..Default::default()
             },
 
@@ -2035,7 +2038,7 @@ mod tests {
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
                 star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_size_min: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_min: harmonigraph_scene::STAR_SPACING_MIN,
                 ..coarse.stars
             },
 

@@ -279,7 +279,7 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
         a.settings.stars.star_speed_max = 0.0;
         if budgeted {
             a.settings.stars.star_density = harmonigraph_scene::atmosphere::STAR_DENSITY_MAX;
-            a.settings.stars.star_size_min = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
+            a.settings.stars.star_spacing_min = harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
         }
         let settings = a.settings;
         let old_cells = star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells;
