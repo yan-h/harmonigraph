@@ -536,3 +536,40 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
         }
     }
 }
+
+/// `Overlap light` only ever adds light, and adds it where stars at one depth
+/// overlap past full coverage. The fresh far bed is dense enough to get there
+/// (two neighbours each cover about 0.7 halfway between them), read 2x2 as
+/// the plan picks and again with every depth forced 3x3, so the excess is
+/// gathered through the halo images too.
+#[test]
+fn overlap_light_brightens_saturated_overlaps_only() {
+    let Some((device, queue)) = headless_device() else { return };
+    use harmonigraph_scene::star_plan::{StarGather, StarTestBed};
+    let mut three = StarTestBed::default();
+    for depth in &mut three.depths {
+        depth.gather = Some(StarGather::Three);
+    }
+    for bed in [None, Some(three)] {
+        let frame = |light: f32| {
+            let mut cb = star_fixture([129, 97], egui::pos2(7.0, 11.0));
+            let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+            stars.star_overlap_light = light;
+            stars.test_bed = bed;
+            frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.25)
+        };
+        let (plain, lit) = (frame(0.0), frame(1.0));
+        let gains: Vec<i32> = lit
+            .iter()
+            .zip(&plain)
+            .map(|(lit, plain)| i32::from(*lit) - i32::from(*plain))
+            .collect();
+        assert!(
+            gains.iter().all(|&gain| gain >= -1),
+            "overlap light darkened a pixel (bed {bed:?})"
+        );
+        let brighter = gains.iter().filter(|&&gain| gain >= 8).count();
+        assert!(brighter > 0, "no overlap reached past full coverage (bed {bed:?})");
+        println!("bed {:?}: {brighter} of {} channels brighter", bed.is_some(), lit.len());
+    }
+}

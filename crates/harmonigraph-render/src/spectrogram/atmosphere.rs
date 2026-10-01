@@ -1002,6 +1002,7 @@ fn memory_key(
                 star_core_near: _, // response/coverage changes do not change material identity
                 star_falloff: _, // response/coverage changes do not change material identity
                 star_far_fill: _, // composition does not change material identity
+                star_overlap_light: _, // composition does not change material identity
                 test_bed: _,  // its cells and bands are appended where the cells are
             },
         material_settings:
@@ -1770,7 +1771,7 @@ impl Targets {
                 let [width, height] = self.near_size().unwrap_or([0, 0]);
                 Float4([width as f32, height as f32, 0.0, 0.0])
             },
-            star_geometry: star_geometry(settings.stars.star_far_fill),
+            star_geometry: star_geometry(settings.stars),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),

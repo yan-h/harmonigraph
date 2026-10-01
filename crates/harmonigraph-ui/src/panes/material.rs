@@ -167,6 +167,12 @@ pub(super) fn stars(
         .on_hover_text(
             "Fills thin background gaps between distant stars using their own colors. 0% keeps the original coverage, 50% fills gently, and 100% fills more strongly. Completely empty gaps remain empty.",
         );
+    ValueBar::new(&mut atmosphere.star_overlap_light, 0.0..=1.0, "Overlap light")
+        .percent()
+        .show(ui)
+        .on_hover_text(
+            "How overlapping stars at the same depth combine where together they cover the background completely. 0% averages their colors, so a cluster is no brighter than its average star; 100% adds their light, brightening toward full intensity. Stars that do not fully cover the background already add their light either way.",
+        );
     ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
         .percent()
         .show(ui)
