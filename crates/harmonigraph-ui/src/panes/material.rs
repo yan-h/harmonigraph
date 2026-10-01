@@ -165,6 +165,62 @@ pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::S
     }
 }
 
+/// RESEARCH (PR #1321), never merged: switches the spectrogram's near two
+/// star depths between production and the 2x2 reads live, for comparison in
+/// the DAW. Not persisted: every load starts at production (or at
+/// `HARMONIGRAPH_STARS_PROTO` / `HARMONIGRAPH_STARS_NEAR_CORE` when set).
+pub(super) fn stars_near_research(ui: &mut egui::Ui) {
+    use harmonigraph_render::StarsProto;
+    let mut proto = StarsProto::current();
+    let before = proto;
+    crate::widgets::choice_row(
+        ui,
+        "Near 2\u{d7}2 (research)",
+        &mut proto,
+        &[
+            (StarsProto::Off, "Off", "Production: native near cores plus a 3\u{d7}3 halo."),
+            (
+                StarsProto::N1,
+                "N1",
+                "Native near cores; the near halo gathers 2\u{d7}2 instead of 3\u{d7}3.",
+            ),
+            (
+                StarsProto::N2,
+                "N2",
+                "No near halo passes: each near depth draws its whole star from one 2\u{d7}2 read.",
+            ),
+        ],
+    );
+    if proto != before {
+        proto.set_current();
+    }
+    let mut core = harmonigraph_render::stars_near_core();
+    let before = core;
+    ui.add_enabled_ui(proto != StarsProto::Off, |ui| {
+        crate::widgets::choice_row(
+            ui,
+            "Near glow (research)",
+            &mut core,
+            &[
+                (None, "Off", "Today's near star shape, its fringe tied to the core's width."),
+                (
+                    Some(1.0),
+                    "Core 1\u{d7}",
+                    "Fringe tied to the 2\u{d7}2 reach instead; the core keeps its size.",
+                ),
+                (
+                    Some(0.5),
+                    "Core \u{bd}\u{d7}",
+                    "Half-size core inside the reach-tied glow: same footprint, more of it glow.",
+                ),
+            ],
+        );
+    });
+    if core != before {
+        harmonigraph_render::set_stars_near_core(core);
+    }
+}
+
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::{
         STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,

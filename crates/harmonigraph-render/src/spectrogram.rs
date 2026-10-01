@@ -533,7 +533,7 @@ impl CallbackTrait for SpectrogramCallback {
         let proto = callback_resources
             .get::<crate::stars::StarsProto>()
             .copied()
-            .unwrap_or_else(crate::stars::StarsProto::from_env);
+            .unwrap_or_else(crate::stars::StarsProto::current);
         let recreate = callback_resources
             .get::<SpectrogramResources>()
             .is_none_or(|r| r.target_format != self.target_format);

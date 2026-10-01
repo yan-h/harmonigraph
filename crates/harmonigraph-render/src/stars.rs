@@ -636,12 +636,14 @@ pub(crate) fn image(
 //   switches both to a support-tied glow (see `proto_near_core`).
 //
 // Chosen per `CallbackResources` (the timing probe inserts one per case) or,
-// absent that, by `HARMONIGRAPH_STARS_PROTO=off|p1|p1x|p2|n1|n2`. `Off` draws
-// production. Colour memory is forced off under P1, P1x and P2.
+// absent that, by the live selection (`StarsProto::current`), which starts at
+// `HARMONIGRAPH_STARS_PROTO=off|p1|p1x|p2|n1|n2` and which the plugin's Stars
+// settings switch at run time. `Off` draws production. Colour memory is forced
+// off under P1, P1x and P2.
 
 /// Which starfield the spectrogram draws. RESEARCH ONLY.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum StarsProto {
+pub enum StarsProto {
     #[default]
     Off,
     P1,
@@ -651,22 +653,51 @@ pub(crate) enum StarsProto {
     N2,
 }
 
-impl StarsProto {
-    pub(crate) fn from_env() -> Self {
-        static PROTO: std::sync::OnceLock<StarsProto> = std::sync::OnceLock::new();
-        *PROTO.get_or_init(|| {
-            match std::env::var("HARMONIGRAPH_STARS_PROTO").as_deref().map(str::trim) {
-                Err(_) | Ok("" | "off") => Self::Off,
-                Ok("p1") => Self::P1,
-                Ok("p1x") => Self::P1x,
-                Ok("p2") => Self::P2,
-                Ok("n1") => Self::N1,
-                Ok("n2") => Self::N2,
-                Ok(other) => {
-                    panic!("HARMONIGRAPH_STARS_PROTO={other}: want off, p1, p1x, p2, n1 or n2")
-                }
+/// The process-wide live selection: the starfield's `code` and the near
+/// core factor's bits (NaN for unset). Every spectrogram in the process reads
+/// it, so two plugin instances switch together.
+struct Live {
+    proto: std::sync::atomic::AtomicU32,
+    core: std::sync::atomic::AtomicU32,
+}
+
+fn live() -> &'static Live {
+    static LIVE: std::sync::OnceLock<Live> = std::sync::OnceLock::new();
+    LIVE.get_or_init(|| {
+        let proto = match std::env::var("HARMONIGRAPH_STARS_PROTO").as_deref().map(str::trim) {
+            Err(_) | Ok("" | "off") => StarsProto::Off,
+            Ok("p1") => StarsProto::P1,
+            Ok("p1x") => StarsProto::P1x,
+            Ok("p2") => StarsProto::P2,
+            Ok("n1") => StarsProto::N1,
+            Ok("n2") => StarsProto::N2,
+            Ok(other) => {
+                panic!("HARMONIGRAPH_STARS_PROTO={other}: want off, p1, p1x, p2, n1 or n2")
             }
-        })
+        };
+        let core = std::env::var("HARMONIGRAPH_STARS_NEAR_CORE")
+            .ok()
+            .map(|v| v.trim().parse::<f32>().expect("HARMONIGRAPH_STARS_NEAR_CORE=<factor>"));
+        Live { proto: proto.code().into(), core: core.unwrap_or(f32::NAN).to_bits().into() }
+    })
+}
+
+impl StarsProto {
+    /// The live selection, which starts at `HARMONIGRAPH_STARS_PROTO`.
+    pub fn current() -> Self {
+        Self::from_code(live().proto.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Switches every spectrogram's starfield from its next frame on.
+    pub fn set_current(self) {
+        live().proto.store(self.code(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn from_code(code: u32) -> Self {
+        [Self::Off, Self::P1, Self::P1x, Self::P2, Self::N1, Self::N2]
+            .into_iter()
+            .find(|p| p.code() == code)
+            .unwrap_or_default()
     }
 
     /// The shaders' `STAR_PROTO` override.
@@ -744,17 +775,20 @@ const PROTO_P2_GAIN: f32 = 0.23;
 /// Set (to any value, 1 included) it switches the near two depths to a
 /// support-tied glow: their Gaussian core's `sigma` and `cap` are multiplied
 /// by the factor (before defocus), and their fringe stops decaying in sigma
-/// units and runs `exp(-3 dist / (R size))` instead, R the 2x2 support's `1 -
+/// units and runs `exp(-1.5 dist / (R size))` instead, R the 2x2 support's `1 -
 /// 0.3 jitter` cells and `size` the star's own size draw, faded out over R's
 /// last .15 like the far path. The star keeps its footprint while more of it
 /// glows. Unset, N1/N2 draw today's star shape (sigma-tied fringe).
-pub(crate) fn proto_near_core() -> Option<f32> {
-    static CORE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
-    *CORE.get_or_init(|| {
-        std::env::var("HARMONIGRAPH_STARS_NEAR_CORE")
-            .ok()
-            .map(|v| v.trim().parse().expect("HARMONIGRAPH_STARS_NEAR_CORE=<factor>"))
-    })
+///
+/// The live value starts at the environment's; [`set_near_core`] switches it.
+pub fn proto_near_core() -> Option<f32> {
+    let core = f32::from_bits(live().core.load(std::sync::atomic::Ordering::Relaxed));
+    (!core.is_nan()).then_some(core)
+}
+
+/// Switches [`proto_near_core`] from every spectrogram's next frame on.
+pub fn set_near_core(core: Option<f32>) {
+    live().core.store(core.unwrap_or(f32::NAN).to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Whether this starfield draws N1/N2's support-tied glow (the shader's

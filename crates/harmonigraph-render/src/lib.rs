@@ -78,6 +78,10 @@ mod stars;
 pub use dot_shadow::dot_shadow_paint_callback;
 pub use glow::{glow_paint_callback, GlowDot};
 use lattice_node_glow::create_glow_pipelines;
+/// RESEARCH (PR #1321): the live starfield switch the Stars settings drive.
+pub use stars::{
+    proto_near_core as stars_near_core, set_near_core as set_stars_near_core, StarsProto,
+};
 
 /// Label text, for the same reason the roll has its own callback: what a
 /// label costs is the rim, and the rim was the text drawn again once per
