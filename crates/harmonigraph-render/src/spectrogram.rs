@@ -916,7 +916,7 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
                         pass.draw(0..pane.count, 0..1);
                     }
-                    target.blur(egui_encoder, cloud);
+                    target.blur(egui_encoder, cloud, settings.settings.spread > 0.0);
                     {
                         // Once filtering is finished, the raw source texture is
                         // free to hold the soft intensity. Fill the whole pane:
@@ -2142,6 +2142,34 @@ mod tests {
             terraces,
             fresh_frame(&device, &queue, &cb),
             "zero widths disabled the terraces"
+        );
+    }
+
+    /// At the fresh `Wide blur mix` of 0 the wide filter pair is skipped, and
+    /// nothing moves for it: a target whose wide half still holds an earlier
+    /// frame's blur draws the same bytes as one that never ran it.
+    #[test]
+    fn a_zero_wide_blur_mix_skips_the_wide_passes_and_moves_nothing() {
+        let Some((device, queue)) = headless_device() else { return };
+        let passes = |resources: &CallbackResources| {
+            let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+            pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed)
+        };
+        let mut cb = cloud_fixture();
+        assert!(
+            cb.atmosphere.unwrap().settings.spread > 0.0,
+            "the fixture never fills the wide target"
+        );
+        let mut resources = CallbackResources::default();
+        frame_with(&device, &queue, &mut resources, &cb);
+        let filled = passes(&resources);
+        cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
+        let stale = frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(passes(&resources) - filled, filled - 2, "the wide passes still ran at mix 0");
+        assert_eq!(
+            stale,
+            fresh_frame(&device, &queue, &cb),
+            "the stale wide blur reached the picture"
         );
     }
 

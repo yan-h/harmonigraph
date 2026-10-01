@@ -1788,11 +1788,19 @@ impl Targets {
         pass.draw(0..3, 0..1);
     }
 
-    pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+    /// The two filter scales. `wide` is false at a `Wide blur mix` of 0, the
+    /// fresh one, where the wide pair is skipped: `fs_cloud_light` reads
+    /// `mix(close, wide, 0)`, which is `close` exactly for any finite texel,
+    /// and the wide target only ever holds zeros or an earlier frame's filter
+    /// output.
+    pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines, wide: bool) {
         // Source -> scratch -> close; close -> scratch -> wide. Feeding the
         // already softened image to the wide kernel closes its sampling gaps.
         // Every pass reads a different texture from the attachment it writes.
-        for (i, (input, output)) in [(0, 0), (1, 1), (2, 0), (1, 2)].into_iter().enumerate() {
+        let passes = if wide { 4 } else { 2 };
+        for (i, (input, output)) in
+            [(0, 0), (1, 1), (2, 0), (1, 2)].into_iter().enumerate().take(passes)
+        {
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
