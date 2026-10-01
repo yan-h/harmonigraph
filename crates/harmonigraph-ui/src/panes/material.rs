@@ -199,19 +199,19 @@ pub(super) fn stars_near_research(ui: &mut egui::Ui) {
     ui.add_enabled_ui(proto != StarsProto::Off, |ui| {
         crate::widgets::choice_row(
             ui,
-            "Near glow (research)",
+            "Star glow (research)",
             &mut core,
             &[
-                (None, "Off", "Today's near star shape, its fringe tied to the core's width."),
+                (None, "Off", "Today's star shape at every depth, its fringe tied to the core's width."),
                 (
                     Some(1.0),
                     "Core 1\u{d7}",
-                    "Fringe tied to the 2\u{d7}2 reach instead; the core keeps its size.",
+                    "Every depth: fringe tied to the 2\u{d7}2 reach instead; the core keeps its size.",
                 ),
                 (
                     Some(0.5),
                     "Core \u{bd}\u{d7}",
-                    "Half-size core inside the reach-tied glow: same footprint, more of it glow.",
+                    "Every depth: half-size core inside the reach-tied glow, same footprint, more of it glow.",
                 ),
             ],
         );

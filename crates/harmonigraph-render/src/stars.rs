@@ -772,8 +772,10 @@ pub(crate) fn proto_p2_gain() -> f32 {
 const PROTO_P2_GAIN: f32 = 0.23;
 
 /// `HARMONIGRAPH_STARS_NEAR_CORE=<factor>` — N1/N2 only, unset by default.
-/// Set (to any value, 1 included) it switches the near two depths to a
-/// support-tied glow: their Gaussian core's `sigma` and `cap` are multiplied
+/// Set (to any value, 1 included) it switches every depth to a support-tied
+/// glow (the near two at first; PR #1322 extended it to the far three, which
+/// then draw through the near path's `star_near_gather`): their Gaussian
+/// core's `sigma` and `cap` are multiplied
 /// by the factor (before defocus), and their fringe stops decaying in sigma
 /// units and runs `exp(-1.5 dist / (R size))` instead, R the 2x2 support's `1 -
 /// 0.3 jitter` cells and `size` the star's own size draw, faded out over R's
@@ -797,11 +799,11 @@ pub(crate) fn proto_near_glow(proto: StarsProto) -> bool {
     matches!(proto, StarsProto::N1 | StarsProto::N2) && proto_near_core().is_some()
 }
 
-/// Applies [`proto_near_core`]'s factor to the near two slices' cores under
-/// glow; every other starfield's slices are left as `star_slices` made them.
+/// Applies [`proto_near_core`]'s factor to every slice's core under glow;
+/// every other starfield's slices are left as `star_slices` made them.
 pub(crate) fn proto_scale_near(slices: &mut [StarSlice; STAR_SLICES], proto: StarsProto) {
     let Some(factor) = proto_near_core().filter(|_| proto_near_glow(proto)) else { return };
-    for slice in &mut slices[3..] {
+    for slice in slices {
         slice.sigma *= factor;
         slice.cap *= factor;
     }

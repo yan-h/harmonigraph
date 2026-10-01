@@ -122,10 +122,10 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
     if paint.a != 1.0 { fade *= paint.a; }
     var centre_x = bitcast<u32>(centre.x);
-    // RESEARCH N1/N2 support-tied glow: a near star's size draw rides in its
+    // RESEARCH N1/N2 support-tied glow: a star's size draw rides in its
     // centre's lowest mantissa byte (under 3e-5 of a cell), because the baked
-    // inverse sigma loses it wherever the cap binds.
-    if star_near_glow() && salt >= 1000u + 3u * STAR_FAR_LAYERS {
+    // inverse sigma loses it wherever the cap binds. Every depth glows.
+    if star_near_glow() {
         centre_x = (centre_x & 0xffffff00u) | u32(c.y * 256.0);
     }
     return vec4<u32>(
@@ -323,6 +323,10 @@ fn star_near_gather(s: StarSlice, r: vec2<f32>, residual: bool) -> vec4<f32> {
 
 fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
     if STAR_PROTO == 2u { return star_far_own(s, r); }
+    // RESEARCH N1/N2 glow (PR #1322): the far three take the near depths'
+    // support-tied glow too. Without it `star_near_texel(.., false)` IS
+    // `star_far_texel`, so this changes nothing but the glow.
+    if star_near_glow() { return star_near_gather(s, r, false); }
     let o = floor(r - 0.5);
     let f = r - o;
     let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
