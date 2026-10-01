@@ -228,7 +228,7 @@ fn atmosphere_costs_by_polyphony() {
             });
             match case {
                 "off" => {
-                    variant.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+                    variant.atmosphere.texture_depth = 0.0;
                     variant.atmosphere.breath_amount = 0.0;
                 }
                 "watercolor" => {

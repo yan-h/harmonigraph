@@ -347,7 +347,6 @@ pub(super) fn tile_key(
     let harmonigraph_scene::SpectralAtmosphere {
         pitch_softness: _,     // applied after the tile bake
         time_softness: _,      // applied after the tile bake
-        spread: _,             // applied after the tile bake
         blur_time_step: _,     // applied after the tile bake
         contour_strength: _,   // applied after the tile bake
         contours: _,           // applied after the tile bake
@@ -419,7 +418,7 @@ struct Uniforms {
     size: Float2,
     step: Float2,
     ppp: f32,
-    spread: f32,
+    padding: u32,
     contours: f32,
     contour_softness: f32,
     contour_strength: f32,
@@ -561,7 +560,7 @@ pub(super) struct Pipelines {
     pub backdrop: wgpu::RenderPipeline,
     filter_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
-    filters: [wgpu::RenderPipeline; 4],
+    filters: [wgpu::RenderPipeline; 2],
     sampler: wgpu::Sampler,
     /// The tile's repeating sampler — see the shader's `tile_sampler`, where
     /// the reason the other reads must keep clamping is spelled out.
@@ -608,7 +607,6 @@ impl Pipelines {
             label: Some("spectral_cloud_composite_layout"),
             entries: &[
                 texture(0),
-                texture(1),
                 sampler_entry(2),
                 uniform(3),
                 texture(4),
@@ -677,7 +675,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(&filter_layout)],
             ..Default::default()
         });
-        let filters = ["fs_close_h", "fs_close_v", "fs_wide_h", "fs_wide_v"].map(|entry| {
+        let filters = ["fs_close_h", "fs_close_v"].map(|entry| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
@@ -966,7 +964,6 @@ fn memory_key(
     let harmonigraph_scene::SpectralAtmosphere {
         pitch_softness,
         time_softness,
-        spread,
         blur_time_step: _, // response/coverage changes do not change material identity
         contour_strength,
         contours,
@@ -1033,7 +1030,6 @@ fn memory_key(
         read.level_per_midi,
         pitch_softness,
         time_softness,
-        spread,
     ];
     match cloud_style {
         CloudStyle::Stars => values.extend([
@@ -1104,7 +1100,7 @@ pub(super) struct Targets {
     /// bilinear read at the divider otherwise blends with a cleared texel and
     /// draws a dark seam. The original data mesh still bounds measured sound.
     pub tone_vertices: wgpu::Buffer,
-    views: [wgpu::TextureView; 3],
+    views: [wgpu::TextureView; 2],
     /// The precomposite and its size: reduced scalar cloud tone or RGB
     /// of the three far Stars layers (75% for High, 50% for Medium, one third for Low, native for Uniform).
     /// None works the texture out per pixel in the composite.
@@ -1124,7 +1120,7 @@ pub(super) struct Targets {
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
-    filter_groups: [wgpu::BindGroup; 3],
+    filter_groups: [wgpu::BindGroup; 2],
     pub bake_group: wgpu::BindGroup,
     /// Reads the baked material and writes the tone target, so the tone target
     /// is the one view this group must NOT carry.
@@ -1178,11 +1174,7 @@ impl Targets {
         let sized = |label, size: [u32; 2]| formatted(label, size, FORMAT);
         let view = |label| sized(label, size);
         let source_view = view("spectral_cloud_source");
-        let views = [
-            view("spectral_cloud_scratch"),
-            view("spectral_cloud_close"),
-            view("spectral_cloud_wide"),
-        ];
+        let views = [view("spectral_cloud_scratch"), view("spectral_cloud_close")];
         // Star presence is already part of the allocation key, so a style
         // change also replaces the tone's format even at identical sizes.
         let tone = tone_size.map(|size| {
@@ -1238,7 +1230,7 @@ impl Targets {
             std::mem::size_of::<SpectrogramUniforms>() as u64,
         );
         let uniform = buffer("spectral_cloud_uniform", std::mem::size_of::<Uniforms>() as u64);
-        let filter_groups = [&source_view, &views[0], &views[1]].map(|view| {
+        let filter_groups = [&source_view, &views[0]].map(|view| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("spectral_cloud_filter_group"),
                 layout: &pipelines.filter_layout,
@@ -1275,10 +1267,6 @@ impl Targets {
                         wgpu::BindGroupEntry {
                             binding: 0,
                             resource: wgpu::BindingResource::TextureView(front),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(&views[2]),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
@@ -1726,7 +1714,7 @@ impl Targets {
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
             ppp,
-            spread: settings.spread,
+            padding: 0,
             contours: settings.contours,
             contour_softness: settings.contour_softness,
             contour_strength: settings.contour_strength,
@@ -1827,19 +1815,10 @@ impl Targets {
         pass.draw(0..3, 0..1);
     }
 
-    /// The two filter scales. `wide` is false at a `Wide blur mix` of 0, the
-    /// fresh one, where the wide pair is skipped: `fs_cloud_light` reads
-    /// `mix(close, wide, 0)`, which is `close` exactly for any finite texel,
-    /// and the wide target only ever holds zeros or an earlier frame's filter
-    /// output.
-    pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines, wide: bool) {
-        // Source -> scratch -> close; close -> scratch -> wide. Feeding the
-        // already softened image to the wide kernel closes its sampling gaps.
+    /// Separable musical softness, from source through scratch to the filtered field.
+    pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
         // Every pass reads a different texture from the attachment it writes.
-        let passes = if wide { 4 } else { 2 };
-        for (i, (input, output)) in
-            [(0, 0), (1, 1), (2, 0), (1, 2)].into_iter().enumerate().take(passes)
-        {
+        for (i, (input, output)) in [(0, 0), (1, 1)].into_iter().enumerate() {
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

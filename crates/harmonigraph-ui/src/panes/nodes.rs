@@ -215,17 +215,13 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
             );
     });
     // Built off `ALL` with an exhaustive match rather than written out, the
-    // way `SpectralOrientation`'s row is and for its reason: a fifth order
+    // way `SpectralOrientation`'s row is and for its reason: another order
     // cannot reach this pane without a name and a hint of its own.
     // Every hint here is about WHEN a slice starts and nothing else: the orders
     // differ in the delay each slice waits, never in what it then does, which
     // is always the same smooth arrival.
     let orders = AnimationOrder::ALL.map(|order| {
             let (label, hint) = match order {
-                AnimationOrder::Simultaneous => (
-                    "Simultaneous",
-                    "Every octave slice of a node starts at the same moment. Stagger spread has no effect.",
-                ),
                 AnimationOrder::Circular => (
                     "Circular",
                     "Slices start one after another at the seam where the highest and lowest meet, sweeping from low to high pitch.",
@@ -242,12 +238,10 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
             (order, label, hint)
         });
     choice_row(ui, "Slice order", &mut view.note_animation.order, &orders);
-    ui.add_enabled_ui(view.note_animation.order != AnimationOrder::Simultaneous, |ui| {
-            ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
+    ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
                 .unit(100.0, "%")
                 .show(ui)
-                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together; Simultaneous ignores this setting.");
-        });
+                .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
     ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset & scale")
             .unit(100.0, "%").show(ui)
             .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");

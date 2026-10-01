@@ -10,9 +10,8 @@ rather than moving already-colored RGB pixels.
 Interpolating levels before coloring retains the stepped look;
 interpolating finished colors would soften those steps and can mix colors outside the gradient's path.
 
-Softness and Spread still build the source picture using the existing density-weighted filter.
-Both textures read that same combined field;
-Mosaic no longer reads the wide field independently of Spread.
+Pitch and time softness build the source picture using the density-weighted filter.
+Both textures read that same softened field.
 Mosaic keeps positive face refraction and negative gathering toward scale centers.
 Watercolor keeps its overlapping globs,
 lookup feathering and bleed,

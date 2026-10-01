@@ -929,7 +929,7 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
                         pass.draw(0..pane.count, 0..1);
                     }
-                    target.blur(egui_encoder, cloud, settings.settings.spread > 0.0);
+                    target.blur(egui_encoder, cloud);
                     {
                         // Once filtering is finished, the raw source texture is
                         // free to hold the soft intensity. Fill the whole pane:
@@ -1959,7 +1959,6 @@ mod tests {
                 // ridge, which is what the diffusion probes measure.
                 pitch_softness: 35.0,
                 time_softness: 120.0,
-                spread: 0.25,
                 // The retired Lava style's terraces, for the probes that turn
                 // `contour_strength` up.
                 contours: 7.0,
@@ -2139,7 +2138,7 @@ mod tests {
                 .unwrap()
                 .encoded_passes
                 .load(Ordering::Relaxed),
-            6,
+            4,
             "the counter must observe actual source, filter and bake passes"
         );
         // The prior one-pixel source integrated every slab and visible bin:
@@ -2177,34 +2176,6 @@ mod tests {
             terraces,
             fresh_frame(&device, &queue, &cb),
             "zero widths disabled the terraces"
-        );
-    }
-
-    /// At the fresh `Wide blur mix` of 0 the wide filter pair is skipped, and
-    /// nothing moves for it: a target whose wide half still holds an earlier
-    /// frame's blur draws the same bytes as one that never ran it.
-    #[test]
-    fn a_zero_wide_blur_mix_skips_the_wide_passes_and_moves_nothing() {
-        let Some((device, queue)) = headless_device() else { return };
-        let passes = |resources: &CallbackResources| {
-            let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
-            pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed)
-        };
-        let mut cb = cloud_fixture();
-        assert!(
-            cb.atmosphere.unwrap().settings.spread > 0.0,
-            "the fixture never fills the wide target"
-        );
-        let mut resources = CallbackResources::default();
-        frame_with(&device, &queue, &mut resources, &cb);
-        let filled = passes(&resources);
-        cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
-        let stale = frame_with(&device, &queue, &mut resources, &cb);
-        assert_eq!(passes(&resources) - filled, filled - 2, "the wide passes still ran at mix 0");
-        assert_eq!(
-            stale,
-            fresh_frame(&device, &queue, &cb),
-            "the stale wide blur reached the picture"
         );
     }
 
@@ -2286,49 +2257,6 @@ mod tests {
         // display intensity instead of this brighter decoded result.
         let expected = (255.0_f32 / (0.1 + 1.81_f32.sqrt())).round() as u8;
         assert!(blue.abs_diff(expected) <= 2, "all encoded columns contribute, got {blue}");
-    }
-
-    #[test]
-    fn a_wide_kernel_narrower_than_its_quadrature_reads_the_texel_grid() {
-        let Some((device, queue)) = headless_device() else { return };
-        let mut cb = cloud_fixture();
-        // One slab per source texel with one of them lit, read through the wide
-        // field alone. A time softness this small leaves the time axis at full
-        // resolution, which is the zoomed-out pane's own case: the wide kernel
-        // is then narrower than the seventeen taps the sparse quadrature would
-        // spread over it, and the filter walks integer offsets instead.
-        //
-        // A slab a PIXEL, which is also what keeps `Blur time step` off this
-        // axis at its fresh step of one: a texel a slab is the full resolution
-        // here, so the dial has nothing to take down and the arm below is
-        // reached under the shipped settings rather than beside them.
-        relay_quad(&mut cb, 128);
-        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        (settings.pitch_softness, settings.time_softness, settings.spread) = (0.0, 30.0, 1.0);
-        let mut bytes = vec![0; 128 * BINS as usize];
-        bytes[64 * BINS as usize..65 * BINS as usize].fill(255);
-        cb.grid = grid_of(Arc::new(bytes), BINS, 128, 0);
-        // That arm's own predicate, restated so the fixture is checked to reach
-        // it rather than assumed to: `Targets::update` hands the filter
-        // `time_softness * points_per_ms` over the pane's width and the wide
-        // pass takes five times it, which is 1.5 texels here.
-        let source = atmosphere::source_size(SIZE, 1.0, cb.atmosphere.unwrap());
-        let sigma = 5.0 * 30.0 * 0.01 / SIZE[0] as f32 * source[0] as f32;
-        assert_eq!(source[0], SIZE[0], "the time axis was reduced away from the dense arm");
-        assert!(6.0 * sigma < 17.0, "the fixture missed the dense arm at {sigma} texels");
-        let frame = fresh_frame(&device, &queue, &cb);
-        let blue = |x: usize| frame[(64 * 128 + x) * 4 + 2];
-        assert!(blue(64) > 96, "the fixture never lit the slab it filled");
-        for k in 1..6 {
-            let (left, right) = (blue(64 - k), blue(64 + k));
-            assert!(left.abs_diff(right) <= 1, "the kernel leaned {k} texels off centre");
-            assert!(right < blue(63 + k), "the light rose {k} texels out");
-        }
-        // Three sigma is four and a half texels, so the taps are the four
-        // either side; the lit slab reaches one texel past its own peak, and
-        // nothing at all reaches six.
-        assert!(blue(69) > 0, "the kernel stopped short of its own three sigma");
-        assert_eq!(blue(70), 0, "the kernel reached past three sigma");
     }
 
     /// At one source texel a slab, the light field is the same picture the
@@ -2454,29 +2382,20 @@ mod tests {
             }
         }
         cb.grid.set_bytes(&bytes);
-        // The three looks the retired style enum named, each reached by the
-        // dials that replaced it and set where each frame covers its path: a
-        // blur wide on both axes with half of it from the wide kernel, so the
-        // wide filter passes run; the same under few hard-edged terraces, so
-        // they read as terraces; and everything off. Not the fresh dials: a
-        // fresh `Wide blur mix` of 0 skips the wide passes, and on this
-        // smooth field the fresh terraces are within 2/255 of no terraces.
+        // Plain, musical softness, and terraces over softness each exercise
+        // a visible path. Fresh terraces are too subtle on this smooth field.
         let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
         let apart = |a: &[u8], b: &[u8]| {
             let total: u32 = a.iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
             f64::from(total) / a.len() as f64
         };
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-        (s.pitch_softness, s.time_softness, s.spread, s.blur_time_step) = (60.0, 200.0, 0.5, 1.0);
+        (s.pitch_softness, s.time_softness, s.blur_time_step) = (60.0, 200.0, 1.0);
         let mut resources = CallbackResources::default();
         let blur = frame_with(&device, &queue, &mut resources, &cb);
         let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
         let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
-        assert_eq!(passes, 6, "the blur frame skipped the wide passes");
-        cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
-        let close = fresh_frame(&device, &queue, &cb);
-        assert!(apart(&blur, &close) > 1.0, "the wide kernel adds nothing to the blur frame");
-        cb.atmosphere.as_mut().unwrap().settings.spread = 0.5;
+        assert_eq!(passes, 4, "source, two filters and decode bake");
         gate.check("spectrogram-style-blur", SIZE, &blur);
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         (s.contour_strength, s.contours, s.contour_softness) = (1.0, 5.0, 0.05);
@@ -2493,6 +2412,9 @@ mod tests {
             return;
         };
         let mut cb = cloud_fixture();
+        // 90 cents at 0.03 points/cent gives sigma 2.7 px: the Gaussian
+        // reaches the outside-ridge probes without a second broad kernel.
+        cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 90.0;
         let lit = fresh_frame(&device, &queue, &cb);
         let mut plain = cloud_fixture();
         plain.atmosphere = None;
@@ -2546,7 +2468,6 @@ mod tests {
                 // provide that width; the source has no hidden quarter-res blur.
                 // Isolate the close field: the wide field intentionally carries
                 // the differently phased band edges into these interior probes.
-                cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
                 cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 140.0;
                 cb.atmosphere.as_mut().unwrap().settings.time_softness = 400.0;
                 let mut bytes = vec![0; 128 * BINS as usize];
@@ -2591,6 +2512,9 @@ mod tests {
     fn spectral_diffusion_softens_faint_detail_with_one_fade_to_the_palettes_floor() {
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = cloud_fixture();
+        // 90 cents at 0.03 points/cent gives sigma 2.7 px: the Gaussian
+        // reaches the outside-ridge probes without a second broad kernel.
+        cb.atmosphere.as_mut().unwrap().settings.pitch_softness = 90.0;
         let bytes: Vec<u8> = cb.grid.bytes().iter().map(|&v| if v > 0 { 102 } else { 0 }).collect();
         cb.grid.set_bytes(&bytes);
         // An edited palette may start above black, and then the diffused tail
@@ -2627,6 +2551,12 @@ mod tests {
         let Some((device, queue)) = headless_device() else { return };
         for turns in 0..4 {
             let mut cb = cloud_fixture();
+            // Resolve the single Gaussian's six-pixel tail independently of
+            // coarse history-column sampling; this probe tests region clipping.
+            let atmosphere = cb.atmosphere.as_mut().unwrap();
+            atmosphere.settings.time_softness = 300.0; // sigma 3 px
+            atmosphere.settings.blur_time_step = 0.0;
+            atmosphere.points_per_slab = 48.0 / 12.0;
             // History starts inside the pane. A ten-pixel ridge seeds enough
             // scalar density for a visible tail six pixels beyond that edge.
             let mut bytes = vec![0; cb.grid.bytes().len()];
@@ -2692,7 +2622,7 @@ mod tests {
         cb.grid.fill(96);
         let smooth = fresh_frame(&device, &queue, &cb);
         // A broad uniform field must stay uniform. Keep the probes beyond
-        // the wide filter's reach from the image edges.
+        // the filter's reach from the image edges.
         for y in 32..96 {
             for x in 32..96 {
                 let blue = smooth[(y * 128 + x) * 4 + 2];
@@ -2991,10 +2921,7 @@ mod tests {
     fn baked_spectrogram_shader_validates() {
         for (source, required) in [
             (SPECTROGRAM_SRC, SPECTROGRAM_ENTRY_POINTS),
-            (
-                atmosphere::SOURCE,
-                &["vs_fullscreen", "fs_close_h", "fs_close_v", "fs_wide_h", "fs_wide_v"][..],
-            ),
+            (atmosphere::SOURCE, &["vs_fullscreen", "fs_close_h", "fs_close_v"][..]),
         ] {
             let module = naga::front::wgsl::parse_str(source)
                 .map_err(|e| e.emit_to_string(source))
@@ -4701,7 +4628,6 @@ fn cs_rotation_probe() {
             ("Pooling width", |s| s.wash_pool_width = 0.2),
             ("Pooling softness", |s| s.wash_pool_softness = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
-            ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),
             // The mosaic's own dial, which the wash's walk cannot read.
             ("Size variation", |s| s.material_settings.scale_variety = 1.0),

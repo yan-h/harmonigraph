@@ -28,7 +28,7 @@ fn dialled() -> SharedState {
     appearance.view.max_sevens = 3;
     appearance.view.note_animation.order = harmonigraph_scene::AnimationOrder::Circular;
     appearance.view.note_animation.stagger_spread = 0.63;
-    appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+    appearance.view.atmosphere.texture_depth = 0.0;
     appearance.spectrum.orientation = crate::SpectralOrientation::Left;
     appearance.spectrum.roll_thickness = 1.75;
     appearance.spectrum.low_midi = 40.5;
@@ -96,6 +96,11 @@ fn enclosing_struct(blob: &str, at: usize) -> &str {
 /// or above the version floor can hold earn one: anything retired before it
 /// is refused with the blob that carries it.
 const RETIRED_KEYS: &[(&str, &str)] = &[
+    // Condensed controls are ignored without disturbing the surviving values.
+    ("pitch_softness", "spread:0.75,"),
+    ("pigment_reach", "material_shadow_width:7.0,material_shadow_softness:0.1,"),
+    ("texture_depth", "texture:None,"),
+    ("texture_depth", "texture:Clouds,"),
     // The cloud's sampling grid.
     ("cloud_depth", "cloud_tile:20.0,cloud_pixel:4.0,"),
     // Node spacing, including a non-finite one.
@@ -169,6 +174,7 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
 const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     ("orientation", "Left", "Diagonal", true),
     ("order", "Circular", "OddEvenStagger", true),
+    ("order", "Circular", "Simultaneous", true),
     ("spectrogram", "Scrolling", "Playhead", true),
     // The selected settings tab lives in the layout, so removing a tab is a
     // variant break too.
@@ -1645,7 +1651,6 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        texture: harmonigraph_scene::LatticeTexture::None,
         material_style: harmonigraph_scene::LatticeMaterial::Mosaic,
         material_amount: 0.63,
         material_settings: harmonigraph_scene::MaterialSettings {
@@ -1773,7 +1778,7 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
         "(diffusion:0.23, blur_mix:0.6, enabled:false, glow:0.4, spread:2.0, texture:0.8)",
     )
     .unwrap();
-    assert_eq!(partial, SpectralAtmosphere { spread: 2.0, ..Default::default() });
+    assert_eq!(partial, SpectralAtmosphere::default());
     let mut state = fresh();
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
         stars: harmonigraph_scene::StarSettings {

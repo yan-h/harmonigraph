@@ -123,18 +123,17 @@ This source is independent of the actual ring, mark and label shadows:
 changing pickup never replaces or suppresses those shadows,
 and changing an actual shadow’s width, darkness or kernel does not change pickup.
 
-The material controls expose four persisted fields:
+The material controls expose three persisted fields:
 
 - Dark pickup (`material_shadow_pickup`): 0–100%, default 0% (off).
 - Color pickup (`material_color_pickup`): 0–100%, default 0% (off).
-- Pickup width (`material_shadow_width`): full band width, 0–800% of the node radius, default 150%.
-- Pickup softness (`material_shadow_softness`): feather distance around each finite arc, 0–800% of the node radius, default 200%.
+- Pigment reach (`pigment_reach`): distance from each arc, 0–1200% of the node radius, default 275%. The solid half-band takes 3/11 of that reach and feathering takes 8/11, preserving the captured profile.
 
 The band is centered on the configured ring rim and follows each note’s light envelope,
 including release, independently of decorative breathing.
-Width zero disables both contributions.
+Reach zero disables both contributions.
 Material None, zero material amount and disabled glow also bypass them.
-Reset material restores all four controls.
+Reset material restores all three controls.
 A nonzero dark pickup saved from the earlier circular-band draft now fades in lit sectors;
 appearances without pickup retain zero for both strengths.
 

@@ -107,7 +107,7 @@ fn measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires() {
             let again = if off < 1.0 { 0.3 } else { 7.2 };
             // One fade after the off, plus the 0.9 spread an ordered release
             // holds its presence for.
-            let released = if order == AnimationOrder::Simultaneous { 6.0 } else { 7.0 };
+            let released = 7.0;
             for &now in times {
                 if now == off || now == again {
                     event(&mut audio, now, now == again);

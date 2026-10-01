@@ -20,12 +20,12 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
         // two draws per case that nothing reads (#1181).
         let sweep = root.is_some() || kernel == harmonigraph_scene::ShadowKernel::Distance;
         for (name, grow, order, spread) in [
-            ("plain", false, AnimationOrder::Simultaneous, 0.28),
-            ("grow", true, AnimationOrder::Simultaneous, 0.28),
+            ("plain", false, AnimationOrder::Circular, 0.0),
+            ("grow", true, AnimationOrder::Circular, 0.0),
             ("ordered", true, AnimationOrder::Circular, 0.28),
             ("wide", true, AnimationOrder::Circular, 0.9),
-            ("marks", false, AnimationOrder::Simultaneous, 0.28),
-            ("audio", false, AnimationOrder::Simultaneous, 0.28),
+            ("marks", false, AnimationOrder::Circular, 0.0),
+            ("audio", false, AnimationOrder::Circular, 0.0),
         ] {
             let mut scene = single_marked_node(MIDDLE_C, 0);
             scene.pluses.clear();

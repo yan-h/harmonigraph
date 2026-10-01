@@ -2707,7 +2707,6 @@ mod tests {
             |c: &mut SpectrumConfig| c.atmosphere.contour_strength = 0.0,
             |c: &mut SpectrumConfig| c.atmosphere.pitch_softness = 250.0,
             |c: &mut SpectrumConfig| c.atmosphere.time_softness = 1800.0,
-            |c: &mut SpectrumConfig| c.atmosphere.spread = 1.0,
             |c: &mut SpectrumConfig| c.atmosphere.contours = 12.0,
             |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
             |c: &mut SpectrumConfig| c.atmosphere.cloud_depth = 0.9,
