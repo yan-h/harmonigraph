@@ -498,7 +498,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         // A changed source at the identical clock, and an unrelated style dial,
         // must neither advance nor invalidate the active material's history.
         cb.grid.fill(0);
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_fringe += 0.1;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_glow += 0.1;
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources))[5000], held);
         // Palette interpretation changes are immediate even on a paused frame.

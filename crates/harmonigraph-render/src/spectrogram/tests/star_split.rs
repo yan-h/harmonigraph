@@ -124,8 +124,10 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                     vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
                 }
                 let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-                settings.stars.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
-                settings.stars.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
+                // The old fringe's top: a broad glow, short of a flat wash.
+                settings.stars.star_glow = 0.5;
+                (settings.stars.star_core_far, settings.stars.star_core_near) =
+                    (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
                 settings.stars.star_spacing_min = harmonigraph_scene::STAR_SPACING_MIN;
                 settings.stars.star_spacing_max = harmonigraph_scene::STAR_SPACING_MAX;
                 settings.cloud_depth = 1.0;
@@ -151,11 +153,14 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
             );
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
             // Bound both half-float rounding and aggregate error so a
-            // wider spatial mismatch still fails.
+            // wider spatial mismatch still fails. The mean is one level of
+            // half-float rounding on about 1% of channels (0.0098..0.0111):
+            // a star's glow eases to nothing at its radius, so more pixels
+            // carry a sliver of one than under the old cut-off fringe.
             let error: usize = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y) as usize).sum();
             let mean = error as f64 / a.len() as f64;
             assert!(
-                worst <= 2 && mean <= 0.01,
+                worst <= 2 && mean <= 0.015,
                 "memory={memory}, jitter={jitter}, step={step}: split differs by max {worst}, mean {mean}/255"
             );
             if let Some(previous) = first.as_ref() {
@@ -279,34 +284,16 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
     let read = "slice = star_texel(s, f, index, false);\n            slice += star_halo_at(pt, k);";
     assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Stars read moved");
     let core = "slice = star_texel(s, f, index, false);";
+    // The whole star, read from all nine cells without the inner/halo split.
     let full = r#"
         slice = vec4<f32>(0.0);
         for (var y = -1; y <= 1; y += 1) {
             for (var x = -1; x <= 1; x += 1) {
-                slice += reference_star(s, f - vec2<f32>(f32(x), f32(y)), index + y * s.grid.x + x);
+                slice += star_far_texel(s, f - vec2<f32>(f32(x), f32(y)), index + y * s.grid.x + x);
             }
         }
     "#;
-    Some(
-        source.replace(read, if mode == 1 { full } else { core })
-            + r#"
-// The original full response, without any compact-core subtraction.
-fn reference_star(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
-    let t = textureLoad(star_atlas, atlas_texel(index), 0);
-    if t.w == 0u { return vec4<f32>(0.0); }
-    let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    let reach = 1.2 * s.cell;
-    if dist >= reach { return vec4<f32>(0.0); }
-    let rgb = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
-    let shape = unpack2x16float(t.w);
-    let d = dist * shape.x;
-    var cover = exp(-0.5 * d * d);
-    if s.fringe > 0.0 { cover += s.fringe * exp(-0.4 * d); }
-    cover = min(cover, 1.0) * shape.y * (1.0 - smoothstep(0.7 * reach, reach, dist));
-    return vec4<f32>(rgb * cover, cover);
-}
-"#,
-    )
+    Some(source.replace(read, if mode == 1 { full } else { core }))
 }
 
 struct HaloOverride(u8);
@@ -327,10 +314,14 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([385, 217], egui::Pos2::ZERO);
     for jitter in [0.0, 0.5, 1.0] {
-        for fringe in [0.0, harmonigraph_scene::STAR_FRINGE_MAX] {
+        for fringe in [0.0, harmonigraph_scene::STAR_GLOW_MAX] {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.stars.star_jitter = jitter;
-            settings.stars.star_fringe = fringe;
+            settings.stars.star_glow = fringe;
+            // Cores out to the star's edge, so even a glowless star leaves
+            // its halo image enough light to witness.
+            (settings.stars.star_core_far, settings.stars.star_core_near) =
+                (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
             settings.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
             settings.stars.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
@@ -375,8 +366,14 @@ fn uniform_halos_preserve_the_original_array_lookup() {
     let Some((device, queue)) = headless_device() else { return };
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
-    cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile =
-        harmonigraph_scene::StarHaloProfile::Uniform;
+    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+    stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
+    // Every depth 3x3, so every depth owns a layer of the one Uniform array.
+    let mut bed = harmonigraph_scene::star_plan::StarTestBed::default();
+    for depth in &mut bed.depths {
+        depth.gather = Some(harmonigraph_scene::star_plan::StarGather::Three);
+    }
+    stars.test_bed = Some(bed);
     for resolution in [0.25, 0.5, 1.0] {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = resolution;
         let mut frames = Vec::new();
@@ -462,9 +459,10 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
             settings.stars.star_jitter = jitter;
             settings.stars.star_halo_profile = profile;
             settings.cloud_depth = 0.65;
-            settings.stars.star_fringe = harmonigraph_scene::STAR_FRINGE_MAX;
+            settings.stars.star_glow = harmonigraph_scene::STAR_GLOW_MAX;
             settings.stars.star_far_fill = 1.0;
-            settings.stars.star_defocus = harmonigraph_scene::STAR_DEFOCUS_MAX;
+            (settings.stars.star_core_far, settings.stars.star_core_near) =
+                (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
             if memory {
                 settings.color_pickup = 0.6;
                 settings.color_release = 0.6;

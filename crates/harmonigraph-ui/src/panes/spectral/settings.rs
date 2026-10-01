@@ -121,7 +121,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 );
             if atmosphere.cloud_style == CloudStyle::Stars {
                 super::super::material::stars_quality(ui, &mut atmosphere.stars);
-                super::super::material::stars_test_bed(ui, &mut atmosphere.stars);
+                super::super::material::stars_test_bed(ui, &mut atmosphere.stars, 1.0);
             }
             ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                 .percent().show(ui).on_hover_text(

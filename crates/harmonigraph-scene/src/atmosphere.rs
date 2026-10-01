@@ -41,12 +41,15 @@ pub enum CloudStyle {
     VelvetScales,
 }
 
-/// Stars rendering policy. P3 is the High preset; `Uniform`
-/// keeps native cores and uses the adjustable halo resolution for every depth.
+/// Stars rendering resolutions: the far image, the near image and the halo
+/// images. Which depths are drawn 2x2 or 3x3 is not the profile's choice but
+/// their stars' size ([`crate::star_plan`]). P3 is the High preset; `Uniform`
+/// draws at the pane's resolution and gives every 3x3 depth the adjustable
+/// halo resolution.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StarHaloProfile {
     Uniform,
-    /// Shorter-glow far three composited at 75%; near halos at 100% and 60%.
+    /// Far three at 75%; near halos at 100% and 60%.
     P3,
     /// Back three at 50%, foreground at 75%, near halos at 75% and 45%.
     #[default]
@@ -167,15 +170,22 @@ pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 pub const STAR_DENSITY_MIN: f32 = 0.5;
 /// See [`STAR_DENSITY_MIN`].
 pub const STAR_DENSITY_MAX: f32 = 10.0;
-/// The top of [`StarSettings::star_fringe`]: past half, the fringes of a
-/// dense slice add up to a flat wash of its average colour.
-pub const STAR_FRINGE_MAX: f32 = 0.5;
+/// The top of [`StarSettings::star_glow`]: the glow as bright as the core at
+/// its centre.
+pub const STAR_GLOW_MAX: f32 = 1.0;
+/// Bounds of [`StarSettings::star_core_far`] and [`StarSettings::star_core_near`],
+/// as a share of the star's radius.
+pub const STAR_CORE_MIN: f32 = 0.05;
+/// See [`STAR_CORE_MIN`].
+pub const STAR_CORE_MAX: f32 = 1.0;
+/// Bounds of [`StarSettings::star_falloff`], the glow's exponent.
+pub const STAR_FALLOFF_MIN: f32 = 0.5;
+/// See [`STAR_FALLOFF_MIN`].
+pub const STAR_FALLOFF_MAX: f32 = 6.0;
 /// Bounds for the per-axis resolution of the Stars halo images.
 pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
 
-/// The top of [`StarSettings::star_defocus`].
-pub const STAR_DEFOCUS_MAX: f32 = 1.5;
 /// Bounds shared by the two ends of the `Star spacing` control
 /// ([`StarSettings::star_spacing_min`], [`StarSettings::star_spacing_max`])
 /// and their sanitizer, in star pixels at density 2.
@@ -183,11 +193,12 @@ pub const STAR_SPACING_MIN: f32 = 0.5;
 /// See [`STAR_SPACING_MIN`].
 pub const STAR_SPACING_MAX: f32 = 64.0;
 /// Bounds shared by the two ends of the `Star size` control
-/// ([`StarSettings::star_diameter_min`], [`StarSettings::star_diameter_max`])
-/// and their sanitizer, in star pixels.
-pub const STAR_DIAMETER_MIN: f32 = 0.25;
-/// See [`STAR_DIAMETER_MIN`].
-pub const STAR_DIAMETER_MAX: f32 = 32.0;
+/// ([`StarSettings::star_size_min`], [`StarSettings::star_size_max`])
+/// and their sanitizer: a star's whole diameter, glow included, in star
+/// pixels.
+pub const STAR_SIZE_MIN: f32 = 0.5;
+/// See [`STAR_SIZE_MIN`].
+pub const STAR_SIZE_MAX: f32 = 64.0;
 /// How many times its stored `Star size` and `Star spacing` the lattice draws
 /// and shows them. The glow has no fine detail for stars to pick up, so its
 /// stars run bigger. Applied where the lattice draws and in its bars, never
@@ -195,7 +206,7 @@ pub const STAR_DIAMETER_MAX: f32 = 32.0;
 /// lacks takes the right fresh value in either.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
 /// Bounds shared by the two depth curves, [`StarSettings::star_spacing_curve`]
-/// and [`StarSettings::star_diameter_curve`], and their sanitizer.
+/// and [`StarSettings::star_size_curve`], and their sanitizer.
 pub const STAR_DEPTH_CURVE_MIN: f32 = 0.5;
 /// See [`STAR_DEPTH_CURVE_MIN`].
 pub const STAR_DEPTH_CURVE_MAX: f32 = 4.0;
@@ -483,15 +494,14 @@ pub struct StarSettings {
     /// star above and below the colour behind it, keeping their average. At 0
     /// every star is the colour behind it, lifted a little.
     pub star_randomness: f32,
-    /// How far the stars' cores shrink below their depth's size, each by its
-    /// own draw, independent of its brightness: every star at its depth's
-    /// size at 0, down to 1/11 of it at 1. Only shrinks, so no star grows into
-    /// the cap its spacing sets. Runs over 0..=1.
+    /// How far the stars shrink below their depth's size, each by its own
+    /// draw, independent of its brightness: every star at its depth's size at
+    /// 0, down to 1/11 of it at 1. Only shrinks, so no star grows past what
+    /// its depth's read holds. Runs over 0..=1.
     pub star_size_variation: f32,
     /// Positional variation within each cell, from regular centers at 0 to
-    /// the original 0.6-cell jitter width at 1. The optimized far-three response
-    /// ends at `1.0 - 0.3 * star_jitter` cells; Uniform and the nearest two
-    /// layers retain the wide 1.2-cell response.
+    /// the original 0.6-cell jitter width at 1. More variation shortens how
+    /// far each read holds a star whole ([`crate::star_plan::StarGather::bound`]).
     pub star_jitter: f32,
     /// The farthest depth's star spacing in star pixels at density 2. A depth
     /// `d` from 0 (far) to 1 (near) spaces its stars at `min · (max /
@@ -507,21 +517,21 @@ pub struct StarSettings {
     /// depths, higher puts most depths in the fine dust. Runs over
     /// [`STAR_DEPTH_CURVE_MIN`]..=[`STAR_DEPTH_CURVE_MAX`].
     pub star_spacing_curve: f32,
-    /// The farthest depth's star size: its core's diameter in star pixels,
-    /// four of its sigmas. A depth `d` spreads it like the spacing, `min ·
-    /// (max / min)^(d^curve)`, and the size is a function of that value
-    /// alone, so one value on the control is one star size at every depth.
-    /// A core never exceeds a third of its depth's spacing (a sigma of a
-    /// third of a cell), which keeps the dust pinpoint and every star inside
-    /// the cells a pixel reads. Runs over
-    /// [`STAR_DIAMETER_MIN`]..=[`STAR_DIAMETER_MAX`] (the lattice draws it
+    /// The farthest depth's star size: the whole star's diameter, glow
+    /// included, in star pixels. A depth `d` spreads it like the spacing,
+    /// `min · (max / min)^(d^curve)`, and the size is a function of that value
+    /// alone, so one value on the control is one star size at every depth. A
+    /// depth whose stars would not fit the widest read its spacing allows is
+    /// drawn at the widest that fits, and the panel says so
+    /// ([`crate::star_plan::StarDepthPlan::clamped`]). Runs over
+    /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`] (the lattice draws it
     /// [`LATTICE_STAR_SIZE_SCALE`] times over), never above
-    /// [`Self::star_diameter_max`].
-    pub star_diameter_min: f32,
-    /// The nearest depth's star size. See [`Self::star_diameter_min`].
-    pub star_diameter_max: f32,
+    /// [`Self::star_size_max`].
+    pub star_size_min: f32,
+    /// The nearest depth's star size. See [`Self::star_size_min`].
+    pub star_size_max: f32,
     /// The exponent on depth in the size, as [`Self::star_spacing_curve`].
-    pub star_diameter_curve: f32,
+    pub star_size_curve: f32,
     /// The farthest depth's drift speed: the slowest stars. A depth `d` from 0
     /// (far) to 1 (near) drifts at `min + (max - min) d^curve`, along the
     /// shared `Drift direction`; the stars never read `cloud_speed`, which is
@@ -540,10 +550,24 @@ pub struct StarSettings {
     /// alike at every depth. Each fades in and out over its life. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
-    /// A wider, fainter fringe of each star's own colour round its core, at
-    /// every depth: its coverage at the centre, falling off over 2.5 sigmas.
-    /// Runs to [`STAR_FRINGE_MAX`].
-    pub star_fringe: f32,
+    /// The glow round each star's core, in the star's own colour: its
+    /// coverage at the centre, falling to nothing at the star's edge as
+    /// `(1 - t)^falloff`, `t` the distance over the star's radius. Runs to
+    /// [`STAR_GLOW_MAX`].
+    pub star_glow: f32,
+    /// How much of the farthest depth's stars is core: where the Gaussian
+    /// core falls to `e^-2`, as a share of the star's radius. A depth `d`
+    /// takes `far + (near - far) d^curve` on the `Star size` curve, so a dense
+    /// bed of filled far stars can sit behind near stars that are points in a
+    /// glow. Runs over [`STAR_CORE_MIN`]..=[`STAR_CORE_MAX`], either way
+    /// round.
+    pub star_core_far: f32,
+    /// The nearest depth's core share. See [`Self::star_core_far`].
+    pub star_core_near: f32,
+    /// The glow's exponent: low spreads it as a broad haze to the star's edge,
+    /// high draws it in as a tight bloom round the core. Runs over
+    /// [`STAR_FALLOFF_MIN`]..=[`STAR_FALLOFF_MAX`].
+    pub star_falloff: f32,
     /// Coverage of the farthest three layers: 0 preserves their response,
     /// 0.5 squares remaining background leakage, and 1 raises it to the fourth
     /// power. Interpolates between those responses without adding stars.
@@ -556,14 +580,11 @@ pub struct StarSettings {
     /// resolutions, for the far three depths' one shared image and the
     /// nearest two's halos. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
-    /// How much every star is widened, equally at every depth.
-    /// Runs to [`STAR_DEFOCUS_MAX`].
-    pub star_defocus: f32,
-    /// The dev-only star test bed: while it is `Some`, the renderer draws this
-    /// plan instead of the profile's. Never saved, so every load starts at
-    /// production.
+    /// The dev-only star test bed: while it is `Some`, its overrides apply on
+    /// top of the plan these settings give. Never saved, so every load starts
+    /// at production.
     #[serde(skip)]
-    pub test_bed: Option<crate::star_plan::StarPlan>,
+    pub test_bed: Option<crate::star_plan::StarTestBed>,
 }
 impl Default for StarSettings {
     fn default() -> Self {
@@ -579,22 +600,31 @@ impl Default for StarSettings {
             star_spacing_min: 2.315533,
             star_spacing_max: 14.752405,
             star_spacing_curve: 2.1178954,
-            // Fitted to the cores the 2026-09-26 capture drew when size and
-            // spacing were one control: the far four depths unchanged (the
-            // far three at their spacing's cap), the nearest no longer
-            // smaller than the one behind it (1.03 star px sigma, was 0.60).
-            star_diameter_min: 1.37,
-            star_diameter_max: 4.1,
-            star_diameter_curve: 1.04,
+            // A rough fit of the core-and-fringe stars this replaced: the
+            // near two at the 1.2-cell reach they were drawn to, the far
+            // three just inside the 2x2 read (0.80-0.82 of a cell) so they
+            // keep its cost. The far cores fill their stars, as the old capped
+            // cores did, which is what made the far bed dense; the nearest
+            // core is the old one's share. A wider near core would sit mostly
+            // in a 3x3 depth's reduced halo image, soft and shimmering as it
+            // drifts. The gentle falloff holds the far stars near full
+            // coverage out to half a cell, as the old fringe on a wide core
+            // did; at 0.7 the fresh Medium frame sits 5.6/255 from the old
+            // one on average.
+            star_size_min: 1.66,
+            star_size_max: 15.8,
+            star_size_curve: 2.3,
             star_speed_min: 0.08931082,
             star_speed_max: 0.16860056,
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
-            star_fringe: 0.5,
+            star_glow: 0.5,
+            star_core_far: 1.0,
+            star_core_near: 0.35,
+            star_falloff: 0.7,
             star_far_fill: 0.0,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
-            star_defocus: 0.35391274,
             test_bed: None,
         }
     }
@@ -606,8 +636,8 @@ impl StarSettings {
         Self {
             star_spacing_min: self.star_spacing_min * scale,
             star_spacing_max: self.star_spacing_max * scale,
-            star_diameter_min: self.star_diameter_min * scale,
-            star_diameter_max: self.star_diameter_max * scale,
+            star_size_min: self.star_size_min * scale,
+            star_size_max: self.star_size_max * scale,
             ..self
         }
     }
@@ -647,10 +677,10 @@ impl StarSettings {
             STAR_SPACING_MIN..=STAR_SPACING_MAX,
         );
         pair(
-            &mut self.star_diameter_min,
-            &mut self.star_diameter_max,
-            [fresh.star_diameter_min, fresh.star_diameter_max],
-            STAR_DIAMETER_MIN..=STAR_DIAMETER_MAX,
+            &mut self.star_size_min,
+            &mut self.star_size_max,
+            [fresh.star_size_min, fresh.star_size_max],
+            STAR_SIZE_MIN..=STAR_SIZE_MAX,
         );
         self.star_spacing_curve = clamp(
             self.star_spacing_curve,
@@ -658,9 +688,9 @@ impl StarSettings {
             STAR_DEPTH_CURVE_MIN,
             STAR_DEPTH_CURVE_MAX,
         );
-        self.star_diameter_curve = clamp(
-            self.star_diameter_curve,
-            fresh.star_diameter_curve,
+        self.star_size_curve = clamp(
+            self.star_size_curve,
+            fresh.star_size_curve,
             STAR_DEPTH_CURVE_MIN,
             STAR_DEPTH_CURVE_MAX,
         );
@@ -680,7 +710,13 @@ impl StarSettings {
         );
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        self.star_fringe = clamp(self.star_fringe, fresh.star_fringe, 0.0, STAR_FRINGE_MAX);
+        self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
+        self.star_core_far =
+            clamp(self.star_core_far, fresh.star_core_far, STAR_CORE_MIN, STAR_CORE_MAX);
+        self.star_core_near =
+            clamp(self.star_core_near, fresh.star_core_near, STAR_CORE_MIN, STAR_CORE_MAX);
+        self.star_falloff =
+            clamp(self.star_falloff, fresh.star_falloff, STAR_FALLOFF_MIN, STAR_FALLOFF_MAX);
         self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);
         self.star_halo_resolution = clamp(
             self.star_halo_resolution,
@@ -688,9 +724,6 @@ impl StarSettings {
             STAR_HALO_RESOLUTION_MIN,
             STAR_HALO_RESOLUTION_MAX,
         );
-        self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
-        let production = crate::star_plan::StarPlan::production(self);
-        self.test_bed = self.test_bed.map(|plan| plan.sanitized(production));
         self
     }
 }
