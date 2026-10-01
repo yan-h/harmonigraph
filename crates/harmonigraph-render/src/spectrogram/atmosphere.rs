@@ -2059,7 +2059,7 @@ mod tests {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        let fade = star_geometry(0.0).0[2];
+        let fade = star_geometry(Default::default()).0[2];
         assert!(fade > 0.0 && fade < 1.0);
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let jitter = star_jitter_width(dial);

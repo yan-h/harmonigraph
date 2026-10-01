@@ -331,7 +331,7 @@ fn scenarios() -> Vec<Scenario> {
                 + 3
                 + 6
                 + 2
-                + 16
+                + 17
                 + 4
                 + usize::from(profile == harmonigraph_scene::StarHaloProfile::Uniform),
             ..base
@@ -366,10 +366,10 @@ fn scenarios() -> Vec<Scenario> {
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
-        (harmonigraph_scene::StarHaloProfile::P3, 16),
-        (harmonigraph_scene::StarHaloProfile::Medium, 16),
-        (harmonigraph_scene::StarHaloProfile::Low, 16),
-        (harmonigraph_scene::StarHaloProfile::Uniform, 17),
+        (harmonigraph_scene::StarHaloProfile::P3, 17),
+        (harmonigraph_scene::StarHaloProfile::Medium, 17),
+        (harmonigraph_scene::StarHaloProfile::Low, 17),
+        (harmonigraph_scene::StarHaloProfile::Uniform, 18),
     ] {
         cases.push(Scenario {
             pane: panes::Tab::AnalyzerSettings,
