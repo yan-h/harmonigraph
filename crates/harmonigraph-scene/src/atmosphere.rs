@@ -5,20 +5,17 @@ use harmonigraph_core::LatticePos;
 
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
-/// Distinct constructions: [`CloudStyle::Mosaic`] is a pile
-/// of soft domes joined by a soft union, and [`CloudStyle::Watercolor`] is a
-/// field of overlapping globs. Both displace the same scalar picture without
-/// altering its levels, then apply the shared Contours and palette controls.
+/// Distinct constructions: [`CloudStyle::Watercolor`] is a field of
+/// overlapping globs that displaces the scalar picture without altering its
+/// levels, then applies the shared Contours and palette controls.
 /// [`CloudStyle::VelvetScales`] instead averages each overlapping scallop's
 /// sampled light, with no raw source overlay at full material depth.
 ///
 /// **These name what Yan sees on the page, and the code under each keeps the
-/// name of its own CONSTRUCTION** — `scale_*` and `dome_*` for the mosaic's
-/// dome geometry, `wash_*` for the watercolour's laid-over globs. That split is
-/// not new and is not an oversight: the variant was `Water` over `scale_*`
-/// fields before it was `Mosaic` over them. A menu entry names a look and may
-/// be renamed whenever the look is better described; a field names the thing
-/// the arithmetic builds.
+/// name of its own CONSTRUCTION** — `wash_*` for the watercolour's laid-over
+/// globs, `velvet_*` for the scallops behind `Scales`. That split is not an
+/// oversight. A menu entry names a look and may be renamed whenever the look
+/// is better described; a field names the thing the arithmetic builds.
 ///
 /// Renaming either is allowed and neither is free, but do not read that as the
 /// two costing the same. They are not symmetric, and the cheap-looking one is
@@ -35,7 +32,6 @@ use harmonigraph_core::LatticePos;
 /// every `star_` setting belongs to it alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
-    Mosaic,
     Watercolor,
     Stars,
     VelvetScales,
@@ -58,10 +54,9 @@ pub enum StarHaloProfile {
     Low,
 }
 
-/// The band the cloud size dials run over — [`MaterialSettings::scale_size`],
-/// [`MaterialSettings::wash_size`] and [`MaterialSettings::velvet_size`], which
-/// mean the same thing about different textures and so are worth one pair of
-/// numbers rather than three.
+/// The band the cloud size dials run over — [`MaterialSettings::wash_size`]
+/// and [`MaterialSettings::velvet_size`], which mean the same thing about
+/// different textures and so are worth one pair of numbers rather than two.
 ///
 /// **Exported because the dial and the load-door clamp have to be the SAME
 /// range.** A bar that stops at one number over a clamp that stops at another
@@ -79,7 +74,8 @@ pub enum StarHaloProfile {
 /// finer raises the mean step between adjacent pixels until its own detail
 /// nears one pixel, and then that number stops moving: past there the dial is
 /// buying noise rather than a smaller texture. Over a 700-point pane — a
-/// 1080p export's — the mosaic's mean adjacent-pixel step runs 0.034 at 1x,
+/// 1080p export's — the faceted dome texture this was measured on (since
+/// retired) ran a mean adjacent-pixel step of 0.034 at 1x,
 /// 0.047 at 1/4, 0.058 at 1/8 and 0.062 at 1/16, and then FALLS to 0.061 at
 /// 0.05. 1/16 is where it turns over, which is about 1.6 points to a cell, so
 /// that is where the bar stops.
@@ -87,9 +83,9 @@ pub enum StarHaloProfile {
 /// Scales' `Cell size` (`velvet_size`) runs over the same band, but the floor
 /// was not measured on it, and its 1x is a coarser cell — about 6% of the
 /// pane's height — so on that pane the floor stops it at about 2.6 points to a
-/// cell rather than at the mosaic's turnover.
+/// cell rather than at the measured turnover.
 ///
-/// It is one floor over three textures and a pane whose height varies about
+/// It is one floor over two textures and a pane whose height varies about
 /// threefold, so it cannot be exactly right everywhere: the watercolour's
 /// globs are averaging toward a flat film by 1/8 already, and on a short
 /// editor pane the last of the travel aliases where on a tall portrait render
@@ -146,11 +142,6 @@ const MATERIAL_DIRECTION_DEFAULT: f32 = 174.0;
 pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
 /// See [`CLOUD_DIRECTION_MIN`].
 pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
-
-/// Bounds shared by the [`MaterialSettings::scale_refract`] control and sanitizer.
-pub const SCALE_REFRACT_MIN: f32 = -1.0;
-/// See [`SCALE_REFRACT_MIN`].
-pub const SCALE_REFRACT_MAX: f32 = 1.0;
 
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
@@ -258,30 +249,9 @@ pub struct MaterialSettings {
     pub velvet_irregularity: f32,
     /// Round bodies at zero, tapered overlapping scallops at one.
     pub velvet_shape: f32,
-    /// Size of one scale, as a multiplier on that size: how many of them cross
-    /// a cloud moves the other way, because the count is divided by this.
-    /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
-    pub scale_size: f32,
-    /// How much the scales differ in size from each other. 0 is one radius for
-    /// every glob in the field, which is the most regular texture there is; 1
-    /// draws each from the whole band the layer's coverage proof allows.
-    pub scale_variety: f32,
-    /// How far a scale carries the light behind it, and which way — the
-    /// refraction, and the whole reason the layer reads as a lens rather than
-    /// as something painted over the picture. 0 leaves the light where it is.
-    ///
-    /// ABOVE 0 the light is read where the scale's own face POINTS, in scale
-    /// widths, so the picture bends smoothly through the cloud. BELOW 0 it is
-    /// pulled toward the scale's CENTRE, and at -1 it is read there — one value
-    /// across the whole scale, so the picture comes apart into flat quantized
-    /// patches. That second half used to be its own `scale_facet` dial, a blend
-    /// between the two readings; the pair spanned a plane and the looks worth
-    /// having lie on this line through it, which is also exactly what the
-    /// watercolour's `wash_refract` has always meant by the word.
-    pub scale_refract: f32,
     /// How big one glob is, as a multiplier on that size: how many of them
     /// cross the cloud frame moves the other way, because the count is divided
-    /// by this. Larger is bigger, like `scale_size`, and over the same
+    /// by this. Larger is bigger, like `velvet_size`, and over the same
     /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
     pub wash_size: f32,
     /// One dial over everything that dissolves a glob's rim: how far it feathers
@@ -308,9 +278,6 @@ impl Default for MaterialSettings {
             velvet_edge: 0.34,
             velvet_irregularity: 0.8,
             velvet_shape: 1.0,
-            scale_size: 0.153_937_07,
-            scale_variety: 0.5,
-            scale_refract: -1.0,
             wash_size: 0.181_260_21,
             wash_fuzz: 1.0,
             wash_lobe: 1.0,
@@ -346,10 +313,6 @@ impl MaterialSettings {
         self.velvet_irregularity =
             clamp(self.velvet_irregularity, fresh.velvet_irregularity, 0.0, 1.0);
         self.velvet_shape = clamp(self.velvet_shape, fresh.velvet_shape, 0.0, 1.0);
-        self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
-        self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
-        self.scale_refract =
-            clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
@@ -446,7 +409,7 @@ pub struct SpectralAtmosphere {
     /// Drift speed, as a multiplier on a slow crossing like the lattice
     /// nebula's. The cloud FRAME it drifts in is fixed in the shader
     /// (`CLOUD_UNITS`): it used to be a dial, and it was a second copy of
-    /// `scale_size`/`wash_size` for the texture's size and of this one for its
+    /// `wash_size`/`velvet_size` for the texture's size and of this one for its
     /// travel.
     pub cloud_speed: f32,
     /// Constant visible texture drift direction in screen degrees: 0 points
@@ -466,8 +429,8 @@ pub struct SpectralAtmosphere {
     pub wash_pool_softness: f32,
     pub material_settings: MaterialSettings,
     /// Which texture the layer draws; [`CloudStyle`] says what each is. Each
-    /// reads its own settings and no other's: `scale_*` for `Mosaic`, `wash_*`
-    /// for `Watercolor` and `velvet_*` for `VelvetScales`, all in
+    /// reads its own settings and no other's: `wash_*` for `Watercolor` and
+    /// `velvet_*` for `VelvetScales`, both in
     /// [`Self::material_settings`], and [`Self::stars`] for `Stars`.
     pub cloud_style: CloudStyle,
     pub stars: StarSettings,
@@ -757,7 +720,7 @@ impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
             // The Stars look captured from the DAW on 2026-09-26: a sharp
-            // field with no time blur or spread, and the Mosaic and Wash
+            // field with no time blur or spread, and the Wash and Scales
             // controls below riding inert at their captured values.
             pitch_softness: 6.726_529_6,
             time_softness: 0.0,
@@ -861,11 +824,6 @@ impl SpectralAtmosphere {
             // color response; only a texture with none of these is bypassed.
             cloud: self.cloud_depth > 0.0
                 && match self.cloud_style {
-                    CloudStyle::Mosaic => {
-                        self.material_settings.scale_refract != 0.0
-                            || self.color_pickup > 0.0
-                            || self.color_release > 0.0
-                    }
                     CloudStyle::Watercolor => {
                         self.material_settings.wash_refract != 0.0
                             || self.material_settings.wash_randomness > 0.0
@@ -898,7 +856,6 @@ pub enum LatticeMaterial {
     #[default]
     None = 0,
     Watercolor = 1,
-    Mosaic = 2,
     Stars = 3,
     VelvetScales = 4,
 }

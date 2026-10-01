@@ -2,7 +2,7 @@
 
 ## Intent
 
-The lattice separates the Clouds pattern from the Watercolor and Mosaic displacement materials,
+The lattice separates the Clouds pattern from the Watercolor and Scales materials,
 so a cloudy glow can feed either material.
 The fixed order is note illumination and breathing → texture → optional segment pickup → material → lattice composition.
 Texture remains lit by notes;
@@ -15,11 +15,10 @@ Keep `ViewConfig::atmosphere` as the owner of lattice glow effects.
 Replace its combined enable/material controls with two independently selectable stages:
 
 - Texture: None, Clouds; depth, size and speed.
-- Material: None, Watercolor, Mosaic, Stars, Scales; amount and drift direction.
-Watercolor, Mosaic and Scales use Drift speed;
+- Material: None, Watercolor, Stars, Scales; amount and drift direction.
+Watercolor and Scales use Drift speed;
 Stars uses its depth-dependent Star speed range.
 - Watercolor: patch size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
-- Mosaic: cell size, size variation and signed refraction.
 - Scales: cell size, size variation, edge softness, irregularity and scale shape.
 - Breathing: depth and speed in the Background glow controls, independent of either stage.
 
@@ -66,8 +65,9 @@ saturated highlights vary less.
 The default is 0%,
 including when older saved settings omit the field.
 
-While the material is active, its geometry is keyed by material kind, quantized tile resolution and the active style’s geometry controls:
-Watercolor feathering/warp, or Mosaic variety.
+While Watercolor is active, its geometry is keyed by quantized tile resolution and its geometry controls:
+feathering and warp.
+Scales and Stars bake no tile.
 Texture settings, amount, refraction, random brightness, fine layer mix, drift, illumination, camera and the inactive style’s controls do not invalidate geometry.
 The active material source target has a lifetime bounded by the glow allocation;
 resizing the glow replaces that source as before.
@@ -156,7 +156,7 @@ RGB blending multiplies the incoming pigment by destination alpha,
 then attenuates the old RGB by pigment opacity.
 The alpha write mask preserves coverage,
 so colored pigment cannot create light where the source is empty or violate premultiplication.
-Watercolor or Mosaic samples this pigment along with the source light.
+Watercolor or Scales samples this pigment along with the source light.
 Bloom brightens the colored source pigment using its strength and luminance soft knee,
 with saturation at white to retain valid premultiplication.
 This is the user-selected brightness coupling,

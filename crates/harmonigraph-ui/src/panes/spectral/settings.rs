@@ -111,12 +111,6 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
                         (CloudStyle::VelvetScales, "Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
-                        (
-                            CloudStyle::Mosaic,
-                            "Mosaic",
-                            "A pile of soft domes refracting the sound through their faces, \
-                             then colored by the shared Contour levels and palette controls",
-                        ),
                     ],
                 );
             if atmosphere.cloud_style == CloudStyle::Stars {
@@ -137,17 +131,15 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
                 block(ui, "Appearance");
                 // Each style has its own controls: nothing a wash carries means
-                // anything to a refracting scale, and a page listing both would be mostly
+                // anything to a scallop, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
                 if atmosphere.cloud_style == CloudStyle::Stars {
                     super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
                 } else if atmosphere.cloud_style == CloudStyle::Watercolor {
                     super::super::material::watercolor(ui, &mut atmosphere.material_settings);
                     super::super::material::edge_pooling(ui, atmosphere);
-                } else if atmosphere.cloud_style == CloudStyle::VelvetScales {
-                    super::super::material::velvet(ui, &mut atmosphere.material_settings);
                 } else {
-                    super::super::material::mosaic(ui, &mut atmosphere.material_settings);
+                    super::super::material::velvet(ui, &mut atmosphere.material_settings);
                 }
                 block(ui, "Color response");
                 crate::widgets::response(

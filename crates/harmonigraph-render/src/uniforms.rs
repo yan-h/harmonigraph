@@ -139,11 +139,10 @@ uniform_group! {
         style: u32,
         fuzz: f32,
         lobe: f32,
-        variety: f32,
         refract: f32,
         layers: f32,
         randomness: f32,
-        padding: f32,
+        padding: Float2,
         velvet: Float4,
     }
 }

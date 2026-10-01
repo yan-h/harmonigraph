@@ -131,9 +131,6 @@ fn poisoned_view() -> ViewConfig {
                 velvet_edge: nan,
                 velvet_irregularity: nan,
                 velvet_shape: nan,
-                scale_size: nan,
-                scale_variety: nan,
-                scale_refract: nan,
                 wash_size: nan,
                 wash_fuzz: nan,
                 wash_lobe: nan,
@@ -438,9 +435,6 @@ fn scene_floats(scene: &Scene) -> Floats {
         velvet_edge,
         velvet_irregularity,
         velvet_shape,
-        scale_size,
-        scale_variety,
-        scale_refract,
         wash_size,
         wash_fuzz,
         wash_lobe,
@@ -453,9 +447,6 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.material_settings.velvet_edge", *velvet_edge);
     f.one("atmosphere.material_settings.velvet_irregularity", *velvet_irregularity);
     f.one("atmosphere.material_settings.velvet_shape", *velvet_shape);
-    f.one("atmosphere.material_settings.scale_size", *scale_size);
-    f.one("atmosphere.material_settings.scale_variety", *scale_variety);
-    f.one("atmosphere.material_settings.scale_refract", *scale_refract);
     f.one("atmosphere.material_settings.wash_size", *wash_size);
     f.one("atmosphere.material_settings.wash_fuzz", *wash_fuzz);
     f.one("atmosphere.material_settings.wash_lobe", *wash_lobe);

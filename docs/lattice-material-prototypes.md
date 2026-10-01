@@ -3,7 +3,7 @@
 This document records the original prototype experiments and measurements.
 The current controls and rendering contract are in [Independent lattice texture and material](design/lattice-texture-material.md).
 Source roughness has since been removed,
-and Watercolor/Mosaic now share the spectrogram’s geometry controls.
+and Watercolor now shares the spectrogram’s geometry controls.
 Contours and Interference were later removed as patterns Yan did not like in use,
 leaving Clouds the only pattern;
 the notes on them below are history.
@@ -91,7 +91,7 @@ The spectrogram keeps its own scalar light and palette mapping.
 Two half-float tiles bake the expensive cell searches only when quantized texel density changes;
 light, camera, time and source roughness never invalidate them.
 The lattice holds the tile independently of resize-dependent targets and applies the washes with two displaced samples plus the original sample for depth blending.
-This isolates the reusable geometry from the light representation for both Watercolor and Mosaic.
+This isolates the reusable geometry from the light representation for Watercolor.
 
 ### Production comparison and measured cost
 
@@ -138,6 +138,9 @@ the uncapped source reaches alpha 165 where the configured peak rounds to 153.
 The renderer suite and existing offline golden frames pass without blessing, and the persistence sweep covers the new selector and roughness field.
 
 ### Mosaic in the production lattice
+
+Removed on 2026-10-01 from both the lattice and the spectrogram: Scales covers its faceted look.
+The rest of this section records what it was.
 
 Mosaic uses the spectrogram’s soft-union dome geometry with variety 0.5 and full centre gathering,
 matching its default flat-facet reading.

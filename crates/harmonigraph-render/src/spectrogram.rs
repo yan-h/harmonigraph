@@ -822,18 +822,15 @@ impl CallbackTrait for SpectrogramCallback {
                                 .map(|n| (n + 2).min(device.limits().max_texture_dimension_2d))
                         })
                     });
-                // Mosaic and Watercolor with a history work their tone out per
-                // history texel in `fs_color_memory` and display the history, so
-                // the reduced size is the history's grid and a tone target would
-                // be drawn into by nothing. Scales draw their tone and then
+                // Watercolor with a history works its tone out per history
+                // texel in `fs_color_memory` and displays the history, so the
+                // reduced size is the history's grid and a tone target would be
+                // drawn into by nothing. Scales draw their tone and then
                 // remember it, and Stars composite their far depths into it.
                 let tone_size = reduced.filter(|_| {
                     memory_extent.is_none()
-                        || !matches!(
-                            settings.settings.cloud_style,
-                            harmonigraph_scene::CloudStyle::Mosaic
-                                | harmonigraph_scene::CloudStyle::Watercolor
-                        )
+                        || settings.settings.cloud_style
+                            != harmonigraph_scene::CloudStyle::Watercolor
                 });
                 let memory_size = memory_extent.map(|extent| {
                     if stars.is_some() {
@@ -1630,92 +1627,84 @@ mod tests {
     /// 96 and 36), which is what the reduced-cloud tests bound instead.
     #[test]
     fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
-        use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let Some((device, queue)) = headless_device() else { return };
-        for style in [Mosaic, Watercolor] {
-            for pixel in [0.5, 2.0] {
-                let mut cb = refracted_fixture();
-                let mut resources = CallbackResources::default();
-                resources.insert(atmosphere::CloudSampling {
-                    pixel_points: pixel,
-                    ..Default::default()
-                });
-                {
+        let style = harmonigraph_scene::CloudStyle::Watercolor;
+        for pixel in [0.5, 2.0] {
+            let mut cb = refracted_fixture();
+            let mut resources = CallbackResources::default();
+            resources
+                .insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
+            {
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.cloud_style = style;
+                s.color_pickup = 0.0;
+                s.color_release = 0.0;
+                s.contour_strength = 1.0;
+                s.cloud_depth = 1.0;
+            }
+            if pixel < 1.0 {
+                for contours in [0.0, 1.0] {
                     let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                    s.cloud_style = style;
-                    s.color_pickup = 0.0;
-                    s.color_release = 0.0;
-                    s.contour_strength = 1.0;
-                    s.cloud_depth = 1.0;
+                    s.contour_strength = contours;
+                    s.material_settings.wash_refract = 0.0;
+                    assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
+                    let bare = frame_with(&device, &queue, &mut resources, &cb);
+                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                    s.material_settings.wash_refract = f32::MIN_POSITIVE;
+                    let vanishing = frame_with(&device, &queue, &mut resources, &cb);
+                    let pane = resources.get::<SpectrogramResources>().unwrap();
+                    let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
+                    assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
+                    assert!(
+                        vanishing == bare,
+                        "{style:?}, contours={contours}: the texture moved the levels"
+                    );
                 }
-                if pixel < 1.0 {
-                    for contours in [0.0, 1.0] {
-                        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                        s.contour_strength = contours;
-                        s.material_settings.scale_refract = 0.0;
-                        s.material_settings.wash_refract = 0.0;
-                        assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
-                        let bare = frame_with(&device, &queue, &mut resources, &cb);
-                        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                        s.material_settings.scale_refract = f32::MIN_POSITIVE;
-                        s.material_settings.wash_refract = f32::MIN_POSITIVE;
-                        let vanishing = frame_with(&device, &queue, &mut resources, &cb);
-                        let pane = resources.get::<SpectrogramResources>().unwrap();
-                        let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
-                        assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
-                        assert!(
-                            vanishing == bare,
-                            "{style:?}, contours={contours}: the texture moved the levels"
-                        );
-                    }
-                }
-                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                s.material_settings.scale_refract = 0.0;
-                s.material_settings.wash_refract = 0.0;
-                let straight = frame_with(&device, &queue, &mut resources, &cb);
-                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                s.material_settings.scale_refract = 1.0;
-                s.material_settings.wash_refract = 1.0;
+            }
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_refract = 0.0;
+            let straight = frame_with(&device, &queue, &mut resources, &cb);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_refract = 1.0;
+            let bent = frame_with(&device, &queue, &mut resources, &cb);
+            let moved = bent.iter().zip(&straight).filter(|(a, b)| a.abs_diff(**b) > 4).count();
+            assert!(moved > bent.len() / 50, "{style:?} did not displace structured sound");
+            let targets = resources
+                .get::<SpectrogramResources>()
+                .unwrap()
+                .panes
+                .get(0)
+                .unwrap()
+                .cloud
+                .as_ref()
+                .unwrap();
+            assert_eq!(targets.tone_size().is_some(), pixel > 1.0);
+            assert!(targets.tile_texels().is_some());
+            // Intermediate depth must stay on the curved palette too.
+            // Mixing RGB endpoints would cut across this ramp's curve.
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
+            let blended = frame_with(&device, &queue, &mut resources, &cb);
+            assert!(
+                blended.chunks_exact(4).all(|pixel| {
+                    cb.shades
+                        .lut
+                        .iter()
+                        .any(|entry| (0..3).all(|c| pixel[c].abs_diff(entry[c]) <= 2))
+                }),
+                "{style:?} depth blend left the palette"
+            );
+            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+            for value in [0, 1, 64, 150, 255] {
+                cb.grid.fill(value);
+                // The GPU cache must re-upload when the supplied samples change.
                 let bent = frame_with(&device, &queue, &mut resources, &cb);
-                let moved = bent.iter().zip(&straight).filter(|(a, b)| a.abs_diff(**b) > 4).count();
-                assert!(moved > bent.len() / 50, "{style:?} did not displace structured sound");
-                let targets = resources
-                    .get::<SpectrogramResources>()
-                    .unwrap()
-                    .panes
-                    .get(0)
-                    .unwrap()
-                    .cloud
-                    .as_ref()
-                    .unwrap();
-                assert_eq!(targets.tone_size().is_some(), pixel > 1.0);
-                assert!(targets.tile_texels().is_some());
-                // Intermediate depth must stay on the curved palette too.
-                // Mixing RGB endpoints would cut across this ramp's curve.
-                cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
-                let blended = frame_with(&device, &queue, &mut resources, &cb);
+                cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+                let bare = frame_with(&device, &queue, &mut resources, &cb);
                 assert!(
-                    blended.chunks_exact(4).all(|pixel| {
-                        cb.shades
-                            .lut
-                            .iter()
-                            .any(|entry| (0..3).all(|c| pixel[c].abs_diff(entry[c]) <= 2))
-                    }),
-                    "{style:?} depth blend left the palette"
+                    bent.iter().zip(&bare).all(|(a, b)| a.abs_diff(*b) <= 1),
+                    "{style:?} changes flat level {value}: pixel={pixel}"
                 );
                 cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-                for value in [0, 1, 64, 150, 255] {
-                    cb.grid.fill(value);
-                    // The GPU cache must re-upload when the supplied samples change.
-                    let bent = frame_with(&device, &queue, &mut resources, &cb);
-                    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-                    let bare = frame_with(&device, &queue, &mut resources, &cb);
-                    assert!(
-                        bent.iter().zip(&bare).all(|(a, b)| a.abs_diff(*b) <= 1),
-                        "{style:?} changes flat level {value}: pixel={pixel}"
-                    );
-                    cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-                }
             }
         }
     }
@@ -1759,40 +1748,36 @@ mod tests {
     /// full depth, including when the displaced levels were rendered reduced.
     #[test]
     fn contours_shape_the_refracted_levels() {
-        use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         type Turn = fn(&mut harmonigraph_scene::SpectralAtmosphere);
         let Some((device, queue)) = headless_device() else { return };
-        for style in [Mosaic, Watercolor] {
-            for pixel in [0.5, 2.0] {
-                let mut cb = refracted_fixture();
-                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                s.cloud_style = style;
-                s.cloud_depth = 1.0;
-                s.contour_strength = 1.0;
-                s.contour_softness = 0.01;
-                s.contours = 4.0;
-                let baseline = *s;
-                let mut resources = CallbackResources::default();
-                resources.insert(atmosphere::CloudSampling {
-                    pixel_points: pixel,
-                    ..Default::default()
-                });
-                let stepped = frame_with(&device, &queue, &mut resources, &cb);
-                for (name, turn) in [
-                    ("strength", (|s| s.contour_strength = 0.0) as Turn),
-                    ("count", |s| s.contours = 12.0),
-                    ("softness", |s| s.contour_softness = 0.5),
-                ] {
-                    cb.atmosphere.as_mut().unwrap().settings = baseline;
-                    turn(&mut cb.atmosphere.as_mut().unwrap().settings);
-                    let adjusted = frame_with(&device, &queue, &mut resources, &cb);
-                    let moved =
-                        stepped.iter().zip(&adjusted).filter(|(a, b)| a.abs_diff(**b) > 2).count();
-                    assert!(
-                        moved > stepped.len() / 100,
-                        "{style:?} contour {name} did not reach pixel={pixel}"
-                    );
-                }
+        let style = harmonigraph_scene::CloudStyle::Watercolor;
+        for pixel in [0.5, 2.0] {
+            let mut cb = refracted_fixture();
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.cloud_style = style;
+            s.cloud_depth = 1.0;
+            s.contour_strength = 1.0;
+            s.contour_softness = 0.01;
+            s.contours = 4.0;
+            let baseline = *s;
+            let mut resources = CallbackResources::default();
+            resources
+                .insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
+            let stepped = frame_with(&device, &queue, &mut resources, &cb);
+            for (name, turn) in [
+                ("strength", (|s| s.contour_strength = 0.0) as Turn),
+                ("count", |s| s.contours = 12.0),
+                ("softness", |s| s.contour_softness = 0.5),
+            ] {
+                cb.atmosphere.as_mut().unwrap().settings = baseline;
+                turn(&mut cb.atmosphere.as_mut().unwrap().settings);
+                let adjusted = frame_with(&device, &queue, &mut resources, &cb);
+                let moved =
+                    stepped.iter().zip(&adjusted).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+                assert!(
+                    moved > stepped.len() / 100,
+                    "{style:?} contour {name} did not reach pixel={pixel}"
+                );
             }
         }
     }
@@ -1964,13 +1949,11 @@ mod tests {
                 // `contour_strength` up.
                 contours: 7.0,
                 contour_softness: 0.15,
-                // The Mosaic's scales at 1x with a mild bend, for the probes
-                // that turn `cloud_depth` up: a cloud the refraction reaches,
-                // where the fresh Stars would paint a field of their own.
-                cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
+                // The wash at 1x, for the probes that turn `cloud_depth` up: a
+                // cloud the refraction reaches, where the fresh Stars would
+                // paint a field of their own.
+                cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
                 material_settings: harmonigraph_scene::MaterialSettings {
-                    scale_size: 1.0,
-                    scale_refract: 0.3,
                     wash_size: 1.0,
                     wash_lobe: 0.55,
                     ..Default::default()
@@ -2235,7 +2218,7 @@ mod tests {
         // A cloud too faint in its bend to move a lookup: it reads the light
         // field under each pixel, which is all that is drawn of it.
         settings.cloud_depth = 1.0;
-        settings.material_settings.scale_refract = f32::MIN_POSITIVE;
+        settings.material_settings.wash_refract = f32::MIN_POSITIVE;
         let field = atmosphere::source_size(SIZE, 1.0, raw.atmosphere.unwrap());
         assert_eq!(field, SIZE, "the field was reduced, so zero softness is not what is measured");
         let zero = fresh_frame(&device, &queue, &raw);
@@ -3452,201 +3435,9 @@ mod tests {
         assert_eq!(through_entry, through_callback);
     }
 
-    /// A pane carrying plenty of energy with no CONCENTRATION anywhere in it:
-    /// the same level in every bin of every slab.
-    ///
-    /// It used to be the fixture the cloud layer was measured over, because a
-    /// pile of puffs draws its own texture against a flat picture as readily
-    /// as against any other. It is the negative control now: everything that
-    /// moves the LOOKUP has to leave this pane alone, because a displaced
-    /// constant is that constant.
-    fn flat_cloud_fixture() -> SpectrogramCallback {
-        let mut cb = cloud_fixture();
-        cb.grid.fill(150);
-        cb
-    }
-
-    /// Refraction moves structured sound while leaving a constant field alone.
-    #[test]
-    fn the_layer_bends_the_picture_rather_than_painting_over_it() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let moved_by_refraction = |cb: &mut SpectrogramCallback| {
-            {
-                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                s.cloud_depth = 1.0;
-                s.material_settings.scale_refract = 0.0;
-            }
-            let straight = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.material_settings.scale_refract = 1.0;
-            let bent = fresh_frame(&device, &queue, cb);
-            let n = straight.len() / 4;
-            let moved = straight
-                .chunks_exact(4)
-                .zip(bent.chunks_exact(4))
-                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
-                .count();
-            moved as f32 / n as f32
-        };
-        let over_structure = moved_by_refraction(&mut cloud_fixture());
-        let over_flat = moved_by_refraction(&mut flat_cloud_fixture());
-        assert!(
-            over_structure > 0.02,
-            "turning the refraction from nothing to full moved almost none of the pane over \
-             a picture with structure in it, so the lookup is not being displaced at all: \
-             {over_structure}"
-        );
-        assert!(
-            over_flat < over_structure / 5.0,
-            "the refraction moved a FEATURELESS picture nearly as much as a structured one, \
-             so it is adding something of its own rather than bending what is behind it: \
-             {over_flat} flat against {over_structure} over structure"
-        );
-    }
-
-    /// The NEGATIVE half of `Refraction` QUANTIZES that bend, and adds nothing of
-    /// its own. It was a dial of its own, `Facet`, and "the facet" below is what
-    /// it draws at -1.
-    ///
-    /// Reading the light at the nearest scale's CENTRE is the other half of
-    /// what round 1 had and round 5 removed, and round 5 was right about the
-    /// defect: a nearest-cell pick STEPS across the bisector between two
-    /// scales, which is a straight edge through a cloud. The soft union keeps
-    /// the reading and loses the step. `Pile::to_centre` is the union's own
-    /// weights against each dome's offset to its own centre, so inside a dome
-    /// one weight runs away with the sum and the reading is that dome's centre
-    /// — one value for the whole interior, which is the flat patch — while on a
-    /// bisector the two weights are equal and the reading crosses over
-    /// continuously.
-    ///
-    /// Measured exactly as the refraction above, and for the same reason: the
-    /// dial moves 7.1% of the pane over the ridge fixture and EXACTLY zero over
-    /// the flat one. The zero is the half that carries the claim. A displaced
-    /// lookup over a constant field returns that constant wherever it reads, so
-    /// a facet that moved a featureless picture would be PAINTING its scales
-    /// on rather than quantizing what is behind them — and paint is the easy
-    /// thing to mistake for this effect, because a mosaic drawn over a flat
-    /// field looks like a mosaic too.
-    #[test]
-    fn negative_refraction_quantizes_the_bend_rather_than_painting_scales() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let moved_by_facet = |cb: &mut SpectrogramCallback| {
-            // From the fresh bend through the faces to the read at the centres.
-            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-            let bent = fresh_frame(&device, &queue, cb);
-            cb.atmosphere.as_mut().unwrap().settings.material_settings.scale_refract = -1.0;
-            let faceted = fresh_frame(&device, &queue, cb);
-            let n = bent.len() / 4;
-            let moved = bent
-                .chunks_exact(4)
-                .zip(faceted.chunks_exact(4))
-                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
-                .count();
-            moved as f32 / n as f32
-        };
-        let over_structure = moved_by_facet(&mut cloud_fixture());
-        let over_flat = moved_by_facet(&mut flat_cloud_fixture());
-        assert!(
-            over_structure > 0.02,
-            "carrying the lookup from the scales' faces to their centres moved almost none of \
-             the pane over a picture with structure in it, so the facet is not reaching the \
-             lookup at all: {over_structure}"
-        );
-        assert_eq!(
-            over_flat, 0.0,
-            "the facet moved a FEATURELESS picture, so it is drawing its scales rather than \
-             quantizing what is behind them: {over_flat} flat against {over_structure} over \
-             structure"
-        );
-    }
-
-    /// `Size variation` changes each dome's radius and weight, hence its displacement.
-    #[test]
-    fn the_variety_reaches_the_scales() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        let lit = |variety| {
-            let mut cb = refracted_fixture();
-            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.cloud_depth = 1.0;
-            s.material_settings.scale_refract = 1.0;
-            s.material_settings.scale_variety = variety;
-            fresh_frame(&device, &queue, &cb)
-        };
-        let plain = lit(0.0);
-        let frame = lit(1.0);
-        let moved = plain
-            .chunks_exact(4)
-            .zip(frame.chunks_exact(4))
-            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
-            .count() as f32
-            / (plain.len() / 4) as f32;
-        assert!(moved > 0.05, "Size variation moved almost none of the pane: {moved}");
-    }
-
-    /// Every point of the plane is inside some dome, and every dome that
-    /// reaches a point is inside the ring the union walks.
-    ///
-    /// This is the one property the whole "texture everywhere" change rests on,
-    /// and it is NOT observable in a frame — an uncovered point draws a face of
-    /// zero, which is also what the top of a dome draws. What it would cost is a
-    /// discontinuity rather than a hole: `to_centre` falls from most of a radius
-    /// to nothing at the rim of the last dome, so a pinhole is a hard edge in a
-    /// picture whose entire construction is about not having one. So the claim
-    /// is checked where it lives, in the geometry, against the constants the
-    /// SHIPPED shader spells rather than a transcription of them.
-    ///
-    /// **Coverage.** A centre sits at its cell's middle give or take
-    /// `JITTER / 2`. The point hardest to reach is a lattice corner with all
-    /// four cells touching it pushed diagonally away,
-    /// `(0.5 + JITTER / 2) * sqrt(2)` from every one of them, so the smallest
-    /// radius any dome can draw has to clear that. At variety 0 that radius is
-    /// `DOME_RADIUS`; at variety 1 it is `DOME_RADIUS_MIN`, and every setting
-    /// between is a `mix` of the two and so never below the smaller.
-    ///
-    /// **Reach.** A cell two out can put its centre no nearer than
-    /// `2.5 - JITTER / 2` from the pixel's own cell origin, and the pixel is at
-    /// most 1 past that origin, so the largest radius has to stay under
-    /// `1.5 - JITTER / 2` or a dome the 3x3 ring never visits can touch the
-    /// pixel — which is a step on the cell grid every time `floor(r)` moves.
-    ///
-    /// Round 5's jitter of 0.75 failed BOTH (it needed a radius at once above
-    /// 1.237 and below 1.125), and both failures were live in the picture.
-    ///
-    /// `DOME_VARIETY_GAIN` is deliberately absent from both. It scales a dome's
-    /// WEIGHT, and the union is a weighted mean over whichever domes already
-    /// cover the pixel: a gain changes whose face is read and never whether a
-    /// face is there to read, so it moves neither radius and appears in neither
-    /// inequality. What bounds it instead is smoothness, which is measured
-    /// where the constant is declared.
-    #[test]
-    fn the_dome_grid_covers_the_plane_and_the_ring_holds_it() {
-        let number = |name: &str| -> f32 {
-            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name).parse().expect("a number")
-        };
-        let jitter = number("DOME_JITTER");
-        let smallest = number("DOME_RADIUS").min(number("DOME_RADIUS_MIN"));
-        let largest = number("DOME_RADIUS").max(number("DOME_RADIUS_MAX"));
-        let farthest = (0.5 + jitter / 2.0) * std::f32::consts::SQRT_2;
-        assert!(
-            smallest > farthest,
-            "a dome of {smallest} cannot reach a corner {farthest} away, so at some corner of \
-             the cell grid no dome covers the pane and `to_centre` steps to nothing there"
-        );
-        let unvisited = 1.5 - jitter / 2.0;
-        assert!(
-            largest < unvisited,
-            "a dome of {largest} reaches {unvisited} into a pixel the 3x3 ring never visits \
-             it from, so the union gains and loses it as `floor(r)` crosses a cell"
-        );
-    }
-
-    /// The same two inequalities for the WASH's glob grid, which pushes on them
-    /// differently in three places.
+    /// Every point of the plane is inside some glob of the wash's base octave,
+    /// and every glob that reaches a point is inside the ring the scan walks.
+    /// Three things push on those two inequalities.
     ///
     /// `Wander` is ABSENT from both, and that is the design rather than an
     /// oversight: it turns each glob's jitter offset about its own cell instead
@@ -3702,22 +3493,22 @@ mod tests {
     }
 
     /// The fixed tile period makes a whole number of cells
-    /// out of EVERY lattice the two walks hash on.
+    /// out of EVERY lattice the wash's walk hashes on.
     ///
     /// A tile is one period of the walk read through a REPEATING sampler, so the
     /// walk has to be periodic or its far edge hashes cells that do not meet its
     /// near edge — a straight seam down the pane every period, which is the same
-    /// failure the two ring proofs above exist to keep off the cell grid.
+    /// failure the ring proof above exists to keep off the cell grid.
     ///
-    /// Neither walk runs on one lattice. Each has a second octave at its own
-    /// lacunarity, and the wash reads a shared warp noise whose cells are
+    /// The walk does not run on one lattice. It has a second octave at its own
+    /// lacunarity, and reads a shared warp noise whose cells are
     /// `WASH_WARP_SCALE` across, with a second octave of its own.
     /// `WASH_FBM_FINE`'s 2.07 is the one no period can make whole, which is why
     /// the tiled path runs that octave at `WASH_FBM_FINE_TILED` — so that
     /// constant is read here too, and moving it off a whole number fails this.
     ///
     /// Read off the shipped shader text rather than a transcription of it, for
-    /// the reason the two proofs above give.
+    /// the reason the ring proof above gives.
     #[test]
     fn the_tile_period_tiles_every_lattice() {
         let number = |name: &str| -> f32 {
@@ -3726,7 +3517,6 @@ mod tests {
         let fine = number("WASH_FBM_FINE_TILED");
         let warp = number("WASH_WARP_SCALE");
         let lattices = [
-            ("the mosaic's fine octave", number("DOME_LACUNARITY")),
             ("the wash's fine octave", number("WASH_LACUNARITY")),
             ("the warp noise", warp),
             ("the warp noise's own second octave", warp * fine),
@@ -3956,29 +3746,28 @@ fn cs_wrap_probe() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        for (name, mut cb) in [("Mosaic", cloud_fixture()), ("Watercolor", wash_fixture())] {
-            let bytes: Vec<u8> =
-                (0..cb.grid.bytes().len()).map(|i| ((i * 37 + i / 19) % 256) as u8).collect();
-            cb.grid.set_bytes(&bytes);
-            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.pitch_softness = 0.0;
-            s.time_softness = 0.0;
-            s.cloud_depth = 1.0;
-            let clouded = fresh_frame(&device, &queue, &cb);
-            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-            let bare = fresh_frame(&device, &queue, &cb);
-            let moved = clouded
-                .chunks_exact(4)
-                .zip(bare.chunks_exact(4))
-                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
-                .count() as f32
-                / (bare.len() / 4) as f32;
-            assert!(
-                moved > 0.05,
-                "{name} at full depth moved {moved} of a lit pane with both softness dials at \
-                 0, so the cloud still needs a blur to be drawn",
-            );
-        }
+        let mut cb = wash_fixture();
+        let bytes: Vec<u8> =
+            (0..cb.grid.bytes().len()).map(|i| ((i * 37 + i / 19) % 256) as u8).collect();
+        cb.grid.set_bytes(&bytes);
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.pitch_softness = 0.0;
+        s.time_softness = 0.0;
+        s.cloud_depth = 1.0;
+        let clouded = fresh_frame(&device, &queue, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let bare = fresh_frame(&device, &queue, &cb);
+        let moved = clouded
+            .chunks_exact(4)
+            .zip(bare.chunks_exact(4))
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+            .count() as f32
+            / (bare.len() / 4) as f32;
+        assert!(
+            moved > 0.05,
+            "the wash at full depth moved {moved} of a lit pane with both softness dials at \
+             0, so the cloud still needs a blur to be drawn",
+        );
     }
 
     /// Brightness changes colored globs even at zero refraction, without biasing
@@ -4174,9 +3963,8 @@ fn cs_wrap_probe() {
     /// replaces, and a reduction that had lost the drift, the pane offset or the
     /// style would differ by a great deal more. Measured at 2 pt against a
     /// 1 px/pt fixture — a quarter resolution — the mean absolute channel
-    /// difference is 0.73/255 for the mosaic and 0.93/255 for the wash, no
-    /// channel anywhere moves more than 9 and 18, and 1.7% and 6.3% of the pane
-    /// moves past 4 at all.
+    /// difference is 0.34/255 for the wash, no channel anywhere moves more than
+    /// 8, and 0.26% of the pane moves past 4 at all.
     #[test]
     fn a_reduced_cloud_draws_the_same_picture_softened() {
         let Some((device, queue)) = headless_device() else {
@@ -4195,52 +3983,43 @@ fn cs_wrap_probe() {
                 .encoded_passes
                 .load(Ordering::Relaxed)
         };
-        use harmonigraph_scene::CloudStyle;
-        let mut means = Vec::new();
-        for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
-            // The wash fixture's coarse glob, and the same coarseness asked of
-            // the scales: at the fresh size this 128-point pane draws either
-            // texture a handful of pixels wide, which measures its own aliasing
-            // rather than what the tone target lost.
-            let mut cb = wash_fixture();
-            // Displacement of a mostly flat field cannot distinguish a wrong
-            // lookup from a correct one. Noise gives both axes detail to move.
-            cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
-            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.cloud_style = style;
-            s.material_settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
-            let mut native_resources = CallbackResources::default();
-            let native = frame_with(&device, &queue, &mut native_resources, &cb);
-            // 2 pt against the fixture's 1 pixel per point: a 64 by 64 tone
-            // target under a 128 by 128 pane, which is a quarter of the walk.
-            let mut reduced_resources = CallbackResources::default();
-            reduced_resources
-                .insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
-            let reduced = frame_with(&device, &queue, &mut reduced_resources, &cb);
-            assert_eq!(
-                passes(&reduced_resources),
-                passes(&native_resources) + 1,
-                "{style:?} encoded no tone pass, so the reduced path never ran"
-            );
-            assert_ne!(native, reduced, "{style:?} drew the same frame at a quarter resolution");
-            let channels = native.len() / 4 * 3;
-            let mean = native
-                .chunks_exact(4)
-                .zip(reduced.chunks_exact(4))
-                .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
-                .sum::<f64>()
-                / channels as f64;
-            let moved = native
-                .chunks_exact(4)
-                .zip(reduced.chunks_exact(4))
-                .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
-                .count() as f64
-                / (native.len() / 4) as f64;
-            means.push((style, mean, moved));
-        }
+        // The wash fixture's coarse glob: at the fresh size this 128-point
+        // pane draws the texture a handful of pixels wide, which measures its
+        // own aliasing rather than what the tone target lost.
+        let mut cb = wash_fixture();
+        // Displacement of a mostly flat field cannot distinguish a wrong
+        // lookup from a correct one. Noise gives both axes detail to move.
+        cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
+        let mut native_resources = CallbackResources::default();
+        let native = frame_with(&device, &queue, &mut native_resources, &cb);
+        // 2 pt against the fixture's 1 pixel per point: a 64 by 64 tone
+        // target under a 128 by 128 pane, which is a quarter of the walk.
+        let mut reduced_resources = CallbackResources::default();
+        reduced_resources
+            .insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
+        let reduced = frame_with(&device, &queue, &mut reduced_resources, &cb);
+        assert_eq!(
+            passes(&reduced_resources),
+            passes(&native_resources) + 1,
+            "the wash encoded no tone pass, so the reduced path never ran"
+        );
+        assert_ne!(native, reduced, "the wash drew the same frame at a quarter resolution");
+        let channels = native.len() / 4 * 3;
+        let mean = native
+            .chunks_exact(4)
+            .zip(reduced.chunks_exact(4))
+            .flat_map(|(a, b)| (0..3).map(move |c| f64::from(a[c].abs_diff(b[c]))))
+            .sum::<f64>()
+            / channels as f64;
+        let moved = native
+            .chunks_exact(4)
+            .zip(reduced.chunks_exact(4))
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
+            .count() as f64
+            / (native.len() / 4) as f64;
         assert!(
-            means.iter().all(|&(_, mean, _)| mean < 3.0),
-            "a reduced cloud is not the picture the walk draws: {means:?}"
+            mean < 3.0,
+            "a reduced cloud is not the picture the walk draws: mean {mean}, moved {moved}"
         );
     }
 
@@ -4265,9 +4044,10 @@ fn cs_wrap_probe() {
     ///
     /// Measured on this fixture at two device pixels a sample, the production
     /// maximum. With the tone pass put back on the region quad, the first row
-    /// inside the region's edge reads 18.79 mean absolute channel difference
-    /// from the native walk, against an interior that stays under 0.83;
-    /// repaired, the two edge rows read 0.16 and 0.22. The bound below sits
+    /// inside the region's edge reads 13.22 mean absolute channel difference
+    /// from the native walk, against an interior that stays under 1.5;
+    /// repaired, the two edge rows read 0.22 and the interior stays under
+    /// 0.53. The bound below sits
     /// between the interior's own band and the seam, which is the claim: an
     /// edge row is no further from the walk than the middle of the pane is.
     ///
@@ -4280,7 +4060,6 @@ fn cs_wrap_probe() {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        use harmonigraph_scene::CloudStyle;
         let mut cb = wash_fixture();
         // The noisy grid for the same reason the sibling test takes it: over a
         // flat picture both resolutions draw the same few levels and a seam has
@@ -4289,8 +4068,6 @@ fn cs_wrap_probe() {
         let split = 0.25;
         {
             let a = cb.atmosphere.as_mut().unwrap();
-            a.settings.cloud_style = CloudStyle::Mosaic;
-            a.settings.material_settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
             let r = cb.rect;
             a.region =
                 egui::Rect::from_min_max(egui::pos2(r.min.x, r.min.y + r.height() * split), r.max);
@@ -4342,114 +4119,15 @@ fn cs_wrap_probe() {
         pub(super) static SOURCE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
         /// Compare both paths without allocating a large pane in every test.
         pub(super) static STAR_SPLIT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-        /// Set while a test draws the reference [`pipeline_source`] builds.
-        static UNWRAPPED_MOSAIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     /// The source every spectrogram pipeline is built from: production's, or
-    /// under [`UNWRAPPED_MOSAIC`] the same with the Mosaic's tile read swapped
-    /// for the unwrapped walk the tile was baked from. That walk was the
-    /// composite's own live arm until #1100 measured it costing the textured
-    /// composite 16 to 21% without ever being taken, so the reference lives
-    /// here instead.
+    /// the reference a star-split test asks for.
     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
         if let Some(source) = star_split::reference_source() {
             return source.into();
         }
-        if !UNWRAPPED_MOSAIC.get() {
-            return SPECTROGRAM_SRC.into();
-        }
-        let read = "let tile = textureSampleLevel(cloud_tile_a, tile_sampler, r / f32(cloud.tile_cells), 0.0);\n    var pile: Pile;\n    pile.face = tile.xy;\n    pile.to_centre = tile.zw;";
-        assert_eq!(SPECTROGRAM_SRC.matches(read).count(), 1, "the Mosaic's tile read moved");
-        SPECTROGRAM_SRC.replace(read, "let pile = cloud_domes(r, 0);").into()
-    }
-
-    /// The square Mosaic tile remains the live scale field inside its first
-    /// period. This is the visual contract behind leaving Mosaic unrotated:
-    /// its tile may repeat the field, but may not turn it into a second look.
-    ///
-    /// The comparison window contains only pixels whose coarse and fine rings
-    /// lie wholly inside `[0, P)`, where wrapping a hash changes nothing. Its
-    /// size is asserted so a stale fixture cannot pass by comparing no pixels.
-    #[test]
-    fn the_mosaic_tile_keeps_the_live_walk_inside_its_first_period() {
-        let Some((device, queue)) = headless_device() else {
-            return;
-        };
-        const TILE_SIZE: [u32; 2] = [SIZE[0] * 2, SIZE[1] * 2];
-        let number = |name: &str| -> f32 {
-            crate::shadow::tests::shader_const(SPECTROGRAM_SRC, name)
-                .split('/')
-                .map(|part| part.trim().parse::<f32>().expect("a number"))
-                .reduce(|a, b| a / b)
-                .expect("a constant has a value")
-        };
-        let fine_offset = [17.3_f32, 5.9];
-        assert_eq!(
-            SPECTROGRAM_SRC.matches("vec2<f32>(17.3, 5.9)").count(),
-            2,
-            "the fine octave moved away from the comparison window"
-        );
-
-        let mut cb = cloud_fixture();
-        cb.rect = egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(TILE_SIZE[0] as f32, TILE_SIZE[1] as f32),
-        );
-        relay_quad(&mut cb, 12);
-        cb.read.rows = TILE_SIZE[1];
-        cb.grid = grid_of(noisy_grid(BINS as usize, 12), BINS, 12, 0);
-        cb.atmosphere.as_mut().unwrap().region = cb.rect;
-        let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-        settings.cloud_style = harmonigraph_scene::CloudStyle::Mosaic;
-        settings.cloud_depth = 1.0;
-        settings.material_settings.scale_size = harmonigraph_scene::CLOUD_SIZE_MAX;
-        settings.cloud_speed = 0.0;
-        UNWRAPPED_MOSAIC.set(true);
-        let live = fresh_frame(&device, &queue, &cb);
-        UNWRAPPED_MOSAIC.set(false);
-        let tiled = fresh_frame(&device, &queue, &cb);
-        assert_ne!(live, tiled, "the tile never ran");
-
-        let units = number("CLOUD_UNITS");
-        let cells = number("SCALE_CELLS") / harmonigraph_scene::CLOUD_SIZE_MAX;
-        let lacunarity = number("DOME_LACUNARITY");
-        let period = atmosphere::CloudSampling::default().tile_cells as f32;
-        let drift = [0.0_f32, 0.6];
-        let inside = |axis: usize, point: f32| {
-            let half = TILE_SIZE[axis] as f32 / 2.0;
-            let r = ((point - half) / TILE_SIZE[1] as f32 * units + drift[axis]) * cells;
-            let fine = lacunarity * r + fine_offset[axis];
-            let held = |value: f32, last: f32| value >= 2.0 && value <= last - 2.0;
-            held(r, period) && held(fine, (lacunarity * period).round())
-        };
-        let (mut compared, mut moved, mut worst, mut total) = (0u32, 0u32, 0u32, 0u64);
-        for y in 0..TILE_SIZE[1] {
-            for x in 0..TILE_SIZE[0] {
-                if !inside(0, x as f32 + 0.5) || !inside(1, y as f32 + 0.5) {
-                    continue;
-                }
-                compared += 1;
-                let at = (y * TILE_SIZE[0] + x) as usize * 4;
-                for channel in 0..3 {
-                    let diff = u32::from(live[at + channel].abs_diff(tiled[at + channel]));
-                    moved += u32::from(diff > 4);
-                    worst = worst.max(diff);
-                    total += u64::from(diff);
-                }
-            }
-        }
-        let pane = TILE_SIZE[0] * TILE_SIZE[1];
-        assert!(
-            compared * 20 > pane,
-            "compared only {compared} of {pane} pixels, too little to measure the look"
-        );
-        let mean = total as f64 / f64::from(compared * 3);
-        assert!(
-            mean < 0.1 && worst <= 2 && moved == 0,
-            "the square Mosaic tile changed the live look: compared={compared}, mean={mean}, \
-             worst={worst}, moved={moved}"
-        );
+        SPECTROGRAM_SRC.into()
     }
 
     /// The production Watercolor lookup is the exact 3-4-5 rotation in
@@ -4674,18 +4352,6 @@ fn cs_rotation_probe() {
             fresh,
             "changing which axis is time kept a Watercolor tile baked for the old rotated basis"
         );
-        let mosaic_at = |pitch_vertical| {
-            key_at(
-                |settings| settings.cloud_style = harmonigraph_scene::CloudStyle::Mosaic,
-                0.0,
-                pitch_vertical,
-            )
-        };
-        assert_eq!(
-            mosaic_at(true),
-            mosaic_at(false),
-            "the unrotated Mosaic tile rebaked for a pane orientation it does not read"
-        );
         for now in [0.5, 7.0, 600.0] {
             assert_eq!(key(|_| {}, now), fresh, "a clock of {now} rebaked a field that only slid");
         }
@@ -4703,15 +4369,14 @@ fn cs_rotation_probe() {
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),
-            // The mosaic's own dial, which the wash's walk cannot read.
-            ("Size variation", |s| s.material_settings.scale_variety = 1.0),
+            // Scales' own dial, which the wash's walk cannot read.
+            ("Size variation", |s| s.material_settings.velvet_variety = 1.0),
         ] {
             assert_eq!(key(turn, 0.0), fresh, "{name} rebaked a tile it cannot reach");
         }
         for (name, turn) in [
             ("Shape warp", (|s| s.material_settings.wash_lobe = 0.0) as Turn),
             ("Edge feathering", |s| s.material_settings.wash_fuzz = 0.0),
-            ("Texture", |s| s.cloud_style = harmonigraph_scene::CloudStyle::Mosaic),
             // Through the tile's texel size alone — how many cells cross the
             // pane, not what a cell draws.
             ("Patch size", |s| s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),

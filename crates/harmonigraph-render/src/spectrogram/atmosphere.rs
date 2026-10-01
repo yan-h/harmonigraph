@@ -12,8 +12,8 @@ use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
-/// The tile's own format. Four channels because the mosaic's walk produces two
-/// vectors and the wash's produces five numbers over two targets; half floats
+/// The tile's own format. Four channels because the wash's walk produces seven
+/// numbers over two targets, the fine octave's four filling one; half floats
 /// because what is stored is a cell offset of order one, where the eleven-bit
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -74,8 +74,8 @@ fn cloud_offset(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [
     harmonigraph_scene::MaterialSettings::drift(settings.cloud_speed, settings.cloud_direction, now)
 }
 
-/// [`cloud_offset`] as the shader takes it. Mosaic and Watercolor repeat their
-/// `tile`, so the offset is reduced by whole repeats before it narrows to f32,
+/// [`cloud_offset`] as the shader takes it. Watercolor repeats its `tile`, so
+/// the offset is reduced by whole repeats before it narrows to f32,
 /// as Stars and the lattice reduce theirs: unreduced, a long clock leaves the
 /// f32 fewer and fewer bits of the cell it lands in. A screen-axis repeat of
 /// the Watercolor tile is five periods, because its basis is the 3-4-5
@@ -94,10 +94,9 @@ fn cloud_drift(
         let material = settings.material_settings;
         let (cells, periods) = match settings.cloud_style {
             harmonigraph_scene::CloudStyle::Watercolor => (WASH_CELLS / material.wash_size, 5),
-            harmonigraph_scene::CloudStyle::Mosaic => (SCALE_CELLS / material.scale_size, 1),
             harmonigraph_scene::CloudStyle::Stars
             | harmonigraph_scene::CloudStyle::VelvetScales => {
-                unreachable!("only Mosaic and Watercolor draw out of a tile")
+                unreachable!("only Watercolor draws out of a tile")
             }
         };
         f64::from(tile.period() * periods) / f64::from(cells)
@@ -251,15 +250,14 @@ pub(super) fn tone_size(
     Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
 }
 
-/// The shader's own `CLOUD_UNITS`, `SCALE_CELLS` and `WASH_CELLS`: how many
-/// cloud units cross the pane's height and how many cells of each texture cross
-/// one unit at a size of 1x. Nothing else here needs to know what a cell is —
+/// The shader's own `CLOUD_UNITS` and `WASH_CELLS`: how many cloud units cross
+/// the pane's height and how many of the wash's cells cross one unit at a size
+/// of 1x. Nothing else here needs to know what a cell is —
 /// the tile does, because how fine it has to be is how fine the pane draws one.
 ///
 /// Held against the shipped shader text by
 /// `the_tile_is_as_fine_as_the_pane_draws_a_cell`.
 const CLOUD_UNITS: f32 = 10.0;
-const SCALE_CELLS: f32 = 6.0 / 2.2;
 const WASH_CELLS: f32 = 5.25;
 /// The tile's texel size: a whole number of these, and never fewer or more.
 ///
@@ -278,37 +276,33 @@ const TILE_MAX: u32 = 2048;
 /// **A key is wrong in two directions and this one is worth writing out.**
 /// Anything that feeds the baked channels and is missing here serves a stale
 /// picture; anything carried here that decides nothing rebakes a full cell walk
-/// at the rate of whatever it should not be watching. So the key is the STYLE,
-/// the period, the texel size, the wash's pane orientation, and the dials the
-/// WALK reads — `Size variation` for the mosaic; `Shape warp` and `Edge
-/// feathering` for the wash, which are the warp and the feather/bleed widths. Orientation decides
-/// the rotated wash basis; the unrotated mosaic neither bakes nor reads it.
+/// at the rate of whatever it should not be watching. So the key is the period,
+/// the texel size, the pane orientation, and the dials the WALK reads —
+/// `Shape warp` and `Edge feathering`, which are the warp and the feather/bleed
+/// widths. Orientation decides the rotated wash basis. Not the style: only the
+/// wash bakes a tile, so there is no other walk for a key to tell it from.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
-/// drift slides over — `drift` enters both styles only as a translation of the
+/// drift slides over — `drift` enters only as a translation of the
 /// cell coordinate — so it is a texture coordinate here rather than an input,
 /// and a tile is never rebaked because time passed.
 ///
 /// Not the light, the palette, the softness or `Texture mix`: none of them
 /// reaches the walk at all. Not `Refraction` or `Fine layer mix`, which are
-/// read AFTER the tile, out of channels it already holds. Not `Cell size` or
-/// `Patch size`, which decide how many cells cross the pane rather than what a
+/// read AFTER the tile, out of channels it already holds. Not `Patch size`,
+/// which decides how many cells cross the pane rather than what a
 /// cell draws, and not the pane's pixels: both reach this only through
 /// [`Self::texels`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TileKey {
-    /// 0 for the mosaic, 1 for the wash — the same word the uniform carries.
-    style: u32,
     /// The period in cells; production always uses forty.
     period: u32,
     /// One side of the square tile, in texels.
     texels: u32,
-    /// Which pane axis is pitch for the wash's rotation. Always false for the
-    /// mosaic, whose square bake stays in physical pane coordinates.
-    wash_pitch_vertical: bool,
+    /// Which pane axis is pitch for the wash's rotation.
+    pitch_vertical: bool,
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
-    /// there is no NaN here to compare unequal to itself. The mosaic reads one
-    /// and leaves the rest at zero.
+    /// there is no NaN here to compare unequal to itself.
     dials: [u32; 2],
 }
 
@@ -360,8 +354,8 @@ pub(super) fn tile_key(
         wash_pool: _,          // the tile holds the distance, the dials shape it after
         wash_pool_width: _,    // the tile holds the distance, the dials shape it after
         wash_pool_softness: _, // the tile holds the distance, the dials shape it after
-        cloud_style,
-        stars: _, // Stars do not use a displacement tile.
+        cloud_style: _,        // only the wash reaches here; the rest returned above
+        stars: _,              // Stars do not use a displacement tile.
         material_settings:
             harmonigraph_scene::MaterialSettings {
                 velvet_size: _,
@@ -369,9 +363,6 @@ pub(super) fn tile_key(
                 velvet_edge: _,
                 velvet_irregularity: _,
                 velvet_shape: _,
-                scale_size,
-                scale_variety,
-                scale_refract: _, // applied after the tile bake
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
@@ -384,17 +375,7 @@ pub(super) fn tile_key(
     // live-walk arm was retired because, never taken, it still cost the
     // full-resolution shader 16 to 21% (#1100).
     assert!(period > 0, "a cloud is drawn only out of a tile, so its period cannot be 0");
-    let (style, cells, dials) = match cloud_style {
-        harmonigraph_scene::CloudStyle::Mosaic => {
-            (0, SCALE_CELLS / scale_size, [scale_variety, 0.0])
-        }
-        harmonigraph_scene::CloudStyle::Watercolor => {
-            (1, WASH_CELLS / wash_size, [wash_lobe, wash_fuzz])
-        }
-        harmonigraph_scene::CloudStyle::Stars | harmonigraph_scene::CloudStyle::VelvetScales => {
-            unreachable!("returned above")
-        }
-    };
+    let cells = WASH_CELLS / wash_size;
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
     // [`TILE_STEP`], which is what keeps a resize off the bake. The 3-4-5
@@ -405,11 +386,10 @@ pub(super) fn tile_key(
         .saturating_mul(TILE_STEP)
         .min(TILE_MAX);
     Some(TileKey {
-        style,
         period,
         texels,
-        wash_pitch_vertical: style == 1 && atmosphere.pitch_vertical,
-        dials: dials.map(f32::to_bits),
+        pitch_vertical: atmosphere.pitch_vertical,
+        dials: [wash_lobe, wash_fuzz].map(f32::to_bits),
     })
 }
 
@@ -434,12 +414,9 @@ struct Uniforms {
     /// notices.
     drift: Float2,
     cloud_depth: f32,
-    scale_size: f32,
-    scale_variety: f32,
-    scale_refract: f32,
-    /// 0 for the refracting scales (Mosaic), 1 for the watercolour wash, 2 for
-    /// the starfield, 3 for Scales. None reads another's own settings; all
-    /// share what sits above them.
+    /// 1 for the watercolour wash, 2 for the starfield, 3 for Scales; 0 is
+    /// unused. None reads another's own settings; all share what sits above
+    /// them.
     cloud_style: u32,
     wash_size: f32,
     wash_fuzz: f32,
@@ -460,7 +437,6 @@ struct Uniforms {
     star_size_variation: f32,
     star_pad0: u32,
     star_pad1: u32,
-    star_pad2: u32,
     /// Exact far target dimensions, optimized-far flag, and padding.
     star_far: Float4,
     /// Exact reduced foreground dimensions; zero means native foreground.
@@ -1012,9 +988,6 @@ fn memory_key(
                 velvet_edge,
                 velvet_irregularity,
                 velvet_shape,
-                scale_size,
-                scale_variety,
-                scale_refract,
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
@@ -1053,18 +1026,6 @@ fn memory_key(
             velvet_edge,
             velvet_irregularity,
             velvet_shape,
-            contours,
-            contour_softness,
-            contour_strength,
-        ]),
-        CloudStyle::Mosaic => values.extend([
-            0.0,
-            size[0],
-            cloud_direction,
-            cloud_speed,
-            scale_size,
-            scale_variety,
-            scale_refract,
             contours,
             contour_softness,
             contour_strength,
@@ -1733,11 +1694,7 @@ impl Targets {
             tone_baked: u32::from(self.tone.is_some()),
             drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },
-            scale_size: settings.material_settings.scale_size,
-            scale_variety: settings.material_settings.scale_variety,
-            scale_refract: settings.material_settings.scale_refract,
             cloud_style: match settings.cloud_style {
-                harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
                 harmonigraph_scene::CloudStyle::Stars => 2,
                 harmonigraph_scene::CloudStyle::VelvetScales => 3,
@@ -1756,7 +1713,6 @@ impl Targets {
             star_size_variation: settings.stars.star_size_variation,
             star_pad0: 0,
             star_pad1: 0,
-            star_pad2: 0,
             star_far: {
                 let [width, height] = self.tone_size().unwrap_or([1, 1]);
                 Float4([
@@ -1884,9 +1840,9 @@ fn source_group(
 mod tests {
     use super::{
         cloud_drift, cloud_offset, retained_size, source_size, star_geometry, star_layout,
-        star_slices, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
-        STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX,
-        TILE_STEP, WASH_CELLS,
+        star_slices, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH,
+        STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP,
+        WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -2360,60 +2316,51 @@ mod tests {
         close(at(220.0, 0.0, 10_000.0), phase);
     }
 
-    /// A tiled texture's drift reaches the shader reduced by whole repeats of
-    /// its tile, so a long clock lands on the cell the f64 offset names — the
-    /// 3-4-5 rotated basis included — within a millionth of a cell, where a
-    /// plain cast to f32 misses it by 1.1 cells (Mosaic) and 2.4 (Watercolor)
-    /// at this clock. A short clock passes bit for bit.
+    /// The wash's drift reaches the shader reduced by whole repeats of its
+    /// tile, so a long clock lands on the cell the f64 offset names — the 3-4-5
+    /// rotated basis included — within a millionth of a cell, where a plain
+    /// cast to f32 misses it by 2.4 cells at this clock. A short clock passes
+    /// bit for bit.
     #[test]
     fn a_tiled_drift_is_reduced_by_whole_repeats_before_it_narrows() {
-        use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let period = super::CloudSampling::default().tile_cells;
         // Four months at the fresh speed: two million cloud units.
         let long = 1.0e7;
-        for style in [Mosaic, Watercolor] {
-            let settings = harmonigraph_scene::SpectralAtmosphere {
-                cloud_style: style,
-                cloud_direction: 37.0,
-                ..Default::default()
-            };
-            let atmosphere = SpectrogramAtmosphere {
-                settings,
-                region: egui::Rect::ZERO,
-                pitch_vertical: true,
-                points_per_cent: 0.03,
-                points_per_ms: 0.01,
-                points_per_slab: 0.0,
-                now: 0.0,
-            };
-            let tile = tile_key([1920, 1080], atmosphere, period);
-            assert!(tile.is_some(), "{style:?} drew no tile");
-            let short = cloud_offset(settings, 2.0);
-            assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32), "{style:?}");
-            // The tile coordinate the shader samples, in periods: a whole
-            // number apart is the same texel.
-            let cells = f64::from(match style {
-                Watercolor => WASH_CELLS / settings.material_settings.wash_size,
-                _ => SCALE_CELLS / settings.material_settings.scale_size,
-            });
-            let uv = |q: [f64; 2]| {
-                let r = q.map(|v| v * cells / f64::from(period));
-                match style {
-                    Watercolor => [0.8 * r[0] + 0.6 * r[1], -0.6 * r[0] + 0.8 * r[1]],
-                    _ => r,
-                }
-            };
-            let off = |a: [f64; 2], b: [f64; 2]| {
-                let (a, b) = (uv(a), uv(b));
-                (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
-                    * f64::from(period)
-            };
-            let exact = cloud_offset(settings, long);
-            let reduced = cloud_drift(settings, exact, tile).map(f64::from);
-            let cast = exact.map(|v| f64::from(v as f32));
-            assert!(off(reduced, exact) < 1e-4, "{style:?}: {} cells off", off(reduced, exact));
-            assert!(off(cast, exact) > 0.01, "{style:?}: the clock is too short to need reducing");
-        }
+        let settings = harmonigraph_scene::SpectralAtmosphere {
+            cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+            cloud_direction: 37.0,
+            ..Default::default()
+        };
+        let atmosphere = SpectrogramAtmosphere {
+            settings,
+            region: egui::Rect::ZERO,
+            pitch_vertical: true,
+            points_per_cent: 0.03,
+            points_per_ms: 0.01,
+            points_per_slab: 0.0,
+            now: 0.0,
+        };
+        let tile = tile_key([1920, 1080], atmosphere, period);
+        assert!(tile.is_some(), "the wash drew no tile");
+        let short = cloud_offset(settings, 2.0);
+        assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32));
+        // The tile coordinate the shader samples, in periods: a whole number
+        // apart is the same texel.
+        let cells = f64::from(WASH_CELLS / settings.material_settings.wash_size);
+        let uv = |q: [f64; 2]| {
+            let r = q.map(|v| v * cells / f64::from(period));
+            [0.8 * r[0] + 0.6 * r[1], -0.6 * r[0] + 0.8 * r[1]]
+        };
+        let off = |a: [f64; 2], b: [f64; 2]| {
+            let (a, b) = (uv(a), uv(b));
+            (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
+                * f64::from(period)
+        };
+        let exact = cloud_offset(settings, long);
+        let reduced = cloud_drift(settings, exact, tile).map(f64::from);
+        let cast = exact.map(|v| f64::from(v as f32));
+        assert!(off(reduced, exact) < 1e-4, "{} cells off", off(reduced, exact));
+        assert!(off(cast, exact) > 0.01, "the clock is too short to need reducing");
     }
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
@@ -2438,7 +2385,6 @@ mod tests {
                 .expect("a constant has a value")
         };
         assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
-        assert_eq!(SCALE_CELLS, number("SCALE_CELLS"));
         assert_eq!(WASH_CELLS, number("WASH_CELLS"));
 
         let at = |cloud_tile, wash_size, height| {
@@ -2491,7 +2437,7 @@ mod tests {
                     // A cloud that reduces at all: the starfield never does.
                     settings: harmonigraph_scene::SpectralAtmosphere {
                         cloud_depth,
-                        cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
+                        cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
                         ..Default::default()
                     },
                     region: egui::Rect::ZERO,

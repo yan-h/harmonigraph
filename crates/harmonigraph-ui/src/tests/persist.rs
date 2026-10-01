@@ -1646,10 +1646,10 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
         texture: harmonigraph_scene::LatticeTexture::None,
-        material_style: harmonigraph_scene::LatticeMaterial::Mosaic,
+        material_style: harmonigraph_scene::LatticeMaterial::Watercolor,
         material_amount: 0.63,
         material_settings: harmonigraph_scene::MaterialSettings {
-            scale_size: 1.7,
+            wash_size: 1.7,
             ..Default::default()
         },
         material_speed: 0.8,
@@ -1701,7 +1701,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         AtmosphereSettings { breath_amount: 0.6, breath_speed: 1.5, ..Default::default() }
     );
     state.picture.appearance.view.atmosphere.material_amount = 7.0;
-    state.picture.appearance.view.atmosphere.material_settings.scale_size = f32::NAN;
+    state.picture.appearance.view.atmosphere.material_settings.wash_size = f32::NAN;
     state.picture.appearance.view.atmosphere.material_speed = -2.0;
     state.picture.appearance.view.atmosphere.texture_depth = f32::NAN;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
@@ -1710,8 +1710,8 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
     assert_eq!(restored.view.atmosphere.material_amount, 1.0);
     assert_eq!(
-        restored.view.atmosphere.material_settings.scale_size,
-        AtmosphereSettings::default().material_settings.scale_size
+        restored.view.atmosphere.material_settings.wash_size,
+        AtmosphereSettings::default().material_settings.wash_size
     );
     assert_eq!(restored.view.atmosphere.material_speed, 0.0);
 }
@@ -2201,13 +2201,13 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
         harmonigraph_scene::CloudStyle::VelvetScales;
     let lattice = &mut state.picture.appearance.view.atmosphere.material_settings;
     lattice.wash_fuzz = 0.23;
-    lattice.scale_variety = 0.81;
+    lattice.velvet_variety = 0.81;
     lattice.velvet_edge = 0.51;
     lattice.velvet_irregularity = 0.43;
     lattice.velvet_shape = 0.72;
     let spectral = &mut state.picture.appearance.spectrum.atmosphere.material_settings;
     spectral.wash_fuzz = 0.72;
-    spectral.scale_variety = 0.19;
+    spectral.velvet_variety = 0.19;
     spectral.velvet_edge = 0.18;
     spectral.velvet_irregularity = 0.93;
     spectral.velvet_shape = 0.29;

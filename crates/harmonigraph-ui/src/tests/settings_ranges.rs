@@ -111,7 +111,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for material in
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
-        poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
+        poison!(material; wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
             velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
     }
     saved.workspace.interaction.ui_scale = v;
@@ -243,7 +243,7 @@ struct Scenario {
     marvel: bool,
     /// Which texture's dials the Spectrogram page draws. Each texture has its
     /// own bars, so the page has one inventory per texture, and the base
-    /// scenario draws the mosaic's.
+    /// scenario draws the wash's.
     style: harmonigraph_scene::CloudStyle,
     halo_profile: harmonigraph_scene::StarHaloProfile,
     material: harmonigraph_scene::LatticeMaterial,
@@ -258,7 +258,7 @@ fn scenarios() -> Vec<Scenario> {
         enabled: false,
         meantone: false,
         marvel: false,
-        style: harmonigraph_scene::CloudStyle::Mosaic,
+        style: harmonigraph_scene::CloudStyle::Watercolor,
         halo_profile: harmonigraph_scene::StarHaloProfile::default(),
         material: harmonigraph_scene::LatticeMaterial::None,
         visits: 0,
@@ -289,9 +289,9 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Mappings => visits + 8,
             panes::Tab::LatticeSettings => visits + 3 + 6,
-            // ...the spectrogram's fourteen, the ribbons' five, and the
-            // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 14 + 5 + 2,
+            // ...the spectrogram's twenty (the wash's nine among them), the
+            // ribbons' five, and the backdrop's height and stripe spacing.
+            panes::Tab::AnalyzerSettings => visits + 20 + 5 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -303,13 +303,6 @@ fn scenarios() -> Vec<Scenario> {
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
         visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
-        ..base
-    });
-    cases.push(Scenario {
-        pane: panes::Tab::LatticeSettings,
-        material: harmonigraph_scene::LatticeMaterial::Mosaic,
-        enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 4,
         ..base
     });
     for profile in [
@@ -337,23 +330,13 @@ fn scenarios() -> Vec<Scenario> {
             ..base
         });
     }
-    // The wash's own inventory: it takes the three scale bars off the Spectrogram
-    // section and puts nine of its own there, and nothing else on the page moves.
-    // Its own scenario rather than a flag on the loop above because the base
-    // scenario selects the mosaic, so without this the nine are drawn by no case
-    // here at all.
-    cases.push(Scenario {
-        pane: panes::Tab::AnalyzerSettings,
-        style: harmonigraph_scene::CloudStyle::Watercolor,
-        enabled: true,
-        visits: 13 + 14 + 5 + 2 + 2 - 3 + 9,
-        ..base
-    });
+    // Scales' own inventory: it takes the wash's nine bars off the Spectrogram
+    // section and puts five of its own there, and nothing else on the page moves.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::VelvetScales,
         enabled: true,
-        visits: 13 + 14 + 5 + 2 + 2 - 3 + 5,
+        visits: 13 + 20 + 5 + 2 + 2 - 9 + 5,
         ..base
     });
     cases.push(Scenario {
@@ -363,7 +346,7 @@ fn scenarios() -> Vec<Scenario> {
         visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 4,
         ..base
     });
-    // Stars replace the scale bars and shared Drift speed. Only the Uniform
+    // Stars replace the wash's bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
         (harmonigraph_scene::StarHaloProfile::P3, 16),
@@ -377,7 +360,7 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile,
             expanded: true,
             enabled: true,
-            visits: 13 + 14 + 5 + 2 + 2 - 3 - 1 + bars,
+            visits: 13 + 20 + 5 + 2 + 2 - 9 - 1 + bars,
             ..base
         });
     }
