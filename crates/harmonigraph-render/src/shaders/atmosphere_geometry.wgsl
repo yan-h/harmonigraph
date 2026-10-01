@@ -303,17 +303,15 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
 }
 
 // Each octave stores its lookup offset, an independent signed brightness draw,
-// and the tide line's SHAPE, which the spectrogram's `Edge pooling` scales:
-// 0..1 and not yet carrying the dial, so a drag is not a rebake.
+// and how far the pixel lies outside the arc of the glob painted over it: in
+// that glob's radii, clamped to 0..1, and 1 where no later glob is near. The
+// spectrogram's `Edge pooling` dials shape a tide line out of that distance
+// after the bake, so dragging any of them is not a rebake.
 struct Wet {
     offset: vec2<f32>,
     brightness: f32,
-    tide: f32,
+    gap: f32,
 };
-
-// How far outside the front glob's arc the tide line reaches, in that glob's
-// radii.
-const WASH_POOL_WIDTH: f32 = 0.55;
 
 // The cell walk chooses the lookup. `Edge feathering` feathers and bleeds that lookup
 // across glob boundaries. Brightness follows the same feathering, with a hash
@@ -348,16 +346,14 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     let brightness = mix(
         mix(centre, under, fa),
         wash_brightness(f.front, salt, period), bl);
-    // The tide line: a broad soft crescent lying on the OVERLAPPED glob,
-    // hugging the outside of the front glob's arc. Squared, so it comes on
-    // gently. Not feathered, as before #1038; how hard it bites is the dial's
-    // and `Edge feathering`'s.
+    // Where the tide line lies: on the OVERLAPPED glob, measured out from the
+    // front glob's arc. `near` is never above 0, since the front is a glob
+    // that does not cover the pixel. Not feathered, as before #1038.
     //
     // #909's surface pigment (each glob darkening toward its own rim) is not
     // here: without that version's paper lift it measured as a near-uniform
     // dim over 99% of the pane rather than a shape, and Yan dropped it.
-    let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
-    return Wet(look - r, brightness, crescent * crescent);
+    return Wet(look - r, brightness, clamp(-f.near, 0.0, 1.0));
 }
 
 // The whole of the wash's geometry at a point, in cells: what each octave

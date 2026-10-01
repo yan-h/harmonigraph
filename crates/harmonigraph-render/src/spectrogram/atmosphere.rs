@@ -17,8 +17,8 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// because what is stored is a cell offset of order one, where the eleven-bit
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// The third tile target: the wash's tide-line shape per octave, a square of a
-/// 0..1 fraction, so eight bits are plenty.
+/// The third tile target: per octave, the wash's distance out from the front
+/// glob's arc, 0..1 radii, so eight bits are plenty.
 const PIGMENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 // Half-float feedback can stall far from the target when alpha is small.
 const MEMORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
@@ -342,10 +342,12 @@ pub(super) fn tile_key(
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
-                wash_refract: _,    // applied after the tile bake
-                wash_layers: _,     // applied after the tile bake
-                wash_randomness: _, // applied after coloring
-                wash_pool: _,       // the tile holds the shape, the dial scales it after
+                wash_refract: _,       // applied after the tile bake
+                wash_layers: _,        // applied after the tile bake
+                wash_randomness: _,    // applied after coloring
+                wash_pool: _,          // the tile holds the distance, the dials shape it after
+                wash_pool_width: _,    // the tile holds the distance, the dials shape it after
+                wash_pool_softness: _, // the tile holds the distance, the dials shape it after
             },
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
@@ -450,7 +452,8 @@ struct Uniforms {
     star_halo_samples: [StarHaloSample; STAR_SLICES],
     velvet: Float4,
     velvet_size: Float4,
-    /// The wash's `Edge pooling`; the rest of the row is padding.
+    /// The wash's `Edge pooling`, its width, and its softness as an exponent;
+    /// w is padding.
     wash_pigment: Float4,
 }
 }
@@ -979,6 +982,8 @@ fn memory_key(
                 wash_layers,
                 wash_randomness: _, // display brightness does not change held color
                 wash_pool,
+                wash_pool_width,
+                wash_pool_softness,
             },
     } = s;
     let mut values = vec![
@@ -1040,6 +1045,8 @@ fn memory_key(
             wash_refract,
             wash_layers,
             wash_pool,
+            wash_pool_width,
+            wash_pool_softness,
             contours,
             contour_softness,
             contour_strength,
@@ -1663,7 +1670,14 @@ impl Targets {
                 settings.material_settings.velvet_variety,
             ]),
             velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
-            wash_pigment: Float4([settings.material_settings.wash_pool, 0.0, 0.0, 0.0]),
+            wash_pigment: Float4([
+                settings.material_settings.wash_pool,
+                settings.material_settings.wash_pool_width,
+                harmonigraph_scene::MaterialSettings::pool_exponent(
+                    settings.material_settings.wash_pool_softness,
+                ),
+                0.0,
+            ]),
             origin: Float2(rect.min.into()),
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),

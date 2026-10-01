@@ -330,7 +330,8 @@ struct Cloud {
     star_halo_samples: array<StarHaloSample, 5>,
     velvet: vec4<f32>,
     velvet_size: vec4<f32>,
-    // The wash's `Edge pooling`, 0..1; yzw are padding.
+    // The wash's `Edge pooling` (signed), its width in front-glob radii, and
+    // the exponent its `Softness` makes of the fade; w is padding.
     wash_pigment: vec4<f32>,
 };
 @group(1) @binding(9) var color_memory: texture_2d<f32>;
@@ -349,8 +350,8 @@ struct Cloud {
 /// `to_centre`); the wash fills both (see `WashField`).
 @group(1) @binding(5) var cloud_tile_a: texture_2d<f32>;
 @group(1) @binding(6) var cloud_tile_b: texture_2d<f32>;
-/// The wash's tide-line shapes, coarse then fine, read only while
-/// `Edge pooling` is above zero.
+/// The wash's distances out from the front glob's arc, coarse then fine, read
+/// only while `Edge pooling` is not zero.
 @group(1) @binding(13) var cloud_tile_c: texture_2d<f32>;
 /// The tile's own sampler, and the only REPEATING one here: the mosaic divides
 /// its cell coordinate by the period, while the wash first turns it into the
@@ -682,9 +683,14 @@ const WASH_POOL: f32 = 0.44;
 // took the same bite out of a dark tone as out of a light one turns every
 // crevice black, which reads as mortar between stones rather than paint.
 const WASH_PIG_DEPTH: f32 = 0.35;
+// A negative `Edge pooling` lifts by `level * (1 - level)` times this, which
+// matches the darkening's bite at mid level (`0.35 + 0.65 * 0.5 = 2.7 / 4`)
+// and is zero at both ends: silence stays black and nothing is pushed past 1
+// until the dial is well past 100%.
+const WASH_BLOOM: f32 = 2.7;
 
 fn wash_pigmented() -> bool {
-    return cloud.wash_pigment.x > 0.0;
+    return cloud.wash_pigment.x != 0.0;
 }
 
 fn wash_level(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> f32 {
@@ -692,10 +698,18 @@ fn wash_level(wet: Wet, pane_per_cell: f32, pt: vec2<f32>) -> f32 {
     if !wash_pigmented() {
         return level;
     }
+    // The tide line: full against the front glob's arc, gone `Width` radii
+    // out, and the fade between them raised to the `Softness` exponent — a
+    // flat hard-edged band at one end, a long soft tail at the other. The
+    // fresh 0.55 and 2 are #909's crescent exactly.
+    let shape = pow(clamp(1.0 - wet.gap / cloud.wash_pigment.y, 0.0, 1.0), cloud.wash_pigment.z);
     // The tide line has to fade as the edge dissolves: a crisp dark crescent
     // on a boundary that is no longer there reads as a line floating in fog.
     let fuzz = cloud.wash_fuzz;
-    let pigment = WASH_POOL * cloud.wash_pigment.x * (1.0 - 0.75 * fuzz) * wet.tide;
+    let pigment = WASH_POOL * cloud.wash_pigment.x * (1.0 - 0.75 * fuzz) * shape;
+    if pigment < 0.0 {
+        return min(level - pigment * WASH_BLOOM * level * (1.0 - level), 1.0);
+    }
     // Over silence the bite is negative and clamps away: the floor stays the
     // palette's floor with no black point needed.
     return max(level - pigment * (WASH_PIG_DEPTH + (1.0 - WASH_PIG_DEPTH) * level), 0.0);
@@ -836,13 +850,13 @@ fn fs_cloud_tile(in: TileVertex) -> TileBake {
     out.b = vec4<f32>(0.0);
     out.c = vec4<f32>(0.0);
     if cloud.cloud_style == 1u {
-        // Seven channels of glob geometry and brightness and two of tide-line
-        // shape, the fine octave whatever `Fine layer mix` says, so turning that
+        // Seven channels of glob geometry and brightness and two of distance
+        // out from the front glob's arc, the fine octave whatever `Fine layer mix` says, so turning that
         // dial up is a mix and never a rebake.
         let field = wash_field(wash_cell, period, cloud.wash_fuzz, cloud.wash_lobe);
         out.a = vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0);
         out.b = vec4<f32>(field.fine.offset, field.fine.brightness, field.cover);
-        out.c = vec4<f32>(field.coarse.tide, field.fine.tide, 0.0, 0.0);
+        out.c = vec4<f32>(field.coarse.gap, field.fine.gap, 0.0, 0.0);
     } else {
         // The mosaic's whole walk is these two vectors, so its second target is
         // never read. It is still allocated and still written, which is what
