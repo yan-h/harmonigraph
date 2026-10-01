@@ -668,8 +668,7 @@ mod tests {
     /// [`draw`] pins both at their identity — a rect at the origin, one pixel
     /// per point — where an origin never subtracted and a ramp never scaled
     /// both come out right. Production is neither: the editor is Retina and
-    /// the Spiral is a docked tab at an offset, and the offline renderer
-    /// scales by 1.5 at 1080p and 3.0 at 4K.
+    /// the Spiral is a docked tab at an offset.
     fn draw_into(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
