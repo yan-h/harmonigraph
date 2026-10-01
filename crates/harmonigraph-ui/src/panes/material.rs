@@ -173,12 +173,14 @@ pub(super) fn stars(
         .on_hover_text(
             "A soft glow around every star's core in the star's own color, fading out at the star's edge. This is its strength at the center; 0% draws bare cores, 100% a glow as bright as the core.",
         );
-    ValueBar::new(&mut atmosphere.star_core, STAR_CORE_MIN..=STAR_CORE_MAX, "Core")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How much of each star is its bright core, as a share of the star's radius; the glow fills the rest. Low values draw pinpoints in a wide glow; 100% spreads the core to the star's edge.",
+    for (core, label, end) in [
+        (&mut atmosphere.star_core_far, "Core, far", "farthest"),
+        (&mut atmosphere.star_core_near, "Core, near", "nearest"),
+    ] {
+        ValueBar::new(core, STAR_CORE_MIN..=STAR_CORE_MAX, label).percent().show(ui).on_hover_text(
+            format!("How much of each of the {end} depth's stars is its bright core, as a share of the star's radius; the glow fills the rest. Depths between follow the Star size curve. Low values draw pinpoints in a wide glow; 100% spreads the core to the star's edge, a dense bed of soft stars."),
         );
+    }
     ValueBar::new(&mut atmosphere.star_falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff")
         .show(ui)
         .on_hover_text(

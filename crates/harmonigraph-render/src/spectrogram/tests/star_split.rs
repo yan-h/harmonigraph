@@ -126,7 +126,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                 let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
                 // The old fringe's top: a broad glow, short of a flat wash.
                 settings.stars.star_glow = 0.5;
-                settings.stars.star_core = harmonigraph_scene::STAR_CORE_MAX;
+                (settings.stars.star_core_far, settings.stars.star_core_near) =
+                    (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
                 settings.stars.star_spacing_min = harmonigraph_scene::STAR_SPACING_MIN;
                 settings.stars.star_spacing_max = harmonigraph_scene::STAR_SPACING_MAX;
                 settings.cloud_depth = 1.0;
@@ -317,6 +318,10 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.stars.star_jitter = jitter;
             settings.stars.star_glow = fringe;
+            // Cores out to the star's edge, so even a glowless star leaves
+            // its halo image enough light to witness.
+            (settings.stars.star_core_far, settings.stars.star_core_near) =
+                (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
             settings.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
             settings.stars.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
@@ -456,7 +461,8 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
             settings.cloud_depth = 0.65;
             settings.stars.star_glow = harmonigraph_scene::STAR_GLOW_MAX;
             settings.stars.star_far_fill = 1.0;
-            settings.stars.star_core = harmonigraph_scene::STAR_CORE_MAX;
+            (settings.stars.star_core_far, settings.stars.star_core_near) =
+                (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
             if memory {
                 settings.color_pickup = 0.6;
                 settings.color_release = 0.6;

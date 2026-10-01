@@ -103,7 +103,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     );
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
-        star_density, star_randomness, star_size_variation, star_jitter, star_glow, star_core, star_falloff,
+        star_density, star_randomness, star_size_variation, star_jitter, star_glow, star_core_far, star_core_near, star_falloff,
         star_far_fill, star_halo_resolution, star_speed_min, star_speed_max, star_spacing_min, star_spacing_max,
         star_spacing_curve, star_size_min, star_size_max, star_size_curve,
         star_speed_curve, star_lifetime);

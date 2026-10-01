@@ -423,7 +423,8 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.stars.star_speed_curve", stars.star_speed_curve);
     f.one("atmosphere.stars.star_lifetime", stars.star_lifetime);
     f.one("atmosphere.stars.star_glow", stars.star_glow);
-    f.one("atmosphere.stars.star_core", stars.star_core);
+    f.one("atmosphere.stars.star_core_far", stars.star_core_far);
+    f.one("atmosphere.stars.star_core_near", stars.star_core_near);
     f.one("atmosphere.stars.star_falloff", stars.star_falloff);
     f.one("atmosphere.stars.star_far_fill", stars.star_far_fill);
     f.one("atmosphere.stars.star_halo_resolution", stars.star_halo_resolution);

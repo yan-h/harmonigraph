@@ -968,7 +968,8 @@ fn memory_key(
                 star_halo_resolution: _, // sampling does not change material identity
                 star_halo_profile: _,    // sampling does not change material identity
                 star_glow: _, // response/coverage changes do not change material identity
-                star_core: _, // response/coverage changes do not change material identity
+                star_core_far: _, // response/coverage changes do not change material identity
+                star_core_near: _, // response/coverage changes do not change material identity
                 star_falloff: _, // response/coverage changes do not change material identity
                 star_far_fill: _, // composition does not change material identity
                 test_bed: _,  // its cells and bands are appended where the cells are

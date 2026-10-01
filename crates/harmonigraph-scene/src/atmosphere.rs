@@ -170,7 +170,8 @@ pub const STAR_DENSITY_MAX: f32 = 10.0;
 /// The top of [`StarSettings::star_glow`]: the glow as bright as the core at
 /// its centre.
 pub const STAR_GLOW_MAX: f32 = 1.0;
-/// Bounds of [`StarSettings::star_core`], as a share of the star's radius.
+/// Bounds of [`StarSettings::star_core_far`] and [`StarSettings::star_core_near`],
+/// as a share of the star's radius.
 pub const STAR_CORE_MIN: f32 = 0.05;
 /// See [`STAR_CORE_MIN`].
 pub const STAR_CORE_MAX: f32 = 1.0;
@@ -551,10 +552,15 @@ pub struct StarSettings {
     /// `(1 - t)^falloff`, `t` the distance over the star's radius. Runs to
     /// [`STAR_GLOW_MAX`].
     pub star_glow: f32,
-    /// How much of the star is core: where its Gaussian core falls to
-    /// `e^-2`, as a share of the star's radius. Runs over
-    /// [`STAR_CORE_MIN`]..=[`STAR_CORE_MAX`].
-    pub star_core: f32,
+    /// How much of the farthest depth's stars is core: where the Gaussian
+    /// core falls to `e^-2`, as a share of the star's radius. A depth `d`
+    /// takes `far + (near - far) d^curve` on the `Star size` curve, so a dense
+    /// bed of filled far stars can sit behind near stars that are points in a
+    /// glow. Runs over [`STAR_CORE_MIN`]..=[`STAR_CORE_MAX`], either way
+    /// round.
+    pub star_core_far: f32,
+    /// The nearest depth's core share. See [`Self::star_core_far`].
+    pub star_core_near: f32,
     /// The glow's exponent: low spreads it as a broad haze to the star's edge,
     /// high draws it in as a tight bloom round the core. Runs over
     /// [`STAR_FALLOFF_MIN`]..=[`STAR_FALLOFF_MAX`].
@@ -594,9 +600,14 @@ impl Default for StarSettings {
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
-            // keep its cost. Core and falloff match the nearest depth, which
-            // shows most: a wider core would sit mostly in a 3x3 depth's
-            // reduced halo image, soft and shimmering as it drifts.
+            // keep its cost. The far cores fill their stars, as the old capped
+            // cores did, which is what made the far bed dense; the nearest
+            // core is the old one's share. A wider near core would sit mostly
+            // in a 3x3 depth's reduced halo image, soft and shimmering as it
+            // drifts. The gentle falloff holds the far stars near full
+            // coverage out to half a cell, as the old fringe on a wide core
+            // did; at 0.7 the fresh Medium frame sits 5.6/255 from the old
+            // one on average.
             star_size_min: 1.66,
             star_size_max: 15.8,
             star_size_curve: 2.3,
@@ -605,8 +616,9 @@ impl Default for StarSettings {
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
             star_glow: 0.5,
-            star_core: 0.35,
-            star_falloff: 2.0,
+            star_core_far: 1.0,
+            star_core_near: 0.35,
+            star_falloff: 0.7,
             star_far_fill: 0.0,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
@@ -696,7 +708,10 @@ impl StarSettings {
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
         self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
-        self.star_core = clamp(self.star_core, fresh.star_core, STAR_CORE_MIN, STAR_CORE_MAX);
+        self.star_core_far =
+            clamp(self.star_core_far, fresh.star_core_far, STAR_CORE_MIN, STAR_CORE_MAX);
+        self.star_core_near =
+            clamp(self.star_core_near, fresh.star_core_near, STAR_CORE_MIN, STAR_CORE_MAX);
         self.star_falloff =
             clamp(self.star_falloff, fresh.star_falloff, STAR_FALLOFF_MIN, STAR_FALLOFF_MAX);
         self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);

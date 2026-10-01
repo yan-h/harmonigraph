@@ -81,7 +81,8 @@ pub struct StarDepthPlan {
     pub radius: f32,
     /// What the dials ask for.
     pub wanted: f32,
-    /// The star's shape: [`StarSettings::star_core`],
+    /// The star's shape: its core share between [`StarSettings::star_core_far`]
+    /// and [`StarSettings::star_core_near`],
     /// [`StarSettings::star_glow`], [`StarSettings::star_falloff`].
     pub core: f32,
     pub glow: f32,
@@ -210,9 +211,8 @@ impl StarSettings {
         let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
         let solo = bed.depths.iter().any(|depth| depth.solo);
         let packing = (self.star_density / 2.0).sqrt();
-        let along = |k: usize, small: f32, big: f32, curve: f32| {
-            small * (big / small).powf((k as f32 / (STAR_DEPTHS - 1) as f32).powf(curve))
-        };
+        let depth = |k: usize, curve: f32| (k as f32 / (STAR_DEPTHS - 1) as f32).powf(curve);
+        let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
         let depths = std::array::from_fn(|k| {
             let o = bed.depths[k];
             let (spacing, size) = (self.star_spacing_curve, self.star_size_curve);
@@ -239,7 +239,10 @@ impl StarSettings {
                 cell,
                 radius: wanted.min(gather.bound(jitter) * cell),
                 wanted,
-                core: o.core.unwrap_or(self.star_core),
+                core: o.core.unwrap_or_else(|| {
+                    let (far, near) = (self.star_core_far, self.star_core_near);
+                    far + (near - far) * depth(k, size)
+                }),
                 glow: o.glow.unwrap_or(self.star_glow),
                 falloff: o.falloff.unwrap_or(self.star_falloff),
                 gain: o.gain,
@@ -300,7 +303,7 @@ mod tests {
         }
         assert_eq!(plan.depths[3].glow, 0.1);
         assert_eq!(plan.depths[3].falloff, 4.0);
-        assert_eq!(plan.depths[3].core, settings.star_core);
+        assert_eq!(plan.depths[3].core, StarSettings::default().plan().depths[3].core);
     }
 
     /// A test bed value off its range is drawn at the range's edge, and a
