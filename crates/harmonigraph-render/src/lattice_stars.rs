@@ -194,7 +194,7 @@ impl Targets {
         let scratch = stars::image(device, "star_scratch", [1; 2], stars::STAR_FAR_FORMAT);
         let atlas_scratch = stars::image(device, "star_atlas_scratch", [1; 2], stars::STAR_FORMAT);
         let halo_scratch =
-            StarHalos::new(device, StarHaloLayout::from_sizes([[1; 2]; stars::STAR_SLICES], 0));
+            StarHalos::new(device, StarHaloLayout::from_sizes([Some([1; 2]); stars::STAR_SLICES]));
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lattice_star_settings"),
             size: std::mem::size_of::<Settings>() as u64,
@@ -258,7 +258,7 @@ impl Targets {
     ) {
         let Frame { settings: stars, direction, now, amount } = frame;
         let layout = stars::star_layout(stars, size[0] as f32 / size[1] as f32);
-        let split = stars.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform
+        let split = stars::star_far_reduced(stars)
             || u64::from(size[0]) * u64::from(size[1]) >= stars::STAR_SPLIT_PIXELS;
         let allocation = Allocation {
             output: size,

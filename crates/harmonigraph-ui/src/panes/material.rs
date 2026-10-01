@@ -178,6 +178,112 @@ pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::S
     }
 }
 
+/// Dev only: edits the [`StarPlan`](harmonigraph_scene::star_plan::StarPlan)
+/// the renderer draws in place of the `Stars rendering` profile's, per depth
+/// and per image, to measure what each choice costs and looks like. Nothing
+/// here is saved; every load starts at production.
+pub(super) fn stars_test_bed(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
+    use crate::widgets::choice_row;
+    use harmonigraph_scene::star_plan::{
+        StarGather, StarPlan, STAR_DEPTHS, STAR_FAR_DEPTHS, STAR_GAIN_MAX,
+        STAR_IMAGE_RESOLUTION_MAX, STAR_IMAGE_RESOLUTION_MIN, STAR_PLAN_SCALE_MAX,
+        STAR_PLAN_SCALE_MIN, STAR_REACH_MAX, STAR_REACH_MIN,
+    };
+    super::subsection(ui, "Star test bed (dev, not saved)", |ui| {
+        let mut on = stars.test_bed.is_some();
+        if crate::widgets::checkbox(ui, &mut on, "Draw from the test bed")
+            .on_hover_text(
+                "Draw the stars from the plan below instead of the Stars rendering profile. It starts from what the profile draws now. Not saved; every load starts at production.",
+            )
+            .changed()
+        {
+            stars.test_bed = on.then(|| StarPlan::production(*stars));
+        }
+        let fresh = StarPlan::production(*stars);
+        let Some(plan) = stars.test_bed.as_mut() else {
+            return;
+        };
+        if ui
+            .button("Reset to production")
+            .on_hover_text("Set every value below to what the Stars rendering profile draws now.")
+            .clicked()
+        {
+            *plan = fresh;
+        }
+        let image = STAR_IMAGE_RESOLUTION_MIN..=STAR_IMAGE_RESOLUTION_MAX;
+        ValueBar::new(&mut plan.far, image.clone(), "Far image").percent().show(ui).on_hover_text(
+            "The far three depths are drawn into one image at this resolution and filtered up. 100% draws them at the pane's own resolution.",
+        );
+        ValueBar::new(&mut plan.near, image.clone(), "Near image").percent().show(ui).on_hover_text(
+            "The near two depths are drawn over the far image at this resolution. 100% draws them straight into the pane, as does any value while Far image is at 100%.",
+        );
+        for (tier, name) in plan.halo_tiers.iter_mut().zip(["Halo A", "Halo B", "Halo C"]) {
+            ValueBar::new(tier, image.clone(), name).percent().show(ui).on_hover_text(
+                "Resolution of the halo image for every 3×3 depth that picks this tier.",
+            );
+        }
+        for (k, depth) in plan.depths.iter_mut().enumerate() {
+            let image = if k < STAR_FAR_DEPTHS { "far image" } else { "near image" };
+            let end = match k {
+                0 => " · farthest",
+                k if k == STAR_DEPTHS - 1 => " · nearest",
+                _ => "",
+            };
+            super::block(ui, &format!("Depth {} · {image}{end}", k + 1));
+            ui.push_id(k, |ui| {
+                choice_row(ui, "Gather", &mut depth.gather, &[
+                    (StarGather::Off, "Off", "Not drawn or baked."),
+                    (StarGather::Core, "1×1", "A compact core inside its own cell, no glow, one read."),
+                    (StarGather::Two, "2×2", "The whole star, glow included, from the four surrounding cells."),
+                    (StarGather::Three, "3×3", "The core plus a halo image gathered from nine cells."),
+                ]);
+                ui.add_enabled_ui(depth.gather != StarGather::Off, |ui| {
+                    let scale = STAR_PLAN_SCALE_MIN..=STAR_PLAN_SCALE_MAX;
+                    ValueBar::new(&mut depth.spacing, scale.clone(), "Spacing")
+                        .unit(1.0, "\u{d7}")
+                        .show(ui)
+                        .on_hover_text("Multiplies this depth's cell. Smaller cells mean more stars and more cost.");
+                    ValueBar::new(&mut depth.size, scale, "Size").unit(1.0, "\u{d7}").show(ui).on_hover_text(
+                        "Multiplies the core. The cap at a third of the cell still applies.",
+                    );
+                    ValueBar::new(&mut depth.gain, 0.0..=STAR_GAIN_MAX, "Opacity")
+                        .unit(1.0, "\u{d7}")
+                        .show(ui)
+                        .on_hover_text("Multiplies every star's coverage at this depth.");
+                    ValueBar::new(&mut depth.jitter, 0.0..=1.0, "Position variation")
+                        .percent()
+                        .show(ui)
+                        .on_hover_text("Position variation for this depth alone. More variation shortens the reach the gather holds without seams.");
+                    let window = match depth.gather {
+                        StarGather::Three => Some("3×3"),
+                        StarGather::Two => Some("2×2"),
+                        StarGather::Off | StarGather::Core => None,
+                    };
+                    ui.add_enabled_ui(depth.gather != StarGather::Core, |ui| {
+                        let bound = depth.gather.bound(depth.jitter);
+                        ValueBar::new(&mut depth.reach, STAR_REACH_MIN..=STAR_REACH_MAX, "Glow reach")
+                            .unit(1.0, " cells")
+                            .show(ui)
+                            .on_hover_text(match window {
+                                Some(window) => format!(
+                                    "How far the glow reaches, in cells. Fits up to {bound:.2} cells at this variation. Past that, the {window} read drops stars and the glow shows seams.",
+                                ),
+                                None => "How far the glow reaches, in cells. 1×1 draws no glow.".to_owned(),
+                            });
+                    });
+                    ui.add_enabled_ui(depth.gather == StarGather::Three, |ui| {
+                        choice_row(ui, "Halo", &mut depth.tier, &[
+                            (0, "A", "Drawn at Halo A's resolution."),
+                            (1, "B", "Drawn at Halo B's resolution."),
+                            (2, "C", "Drawn at Halo C's resolution."),
+                        ]);
+                    });
+                });
+            });
+        }
+    });
+}
+
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::{
         STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,

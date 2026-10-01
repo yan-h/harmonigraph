@@ -5,7 +5,7 @@ use crate::wgpu;
 /// How many depth slices the starfield walks, from the farthest (0) to the
 /// nearest. The shader's `STAR_SLICES`, held to this by
 /// `the_star_ring_holds_every_star_that_reaches_a_pixel`.
-pub(crate) const STAR_SLICES: usize = 5;
+pub(crate) const STAR_SLICES: usize = harmonigraph_scene::star_plan::STAR_DEPTHS;
 /// The period the star hash wraps at, in cells of each slice, and the modulus
 /// each slice's drift is reduced by here in f64 before it is narrowed to f32.
 ///
@@ -57,7 +57,7 @@ struct StarSlice {
     cell: f32,
     /// The core's base sigma, before the per-star size draw: a quarter of
     /// this depth's diameter on the `Star size` curve, the same at every
-    /// depth for the same value.
+    /// depth for the same value, times the plan's size.
     sigma: f32,
     /// The ceiling on a core, before defocus: a third of a cell. It is what
     /// keeps the dust pinpoint — dropping it made the prototype's field foamy.
@@ -65,17 +65,42 @@ struct StarSlice {
     /// How much the core is widened after the cap, equally at every depth.
     defocus: f32,
     /// The same-colour fringe's coverage at the star's centre, falling off as
-    /// `exp(-d / 2.5 sigma)`. Uniform and the nearest two layers fade to zero
-    /// at 1.2 cells; the optimized far-three response ends at
-    /// `1.0 - 0.3 * star_jitter` cells.
+    /// `exp(-d / 2.5 sigma)` out to [`Self::glow`].
     fringe: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
-    /// many cells it holds across and down. See [`StarLayout`].
+    /// many cells it holds across and down. See [`StarLayout`]. An undrawn
+    /// slice holds no cells.
     base: i32,
     origin: Int2,
     grid: Int2,
+    /// The band a star's centre is drawn from, in cells, and the compact
+    /// core's reach, which stays inside the star's own cell: the slice's
+    /// `Position variation`, through [`star_band`].
+    width: f32,
+    core: f32,
+    /// How far the glow reaches, in cells: the 2x2 gather's whole star, or
+    /// the 3x3 halo's outer edge.
+    glow: f32,
+    /// A multiplier on every star's coverage.
+    gain: f32,
+    /// How the slice is gathered: [`star_gather_code`].
+    gather: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
+}
+
+/// The shader's code for a gather, which `star_layers` and the bake read.
+fn star_gather_code(gather: harmonigraph_scene::star_plan::StarGather) -> u32 {
+    use harmonigraph_scene::star_plan::StarGather;
+    match gather {
+        StarGather::Off => 0,
+        StarGather::Core => 1,
+        StarGather::Two => 2,
+        StarGather::Three => 3,
+    }
 }
 
 /// The slice's depth, 0 for the farthest and 1 for the nearest.
@@ -116,8 +141,10 @@ const STAR_ATLAS_STEP: u32 = 64;
 pub(crate) fn star_cells(settings: harmonigraph_scene::StarSettings) -> [f32; STAR_SLICES] {
     let packing = (settings.star_density / 2.0).sqrt();
     let (small, big) = (settings.star_spacing_min, settings.star_spacing_max);
+    let plan = settings.plan();
     std::array::from_fn(|k| {
         small * (big / small).powf(star_depth(k).powf(settings.star_spacing_curve)) / packing
+            * plan.depths[k].spacing
     })
 }
 
@@ -134,8 +161,8 @@ pub(crate) struct StarLayout {
     /// Each slice's cell in star pixels: the dials' own, unless the atlas
     /// could not hold the finest of them.
     pub(crate) cells: [f32; STAR_SLICES],
-    /// Cells across and down in each slice, and the atlas texel its first
-    /// cell is, counted along the rows.
+    /// Cells across and down in each slice, none for an undrawn one, and the
+    /// atlas texel its first cell is, counted along the rows.
     pub(crate) grids: [[u32; 2]; STAR_SLICES],
     pub(crate) bases: [u32; STAR_SLICES],
     /// The pane in star pixels, across and down.
@@ -145,13 +172,27 @@ pub(crate) struct StarLayout {
 }
 
 impl StarLayout {
-    pub(crate) fn at(cells: [f32; STAR_SLICES], floor: f32, aspect: f32) -> Self {
+    pub(crate) fn at(
+        cells: [f32; STAR_SLICES],
+        drawn: [bool; STAR_SLICES],
+        floor: f32,
+        aspect: f32,
+    ) -> Self {
         let cells = cells.map(|cell| cell.max(floor));
         let pane = [STAR_PANE * aspect, STAR_PANE];
         // Retain the padded atlas bounds needed by the halo
-        // pass's 3x3 walk around each pixel's nominal cell.
-        let grids = cells.map(|cell| {
-            pane.map(|span| ((span / cell).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN))
+        // pass's 3x3 walk around each pixel's nominal cell. An undrawn slice
+        // bakes nothing.
+        let grids = std::array::from_fn(|k| {
+            pane.map(|span| {
+                let cells =
+                    ((span / cells[k]).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN);
+                if drawn[k] {
+                    cells
+                } else {
+                    0
+                }
+            })
         });
         // Each slice's cells row after row, straight after the last slice's,
         // so no slice pays for another's width.
@@ -184,24 +225,29 @@ impl StarLayout {
 /// every other slice is untouched.
 pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f32) -> StarLayout {
     let wanted = star_cells(settings);
-    let whole = StarLayout::at(wanted, 0.0, aspect);
+    let drawn = settings
+        .plan()
+        .depths
+        .map(|depth| depth.gather != harmonigraph_scene::star_plan::StarGather::Off);
+    let at = |floor| StarLayout::at(wanted, drawn, floor, aspect);
+    let whole = at(0.0);
     if whole.fits() {
         return whole;
     }
-    let mut high = wanted[0].max(1e-3);
-    while !StarLayout::at(wanted, high, aspect).fits() {
+    let mut high = wanted.iter().copied().fold(f32::INFINITY, f32::min).max(1e-3);
+    while !at(high).fits() {
         high *= 2.0;
     }
     let mut low = 0.0;
     for _ in 0..24 {
         let mid = (low + high) / 2.0;
-        if StarLayout::at(wanted, mid, aspect).fits() {
+        if at(mid).fits() {
             high = mid;
         } else {
             low = mid;
         }
     }
-    StarLayout::at(wanted, high, aspect)
+    at(high)
 }
 
 /// The atlas to allocate for `needed` texels, keeping the one `held` while it
@@ -239,14 +285,16 @@ pub(crate) fn star_slices(
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let (small, big) = (settings.star_diameter_min, settings.star_diameter_max);
+    let plan = settings.plan();
     std::array::from_fn(|k| {
+        let depth = plan.depths[k];
         let along = star_depth(k).powf(settings.star_diameter_curve);
         let cell = layout.cells[k];
         // The core is this depth's point on the `Star size` curve alone, a
         // diameter of four sigmas, so one value on the control is one star
         // size at every depth; capped at a third of the depth's actual
         // spacing, which `Star spacing`, density and the atlas floor set.
-        let sigma = 0.25 * small * (big / small).powf(along);
+        let sigma = 0.25 * small * (big / small).powf(along) * depth.size;
         let cap = 0.33 * cell;
         let defocus = 1.0 + settings.star_defocus;
         let speed = f64::from(star_speed(settings, k));
@@ -259,6 +307,7 @@ pub(crate) fn star_slices(
         // works it out, with the original conservative neighbor and margin.
         let origin: [i32; 2] =
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
+        let [width, core] = star_band(depth.jitter);
         StarSlice {
             offset: Float2(offset),
             cell,
@@ -269,6 +318,14 @@ pub(crate) fn star_slices(
             base: layout.bases[k] as i32,
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
+            width,
+            core,
+            glow: depth.reach,
+            gain: depth.gain,
+            gather: star_gather_code(depth.gather),
+            pad0: 0,
+            pad1: 0,
+            pad2: 0,
         }
     })
 }
@@ -281,9 +338,19 @@ pub(crate) fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
     let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
     edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
 }
-pub(crate) fn star_geometry(jitter: f32, far_fill: f32) -> Float4 {
+/// A slice's centre band and compact core reach in cells at `Position
+/// variation` `jitter`: the core stays inside the star's own cell wherever its
+/// centre is drawn.
+pub(crate) fn star_band(jitter: f32) -> [f32; 2] {
     let width = 0.6 * f64::from(jitter);
-    Float4([width as f32, (0.5 - width / 2.0) as f32, 0.7, far_fill])
+    [harmonigraph_scene::star_plan::star_jitter_width(jitter), (0.5 - width / 2.0) as f32]
+}
+
+/// What every slice shares: where the core starts fading, as a share of its
+/// reach, and `Distant gap fill`. The first two are each slice's own
+/// (`StarSlice::width` and `core`).
+pub(crate) fn star_geometry(far_fill: f32) -> Float4 {
+    Float4([0.0, 0.0, 0.7, far_fill])
 }
 
 /// Per-depth halo sampling follows pane pixels and the sanitized resolution
@@ -293,33 +360,37 @@ pub(crate) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
     pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
 }
 
-/// Uniform keeps exact native texel addressing; High, Medium and Low draw the
-/// complete far-three response at 75%, 50% and one-third dimensions.
+/// Whether the far depths are drawn into a reduced image and sampled
+/// filtered: the presets' far image (75%, 50% and a third for High, Medium
+/// and Low). Uniform's is the pane's own, read texel for texel, and drawn
+/// only on a big pane.
+pub(crate) fn star_far_reduced(settings: harmonigraph_scene::StarSettings) -> bool {
+    settings.plan().far < 1.0
+}
+
+/// The far image's size: the pane's own unless [`star_far_reduced`].
 pub(crate) fn star_far_size(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
 ) -> [u32; 2] {
-    use harmonigraph_scene::StarHaloProfile;
-    match settings.star_halo_profile {
-        StarHaloProfile::Uniform => pixels,
-        StarHaloProfile::P3 => star_halo_size(pixels, 0.75),
-        StarHaloProfile::Medium => star_halo_size(pixels, 0.5),
-        StarHaloProfile::Low => star_halo_size(pixels, 1.0 / 3.0),
+    let far = settings.plan().far;
+    if far < 1.0 {
+        star_halo_size(pixels, far)
+    } else {
+        pixels
     }
 }
 
 /// Medium and Low shade the foreground over the far image at 75% and 50% dimensions.
 /// Exact rounded dimensions belong to allocation identity, not the preset name.
+/// The near pass composites over a reduced far image, so there is no near
+/// image without one.
 pub(crate) fn star_near_size(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
 ) -> Option<[u32; 2]> {
-    use harmonigraph_scene::StarHaloProfile;
-    match settings.star_halo_profile {
-        StarHaloProfile::Medium => Some(star_halo_size(pixels, 0.75)),
-        StarHaloProfile::Low => Some(star_halo_size(pixels, 0.5)),
-        StarHaloProfile::P3 | StarHaloProfile::Uniform => None,
-    }
+    let plan = settings.plan();
+    (plan.near < 1.0 && plan.far < 1.0).then(|| star_halo_size(pixels, plan.near))
 }
 
 /// Include every bilinear tap at the boundary of a partially covered pane.
@@ -355,26 +426,28 @@ pub(crate) struct HaloGroup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StarHaloLayout {
     pub(crate) groups: [HaloGroup; STAR_HALO_GROUPS],
-    /// [group, array layer] for each far-to-near depth.
+    /// [group, array layer] for each far-to-near depth; zeros for one with
+    /// no halo.
     pub(crate) layers: [[u32; 2]; STAR_SLICES],
-    /// High, Medium and Low far depths are drawn directly and own no halo images.
-    pub(crate) first_active_layer: usize,
+    /// Which depths own a halo image: those the plan gathers 3x3.
+    pub(crate) active: [bool; STAR_SLICES],
 }
 
 impl StarHaloLayout {
-    pub(crate) fn from_sizes(sizes: [[u32; 2]; STAR_SLICES], first_active_layer: usize) -> Self {
+    pub(crate) fn from_sizes(sizes: [Option<[u32; 2]>; STAR_SLICES]) -> Self {
         let mut layout = Self {
             groups: [HaloGroup { size: [1, 1], layers: 0 }; STAR_HALO_GROUPS],
             layers: [[0, 0]; STAR_SLICES],
-            first_active_layer,
+            active: sizes.map(|size| size.is_some()),
         };
-        for (depth, size) in sizes.into_iter().enumerate().skip(first_active_layer) {
+        for (depth, size) in sizes.into_iter().enumerate() {
+            let Some(size) = size else { continue };
             let group = layout
                 .groups
                 .iter()
                 .position(|g| g.layers > 0 && g.size == size)
                 .or_else(|| layout.groups.iter().position(|g| g.layers == 0))
-                .expect("halo profiles use at most three different target sizes");
+                .expect("a plan's halos come in at most `STAR_HALO_TIERS` sizes");
             layout.layers[depth] = [group as u32, layout.groups[group].layers];
             layout.groups[group].size = size;
             layout.groups[group].layers += 1;
@@ -391,24 +464,19 @@ impl StarHaloLayout {
     }
 }
 
-/// High, Medium and Low need halos only for the nearest two depths. Material history
-/// keeps the same identity across profiles, independent of their sampling.
+/// A halo image for each depth the plan gathers 3x3, at its tier's
+/// resolution: High, Medium and Low need them only for the nearest two depths.
+/// Material history keeps the same identity across profiles, independent of
+/// their sampling.
 pub(crate) fn star_halo_layout(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
 ) -> StarHaloLayout {
-    use harmonigraph_scene::StarHaloProfile;
-    let settings = settings.sanitized();
-    let (factors, first_active_layer) = match settings.star_halo_profile {
-        StarHaloProfile::Uniform => ([settings.star_halo_resolution; STAR_SLICES], 0),
-        StarHaloProfile::P3 => ([0.0, 0.0, 0.0, 1.0, 0.6], 3),
-        StarHaloProfile::Medium => ([0.0, 0.0, 0.0, 0.75, 0.45], 3),
-        StarHaloProfile::Low => ([0.0, 0.0, 0.0, 0.5, 0.3], 3),
-    };
-    StarHaloLayout::from_sizes(
-        factors.map(|factor| star_halo_size(pixels, factor)),
-        first_active_layer,
-    )
+    let plan = settings.sanitized().plan();
+    StarHaloLayout::from_sizes(plan.depths.map(|depth| {
+        (depth.gather == harmonigraph_scene::star_plan::StarGather::Three)
+            .then(|| star_halo_size(pixels, plan.halo_tiers[depth.tier]))
+    }))
 }
 
 // One 16-byte uniform row: the renderer supplies the allocated size and
@@ -459,7 +527,7 @@ impl StarHalos {
                 })
             }),
             layers: std::array::from_fn(|depth| {
-                if depth < layout.first_active_layer {
+                if !layout.active[depth] {
                     return None;
                 }
                 let [group, layer] = layout.layers[depth];
@@ -511,13 +579,11 @@ impl StarUniforms {
             star_far: Float4([
                 far[0] as f32,
                 far[1] as f32,
-                f32::from(
-                    settings.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform,
-                ),
+                f32::from(star_far_reduced(settings)),
                 0.0,
             ]),
             star_near: Float4([near[0] as f32, near[1] as f32, 0.0, 0.0]),
-            star_geometry: star_geometry(settings.star_jitter, settings.star_far_fill),
+            star_geometry: star_geometry(settings.star_far_fill),
             star_slices: star_slices(settings, direction, now, layout),
             star_halo_samples: halos.samples(),
         }

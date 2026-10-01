@@ -19,6 +19,19 @@ struct StarSlice {
     base: i32,
     origin: vec2<i32>,
     grid: vec2<i32>,
+    // The band a centre is drawn from and the compact core's reach, in cells,
+    // at this slice's `Position variation`.
+    width: f32,
+    core: f32,
+    // The glow's reach in cells: the 2x2 star's, or the 3x3 halo's.
+    glow: f32,
+    gain: f32,
+    // 0 not drawn, 1 the core alone, 2 the whole star from a 2x2 read, 3 the
+    // core plus a 3x3 halo image.
+    gather: u32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 struct StarUniforms {
     origin: vec2<f32>,
@@ -38,9 +51,6 @@ fn atlas_texel(index: i32) -> vec2<i32> {
 }
 const STAR_SLICES: u32 = 5u;
 const STAR_PANE: f32 = 540.0;
-// Original full-jitter halo bounds. The nominal cell and its eight neighbors
-// cover this radius at every `Position variation`; a missing cell starts at 1.2.
-const STAR_HALO_REACH: f32 = 1.2;
 const STAR_HALO_FADE: f32 = 0.7;
 // The star atlas's width in texels, a power of two (`STAR_ATLAS_WIDTH` in
 // stars.rs), and its log.
@@ -105,7 +115,7 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // alone.
     let a = star_hash(hashed, key);
     let through = fract(age);
-    let centre = 0.5 + star_geometry().x * (a.xy - 0.5);
+    let centre = 0.5 + s.width * (a.xy - 0.5);
     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
         * (star_size().y / STAR_PANE) + star_size() * 0.5;
     let c = star_hash(hashed, key + 1u);
@@ -118,7 +128,8 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     let size = exp(-2.4 * star_size_variation() * c.y);
     let sigma = min(s.sigma * size, s.cap) * s.defocus;
     // It fades in over the start of its life and out over the end.
-    var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
+    var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through)
+        * s.gain;
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
     if paint.a != 1.0 { fade *= paint.a; }
     return vec4<u32>(
@@ -149,8 +160,8 @@ fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
 
 // One star's premultiplied palette color and coverage. The native path draws
 // only a compact core that fits wholly inside its own cell. The halo path
-// draws the original response MINUS that core, including its clipped outer
-// tails, so their sum neither drops the fringe nor counts the center twice.
+// draws the whole response out to the slice's glow MINUS that core, so their
+// sum neither drops the fringe nor counts the center twice.
 fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     let t = textureLoad(
         star_atlas,
@@ -159,8 +170,9 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     );
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    let reach = star_geometry().y * s.cell;
-    if dist >= select(reach, STAR_HALO_REACH * s.cell, halo) {
+    let reach = s.core * s.cell;
+    let outer = s.glow * s.cell;
+    if dist >= select(reach, outer, halo) {
         return vec4<f32>(0.0);
     }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
@@ -172,7 +184,6 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     if halo {
         var full = gaussian;
         if s.fringe > 0.0 { full += s.fringe * exp(-0.4 * d); }
-        let outer = STAR_HALO_REACH * s.cell;
         full = min(full, 1.0) * (1.0 - smoothstep(STAR_HALO_FADE * outer, outer, dist));
         cover = max(full - core, 0.0);
     }
@@ -220,14 +231,14 @@ fn star_halo_at(pt: vec2<f32>, k: u32) -> vec4<f32> {
     }
 }
 
-// A 2x2 gather sees every center within 1 - jitter/2 cells. Outside
-// those four cells even the nearest allowed center cannot reach the pixel.
-// Fade over the final .15 cells; default jitter gives the selected .7..85 glow.
+// A 2x2 gather sees every center within 1 - width/2 cells, which is where
+// production puts the glow; a test bed glow past it drops the stars outside
+// the four cells. Fade over the final .15 cells.
 fn star_far_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     let t = textureLoad(star_atlas, atlas_texel(index), 0);
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
-    let radius = 1.0 - star_geometry().x * 0.5;
+    let radius = s.glow;
     let outer = radius * s.cell;
     if dist >= outer { return vec4<f32>(0.0); }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
@@ -272,11 +283,11 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
         let local = vec2<i32>(o) - vec2<i32>(floor(s.offset)) - s.origin;
         let index = s.base + local.y * s.grid.x + local.x;
         var slice = vec4<f32>(0.0);
-        if star_far().z > 0.0 && k < STAR_FAR_LAYERS {
+        if s.gather == 2u {
             slice = star_far_gather(s, r);
-        } else {
+        } else if s.gather != 0u {
             slice = star_texel(s, f, index, false);
-            slice += star_halo_at(pt, k);
+            if s.gather == 3u { slice += star_halo_at(pt, k); }
         }
         if slice.w > 0.0 {
             let cover = min(slice.w, 1.0);

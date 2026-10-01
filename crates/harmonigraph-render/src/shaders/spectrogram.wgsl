@@ -311,8 +311,8 @@ struct Cloud {
     star_pad2: u32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
-    // Jitter width, compact-core reach, fade-start fraction and far fill, computed once
-    // per frame by star_geometry in atmosphere.rs. The first two lengths are in cells.
+    // Unused, unused, the core's fade-start fraction and far fill, computed once per
+    // frame by star_geometry in stars.rs. Each slice carries its own width and core.
     star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
@@ -838,7 +838,7 @@ fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
     let life = u32(floor(cloud.star_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
     let key = salt + ((life + 1u) << 16u);
     let a = star_hash(hashed, key);
-    let centre = 0.5 + cloud.star_geometry.x * (a.xy - 0.5);
+    let centre = 0.5 + s.width * (a.xy - 0.5);
     let at = (vec2<f32>(cell) + centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at);
     let rank_draw = star_hash(hashed, key + 1u).x;

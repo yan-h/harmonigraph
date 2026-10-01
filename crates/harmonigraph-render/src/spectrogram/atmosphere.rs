@@ -191,7 +191,7 @@ pub(super) fn tone_size(
         return None;
     }
     if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
-        if settings.stars.star_halo_profile != harmonigraph_scene::StarHaloProfile::Uniform {
+        if crate::stars::star_far_reduced(settings.stars) {
             return Some(star_far_size(pixels, settings.stars));
         }
         let split = u64::from(pixels[0]) * u64::from(pixels[1]) >= STAR_SPLIT_PIXELS;
@@ -428,7 +428,7 @@ struct Uniforms {
     star_far: Float4,
     /// Exact reduced foreground dimensions; zero means native foreground.
     star_near: Float4,
-    /// Jitter width, compact-core reach, fade-start fraction and far fill; see [`star_geometry`].
+    /// The core's fade-start fraction and far fill; see [`star_geometry`].
     star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
@@ -940,7 +940,7 @@ fn memory_key(
                 star_density,
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
-                star_jitter,
+                star_jitter: _,         // each slice's band is appended where the cells are
                 star_spacing_min,
                 star_spacing_max,
                 star_spacing_curve,
@@ -956,6 +956,7 @@ fn memory_key(
                 star_fringe: _,       // response/coverage changes do not change material identity
                 star_far_fill: _,     // composition does not change material identity
                 star_defocus: _,      // response/coverage changes do not change material identity
+                test_bed: _,          // its cells and bands are appended where the cells are
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -995,7 +996,6 @@ fn memory_key(
             star_spacing_max,
             star_spacing_curve,
             star_randomness,
-            star_jitter,
         ]),
         CloudStyle::VelvetScales => values.extend([
             3.0,
@@ -1147,7 +1147,7 @@ impl Targets {
         let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
         let halos = halo_layout.map(|layout| StarHalos::new(device, layout));
         let halo_scratch =
-            StarHalos::new(device, StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES], 0));
+            StarHalos::new(device, StarHaloLayout::from_sizes([Some([1, 1]); STAR_SLICES]));
         let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
@@ -1601,7 +1601,9 @@ impl Targets {
                 // Stars carry by absolute cell and life across motion edits
                 // and width changes. At the atlas budget, a wider pane can
                 // coarsen cells: the same integer cell then names a new star.
+                // A slice's band moves every centre in it.
                 key.extend(layout.cells.map(f32::to_bits));
+                key.extend(slices.iter().map(|slice| slice.width.to_bits()));
             }
             if let Some(previous) = &memory.frame {
                 let dt = atmosphere.now - previous.now;
@@ -1689,10 +1691,7 @@ impl Targets {
                 Float4([
                     width as f32,
                     height as f32,
-                    f32::from(
-                        settings.stars.star_halo_profile
-                            != harmonigraph_scene::StarHaloProfile::Uniform,
-                    ),
+                    f32::from(crate::stars::star_far_reduced(settings.stars)),
                     0.0,
                 ])
             },
@@ -1700,7 +1699,7 @@ impl Targets {
                 let [width, height] = self.near_size().unwrap_or([0, 0]);
                 Float4([width as f32, height as f32, 0.0, 0.0])
             },
-            star_geometry: star_geometry(settings.stars.star_jitter, settings.stars.star_far_fill),
+            star_geometry: star_geometry(settings.stars.star_far_fill),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -1714,7 +1713,7 @@ impl Targets {
             previous_slices,
             star_halo_samples: self
                 .halo_layout()
-                .unwrap_or_else(|| StarHaloLayout::from_sizes([[1, 1]; STAR_SLICES], 0))
+                .unwrap_or_else(|| StarHaloLayout::from_sizes([Some([1, 1]); STAR_SLICES]))
                 .samples(),
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
@@ -1914,20 +1913,81 @@ mod tests {
         );
     }
 
+    /// The star test bed's plan decides what is allocated and baked: an Off
+    /// depth holds no atlas cells, only 3x3 depths own halo images, each at
+    /// its tier's size, and each slice carries its gather to the shader.
+    #[test]
+    fn a_test_bed_plan_allocates_and_bakes_only_what_it_draws() {
+        use harmonigraph_scene::star_plan::{StarGather, StarPlan};
+        let production = harmonigraph_scene::StarSettings::default();
+        let mut plan = StarPlan::production(production);
+        let gathers = [
+            StarGather::Off,
+            StarGather::Two,
+            StarGather::Three,
+            StarGather::Core,
+            StarGather::Three,
+        ];
+        for ((depth, gather), tier) in plan.depths.iter_mut().zip(gathers).zip([0, 0, 2, 0, 0]) {
+            depth.gather = gather;
+            depth.tier = tier;
+        }
+        plan.halo_tiers = [0.5, 0.3, 0.25];
+        plan.far = 1.0;
+        plan.near = 1.0;
+        let stars = harmonigraph_scene::StarSettings { test_bed: Some(plan), ..production };
+
+        let halos = super::star_halo_layout([161, 121], stars);
+        assert_eq!(halos.active, [false, false, true, false, true]);
+        assert_eq!(
+            halos.groups.map(|g| (g.size, g.layers)),
+            [([41, 31], 1), ([81, 61], 1), ([1, 1], 0)]
+        );
+        assert!(!crate::stars::star_far_reduced(stars));
+        assert_eq!(super::star_near_size([161, 121], stars), None);
+
+        let layout = star_layout(stars, 16.0 / 9.0);
+        let every = star_layout(production, 16.0 / 9.0);
+        assert_eq!(layout.grids[0], [0, 0]);
+        assert_eq!(layout.grids[1..], every.grids[1..]);
+        assert_eq!(layout.texels, every.texels - u64::from(every.grids[0][0] * every.grids[0][1]));
+        let slices = star_slices(stars, 0.0, 0.0, &layout);
+        assert_eq!(slices.map(|s| s.gather), [0, 2, 3, 1, 3]);
+    }
+
     /// Both walks include every star that can reach the pixel: one nominal
     /// cell for the compact core, and a 3x3 ring for the original wide halo.
+    /// Every profile's halo reach sits inside the 3x3 ring's bound too.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
+        use harmonigraph_scene::star_plan::{StarGather, StarPlan};
+        use harmonigraph_scene::StarHaloProfile;
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
+        let fade = star_geometry(0.0).0[2];
+        assert!(fade > 0.0 && fade < 1.0);
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let [jitter, core_reach, fade, _] = star_geometry(dial, 0.0).0;
-            assert!(fade > 0.0 && fade < 1.0);
-            for (radius, reach) in [(0, core_reach), (1, shader_number("STAR_HALO_REACH") as f32)] {
+            let [jitter, core_reach] = crate::stars::star_band(dial);
+            for (radius, reach) in [(0, core_reach), (1, StarGather::Three.bound(dial))] {
                 let nearest = nearest_outside_the_ring(jitter / 2.0, radius);
                 assert!(nearest >= reach - 1e-5,
                     "jitter={dial}, ring={radius}: excluded star at {nearest}, inside reach {reach}");
+            }
+            for profile in [
+                StarHaloProfile::Uniform,
+                StarHaloProfile::P3,
+                StarHaloProfile::Medium,
+                StarHaloProfile::Low,
+            ] {
+                let settings = harmonigraph_scene::StarSettings {
+                    star_jitter: dial,
+                    star_halo_profile: profile,
+                    ..Default::default()
+                };
+                for depth in StarPlan::production(settings).depths {
+                    assert!(depth.reach <= depth.gather.bound(dial), "{profile:?} {depth:?}");
+                }
             }
         }
     }
@@ -2071,7 +2131,9 @@ mod tests {
         let layout = star_layout(fine.stars, 16.0 / 9.0);
         let floor = layout.cells[0];
         assert!(floor > wanted[0], "{layout:?}");
-        assert!(!super::StarLayout::at(wanted, floor * 0.99, 16.0 / 9.0).fits());
+        assert!(
+            !super::StarLayout::at(wanted, [true; STAR_SLICES], floor * 0.99, 16.0 / 9.0).fits()
+        );
         for (got, want) in layout.cells.iter().zip(wanted) {
             assert_eq!(*got, want.max(floor));
         }
