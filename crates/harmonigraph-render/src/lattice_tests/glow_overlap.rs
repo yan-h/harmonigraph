@@ -1342,3 +1342,61 @@ fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
         }
     }
 }
+
+/// The Clouds pattern's detail layer fades toward its mean where its cells are
+/// finer than the glow resolve texel, so the smallest Pattern sizes do not
+/// alias it into texel-scale grain (#1319).
+///
+/// The glow target here is half of `SIZE`, 128 texels tall, and this Pattern
+/// size puts the detail at about 1.2 texels a cell, two thirds of the way
+/// through the fade (`NEBULA_DETAIL_FADE`), and the clouds at about three.
+/// Read as the light's curvature between neighbouring glow texels over the
+/// halo: 0.279 with the fade, 0.315 with it switched off (measured by
+/// widening the fade past reach). The clouds' own grain is most of either
+/// number, which is why the margin is narrow.
+#[test]
+fn the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel() {
+    const PATTERN: f32 = 0.11;
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    let mut scene = scene(&[1.0; 32], 0.75, false);
+    scene.camera = harmonigraph_scene::Camera {
+        projection: harmonigraph_scene::Projection::Orthographic,
+        distance: 28.0,
+        yaw: 0.0,
+        pitch: 0.0,
+        ..Default::default()
+    };
+    scene.atmosphere.texture = harmonigraph_scene::LatticeTexture::Clouds;
+    scene.atmosphere.texture_scale = PATTERN;
+    scene.atmosphere.breath_amount = 0.0;
+    scene.glow_timing =
+        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
+    // Detail cells per glow texel, as `nebula_light` reckons them: the fixture
+    // has to stand well inside the fade for this to measure it.
+    let detail = 5.0 * 2.3 / (PATTERN * (SIZE[1] / 2) as f32);
+    assert!(detail > 0.6, "the detail spans {detail} cells a texel, short of the fade");
+    let smooth = glow(&mut shooter, &scene);
+    scene.atmosphere.texture_depth = 1.0;
+    let textured = glow(&mut shooter, &scene);
+    // The texture's share of the light at a pixel, read every other pixel so
+    // neighbours are neighbouring glow texels rather than the blit's blend.
+    let w = SIZE[0] as usize;
+    let ratio = |x: usize, y: usize| -> Option<f32> {
+        let i = (y * w + x) * 4 + 3;
+        (smooth[i] > 30).then(|| f32::from(textured[i]) / f32::from(smooth[i]))
+    };
+    let (mut curvature, mut count) = (0.0f32, 0);
+    for y in (3..SIZE[1] as usize - 3).step_by(2) {
+        for x in (3..w - 3).step_by(2) {
+            let near =
+                [ratio(x, y), ratio(x - 2, y), ratio(x + 2, y), ratio(x, y - 2), ratio(x, y + 2)];
+            if let [Some(c), Some(l), Some(r), Some(u), Some(d)] = near {
+                curvature += (l + r + u + d - 4.0 * c).abs();
+                count += 1;
+            }
+        }
+    }
+    assert!(count > 2000, "only {count} halo texels to read");
+    let curvature = curvature / count as f32;
+    assert!(curvature < 0.3, "the detail still grains the light: curvature {curvature}");
+}

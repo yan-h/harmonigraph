@@ -3521,6 +3521,11 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
     );
 }
 
+// Detail cells per glow texel over which `nebula_light` fades its detail layer
+// to its mean: from 0.3 (about three texels a cell, where it starts to
+// sparkle as it drifts) to 1.1 (under a texel a cell, pure aliasing).
+const NEBULA_DETAIL_FADE: vec2<f32> = vec2<f32>(0.3, 1.1);
+
 fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     if u.texture.depth <= 0.0 || light.a <= 0.0 {
         return light;
@@ -3532,7 +3537,18 @@ fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     let drift = u.texture.drift;
     let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
     let cloud = nebula_noise(p + warp * 1.2 + drift);
-    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
+    // The detail layer is 2.3x finer than the clouds, so at the smallest
+    // Pattern sizes its cells shrink under the glow resolve texel and alias.
+    // Fade it toward its mean (0.5) by how many detail cells one texel spans,
+    // from about three texels a cell to under one (#1319). Exactly 0 at the
+    // fresh size on any target over ~46 texels tall, so those frames are
+    // untouched.
+    let footprint = 5.0 / (u.texture.scale * f32(textureDimensions(glow_sum).y));
+    let detail = mix(
+        nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4)),
+        0.5,
+        smoothstep(NEBULA_DETAIL_FADE.x, NEBULA_DETAIL_FADE.y, footprint * 2.3),
+    );
     let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, cloud * 0.75 + detail * 0.25);
     // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
     // and the overlap rule's peak bound. No glow means no nebula light at all.
