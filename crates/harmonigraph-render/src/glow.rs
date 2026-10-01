@@ -102,7 +102,7 @@ impl GlowDot {
 /// before anything that must stay out of the light (a label, most of all: see
 /// `crate::text`).
 ///
-/// `strength` is the lattice's own bloom strength, through
+/// `strength` is the caller's bloom strength (the Spiral's, today), through
 /// [`crate::bloom_strength`] for the reason that function exists. 0 skips the
 /// whole thing — no chain is built and no pass runs.
 ///

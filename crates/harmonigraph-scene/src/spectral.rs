@@ -5,8 +5,8 @@
 //! second one:
 //!
 //! - **MIDI** — [`ViewConfig::pitch_gradient`](crate::ViewConfig) spread over
-//!   the Color range, read through
-//!   [`pitch_lut_color`](crate::pitch_lut_color). A note's disc, its octave
+//!   the Pitch color range, read through
+//!   [`pitch_lut_color`](crate::pitch_lut_color). A note's octave
 //!   wedges, its melody and bass marks and its ribbon on the piano roll all
 //!   come off that one table, so a pitch is one colour wherever it is drawn.
 //! - **FREQUENCY** — the volume-color ramp
@@ -547,7 +547,7 @@ impl RingGate {
 /// the decision makes that a ring dimming and coming back, which is the same
 /// reading drawn at a speed an eye can follow — and it is the Fade rather than
 /// a smoothing of its own because the ring is a LAYER OF A NODE: the node's
-/// disc, its band and its marks all leave on that one duration, so a release
+/// slices, its band and its marks all leave on that one duration, so a release
 /// reads as a single gesture instead of the ring snapping off part way through
 /// it.
 ///

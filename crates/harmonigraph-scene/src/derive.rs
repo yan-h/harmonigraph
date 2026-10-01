@@ -105,6 +105,7 @@ pub fn derive_scene_with_extra(
             lattice_pos: pos,
             world_pos,
             activation: 0.0,
+            envelope: 0.0,
             departing: false,
             slice_progress: [1.0; OCTAVE_SLOTS],
             thickness: [1.0; OCTAVE_SLOTS],
@@ -288,9 +289,10 @@ fn marker_world(uv: f32) -> f32 {
     NODE_RADIUS_FACTOR * 1.8 * uv
 }
 
-/// The lattice's resting picture: idle positions draw no disc, so a small
-/// cross stands at each one and carries the structure instead. Only the home
-/// (center) sheet gets them.
+/// The lattice's resting picture: an idle position paints nothing of its
+/// own (its node draws at most the analyzer's ring), so a small cross stands
+/// at each one and carries the structure instead. Only the home (center)
+/// sheet gets them.
 ///
 /// A marker at each position rather than a line between them, and the
 /// difference is what the picture claims. Lines draw the INTERVALS — one
@@ -321,7 +323,7 @@ fn marker_world(uv: f32) -> f32 {
 /// The name takes the marker by DEGREE, not by decree: a marker's opacity is
 /// what is left over from the name above it. Under
 /// [`Played`](crate::NoteNames::Played) a name is drawn at the node's own
-/// activation, so a released note's name spends the end of its fade invisible —
+/// envelope, so a released note's name spends the end of its fade invisible —
 /// and a marker that waited for the name to be gone ENTIRELY would leave the
 /// position empty for that stretch and then pop in at full opacity. The
 /// complement makes the two one crossing surface.
@@ -375,12 +377,9 @@ pub(crate) fn derive_pluses(
     // A name and NOTHING else, which is the whole rule: the cross disappears if
     // and only if a name is present. A note reaches it through the name rather
     // than beside it, and does so under every Show mode — `name_level` is
-    // `activation.max(resting)`, so a sounding note is named at its own
-    // activation even under `Played`, where nothing rests. Asking the note a
-    // second time here would therefore change one case only, the one where
-    // there are no names to be present: with the Note names switched off a
-    // sounding note would take a marker that no name is taking, which is the
-    // rule read backwards.
+    // `envelope.max(resting)`, so a sounding note is named at its own envelope
+    // even under `Played`, where nothing rests. Asking the note a second time
+    // here would therefore change nothing.
     //
     // So an analyzer ring moves this by nothing, having no name to put over a
     // position. Nor does the LIGHT standing over one, and that is the same rule

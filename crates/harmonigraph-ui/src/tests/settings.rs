@@ -502,7 +502,7 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
 /// and the Options field have nowhere left to go, are where the clamp is the
 /// only thing holding the bars level.
 /// How many source-to-display mappings a fresh view carries, each drawn as a
-/// weight bar in the Colors page's Mappings section.
+/// weight bar in the Mappings page's MIDI note intensity section.
 fn fresh_mappings() -> usize {
     let fresh = harmonigraph_scene::IntensitySettings::default();
     [fresh.velocity, fresh.gain, fresh.pressure, fresh.timbre]
@@ -532,14 +532,14 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                 // reserved the button's width at all — it comes out at the
                 // column's own length and passes on the first alternative,
                 // with the button painted over its left end. So the count is
-                // exact: TWO on the Colors page, which carries both gradients
+                // exact: TWO on the Mappings page, which carries both gradients
                 // — the lattice's pitch table and the heatmap's level table, on
                 // the same three bars over the same type — and none anywhere
                 // else.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
                 // A mapping's weight bar gives the right end of its row to its
                 // Delete button, and is counted the same way: one per mapping
-                // the fresh settings carry, all of them on the Colors page. How
+                // the fresh settings carry, all of them on the Mappings page. How
                 // wide the button is is the button's business; what is held is
                 // that the bar is short of the column by the SAME amount at
                 // every width, which is the bar narrowing with the column.
@@ -671,7 +671,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
                 && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
         })
         .collect();
-    assert_eq!(drawn.len(), 2, "the Colors page drew {} gradient previews, not two", drawn.len());
+    assert_eq!(drawn.len(), 2, "the Mappings page drew {} gradient previews, not two", drawn.len());
     // Down the page, which is the order the groups are written in: note colors
     // first, heatmap colors under them.
     drawn.sort_by(|a, b| {
@@ -690,7 +690,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
             _ => None,
         })
         .collect();
-    assert_eq!(tracks.len(), 2, "the Colors page drew {tracks:?} as spectrum tracks, not two");
+    assert_eq!(tracks.len(), 2, "the Mappings page drew {tracks:?} as spectrum tracks, not two");
     tracks.sort_by(|a, b| a.top().total_cmp(&b.top()));
 
     for (group, mesh, bar, gradient) in [

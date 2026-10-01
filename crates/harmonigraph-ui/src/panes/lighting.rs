@@ -72,12 +72,12 @@ pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
 
 /// The background glow: its reach, strength, colour, wash and clock.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    // A share of the node's radius, the unit the shared gap and the Clearance in
-    // Note read in, and measured from the same place: the reach is a distance
-    // out from the node's edge exactly as the Clearance is. Eased, because the
-    // bar spans two pictures rather than one range of one: the accent — a halo
-    // reaching about as far as the gap to a neighbour — is the bottom eighth
-    // of it, and the wash is everything above. Cubic travel gives the accent
+    // In the node's quad uv, the unit the Gap reads in (1.0 is the quad edge
+    // the Layers bar budgets as 100%), and measured out from the node's
+    // outermost drawn edge. Eased, because the bar spans two pictures rather
+    // than one range of one: the accent — a halo reaching about as far as the
+    // gap to a neighbour — is the bottom eighth of it, and the wash is
+    // everything above. Cubic travel gives the accent
     // half the bar, so a light meant to sit on its own node is still dialled a
     // hundredth at a time, and the far end is reachable in the same drag.
     ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Background glow reach")
@@ -90,12 +90,16 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      0% turns the background glow off.",
         );
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
-            ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Background glow gain")
+        ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Background glow gain")
             .unit(1.0, "×")
-                .show(ui)
-                .on_hover_text(
-                    "Brightness of the background glow. 0 removes the light; 1× is the reference gain.",
-                );
+            .show(ui)
+            .on_hover_text(
+                "Brightness of the background glow. 0 removes the light; 1× is the reference gain.",
+            );
+    });
+    // Everything below shapes a light that draws only at a Reach and a gain
+    // both above 0, so either at 0 greys it, as it does the breathing.
+    ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
             ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Overlap buildup")
                 .percent()
                 .show(ui)
@@ -136,7 +140,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      Audio-ring colors do not feed the glow.",
                 );
         });
-    ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+    ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
         // The INK's own share of the light, where a Shadow depth says the
         // ground's: one question asked twice, and the answers are free of each
         // other on purpose — a dark pool with a tinted ring in it is a picture

@@ -16,7 +16,7 @@ use crate::view::finite_or;
 /// **What the range IS belongs to whoever holds one**, and two things in the
 /// picture do. `ViewConfig::pitch_gradient` spans the lattice's color range, so
 /// its low end is the darkest pitch and its high end the brightest — that is
-/// the gradient the discs, the octave glyphs, the trail and the piano roll's
+/// the gradient the octave slices, the octave glyphs, the trail and the piano roll's
 /// ribbons all read. The Spectral pane's heatmap holds a second one spanning
 /// the analyzer's Level, where low is silence and high is a full-scale bucket.
 /// Everything below is stated in "the bottom of the range" and "the top" for
@@ -328,9 +328,8 @@ fn default_hue_span() -> f32 {
 
 /// Mid-range brightness, placed with [`default_lightness_ramp`] so the
 /// gradient opens at `L*` 42 and closes at 86. That is a 5.4x span in screen
-/// luminance from the bottom of the range to the top — a strong cue, and
-/// the reading of the picture the defaults are meant to open on. Isoluminant
-/// is one bar-drag away.
+/// luminance from the bottom of the range to the top — a strong cue.
+/// Isoluminant is one bar-drag away.
 fn default_lightness() -> f32 {
     64.0
 }
@@ -361,8 +360,8 @@ fn default_chroma() -> f32 {
 /// their hue and their brightness rather than how colored they are.
 ///
 /// Where [`default_lightness_ramp`] opens wide, and the difference is what the
-/// two cues are worth. Brightness is the strongest separation there is, so the
-/// picture the defaults open on spends it on the range; color is already
+/// two cues are worth. Brightness is the strongest separation there is, so
+/// this default spends it on the range; color is already
 /// carrying the range through the hue arc, and a chroma ramp on top of that arc says the
 /// same thing twice while costing one end of the range its color. It is a knob
 /// to dial rather than one to open on.
@@ -370,6 +369,13 @@ fn default_chroma_ramp() -> f32 {
     0.0
 }
 
+/// The gradient TYPE's own default: the retired CIELAB arc converted, which
+/// `the_defaults_are_the_retired_arc_converted` and
+/// `the_default_opens_at_the_colorfulness_it_used_to` hold it to. No picture
+/// opens on it — the fresh view and every preset write their numbers out. What
+/// reaches it is [`sanitized`](Self::sanitized)'s fallback for a non-finite
+/// knob, a saved gradient missing a field, the straight [`Bend`] a gradient
+/// written out in code takes from it, and tests.
 impl Default for Gradient {
     fn default() -> Self {
         Gradient {
@@ -567,7 +573,7 @@ pub enum SevensLabel {
 /// [`Past`](NoteNames::Past) is the trail, and the only mode with a history
 /// behind it: it is the one that reads
 /// [`NodeInstance::trail`](crate::NodeInstance::trail), so it is also the
-/// only one Clear note names means anything under. See the
+/// only one Clear label history means anything under. See the
 /// [`trail`](crate::trail) module for why a memory is drawn in TYPE and
 /// nothing else.
 ///
@@ -576,12 +582,15 @@ pub enum SevensLabel {
 /// refused it would leave the lattice with no way to answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NoteNames {
-    /// Every node on screen, played or not — the lattice read as a map.
+    /// Every home-sheet node on screen, played or not, and every sounding
+    /// node off it — the lattice read as a map.
     /// Every name is equally readable, unplayed and sounding alike; what
     /// says which note is playing is the NODE under the name, not the name.
     All,
-    /// Every node the music has visited, and it never forgets: a whole
-    /// piece's territory accumulates as it plays.
+    /// Every node the music has visited: a whole piece's territory
+    /// accumulates as it plays, up to the history's bound
+    /// (`NoteHistory::MAX_VISITS` distinct pitches, past which the least
+    /// recently played is forgotten).
     #[default]
     Past,
     /// Only what is sounding now. The lattice at rest carries no text.
@@ -714,13 +723,15 @@ pub struct ShadowStyle {
     /// resolved Shadow width. 0 keeps the original ink; 1 grows it by one
     /// whole width. Contour shadows ignore this stored setting.
     pub spread: f32,
-    /// How dark the shadow lands where it is whole, 0..=1 — the factor the
-    /// frame is left with under this group's solid ink, spent in STOPS across
-    /// the width above (`shadow_transmittance` in common.wgsl).
+    /// How dark the shadow lands where it is whole, 0..=1. 1 takes the frame
+    /// under wide ink to black; 0 is this group's second off switch.
     ///
-    /// A FLOOR rather than a scale: ink wide against σ lands exactly here and a
-    /// hairline lands short of it. 1 takes the frame under wide ink to black; 0
-    /// is this group's second off switch.
+    /// The two families spend it differently. A spectral group spends it in
+    /// STOPS across the width above (`shadow_transmittance` in common.wgsl),
+    /// as a FLOOR rather than a scale: ink wide against σ lands exactly here
+    /// and a hairline lands short of it. A lattice group scales its shadow's
+    /// coverage by it (`local_shadow_transmittance`), so the kernel's shape and
+    /// reach stay independent of how dark it is.
     pub depth: f32,
     /// Signed bend in [`SHADOW_FALLOFF_MIN`]..=[`SHADOW_FALLOFF_MAX`].
     /// Negative falls early, zero is linear, positive falls late. All profiles
@@ -756,7 +767,7 @@ impl Default for ShadowStyle {
             // Just under half depth leaves the shadow legible without cutting
             // the shared field back to the ground.
             depth: 0.477_784_4,
-            // Early decay, close to the previous exponential near the ink.
+            // Early decay near the ink.
             falloff: -4.0,
         }
     }

@@ -167,7 +167,7 @@ fn tuning_hint(key: ParamKey) -> &'static str {
              cents. Also sets the Analyzer's off-lattice band."
         }
         // Not on this pane: Fade is a node setting and the two pitch ends are
-        // the Colors page's Color range.
+        // the Mappings page's Pitch color range.
         ParamKey::Fade | ParamKey::DarkestPitch | ParamKey::BrightestPitch => "",
     }
 }

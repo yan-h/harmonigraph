@@ -89,8 +89,8 @@ const FIRST_ROWS: u32 = 64;
 /// A ceiling on the TEXTURE rather than on the picture: a strip is one row per
 /// lit node and a texture has a maximum dimension (8192 on every backend the
 /// plugin runs on), where [`MAX_DRAWN_NODES`](harmonigraph_scene::MAX_DRAWN_NODES)
-/// is 20480 — a fully zoomed-out lattice with the audio ring's Gate at its
-/// floor lights every node in the window, so the two numbers do meet. Past this
+/// is 20480, so a fully zoomed-out lattice can ask for more rows than a texture
+/// holds. Past this
 /// a node simply gets no light: its layers draw exactly as they do with the
 /// glow off, which is the graceful end of a halo nobody can pick out of four
 /// thousand others anyway.
@@ -197,9 +197,8 @@ impl GlowFade {
             // halves of one light cannot come to disagree about what lit it.
             //
             // `NodeMotion::step` has already answered that into `glow.level`,
-            // marks included, each layer read through the glow's own intensity
-            // floor rather than the fade that `activation` and the mark levels
-            // carry.
+            // marks included, each layer read before the Opacity mapping that
+            // `activation` and the mark levels carry.
             let target = node.glow.level.clamp(0.0, 1.0);
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
