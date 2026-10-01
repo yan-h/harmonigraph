@@ -674,11 +674,14 @@ mod tests {
 
     /// The three shadows in one picture, written to `target/scratch/`: a
     /// node's rings, a marker's cross and a name's type, all casting into the
-    /// same frame off the same Shadow bar.
+    /// same frame. They no longer share one Shadow bar — the rings are the
+    /// lattice geometry group, the cross and the name the lattice notation
+    /// group — so the probe sets every group to one width to compare them.
     ///
     /// A probe: it asserts nothing, the verdict being whether the three read as
-    /// one shadow, and it is kept and `#[ignore]`d for the reason the field's
-    /// own probe above is — the reading conditions are the expensive part.
+    /// one shadow at a common width, and it is kept and `#[ignore]`d for the
+    /// reason the field's own probe above is — the reading conditions are the
+    /// expensive part.
     ///
     /// Those conditions: a chord HELD, because the light is what a shadow is
     /// most visible on and an unlit lattice has none; `NoteNames::Played`, which is
@@ -687,8 +690,9 @@ mod tests {
     /// camera pulled back far enough that a node's shadow reaches its
     /// neighbours, which is where two shadows can be compared at all.
     ///
-    /// The sweep is the Shadow WIDTH, since that is the bar the three are meant
-    /// to share: off, fresh, and wide enough that the pools meet.
+    /// The sweep is the Shadow WIDTH, set on every group at once: off, the bare
+    /// `ShadowStyle::default` width (which no fresh group ships), and two wider
+    /// ones up to the bar's top, where the pools meet.
     ///
     /// `PROBE_TAG` names the shots, so a before and an after can be shot from
     /// two builds and laid side by side.

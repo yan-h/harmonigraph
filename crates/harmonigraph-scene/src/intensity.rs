@@ -8,8 +8,10 @@
 //! in multiples of each pane's reference note width. Opacity has a base of
 //! its own. Bases apply even with no routes enabled.
 //!
-//! Fresh settings leave every source off. The trail never reads any of this;
-//! it records pitch classes only.
+//! Fresh settings route velocity and gain to opacity. A host sends unity gain
+//! for a note with no gain lane, which adds gain's whole weight, so at fresh
+//! settings velocity only shows on very soft notes; that is intended. The
+//! trail never reads any of this; it records pitch classes only.
 
 use crate::view::finite_or;
 use harmonigraph_core::Expressions;
@@ -246,21 +248,24 @@ mod tests {
         source
     }
 
-    /// Fresh, velocity and gain lift opacity from a rest of about a third:
-    /// a silent note sits at the rest, a full-velocity note at unity gain
-    /// reaches full opacity, and thickness stays at one note width.
+    /// Fresh, velocity and gain lift opacity from a rest of about a third, and
+    /// the common case is a host sending unity gain for a note with no gain
+    /// lane. That adds gain's whole weight, so every note starts about four
+    /// fifths opaque and velocity separates only the softest ones: anything
+    /// above about 39/127 draws in full. Thickness stays at one note width.
     #[test]
-    fn fresh_settings_lift_opacity_from_a_third_by_velocity_and_gain() {
+    fn fresh_settings_at_unity_gain_start_every_note_four_fifths_opaque() {
         let fresh = IntensitySettings::default();
-        let silent = Expressions { pressure: 0.0, gain: 0.0, timbre: 0.0 };
-        assert_eq!(
-            fresh.read(0.0, silent),
-            IntensityReading { opacity: fresh.opacity_rest, thickness: 1.0 }
-        );
+        let unity = Expressions::NEUTRAL;
+        assert_eq!(unity.gain, 1.0);
         assert!((fresh.opacity_rest - 0.3).abs() < 0.01, "{fresh:?}");
+        let softest = fresh.read(0.0, unity);
+        assert!((softest.opacity - 0.81).abs() < 0.01, "{softest:?}");
+        assert_eq!(softest.thickness, 1.0);
+        assert!(fresh.read(38.0 / 127.0, unity).opacity < 1.0);
+        assert_eq!(fresh.read(40.0 / 127.0, unity), IntensityReading::REST);
         assert!(fresh.routes_to(IntensityTarget::Opacity));
         assert!(!fresh.routes_to(IntensityTarget::Thickness));
-        assert_eq!(fresh.read(1.0, gain(1.0)), IntensityReading::REST);
     }
 
     #[test]

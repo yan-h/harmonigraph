@@ -5,8 +5,8 @@
 //! second one:
 //!
 //! - **MIDI** — [`ViewConfig::pitch_gradient`](crate::ViewConfig) spread over
-//!   the Color range, read through
-//!   [`pitch_lut_color`](crate::pitch_lut_color). A note's disc, its octave
+//!   the Pitch color range, read through
+//!   [`pitch_lut_color`](crate::pitch_lut_color). A note's octave
 //!   wedges, its melody and bass marks and its ribbon on the piano roll all
 //!   come off that one table, so a pitch is one colour wherever it is drawn.
 //! - **FREQUENCY** — the volume-color ramp

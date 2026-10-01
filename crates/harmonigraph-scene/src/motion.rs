@@ -1,6 +1,6 @@
 //! Lattice-only event-time animation. Core envelopes and the other panes keep
 //! their own timing. A checkpoint survives voice pruning and roll retention.
-use crate::{IntensityReading, NoteAnimationConfig, OctaveLayout, RingFade, Scene, ViewConfig};
+use crate::{IntensityReading, RingFade, Scene, ViewConfig};
 use harmonigraph_core::{
     Envelope, LatticePos, NoteTracker, PitchClass, Tuning, VoiceKey, VoiceState,
 };
@@ -259,15 +259,6 @@ impl SlotReadings {
         }
     }
 }
-fn delays(
-    layout: &OctaveLayout,
-    cents: f32,
-    config: NoteAnimationConfig,
-    seed: u32,
-    duration: f32,
-) -> [f32; 11] {
-    config.delays(layout, cents, seed, duration)
-}
 impl NodeMotion {
     /// Whether a position has carried MIDI ink or marks. Audio poses emit no light.
     pub fn owns_light(&self, pos: LatticePos) -> bool {
@@ -388,10 +379,9 @@ impl NodeMotion {
                 node.lattice_pos.hash(&mut hash);
                 first_onset.hash(&mut hash);
                 motion.order_seed = hash.finish() as u32;
-                motion.order_delay = delays(
+                motion.order_delay = view.note_animation.delays(
                     &scene.octave_layout,
                     node.cents,
-                    view.note_animation,
                     motion.order_seed,
                     duration,
                 );
@@ -405,10 +395,9 @@ impl NodeMotion {
                 // cost of the spread being a start offset; the alternative was
                 // compressing every piece into a tenth of the fade.
             } else if !gate && motion.gate && motion.progress.iter().all(|&p| p == 1.0) {
-                motion.order_delay = delays(
+                motion.order_delay = view.note_animation.delays(
                     &scene.octave_layout,
                     node.cents,
-                    view.note_animation,
                     motion.order_seed,
                     duration,
                 );
@@ -699,6 +688,7 @@ impl NodeMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NoteAnimationConfig;
 
     #[test]
     fn halo_candidates_keep_between_frame_bends_after_voice_pruning() {
@@ -985,7 +975,7 @@ mod tests {
     /// Pressure routed to opacity over a base of 0 fades a slot's ink and the
     /// node's presence, straight away as the pressure moves, and nothing else:
     /// a note faded to nothing is still held, and still departs on its own
-    /// release. The glow, with nothing routed to it, stays in full.
+    /// release. The glow, which no intensity mapping reaches, stays in full.
     #[test]
     fn intensity_fades_the_ink_but_not_the_note() {
         use crate::IntensitySource;
@@ -1322,17 +1312,15 @@ mod tests {
         }
     }
     #[test]
-    fn random_order_and_grow_bounds_are_stable() {
+    fn random_order_and_a_centre_start_reach_are_stable() {
         let layout = crate::octave_layout(6, 60.0);
         let config = NoteAnimationConfig {
             order: AnimationOrder::RandomStagger,
             radial_start: -1.0,
             ..Default::default()
         };
-        assert_eq!(
-            delays(&layout, 350.0, config, 42, 1.0),
-            delays(&layout, 350.0, config, 42, 1.0)
-        );
+        let delays = || config.delays(&layout, 350.0, 42, 1.0);
+        assert_eq!(delays(), delays());
         assert_eq!(config.reach(1.0), 1.0);
     }
     #[test]

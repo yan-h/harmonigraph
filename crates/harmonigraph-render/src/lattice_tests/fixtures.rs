@@ -253,8 +253,10 @@ pub(super) fn parity_scene() -> Scene {
         // existed — under the renderer every reading here is calibrated
         // against.
         shadow: one_shadow(0.16, 0.85, harmonigraph_scene::ShadowKernel::Gaussian),
-        // The share a lit slice's own ink takes of the light, so a test that
-        // says nothing about it measures the fresh picture.
+        // The share a lit slice's own ink takes of the light: the whole of it,
+        // as idle ink always takes, rather than the fresh value (about 0.4), so
+        // a test that says nothing about it reads one field over lit and idle
+        // ink alike.
         glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv

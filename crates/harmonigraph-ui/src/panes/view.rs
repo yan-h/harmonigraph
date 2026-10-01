@@ -231,11 +231,7 @@ pub(super) fn camera(
 /// classes as large as they will go, and turning depth on asks the same
 /// rectangle to hold three or five times the nodes. The way out is not to
 /// shrink the home sheet — that is the picture — but to let the sevens layer sit
-/// ON it, smaller and clearing its own space.
-///
-/// The Clearance bar itself is with the node settings, not here. It is cut by
-/// every sounding node on every sheet, so it is a property of the node rather
-/// than of this layer, whatever its field names say.
+/// ON it, smaller.
 pub(super) fn sevens(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     // Named, because the strip itself says only "Layers", and under View that
     // could as well be the note's.

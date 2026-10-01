@@ -257,18 +257,6 @@ pub const PLUS_WIDTH_PER_LABEL_SCALE: f32 = 0.054;
 /// what the pane draws is a coloured field with the lattice sitting in it.
 /// That is a different picture rather than more of the same one, and it is the
 /// one the far end of this bar is for.
-///
-/// What it costs is fill rate, and the bar is where it is spent: the glow's
-/// draws size their quad to hold the whole halo (`quad_margin` in
-/// lattice.wgsl), so a node's billboard is as wide as its rim plus this and the
-/// fragments in it go as the square — about twenty times as many at the top of
-/// the bar as at a reach of one. Cheap fragments, the ink strip having already
-/// answered the colour, so what that comes to depends on how many nodes are
-/// lit at once: measured off `the_node_glow_draws_a_picture` at 1200x1000, a
-/// chord's worth of light costs the same at 8 as at a reach of 0.35 (5.4 ms a
-/// frame either way), and a lattice with thirty-odd nodes lit goes from 6.6 ms
-/// to 12.2. A bar to turn up while watching the frame rate, in other words,
-/// rather than a number the renderer defends.
 pub const GLOW_REACH_MAX: f32 = 8.0;
 
 /// Limits of the signed exponent that shapes the glow's normalized falloff
@@ -323,8 +311,8 @@ pub const SPECTRAL_SHADOW_MAX: f32 = 3.0;
 pub const GLOW_BALLISTICS_MAX: f32 = 6.0;
 
 /// Samples in the pitch->color lookup EVERYTHING pitch-colored reads: the
-/// disc, the trail and the piano roll on the CPU, the octave glyphs and their
-/// glow in the shader. The shader mirrors this length, and `harmonigraph-render`
+/// melody and bass marks and the piano roll on the CPU, the octave glyphs and
+/// their glow in the shader. The shader mirrors this length, and `harmonigraph-render`
 /// asserts that it does.
 ///
 /// Because all of them read this one table, its size is not what makes two
@@ -393,11 +381,13 @@ pub struct GlowStep {
     /// Unique owner of this row while the light lives. The renderer compares
     /// it with the owner whose ink it actually encoded, across discarded UI passes.
     pub incarnation: u64,
-    /// How lit this node is for the purpose of the light it gives off, carried
-    /// on the Glow attack and release. Its TARGET is the largest level that
-    /// puts ink on the node; this is where that target has got to, so it can be
-    /// above zero on a node whose every layer has gone silent — which is the
-    /// whole of what makes a halo linger.
+    /// How lit this node is for the purpose of the light it gives off. Out of
+    /// [`NodeMotion::step`] it is the TARGET: the loudest octave slot or mark
+    /// level before the Opacity mapping, so a note faded to nothing still
+    /// lights its halo. The shell's glow pass (`GlowFade` in harmonigraph-ui)
+    /// then replaces it with where that target has got to on the Glow attack
+    /// and release, so it can be above zero on a node whose every layer has
+    /// gone silent — which is the whole of what makes a halo linger.
     pub level: f32,
     /// Which row of this frame's ink strip holds this node's colour.
     ///
@@ -491,9 +481,9 @@ pub struct NodeInstance {
     /// in-lattice cents readout.
     pub cents: f32,
     /// Octave slots (bit i = slot i) where this node carries the melody —
-    /// the highest held note. 0 when it doesn't, or when the melody isn't
-    /// being marked. One voice lights every node its pitch class matches
-    /// under the tuning tolerance, and the mark follows the same rule.
+    /// the highest held note. 0 when it doesn't. One voice lights every node
+    /// its pitch class matches under the tuning tolerance, and the mark follows
+    /// the same rule.
     ///
     /// One bit at a time: the node carries one melody mark at one level, so
     /// the mask names the strongest carried slot ([`NodeMotion`]).
@@ -514,7 +504,7 @@ pub struct NodeInstance {
     /// first), rather than appearing at full the frame it is claimed.
     /// Separate from `activation` because a mark can be arriving while the
     /// node it sits on has been fully lit for a while — the mark has to
-    /// follow its own note, not the disc's.
+    /// follow its own note, not the node's.
     ///
     /// On target loss the carried level reverses immediately, and any pending
     /// wait is canceled. Short notes therefore leave from their current level;
@@ -528,8 +518,8 @@ pub struct NodeInstance {
     /// of that slot on this node, through [`color::pitch_lut_color`] — so a
     /// mark reads as that indicator continued rather than as a fixed livery.
     /// Taken from the strongest carried slot (it can change
-    /// mid-crossfade). No lift on top of the ramp: the disc, the roll and the
-    /// glyphs all wear it as the table hands it over, whatever the gradient's
+    /// mid-crossfade). No lift on top of the ramp: the roll and the glyphs
+    /// both wear it as the table hands it over, whatever the gradient's
     /// brightness is dialled to, so a mark that lightened its own copy would
     /// sit a shade whiter than the slice it continues.
     ///
@@ -556,7 +546,7 @@ pub struct NodeInstance {
     /// reading-per-node was worth holding back.
     ///
     /// Beyond that floor it says nothing about the MIDI picture: a node whose
-    /// ring is gone keeps its disc, its octave band and its marks exactly as
+    /// ring is gone keeps its octave band and its marks exactly as
     /// the keys drew them, and loses only the annulus between the core and the
     /// band.
     ///
@@ -632,12 +622,12 @@ impl NodeInstance {
     /// marker only says that there is one.
     ///
     /// So the label layer is the one that decides, and this is the whole of
-    /// its rule: names on at all, then the node is sounding, hovered, or one
-    /// the Show row keeps at rest.
+    /// its rule: the node is sounding, hovered, or one the Show row keeps at
+    /// rest.
     ///
     /// A LEVEL rather than a yes or no, and that is the whole of what keeps
     /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
-    /// exactly the node's `activation` (`label_strength` in `harmonigraph-ui`),
+    /// exactly the node's `activation` (`draw_node_labels` in `harmonigraph-ui`),
     /// so a released note spends the end of its fade with a name too faint to
     /// see. Answered as a predicate, the marker under it stays away for all of
     /// that and then arrives at full ground opacity the frame activation
@@ -869,10 +859,10 @@ pub struct Scene {
     /// pane paints its own rect with, as every other picture pane does (see
     /// [`skin::picture_color`]).
     ///
-    /// Nothing in the lattice reads it: a shadow is a multiply on what the
-    /// frame already holds rather than a hole cut through to the pane. It is
-    /// still handed over, the uniform row it fills being a retired slot rather
-    /// than a repack.
+    /// No shadow reads it: a shadow is a multiply on what the frame already
+    /// holds rather than a hole cut through to the pane. The final composite
+    /// does (`fs_composite` in blit.wgsl), counting the pane fill this ground
+    /// will add into the cap on displayed light.
     pub background: Vec4,
     /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
     /// [`ViewConfig::mark_thickness`]). It starts one
@@ -880,14 +870,14 @@ pub struct Scene {
     /// sum already spent, this struct carrying [`mark_inner`](Self::mark_inner)
     /// itself. Already clamped.
     pub mark_thickness: f32,
-    /// Pitch->color lookup for the octave glyphs, matching the disc
-    /// gradient; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
+    /// Pitch->color lookup for the octave glyphs, the same table the marks
+    /// are colored from; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],
     /// Where `pitch_lut`'s entries stand along the range, which the shader maps
     /// a `t` through before indexing (see [`LutSpacing`]).
     pub pitch_lut_spacing: LutSpacing,
-    /// Gradient endpoints (MIDI notes) the shader maps a dot's pitch through
-    /// to index `pitch_lut`; mirrors the disc coloring's `FrameParams`.
+    /// Gradient endpoints (MIDI notes) the shader maps a glyph's pitch through
+    /// to index `pitch_lut`; copied from [`FrameParams`].
     pub darkest_pitch: f32,
     pub brightest_pitch: f32,
     /// Offscreen render resolution multiplier (see [`ViewConfig`]); the

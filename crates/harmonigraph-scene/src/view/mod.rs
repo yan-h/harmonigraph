@@ -155,7 +155,7 @@ pub struct ViewConfig {
     // ([`shadow`](Self::shadow)) — each item multiplying the frame under it by
     // what its own ink casts, at any extent and on every sheet.
     //
-    // The problem all three settings answer: the 5-limit sheet wants its
+    // The problem both settings answer: the 5-limit sheet wants its
     // pitch classes as large as they will go, and at one world unit per step a
     // node's visible edge already reaches 0.376 of the way to its neighbor.
     // Turning depth on asks the same rectangle to hold three times the
@@ -603,10 +603,11 @@ pub struct ViewConfig {
     /// pitch class — is one slice extended once, which is the whole of what
     /// there is to say about it.
     ///
-    /// That ordering is the usual case rather than a guarantee. A mark
-    /// outlives its key and a released voice claims each end from its own
-    /// stamp, so through one release a fading melody can sit on a LOWER slice
-    /// than the live bass beside it, with nothing in the picture to say which
+    /// That ordering is the usual case rather than a guarantee. The ends are
+    /// claimed by held notes only, but a mark outlives its key: it fades out
+    /// while the new end's mark eases in, and each end draws whichever is the
+    /// stronger, so through one release a fading melody can sit on a LOWER
+    /// slice than the live bass beside it, with nothing in the picture to say which
     /// is which — the radius that used to say it is what the shared strip
     /// spends. `a_released_end_can_mark_a_lower_slice_than_the_live_one`
     /// builds that state and is where the window is measured.
@@ -785,9 +786,10 @@ pub struct ViewConfig {
     /// The glow switches off at 0: the view draws exactly the
     /// ink the ring stack describes and nothing around it.
     ///
-    /// Every node's glow is drawn into a target of its own, with SCREEN
-    /// blending, so two neighbours' halos meld like light rather than summing
-    /// to white and neither one's draw order is readable in the overlap. That
+    /// Every node's glow is drawn into a target of its own, where overlapping
+    /// halos combine as a luminance screen under a fixed full-strength peak, so
+    /// two neighbours' halos meld like light rather than summing to white and
+    /// neither one's draw order is readable in the overlap. That
     /// target is one field across every sheet, laid down UNDER the lattice: the
     /// rings, the markers and the names are all drawn over it, so the middle of
     /// a node keeps the light its neighbours put there and every shadow in the
@@ -800,8 +802,8 @@ pub struct ViewConfig {
     /// Distinct from the bloom
     /// ([`note_bloom`](Self::note_bloom))
     /// in what it measures: bloom thresholds a finished picture, so only its
-    /// bright end blooms. This strength belongs to the lattice. Glow is a layer of the lattice's nodes, drawn from the
-    /// same octave colours their discs are.
+    /// bright end blooms. This strength belongs to the lattice. Glow is a layer
+    /// of the lattice's nodes, drawn from the colours of their own ink.
     pub glow_reach: f32,
     /// Glow texture, material and breathing, shared by editor and exports.
     pub atmosphere: AtmosphereSettings,
@@ -1113,11 +1115,6 @@ impl ViewConfig {
         }
     }
 
-    /// Active labels are always neutral white.
-    pub fn active_label_lightness(&self) -> f32 {
-        100.0
-    }
-
     /// Whether the audio ring is drawn at all: a width to draw it with, and
     /// room left inside the quad to draw it in.
     ///
@@ -1276,8 +1273,8 @@ impl ViewConfig {
         // every comparison), so the level stays at 0 while the slot bit is
         // still set, and the shader multiplies the ring's coverage away to
         // nothing. Silent, and it takes the whole layer wherever the marks
-        // are on. `derive_scene` retains the RANGE clamp for callers that do
-        // not pass through this load boundary; this door also catches NaN.
+        // are on. `mark_delay` in motion.rs repeats this repair for callers that
+        // do not pass through this load boundary.
         self.mark_delay = finite_or(self.mark_delay, 0.0).clamp(0.0, crate::MARK_DELAY_MAX);
 
         // The envelope's shape, against the same hole. `Envelope::approach`
@@ -1399,16 +1396,8 @@ impl ViewConfig {
         // reaches no gradient, so a broken one costs the resting field and
         // nothing else.
         self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink).clamp(0.0, 100.0);
-        // The node glow's pair. The reach repairs to the fresh value — 0, the
-        // off position — on the same argument the ring's gate does: a number
-        // nobody can read is a reason to draw no halo, never to open one over
-        // the whole lattice out of a corrupt blob. The strength rides with it
-        // and repairs to its own fresh value, being inert while the reach is 0.
-        //
-        // The reach is what the billboard is SIZED on (`quad_margin` in
-        // lattice.wgsl), so a non-finite one is not merely a wrong halo: it is
-        // a NaN quad, and every node's glow vanishes with nothing on screen to
-        // say why.
+        // The node glow's pair, each repaired to its fresh value and clamped
+        // to its bar.
         self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
@@ -1505,9 +1494,9 @@ impl Default for ViewConfig {
         ViewConfig {
             // The naming reach: how far out a played pitch is hunted for a
             // spelling before it counts as off the lattice. Oblong, like the
-            // panes it has to cover — `lattice_to_world` puts the FIFTHS axis
-            // on world x, so that is the one running across the screen and the
-            // one the width is spent on.
+            // panes it has to cover — `lattice_to_world` puts the THIRDS axis
+            // (`fives`) on world x, so that is the one running across the
+            // screen and the one the width is spent on.
             //
             // Sized to hold the whole of what a CABINET pane shows, at every
             // zoom, up to a 16:9 frame — which is the projection this matters
@@ -1623,8 +1612,8 @@ impl Default for ViewConfig {
             // field.
             spectral_width: 2.088_490_2,
             // Parked at the floor so the center and octave band spend the
-            // node's radial budget; Fold still feeds the node glow through the
-            // analyzer reading independently of this width.
+            // node's radial budget, which leaves the fresh lattice with no
+            // audio ring.
             spectral_ring_width: 0.0,
             // A narrow wedge — see the field for why a window this size and
             // not the octave that makes the ring continuous. It only zooms the

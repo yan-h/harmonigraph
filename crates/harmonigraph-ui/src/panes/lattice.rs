@@ -9,7 +9,7 @@ use crate::marks::{
 use crate::{theme, PictureState};
 use egui::Sense;
 use harmonigraph_render::lattice_paint_callback;
-use harmonigraph_scene::{derive_scene_with_extra, Camera, NoteNames, Projection, SevensLabel};
+use harmonigraph_scene::{derive_scene_with_extra, Camera, Projection, SevensLabel};
 
 /// The 3D lattice view: orbit camera on drag, zoom on scroll, pick on hover.
 ///
@@ -52,10 +52,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     {
         // Reset orbit/zoom, but keep the chosen projection and Cabinet depth
         // settings: those are view preferences, not navigation state.
-        // Home is the ORIGIN of the lattice, so the window's center goes
-        // back with the camera —
-        // otherwise a double-click on a scrolled view resets the camera into
-        // the middle of wherever it had scrolled to, which is not a reset.
+        // The window's center goes back with the camera, to the lattice's
+        // ORIGIN (C) — not where a fresh view opens, one third across
+        // (`ViewConfig::default`'s `center_fives`). Without it a double-click
+        // on a scrolled view resets the camera into the middle of wherever it
+        // had scrolled to, which is not a reset.
         state.appearance.camera = Camera {
             projection: state.appearance.camera.projection,
             cabinet_angle: state.appearance.camera.cabinet_angle,
@@ -466,9 +467,8 @@ fn learn_badge(ui: &egui::Ui, rect: egui::Rect, now: f64) -> crate::text::TextBa
 /// drawn once rather than two.
 ///
 /// Mixed in `L*` rather than between the two solved greys, because `L*` is the
-/// axis the pair is dialled on: the bars are read against each other by their
-/// numbers, and a crossing through greys neither number names is a third answer
-/// no bar gives.
+/// axis the marker bar is dialled on, and a crossing through greys neither end
+/// names is a third answer no bar gives.
 ///
 /// OPAQUE at every mix, as a marker's ink is (see `derive_pluses`): the grey a
 /// bar names is the grey on screen rather than a blend of it with whatever the
@@ -481,13 +481,14 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
     // on — the mix carries it whatever the two ends hold.
     let lit = if lit.is_finite() { lit.clamp(0.0, 1.0) } else { 0.0 };
     let resting = view.marker_ink_lightness();
-    let l_star = resting + (view.active_label_lightness() - resting) * lit;
+    let l_star = resting + (100.0 - resting) * lit;
     super::scene_color(harmonigraph_scene::grey_of_lightness(l_star), 1.0)
 }
 
 /// What a name hands the LIGHT standing under it: the shadow it holds that
-/// light off by, on the Shadow bars a node's rings and a marker's cross are
-/// held off on (`fs_shadow_box` in `harmonigraph_render`'s `text.wgsl`).
+/// light off by, on the lattice notation group's Shadow bars, which a marker's
+/// cross shares and a node's rings do not (`fs_shadow_box` in
+/// `harmonigraph_render`'s `text.wgsl`).
 ///
 /// No black is painted anywhere. This colour reaches the shader as one number
 /// — its alpha, which the caller spends the name's own strength on — because
@@ -496,81 +497,11 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
 /// premultiplied nothing carries.
 const LABEL_SHADOW: egui::Color32 = egui::Color32::BLACK;
 
-/// How readable a label on a node that is not sounding is: exactly as
-/// readable as one that is.
-///
-/// A kept name is as OPAQUE as a sounding one, and what separates the two is
-/// spent on BRIGHTNESS instead — [`label_ink`], on a bar of its own. Alpha over
-/// the lattice's dark ground is grey rather than a fainter white, so a rank
-/// spent here costs the quieter end its legibility as well as its rank, where a
-/// grey each end is named in outright costs it neither.
-///
-/// It is also the level the marker underneath already assumes.
-/// [`name_level`](harmonigraph_scene::NodeInstance::name_level) is what the
-/// resting marker cross-fades OUT on and it reaches 1.0 for a kept name;
-/// short of that here, the marker left the position completely while the
-/// name replacing it arrived at a fraction, so the handoff lost ink in the
-/// middle. One level on both sides and the swap is even.
-const RESTING_LABEL_STRENGTH: f32 = 1.0;
-
-/// How readable one node's label is, 0..1. `names` is which nodes the view
-/// names at all (see [`draw_node_labels`]), and this is where each of the
-/// three answers turns into a level.
-///
-/// A sounding label rides its note's envelope straight down to nothing. The
-/// one exception is a name this view is about to KEEP, which settles on
-/// `RESTING_LABEL_STRENGTH` instead of fading out: `node.trail` is the recorded
-/// memory, and it is only written the frame the release finishes, so during
-/// the fade there is nothing to settle onto and the level has to be reserved
-/// ahead of the record. Without that reserve the name eases to zero and the
-/// trail pops it back a frame later — the "flash back in" that made one label
-/// read as two.
-///
-/// Reserved on the way OUT only, which is what `node.departing` is read for.
-/// The argument above is entirely about a record that is coming, and nothing
-/// is coming for a note easing IN — a low activation there is a note that has
-/// barely started rather than one nearly gone. Reserving on both ends puts
-/// the name at full brightness the instant a key goes down, over a node still
-/// at a fraction of it, which is the same "steady, then switched" the reserve
-/// exists to remove, mirrored.
-///
-/// Reserved only where a trail can actually land, which is the home sheet:
-/// off-sheet nodes are deliberately never marked (a lone memory floating out
-/// in the sevens dimension reads as noise — see `harmonigraph_scene::trail`), so
-/// reserving there held the label at full brightness through the whole
-/// release and then dropped it to nothing at prune. Fading to a level and
-/// vanishing from it is exactly what a visibility floor looks like, and this
-/// was the last one left.
-///
-/// Reserved under [`NoteNames::Past`] alone, which is the only mode a record
-/// is ever coming under. [`All`](NoteNames::All) needs none — every node
-/// already draws at the kept level, so there is nothing to reserve up to —
-/// and under [`Played`](NoteNames::Played) nothing is kept, so a name held
-/// short of zero would hold there for good.
-fn label_strength(node: &harmonigraph_scene::NodeInstance, names: NoteNames) -> f32 {
-    if node.hovered {
-        return 1.0;
-    }
-    // What a name that is not sounding draws at: every node under All, a
-    // visited one under Past, and nothing at all under Played.
-    let resting = match names {
-        NoteNames::All => RESTING_LABEL_STRENGTH,
-        NoteNames::Past => RESTING_LABEL_STRENGTH * node.trail,
-        NoteNames::Played => 0.0,
-    };
-    let keeps_past = names == NoteNames::Past;
-    let reserved = if keeps_past && node.on_home && node.departing && node.activation > 0.0 {
-        RESTING_LABEL_STRENGTH
-    } else {
-        0.0
-    };
-    node.activation.max(resting).max(reserved)
-}
-
 /// Labels on hovered and sounding nodes, plus whatever else the Show row
-/// names -- every visited node under [`NoteNames::Past`], every node on
-/// screen under [`All`](NoteNames::All) -- projected with the same camera as
-/// the nodes: the note name centered on the node, optionally its pitch class
+/// names -- every visited node under
+/// [`NoteNames::Past`](harmonigraph_scene::NoteNames::Past), every home-sheet
+/// node on screen under [`All`](harmonigraph_scene::NoteNames::All) --
+/// projected with the same camera as the nodes: the note name centered on the node, optionally its pitch class
 /// in cents just below.
 ///
 /// Collected here and drawn by the lattice's own callback, inside its scene
@@ -619,26 +550,21 @@ pub(crate) fn draw_node_labels(
     let want = rect.height() / REFERENCE_HEIGHT * view.label_scale * scene.camera.screen_scale();
     let ppp = ui.painter().ctx().pixels_per_point();
     let projector = scene.projector(glam::Vec2::new(rect.width(), rect.height()));
-    // Past IS the trail: it is what populates `node.trail` (see
-    // `TrailField::build`) as well as what draws off it. Under either other
-    // mode the field never fills, so a fading name has nothing to settle onto
-    // and eases all the way out.
-    let names = view.note_names;
     for (index, node) in scene.nodes.iter().enumerate() {
-        // Whether this node is named at all — asked of the node rather than
-        // spelled out here, because the resting MARKER under it turns on the same
-        // answer and the two have to be one rule (see
-        // `NodeInstance::is_named`). What is left to this pass is where the
+        // How much name this node carries — asked of the node rather than
+        // spelled out here, because the resting MARKER under it cross-fades on
+        // the same level and the two have to be one rule (see
+        // `NodeInstance::name_level`). What is left to this pass is where the
         // name lands and what it says.
         let assigned = assignments.binary_search(&index).is_ok();
-        let named = node.is_named(view);
+        let strength = node.name_level(view);
+        let named = strength > 0.0;
         if !named && !assigned {
             continue;
         }
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        let strength = label_strength(node, names);
         // Per NODE and off the note's own envelope, which is what puts the
         // crossing between the two ends on the Fade: `activation` is the same
         // ramp the node's light rides, so a name brightens and dims with the
@@ -779,6 +705,7 @@ mod tests {
         frame_full, fresh_picture as fresh, painted_full, painted_into, themed,
     };
     use harmonigraph_core::{NoteEvent, SourceId};
+    use harmonigraph_scene::NoteNames;
 
     #[test]
     fn lattice_map_destination_click_excludes_camera_drags_other_modes_and_export() {
@@ -1221,6 +1148,13 @@ mod tests {
         }
     }
 
+    /// The name's level under `names`, through a view that differs from the
+    /// fresh one there alone.
+    fn level(node: &harmonigraph_scene::NodeInstance, names: NoteNames) -> f32 {
+        let view = harmonigraph_scene::ViewConfig { note_names: names, ..Default::default() };
+        node.name_level(&view)
+    }
+
     /// The last visibility floor: a label that stops part-way down and then
     /// vanishes reads as holding steady and being switched off, which is the
     /// thing the 0.35 floor was removed everywhere for.
@@ -1233,37 +1167,39 @@ mod tests {
         // Off the home sheet: nothing will ever be recorded there, so the
         // label rides the envelope all the way out.
         for names in [NoteNames::Played, NoteNames::Past] {
-            assert_eq!(label_strength(&fading(0.2, false), names), 0.2);
-            assert_eq!(label_strength(&fading(0.02, false), names), 0.02);
-            assert_eq!(label_strength(&fading(0.0, false), names), 0.0);
+            assert_eq!(level(&fading(0.2, false), names), 0.2);
+            assert_eq!(level(&fading(0.02, false), names), 0.02);
+            assert_eq!(level(&fading(0.0, false), names), 0.0);
         }
         // On the home sheet with the past kept, it settles on the level the
         // record will hold it at rather than easing out and popping back. That
         // level being full, a name on its way to being kept never dims at all:
         // the release is the NODE's, and the name it carries is one the view is
         // about to keep saying.
-        assert_eq!(label_strength(&fading(0.8, true), NoteNames::Past), RESTING_LABEL_STRENGTH);
-        assert_eq!(label_strength(&fading(0.2, true), NoteNames::Past), RESTING_LABEL_STRENGTH);
+        assert_eq!(level(&fading(0.8, true), NoteNames::Past), 1.0);
+        assert_eq!(level(&fading(0.2, true), NoteNames::Past), 1.0);
         // ...and with only the played notes named, the home sheet fades out
         // like anything else.
-        assert_eq!(label_strength(&fading(0.2, true), NoteNames::Played), 0.2);
+        assert_eq!(level(&fading(0.2, true), NoteNames::Played), 0.2);
         // A silent node reserves nothing at all, wherever it sits: the
         // reserve is for a name on its way to being kept, not for every node
         // the view holds.
-        assert_eq!(label_strength(&fading(0.0, true), NoteNames::Past), 0.0);
+        assert_eq!(level(&fading(0.0, true), NoteNames::Past), 0.0);
         // A hover is always fully readable, mid-fade or not.
         let mut hovered = fading(0.05, false);
         hovered.hovered = true;
-        assert_eq!(label_strength(&hovered, NoteNames::Played), 1.0);
+        assert_eq!(level(&hovered, NoteNames::Played), 1.0);
         // Once the name IS recorded, it reads at the kept level.
         let mut kept = fading(0.0, true);
         kept.trail = 1.0;
-        assert_eq!(label_strength(&kept, NoteNames::Past), RESTING_LABEL_STRENGTH);
+        assert_eq!(level(&kept, NoteNames::Past), 1.0);
     }
 
     /// Naming every node is a floor under the whole lattice, not a memory:
-    /// silence reads at the kept level on a node that has never sounded and
-    /// on one off the home sheet alike.
+    /// silence on the home sheet reads at the kept level whether or not the
+    /// node has ever sounded, and so does a sounding node off it. An idle node
+    /// off the home sheet is not visible (`NodeInstance::is_visible`) and
+    /// carries no name.
     ///
     /// A sounding node does NOT outshine the field it sits in, and that is
     /// the point rather than a gap in the mode. Its LIGHT does that; the type
@@ -1272,13 +1208,11 @@ mod tests {
     /// answered — paid for in the legibility of every name that was not
     /// currently playing.
     #[test]
-    fn naming_everything_puts_every_node_at_the_kept_level() {
+    fn naming_everything_puts_every_visible_node_at_the_kept_level() {
         for on_home in [false, true] {
             for activation in [0.0, 0.8] {
-                assert_eq!(
-                    label_strength(&fading(activation, on_home), NoteNames::All),
-                    RESTING_LABEL_STRENGTH,
-                );
+                let want = if on_home || activation > 0.0 { 1.0 } else { 0.0 };
+                assert_eq!(level(&fading(activation, on_home), NoteNames::All), want);
             }
         }
     }
@@ -1293,7 +1227,7 @@ mod tests {
     /// steady and then switching" the reserve exists to remove, at the other
     /// end of the note.
     ///
-    /// The band `0 < activation < RESTING_LABEL_STRENGTH` is the whole of a
+    /// The band `0 < activation < 1` is the whole of a
     /// note's climb, and it is climbed on every note-on: at the fresh view —
     /// the trail's kept names on — that is every lit node.
     #[test]
@@ -1307,21 +1241,21 @@ mod tests {
             let window = state.appearance.view.reach();
             compose_scene(&mut state, &window, 1.0, None, 0, 0.05)
         };
-        let names = state.appearance.view.note_names;
+        let view = &state.appearance.view;
         assert_eq!(
-            names,
+            view.note_names,
             NoteNames::Past,
             "the fresh view keeps the past; without that this proves nothing",
         );
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note lit a node");
         assert!(node.on_home, "the lit node is off the home sheet, where nothing is reserved");
         assert!(
-            node.activation < RESTING_LABEL_STRENGTH,
+            node.activation < 1.0,
             "sampled past the reserve's band at {}, so this cannot see the plateau",
             node.activation,
         );
         assert_eq!(
-            label_strength(node, names),
+            node.name_level(view),
             node.activation,
             "an arriving name was drawn at the trail reserve, not at its note's own level",
         );
@@ -1339,32 +1273,28 @@ mod tests {
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing, "the key is up and the arrival landed, so this is a departure");
         assert!(
-            node.activation < RESTING_LABEL_STRENGTH,
+            node.activation < 1.0,
             "sampled at {}, above the reserve, so this cannot see it hold",
             node.activation,
         );
         assert_eq!(
-            label_strength(node, names),
-            RESTING_LABEL_STRENGTH,
+            node.name_level(&state.appearance.view),
+            1.0,
             "a departing name stopped reserving the level its trail record takes over at",
         );
     }
 
-    /// The level a name is DRAWN at and the level a marker cross-fades out on
-    /// are one rule, and a departure is where they can come apart: the reserve
-    /// that holds a departing name up to what its record takes over at lives in
-    /// `label_strength`, while the marker's opacity is the complement of
-    /// [`name_level`](harmonigraph_scene::NodeInstance::name_level), which is a
-    /// second spelling of the same rule. A position carries one mark; two
-    /// spellings is the one way it can carry two.
+    /// A departing name the reserve holds up whole leaves NO marker under it,
+    /// rather than one shipped just short of full: the marker's opacity is the
+    /// complement of [`name_level`](harmonigraph_scene::NodeInstance::name_level),
+    /// the level the pass draws the name at. A position carries one mark.
     ///
     /// Measured through the same derive as the reserve's own test rather than
-    /// off a hand-built node, because the disagreement needs a state only a
+    /// off a hand-built node, because the reserve needs a state only a
     /// release reaches — on the home sheet, under `Past`, with the trail not
-    /// written until the frame the release ends. Sampling before or after that
-    /// window is what leaves the pair looking equal.
+    /// written until the frame the release ends.
     #[test]
-    fn a_departing_name_and_the_marker_under_it_are_one_rule() {
+    fn a_departing_name_held_whole_leaves_no_marker_under_it() {
         let mut state = fresh();
         state.runtime.frame_params.fade_time = 1.0;
         state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
@@ -1373,20 +1303,12 @@ mod tests {
             let window = state.appearance.view.reach();
             compose_scene(&mut state, &window, 1.0, None, 0, 1.9)
         };
-        let names = state.appearance.view.note_names;
-        assert_eq!(names, NoteNames::Past, "the reserve is Past's alone");
+        let view = &state.appearance.view;
+        assert_eq!(view.note_names, NoteNames::Past, "the reserve is Past's alone");
         let node = scene.nodes.iter().find(|n| n.activation > 0.0).expect("the note still lights");
         assert!(node.departing && node.on_home, "the reserve wants a departure on the home sheet");
         assert_eq!(node.trail, 0.0, "the record is not written until the release ends");
-        assert_eq!(
-            node.name_level(&state.appearance.view),
-            label_strength(node, names),
-            "the marker reads a departing name at {} while the pass draws it at {}",
-            node.name_level(&state.appearance.view),
-            label_strength(node, names),
-        );
-        // The half a level cannot say on its own: a name drawn whole leaves NO
-        // marker under it, rather than one shipped just short of full.
+        assert_eq!(node.name_level(view), 1.0, "the reserve did not hold the name whole");
         let standing = scene
             .pluses
             .iter()
@@ -1396,7 +1318,7 @@ mod tests {
             standing,
             0.0,
             "a marker stood at {standing} under a name drawn at {}",
-            label_strength(node, names),
+            node.name_level(view),
         );
     }
 
@@ -1553,7 +1475,7 @@ mod tests {
     ///
     /// The release is where a brightness and an opacity part company, and that
     /// is why the middle sample checks both. Under `Past` a departing name is
-    /// held at full strength (see `label_strength`), so through that stretch
+    /// held at full strength (see `NodeInstance::name_level`), so through that stretch
     /// the type is not fading out at all and everything moving on it is this
     /// mix.
     #[test]

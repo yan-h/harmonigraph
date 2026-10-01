@@ -377,10 +377,7 @@ pub(crate) fn derive_pluses(
     // than beside it, and does so under every Show mode — `name_level` is
     // `activation.max(resting)`, so a sounding note is named at its own
     // activation even under `Played`, where nothing rests. Asking the note a
-    // second time here would therefore change one case only, the one where
-    // there are no names to be present: with the Note names switched off a
-    // sounding note would take a marker that no name is taking, which is the
-    // rule read backwards.
+    // second time here would therefore change nothing.
     //
     // So an analyzer ring moves this by nothing, having no name to put over a
     // position. Nor does the LIGHT standing over one, and that is the same rule

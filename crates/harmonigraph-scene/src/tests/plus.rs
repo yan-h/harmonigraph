@@ -343,7 +343,7 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
         let standing =
             scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
         // The complement, exactly: the name's level under Played IS the
-        // activation (`label_strength` in harmonigraph-ui), so the two together
+        // activation (`NodeInstance::name_level`), so the two together
         // are one whole marker's worth of ink at every instant.
         let want = ground * (1.0 - node.name_level(&view));
         assert!(

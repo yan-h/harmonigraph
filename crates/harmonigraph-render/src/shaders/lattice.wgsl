@@ -2980,11 +2980,11 @@ fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
 /// How lit this node is, for the purpose of the light it gives off — carried on
 /// the glow's own attack and release, and handed over per instance.
 ///
-/// Its TARGET is the largest of every level that puts ink on the node, and the
-/// note's own envelope is only one of them: a mark rides the marked VOICE's
-/// level rather than the node's, and the audio ring rides the analyzer through
-/// the view's Gate, so a node with no key down and a ring showing is a node
-/// with something on screen. But this is where that target has GOT to, not the
+/// Its TARGET is the largest of the node's MIDI levels, read before the Opacity
+/// mapping, and the note's own envelope is only one of them: a mark rides the
+/// marked VOICE's level rather than the node's. The audio ring is not among
+/// them — a halo says something is being played here, where the ring says
+/// something is being heard. But this is where that target has GOT to, not the
 /// target — a light runs slower than every layer under it, which is what makes
 /// it read as light, and it can stand above zero on a node that has gone
 /// silent entirely.
@@ -3195,7 +3195,7 @@ fn vs_ink_strip(@builtin(vertex_index) vertex_index: u32, inst: Instance) -> VsO
     out.uv = vec2<f32>(corner.x, 0.0);
     // A node with no light was handed no ROW either, and the two facts are one
     // fact: `GlowFade` gives a row only to a node that has a light and hands
-    // everything else `GlowStep::default()`, whose row is 0 and whose mix is 1.
+    // everything else `GlowStep::default()`, whose level and row are both 0.
     // Such a node is still SHIPPED whenever it draws anything at all — an audio
     // ring is enough — so writing its ink here would settle it whole into the
     // row belonging to whichever node lit first. Collapsed to a point instead,
