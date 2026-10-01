@@ -341,10 +341,14 @@ load_merged_heads() {
   # --jq uses gh's embedded jq, so this needs no external jq. `--state all`
   # rather than two calls: one round trip carries both verdicts, and OPEN is
   # dropped here so an in-flight PR never counts as resolved.
-  gh pr list --state all --limit "$GH_PR_LIMIT" \
+  # From $ROOT, because gh takes its repository from the process cwd: a
+  # hand-run from another checkout would otherwise resolve THAT repo's PRs,
+  # match no sha here, and fall back to ancestor-only (#1300). `exec` keeps
+  # $! the gh process itself, so the timeout below kills gh and not a shell.
+  (cd "$ROOT" && exec gh pr list --state all --limit "$GH_PR_LIMIT" \
     --json state,headRefOid \
     --jq '.[] | select(.state == "MERGED" or .state == "CLOSED")
-              | "\(.state) \(.headRefOid)"' >"$tmp" 2>/dev/null &
+              | "\(.state) \(.headRefOid)"') >"$tmp" 2>/dev/null &
   gh_pid=$!
 
   # Bound it by hand: macOS ships no `timeout`, and a hung network call must not
