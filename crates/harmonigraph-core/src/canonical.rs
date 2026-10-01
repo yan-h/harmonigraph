@@ -234,7 +234,9 @@ pub struct SourceBaseline {
     pub id: u64,
     pub time: Time,
     pub output_cut: u64,
-    pub participating: bool,
+    /// The source's Show switch. False hides its notes without releasing
+    /// them; whether it is retuned (Retune, its participation) is not here.
+    pub shown: bool,
     count: usize,
     voices: [VoiceBaseline; HELD_PER_SOURCE],
 }
@@ -247,7 +249,7 @@ impl SourceBaseline {
         id: u64,
         time: Time,
         output_cut: u64,
-        participating: bool,
+        shown: bool,
         voices: &[VoiceBaseline],
     ) -> Result<Self, InvalidCanonical> {
         if voices.len() > HELD_PER_SOURCE {
@@ -258,7 +260,7 @@ impl SourceBaseline {
             id,
             time,
             output_cut,
-            participating,
+            shown,
             count: voices.len(),
             voices: [VoiceBaseline::default(); HELD_PER_SOURCE],
         };
@@ -514,7 +516,7 @@ mod tests {
         assert_eq!(tracker.roll().notes().count(), 1);
         let mut off = frame(&[row]).unwrap();
         off.id = 2;
-        off.participating = false;
+        off.shown = false;
         tracker.replace_source(&off).unwrap();
         assert_eq!(tracker.held_count(), 0);
         let mut tuning = delta(

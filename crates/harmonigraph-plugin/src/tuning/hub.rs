@@ -1176,7 +1176,7 @@ impl Hub {
                 else {
                     continue;
                 };
-                frame.participating = self.rows[index].show;
+                frame.shown = self.rows[index].show;
                 if recorder.publish_baseline(lane, &frame, route).is_ok() {
                     self.rows[index].baseline_id[lane] = id;
                     self.rows[index].repair[lane] = false;
