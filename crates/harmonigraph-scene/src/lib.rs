@@ -286,7 +286,7 @@ pub const GLOW_CURVE_SHAPE_MAX: f32 = 8.0;
 /// a different light: the bloom's chain thresholds, so its strength acts on the
 /// bright end alone, where this one scales one node's own skirt. Two is where
 /// the travel stops being about the light and starts being about the clamp —
-/// the base (`GLOW_BASE` in lattice.wgsl) is picked so that 1 reads plainly,
+/// the base (`GLOW_BASE` in common.wgsl) is picked so that 1 reads plainly,
 /// which puts the middle of a node at saturation somewhere short of this.
 pub const GLOW_STRENGTH_MAX: f32 = 2.0;
 
