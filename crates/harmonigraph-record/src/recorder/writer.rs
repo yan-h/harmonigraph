@@ -11,6 +11,14 @@ mod canonical_tests;
 #[cfg(test)]
 mod tests;
 
+/// The render request a fixture's Stop has to carry, aimed at a program that
+/// does not exist: a take that finishes launches nothing, and its render
+/// leaves only "could not run" on the status line.
+#[cfg(test)]
+fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
+    RenderRequest { program: directory.join("no-such-renderer"), appearance: None, size: [16, 16] }
+}
+
 /// How long the writer thread sleeps when it finds the ring empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
@@ -26,7 +34,8 @@ pub fn channel() -> (Recorder, Control) {
     let dropped = Arc::new(AtomicU64::new(0));
     let recording = Arc::new(AtomicBool::new(false));
     let rolling = Arc::new(AtomicBool::new(false));
-    let with_audio = Arc::new(AtomicBool::new(false));
+    // Every take records audio; see `Recorder::with_audio`.
+    let with_audio = Arc::new(AtomicBool::new(true));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
     let latches = Arc::new(TakeLatches::default());
     let status = Arc::new(Mutex::new(String::new()));
@@ -54,7 +63,8 @@ pub fn channel() -> (Recorder, Control) {
                     if pump.pending_stop.is_some() {
                         thread_fence.fail();
                     } else {
-                        pump.open = Recording::create(*header, path, epoch, spec, &thread_status);
+                        pump.open =
+                            Recording::create(*header, path, epoch, Some(spec), &thread_status);
                         #[cfg(all(test, feature = "test-support"))]
                         if let Some(open) = pump.open.as_mut() {
                             open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock();
@@ -72,7 +82,7 @@ pub fn channel() -> (Recorder, Control) {
                         if pump
                             .open
                             .as_ref()
-                            .is_none_or(|o| spec.is_some() && o.current.audio.is_none())
+                            .is_none_or(|o| o.current.audio.is_none())
                         {
                             thread_fence.fail_with_message(thread_status.lock().clone());
                             pump.failure.account(&mut pump.open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
@@ -121,10 +131,8 @@ pub fn channel() -> (Recorder, Control) {
                 #[cfg(all(test, feature = "test-support"))]
                 thread_fence.worker_after_finish.reach();
                 *thread_last_take.lock() = Some(path.clone());
-                if let Some(render) = render {
-                    spawn_render(*render, path, thread_status.clone(),
-                        thread_progress.clone(), thread_render.clone());
-                }
+                spawn_render(*render, path, thread_status.clone(),
+                    thread_progress.clone(), thread_render.clone());
             }
             #[cfg(all(test, feature = "test-support"))]
             if processed_stop {
@@ -161,7 +169,7 @@ pub fn channel() -> (Recorder, Control) {
             run: 0,
             run_live: false,
             audio: audio_producer,
-            with_audio: with_audio.clone(),
+            with_audio,
             end_at_rewind: end_at_rewind.clone(),
             latches: latches.clone(),
         },
@@ -175,7 +183,6 @@ pub fn channel() -> (Recorder, Control) {
             last_take,
             recording,
             rolling,
-            with_audio,
             end_at_rewind,
             latches,
             progress,
@@ -200,7 +207,7 @@ struct Pump {
     fanout: CanonicalFanout,
     failure: FailureAccount,
     /// The Stop whose prefix is not closed yet, and the render it asked for.
-    pending_stop: Option<(u64, Option<Box<RenderRequest>>)>,
+    pending_stop: Option<(u64, Box<RenderRequest>)>,
     /// No further command can arrive, so unresolved ownership is lost.
     disconnected: bool,
 }
@@ -211,7 +218,7 @@ struct Pumped {
     /// Either lane had something, so the writer must not sleep yet.
     worked: bool,
     /// A take sealed this pass: where it landed, and the render Stop carried.
-    finished: Option<(std::path::PathBuf, Option<Box<RenderRequest>>)>,
+    finished: Option<(std::path::PathBuf, Box<RenderRequest>)>,
     /// Both lanes are drained and no command can arrive: the thread returns.
     shutdown: bool,
 }

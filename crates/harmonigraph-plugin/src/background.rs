@@ -596,7 +596,7 @@ mod tests {
             // pane's toggle reaches: this test is about what happens with no
             // frame running, so it must not need one to set up either.
             let appearance = shared.ui.picture.appearance.serialize();
-            shared.take.start(48_000.0, appearance, false);
+            shared.take.start(48_000.0, appearance);
             assert!(shared.take.is_recording(), "armed");
         }
         // Something captured — one note, as the Hub publishes it into the

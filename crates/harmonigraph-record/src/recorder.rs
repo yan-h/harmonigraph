@@ -129,9 +129,9 @@ pub struct AudioSpec {
 }
 
 enum Command {
-    Start(u64, Box<harmonigraph_take::Header>, std::path::PathBuf, Option<AudioSpec>),
-    /// Close the file, and — if asked — render it to video.
-    Stop(u64, Option<Box<RenderRequest>>),
+    Start(u64, Box<harmonigraph_take::Header>, std::path::PathBuf, AudioSpec),
+    /// Close the file and render it to video.
+    Stop(u64, Box<RenderRequest>),
 }
 
 /// The user's home directory, or `.` when `HOME` is unset — the base for the
@@ -250,9 +250,12 @@ pub struct Recorder {
     record_pass: u32,
     closed_epoch: u64,
     producer: rtrb::Producer<Entry>,
-    /// Interleaved input samples, when the take is recording audio too.
+    /// Interleaved input samples, recorded beside every take's notes.
     audio: rtrb::Producer<f32>,
-    /// Selected for the whole take; Stop cannot change an in-flight callback.
+    /// Whether an armed take reads the selected audio. Always true behind the
+    /// writer thread's [`channel`]: every take records audio. Only the
+    /// in-memory `testing` channel arms without it, for the fixtures whose
+    /// `FileWriter` opens no WAV.
     with_audio: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// Last value written per parameter, so only changes are recorded.
@@ -722,7 +725,6 @@ pub struct Control {
     /// Set by the audio thread; the GUI's only honest view of whether
     /// the transport is moving.
     rolling: Arc<AtomicBool>,
-    with_audio: Arc<AtomicBool>,
     /// Mirror for the audio thread of whether a backward jump ends the take.
     end_at_rewind: Arc<AtomicBool>,
     /// What the take in progress has latched, shared with the [`Recorder`] that
@@ -842,9 +844,9 @@ impl Control {
     }
 
     /// Begin a take. `appearance` is the appearance document that decides how the
-    /// replay will look; `sample_rate` stamps the header. `audio`
-    /// records the selected audio stream alongside the notes.
-    pub fn start(&self, sample_rate: f32, appearance: String, audio: bool) {
+    /// replay will look; `sample_rate` stamps the header and the WAV the
+    /// selected audio stream is recorded to alongside the notes.
+    pub fn start(&self, sample_rate: f32, appearance: String) {
         if self.is_recording() {
             return;
         }
@@ -879,8 +881,7 @@ impl Control {
         let header = header_for(sample_rate, appearance);
 
         self.dropped.store(0, Ordering::Relaxed);
-        self.with_audio.store(audio, Ordering::Relaxed);
-        let spec = audio.then_some(AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 });
+        let spec = AudioSpec { sample_rate, channels: TAKE_CHANNELS as u16 };
         let Some(epoch) = self.fence.epoch().checked_add(1).filter(|epoch| *epoch <= u64::MAX >> 1)
         else {
             *self.status.lock() = "recording epoch exhausted".into();
@@ -900,20 +901,21 @@ impl Control {
         *self.status.lock() = "armed — waiting for the transport to roll".into();
     }
 
-    /// Stop recording, optionally rendering the finished take to video.
+    /// Stop recording and render the finished take to video.
     ///
     /// The render is launched by the writer thread, after it has closed
     /// the file — the only place that knows the take is actually complete.
-    pub fn stop(&self, render: Option<RenderRequest>) {
+    /// A take that failed is never rendered; its request is dropped there.
+    pub fn stop(&self, render: RenderRequest) {
         if !self.is_recording() {
             return;
         }
-        // Stop is intent, not producer closure. Keep the selected audio mode
-        // until the next Start so a callback that observed armed can finish.
+        // Stop is intent, not producer closure: a callback that observed
+        // armed still finishes its block, audio included.
         let epoch = self.fence.epoch();
         self.fence.finishing.store(true, Ordering::Release);
         self.fence.intent.fetch_and(!1, Ordering::AcqRel);
-        let _ = self.commands.send(Command::Stop(epoch, render.map(Box::new)));
+        let _ = self.commands.send(Command::Stop(epoch, Box::new(render)));
         self.recording.store(false, Ordering::Relaxed);
         if let Some(wake) = &self.stop_wakeup {
             wake();

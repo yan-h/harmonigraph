@@ -31,7 +31,7 @@ impl Worker {
         let fence = control.fence.clone();
         *fence.test_directory.lock() = Some(directory.clone());
         let worker = Self { recorder: Some(recorder), control: Some(control), fence, directory };
-        worker.control.as_ref().unwrap().start(48_000.0, String::new(), true);
+        worker.control.as_ref().unwrap().start(48_000.0, String::new());
         wait_for("Start", || worker.find_wav().is_some());
         worker.fence.worker_before_commands.enabled.store(true, Ordering::Release);
         wait_for("before command poll", || {
@@ -55,7 +55,7 @@ impl Worker {
         // drain must see both the audio and its alignment before it sees Start.
         fence.worker_after_empty.enabled.store(true, Ordering::Release);
         wait_for("empty command poll", || fence.worker_after_empty.entered.load(Ordering::Acquire));
-        worker.control.as_ref().unwrap().start(48_000.0, String::new(), true);
+        worker.control.as_ref().unwrap().start(48_000.0, String::new());
         if !pending_start {
             fence.worker_after_empty.enabled.store(false, Ordering::Release);
             wait_for("Start opened WAV", || worker.find_wav().is_some());
@@ -82,11 +82,11 @@ impl Worker {
         let program = self.directory.join("renderer");
         std::fs::write(&program, "#!/bin/sh\ntouch \"$0.invoked\"\n").unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        self.control.as_ref().unwrap().stop(Some(RenderRequest {
+        self.control.as_ref().unwrap().stop(RenderRequest {
             program,
             appearance: None,
             size: [16, 16],
-        }));
+        });
         assert_no_alloc(|| self.close(1));
         // A failure may already be accounted before Stop. Wait for this
         // command's worker iteration too, so its render request is exercised.
@@ -182,7 +182,7 @@ fn queued_stop_preserves_the_audio_prefix() {
         recorder.mark_audio_start(0.25);
         recorder.audio(&mut PREFIX.into_iter(), PREFIX.len());
     });
-    worker.control.as_ref().unwrap().stop(None);
+    worker.control.as_ref().unwrap().stop(unlaunchable_render(&worker.directory));
     worker.close(1);
     worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
     wait_for("queued Stop", || worker.control.as_ref().unwrap().last_take().is_some());
@@ -208,7 +208,7 @@ fn queued_rollover_keeps_each_pass_audio() {
     let second =
         first.with_file_name(format!("{}-2.wav", first.file_stem().unwrap().to_str().unwrap()));
     wait_for("loop audio written", || std::fs::metadata(&second).is_ok_and(|m| m.len() >= 52));
-    worker.control.as_ref().unwrap().stop(None);
+    worker.control.as_ref().unwrap().stop(unlaunchable_render(&worker.directory));
     worker.close(2);
     wait_for("rollover Stop", || worker.control.as_ref().unwrap().last_take().is_some());
     assert_eq!((wav_samples(&first), wav_samples(&second)), (PREFIX.to_vec(), vec![0.75, -0.75]));

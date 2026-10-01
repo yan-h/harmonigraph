@@ -322,7 +322,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
         let _resume_on_panic = WorkerPause(fence.clone());
         fence.worker_after_empty.enabled.store(true, Ordering::Release);
         wait_for(&fence.worker_after_empty.entered);
-        control.start(48000.0, String::new(), false);
+        control.start(48000.0, String::new());
         assert!(recorder.is_armed());
         let address = RecordAddress { epoch: 1, pass: 1 };
         recorder.configuration_at(
@@ -362,9 +362,7 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             fence.worker_after_empty.enabled.store(false, Ordering::Release);
             wait_for(&fence.worker_failure_accounted);
             fence.worker_after_stop.enabled.store(true, Ordering::Release);
-            control.stop(Some(RenderRequest::from_config(
-                &harmonigraph_take::RenderConfig::default(),
-            )));
+            control.stop(unlaunchable_render(&directory));
             wait_for(&fence.worker_after_stop.entered);
             fence.worker_after_empty.entered.store(false, Ordering::Release);
             fence.worker_after_empty.enabled.store(true, Ordering::Release);
@@ -429,7 +427,7 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
-    control.start(48000.0, String::new(), false);
+    control.start(48000.0, String::new());
     assert!(recorder.is_armed());
     let address = RecordAddress { epoch: 1, pass: 1 };
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
@@ -467,11 +465,7 @@ fn an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with() {
     }
     assert!(!fence.failed.load(Ordering::Acquire), "the overflow alone must not fail the take");
 
-    control.stop(Some(RenderRequest {
-        program: directory.join("no-such-renderer"),
-        appearance: None,
-        size: [16, 16],
-    }));
+    control.stop(unlaunchable_render(&directory));
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -515,7 +509,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let fence = control.fence.clone();
     let last_take = control.last_take.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
-    control.start(48000.0, String::new(), false);
+    control.start(48000.0, String::new());
     assert!(recorder.is_armed());
     let address = RecordAddress { epoch: 1, pass: 1 };
     recorder.configuration_at(
@@ -524,7 +518,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
         harmonigraph_core::configuration::ConfigReducer::default().resolved(),
     );
     fence.worker_after_stop.enabled.store(true, Ordering::Release);
-    control.stop(None);
+    control.stop(unlaunchable_render(&directory));
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -570,7 +564,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         *control.fence.test_directory.lock() = Some(directory.clone());
         let fence = control.fence.clone();
         let _resume_on_panic = WorkerPause(fence.clone());
-        control.start(48000.0, String::new(), false);
+        control.start(48000.0, String::new());
         assert!(recorder.is_armed());
         let address = RecordAddress { epoch: 1, pass: 1 };
         recorder.configuration_at(
@@ -601,7 +595,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
             wait_for(&fence.worker_before_commands.entered);
             recorder.producer.push(Entry::NewPass).unwrap();
         }
-        control.stop(None);
+        control.stop(unlaunchable_render(&directory));
         assert!(!recorder.is_armed());
         recorder.configuration_pass_complete(address);
         recorder.configuration_epoch_complete(1);
@@ -616,7 +610,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         recorder.source_epoch_complete(1, 1.0);
         wait_for(&fence.worker_after_stop.entered);
         if case == "retry" {
-            control.start(48000.0, String::new(), false);
+            control.start(48000.0, String::new());
             assert!(!control.is_recording());
             assert!(control.status().starts_with("finishing the previous take"));
         }
@@ -645,9 +639,14 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
             newer.map_or_else(|| format!("recorded {}", file.display()), str::to_owned)
         );
         assert!(control.last_take().is_none(), "old completion handler is still parked");
-        control.start(48000.0, String::new(), false);
+        control.start(48000.0, String::new());
         assert!(control.is_recording());
         let armed = control.status();
+        // The old handler launches this take's render, which announces itself
+        // on the status line. Another take's render in flight queues it before
+        // it says anything, so what is left to read is the handler's own.
+        let render = control.render.clone();
+        let queued = render.running.lock();
         // Park at the next command poll: the old handler runs, but the new
         // Start has not opened a file or published its own writer message.
         fence.worker_before_commands.enabled.store(true, Ordering::Release);
@@ -655,6 +654,13 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         wait_for(&fence.worker_before_commands.entered);
         assert_eq!(control.last_take(), Some(file));
         assert_eq!(control.status(), armed, "old completion overwrote the new Start");
+        // And the render really was queued behind the hold, not never launched.
+        drop(queued);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !control.status().contains("could not run") && std::time::Instant::now() < until {
+            std::thread::yield_now();
+        }
+        assert!(control.status().contains("could not run"), "{}", control.status());
         drop(recorder);
         drop(control);
         fence.worker_before_commands.enabled.store(false, Ordering::Release);
@@ -672,7 +678,7 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
-    control.start(48000.0, String::new(), false);
+    control.start(48000.0, String::new());
     assert!(recorder.is_armed());
     let address = RecordAddress { epoch: 1, pass: 1 };
     recorder.configuration_at(
@@ -681,7 +687,7 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
         harmonigraph_core::configuration::ConfigReducer::default().resolved(),
     );
     fence.worker_after_stop.enabled.store(true, Ordering::Release);
-    control.stop(None);
+    control.stop(unlaunchable_render(&directory));
     assert!(!recorder.is_armed());
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -827,7 +833,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     );
     displayed.drain(|_, _| true);
     let address = RecordAddress { epoch: 1, pass: 1 };
-    control.start(48000.0, String::new(), false);
+    control.start(48000.0, String::new());
     assert!(recorder.is_armed());
     // Released into the drain that has no file, then into the poll that opens
     // one — in that order, because the pause is inside the arm that found no
@@ -851,7 +857,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     recorder
         .publish_note(accepted(NoteEvent::off(0.02, SourceId(1), 0, 60), 2), route)
         .expect_both();
-    control.stop(None);
+    control.stop(unlaunchable_render(&directory));
     assert!(!recorder.is_armed(), "the disarm boundary closes the producer's prefix");
     recorder.configuration_pass_complete(address);
     recorder.configuration_epoch_complete(1);
@@ -1057,7 +1063,7 @@ fn a_marker_flush_failure_refuses_stop_and_render() {
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
-    control.start(48000.0, String::new(), false);
+    control.start(48000.0, String::new());
     assert!(recorder.is_armed());
     let address = RecordAddress { epoch: 1, pass: 1 };
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
@@ -1074,11 +1080,7 @@ fn a_marker_flush_failure_refuses_stop_and_render() {
         recorder.publish_note(NoteEvent::off(1.0, SourceId::DIRECT, 0, 60).into(), route).take,
         Err(publication::PublishError::Lost),
     );
-    control.stop(Some(RenderRequest {
-        program: directory.join("no-such-renderer"),
-        appearance: None,
-        size: [16, 16],
-    }));
+    control.stop(unlaunchable_render(&directory));
     assert!(!recorder.is_armed());
     fence.worker_after_empty.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_stop_processed);
