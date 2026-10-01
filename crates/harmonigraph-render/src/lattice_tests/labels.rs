@@ -1514,8 +1514,10 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
         // Occlusion follows Darkness (#1288), so the reference is the same
         // live field at a Darkness of 0, which hides nothing, and the reading
         // is at full Darkness, where it hides at its whole strength. The
-        // ordinary node shadow never reaches a name with occlusion on (checked
-        // below), so the two differ by occlusion alone.
+        // ordinary node shadow does not reach a name with occlusion on (the
+        // midpoint reading below holds it to that where the name stands
+        // clear of the rear ring), so the two differ by
+        // occlusion alone.
         let bare_old = shot(&scene, None, true, 0.0);
         let rear_old = shot(&scene, Some(1), true, 0.0);
         let bare = shot(&scene, None, true, 1.0);
@@ -1547,9 +1549,39 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
         }
         // A black clear with no glow or text shadows gives the ordinary node
         // shadow nothing to darken except misplaced ink, so what Darkness
-        // moves here is occlusion alone — and occlusion follows it (#1288):
-        // the deeper shadow hides more of the rear name and never less,
-        // including when the label-free bloom attachment is present.
+        // moves here is occlusion alone. Occlusion follows it LINEARLY
+        // (#1288), so the rear name at 0.4 is the mean of 0 and 0.8: a name
+        // that also took the ordinary shadow on top would bow under it.
+        let (none, half, full) = (
+            shot(&scene, Some(1), true, 0.0),
+            shot(&scene, Some(1), true, 0.4),
+            shot(&scene, Some(1), true, 0.8),
+        );
+        // Only the name's pixels standing over nothing Darkness moves: where it
+        // overlaps the rear ring, a faded name over a faded ring is a product
+        // of two linear fades and bows by itself.
+        let bare_deep = shot(&scene, None, true, 0.8);
+        let label = |i: usize| {
+            i32::from(rear_old[i * 4]) - i32::from(bare_old[i * 4]) > 32
+                && (0..3).all(|k| bare_old[i * 4 + k].abs_diff(bare_deep[i * 4 + k]) <= 1)
+        };
+        let keep = |frame: &[u8]| -> Vec<u8> {
+            frame
+                .chunks_exact(4)
+                .enumerate()
+                .flat_map(|(i, px)| if label(i) { [px[0], px[1], px[2], px[3]] } else { [0; 4] })
+                .collect()
+        };
+        let (probed, worst) = off_the_midpoint(&keep(&none), &keep(&half), &keep(&full), 8);
+
+        assert!(probed > 30, "{kernel:?}: Darkness moved only {probed} rear-label pixels");
+        assert!(
+            worst <= 2.0,
+            "{kernel:?}: the rear name at 0.4 sits {worst} codes off the mean of 0 and 0.8 \
+             over {probed} pixels, so something besides occlusion darkens it"
+        );
+        // And through the label-free bloom attachment: a deeper shadow hides
+        // more of the rear name and never less.
         for bloom in [0.0, 1.0] {
             scene.bloom_strength = bloom;
             let faint = shot(&scene, Some(1), true, 0.18);

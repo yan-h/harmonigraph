@@ -296,6 +296,11 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 /// restores that background under the faded ink, which one target cannot do
 /// (`node_split`). Those pixels — the ones occlusion moves on the offscreen
 /// path — are left out of the comparison, and the fixture has to have some.
+/// There the offscreen path may only be the BRIGHTER of the two, which is what
+/// restoring the background is.
+///
+/// The offscreen path is the one that ships; the direct draw (`fs_main` into
+/// one target) exists only as this test's reference.
 #[test]
 fn offscreen_composite_matches_direct_draw() {
     let Some((device, queue)) = headless_device() else {
@@ -421,9 +426,22 @@ fn offscreen_composite_matches_direct_draw() {
         composite.chunks(4).zip(unoccluded.chunks(4)).map(|(a, b)| a != b).collect();
     let hidden = occluded.iter().filter(|&&o| o).count();
     assert!(hidden > 50, "occlusion moved only {hidden} pixels: the fixture overlaps no nodes");
+    // 157 when measured (#1344); a few times that is a different fixture or a
+    // different occlusion, not this one with more room to hide in.
     assert!(
-        hidden * 10 < occluded.len(),
-        "occlusion moved {hidden} pixels, too much of the frame to compare around"
+        hidden < 600,
+        "occlusion moved {hidden} pixels, far more than the 157 this fixture measured"
+    );
+    let darker = composite
+        .chunks(4)
+        .zip(direct.chunks(4))
+        .zip(&occluded)
+        .filter(|((a, b), &o)| o && brightness(a) + 3 < brightness(b))
+        .count();
+    assert_eq!(
+        darker, 0,
+        "where occlusion acts the offscreen path came out darker than the direct draw at \
+         {darker} pixels; it should only restore background"
     );
 
     let (mut max_diff, mut at) = (0u8, 0usize);

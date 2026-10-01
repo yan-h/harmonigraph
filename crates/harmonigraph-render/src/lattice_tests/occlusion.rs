@@ -123,10 +123,27 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             }
             // With no glow and a black clear, ordinary background shadows
             // have no RGB to darken, so whatever Darkness moves in node ink
-            // here is occlusion alone — and occlusion follows it (#1288): the
-            // deeper shadow hides more rear ink and never less, both directly
-            // and through bloom.
+            // here is occlusion alone. Occlusion follows it LINEARLY (#1288),
+            // so the rear ink at 0.4 is the mean of 0 and 0.8: rear ink that
+            // also took the ordinary shadow on top of its fading would bow
+            // well under it.
             scene.glow_reach = 0.0;
+            scene.bloom_strength = 0.0;
+            let mut at = |depth: f32| {
+                scene.shadow.lattice_geometry.depth = depth;
+                shot(&scene, true)
+            };
+            let (none, half, full) = (at(0.0), at(0.4), at(0.8));
+            let (probed, worst) = off_the_midpoint(&none, &half, &full, 8);
+
+            assert!(probed > 50, "{kernel:?}, lit={lit}: Darkness moved only {probed} pixels");
+            assert!(
+                worst <= 2.0,
+                "{kernel:?}, lit={lit}: rear ink at 0.4 sits {worst} codes off the mean of 0 and \
+                 0.8 over {probed} pixels, so something besides occlusion darkens it"
+            );
+            // And through bloom, which is not linear: a deeper shadow hides
+            // more rear ink and never less.
             for bloom in [0.0, 1.0] {
                 scene.bloom_strength = bloom;
                 scene.shadow.lattice_geometry.depth = 0.18;

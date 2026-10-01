@@ -98,10 +98,10 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
                 "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
                      Raise above Idle ring brightness to keep the lattice easy to navigate.",
             );
-        // In the same quad UV a node's ring radii are dialled in, so this pair
-        // and Inner on the Layers bar are readings on ONE axis — a marker that
-        // fits inside the middle a node's rings stand around can be read off
-        // the numbers rather than by eye.
+        // Stored in the same quad UV a node's ring radii are dialled in, so this
+        // pair and the Layers bar's Inner handle are positions on ONE axis. The
+        // Layers bar shows no numbers, so whether a cross fits inside the middle
+        // a node's rings stand around is still judged by eye on the picture.
         edge_bar(
             ui,
             (&mut appearance.view.plus_arm, &mut appearance.view.plus_taper),
