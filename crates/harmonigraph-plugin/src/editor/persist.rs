@@ -1,8 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crossbeam::atomic::AtomicCell;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+
+use super::shared::EditorShared;
 
 /// Window size persistence, modeled on nih_plug_egui's `EguiState`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,5 +68,84 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<Egui
         F: Fn(&EguiState) -> R,
     {
         f(self)
+    }
+}
+
+/// How long a host's state save waits for a frame to let go of the editor's
+/// state before it settles for the blob the last close wrote.
+///
+/// A frame holds that lock for its whole run, which is milliseconds, so the
+/// wait is normally one frame at most. It is bounded rather than a plain
+/// `lock` because the lock is not reentrant: a host that answered something a
+/// frame asked by saving state on the same thread would otherwise hang the
+/// host on its own save — the kind of host hang issue #296 is about.
+const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The editor's saved settings: the `ui-state` blob the host stores with the
+/// project, plus a way to serialize them live while a window is open.
+///
+/// The blob is written by the host's restore and by the editor window's
+/// `Drop`, and nothing else. A save that only read it would store the settings
+/// of the last CLOSE, so with a window open, [`map`](Self::map) — which is the
+/// one thing a host save calls — serializes what the window is showing
+/// instead. The blob itself is left alone: the background analyzer adopts it
+/// whenever it changes with the window shut, and that has to keep meaning a
+/// host restore or a close (see [`crate::background`]).
+pub struct UiState {
+    blob: Arc<RwLock<String>>,
+    live: OnceLock<(Arc<Mutex<EditorShared>>, Arc<EguiState>)>,
+}
+
+impl UiState {
+    /// An empty blob, which is what a project whose editor has never been
+    /// open carries, and nothing live yet.
+    pub fn new() -> UiState {
+        UiState { blob: Arc::new(RwLock::new(String::new())), live: OnceLock::new() }
+    }
+
+    /// The stored blob: the last host restore or window close.
+    pub fn blob(&self) -> &Arc<RwLock<String>> {
+        &self.blob
+    }
+
+    /// Give the save the editor state to serialize while `window` says a
+    /// window is open. Once per plugin; the params exist before the state
+    /// does, hence the two steps.
+    pub(crate) fn attach(&self, shared: Arc<Mutex<EditorShared>>, window: Arc<EguiState>) {
+        if self.live.set((shared, window)).is_err() {
+            unreachable!("the editor state is attached once, by the plugin that owns both");
+        }
+    }
+}
+
+impl Default for UiState {
+    fn default() -> UiState {
+        UiState::new()
+    }
+}
+
+impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
+    fn set(&self, new_value: String) {
+        *self.blob.write() = new_value;
+    }
+
+    /// Called when the host saves state, on its main thread. One RON
+    /// serialization per save, which is what a window close already spends;
+    /// nothing per frame.
+    fn map<F, R>(&self, f: F) -> R
+    where
+        F: Fn(&String) -> R,
+    {
+        if let Some((shared, window)) = self.live.get() {
+            if window.is_open() {
+                let live = shared
+                    .try_lock_for(SAVE_WAIT)
+                    .map(|shared| harmonigraph_ui::shell::close(&shared.ui));
+                if let Some(live) = live {
+                    return f(&live);
+                }
+            }
+        }
+        f(&self.blob.read())
     }
 }

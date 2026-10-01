@@ -1,12 +1,13 @@
-//! A minimal WAV reader: enough to get the DAW's bounce into the
+//! A minimal WAV reader: enough to get the audio a take recorded into the
 //! spectrum analyzer, and no more.
 //!
 //! The spectrum can't come from the plugin. Its live audio ring drops
 //! samples under backpressure by design (the right failure mode for a
 //! meter, the wrong one for a recording), and during an offline export
 //! there is no GUI draining it at all. So the analyzer is fed from the
-//! bounced file instead — which is also the file the video's audio comes
-//! from, so the curve and the sound can't drift apart.
+//! WAV the recorder wrote beside the take instead — which is also the file
+//! the video's audio comes from, so the curve and the sound can't drift
+//! apart.
 //!
 //! Hand-rolled rather than pulled from a crate: it is one chunk walk and
 //! five sample decoders, against a workspace that documents every
@@ -193,7 +194,7 @@ pub fn read(path: impl AsRef<std::path::Path>) -> Result<Audio, String> {
         };
         let channels = usize::from(channels);
         let width = usize::from(bits / 8);
-        // Declared data can exceed the physical file after an interrupted bounce.
+        // Declared data can exceed the physical file after an interrupted write.
         // Preserve the old reader's complete-frame prefix, never a partial channel.
         let frames = (data_bytes / (channels * width) as u64) as usize;
         reader.seek_relative(data_start as i64 - cursor as i64).map_err(|e| e.to_string())?;
@@ -346,7 +347,7 @@ mod tests {
         assert_eq!(audio.seconds(), 1.0);
         assert_eq!(slice_seconds(&mut audio, 0.1, 0.2).0.len(), 10);
         // Past the end is empty, not a panic: the visual tail outlives
-        // the bounce whenever a note fades out at the end.
+        // the audio whenever a note fades out at the end.
         assert!(slice_seconds(&mut audio, 5.0, 6.0).0.is_empty());
         // A backwards range is empty too, rather than panicking on the
         // reversed slice bounds.

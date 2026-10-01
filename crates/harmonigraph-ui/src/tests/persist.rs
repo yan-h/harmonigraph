@@ -54,12 +54,14 @@ fn pair_starts(blob: &str, key: &str) -> Vec<usize> {
 /// pairs are spliced back in ahead of the live key.
 ///
 /// The VALUE shapes are the point as much as the names. A number is skipped by
-/// any parser; a bare identifier (`Aurora`, `Pitch`, `DrawAndRetract`) is an
-/// enum token with no type left to parse it into, and a string and `NaN` are
-/// tokens of their own. Retiring a FIELD is safe for every one of them, where
-/// retiring a VARIANT is not — that is [`DROPPED_VARIANTS`].
+/// any parser; a bare identifier (`Fibres`, `Pop`) is an enum token with no
+/// type left to parse it into, and a string and `NaN` are tokens of their own.
+/// Retiring a FIELD is safe for every one of them, where retiring a VARIANT is
+/// not — that is [`DROPPED_VARIANTS`].
 ///
-/// Retiring another key is a row here, not another test.
+/// Retiring another key is a row here, not another test. Only keys a blob at
+/// or above the version floor can hold earn one: anything retired before it
+/// is refused with the blob that carries it.
 const RETIRED_KEYS: &[(&str, &str)] = &[
     // The cloud's sampling grid.
     ("cloud_depth", "cloud_tile:20.0,cloud_pixel:4.0,"),
@@ -69,35 +71,12 @@ const RETIRED_KEYS: &[(&str, &str)] = &[
     // The independent angular gap. `ring_gap` is the shared one now, and the
     // dialled 0.02 must not be overwritten by it.
     ("ring_gap", "octave_gap:0.17,"),
-    // The shimmer, including its two bare enum tokens.
-    (
-        "pitch_gradient",
-        "pulse_octaves:Bands,pulse_marks:Hex,shimmer_speed:1.6,shimmer_width:5.0,\
-         shimmer_intensity:1.0,shimmer_softness:0.8,",
-    ),
-    // The core's paint styles: one that survived to the end, and one only an
-    // alias kept loading.
-    ("pitch_gradient", "node_style:Vortex,"),
-    ("pitch_gradient", "node_style:Pinwheel,"),
-    // The heatmap's enum look, fine-level switch, opacity, contrast and
-    // private dB window.
-    (
-        "spectrogram_gradient",
-        "spectrogram_color:Aurora,spectrogram_fine_levels:true,\
-         spectrogram_opacity:0.85,spectrogram_own_range:true,\
-         spectrogram_floor_db:-60.0,spectrogram_ceiling_db:-20.0,\
-         spectrogram_gamma:1.6,",
-    ),
     // The entire combined lattice material key is retired, including its old variants.
     ("material_style", "material:Fibres,"),
     ("material_style", "material:Liquid,"),
     // The hidden renderer override, a string.
     ("short_edge", "renderer_path:\"/old/renderer\","),
-    // The roll's Gap feature and its Color row.
-    ("roll_thickness", "roll_gap:2.5,"),
-    ("roll_thickness", "roll_color:Pitch,"),
-    // The note transition enum and the view's retired switches.
-    ("label_scale", "note_transition:DrawAndRetract,"),
+    // The view's retired switches.
     ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,"),
     // The note animation's own retired fields, inside its struct.
     ("stagger_spread", "animation:Pop,start_size:0.2,"),
@@ -150,6 +129,8 @@ const DROPPED_VARIANTS: &[(&str, &str, &str, bool)] = &[
     // The selected settings tab lives in the layout, so removing a tab is a
     // variant break too.
     ("settings_tab", "Tuning", "Display", false),
+    // The Mappings tab's variant, before it took the tab's title.
+    ("settings_tab", "Tuning", "Colors", false),
 ];
 
 /// A dropped variant refuses the WHOLE document, and says so on the Console.
@@ -295,42 +276,6 @@ fn persist_round_trips_camera_and_view() {
     assert_eq!(restored.workspace.interaction.camera_presets.len(), 1);
     assert_eq!(restored.workspace.interaction.camera_presets[0].name, "reading");
     assert_eq!(restored.workspace.interaction.camera_presets[0].yaw, 0.7);
-}
-
-#[test]
-fn a_blob_written_before_the_auto_detect_opts_into_it() {
-    // Every project saved before the switch existed carries no key for it,
-    // and each one has a tuning that already answers the question: a 12-TET
-    // project IS a meantone (400 = 4·700 − 2400), and its E and E- name one
-    // pitch whether or not anyone said "meantone". Defaulting the missing
-    // key to OFF would leave exactly those projects the only ones the
-    // feature never reaches.
-    let mut state = fresh();
-    state.picture.appearance.camera.yaw = 1.23;
-    // One key at a time, each checked to have HIT: with three replacements
-    // over one blob, a single `assert_ne!` at the end is satisfied by any one
-    // of them, and a key that quietly stopped matching (a rename, a space
-    // after the colon) would leave its default untested.
-    let mut saved = state.save_persist();
-    for key in ["meantone_auto:true,", "marvel_auto:true,", "marvel:true,"] {
-        let stripped = saved.replace(key, "");
-        assert_ne!(stripped, saved, "{key:?} is not in the blob to remove");
-        saved = stripped;
-    }
-
-    let mut restored = fresh();
-    restored.load_persist(&saved);
-    assert!(restored.picture.appearance.view.meantone_auto, "a missing key means on");
-    // And the septimal comma's keys are newer still, so EVERY project
-    // predates them: 12-TET tempers 225/224 out as well (1000 = 2·700 + 2·400
-    // − 1200), so the same argument opts them in — off would leave the mode
-    // unreachable for every project that already exists.
-    assert!(restored.picture.appearance.view.marvel_auto, "a missing detect key means on");
-    assert!(
-        restored.picture.appearance.view.marvel,
-        "a missing mode key uses the engaged fresh verdict"
-    );
-    assert_eq!(restored.picture.appearance.camera.yaw, 1.23, "rest of the blob still restores");
 }
 
 /// Loaded counts agree with the drawable range and the setting's readout.
@@ -992,6 +937,8 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "ui_scale",
         "skin_dials",
         "perf_pos",
+        "show_perf",
+        "show_perf_detail",
     ];
 
     let saved = fresh().save_persist();
@@ -1215,24 +1162,6 @@ fn persist_round_trips_the_frame_rate_cap() {
     let mut restored = fresh();
     restored.load_persist(&state.save_persist());
     assert_eq!(restored.workspace.interaction.fps_cap, Some(45.0));
-}
-
-#[test]
-fn pre_cap_persist_blobs_load_as_uncapped() {
-    // The cap was added after these blobs were written; dropping the field
-    // must not fail the parse, which would silently discard the WHOLE
-    // persist (layout, camera, every view setting) rather than one setting.
-    let mut state = fresh();
-    state.workspace.interaction.fps_cap = Some(30.0);
-    state.picture.appearance.view.max_sevens = 3;
-    let saved = state.save_persist();
-    let stripped = saved.replace(",fps_cap:Some(30.0)", "");
-    assert_ne!(stripped, saved, "the field removal must have hit");
-
-    let mut restored = fresh();
-    restored.load_persist(&stripped);
-    assert_eq!(restored.workspace.interaction.fps_cap, None, "a missing cap reads as uncapped");
-    assert_eq!(restored.picture.appearance.view.max_sevens, 3, "the rest of the blob must survive");
 }
 
 /// A blob saved before the control existed loads at the design size. `f32`'s

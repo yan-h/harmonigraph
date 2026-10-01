@@ -369,7 +369,7 @@ fn every_settings_row_is_one_row_high() {
 fn every_bar_has_its_declared_height() {
     for pane in [
         panes::Tab::Tuning,
-        panes::Tab::Colors,
+        panes::Tab::Mappings,
         panes::Tab::LatticeSettings,
         panes::Tab::AnalyzerSettings,
         panes::Tab::System,

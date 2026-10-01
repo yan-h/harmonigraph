@@ -37,7 +37,7 @@ fn drag_hud(h: &mut DockHarness, state: &mut SharedState, by: egui::Vec2) -> egu
 /// An overlay nobody has dragged opens in the editor's bottom-left corner —
 /// the one placement anything but a drag decides.
 ///
-/// Read off the EDITOR, and off nothing else. What pane is where, which leaf
+/// Read off the EDITOR, and off nothing else. What pane is where, which section
 /// is folded, where the tab bars run: none of it is consulted, and that is the
 /// point rather than an omission. The corner is where the HUD opens, not where
 /// it belongs, and a drag is what settles the question for good.
@@ -46,7 +46,7 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
     let mut state = fresh();
     // Turned on by hand: the overlay ships off, and what is under test is
     // where it lands once asked for, not whether anything asks.
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     let mut h = DockHarness::new();
     let screen = h.screen;
     // An Area's opening pass sizes it and paints nothing, so the HUD is read
@@ -107,9 +107,9 @@ fn the_perf_overlay_opens_in_the_editors_corner() {
 #[test]
 fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     // The breakdown open, which is the tall HUD: two dozen rows against four.
-    state.picture.appearance.view.show_perf_detail = true;
+    state.workspace.interaction.show_perf_detail = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let screen = h.screen;
@@ -122,7 +122,7 @@ fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
 
     // The VERY next frame after the rows go: no settling, because one frame
     // in the wrong place is the whole of what this is about.
-    state.picture.appearance.view.show_perf_detail = false;
+    state.workspace.interaction.show_perf_detail = false;
     let shallow = hud_of(&h.frame(&mut state, vec![]));
     assert!(
         shallow.height() < deep.height() - 100.0,
@@ -147,7 +147,7 @@ fn the_perf_overlay_holds_its_corner_as_its_rows_shrink() {
 #[test]
 fn the_perf_overlay_goes_where_it_is_dragged() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
 
@@ -179,13 +179,13 @@ fn the_perf_overlay_goes_where_it_is_dragged() {
 ///
 /// This is the inverse of a rule the overlay used to carry: it hung off the
 /// analyzer pane, fell back to the lattice when that pane went off screen, and
-/// off the editor when neither was up — so folding a leaf moved it. A dragged
+/// off the editor when neither was up — so folding a section moved it. A dragged
 /// HUD is furniture the user positioned, and a fold is not a request to move
 /// it.
 #[test]
 fn folding_a_pane_does_not_move_the_perf_overlay() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let placed = drag_hud(&mut h, &mut state, egui::vec2(-200.0, -120.0));
@@ -213,7 +213,7 @@ fn folding_a_pane_does_not_move_the_perf_overlay() {
 #[test]
 fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let screen = h.screen;
@@ -251,7 +251,7 @@ fn the_perf_overlay_cannot_be_dragged_out_of_the_editor() {
 #[test]
 fn a_saved_position_opens_the_hud_where_it_was_left() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     // Nowhere near the corner it would open at by itself, so "honoured" and
     // "defaulted" cannot look alike.
     let left = egui::pos2(120.0, 210.0);
@@ -280,14 +280,14 @@ fn a_saved_position_opens_the_hud_where_it_was_left() {
 #[test]
 fn the_perf_overlay_comes_back_where_it_was_switched_off() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     let mut h = DockHarness::new();
     h.settle(&mut state);
     let placed = drag_hud(&mut h, &mut state, egui::vec2(-180.0, -140.0));
 
-    state.picture.appearance.view.show_perf = false;
+    state.workspace.interaction.show_perf = false;
     h.frame(&mut state, vec![]);
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     // ONE frame: a second would hide a fresh sizing pass behind it.
     let back = hud_of(&h.frame(&mut state, vec![]));
     assert_eq!(back, placed, "the HUD should come back where it was switched off");
@@ -298,7 +298,7 @@ fn the_perf_overlay_comes_back_where_it_was_switched_off() {
 #[test]
 fn a_dragged_perf_overlay_is_persisted() {
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     state.workspace.interaction.perf_pos = Some(egui::pos2(123.0, 456.0));
 
     let mut restored = fresh();
@@ -310,8 +310,8 @@ fn a_dragged_perf_overlay_is_persisted() {
     );
 
     // NaN reaches the tessellator as geometry, and a blob is a file someone
-    // can edit — see `load_persist`, which repairs the spiral framing beside
-    // this for the same reason.
+    // can edit — see `load_persist`, and `AppearanceDocument::normalize`,
+    // which repairs the spiral framing for the same reason.
     let mut restored = fresh();
     let saved = state.save_persist();
     let edited = saved.replacen("x:123.0", "x:NaN", 1);
@@ -323,8 +323,8 @@ fn a_dragged_perf_overlay_is_persisted() {
     );
 }
 
-/// The overlay ships OFF, on a fresh install and in a project saved before the
-/// setting existed alike.
+/// The overlay ships OFF, on a fresh install and in a project saved without the
+/// key alike (every one saved before the setting moved out of the view).
 ///
 /// Two separate declarations decide this and they have to agree: the struct
 /// default is what a fresh install reads, and `#[serde(default)]` is what a
@@ -335,13 +335,13 @@ fn a_dragged_perf_overlay_is_persisted() {
 fn the_performance_overlay_ships_off() {
     let defaults = fresh();
     assert!(
-        !defaults.picture.appearance.view.show_perf,
+        !defaults.workspace.interaction.show_perf,
         "a fresh install opens with the overlay off"
     );
 
-    // A blob from before the setting existed: the key cut out of a saved one.
+    // A blob without the key: the key cut out of a saved one.
     let mut state = fresh();
-    state.picture.appearance.view.show_perf = true;
+    state.workspace.interaction.show_perf = true;
     let saved = state.save_persist();
     let old = saved.replacen("show_perf:true,", "", 1);
     assert_ne!(old, saved, "the show_perf cut must land for this to test anything");
@@ -349,16 +349,13 @@ fn the_performance_overlay_ships_off() {
     let mut restored = fresh();
     restored.load_persist(&old);
     assert!(
-        !restored.picture.appearance.view.show_perf,
-        "a pre-show_perf blob opens with the overlay off"
+        !restored.workspace.interaction.show_perf,
+        "a blob without show_perf opens with the overlay off"
     );
 
     // And a project that asked for it still gets it: the cut above is what
     // makes the blob old, not the value, so the round-trip has to still work.
     let mut kept = fresh();
     kept.load_persist(&saved);
-    assert!(
-        kept.picture.appearance.view.show_perf,
-        "a project that turned the overlay on keeps it"
-    );
+    assert!(kept.workspace.interaction.show_perf, "a project that turned the overlay on keeps it");
 }

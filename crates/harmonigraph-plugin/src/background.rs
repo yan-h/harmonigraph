@@ -168,7 +168,10 @@ impl Drop for BackgroundAnalyzer {
 ///
 /// `params.ui_state` is where a project's settings arrive — the host writes it
 /// on state restore, and `LatticeEditorHandle`'s `Drop` writes it again on the
-/// way out of every editor session. Nothing reads it until a window is built,
+/// way out of every editor session. Nothing else writes it: a host save with a
+/// window open serializes the live state without storing it (see
+/// [`UiState`](crate::editor::UiState)), so a change of blob still means a
+/// restore or a close. Nothing reads it until a window is built,
 /// so a project's saved analyzer Window reaches nothing that runs before the
 /// first open; applying it here is what closes that gap.
 ///
@@ -208,7 +211,8 @@ impl Restore {
     /// are load-bearing. `Opening` applies the same blob through the same call
     /// whenever a window is built, so an open window is already served; and
     /// applying it under one would revert everything the user has changed since
-    /// they opened it, since the blob is only written on the way out. The lock
+    /// they opened it, since the blob is only written on the way out (a save
+    /// with the window open serializes the live state and stores nothing). The lock
     /// is what makes reading `blob` here safe to order this way — the close
     /// path takes the same two in the same order (`shared`, then `ui_state`).
     ///
@@ -238,8 +242,8 @@ impl Restore {
 /// clock, which is most of what there is to get wrong here.
 ///
 /// The window check carries a second job with the adopt behind it, and one that
-/// is about the USER rather than about a lock: `params.ui_state` names what the
-/// project last saved, so re-applying it under an open window would revert
+/// is about the USER rather than about a lock: `params.ui_state` names the last
+/// restore or window close, so re-applying it under an open window would revert
 /// whatever has been changed since. See [`Restore::adopt`].
 ///
 /// **Both checks exist to keep this thread off a lock a frame is holding.**
@@ -703,9 +707,10 @@ mod tests {
     }
 
     /// The trap in fixing it. `params.ui_state` is only written on the way OUT
-    /// of an editor session, so it names what the user had when they last
-    /// closed the window — and re-applying that under an open one would revert
-    /// everything they have changed since.
+    /// of an editor session — a host save with the window open serializes the
+    /// live state rather than storing it — so it names what the user had when
+    /// they last closed the window, and re-applying that under an open one
+    /// would revert everything they have changed since.
     ///
     /// The guard is [`tick`]'s existing open-window check, which is why this
     /// test lives next to the drain it also guards: anything that moved the

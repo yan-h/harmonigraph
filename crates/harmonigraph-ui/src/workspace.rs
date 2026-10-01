@@ -36,7 +36,7 @@ impl Section {
                 Tab::Tuning,
                 Tab::LatticeSettings,
                 Tab::AnalyzerSettings,
-                Tab::Colors,
+                Tab::Mappings,
                 Tab::Video,
                 Tab::System,
                 Tab::Console,

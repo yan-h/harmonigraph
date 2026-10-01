@@ -2,14 +2,6 @@ use super::super::channel;
 use super::*;
 use harmonigraph_take::RenderConfig;
 
-#[test]
-fn a_finished_take_always_renders() {
-    // Auto-render is not gated: stopping a take always kicks off a
-    // render using recorded audio, so from_config is always `Some`.
-    let config = RenderConfig::default();
-    assert!(RenderRequest::from_config(&config).is_some());
-}
-
 /// Automatic and manual requests use the paired renderer and active sizing
 /// settings; only a manual request replaces the recorded appearance.
 #[test]
@@ -19,7 +11,7 @@ fn automatic_and_manual_requests_keep_the_active_settings() {
         short_edge: 2160,
         ..Default::default()
     };
-    let automatic = RenderRequest::from_config(&config).unwrap();
+    let automatic = RenderRequest::from_config(&config);
     let manual = RenderRequest::render_now(&config, "current appearance".into());
     for request in [&automatic, &manual] {
         assert_eq!(request.program, default_renderer_path());
@@ -237,7 +229,7 @@ fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
 /// killing it.
 ///
 /// Auto-render fires for every finished take (see
-/// [`a_finished_take_always_renders`]) and each take is a new file, so
+/// [`RenderRequest::from_config`]) and each take is a new file, so
 /// recording twice in a row is two requests naming two different videos.
 /// Cancelling on that would drop the first take's video on the floor
 /// silently — a superseded run cleans up its partial and returns without

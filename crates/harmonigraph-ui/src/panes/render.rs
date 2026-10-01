@@ -347,8 +347,7 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
         // decides only how big, so each option shows the pixels it lands on and
         // the pair is what the plugin passes as `--size`.
         //
-        // 720 is on the list rather than only the three sizes worth delivering
-        // because it is a real draft setting for a render measured in minutes.
+        // 720 is the fresh size.
         let frame = state.appearance.render.frame;
         let sizes: Vec<(u32, String, String)> = [720u32, 1080, 1440, 2160]
             .iter()

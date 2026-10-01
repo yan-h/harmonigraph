@@ -16,18 +16,11 @@ The exact values are recoverable:
 ./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ```
 
-**The trap, which costs a round trip with Yan every time it's missed:** the UI state (`layout` and `folded_sections`, camera, ViewConfig) is written into the plugin state ONLY when the editor WINDOW is closed (`impl Drop for LatticeEditorHandle`, `crates/harmonigraph-plugin/src/editor/window.rs`).
-Saving a project with the plugin window open silently keeps the previous values, with no warning.
-So ask Yan for, in order:
-
-1. close the Harmonigraph **window**, then
-2. save the project (Cmd+S).
-
-Only then run the script.
-Asking for a save alone gets you nothing.
-Host-automatable params (tuning, fade, color range) are exempt —
-they live in the param system and are always current, which is why a project can show fresh params next to a missing `ui-state`.
-That mismatch is the tell.
+The UI state (`layout` and `folded_sections`, camera, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
+A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
+if the numbers look stale, ask Yan to save it again from a current build.
+Host-automatable params (tuning, fade, color range) were never affected —
+they live in the param system, which is why such a project can show fresh params next to a stale or missing `ui-state`.
 
 ## Where the projects live
 
@@ -69,8 +62,3 @@ The version-7 editor save nests camera, view, spectrum, spiral framing and the w
 The take carries that appearance independently of the editor layout and its folds.
 nice-plug can also zstd the JSON.
 The script's own header documents this too.
-
-## Known follow-up, not yet asked for
-
-Writing the blob only on window close also means a Bitwig crash loses view settings.
-A periodic flush would fix it.

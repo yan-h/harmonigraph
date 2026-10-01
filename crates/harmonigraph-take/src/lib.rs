@@ -24,14 +24,16 @@
 //!
 //! Line-oriented rather than one big document for three reasons: the
 //! writer can append as the export runs without holding the whole take in
-//! memory; a take truncated by a crash loses only its last line; and a
+//! memory; a take truncated by a crash keeps every line written before it,
+//! which is all but the writer's last unflushed batch of records; and a
 //! take is greppable and hand-editable, which matters a lot the first
 //! time a render comes out wrong.
 //!
-//! Times are **seconds on the audio clock**, counted from the start of
-//! the recording, which is the same clock the plugin stamps its note
-//! events with. They are deliberately NOT wall-clock or frame times: the
-//! whole point is that the replay chooses its own frame rate.
+//! Times are **seconds of host transport position** — the song position,
+//! not a count from the record button — which is the same clock the plugin
+//! stamps its note events with. They are deliberately NOT wall-clock or
+//! frame times: the whole point is that the replay chooses its own frame
+//! rate.
 
 pub mod canonical;
 pub use canonical::{CanonicalRecord, IncompleteRecord};
@@ -159,7 +161,7 @@ impl From<ExpressionKind> for harmonigraph_core::Expression {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NoteRecord {
-    /// Seconds on the audio clock, from the start of the recording.
+    /// Seconds of host transport position (see the module doc).
     pub t: f64,
     /// Canonical stream identity, with 0 reserved for observed direct input.
     /// This is not a saved runtime session, epoch or source-incarnation token.
@@ -413,8 +415,9 @@ impl Take {
         Ok(take)
     }
 
-    /// Seconds from the first recorded event to the last. Zero for a take
-    /// with nothing in it.
+    /// The transport position of the last recorded event (a gap counts to
+    /// where it runs through): the take's absolute end, not its length. Zero
+    /// for a take with nothing in it.
     pub fn duration(&self) -> f64 {
         let last_note = self
             .events

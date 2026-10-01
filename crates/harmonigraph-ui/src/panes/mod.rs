@@ -117,9 +117,8 @@ pub enum Tab {
     /// the analysis they share. Titled "Analyzer".
     AnalyzerSettings,
     /// Note and level colors and how a note's playing draws it, shared by
-    /// every picture. Titled "Mappings"; the variant keeps its saved name,
-    /// since a renamed one fails a saved workspace's whole parse.
-    Colors,
+    /// every picture. Titled "Mappings".
+    Mappings,
     /// Rendering cost and the editor's own interface.
     System,
     Console,
@@ -192,7 +191,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         // apart.
         Tab::LatticeSettings => "Lattice",
         Tab::AnalyzerSettings => "Analyzer",
-        Tab::Colors => "Mappings",
+        Tab::Mappings => "Mappings",
         Tab::System => "System",
         Tab::Console => "Console",
         Tab::Spectral => "Analyzer",
@@ -247,7 +246,7 @@ impl Viewer<'_> {
             Tab::AnalyzerSettings => {
                 analyzer_settings_pane(ui, self.state, self.interaction, self.params)
             }
-            Tab::Colors => color_pane(ui, &mut self.state.appearance, self.params),
+            Tab::Mappings => color_pane(ui, &mut self.state.appearance, self.params),
             Tab::System => system_pane(ui, &mut self.state.appearance, self.interaction),
             Tab::Console => console_pane(ui, &mut self.state.runtime),
             Tab::Spectral => {

@@ -5,7 +5,7 @@
 //! Where it sits is the user's, and nothing else's: it opens in the editor's
 //! bottom-left corner and is DRAGGED from there to wherever it is wanted,
 //! which is the only thing that ever moves it (see [`draw_overlay`]). The
-//! position outlives the session — `SharedState::perf_pos`.
+//! position outlives the session — `Interaction::perf_pos`.
 //!
 //! The picture is the whole of this module: which rows the HUD shows, and how
 //! they are painted. Everything the numbers are MADE of — the windows and

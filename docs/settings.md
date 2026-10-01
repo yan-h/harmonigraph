@@ -7,6 +7,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 **Mappings** holds the color tables and note intensity mappings every picture shares.
 **Video** records takes, frames the exported Lattice and Analyzer, chooses the spectrogram timeline and render trigger, and starts or reruns export.
 **System** holds rendering cost and the editor's own interface.
+**Console** is the editor's log.
 
 | Tab | What you will find |
 | --- | --- |
@@ -16,6 +17,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
+| Console | The log, the held-note count and Clear. When this build refuses a project's saved editor settings, the editor opens on this tab with the reason. |
 
 Settings opens on Tuning in a fresh workspace.
 Tabs that do not fit the column move, from the right, into a trailing overflow menu.
