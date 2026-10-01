@@ -128,8 +128,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                 settings.stars.star_glow = 0.5;
                 (settings.stars.star_core_far, settings.stars.star_core_near) =
                     (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
-                settings.stars.star_spacing_min = harmonigraph_scene::STAR_SPACING_MIN;
-                settings.stars.star_spacing_max = harmonigraph_scene::STAR_SPACING_MAX;
+                settings.stars.star_spacing_far = harmonigraph_scene::STAR_SPACING_MIN;
+                settings.stars.star_spacing_near = harmonigraph_scene::STAR_SPACING_MAX;
                 settings.cloud_depth = 1.0;
             }
             let a = {

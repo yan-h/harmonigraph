@@ -165,11 +165,6 @@ pub const WASH_POOL_WIDTH_MIN: f32 = 0.05;
 /// See [`WASH_POOL_WIDTH_MIN`].
 pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 
-/// Bounds shared by the [`StarSettings::star_density`] control and
-/// sanitizer, as a multiplier on stars per area.
-pub const STAR_DENSITY_MIN: f32 = 0.5;
-/// See [`STAR_DENSITY_MIN`].
-pub const STAR_DENSITY_MAX: f32 = 10.0;
 /// The top of [`StarSettings::star_glow`]: the glow as bright as the core at
 /// its centre.
 pub const STAR_GLOW_MAX: f32 = 1.0;
@@ -187,9 +182,9 @@ pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
 
 /// Bounds shared by the two ends of the `Star spacing` control
-/// ([`StarSettings::star_spacing_min`], [`StarSettings::star_spacing_max`])
-/// and their sanitizer, in star pixels at density 2.
-pub const STAR_SPACING_MIN: f32 = 0.5;
+/// ([`StarSettings::star_spacing_far`], [`StarSettings::star_spacing_near`])
+/// and their sanitizer, in star pixels.
+pub const STAR_SPACING_MIN: f32 = 0.25;
 /// See [`STAR_SPACING_MIN`].
 pub const STAR_SPACING_MAX: f32 = 64.0;
 /// Bounds shared by the two ends of the `Star size` control
@@ -482,12 +477,6 @@ pub struct SpectralAtmosphere {
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct StarSettings {
-    /// Stars per area at every depth, as a multiplier: the cells each depth's
-    /// stars are hashed into shrink by its square root. Runs over
-    /// [`STAR_DENSITY_MIN`]..=[`STAR_DENSITY_MAX`].
-    ///
-    /// Shared by [`CloudStyle::Stars`] and [`LatticeMaterial::Stars`].
-    pub star_density: f32,
     /// How far the stars differ from each other in brightness, spent as a
     /// palette position in the spectrogram or a level of the sampled lattice
     /// hue: the steepness of the brightness rank and how far it spreads each
@@ -503,16 +492,15 @@ pub struct StarSettings {
     /// the original 0.6-cell jitter width at 1. More variation shortens how
     /// far each read holds a star whole ([`crate::star_plan::StarGather::bound`]).
     pub star_jitter: f32,
-    /// The farthest depth's star spacing in star pixels at density 2. A depth
-    /// `d` from 0 (far) to 1 (near) spaces its stars at `min · (max /
-    /// min)^(d^curve)`, divided by the square root of half the density. Every
-    /// cell holds a star, so how many a depth has follows its spacing alone.
-    /// Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`] (the lattice
-    /// draws it [`LATTICE_STAR_SIZE_SCALE`] times over), never above
-    /// [`Self::star_spacing_max`].
-    pub star_spacing_min: f32,
-    /// The nearest depth's star spacing. See [`Self::star_spacing_min`].
-    pub star_spacing_max: f32,
+    /// The farthest depth's star spacing in star pixels. A depth `d` from 0
+    /// (far) to 1 (near) spaces its stars at `far · (near / far)^(d^curve)`.
+    /// Every cell holds a star, so how many a depth has follows its spacing
+    /// alone. Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`] (the
+    /// lattice draws it [`LATTICE_STAR_SIZE_SCALE`] times over), never above
+    /// [`Self::star_spacing_near`].
+    pub star_spacing_far: f32,
+    /// The nearest depth's star spacing. See [`Self::star_spacing_far`].
+    pub star_spacing_near: f32,
     /// The exponent on depth in the spacing: 1 spreads it evenly over the
     /// depths, higher puts most depths in the fine dust. Runs over
     /// [`STAR_DEPTH_CURVE_MIN`]..=[`STAR_DEPTH_CURVE_MAX`].
@@ -597,15 +585,16 @@ impl Default for StarSettings {
     fn default() -> Self {
         Self {
             // Yan's Stars controls captured from the DAW on 2026-09-26.
-            star_density: 10.0,
             star_randomness: 0.080912866,
             // The old shared dial's size spread at its fresh value, anchored
             // at the top: the same smallest-to-largest ratio, now 0.47..1
             // where it was 0.69..1.45.
             star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
-            star_spacing_min: 2.315533,
-            star_spacing_max: 14.752405,
+            // The captured spacings at the captured Star density of 10, which
+            // divided them by sqrt(5) before the spacing alone set the cell.
+            star_spacing_far: 1.0355378,
+            star_spacing_near: 6.597476,
             star_spacing_curve: 2.1178954,
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
@@ -642,8 +631,8 @@ impl StarSettings {
     /// the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
     pub fn scaled(self, scale: f32) -> Self {
         Self {
-            star_spacing_min: self.star_spacing_min * scale,
-            star_spacing_max: self.star_spacing_max * scale,
+            star_spacing_far: self.star_spacing_far * scale,
+            star_spacing_near: self.star_spacing_near * scale,
             star_size_min: self.star_size_min * scale,
             star_size_max: self.star_size_max * scale,
             ..self
@@ -658,8 +647,6 @@ impl StarSettings {
                 fallback
             }
         };
-        self.star_density =
-            clamp(self.star_density, fresh.star_density, STAR_DENSITY_MIN, STAR_DENSITY_MAX);
         self.star_randomness = clamp(self.star_randomness, fresh.star_randomness, 0.0, 1.0);
         self.star_size_variation =
             clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
@@ -679,9 +666,9 @@ impl StarSettings {
             }
         };
         pair(
-            &mut self.star_spacing_min,
-            &mut self.star_spacing_max,
-            [fresh.star_spacing_min, fresh.star_spacing_max],
+            &mut self.star_spacing_far,
+            &mut self.star_spacing_near,
+            [fresh.star_spacing_far, fresh.star_spacing_near],
             STAR_SPACING_MIN..=STAR_SPACING_MAX,
         );
         pair(

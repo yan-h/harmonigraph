@@ -982,12 +982,11 @@ fn memory_key(
         cloud_style,
         stars:
             harmonigraph_scene::StarSettings {
-                star_density,
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
-                star_spacing_min,
-                star_spacing_max,
+                star_spacing_far,
+                star_spacing_near,
                 star_spacing_curve,
                 star_size_min: _,        // star sizes do not change a star's colour
                 star_size_max: _,        // star sizes do not change a star's colour
@@ -1039,9 +1038,8 @@ fn memory_key(
     match cloud_style {
         CloudStyle::Stars => values.extend([
             2.0,
-            star_density,
-            star_spacing_min,
-            star_spacing_max,
+            star_spacing_far,
+            star_spacing_near,
             star_spacing_curve,
             star_randomness,
         ]),
@@ -2141,8 +2139,7 @@ mod tests {
         let fresh = harmonigraph_scene::SpectralAtmosphere::default();
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_spacing_min: harmonigraph_scene::STAR_SPACING_MIN,
+                star_spacing_far: harmonigraph_scene::STAR_SPACING_MIN,
                 ..fresh.stars
             },
 
@@ -2206,8 +2203,8 @@ mod tests {
         // Exercise the below-budget path independently of the current look defaults.
         let coarse = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_density: 1.0,
-                star_spacing_min: 3.0,
+                star_spacing_far: 4.25,
+                star_spacing_near: 21.0,
                 star_spacing_curve: 1.0,
                 ..Default::default()
             },
@@ -2220,8 +2217,8 @@ mod tests {
         }
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_density: harmonigraph_scene::STAR_DENSITY_MAX,
-                star_spacing_min: harmonigraph_scene::STAR_SPACING_MIN,
+                star_spacing_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_spacing_near: 6.6,
                 ..coarse.stars
             },
 

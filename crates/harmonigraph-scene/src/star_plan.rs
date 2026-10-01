@@ -212,14 +212,12 @@ impl StarSettings {
         let halo_tiers = [nearer, nearest, far];
         let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
         let solo = bed.depths.iter().any(|depth| depth.solo);
-        let packing = (self.star_density / 2.0).sqrt();
         let depth = |k: usize, curve: f32| (k as f32 / (STAR_DEPTHS - 1) as f32).powf(curve);
         let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
         let depths = std::array::from_fn(|k| {
             let o = bed.depths[k];
             let (spacing, size) = (self.star_spacing_curve, self.star_size_curve);
-            let cell =
-                along(k, self.star_spacing_min, self.star_spacing_max, spacing) / packing * o.scale;
+            let cell = along(k, self.star_spacing_far, self.star_spacing_near, spacing) * o.scale;
             let wanted =
                 0.5 * along(k, self.star_size_min, self.star_size_max, size) * o.scale * o.size;
             let jitter = o.jitter.unwrap_or(self.star_jitter);

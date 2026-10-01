@@ -407,12 +407,11 @@ fn scene_floats(scene: &Scene) -> Floats {
         breath_amount,
         breath_speed,
     } = atmosphere;
-    f.one("atmosphere.stars.star_density", stars.star_density);
     f.one("atmosphere.stars.star_randomness", stars.star_randomness);
     f.one("atmosphere.stars.star_size_variation", stars.star_size_variation);
     f.one("atmosphere.stars.star_jitter", stars.star_jitter);
-    f.one("atmosphere.stars.star_spacing_min", stars.star_spacing_min);
-    f.one("atmosphere.stars.star_spacing_max", stars.star_spacing_max);
+    f.one("atmosphere.stars.star_spacing_far", stars.star_spacing_far);
+    f.one("atmosphere.stars.star_spacing_near", stars.star_spacing_near);
     f.one("atmosphere.stars.star_spacing_curve", stars.star_spacing_curve);
     f.one("atmosphere.stars.star_size_min", stars.star_size_min);
     f.one("atmosphere.stars.star_size_max", stars.star_size_max);
