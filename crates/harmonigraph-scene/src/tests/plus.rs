@@ -311,7 +311,7 @@ fn neither_proportion_moves_a_marker_or_changes_how_far_it_reaches() {
 ///
 /// This is the one place the two claims on a position cross, and a predicate
 /// gets it wrong in a way no still picture shows. Under `Played` a name is
-/// drawn at exactly the node's activation, so the end of a release is a name
+/// drawn at exactly the node's envelope, so the end of a release is a name
 /// too faint to see — and a marker that waits for the name to be gone entirely
 /// stays away through all of it and then arrives at FULL opacity the frame
 /// activation reaches 0. Measured on the fixture below before this was a
@@ -343,7 +343,7 @@ fn a_marker_takes_back_what_a_names_fade_gives_up() {
         let standing =
             scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
         // The complement, exactly: the name's level under Played IS the
-        // activation (`NodeInstance::name_level`), so the two together
+        // envelope (`NodeInstance::name_level`), so the two together
         // are one whole marker's worth of ink at every instant.
         let want = ground * (1.0 - node.name_level(&view));
         assert!(
@@ -775,4 +775,58 @@ fn a_markers_shadow_fades_in_with_its_cross() {
         last = held;
     }
     assert!((last - whole).abs() < 1e-5, "the cross never came all the way back: {last}");
+}
+
+/// A SOFT note's name and the cross under it hold still across key-up under
+/// `Past` (#1316): the name level reads the note's unfaded envelope, so a note
+/// Opacity holds below full is named whole while held, and the departing
+/// reserve has nothing to jump from.
+///
+/// Frame by frame through one carried [`NodeMotion`], with the key let go
+/// mid-walk, because the jump lived on the one frame where a held level below 1
+/// met the departure's reserve of 1 — and a hand-built node never makes that
+/// crossing.
+#[test]
+fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
+    let view = ViewConfig { note_names: NoteNames::Past, ..plus_view() };
+    assert!(view.intensity.routes_to(IntensityTarget::Opacity), "Opacity must be routed");
+    let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
+    let env = view.envelope(&frame);
+    let tuning = Tuning::default();
+    let mut tracker = NoteTracker::new();
+    tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.05));
+    let mut motion = NodeMotion::default();
+    let (mut held_soft, mut departed) = (false, false);
+    let mut last: Option<(f32, f32)> = None;
+    for step in 0..=240 {
+        let now = f64::from(step) / 60.0;
+        if step == 120 {
+            tracker.handle_event(NoteEvent::off(now, SourceId::DIRECT, 0, 60));
+        }
+        tracker.prune(now, &env);
+        let mut scene =
+            derive_scene(&tracker, &tuning, &view, &view.reach(), &frame, Camera::default(), None);
+        motion.step(&mut scene, &tracker, &tuning, &view, &env, &RingFade::default(), now);
+        let node = *origin_node(&scene);
+        let name = node.name_level(&view);
+        let cross =
+            scene.pluses.iter().find(|p| p.pos == node.world_pos).map_or(0.0, |p| p.strength);
+        held_soft |= step < 120 && node.activation > 0.0 && node.activation < 0.95;
+        departed |= node.departing && node.on_home && node.activation > 0.0;
+        if let Some((name_was, cross_was)) = last {
+            // One frame of a one-second Fade is a sixtieth of the way; the jump
+            // was the whole of the gap Opacity left, near a fifth here.
+            assert!(
+                (name - name_was).abs() < 0.05,
+                "at {now}s the name went from {name_was} to {name} in one frame",
+            );
+            assert!(
+                (cross - cross_was).abs() < 0.05,
+                "at {now}s the cross went from {cross_was} to {cross} in one frame",
+            );
+        }
+        last = Some((name, cross));
+    }
+    assert!(held_soft, "the fixture never held the note below full opacity");
+    assert!(departed, "the fixture never reached a departure on the home sheet");
 }

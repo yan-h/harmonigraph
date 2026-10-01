@@ -256,6 +256,7 @@ fn scene_floats(scene: &Scene) -> Floats {
             lattice_pos: _,
             world_pos,
             activation,
+            envelope,
             departing: _,
             slice_progress,
             octaves,
@@ -276,6 +277,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         } = node;
         f.vec3(&format!("nodes[{i}].world_pos"), *world_pos);
         f.one(format!("nodes[{i}].activation"), *activation);
+        f.one(format!("nodes[{i}].envelope"), *envelope);
         f.many(&format!("nodes[{i}].slice_progress"), *slice_progress);
         f.many(&format!("nodes[{i}].octaves"), *octaves);
         f.many(&format!("nodes[{i}].thickness"), *thickness);

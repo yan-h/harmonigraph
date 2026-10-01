@@ -430,8 +430,18 @@ impl GlowTiming {
 pub struct NodeInstance {
     pub lattice_pos: LatticePos,
     pub world_pos: Vec3,
-    /// 0 = idle, 1 = fully lit. Held notes are 1; released notes decay.
+    /// 0 = idle, 1 = fully lit: the loudest octave slot as drawn, Opacity
+    /// included. A held note sits at its Opacity reading; released notes decay.
     pub activation: f32,
+    /// [`activation`](Self::activation) before Opacity: the loudest octave
+    /// slot's envelope alone, so a held note is 1 however softly it was played.
+    ///
+    /// What reads it is the NAME ([`name_level`](Self::name_level)), and the
+    /// cross that is its complement. A name says which position this is, not
+    /// how loud it sounded, and a name held at the note's Opacity would jump to
+    /// the departing reserve at key-up (#1316). The name's grey-to-white ink
+    /// still follows `activation`.
+    pub envelope: f32,
     /// Whether the voice this node is lit by is on its way OUT — its key is
     /// up and its departure has begun.
     ///
@@ -627,13 +637,18 @@ impl NodeInstance {
     ///
     /// A LEVEL rather than a yes or no, and that is the whole of what keeps
     /// the handoff continuous. Under [`NoteNames::Played`] a name is drawn at
-    /// exactly the node's `activation` (`draw_node_labels` in `harmonigraph-ui`),
-    /// so a released note spends the end of its fade with a name too faint to
-    /// see. Answered as a predicate, the marker under it stays away for all of
-    /// that and then arrives at full ground opacity the frame activation
-    /// reaches 0 — a hole in the field, and then a cross popping into it, once
-    /// per note. As a level the two cross-fade: what the name gives up, the
-    /// marker takes, and the position carries the same ink throughout.
+    /// exactly the node's [`envelope`](Self::envelope) (`draw_node_labels` in
+    /// `harmonigraph-ui`), so a released note spends the end of its fade with a
+    /// name too faint to see. Answered as a predicate, the marker under it
+    /// stays away for all of that and then arrives at full ground opacity the
+    /// frame the envelope reaches 0 — a hole in the field, and then a cross
+    /// popping into it, once per note. As a level the two cross-fade: what the
+    /// name gives up, the marker takes, and the position carries the same ink
+    /// throughout.
+    ///
+    /// The envelope rather than `activation`, which carries Opacity: a soft
+    /// note held at its Opacity reading and then reserved whole at key-up
+    /// would step its name up and its cross out in one frame (#1316).
     ///
     /// The `is_visible` term re-checks what [`Scene::pick`] already enforces,
     /// and `hovered` is picking's alone, so it is a second lock on one door.
@@ -676,13 +691,13 @@ impl NodeInstance {
         let reserved = if view.note_names == NoteNames::Past
             && self.on_home
             && self.departing
-            && self.activation > 0.0
+            && self.envelope > 0.0
         {
             1.0
         } else {
             0.0
         };
-        self.activation.max(resting).max(reserved).clamp(0.0, 1.0)
+        self.envelope.max(resting).max(reserved).clamp(0.0, 1.0)
     }
 
     /// Whether a note name is drawn over this node AT ALL — the gate the label

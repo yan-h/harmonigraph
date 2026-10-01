@@ -173,9 +173,9 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // two axes carry one rhythm of empty space. It is a whole-note setting
     // rather than any one layer's, which is what puts it in Note layers.
     //
-    // Read out as a PERCENTAGE of the node's radius, which is what quad uv 1.0
-    // is (`scene.node_radius`, a quarter of the lattice spacing, and the edge
-    // no ring may cross). That makes the whole stack a budget of
+    // Read out as a PERCENTAGE of quad uv 1.0, the edge no ring may cross:
+    // 1.8 × `scene.node_radius` in the world (`marker_world` in
+    // harmonigraph-scene). That makes the whole stack a budget of
     // 100%, which is the picture the Layers bar draws. A tenth of a percent is
     // exactly the resolution three decimals of the stored number gives. Numeric entry uses
     // the displayed percentage too; the widget converts it back to the stored

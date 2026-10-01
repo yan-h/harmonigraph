@@ -565,10 +565,12 @@ pub(crate) fn draw_node_labels(
         let Some(p) = projector.project(node.world_pos) else {
             continue;
         };
-        // Per NODE and off the note's own envelope, which is what puts the
+        // Per NODE and off the note's own activation, which is what puts the
         // crossing between the two ends on the Fade: `activation` is the same
         // ramp the node's light rides, so a name brightens and dims with the
-        // thing it names rather than on a clock of its own.
+        // thing it names rather than on a clock of its own. Opacity included,
+        // where the name's strength above reads the unfaded envelope: a soft
+        // note is named whole in a greyer ink.
         let ink = label_ink(view, node.activation);
         let center = egui::pos2(rect.min.x + p.x, rect.min.y + p.y);
         // Off the pane: nothing to draw. `project` only rejects what is
@@ -895,6 +897,7 @@ mod tests {
             .unwrap();
         assert!((dot.ink.center().x - (rect.min.x + center.x)).abs() < 0.01);
         scene.nodes[index].activation = 1.0;
+        scene.nodes[index].envelope = 1.0;
         let sounding = draw(&scene, &state.appearance.view);
         let lit_dot = sounding.pieces().iter().find(|p| p.text == ".").unwrap();
         assert_eq!(lit_dot.ink, dot.ink, "activity must not move or resize the dot");
@@ -1124,6 +1127,7 @@ mod tests {
             lattice_pos: harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
             world_pos: glam::Vec3::ZERO,
             activation,
+            envelope: activation,
             departing: true,
             slice_progress: [1.0; 11],
             thickness: [1.0; 11],
@@ -1256,7 +1260,7 @@ mod tests {
         );
         assert_eq!(
             node.name_level(view),
-            node.activation,
+            node.envelope,
             "an arriving name was drawn at the trail reserve, not at its note's own level",
         );
 

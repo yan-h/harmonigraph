@@ -861,7 +861,8 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// pitches, not because two definitions of one pitch's color disagree.)
 ///
 /// The shader can only afford a lookup — a gamut search per fragment
-/// is out of reach, and the glow loops call this several times over — so the
+/// is out of reach, and each node fragment reaches this once per octave slot
+/// it draws (`oct_slot_lit`, lattice.wgsl) — so the
 /// choice is not "table vs. exact curve" but "one table vs. a table and a
 /// curve that disagree". Two shapes sharing an edge is the harshest test of a
 /// color match there is, and structural agreement passes it at any table size.

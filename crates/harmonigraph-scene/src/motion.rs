@@ -652,6 +652,7 @@ impl NodeMotion {
                 }
             });
             node.activation = node.octaves.iter().copied().fold(0.0, f32::max);
+            node.envelope = motion.levels.iter().copied().fold(0.0, f32::max);
             node.departing = !motion.gate;
             let (melody_slots, melody_level, melody_slot) = motion.melody.strongest();
             let (bass_slots, bass_level, bass_slot) = motion.bass.strongest();

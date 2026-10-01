@@ -1675,10 +1675,10 @@ fn spectral_ring(
 // ground exactly — weigh nothing (`ink_at`, `fs_ink_strip`, then `glow_ink`).
 // What is left here is the angular tightness that blend is laid out at.
 
-// An unlit node's own billboard paints no disc, no trail mark and no
-// placeholder. What says the position is there is the MARKER standing at it,
-// which is a separate instance drawn under the home sheet (`fs_plus`) rather
-// than anything this node paints. So every DISC on screen is a note.
+// An unlit node's own billboard paints no trail mark and no placeholder.
+// What says the position is there is the MARKER standing at it, which is a
+// separate instance drawn under the home sheet (`fs_plus`) rather than
+// anything this node paints.
 //
 // The audio ring is the one thing an idle node does paint, and it is not the
 // node speaking — it is the analyzer, drawn on the node's own ground (see
@@ -2320,7 +2320,7 @@ fn base_node_ink(
     glyph = mark + glyph * (1.0 - mark);
     glyph_mask = mark_mask + glyph_mask * (1.0 - mark_mask);
 
-    // The active note: glyph over (disc + glow), premultiplied.
+    // The active note: the glyphs over the empty ground above, premultiplied.
     let active_alpha = glyph + base_alpha * (1.0 - glyph);
     let active_rgb = glyph_rgb * glyph + base_rgb * (1.0 - glyph);
     // Out as a FRACTION of the ink rather than as the coverage it was carried

@@ -581,7 +581,7 @@ pub struct ViewConfig {
     // on the home sheet alone (see `derive_pluses`) — off it, a position at
     // rest is unmarked, which is the same reason it is not hoverable. So a
     // resting lattice is its own drawing rather than a field of
-    // placeholders, and every disc on screen is a note.
+    // placeholders.
     // ---- Melody / bass highlight -----------------------------------------
     // Mark the outer held notes, so the melody and/or bass line reads at a
     // glance out of a chord. "Outer" is by sounding pitch (`Voice::pitch`,
