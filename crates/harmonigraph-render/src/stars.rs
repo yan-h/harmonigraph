@@ -57,7 +57,7 @@ struct StarSlice {
     cell: f32,
     /// The core's base sigma, before the per-star size draw: a quarter of
     /// this depth's diameter on the `Star size` curve, the same at every
-    /// depth for the same value, times the plan's size.
+    /// depth for the same value, times the plan's scale and size.
     sigma: f32,
     /// The ceiling on a core, before defocus: a third of a cell. It is what
     /// keeps the dust pinpoint — dropping it made the prototype's field foamy.
@@ -144,7 +144,7 @@ pub(crate) fn star_cells(settings: harmonigraph_scene::StarSettings) -> [f32; ST
     let plan = settings.plan();
     std::array::from_fn(|k| {
         small * (big / small).powf(star_depth(k).powf(settings.star_spacing_curve)) / packing
-            * plan.depths[k].spacing
+            * plan.depths[k].scale
     })
 }
 
@@ -294,7 +294,7 @@ pub(crate) fn star_slices(
         // diameter of four sigmas, so one value on the control is one star
         // size at every depth; capped at a third of the depth's actual
         // spacing, which `Star spacing`, density and the atlas floor set.
-        let sigma = 0.25 * small * (big / small).powf(along) * depth.size;
+        let sigma = 0.25 * small * (big / small).powf(along) * (depth.scale * depth.size);
         let cap = 0.33 * cell;
         let defocus = 1.0 + settings.star_defocus;
         let speed = f64::from(star_speed(settings, k));

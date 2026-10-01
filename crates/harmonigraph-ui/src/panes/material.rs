@@ -222,6 +222,7 @@ pub(super) fn stars_test_bed(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::
                 "Resolution of the halo image for every 3×3 depth that picks this tier.",
             );
         }
+        let any_solo = plan.depths.iter().any(|depth| depth.solo);
         for (k, depth) in plan.depths.iter_mut().enumerate() {
             let image = if k < STAR_FAR_DEPTHS { "far image" } else { "near image" };
             let end = match k {
@@ -229,8 +230,12 @@ pub(super) fn stars_test_bed(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::
                 k if k == STAR_DEPTHS - 1 => " · nearest",
                 _ => "",
             };
-            super::block(ui, &format!("Depth {} · {image}{end}", k + 1));
+            let silenced = if any_solo && !depth.solo { " · silenced by solo" } else { "" };
+            super::block(ui, &format!("Depth {} · {image}{end}{silenced}", k + 1));
             ui.push_id(k, |ui| {
+                crate::widgets::checkbox(ui, &mut depth.solo, "Solo").on_hover_text(
+                    "Draw only the soloed depths. The others count as Off, cost included, until no depth is soloed.",
+                );
                 choice_row(ui, "Gather", &mut depth.gather, &[
                     (StarGather::Off, "Off", "Not drawn or baked."),
                     (StarGather::Core, "1×1", "The whole star from one read, faded out where it would leave its own cell."),
@@ -239,12 +244,12 @@ pub(super) fn stars_test_bed(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::
                 ]);
                 ui.add_enabled_ui(depth.gather != StarGather::Off, |ui| {
                     let scale = STAR_PLAN_SCALE_MIN..=STAR_PLAN_SCALE_MAX;
-                    ValueBar::new(&mut depth.spacing, scale.clone(), "Spacing")
+                    ValueBar::new(&mut depth.scale, scale.clone(), "Scale")
                         .unit(1.0, "\u{d7}")
                         .show(ui)
-                        .on_hover_text("Multiplies this depth's cell. Smaller cells mean more stars and more cost.");
+                        .on_hover_text("Zooms this depth: its cells and its stars grow together, so it keeps its look with fewer, larger stars. Smaller means more stars and more cost.");
                     ValueBar::new(&mut depth.size, scale, "Size").unit(1.0, "\u{d7}").show(ui).on_hover_text(
-                        "Multiplies the core. The cap at a third of the cell still applies.",
+                        "Star size relative to the scale. The cap at a third of the cell still applies, and 1×1 stars also stop at their cell's edge.",
                     );
                     ValueBar::new(&mut depth.gain, 0.0..=STAR_GAIN_MAX, "Opacity")
                         .unit(1.0, "\u{d7}")

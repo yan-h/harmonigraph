@@ -1,4 +1,4 @@
-//! How each star depth is drawn: its gather, spacing, size, opacity,
+//! How each star depth is drawn: its gather, scale, size, opacity,
 //! position variation and glow reach, and the images the far and near depths
 //! and the halos are drawn into.
 //!
@@ -27,7 +27,7 @@ pub const STAR_HALO_REACH: f32 = 1.2;
 /// which is worth seeing rather than forbidding.
 pub const STAR_REACH_MIN: f32 = 0.2;
 pub const STAR_REACH_MAX: f32 = 2.0;
-/// The test bed's range for [`StarDepthPlan::spacing`] and
+/// The test bed's range for [`StarDepthPlan::scale`] and
 /// [`StarDepthPlan::size`], as multipliers.
 pub const STAR_PLAN_SCALE_MIN: f32 = 0.25;
 pub const STAR_PLAN_SCALE_MAX: f32 = 4.0;
@@ -79,12 +79,16 @@ pub fn star_jitter_width(jitter: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StarDepthPlan {
     pub gather: StarGather,
-    /// The depth's cell, as a multiple of what `Star spacing` and `Star
-    /// density` give it.
-    pub spacing: f32,
-    /// The core's size, as a multiple of what `Star size` gives it; the cap at
-    /// a third of the cell still binds.
+    /// Zooms the depth: its cell and its cores both, as a multiple of what
+    /// `Star spacing`, `Star density` and `Star size` give them, so the depth
+    /// keeps its proportions with fewer, larger stars.
+    pub scale: f32,
+    /// The core's size relative to the scaled one; the cap at a third of the
+    /// cell still binds, and in 1x1 the cell's edge.
     pub size: f32,
+    /// While any depth is soloed, only soloed depths are drawn; the rest count
+    /// as [`StarGather::Off`] wherever the plan is read.
+    pub solo: bool,
     /// A multiplier on every star's coverage.
     pub gain: f32,
     /// `Position variation` for this depth alone.
@@ -142,7 +146,16 @@ impl StarPlan {
                 (false, true, _) => 2,
                 (false, false, k) => k - STAR_FAR_DEPTHS,
             };
-            StarDepthPlan { gather, spacing: 1.0, size: 1.0, gain: 1.0, jitter, reach, tier }
+            StarDepthPlan {
+                gather,
+                scale: 1.0,
+                size: 1.0,
+                gain: 1.0,
+                jitter,
+                reach,
+                tier,
+                solo: false,
+            }
         });
         Self { depths, halo_tiers, far, near }
     }
@@ -158,8 +171,7 @@ impl StarPlan {
             }
         };
         for (depth, fresh) in self.depths.iter_mut().zip(fallback.depths) {
-            depth.spacing =
-                clamp(depth.spacing, fresh.spacing, STAR_PLAN_SCALE_MIN, STAR_PLAN_SCALE_MAX);
+            depth.scale = clamp(depth.scale, fresh.scale, STAR_PLAN_SCALE_MIN, STAR_PLAN_SCALE_MAX);
             depth.size = clamp(depth.size, fresh.size, STAR_PLAN_SCALE_MIN, STAR_PLAN_SCALE_MAX);
             depth.gain = clamp(depth.gain, fresh.gain, 0.0, STAR_GAIN_MAX);
             depth.jitter = clamp(depth.jitter, fresh.jitter, 0.0, 1.0);
@@ -176,13 +188,23 @@ impl StarPlan {
         self.near = image(self.near, fallback.near);
         self
     }
+
+    /// This plan as drawn: with any depth soloed, every other one is Off.
+    pub fn soloed(mut self) -> Self {
+        if self.depths.iter().any(|depth| depth.solo) {
+            for depth in self.depths.iter_mut().filter(|depth| !depth.solo) {
+                depth.gather = StarGather::Off;
+            }
+        }
+        self
+    }
 }
 
 impl StarSettings {
     /// The plan the renderer draws: the test bed's while it is on, else the
     /// profile's.
     pub fn plan(self) -> StarPlan {
-        self.test_bed.unwrap_or_else(|| StarPlan::production(self))
+        self.test_bed.map_or_else(|| StarPlan::production(self), StarPlan::soloed)
     }
 }
 
@@ -197,17 +219,31 @@ mod tests {
     fn a_test_bed_plan_is_sanitized_against_production() {
         let production = StarPlan::production(StarSettings::default());
         let mut plan = production;
-        plan.depths[0].spacing = f32::NAN;
+        plan.depths[0].scale = f32::NAN;
         plan.depths[1].reach = 9.0;
         plan.depths[2].gain = -1.0;
         plan.depths[3].tier = 7;
         plan.far = 0.0;
         let settings = StarSettings { test_bed: Some(plan), ..Default::default() }.sanitized();
         let plan = settings.plan();
-        assert_eq!(plan.depths[0].spacing, production.depths[0].spacing);
+        assert_eq!(plan.depths[0].scale, production.depths[0].scale);
         assert_eq!(plan.depths[1].reach, STAR_REACH_MAX);
         assert_eq!(plan.depths[2].gain, 0.0);
         assert_eq!(plan.depths[3].tier, STAR_HALO_TIERS - 1);
         assert_eq!(plan.far, STAR_IMAGE_RESOLUTION_MIN);
+    }
+
+    /// Soloing a depth draws it alone, and soloing none draws them all.
+    #[test]
+    fn a_soloed_depth_is_drawn_alone() {
+        let mut plan = StarPlan::production(StarSettings::default());
+        let gathers = plan.depths.map(|depth| depth.gather);
+        let settings = |plan| StarSettings { test_bed: Some(plan), ..Default::default() };
+        assert_eq!(settings(plan).plan().depths.map(|depth| depth.gather), gathers);
+        plan.depths[3].solo = true;
+        let drawn = settings(plan).plan().depths.map(|depth| depth.gather);
+        for (k, gather) in drawn.into_iter().enumerate() {
+            assert_eq!(gather, if k == 3 { gathers[3] } else { StarGather::Off }, "depth {k}");
+        }
     }
 }
