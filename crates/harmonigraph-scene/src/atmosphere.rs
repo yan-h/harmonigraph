@@ -459,10 +459,10 @@ pub struct StarSettings {
     pub star_jitter: f32,
     /// The farthest depth's star size, as its spacing in star pixels at
     /// density 2: the smallest stars in the field. A depth `d` from 0 (far) to
-    /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and grows
-    /// each star's core and its cap with that spacing's ratio to the fresh
-    /// 2-to-32 spacing at the same depth, so the fresh ends draw exactly what
-    /// the old fixed curve did. Every cell holds a star, so how many a depth
+    /// 1 (near) spaces its stars at `min · (max / min)^(d^curve)`, and draws
+    /// each star's core from that value alone, so one value is one star size
+    /// at every depth (capped at a third of the depth's spacing, which
+    /// density shrinks). Every cell holds a star, so how many a depth
     /// has follows its spacing alone. Runs over
     /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`], times
     /// [`LATTICE_STAR_SIZE_SCALE`] in the lattice, never above
