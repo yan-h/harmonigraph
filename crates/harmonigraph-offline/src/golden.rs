@@ -22,19 +22,24 @@
 //!   carries is the INVARIANCE #491 asked for — neither frame says anything
 //!   about it alone. The bucket-space filter is what put them there: before it
 //!   the short pane drew a mean of 75.5/255 against the tall one's 55.2, and
-//!   after it 43.9 against 42.3.
+//!   after it 43.9 against 42.3 (#514's palette; under today's they read 91.9
+//!   against 92.9).
 //! - a ZOOMED-IN pane, where a row is narrower than a bucket and reads a lerp
 //!   between two of them instead. Its half-bucket centre offset is one of the
 //!   things #503's own trap list calls easy to lose in the port, and no
 //!   zoomed-out frame executes it at all.
 //!
+//! All three draw the plain heatmap, every effect at zero, which is the
+//! picture these claims were first measured on (see [`Shot::take`]).
+//!
 //! Each frame was held against the read it claims, by breaking that read and
 //! measuring what moved. Flattening the minifying arm to a plain max over its
-//! run moves the short pane by a mean of 32.0/255, the tall by 14.8,
-//! and the zoomed-in one by 1.1 — the ordering the
+//! run moves the short pane by a mean of 38.1/255, the tall by 18.1,
+//! and the zoomed-in one by 1.2 — the ordering the
 //! footprint argument predicts, widest run first. Dropping the magnifying
 //! arm's half-bucket centre offset moves the zoomed-in frame by 1.1 and the
-//! other two by nothing at all.
+//! other two by nothing at all. Re-measured on the plain frames in #1306; #514
+//! measured 32.0, 14.8, 1.1 and 1.1 under its own palette.
 //! Before that last number the zoomed-in shot was six semitones over 384
 //! rows, which the two-octave floor widened under it into a mean on every
 //! row: it drew a plausible frame, blessed, and measured nothing.
@@ -247,14 +252,26 @@ const _: () = assert!(
 );
 
 impl Shot {
-    /// The take the shot replays: no notes, and the pane dialled so the
-    /// heatmap is the frame.
+    /// The take the #503 frames replay: no notes, and the pane dialled so the
+    /// plain heatmap — every effect at zero — is the frame.
     ///
     /// No notes deliberately. A roll ribbon is painted OVER the heatmap on the
     /// same axes, so every note in the fixture is heatmap the gate cannot see —
     /// and the roll is not what #503 moves.
+    ///
+    /// The plain heatmap because that is what the bucket filter's claims were
+    /// measured on: #514 predates every effect (#872 added the first). A blur,
+    /// terraces or a texture over the frame would put a resample of their own
+    /// between the filter and the gate, and the fresh Stars paint a field of
+    /// their own over it.
     fn take(&self) -> Take {
-        self.dialled(|_| {})
+        self.dialled(|a| {
+            let atmosphere = &mut a.spectrum.atmosphere;
+            atmosphere.pitch_softness = 0.0;
+            atmosphere.time_softness = 0.0;
+            atmosphere.contour_strength = 0.0;
+            atmosphere.cloud_depth = 0.0;
+        })
     }
 
     /// The same take with one further turn of the appearance, for a shot that
@@ -362,9 +379,9 @@ fn a_zoomed_in_pane_draws_the_frame_on_record() {
 
 /// The watercolour wash draws the frame on record.
 ///
-/// The three frames above are drawn with the fresh appearance's texture, which
-/// has been Stars since #1205, so none of them reaches the wash. This is the
-/// one that has the wash in it, and it earns its place because nothing else
+/// The three frames above draw the plain heatmap, so none of them reaches a
+/// texture. This is the one that has the wash in it, and it earns its place
+/// because nothing else
 /// committed here executes `wash_cloud_tone` end to end — the claim tests
 /// beside the shader each turn one dial and compare two frames, where this pins
 /// the whole construction, every constant in it, at the settings the page opens
@@ -376,6 +393,35 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Watercolor;
     });
     check_take("spectrogram-watercolour-wash", shot, take);
+}
+
+/// The mosaic draws the frame on record, at the settings the page opens it at.
+///
+/// The wash's partner: nothing else committed here executes `scale_tone` and
+/// the mosaic's tile end to end, and at the fresh `Refraction` of -1 this is
+/// the centre-gather half of the dial, which no claim test runs at full
+/// strength.
+#[test]
+fn the_mosaic_draws_the_frame_on_record() {
+    let shot = Shot { size: TALL, range: whole_axis() };
+    let take = shot.dialled(|a| {
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Mosaic;
+    });
+    check_take("spectrogram-mosaic", shot, take);
+}
+
+/// Scales draw the frame on record, at the settings the page opens them at.
+///
+/// The one texture with neither a tile nor a starfield: `fs_velvet_tone` into
+/// the tone target, then the composite's one tap. No other frame here reaches
+/// that pass.
+#[test]
+fn scales_draw_the_frame_on_record() {
+    let shot = Shot { size: TALL, range: whole_axis() };
+    let take = shot.dialled(|a| {
+        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::VelvetScales;
+    });
+    check_take("spectrogram-scales", shot, take);
 }
 
 /// High retains its original starfield reference: every slice, palette

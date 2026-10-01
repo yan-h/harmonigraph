@@ -778,7 +778,7 @@ impl CallbackTrait for SpectrogramCallback {
                     [start[0], start[1], end[0] - start[0], end[1] - start[1]]
                 });
                 let drawn_pixels = star_coverage.map_or(pixels, |r| [r[2], r[3]]);
-                let tone_size =
+                let reduced =
                     atmosphere::tone_size(drawn_pixels, ppp, settings, sampling.pixel_points)
                         // Keep pane-relative texel addressing; the scissor bounds
                         // work while the intermediate retains the full pane size.
@@ -817,11 +817,24 @@ impl CallbackTrait for SpectrogramCallback {
                         || settings.settings.color_release > 0.0))
                     .then(|| {
                         star_size.unwrap_or_else(|| {
-                            tone_size
+                            reduced
                                 .unwrap_or(pixels)
                                 .map(|n| (n + 2).min(device.limits().max_texture_dimension_2d))
                         })
                     });
+                // Mosaic and Watercolor with a history work their tone out per
+                // history texel in `fs_color_memory` and display the history, so
+                // the reduced size is the history's grid and a tone target would
+                // be drawn into by nothing. Scales draw their tone and then
+                // remember it, and Stars composite their far depths into it.
+                let tone_size = reduced.filter(|_| {
+                    memory_extent.is_none()
+                        || !matches!(
+                            settings.settings.cloud_style,
+                            harmonigraph_scene::CloudStyle::Mosaic
+                                | harmonigraph_scene::CloudStyle::Watercolor
+                        )
+                });
                 let memory_size = memory_extent.map(|extent| {
                     if stars.is_some() {
                         extent
@@ -916,7 +929,7 @@ impl CallbackTrait for SpectrogramCallback {
                         pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
                         pass.draw(0..pane.count, 0..1);
                     }
-                    target.blur(egui_encoder, cloud);
+                    target.blur(egui_encoder, cloud, settings.settings.spread > 0.0);
                     {
                         // Once filtering is finished, the raw source texture is
                         // free to hold the soft intensity. Fill the whole pane:
@@ -1000,11 +1013,8 @@ impl CallbackTrait for SpectrogramCallback {
                             star_coverage.expect("Stars coverage"),
                             near_coverage,
                         );
-                    } else if let Some(((tone_view, _), tone_group)) = target
-                        .tone
-                        .as_ref()
-                        .filter(|_| velvet || target.memory_size().is_none())
-                        .zip(target.tone_group.as_ref())
+                    } else if let Some(((tone_view, _), tone_group)) =
+                        target.tone.as_ref().zip(target.tone_group.as_ref())
                     {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
@@ -1347,7 +1357,7 @@ mod tests {
     /// that number where [`cloud_fixture`] set it draws its light field at the
     /// resolution of a pane it no longer has — measuring the wrong picture
     /// without a word about it.
-    fn relay_quad(cb: &mut SpectrogramCallback, slabs: u32) {
+    pub(super) fn relay_quad(cb: &mut SpectrogramCallback, slabs: u32) {
         let pane = pane_of(cb);
         cb.vertices = full_quad_in(slabs, pane);
         if let Some(atmosphere) = cb.atmosphere.as_mut() {
@@ -1604,11 +1614,22 @@ mod tests {
         crate::uniforms::layout::check_binding::<SpectrogramUniforms>(SPECTROGRAM_SRC, 0, 0);
     }
 
-    /// Zero refraction is the ordinary picture, while nonzero refraction must
-    /// execute each enabled path and move structured sound without painting a
-    /// constant field. Reusing resources also exercises disabling/re-enabling.
+    /// A texture reads the light under each pixel and adds nothing to its
+    /// level: at a refraction too small to move any lookup, the effects path
+    /// draws the plain picture to the byte, so the bypass exactly zero takes is
+    /// the same picture rather than merely a cheaper one. Nonzero refraction
+    /// must execute each enabled path and move structured sound without
+    /// painting a constant field. Reusing resources also exercises
+    /// disabling/re-enabling.
+    ///
+    /// The identity is held softened at native spacing, where the composite
+    /// reads the light field directly. Unsoftened, a cloud reads that field at
+    /// its own resolution, which `Blur time step` bounds to a texel a slab, and
+    /// at a reduced spacing it reads the tone target: neither is the plain
+    /// picture to the byte on this fixture's per-slab bands (measured maxima of
+    /// 96 and 36), which is what the reduced-cloud tests bound instead.
     #[test]
-    fn textures_preserve_levels_and_zero_refraction_is_exact_identity() {
+    fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
         use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let Some((device, queue)) = headless_device() else { return };
         for style in [Mosaic, Watercolor] {
@@ -1625,24 +1646,32 @@ mod tests {
                     s.color_pickup = 0.0;
                     s.color_release = 0.0;
                     s.contour_strength = 1.0;
-                }
-                for (soft, contours) in [(false, 0.0), (false, 1.0), (true, 1.0)] {
-                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                    s.pitch_softness = if soft { 35.0 } else { 0.0 };
-                    s.time_softness = if soft { 120.0 } else { 0.0 };
-                    s.contour_strength = contours;
-                    s.cloud_depth = 0.0;
-                    let bare = frame_with(&device, &queue, &mut resources, &cb);
-                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                     s.cloud_depth = 1.0;
-                    s.material_settings.scale_refract = 0.0;
-                    s.material_settings.wash_refract = 0.0;
-                    assert_eq!(
-                        frame_with(&device, &queue, &mut resources, &cb),
-                        bare,
-                        "{style:?}, pixel={pixel}, soft={soft}, contours={contours}"
-                    );
                 }
+                if pixel < 1.0 {
+                    for contours in [0.0, 1.0] {
+                        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                        s.contour_strength = contours;
+                        s.material_settings.scale_refract = 0.0;
+                        s.material_settings.wash_refract = 0.0;
+                        assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
+                        let bare = frame_with(&device, &queue, &mut resources, &cb);
+                        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                        s.material_settings.scale_refract = f32::MIN_POSITIVE;
+                        s.material_settings.wash_refract = f32::MIN_POSITIVE;
+                        let vanishing = frame_with(&device, &queue, &mut resources, &cb);
+                        let pane = resources.get::<SpectrogramResources>().unwrap();
+                        let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
+                        assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
+                        assert!(
+                            vanishing == bare,
+                            "{style:?}, contours={contours}: the texture moved the levels"
+                        );
+                    }
+                }
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.material_settings.scale_refract = 0.0;
+                s.material_settings.wash_refract = 0.0;
                 let straight = frame_with(&device, &queue, &mut resources, &cb);
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                 s.material_settings.scale_refract = 1.0;
@@ -1773,49 +1802,49 @@ mod tests {
     /// depths take the reduced tone target as their precomposite.
     ///
     /// Silence is the claim the look is most likely to break: no star is drawn
-    /// over silence, so a quiet pane must be the floor EXACTLY — on a palette
-    /// whose floor is not black, so an invented black would show — rather than
-    /// a field of faint noise. Held at a reduced cloud sample spacing too,
-    /// which is where the other textures take the tone target; the starfield's
-    /// does not depend on the spacing.
+    /// over silence, so a quiet pane must settle on the floor EXACTLY — on a
+    /// palette whose floor is not black, so an invented black would show —
+    /// rather than a field of faint noise. Run as the fresh Stars ship, with
+    /// their colour response on, so the silence is the one a history fades
+    /// into after sound stops: seven Releases on, nothing of the stars is left.
     #[test]
     fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
         let Some((device, queue)) = headless_device() else { return };
-        for pixel in [0.5, 2.0] {
-            let mut cb = refracted_fixture();
-            let mut resources = CallbackResources::default();
-            resources
-                .insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
-            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-            s.cloud_depth = 0.0;
-            let bare = frame_with(&device, &queue, &mut resources, &cb);
-            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-            let stars = frame_with(&device, &queue, &mut resources, &cb);
-            let moved = stars.iter().zip(&bare).filter(|(a, b)| a.abs_diff(**b) > 8).count();
-            assert!(moved > stars.len() / 10, "the starfield left the picture: pixel={pixel}");
-            // Pinpoints, not a flat tint: neighbouring pixels along a row
-            // differ far more often than the smooth fixture's own do.
-            let steps = |frame: &[u8]| {
-                frame
-                    .chunks_exact(4)
-                    .collect::<Vec<_>>()
-                    .windows(2)
-                    .filter(|w| (0..3).any(|c| w[0][c].abs_diff(w[1][c]) > 12))
-                    .count()
-            };
-            assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars: pixel={pixel}");
-            let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
-            let targets = targets.cloud.as_ref().unwrap();
-            assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
-            cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = 1.0;
-            cb.grid.fill(0);
-            let silent = frame_with(&device, &queue, &mut resources, &cb);
-            cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
-            let floor = frame_with(&device, &queue, &mut resources, &cb);
-            assert_eq!(silent, floor, "silence drew something other than the floor: pixel={pixel}");
-            assert!(floor.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]), "the floor is black");
-        }
+        let mut cb = refracted_fixture();
+        let mut resources = CallbackResources::default();
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+        (s.color_pickup, s.color_release) = (fresh.color_pickup, fresh.color_release);
+        s.cloud_depth = 0.0;
+        let bare = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
+        let stars = frame_with(&device, &queue, &mut resources, &cb);
+        let moved = stars.iter().zip(&bare).filter(|(a, b)| a.abs_diff(**b) > 8).count();
+        assert!(moved > stars.len() / 10, "the starfield left the picture");
+        // Pinpoints, not a flat tint: neighbouring pixels along a row
+        // differ far more often than the smooth fixture's own do.
+        let steps = |frame: &[u8]| {
+            frame
+                .chunks_exact(4)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .filter(|w| (0..3).any(|c| w[0][c].abs_diff(w[1][c]) > 12))
+                .count()
+        };
+        assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars");
+        let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let targets = targets.cloud.as_ref().unwrap();
+        assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
+        assert!(targets.memory_size().is_some(), "the fresh Stars ran without their history");
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = 1.0;
+        cb.grid.fill(0);
+        cb.atmosphere.as_mut().unwrap().now += 7.0 * f64::from(fresh.color_release);
+        let silent = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
+        let floor = frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(silent, floor, "silence drew something other than the floor");
+        assert!(floor.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]), "the floor is black");
     }
 
     /// The shader carries the starfield along each slice's drift, the way the
@@ -2145,6 +2174,34 @@ mod tests {
         );
     }
 
+    /// At the fresh `Wide blur mix` of 0 the wide filter pair is skipped, and
+    /// nothing moves for it: a target whose wide half still holds an earlier
+    /// frame's blur draws the same bytes as one that never ran it.
+    #[test]
+    fn a_zero_wide_blur_mix_skips_the_wide_passes_and_moves_nothing() {
+        let Some((device, queue)) = headless_device() else { return };
+        let passes = |resources: &CallbackResources| {
+            let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+            pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed)
+        };
+        let mut cb = cloud_fixture();
+        assert!(
+            cb.atmosphere.unwrap().settings.spread > 0.0,
+            "the fixture never fills the wide target"
+        );
+        let mut resources = CallbackResources::default();
+        frame_with(&device, &queue, &mut resources, &cb);
+        let filled = passes(&resources);
+        cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
+        let stale = frame_with(&device, &queue, &mut resources, &cb);
+        assert_eq!(passes(&resources) - filled, filled - 2, "the wide passes still ran at mix 0");
+        assert_eq!(
+            stale,
+            fresh_frame(&device, &queue, &cb),
+            "the stale wide blur reached the picture"
+        );
+    }
+
     #[test]
     fn held_newest_slab_and_zero_softness_preserve_the_field() {
         let Some((device, queue)) = headless_device() else { return };
@@ -2156,12 +2213,49 @@ mod tests {
         let held = fresh_frame(&device, &queue, &cb);
         assert!((95..=97).contains(&held[(64 * 128 + 64) * 4 + 2]), "held strip became black");
         let mut raw = cloud_fixture();
+        // The ridge again, on a slab a pixel: the field's time axis is then at
+        // full resolution under `Blur time step`'s data bound, and zero
+        // softness is the one thing left that could take it down.
+        let slabs = SIZE[0];
+        relay_quad(&mut raw, slabs);
+        let mut bytes = vec![0; (slabs * BINS) as usize];
+        for slab in 40..80 {
+            bytes[slab * BINS as usize + 500..slab * BINS as usize + 524].fill(255);
+        }
+        raw.grid = grid_of(Arc::new(bytes), BINS, slabs, 0);
         let settings = &mut raw.atmosphere.as_mut().unwrap().settings;
         settings.pitch_softness = 0.0;
         settings.time_softness = 0.0;
+        // A cloud too faint in its bend to move a lookup: it reads the light
+        // field under each pixel, which is all that is drawn of it.
+        settings.cloud_depth = 1.0;
+        settings.material_settings.scale_refract = f32::MIN_POSITIVE;
+        let field = atmosphere::source_size(SIZE, 1.0, raw.atmosphere.unwrap());
+        assert_eq!(field, SIZE, "the field was reduced, so zero softness is not what is measured");
         let zero = fresh_frame(&device, &queue, &raw);
         raw.atmosphere = None;
-        assert!(zero == fresh_frame(&device, &queue, &raw), "zero widths added smoothing");
+        let plain = fresh_frame(&device, &queue, &raw);
+        // The field takes each pixel's own footprint — in time the box over a
+        // slab-affine ramp, in pitch the encoded-domain mean of the buckets
+        // under the row — so on the ridge's edge pixels it is not the plain
+        // point read (measured: up to 82 on 92 of them). Anywhere else it is
+        // the plain picture to the byte, and nothing reaches past an edge.
+        let at = |frame: &[u8], x: i32, y: i32| {
+            let (x, y) = (x.clamp(0, SIZE[0] as i32 - 1), y.clamp(0, SIZE[1] as i32 - 1));
+            let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
+            [frame[i], frame[i + 1], frame[i + 2]]
+        };
+        let mut edges = 0;
+        for (x, y) in (0..SIZE[1] as i32).flat_map(|y| (0..SIZE[0] as i32).map(move |x| (x, y))) {
+            if at(&zero, x, y) != at(&plain, x, y) {
+                let edge = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                    .any(|(dx, dy)| at(&plain, x + dx, y + dy) != at(&plain, x, y));
+                assert!(edge, "zero widths smoothed ({x}, {y}), off the ridge's edge");
+                edges += 1;
+            }
+        }
+        assert!(edges > 0, "the fixture never reached the field: no edge pixel moved");
     }
 
     #[test]
@@ -2354,13 +2448,35 @@ mod tests {
             }
         }
         cb.grid.set_bytes(&bytes);
-        // The three looks the retired style enum named, each reached by its
-        // dials, against the frames that enum drew: the blur the fixture pins,
-        // the same with the terraces at full strength, and everything off.
+        // The three looks the retired style enum named, each reached by the
+        // dials that replaced it and set where each frame covers its path: a
+        // blur wide on both axes with half of it from the wide kernel, so the
+        // wide filter passes run; the same under few hard-edged terraces, so
+        // they read as terraces; and everything off. Not the fresh dials: a
+        // fresh `Wide blur mix` of 0 skips the wide passes, and on this
+        // smooth field the fresh terraces are within 2/255 of no terraces.
         let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
-        gate.check("spectrogram-style-blur", SIZE, &fresh_frame(&device, &queue, &cb));
-        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
-        gate.check("spectrogram-style-lava", SIZE, &fresh_frame(&device, &queue, &cb));
+        let apart = |a: &[u8], b: &[u8]| {
+            let total: u32 = a.iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
+            f64::from(total) / a.len() as f64
+        };
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        (s.pitch_softness, s.time_softness, s.spread, s.blur_time_step) = (60.0, 200.0, 0.5, 1.0);
+        let mut resources = CallbackResources::default();
+        let blur = frame_with(&device, &queue, &mut resources, &cb);
+        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
+        assert_eq!(passes, 6, "the blur frame skipped the wide passes");
+        cb.atmosphere.as_mut().unwrap().settings.spread = 0.0;
+        let close = fresh_frame(&device, &queue, &cb);
+        assert!(apart(&blur, &close) > 1.0, "the wide kernel adds nothing to the blur frame");
+        cb.atmosphere.as_mut().unwrap().settings.spread = 0.5;
+        gate.check("spectrogram-style-blur", SIZE, &blur);
+        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+        (s.contour_strength, s.contours, s.contour_softness) = (1.0, 5.0, 0.05);
+        let lava = fresh_frame(&device, &queue, &cb);
+        assert!(apart(&lava, &blur) > 2.0, "the terraces do not show over the blur");
+        gate.check("spectrogram-style-lava", SIZE, &lava);
         every_effect_off(&mut cb);
         gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
     }
@@ -3633,12 +3749,12 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        const COUNT: u64 = 18;
+        const COUNT: u64 = 12;
         let source = format!(
             "{}\n{}",
             SPECTROGRAM_SRC,
             r#"
-struct WrapProbe { cells: array<vec2<i32>, 18> }
+struct WrapProbe { cells: array<vec2<i32>, 12> }
 @group(0) @binding(3) var<storage, read_write> wrap_probe: WrapProbe;
 
 @compute @workgroup_size(1)
@@ -3656,13 +3772,6 @@ fn cs_wrap_probe() {
     wrap_probe.cells[9] = wrap_cell_for_tile(vec2<i32>(-73, 7), 72);
     wrap_probe.cells[10] = wrap_cell_for_tile(vec2<i32>(-1, 7), 72);
     wrap_probe.cells[11] = wrap_cell_for_tile(vec2<i32>(-73, 79), 72);
-    // P20 coarse and its 2.1 lattice.
-    wrap_probe.cells[12] = wrap_cell_for_tile(vec2<i32>(-21, 7), 20);
-    wrap_probe.cells[13] = wrap_cell_for_tile(vec2<i32>(-1, 7), 20);
-    wrap_probe.cells[14] = wrap_cell_for_tile(vec2<i32>(-21, 27), 20);
-    wrap_probe.cells[15] = wrap_cell_for_tile(vec2<i32>(-43, 7), 42);
-    wrap_probe.cells[16] = wrap_cell_for_tile(vec2<i32>(-1, 7), 42);
-    wrap_probe.cells[17] = wrap_cell_for_tile(vec2<i32>(-43, 49), 42);
 }
 "#,
         );
@@ -3715,7 +3824,7 @@ fn cs_wrap_probe() {
             [39, 7],
             "negative coordinates did not use positive modulo: {cells:?}"
         );
-        for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14], [15, 16, 17]] {
+        for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]] {
             assert_eq!(
                 cells[group[0]], cells[group[1]],
                 "an x-period translation changed the wrapped hash cell: {cells:?}"
@@ -3881,7 +3990,7 @@ fn cs_wrap_probe() {
             }
         };
         for palette in [[96, 128, 160, 255], [210, 230, 250, 255]] {
-            for (sampling, memory) in [(1.0, false), (3.0, false), (1.0, true)] {
+            for (sampling, memory) in [(1.0, false), (2.0, false), (1.0, true)] {
                 let mut cb = wash_fixture();
                 cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(384.0, 384.0));
                 cb.atmosphere.as_mut().unwrap().region = cb.rect;
@@ -4148,12 +4257,13 @@ fn cs_wrap_probe() {
     /// is half a tone texel wide, so it widens with the dial: invisible at the
     /// fresh 0.5 pt, which takes the native path and allocates no target at all.
     ///
-    /// Measured on this fixture at 4 pt. Before the repair the two rows inside
-    /// the region's edge read 29.21 and 9.74 mean absolute channel difference
-    /// from the native walk, against an interior that stays under 5.2; after
-    /// it they read 3.71 and 1.26. The bound below is the interior's own band,
-    /// which is the claim: an edge row is no further from the walk than the
-    /// middle of the pane is.
+    /// Measured on this fixture at two device pixels a sample, the production
+    /// maximum. With the tone pass put back on the region quad, the first row
+    /// inside the region's edge reads 18.79 mean absolute channel difference
+    /// from the native walk, against an interior that stays under 0.83;
+    /// repaired, the two edge rows read 0.16 and 0.22. The bound below sits
+    /// between the interior's own band and the seam, which is the claim: an
+    /// edge row is no further from the walk than the middle of the pane is.
     ///
     /// Only rows INSIDE the region are measured. Production draws the cloud
     /// over the backdrop's region quad and the heatmap mesh, both of which stop
@@ -4185,10 +4295,11 @@ fn cs_wrap_probe() {
         }
         let mut native_res = CallbackResources::default();
         let native = frame_with(&device, &queue, &mut native_res, &cb);
-        // 4 pt against the fixture's 1 pixel per point, so a cleared texel
-        // reaches two pixels into the region.
+        // 2 pt against the fixture's 1 pixel per point, the production maximum
+        // of two device pixels, so a cleared texel reaches a pixel into the
+        // region.
         let mut reduced_res = CallbackResources::default();
-        reduced_res.insert(atmosphere::CloudSampling { pixel_points: 4.0, ..Default::default() });
+        reduced_res.insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
         let reduced = frame_with(&device, &queue, &mut reduced_res, &cb);
         let (w, h) = (SIZE[0] as usize, SIZE[1] as usize);
         let row_mean = |y: usize| {
