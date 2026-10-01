@@ -112,18 +112,10 @@ pub(super) fn stars(
 ) {
     use crate::widgets::Depth;
     use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_DENSITY_MAX, STAR_DENSITY_MIN, STAR_DEPTH_CURVE_MAX,
-        STAR_DEPTH_CURVE_MIN, STAR_FALLOFF_MAX, STAR_FALLOFF_MIN, STAR_GLOW_MAX, STAR_SIZE_MAX,
-        STAR_SIZE_MIN, STAR_SPACING_MAX, STAR_SPACING_MIN,
+        STAR_CORE_MAX, STAR_CORE_MIN, STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_FALLOFF_MAX,
+        STAR_FALLOFF_MIN, STAR_GLOW_MAX, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
+        STAR_SPACING_MIN,
     };
-    ValueBar::new(
-        &mut atmosphere.star_density,
-        STAR_DENSITY_MIN..=STAR_DENSITY_MAX,
-        "Star density",
-    )
-    .unit(1.0, "\u{d7}")
-    .show(ui)
-    .on_hover_text("How many stars at every depth. Higher values pack them closer.");
     crate::widgets::depth(
         ui,
         &mut atmosphere.star_size_min,
@@ -136,8 +128,8 @@ pub(super) fn stars(
     held_to_fit(ui, *atmosphere, size_scale);
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_spacing_min,
-        &mut atmosphere.star_spacing_max,
+        &mut atmosphere.star_spacing_far,
+        &mut atmosphere.star_spacing_near,
         &mut atmosphere.star_spacing_curve,
         STAR_SPACING_MIN..=STAR_SPACING_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,

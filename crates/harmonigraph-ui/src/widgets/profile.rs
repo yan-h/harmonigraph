@@ -88,9 +88,9 @@ pub(crate) fn depth(
                 .display(|octaves| format!("{:.1} px", octaves.exp2()))
                 .show(ui)
                 .on_hover_text(if matches!(kind, Depth::Size(_)) {
-                    "How big the stars are across, glow included, the farthest at the low end and the nearest at the high end. One value is one size at every depth. A depth whose stars would not fit its spacing is drawn smaller, and a note below says so; wider spacing or lower density leaves room for bigger stars."
+                    "How big the stars are across, glow included, the farthest at the low end and the nearest at the high end. One value is one size at every depth. A depth whose stars would not fit its spacing is drawn smaller, and a note below says so; wider spacing leaves room for bigger stars."
                 } else {
-                    "How far apart the stars are, the farthest at the low end and the nearest at the high end. Every place holds a star, so wider spacing is fewer stars; Star density packs every depth closer."
+                    "How far apart the stars are, the farthest at the low end and the nearest at the high end. Every place holds a star, so wider spacing is fewer stars."
                 });
                 if response.changed() {
                     *low = far.exp2() / shown;
