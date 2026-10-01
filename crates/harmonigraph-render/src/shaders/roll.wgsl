@@ -49,9 +49,7 @@ struct Locals {
     /// Width of the antialiasing ramp in points — one pixel of whatever is
     /// being drawn into, which is not the display's pixel in the bloom's pass.
     feather: f32,
-    /// 1 in the bloom pass, which uses the body's original opacity;
-    /// 0 on screen, where per-note opacity mappings apply.
-    light: f32,
+    _feather_pad: f32,
     /// Unit screen vectors of the pane's two axes. Pitch runs across the
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
@@ -591,15 +589,14 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
     return in.outline * max(wrap, cap_coverage(in)) * along(in, in.fade);
 }
 
-/// Flat premultiplied gamma-space body color. A leading tip set to fade loses
-/// its contribution through
+/// Flat premultiplied gamma-space body color, at the note's own opacity
+/// reading. A leading tip set to fade loses its contribution through
 /// [`lead_coverage`].
+///
+/// The bloom pass draws the bodies through this too, so a note's halo is lit
+/// at the opacity the note is drawn at (#1289).
 fn core_color(in: VertexOut) -> vec4<f32> {
-    let body = in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in);
-    if (locals.light < 0.5) {
-        return body * along(in, in.fade);
-    }
-    return body;
+    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, in.fade);
 }
 
 // One of the note's intensity readings at this depth: `ends` is its value at

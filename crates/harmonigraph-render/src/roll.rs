@@ -348,9 +348,7 @@ struct RollUniforms {
     origin_points: Float2,
     viewport_points: Float2,
     feather: f32,
-    /// 1 in the bloom pass, which uses the body's original opacity;
-    /// 0 on screen, where per-note opacity mappings apply.
-    light: f32,
+    _feather_pad: f32,
     pitch_dir: Float2,
     depth_dir: Float2,
     _axis_pad: Float2,
@@ -392,8 +390,8 @@ struct RollResources {
     outline_pipeline: wgpu::RenderPipeline,
     core_pipeline: wgpu::RenderPipeline,
     /// The bodies again, into the bloom chain's own [`BLOOM_FORMAT`] rather
-    /// than the target's, shaded as the target is so the halo is the colour
-    /// the notes are.
+    /// than the target's, shaded as the target is and at each note's own
+    /// opacity reading, so the halo is the colour and strength the notes are.
     light_pipeline: wgpu::RenderPipeline,
     shadow_cell_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -933,7 +931,7 @@ impl CallbackTrait for RollCallback {
             // which is what the offline render's byte-for-byte determinism
             // test rests on.
             feather: 1.0 / ppp,
-            light: 0.0,
+            _feather_pad: 0.0,
             pitch_dir: Float2(self.axes.pitch_dir),
             depth_dir: Float2(self.axes.depth_dir),
             _axis_pad: Float2([0.0; 2]),
@@ -981,7 +979,6 @@ impl CallbackTrait for RollCallback {
                 ]),
                 viewport_points: Float2([bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp]),
                 feather: 1.0 / half_ppp,
-                light: 1.0,
                 ..uniforms
             }
         });
@@ -2481,6 +2478,55 @@ mod tests {
         };
         assert!(!bloom_of(0.0), "a strength of 0 built the bloom chain anyway");
         assert!(bloom_of(1.5), "no chain was built at a strength that asks for one");
+    }
+
+    /// A note's bloom follows the opacity it is drawn at (#1289).
+    ///
+    /// The Opacity mapping reaches this crate as the instance's `fade` — the
+    /// pane's `read_through` writes it, and
+    /// `a_notes_fade_follows_its_pressure_in_pieces_of_one_box` in
+    /// `panes::spectral::roll` pins a routed mapping to it. So a quarter
+    /// reading here is a note the mapping drew at a quarter, and its halo has
+    /// to be a quarter of the full one's.
+    ///
+    /// Quarter rather than merely less, because the threshold reads the
+    /// STRAIGHT color and spends coverage after it (`fs_bright_coverage`):
+    /// opacity scales the light linearly, so anything off the ratio is the
+    /// bloom pass reading some other opacity than the one on screen.
+    #[test]
+    fn a_notes_bloom_follows_its_opacity_reading() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let note = |fade: f32| RollInstance {
+            core: [160, 96, 48, 255],
+            outline: [0, 0, 0, 0],
+            fade: [fade; 2],
+            ..centered_note()
+        };
+        // All the light the halo adds around the note, on red: the bloomed
+        // frame less the same note drawn without bloom. Off the body and a
+        // pixel round it, where the unbloomed frame is black at either
+        // opacity — over the full note's body the sum clips at 255 and reads
+        // the halo short.
+        let light = |fade: f32| {
+            let plain =
+                draw_bloomed(&device, &queue, vec![note(fade)], TOP, 0.0, wgpu::Color::BLACK);
+            let lit = draw_bloomed(&device, &queue, vec![note(fade)], TOP, 1.5, wgpu::Color::BLACK);
+            (0..SIZE[1])
+                .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
+                .filter(|&(x, y)| !(115..141).contains(&x) || !(67..189).contains(&y))
+                .map(|(x, y)| f32::from(pixel(&lit, x, y)[0]) - f32::from(pixel(&plain, x, y)[0]))
+                .sum::<f32>()
+        };
+        let (full, quarter) = (light(1.0), light(0.25));
+        assert!(full > 1000.0, "the unfaded note grew no halo to compare against: {full}");
+        let ratio = quarter / full;
+        assert!(
+            (ratio - 0.25).abs() < 0.03,
+            "a note drawn at a quarter opacity blooms at {ratio:.3} of the full note's light \
+             ({quarter} against {full})",
+        );
     }
 
     /// One `prepare` of `cb` against `resources`, submitted — the unit both
