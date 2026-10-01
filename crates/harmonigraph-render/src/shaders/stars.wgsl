@@ -258,7 +258,8 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
 }
 
 // The consumer's floor, then every slice laid over it far to near: within a slice
-// the stars' coverages add and their colours average by coverage, and the slice
+// the stars' coverages add and their colours average by coverage (past full
+// coverage `Overlap light` adds back what the average drops), and the slice
 // covers what is under it by its summed coverage, capped at one. The salts
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
 // it, a cell's stagger at the second.
@@ -289,6 +290,18 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
             let cover = min(slice.w, 1.0);
             // Preserve the spectral RGB arithmetic; alpha independently follows over.
             out = vec4<f32>(mix(out.rgb, slice.rgb / slice.w, cover), out.a + (1.0 - out.a) * cover);
+            // Up to full coverage that IS the stars' light added; past it the
+            // divide averages them instead. `Overlap light` adds that excess
+            // back, eased into each channel's headroom: one for one at first,
+            // continuous where coverage fills, never past one. Each channel
+            // eases on its own, so a bright crowd pales as its channels fill.
+            let light = star_geometry().x;
+            if slice.w > 1.0 && light > 0.0 {
+                let base = slice.rgb / slice.w;
+                let room = max(1.0 - base, vec3<f32>(0.0));
+                let excess = base * (slice.w - 1.0) * light;
+                out = vec4<f32>(out.rgb + room * (1.0 - exp(-excess / max(room, vec3<f32>(1e-4)))), out.a);
+            }
         }
         if star_geometry().w > 0.0 && k < STAR_FAR_LAYERS {
             far_gap *= 1.0 - min(slice.w, 1.0);

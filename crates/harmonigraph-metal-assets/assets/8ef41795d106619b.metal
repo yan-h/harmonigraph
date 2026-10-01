@@ -4,10 +4,6 @@
 
 using metal::uint;
 
-struct _mslBufferSizes {
-    uint size11;
-};
-
 struct Wet {
     metal::float2 offset;
     float brightness;
@@ -97,27 +93,6 @@ struct Cloud {
     metal::float4 velvet_size;
     metal::float4 wash_pigment;
 };
-struct Locals {
-    metal::float2 origin_points;
-    metal::float2 viewport_points;
-    float min_midi;
-    float span;
-    float spectrum_min_midi;
-    float bins_per_semitone;
-    float level0_;
-    float level_per_step;
-    float level_per_midi;
-    uint rows;
-    uint bins;
-    uint stride;
-    uint capacity;
-    uint first_slot;
-    uint run_slabs;
-    uint _pad0_;
-    uint _pad1_;
-    uint _pad2_;
-};
-typedef uint type_16[1];
 struct VertexOut {
     metal::float4 position;
     float slab;
@@ -160,7 +135,7 @@ constant float SCALE_CELLS = 2.7272727;
 constant float WASH_POOL = 0.44;
 constant float WASH_PIG_DEPTH = 0.35;
 constant float WASH_BLOOM = 2.7;
-constant bool STAR_SPLIT = false;
+constant bool STAR_SPLIT = true;
 
 metal::float2 rotate_watercolor_tile_vector_for(
     metal::float2 v,
@@ -227,8 +202,8 @@ metal::float3 palette_color(
     metal::float3 a = _e24.xyz;
     uint clamped_lod_e35 = metal::min(uint(0), lut.get_num_mip_levels() - 1);
     metal::float4 _e35 = lut.read(metal::min(metal::uint2(metal::uint2(metal::min(i + 1u, levels - 1u), 0u)), metal::uint2(lut.get_width(clamped_lod_e35), lut.get_height(clamped_lod_e35)) - 1), clamped_lod_e35);
-    metal::float3 b_2 = _e35.xyz;
-    return metal::mix(a, b_2, metal::fract(x));
+    metal::float3 b = _e35.xyz;
+    return metal::mix(a, b, metal::fract(x));
 }
 
 StarSlice star_slice(
@@ -274,11 +249,11 @@ metal::float4 star_texel(
 ) {
     bool local = {};
     uint clamped_lod_e11 = metal::min(uint(0), star_atlas.get_num_mip_levels() - 1);
-    metal::uint4 t_3 = star_atlas.read(metal::min(metal::uint2(metal::int2(index_1 & 2047, index_1 >> STAR_ATLAS_SHIFT)), metal::uint2(star_atlas.get_width(clamped_lod_e11), star_atlas.get_height(clamped_lod_e11)) - 1), clamped_lod_e11);
-    if (t_3.w == 0u) {
+    metal::uint4 t_1 = star_atlas.read(metal::min(metal::uint2(metal::int2(index_1 & 2047, index_1 >> STAR_ATLAS_SHIFT)), metal::uint2(star_atlas.get_width(clamped_lod_e11), star_atlas.get_height(clamped_lod_e11)) - 1), clamped_lod_e11);
+    if (t_1.w == 0u) {
         return metal::float4(0.0);
     }
-    float dist = metal::length(f - metal::float2(as_type<float>(t_3.x), as_type<float>(t_3.y))) * s_1.cell;
+    float dist = metal::length(f - metal::float2(as_type<float>(t_1.x), as_type<float>(t_1.y))) * s_1.cell;
     float reach = s_1.inner * s_1.cell;
     if (!(halo)) {
         local = dist >= reach;
@@ -289,12 +264,12 @@ metal::float4 star_texel(
     if (_e34) {
         return metal::float4(0.0);
     }
-    metal::float2 shape = float2(as_type<half2>(t_3.w));
+    metal::float2 shape = float2(as_type<half2>(t_1.w));
     float _e41 = star_profile(s_1, dist * shape.x);
     if (_e41 <= 0.0) {
         return metal::float4(0.0);
     }
-    metal::float3 colour = static_cast<metal::float3>(metal::uint3(t_3.z >> 20u, t_3.z >> 10u, t_3.z) & metal::uint3(1023u)) / metal::float3(1023.0);
+    metal::float3 colour = static_cast<metal::float3>(metal::uint3(t_1.z >> 20u, t_1.z >> 10u, t_1.z) & metal::uint3(1023u)) / metal::float3(1023.0);
     metal::float4 _e61 = star_geometry(cloud);
     float inner = _e41 * (1.0 - metal::smoothstep(_e61.z * reach, reach, dist));
     float cover = (halo ? metal::max(_e41 - inner, 0.0) : inner) * shape.y;
@@ -345,18 +320,18 @@ metal::float4 star_far_texel(
 ) {
     metal::int2 _e4 = atlas_texel(index_2);
     uint clamped_lod_e6 = metal::min(uint(0), star_atlas.get_num_mip_levels() - 1);
-    metal::uint4 t_4 = star_atlas.read(metal::min(metal::uint2(_e4), metal::uint2(star_atlas.get_width(clamped_lod_e6), star_atlas.get_height(clamped_lod_e6)) - 1), clamped_lod_e6);
-    if (t_4.w == 0u) {
+    metal::uint4 t_2 = star_atlas.read(metal::min(metal::uint2(_e4), metal::uint2(star_atlas.get_width(clamped_lod_e6), star_atlas.get_height(clamped_lod_e6)) - 1), clamped_lod_e6);
+    if (t_2.w == 0u) {
         return metal::float4(0.0);
     }
-    float dist_1 = metal::length(f_1 - metal::float2(as_type<float>(t_4.x), as_type<float>(t_4.y))) * s_2.cell;
-    metal::float2 shape_1 = float2(as_type<half2>(t_4.w));
+    float dist_1 = metal::length(f_1 - metal::float2(as_type<float>(t_2.x), as_type<float>(t_2.y))) * s_2.cell;
+    metal::float2 shape_1 = float2(as_type<half2>(t_2.w));
     float _e25 = star_profile(s_2, dist_1 * shape_1.x);
     float cover_1 = _e25 * shape_1.y;
     if (cover_1 <= 0.0) {
         return metal::float4(0.0);
     }
-    metal::float3 colour_1 = static_cast<metal::float3>(metal::uint3(t_4.z >> 20u, t_4.z >> 10u, t_4.z) & metal::uint3(1023u)) / metal::float3(1023.0);
+    metal::float3 colour_1 = static_cast<metal::float3>(metal::uint3(t_2.z >> 20u, t_2.z >> 10u, t_2.z) & metal::uint3(1023u)) / metal::float3(1023.0);
     return metal::float4(colour_1 * cover_1, cover_1);
 }
 
@@ -372,8 +347,8 @@ metal::float4 star_far_gather(
     metal::float4 result = metal::float4(0.0);
     metal::float2 o = metal::floor(r_1 - metal::float2(0.5));
     metal::float2 f_2 = r_1 - o;
-    metal::int2 local_7 = as_type<metal::int2>(as_type<metal::uint2>(as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(o)) - as_type<metal::uint2>(naga_f2i32(metal::floor(s_3.offset))))) - as_type<metal::uint2>(s_3.origin));
-    int index_3 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(s_3.base) + as_type<uint>(as_type<int>(as_type<uint>(local_7.y) * as_type<uint>(s_3.grid.x))))) + as_type<uint>(local_7.x));
+    metal::int2 local_8 = as_type<metal::int2>(as_type<metal::uint2>(as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(o)) - as_type<metal::uint2>(naga_f2i32(metal::floor(s_3.offset))))) - as_type<metal::uint2>(s_3.origin));
+    int index_3 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(s_3.base) + as_type<uint>(as_type<int>(as_type<uint>(local_8.y) * as_type<uint>(s_3.grid.x))))) + as_type<uint>(local_8.x));
     metal::float4 _e25 = result;
     metal::float4 _e26 = star_far_texel(s_3, f_2, index_3, star_atlas);
     result = _e25 + _e26;
@@ -408,6 +383,7 @@ metal::float4 star_layers(
     metal::float4 slice = {};
     bool local_1 = {};
     bool local_2 = {};
+    bool local_3 = {};
     out = under;
     metal::float2 _e7 = star_size(cloud);
     metal::float2 _e12 = star_size(cloud);
@@ -419,8 +395,8 @@ metal::float4 star_layers(
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            uint _e145 = k_3;
-            k_3 = _e145 + 1u;
+            uint _e191 = k_3;
+            k_3 = _e191 + 1u;
         }
         loop_init = false;
         uint _e17 = k_3;
@@ -434,8 +410,8 @@ metal::float4 star_layers(
             metal::float2 r_4 = (sp / metal::float2(_e20.cell)) - metal::fract(_e20.offset);
             metal::float2 o_1 = metal::floor(r_4);
             metal::float2 f_3 = r_4 - o_1;
-            metal::int2 local_8 = as_type<metal::int2>(as_type<metal::uint2>(as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(o_1)) - as_type<metal::uint2>(naga_f2i32(metal::floor(_e20.offset))))) - as_type<metal::uint2>(_e20.origin));
-            int index_4 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(_e20.base) + as_type<uint>(as_type<int>(as_type<uint>(local_8.y) * as_type<uint>(_e20.grid.x))))) + as_type<uint>(local_8.x));
+            metal::int2 local_9 = as_type<metal::int2>(as_type<metal::uint2>(as_type<metal::int2>(as_type<metal::uint2>(naga_f2i32(o_1)) - as_type<metal::uint2>(naga_f2i32(metal::floor(_e20.offset))))) - as_type<metal::uint2>(_e20.origin));
+            int index_4 = as_type<int>(as_type<uint>(as_type<int>(as_type<uint>(_e20.base) + as_type<uint>(as_type<int>(as_type<uint>(local_9.y) * as_type<uint>(_e20.grid.x))))) + as_type<uint>(local_9.x));
             slice = metal::float4(0.0);
             if (_e20.gather == 2u) {
                 metal::float4 _e50 = star_far_gather(_e20, r_4, star_atlas);
@@ -465,43 +441,63 @@ metal::float4 star_layers(
                 float _e82 = out.w;
                 float _e84 = out.w;
                 out = metal::float4(metal::mix(_e72.xyz, _e74.xyz / metal::float3(_e77), cover_2), _e82 + ((1.0 - _e84) * cover_2));
-            }
-            metal::float4 _e90 = star_geometry(cloud);
-            if (_e90.w > 0.0) {
-                uint _e96 = k_3;
-                local_1 = _e96 < STAR_FAR_LAYERS;
-            } else {
-                local_1 = false;
-            }
-            bool _e100 = local_1;
-            if (_e100) {
-                float _e101 = far_gap;
-                float _e103 = slice.w;
-                far_gap = _e101 * (1.0 - metal::min(_e103, 1.0));
-                uint _e109 = k_3;
-                if ((_e109 + 1u) == STAR_FAR_LAYERS) {
-                    local_2 = first == 0u;
+                metal::float4 _e90 = star_geometry(cloud);
+                float light = _e90.x;
+                float _e93 = slice.w;
+                if (_e93 > 1.0) {
+                    local_1 = light > 0.0;
                 } else {
-                    local_2 = false;
+                    local_1 = false;
                 }
-                bool _e119 = local_2;
-                if (_e119) {
-                    metal::float4 _e120 = star_geometry(cloud);
-                    float amount_1 = _e120.w * 2.0;
+                bool _e101 = local_1;
+                if (_e101) {
+                    metal::float4 _e102 = slice;
+                    float _e105 = slice.w;
+                    metal::float3 base = _e102.xyz / metal::float3(_e105);
+                    metal::float3 room = metal::max(metal::float3(1.0) - base, metal::float3(0.0));
+                    float _e115 = slice.w;
+                    metal::float3 excess = (base * (_e115 - 1.0)) * light;
+                    metal::float4 _e120 = out;
+                    float _e134 = out.w;
+                    out = metal::float4(_e120.xyz + (room * (metal::float3(1.0) - metal::exp(-(excess) / metal::max(room, metal::float3(0.0001))))), _e134);
+                }
+            }
+            metal::float4 _e136 = star_geometry(cloud);
+            if (_e136.w > 0.0) {
+                uint _e142 = k_3;
+                local_2 = _e142 < STAR_FAR_LAYERS;
+            } else {
+                local_2 = false;
+            }
+            bool _e146 = local_2;
+            if (_e146) {
+                float _e147 = far_gap;
+                float _e149 = slice.w;
+                far_gap = _e147 * (1.0 - metal::min(_e149, 1.0));
+                uint _e155 = k_3;
+                if ((_e155 + 1u) == STAR_FAR_LAYERS) {
+                    local_3 = first == 0u;
+                } else {
+                    local_3 = false;
+                }
+                bool _e165 = local_3;
+                if (_e165) {
+                    metal::float4 _e166 = star_geometry(cloud);
+                    float amount_1 = _e166.w * 2.0;
                     float gentle = metal::min(amount_1, 1.0);
                     float strong = metal::max(amount_1 - 1.0, 0.0);
-                    float _e130 = far_gap;
-                    float _e134 = far_gap;
-                    float _e136 = far_gap;
-                    float gain = (1.0 + (gentle * _e130)) * (1.0 + ((strong * _e134) * _e136));
-                    metal::float4 _e141 = out;
-                    out = under + ((_e141 - under) * gain);
+                    float _e176 = far_gap;
+                    float _e180 = far_gap;
+                    float _e182 = far_gap;
+                    float gain = (1.0 + (gentle * _e176)) * (1.0 + ((strong * _e180) * _e182));
+                    metal::float4 _e187 = out;
+                    out = under + ((_e187 - under) * gain);
                 }
             }
         }
     }
-    metal::float4 _e148 = out;
-    return _e148;
+    metal::float4 _e194 = out;
+    return _e194;
 }
 
 metal::float4 star_far(
@@ -585,172 +581,6 @@ metal::float4 star_color(
     return _e16;
 }
 
-uint stored(
-    uint slot,
-    uint bucket,
-    constant Locals& locals,
-    device type_16 const& grid,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    uint _e4 = locals.stride;
-    uint i_1 = (slot * _e4) + bucket;
-    uint _e11 = grid[metal::min(unsigned(i_1 >> 2u), (_buffer_sizes.size11 - 0 - 4) / 4)];
-    return (_e11 >> ((i_1 & 3u) * 8u)) & 255u;
-}
-
-float bucket_x(
-    float t_1,
-    constant Locals& locals
-) {
-    float _e3 = locals.min_midi;
-    float _e6 = locals.span;
-    float midi = _e3 + (t_1 * _e6);
-    float _e11 = locals.spectrum_min_midi;
-    float _e15 = locals.bins_per_semitone;
-    return (midi - _e11) * _e15;
-}
-
-float density_encode(
-    float level_1
-) {
-    return level_1 * (0.1 + (0.9 * level_1));
-}
-
-float bucket_level(
-    uint slot_1,
-    uint b,
-    bool density,
-    constant Locals& locals,
-    device type_16 const& grid,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    float _e5 = locals.spectrum_min_midi;
-    float _e11 = locals.bins_per_semitone;
-    float midi_1 = _e5 + ((static_cast<float>(b) + 0.5) / _e11);
-    uint _e14 = stored(slot_1, b, locals, grid, _buffer_sizes);
-    float v_3 = static_cast<float>(_e14);
-    float _e18 = locals.level0_;
-    float _e21 = locals.level_per_step;
-    float _e26 = locals.level_per_midi;
-    float level_7 = (_e18 + (_e21 * v_3)) + (_e26 * midi_1);
-    float mapped = metal::clamp(level_7, 0.0, 1.0);
-    if (density) {
-        float _e32 = density_encode(mapped);
-        return _e32;
-    }
-    return mapped;
-}
-
-float read_level(
-    uint slot_2,
-    float t_2,
-    bool density_1,
-    constant Locals& locals,
-    device type_16 const& grid,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    float sum = 0.0;
-    float total = 0.0;
-    uint b_1 = {};
-    uint _e5 = locals.rows;
-    float half_ = 0.5 / static_cast<float>(_e5);
-    float _e10 = bucket_x(t_2 - half_, locals);
-    float _e12 = bucket_x(t_2 + half_, locals);
-    uint _e15 = locals.bins;
-    float top = static_cast<float>(_e15) - 1.0;
-    uint idx = naga_f2u32(metal::clamp(metal::floor(_e10), 0.0, top));
-    uint last_1 = naga_f2u32(metal::clamp(metal::floor(_e12), 0.0, top));
-    if (last_1 > idx) {
-        uint _e30 = locals.bins;
-        float lo = metal::clamp(_e10, 0.0, static_cast<float>(_e30));
-        uint _e36 = locals.bins;
-        float hi = metal::clamp(_e12, 0.0, static_cast<float>(_e36));
-        b_1 = idx;
-        uint2 loop_bound_1 = uint2(4294967295u);
-        bool loop_init_1 = true;
-        while(true) {
-            if (metal::all(loop_bound_1 == uint2(0u))) { break; }
-            loop_bound_1 -= uint2(loop_bound_1.y == 0u, 1u);
-            if (!loop_init_1) {
-                uint _e65 = b_1;
-                b_1 = _e65 + 1u;
-            }
-            loop_init_1 = false;
-            uint _e45 = b_1;
-            if (_e45 <= last_1) {
-            } else {
-                break;
-            }
-            {
-                uint _e47 = b_1;
-                uint _e52 = b_1;
-                float w = metal::max(metal::min(hi, static_cast<float>(_e47) + 1.0) - metal::max(lo, static_cast<float>(_e52)), 0.0);
-                float _e58 = sum;
-                uint _e59 = b_1;
-                float _e60 = bucket_level(slot_2, _e59, density_1, locals, grid, _buffer_sizes);
-                sum = _e58 + (w * _e60);
-                float _e63 = total;
-                total = _e63 + w;
-            }
-        }
-        float _e68 = total;
-        if (_e68 <= 0.0) {
-            float _e71 = bucket_level(slot_2, idx, density_1, locals, grid, _buffer_sizes);
-            return _e71;
-        }
-        float _e72 = sum;
-        float _e73 = total;
-        return _e72 / _e73;
-    }
-    float _e75 = bucket_x(t_2, locals);
-    float x_1 = _e75 - 0.5;
-    uint _e81 = locals.bins;
-    uint b_3 = naga_f2u32(metal::clamp(metal::floor(x_1), 0.0, static_cast<float>(_e81) - 2.0));
-    float f_4 = metal::clamp(x_1 - static_cast<float>(b_3), 0.0, 1.0);
-    float _e93 = bucket_level(slot_2, b_3, density_1, locals, grid, _buffer_sizes);
-    float _e96 = bucket_level(slot_2, b_3 + 1u, density_1, locals, grid, _buffer_sizes);
-    return metal::mix(_e93, _e96, f_4);
-}
-
-uint naga_mod(uint lhs, uint rhs) {
-    return lhs % metal::select(rhs, 1u, rhs == 0u);
-}
-
-float field_level(
-    VertexOut in_1,
-    bool density_2,
-    constant Locals& locals,
-    device type_16 const& grid,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    uint _e4 = locals.run_slabs;
-    float n = static_cast<float>(_e4);
-    float jx = metal::clamp(metal::floor(in_1.slab - 0.5), 0.0, n - 1.0);
-    uint j0_ = naga_f2u32(jx);
-    uint _e19 = locals.run_slabs;
-    uint j1_ = metal::min(j0_ + 1u, _e19 - 1u);
-    float fx = metal::clamp((in_1.slab - 0.5) - jx, 0.0, 1.0);
-    uint _e32 = locals.first_slot;
-    uint _e36 = locals.capacity;
-    uint s0_ = naga_mod(_e32 + j0_, _e36);
-    uint _e40 = locals.first_slot;
-    uint _e44 = locals.capacity;
-    uint s1_ = naga_mod(_e40 + j1_, _e44);
-    float _e47 = read_level(s0_, in_1.t, density_2, locals, grid, _buffer_sizes);
-    float _e49 = read_level(s1_, in_1.t, density_2, locals, grid, _buffer_sizes);
-    return metal::mix(_e47, _e49, fx);
-}
-
-float heatmap_level(
-    VertexOut in_2,
-    constant Locals& locals,
-    device type_16 const& grid,
-    constant _mslBufferSizes& _buffer_sizes
-) {
-    float _e2 = field_level(in_2, false, locals, grid, _buffer_sizes);
-    return _e2;
-}
-
 metal::float3 linear_from_gamma_rgb(
     metal::float3 srgb
 ) {
@@ -782,24 +612,24 @@ bool softened(
 }
 
 float style_level(
-    float level_2,
+    float level_1,
     constant Cloud& cloud
 ) {
     float _e3 = cloud.contour_strength;
     if (_e3 <= 0.0) {
-        return level_2;
+        return level_1;
     }
     float _e11 = cloud.contours;
-    float x_2 = metal::clamp(level_2, 0.0, 1.0) * _e11;
+    float x_1 = metal::clamp(level_1, 0.0, 1.0) * _e11;
     float _e15 = cloud.contour_softness;
-    float _e16 = metal::fwidth(x_2);
+    float _e16 = metal::fwidth(x_1);
     float edge = metal::min(0.5, metal::max(_e15, _e16 * 0.5));
     float _e32 = cloud.contours;
-    float terraces = (metal::floor(x_2) + metal::smoothstep(0.5 - edge, 0.5 + edge, metal::fract(x_2))) / _e32;
+    float terraces = (metal::floor(x_1) + metal::smoothstep(0.5 - edge, 0.5 + edge, metal::fract(x_1))) / _e32;
     float _e36 = cloud.contour_strength;
-    float _e43 = metal::fwidth(x_2);
-    float strength = ((0.9 * _e36) * metal::smoothstep(0.0, 1.0, x_2)) * (1.0 - metal::smoothstep(0.5, 1.5, _e43));
-    return metal::mix(level_2, terraces, strength);
+    float _e43 = metal::fwidth(x_1);
+    float strength = ((0.9 * _e36) * metal::smoothstep(0.0, 1.0, x_1)) * (1.0 - metal::smoothstep(0.5, 1.5, _e43));
+    return metal::mix(level_1, terraces, strength);
 }
 
 metal::float4 density_color(
@@ -932,11 +762,11 @@ WashField wash_tile_field(
     out_1.cover = 0.0;
     float _e32 = cloud.wash_layers;
     if (_e32 > 0.0) {
-        metal::float4 b_4 = cloud_tile_b.sample(tile_sampler, _e1, metal::level(0.0));
-        metal::float2 _e41 = rotate_watercolor_tile_vector(b_4.xy, cloud);
+        metal::float4 b_1 = cloud_tile_b.sample(tile_sampler, _e1, metal::level(0.0));
+        metal::float2 _e41 = rotate_watercolor_tile_vector(b_1.xy, cloud);
         float _e44 = c.y;
-        out_1.fine = Wet {_e41, b_4.z, _e44};
-        out_1.cover = b_4.w;
+        out_1.fine = Wet {_e41, b_1.z, _e44};
+        out_1.cover = b_1.w;
     }
     WashField _e48 = out_1;
     return _e48;
@@ -964,7 +794,7 @@ float wash_cloud_tone(
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
     metal::sampler tile_sampler
 ) {
-    float level_3 = {};
+    float level_2 = {};
     float _e4 = cloud.wash_size;
     float cells = WASH_CELLS / _e4;
     float _e9 = cloud.size.y;
@@ -972,16 +802,16 @@ float wash_cloud_tone(
     metal::float2 _e13 = wash_cell_at(pt_8, cloud);
     WashField _e14 = wash_tile_field(_e13, cloud, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     float _e16 = wash_level(_e14.coarse, pane_per_cell_1, pt_8, cloud, close_light, cloud_sampler);
-    level_3 = _e16;
+    level_2 = _e16;
     float _e20 = cloud.wash_layers;
     if (_e20 > 0.0) {
         float _e26 = wash_level(_e14.fine, pane_per_cell_1 / WASH_LACUNARITY, pt_8, cloud, close_light, cloud_sampler);
         float _e29 = cloud.wash_layers;
         float over = _e29 * _e14.cover;
-        float _e32 = level_3;
-        level_3 = metal::mix(_e32, _e26, over);
+        float _e32 = level_2;
+        level_2 = metal::mix(_e32, _e26, over);
     }
-    float _e34 = level_3;
+    float _e34 = level_2;
     return _e34;
 }
 
@@ -1019,25 +849,25 @@ metal::float3 memory_color(
     metal::float2 _e3 = cloud.memory_extent;
     metal::int2 size = naga_f2i32(_e3);
     metal::float2 p = (uv * static_cast<metal::float2>(size)) - metal::float2(0.5);
-    metal::int2 lo_1 = naga_f2i32(metal::floor(p));
-    metal::float2 f_5 = metal::fract(p);
+    metal::int2 lo = naga_f2i32(metal::floor(p));
+    metal::float2 f_4 = metal::fract(p);
     uint clamped_lod_e21 = metal::min(uint(0), color_memory.get_num_mip_levels() - 1);
-    metal::float4 _e21 = color_memory.read(metal::min(metal::uint2(metal::clamp(lo_1, metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e21), color_memory.get_height(clamped_lod_e21)) - 1), clamped_lod_e21);
+    metal::float4 _e21 = color_memory.read(metal::min(metal::uint2(metal::clamp(lo, metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e21), color_memory.get_height(clamped_lod_e21)) - 1), clamped_lod_e21);
     metal::float3 a_2 = _e21.xyz;
     uint clamped_lod_e35 = metal::min(uint(0), color_memory.get_num_mip_levels() - 1);
-    metal::float4 _e35 = color_memory.read(metal::min(metal::uint2(metal::clamp(as_type<metal::int2>(as_type<metal::uint2>(lo_1) + as_type<metal::uint2>(metal::int2(1, 0))), metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e35), color_memory.get_height(clamped_lod_e35)) - 1), clamped_lod_e35);
-    metal::float3 b_5 = _e35.xyz;
+    metal::float4 _e35 = color_memory.read(metal::min(metal::uint2(metal::clamp(as_type<metal::int2>(as_type<metal::uint2>(lo) + as_type<metal::uint2>(metal::int2(1, 0))), metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e35), color_memory.get_height(clamped_lod_e35)) - 1), clamped_lod_e35);
+    metal::float3 b_2 = _e35.xyz;
     uint clamped_lod_e49 = metal::min(uint(0), color_memory.get_num_mip_levels() - 1);
-    metal::float4 _e49 = color_memory.read(metal::min(metal::uint2(metal::clamp(as_type<metal::int2>(as_type<metal::uint2>(lo_1) + as_type<metal::uint2>(metal::int2(0, 1))), metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e49), color_memory.get_height(clamped_lod_e49)) - 1), clamped_lod_e49);
+    metal::float4 _e49 = color_memory.read(metal::min(metal::uint2(metal::clamp(as_type<metal::int2>(as_type<metal::uint2>(lo) + as_type<metal::uint2>(metal::int2(0, 1))), metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e49), color_memory.get_height(clamped_lod_e49)) - 1), clamped_lod_e49);
     metal::float3 c_1 = _e49.xyz;
     uint clamped_lod_e63 = metal::min(uint(0), color_memory.get_num_mip_levels() - 1);
-    metal::float4 _e63 = color_memory.read(metal::min(metal::uint2(metal::clamp(as_type<metal::int2>(as_type<metal::uint2>(lo_1) + as_type<metal::uint2>(metal::int2(1, 1))), metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e63), color_memory.get_height(clamped_lod_e63)) - 1), clamped_lod_e63);
+    metal::float4 _e63 = color_memory.read(metal::min(metal::uint2(metal::clamp(as_type<metal::int2>(as_type<metal::uint2>(lo) + as_type<metal::uint2>(metal::int2(1, 1))), metal::int2(0), as_type<metal::int2>(as_type<metal::uint2>(size) - as_type<metal::uint2>(metal::int2(1))))), metal::uint2(color_memory.get_width(clamped_lod_e63), color_memory.get_height(clamped_lod_e63)) - 1), clamped_lod_e63);
     metal::float3 d = _e63.xyz;
-    return metal::mix(metal::mix(a_2, b_5, f_5.x), metal::mix(c_1, d, f_5.x), f_5.y);
+    return metal::mix(metal::mix(a_2, b_2, f_4.x), metal::mix(c_1, d, f_4.x), f_4.y);
 }
 
 metal::float4 clouded_base(
-    float level_4,
+    float level_3,
     metal::float2 position_1,
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -1057,7 +887,7 @@ metal::float4 clouded_base(
     float tone = {};
     float _e4 = cloud.cloud_depth;
     if (_e4 <= 0.0) {
-        metal::float4 _e7 = density_color(level_4, cloud, lut);
+        metal::float4 _e7 = density_color(level_3, cloud, lut);
         return _e7;
     }
     float _e10 = cloud.ppp;
@@ -1065,7 +895,7 @@ metal::float4 clouded_base(
     metal::float2 pt_10 = (position_1 / metal::float2(_e10)) - _e15;
     uint _e19 = cloud.cloud_style;
     if (_e19 == 2u) {
-        metal::float4 _e22 = density_color(level_4, cloud, lut);
+        metal::float4 _e22 = density_color(level_3, cloud, lut);
         metal::float4 _e24 = star_color(pt_10, cloud, cloud_sampler, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone);
         float _e28 = cloud.cloud_depth;
         return metal::float4(metal::mix(_e22.xyz, _e24.xyz, _e28), 1.0);
@@ -1082,7 +912,7 @@ metal::float4 clouded_base(
             metal::float3 _e62 = gamma_from_linear_rgb(_e56);
             return metal::float4(_e62, 1.0);
         }
-        metal::float4 _e65 = density_color(level_4, cloud, lut);
+        metal::float4 _e65 = density_color(level_3, cloud, lut);
         metal::float3 _e67 = linear_from_gamma_rgb(_e65.xyz);
         float _e70 = cloud.cloud_depth;
         metal::float3 _e72 = gamma_from_linear_rgb(metal::mix(_e67, _e56, _e70));
@@ -1099,12 +929,12 @@ metal::float4 clouded_base(
     }
     float _e91 = tone;
     float _e94 = cloud.cloud_depth;
-    metal::float4 _e96 = density_color(metal::mix(level_4, _e91, _e94), cloud, lut);
+    metal::float4 _e96 = density_color(metal::mix(level_3, _e91, _e94), cloud, lut);
     return _e96;
 }
 
 metal::float4 clouded(
-    float level_5,
+    float level_4,
     metal::float2 position_2,
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -1121,24 +951,24 @@ metal::float4 clouded(
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
     metal::sampler tile_sampler
 ) {
-    bool local_3 = {};
     bool local_4 = {};
-    metal::float4 _e2 = clouded_base(level_5, position_2, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    bool local_5 = {};
+    metal::float4 _e2 = clouded_base(level_4, position_2, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     uint _e5 = cloud.cloud_style;
     if (!((_e5 != 1u))) {
         float _e13 = cloud.wash_randomness;
-        local_3 = _e13 <= 0.0;
-    } else {
-        local_3 = true;
-    }
-    bool _e17 = local_3;
-    if (!(_e17)) {
-        float _e23 = cloud.cloud_depth;
-        local_4 = _e23 <= 0.0;
+        local_4 = _e13 <= 0.0;
     } else {
         local_4 = true;
     }
-    bool _e27 = local_4;
+    bool _e17 = local_4;
+    if (!(_e17)) {
+        float _e23 = cloud.cloud_depth;
+        local_5 = _e23 <= 0.0;
+    } else {
+        local_5 = true;
+    }
+    bool _e27 = local_5;
     if (_e27) {
         return _e2;
     }
@@ -1160,28 +990,28 @@ metal::float4 clouded(
 bool full_material_memory(
     constant Cloud& cloud
 ) {
-    bool local_5 = {};
     bool local_6 = {};
+    bool local_7 = {};
     uint _e2 = cloud.memory_enabled;
     if (_e2 != 0u) {
         float _e9 = cloud.cloud_depth;
-        local_5 = _e9 >= 1.0;
-    } else {
-        local_5 = false;
-    }
-    bool _e13 = local_5;
-    if (_e13) {
-        uint _e18 = cloud.cloud_style;
-        local_6 = _e18 != 2u;
+        local_6 = _e9 >= 1.0;
     } else {
         local_6 = false;
     }
-    bool _e22 = local_6;
+    bool _e13 = local_6;
+    if (_e13) {
+        uint _e18 = cloud.cloud_style;
+        local_7 = _e18 != 2u;
+    } else {
+        local_7 = false;
+    }
+    bool _e22 = local_7;
     return _e22;
 }
 
-metal::float4 cloud_color(
-    VertexOut in_3,
+metal::float4 backdrop_color(
+    metal::float2 position_3,
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
     metal::sampler cloud_sampler,
@@ -1192,43 +1022,37 @@ metal::float4 cloud_color(
     metal::texture2d_array<float, metal::access::sample> star_halos_b,
     metal::texture2d_array<float, metal::access::sample> star_halos_c,
     metal::texture2d<float, metal::access::sample> cloud_tone,
-    constant Locals& locals,
-    device type_16 const& grid,
     metal::texture2d<float, metal::access::sample> cloud_tile_a,
     metal::texture2d<float, metal::access::sample> cloud_tile_b,
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
-    metal::sampler tile_sampler,
-    constant _mslBufferSizes& _buffer_sizes
+    metal::sampler tile_sampler
 ) {
-    float level_6 = {};
+    float level_5 = 0.0;
     bool _e1 = full_material_memory(cloud);
     if (_e1) {
-        metal::float4 _e5 = clouded(0.0, in_3.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
-        return _e5;
+        metal::float4 _e3 = clouded(0.0, position_3, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+        return _e3;
     }
-    bool _e7 = softened(cloud);
-    if (_e7) {
-        float _e10 = baked_density(in_3.position.xy, cloud, close_light, cloud_sampler);
-        level_6 = _e10;
-    } else {
-        float _e11 = heatmap_level(in_3, locals, grid, _buffer_sizes);
-        level_6 = _e11;
+    bool _e6 = softened(cloud);
+    if (_e6) {
+        float _e7 = baked_density(position_3, cloud, close_light, cloud_sampler);
+        level_5 = _e7;
     }
-    float _e12 = level_6;
-    metal::float4 _e15 = clouded(_e12, in_3.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
-    return _e15;
+    float _e8 = level_5;
+    metal::float4 _e9 = clouded(_e8, position_3, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    return _e9;
 }
 
-struct fs_cloud_gammaInput {
+struct fs_cloud_backdrop_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_gammaOutput {
+struct fs_cloud_backdrop_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_gammaOutput fs_cloud_gamma(
-  fs_cloud_gammaInput varyings [[stage_in]]
-, metal::float4 position_3 [[position]]
+fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
+  fs_cloud_backdrop_linearInput varyings [[stage_in]]
+, metal::float4 position_4 [[position]]
 , constant Cloud& cloud [[buffer(2)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
 , metal::sampler cloud_sampler [[sampler(0)]]
@@ -1239,15 +1063,13 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
 , metal::texture2d_array<float, metal::access::sample> star_halos_b [[texture(9)]]
 , metal::texture2d_array<float, metal::access::sample> star_halos_c [[texture(10)]]
 , metal::texture2d<float, metal::access::sample> cloud_tone [[texture(3)]]
-, constant Locals& locals [[buffer(0)]]
-, device type_16 const& grid [[buffer(1)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_a [[texture(4)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_b [[texture(5)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_c [[texture(11)]]
 , metal::sampler tile_sampler [[sampler(1)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
-    const VertexOut in = { position_3, varyings.slab, varyings.t };
-    metal::float4 _e1 = cloud_color(in, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, locals, grid, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler, _buffer_sizes);
-    return fs_cloud_gammaOutput { _e1 };
+    const VertexOut in = { position_4, varyings.slab, varyings.t };
+    metal::float4 _e3 = backdrop_color(in.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, star_atlas, star_halos, star_halos_b, star_halos_c, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
+    return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

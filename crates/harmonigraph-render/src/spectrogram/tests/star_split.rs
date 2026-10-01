@@ -536,3 +536,52 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
         }
     }
 }
+
+/// `Overlap light` adds light only where stars at one depth overlap past full
+/// coverage, and never takes any away. The fresh farthest depth, soloed, is
+/// dense enough to get there (two neighbours each cover about 0.7 halfway
+/// between them): read 2x2 as the plan picks, and again forced 3x3 so the
+/// excess is gathered through its halo image too. Stars too small to leave
+/// their own cell never overlap, and draw the same frame either way.
+#[test]
+fn overlap_light_brightens_saturated_overlaps_only() {
+    let Some((device, queue)) = headless_device() else { return };
+    use harmonigraph_scene::star_plan::{StarGather, StarTestBed};
+    let far = |gather| {
+        let mut bed = StarTestBed::default();
+        bed.depths[0].solo = true;
+        bed.depths[0].gather = gather;
+        Some(bed)
+    };
+    let frame = |light: f32, bed, size: Option<f32>| {
+        let mut cb = star_fixture([129, 97], egui::pos2(7.0, 11.0));
+        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+        stars.star_overlap_light = light;
+        stars.test_bed = bed;
+        if let Some(size) = size {
+            (stars.star_size_min, stars.star_size_max) = (size, size);
+        }
+        frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.25)
+    };
+    for bed in [far(None), far(Some(StarGather::Three))] {
+        let (plain, lit) = (frame(0.0, bed, None), frame(1.0, bed, None));
+        let gains: Vec<i32> = lit
+            .iter()
+            .zip(&plain)
+            .map(|(lit, plain)| i32::from(*lit) - i32::from(*plain))
+            .collect();
+        assert!(
+            gains.iter().all(|&gain| gain >= -1),
+            "overlap light darkened a pixel (bed {bed:?})"
+        );
+        assert!(
+            gains.iter().any(|&gain| gain >= 8),
+            "no far star overlapped past full coverage (bed {bed:?})"
+        );
+    }
+    let tiny = Some(harmonigraph_scene::STAR_SIZE_MIN);
+    assert!(
+        frame(0.0, None, tiny) == frame(1.0, None, tiny),
+        "overlap light changed stars that cannot overlap"
+    );
+}
