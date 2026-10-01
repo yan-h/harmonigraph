@@ -69,7 +69,7 @@ drag a bar or double-click it to type in the displayed units.
 | Cabinet depth axis | Point the endpoint along the depth axis; its distance from the origin sets the depth-step scale. |
 | Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
 | Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
-| Star size and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size uses a logarithmic vertical scale; speed is linear. |
+| Star size, spacing and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size and spacing use a logarithmic vertical scale; speed is linear. |
 | Shadow profile | Move the upper-right corner for width and darkness. Contour shadows have a curve handle; Blur shadows expose caster spread and show schematic extent because their actual profile depends on the caster. |
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Contour levels | Drag the integer slider from 2 to 16, or double-click to type; the band preview shows the count. |

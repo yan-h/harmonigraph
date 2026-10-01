@@ -305,7 +305,6 @@ mod tests {
         shared.ui.picture.appearance.camera.yaw = 1.23;
         shared.ui.picture.appearance.view.max_sevens = 3;
         shared.ui.picture.appearance.spectrum.low_midi = 40.5;
-        shared.ui.picture.appearance.spiral.zoom = 2.75;
         shared.ui.picture.appearance.render.short_edge = 2160;
         shared.ui.workspace.interaction.ui_scale = 1.25;
         let expected = shared.ui.picture.appearance.serialize();
@@ -330,7 +329,9 @@ mod tests {
         let blob = take.header.appearance.unwrap();
         assert_eq!(take.header.sample_rate, 44_100.0);
         assert_eq!(blob, expected);
-        assert!(!blob.contains("dock:") && !blob.contains("ui_scale:"));
+        assert!(
+            !blob.contains("dock:") && !blob.contains("ui_scale:") && !blob.contains("spiral:")
+        );
         let appearance = harmonigraph_ui::AppearanceDocument::parse(&blob).unwrap();
         assert_eq!(appearance.serialize(), expected);
         std::fs::remove_dir_all(directory).unwrap();

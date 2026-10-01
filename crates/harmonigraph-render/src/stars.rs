@@ -12,13 +12,13 @@ pub(crate) const STAR_SLICES: usize = 5;
 /// Without the reduction a session left running for hours would carry a drift
 /// of millions of star pixels into an f32, and the stars would start stepping
 /// by fractions of a pixel. It is wider than any pane is in the finest cells,
-/// so the repeat never shows: those are `STAR_SIZE_MIN / sqrt(STAR_DENSITY_MAX
+/// so the repeat never shows: those are `STAR_SPACING_MIN / sqrt(STAR_DENSITY_MAX
 /// / 2)`, 0.224 star pixels, which puts a 16:9 pane about 4300 cells wide (the
 /// 4096 this was once repeated inside it) and a 16:1 pane about 38,600.
 ///
 /// The price is the offset's own precision: an f32 near 65536 resolves a 256th
 /// of a cell, which is 0.03 star pixels in the fresh nearest cells and half a
-/// star pixel only in the biggest cell `Star size` and `Star density` allow.
+/// star pixel only in the biggest cell `Star spacing` and `Star density` allow.
 pub(crate) const STAR_HASH_PERIOD: f64 = 65536.0;
 /// The period the life clock is reduced by, in lives: a power of two, so the
 /// shader's mask on the life index wraps with it and a star's life runs
@@ -51,16 +51,16 @@ struct StarSlice {
     /// This slice's drift, in its own cells, reduced modulo
     /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
     offset: Float2,
-    /// The cell one star is hashed into: `Star size`'s low end at the far end
-    /// over the square root of half the density, times the ratio of its ends
-    /// raised to `d^Size curve` — at the prototype's 2 to 32 and 2, 32 at the
-    /// near end and most of the depth fine dust.
+    /// The cell one star is hashed into: `Star spacing`'s low end at the far
+    /// end over the square root of half the density, times the ratio of its
+    /// ends raised to `d^Spacing curve`.
     cell: f32,
-    /// The core's base sigma, before the per-star size draw.
+    /// The core's base sigma, before the per-star size draw: a quarter of
+    /// this depth's diameter on the `Star size` curve, the same at every
+    /// depth for the same value.
     sigma: f32,
-    /// The ceiling on a core, before defocus: 1.8 star pixels or a third of a
-    /// cell. The cell half is what keeps the dust pinpoint — dropping it made
-    /// the prototype's field foamy.
+    /// The ceiling on a core, before defocus: a third of a cell. It is what
+    /// keeps the dust pinpoint — dropping it made the prototype's field foamy.
     cap: f32,
     /// How much the core is widened after the cap, equally at every depth.
     defocus: f32,
@@ -93,7 +93,7 @@ pub(crate) const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb
 pub(crate) const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
 /// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
 /// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
-/// million; only the finest `Star size` at a high `Star density`, or a
+/// million; only the finest `Star spacing` at a high `Star density`, or a
 /// still wider pane, asks for more (see [`star_layout`]).
 const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
@@ -110,14 +110,14 @@ const STAR_GRID_MARGIN: u32 = 1;
 /// dial that sizes cells reallocates at steps rather than every frame.
 const STAR_ATLAS_STEP: u32 = 64;
 
-/// Each slice's cell as the dials ask for it, in star pixels: `Star size`'s
-/// low end at the far end over the square root of half the density, times the
-/// ratio of its ends raised to `d^Size curve`.
+/// Each slice's cell as the dials ask for it, in star pixels: `Star
+/// spacing`'s low end at the far end over the square root of half the
+/// density, times the ratio of its ends raised to `d^Spacing curve`.
 pub(crate) fn star_cells(settings: harmonigraph_scene::StarSettings) -> [f32; STAR_SLICES] {
     let packing = (settings.star_density / 2.0).sqrt();
-    let (small, big) = (settings.star_size_min, settings.star_size_max);
+    let (small, big) = (settings.star_spacing_min, settings.star_spacing_max);
     std::array::from_fn(|k| {
-        small * (big / small).powf(star_depth(k).powf(settings.star_size_curve)) / packing
+        small * (big / small).powf(star_depth(k).powf(settings.star_spacing_curve)) / packing
     })
 }
 
@@ -178,7 +178,7 @@ impl StarLayout {
 /// The starfield's layout for a pane `aspect` wide per unit of height.
 ///
 /// Where the dials' cells would take more atlas than [`STAR_ATLAS_TEXELS`] —
-/// the finest `Star size` at a high `Star density`, where a far cell is a
+/// the finest `Star spacing` at a high `Star density`, where a far cell is a
 /// fraction of a pixel on any real pane — the finest cells are raised to the
 /// smallest floor that fits, so those slices hold fewer, sparser stars and
 /// every other slice is untouched.
@@ -238,19 +238,16 @@ pub(crate) fn star_slices(
     // Star pixels travelled at a speed of one.
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
-    let small = settings.star_size_min;
-    let big = settings.star_size_max;
+    let (small, big) = (settings.star_diameter_min, settings.star_diameter_max);
     std::array::from_fn(|k| {
-        let d = star_depth(k);
-        let along = d.powf(settings.star_size_curve);
+        let along = star_depth(k).powf(settings.star_diameter_curve);
         let cell = layout.cells[k];
-        // The core and its cap grow with this depth's spacing over the
-        // prototype's 2-to-32 one at the same depth, so a bigger `Star size` is
-        // bigger stars and not only sparser ones, and ends of 2 and 32 are 1
-        // here.
-        let scale = small / 2.0 * (big / small / 16.0).powf(along);
-        let sigma = (0.5 + 0.8 * d) * scale;
-        let cap = (0.33 * cell).min(1.8 * scale);
+        // The core is this depth's point on the `Star size` curve alone, a
+        // diameter of four sigmas, so one value on the control is one star
+        // size at every depth; capped at a third of the depth's actual
+        // spacing, which `Star spacing`, density and the atlas floor set.
+        let sigma = 0.25 * small * (big / small).powf(along);
+        let cap = 0.33 * cell;
         let defocus = 1.0 + settings.star_defocus;
         let speed = f64::from(star_speed(settings, k));
         let shift = |axis: f64| {

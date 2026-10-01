@@ -179,7 +179,8 @@ pub struct SheetUploads {
 /// in.
 ///
 /// One struct rather than two arguments: every paint callback in this crate
-/// takes both, both are `u64`, and nothing but their order told them apart.
+/// that keeps buffers per pane takes both, both are `u64`, and nothing but
+/// their order told them apart.
 /// A call that swapped them would key each pane's buffers on the frame
 /// counter — a fresh chain, grid or instance buffer every frame, held until
 /// the sweep aged it out — while the sweep itself read a pane id as an age and

@@ -104,8 +104,9 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
         star_density, star_randomness, star_size_variation, star_jitter, star_fringe, star_far_fill, star_halo_resolution,
-        star_speed_min, star_speed_max, star_defocus, star_size_min, star_size_max,
-        star_size_curve, star_speed_curve, star_lifetime);
+        star_speed_min, star_speed_max, star_defocus, star_spacing_min, star_spacing_max,
+        star_spacing_curve, star_diameter_min, star_diameter_max, star_diameter_curve,
+        star_speed_curve, star_lifetime);
     }
     for material in
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
@@ -116,10 +117,10 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
     // These owners have NO ValueBar/RangeBar today. Still pass through their
-    // real shared load boundary; zero Video visits below explicitly records
-    // that its text/choice/divider controls are not range-guard coverage.
-    a.spiral.zoom = v;
-    a.spiral.look = glam::Vec2::splat(v);
+    // real load boundary; zero Video visits below explicitly records that its
+    // text/choice/divider controls are not range-guard coverage.
+    saved.workspace.interaction.spiral.zoom = v;
+    saved.workspace.interaction.spiral.look = glam::Vec2::splat(v);
     a.render.stop_bar = v as f64;
     a.render.frame.split = v;
 }
@@ -135,8 +136,8 @@ fn loaded(edge: Edge) -> SharedState {
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
-    assert!((1.0..=8.0).contains(&state.picture.appearance.spiral.zoom));
-    assert!(state.picture.appearance.spiral.look.length() <= 1.0);
+    assert!((1.0..=8.0).contains(&state.workspace.interaction.spiral.zoom));
+    assert!(state.workspace.interaction.spiral.look.length() <= 1.0);
     assert!(
         (STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1).contains(&state.picture.appearance.render.stop_bar)
     );
@@ -330,7 +331,7 @@ fn scenarios() -> Vec<Scenario> {
                 + 3
                 + 6
                 + 2
-                + 12
+                + 14
                 + 4
                 + usize::from(profile == harmonigraph_scene::StarHaloProfile::Uniform),
             ..base
@@ -365,10 +366,10 @@ fn scenarios() -> Vec<Scenario> {
     // Stars replace the scale bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
-        (harmonigraph_scene::StarHaloProfile::P3, 12),
-        (harmonigraph_scene::StarHaloProfile::Medium, 12),
-        (harmonigraph_scene::StarHaloProfile::Low, 12),
-        (harmonigraph_scene::StarHaloProfile::Uniform, 13),
+        (harmonigraph_scene::StarHaloProfile::P3, 14),
+        (harmonigraph_scene::StarHaloProfile::Medium, 14),
+        (harmonigraph_scene::StarHaloProfile::Low, 14),
+        (harmonigraph_scene::StarHaloProfile::Uniform, 15),
     ] {
         cases.push(Scenario {
             pane: panes::Tab::AnalyzerSettings,

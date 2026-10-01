@@ -195,6 +195,12 @@ pub struct SurfaceState {
 /// the layout being traversed, so a reset request cannot replace a live dock.
 pub struct Interaction {
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
+    /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
+    ///
+    /// Here rather than in the appearance for the reason `show_perf` is: the
+    /// Spiral is an editor tab and never exported (#974), so its framing is
+    /// how this editor is looking at the picture, and rides in no take.
+    pub(crate) spiral: panes::spiral::SpiralView,
     /// User-saved camera angles, applied like the built-in Flat/Isometric
     /// presets (persisted; see Camera in the Lattice page's View section).
     pub camera_presets: Vec<CameraPreset>,
@@ -493,6 +499,7 @@ impl SharedState {
             version: UI_PERSIST_VERSION,
             layout: self.workspace.layout.clone(),
             analyzer_regions: self.workspace.interaction.analyzer_regions.clone(),
+            spiral: self.workspace.interaction.spiral,
             folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
@@ -544,6 +551,8 @@ impl SharedState {
         };
         self.workspace.interaction.analyzer_regions = persist.analyzer_regions;
         self.workspace.interaction.analyzer_regions.sanitize();
+        self.workspace.interaction.spiral = persist.spiral;
+        self.workspace.interaction.spiral.sanitize();
         self.workspace.layout = persist.layout;
         self.workspace.layout.sanitize();
         self.workspace.layout_runtime = workspace::Runtime::default();
@@ -565,8 +574,8 @@ impl SharedState {
         self.workspace.interaction.skin_dials = persist.skin_dials;
         self.workspace.interaction.skin_dials.sanitize();
         // A hand-edited NaN is dropped rather than honoured, on the grounds
-        // `AppearanceDocument::normalize` repairs the spiral framing on: it
-        // positions drawn geometry, and NaN geometry is a panic inside egui's
+        // the Spiral's framing is repaired on above: it positions drawn
+        // geometry, and NaN geometry is a panic inside egui's
         // tessellator. A dropped position opens the HUD where an undragged one
         // opens, which is a place the user can see it and drag it from.
         self.workspace.interaction.perf_pos = persist.perf_pos.filter(|pos| pos.is_finite());
@@ -618,7 +627,10 @@ fn default_ui_scale() -> f32 {
 /// callers each covers.
 ///
 /// 7: camera, view, spectrum, spiral and render moved into one appearance
-/// document. Previous editor saves are refused whole, with no migration.
+/// document. Previous editor saves are refused whole, with no migration. The
+/// spiral framing has since moved back out to a top-level editor key (#1332)
+/// without a bump: the copy an older save nests in its appearance is ignored,
+/// so that framing opens on the whole disc once.
 pub(crate) const UI_PERSIST_VERSION: u32 = 7;
 
 /// On-disk format of [`SharedState::save_persist`]. Bump thoughtfully; a
@@ -632,6 +644,8 @@ pub(crate) struct UiPersist {
     pub(crate) version: u32,
     pub(crate) layout: workspace::Layout,
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
+    /// See [`Interaction::spiral`]; a blob without it opens on the whole disc.
+    pub(crate) spiral: panes::spiral::SpiralView,
     /// See [`Interaction::folded_sections`]; a blob without it opens every
     /// section.
     pub(crate) folded_sections: std::collections::BTreeSet<String>,
@@ -660,6 +674,7 @@ impl Default for UiPersist {
             version: 0,
             layout: workspace::Layout::default(),
             analyzer_regions: Default::default(),
+            spiral: Default::default(),
             folded_sections: Default::default(),
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
@@ -704,6 +719,7 @@ impl Default for Interaction {
     fn default() -> Self {
         Self {
             analyzer_regions: Default::default(),
+            spiral: Default::default(),
             camera_presets: Vec::new(),
             preset_name: String::new(),
             take: TakeState::default(),

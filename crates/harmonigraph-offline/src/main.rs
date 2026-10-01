@@ -573,7 +573,7 @@ mod tests {
         recorded.camera.cabinet_scale = 0.7;
         recorded.view.max_sevens = 3;
         recorded.spectrum.low_midi = 40.5;
-        recorded.spiral.zoom = 2.75;
+        recorded.spectrum.roll_thickness = 1.75;
         recorded.render.short_edge = 180;
         recorded.render.frame.aspect_w = 16;
         recorded.render.frame.aspect_h = 9;
@@ -625,7 +625,7 @@ mod tests {
         replacement.camera.cabinet_scale = 0.9;
         replacement.view.max_sevens = 1;
         replacement.spectrum.low_midi = 45.0;
-        replacement.spiral.zoom = 1.5;
+        replacement.spectrum.roll_thickness = 0.5;
         replacement.render.frame.aspect_w = 1;
         replacement.render.frame.aspect_h = 1;
         replacement.render.short_edge = 256;

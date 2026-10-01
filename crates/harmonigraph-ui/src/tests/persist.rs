@@ -116,6 +116,9 @@ const RETIRED_KEYS: &[(&str, &str)] = &[
     // The overlay switches, moved out of the view to the editor's top level:
     // one inside a view must not reach the top-level key of the same name.
     ("render_scale", "show_perf:true,show_perf_detail:true,"),
+    // The Spiral's framing, moved out of the appearance to the editor's top
+    // level for the same reason, and a struct where those were flags.
+    ("spectrum", "spiral:(zoom:3.0,look:(0.4,-0.6)),"),
 ];
 
 /// A retired key costs nothing: through both doors — the editor's
@@ -971,6 +974,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "version",
         "layout",
         "analyzer_regions",
+        "spiral",
         "folded_sections",
         "appearance",
         "camera_presets",
@@ -1042,11 +1046,11 @@ fn workspace_edits_do_not_change_recorded_appearance() {
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.max_sevens = 3;
     state.picture.appearance.spectrum.low_midi = 40.5;
-    state.picture.appearance.spiral.zoom = 2.75;
     state.picture.appearance.render.short_edge = 2160;
     let appearance = state.picture.appearance.serialize();
     let editor = state.save_persist();
     state.workspace.layout = workspace::Layout::solo(crate::panes::Tab::Console);
+    state.workspace.interaction.spiral.zoom = 2.75;
     state.workspace.layout.right.lattice = 320.0;
     state.workspace.interaction.folded_sections.insert("System/Performance".into());
     state.workspace.interaction.ui_scale = 1.25;
@@ -1070,7 +1074,6 @@ fn an_appearance_missing_any_one_group_keeps_the_rest() {
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.max_sevens = 3;
     state.picture.appearance.spectrum.low_midi = 40.5;
-    state.picture.appearance.spiral.zoom = 2.75;
     state.picture.appearance.render.short_edge = 2160;
     let saved = state.picture.appearance.serialize();
     let defaults = AppearanceDocument::default().serialize();
@@ -1097,7 +1100,7 @@ fn an_appearance_missing_any_one_group_keeps_the_rest() {
 /// The Spiral pane's framing round-trips, and a hand-edited one comes back
 /// drawable.
 ///
-/// Persisted for the reason the camera beside it is — a framing is dialled in by
+/// Persisted for the reason the lattice's camera is — a framing is dialled in by
 /// hand and comes back when the editor reopens — so what has to hold is that the pair
 /// SURVIVES rather than being re-derived from the fit, and that a nonsense one
 /// cannot reach the pane: both fields multiply the geometry it paints, and NaN
@@ -1107,13 +1110,13 @@ fn persist_round_trips_the_spiral_framing() {
     let mut state = fresh();
     // A zoom off both ends of the range and a look off both axes, so a field
     // dropped or transposed on the way through shows up.
-    state.picture.appearance.spiral =
+    state.workspace.interaction.spiral =
         crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
 
     let mut restored = fresh();
     assert!(restored.load_persist(&state.save_persist()));
-    assert_eq!(restored.picture.appearance.spiral.zoom, 2.75);
-    assert_eq!(restored.picture.appearance.spiral.look, glam::vec2(0.4, -0.6));
+    assert_eq!(restored.workspace.interaction.spiral.zoom, 2.75);
+    assert_eq!(restored.workspace.interaction.spiral.look, glam::vec2(0.4, -0.6));
 
     // And the repair on the way in, which is `load_persist`'s call rather than
     // the pane's: a blob nothing but a text editor could have written.
@@ -1123,9 +1126,9 @@ fn persist_round_trips_the_spiral_framing() {
     let mut restored = fresh();
     assert!(restored.load_persist(&edited));
     assert!(
-        restored.picture.appearance.spiral.zoom.is_finite(),
+        restored.workspace.interaction.spiral.zoom.is_finite(),
         "a NaN zoom opened at {}",
-        restored.picture.appearance.spiral.zoom,
+        restored.workspace.interaction.spiral.zoom,
     );
 }
 
@@ -1135,15 +1138,14 @@ fn persist_round_trips_the_spiral_framing() {
 ///
 /// One layer in from [`a_persist_blob_missing_any_one_section_keeps_the_rest`],
 /// and that is the whole reason it exists: sweeping whole sections exercises
-/// `AppearanceDocument`'s container-level attribute, where this is the only thing that
+/// `UiPersist`'s container-level attribute, where this is the only thing that
 /// asks after `SpiralView`'s container-level one — the attribute nothing at a
 /// declaration says is there.
 ///
-/// The input is one a hand-authored `--appearance` file arrives in every time:
-/// `spiral: (zoom: 3.0)` and no `look`, because a person writing a framing out by
-/// hand writes the field they came to change. Without the attribute that file does
-/// not cost `look` — it sinks the whole document, dock and camera with it, and
-/// nothing but this would fail.
+/// The input is `spiral: (zoom: 3.0)` and no `look`, which is what a person
+/// writing a framing into a saved blob by hand writes: the field they came to
+/// change. Without the attribute that blob does not cost `look` — it sinks the
+/// whole document, dock and camera with it, and nothing but this would fail.
 #[test]
 fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
     let mut state = fresh();
@@ -1153,11 +1155,11 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
     // Both fields off their fresh values, and the look off both axes: a field
     // that came back from the wrong place is only visible against a value the
     // default is not.
-    state.picture.appearance.spiral =
+    state.workspace.interaction.spiral =
         crate::panes::spiral::SpiralView { zoom: 2.75, look: glam::vec2(0.4, -0.6) };
     let saved = state.save_persist();
 
-    let whole = top_level_pairs(&state.picture.appearance.serialize())
+    let whole = top_level_pairs(&saved)
         .into_iter()
         .find_map(|(key, text)| (key == "spiral").then_some(text))
         .expect("the blob carries a spiral section");
@@ -1183,13 +1185,15 @@ fn a_persist_blob_missing_any_one_spiral_key_keeps_the_rest() {
             restored.picture.appearance.camera.yaw, 1.23,
             "dropping the spiral's {key:?} cost the camera too"
         );
+        let framing = state.workspace.interaction.spiral;
         let want = match key.as_str() {
-            "zoom" => (opened.zoom, state.picture.appearance.spiral.look),
-            "look" => (state.picture.appearance.spiral.zoom, opened.look),
+            "zoom" => (opened.zoom, framing.look),
+            "look" => (framing.zoom, opened.look),
             other => panic!("the framing grew a {other:?} field this sweep does not name"),
         };
+        let restored = restored.workspace.interaction.spiral;
         assert_eq!(
-            (restored.picture.appearance.spiral.zoom, restored.picture.appearance.spiral.look),
+            (restored.zoom, restored.look),
             want,
             "dropping the spiral's {key:?} did not cost that key alone",
         );

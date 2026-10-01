@@ -1828,14 +1828,16 @@ mod tests {
     /// over a flat level so a star's colour does not change with where
     /// it is, on a 540-point pane so a star pixel is a device pixel — and the
     /// clock steps by the time the drift takes to cover a whole number of
-    /// them. Lives are long and the step short, so a star's fade moves a
+    /// them, and of texels in every reduced star image too (Medium's far 50%
+    /// and near 75%: 8 pixels is 4 and 6), so resampling is not read as a
+    /// move. Lives are long and the step short, so a star's fade moves a
     /// couple of levels at most, and a life that turns over is at zero at both
     /// ends of the turn. An ignored offset leaves the field where it was, and
     /// a flipped one moves it the other way: either fails the first assert.
     #[test]
     fn the_starfield_moves_by_the_drift() {
         const PANE: u32 = 540;
-        const SHIFT: usize = 6;
+        const SHIFT: usize = 8;
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
         let mut cb = refracted_fixture();
