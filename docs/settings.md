@@ -122,7 +122,9 @@ and thickness between zero and **Thickness max** times its reference width.
 An opacity base of 1 leaves no room for positive additions;
 lower it to see velocity or pressure brighten the note.
 Note-release fading still applies,
-and the lattice's separate background node glow does not follow these mappings.
+and the lattice's background node glow follows Opacity as the ink does,
+shining as strongly as the node's most opaque slice,
+but not Thickness.
 
 The colored bands sit inside each standard base slider,
 behind its label and value,

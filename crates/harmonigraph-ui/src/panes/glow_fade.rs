@@ -197,8 +197,8 @@ impl GlowFade {
             // halves of one light cannot come to disagree about what lit it.
             //
             // `NodeMotion::step` has already answered that into `glow.level`,
-            // marks included, each layer read before the Opacity mapping that
-            // `activation` and the mark levels carry.
+            // marks included, each layer read after the Opacity mapping, as
+            // `activation` and the mark levels carry it.
             let target = node.glow.level.clamp(0.0, 1.0);
             node.glow = match self.nodes.get_mut(&node.lattice_pos) {
                 Some(lit) => {
