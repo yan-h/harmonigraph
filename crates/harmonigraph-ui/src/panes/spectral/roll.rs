@@ -38,7 +38,7 @@ const MIN_RIBBON_PX: f32 = 1.5;
 ///
 /// The same shape of problem as [`MIN_RIBBON_PX`] on the other axis, with a
 /// sharper threshold, because this is the axis a note MOVES along. The shader
-/// antialiases with a one-pixel box filter (`band`/`inside` in roll.wgsl),
+/// antialiases with a one-pixel box filter (`inside` in roll.wgsl),
 /// which conserves a shape's total ink under any sub-pixel offset but not its
 /// PEAK — and peak is what the eye reads on something a pixel or two across.
 /// Measured on the real pipeline, sweeping a note through eight sub-pixel
@@ -96,21 +96,20 @@ const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
 /// be left in by accident, and the ribbon still carries its own color where
 /// the surround has stopped saying anything.
 ///
-/// Opaque where it is solid, and translucent only through the fade — never a
-/// flat tint. A uniformly translucent surround takes its color from whatever is
-/// behind it, so the same note comes out with a different edge over a loud cell
-/// than over a quiet one, and washes out entirely against the bright end of a
-/// palette — the one place a note most needs an edge, since that is the cell the
-/// note itself is making. The fade is a shape's ending rather than a strength:
-/// it is opaque against the note and gone at its reach, wherever it is drawn.
+/// The colour is opaque black, and how dark it paints is the Shadow darkness:
+/// darkest against the note, falling off to nothing at its reach. At the bar's
+/// default that is a deep tint rather than solid black, so the backdrop still
+/// shows through the edge, as it does through every other shadow in the
+/// picture.
 ///
 /// The inherited spectral geometry width resolves to points, so it is the same
-/// edge at every zoom and every ribbon width.
+/// edge at every zoom and every ribbon width. The shader reads that reach from
+/// the shadow style itself; the one returned here is for the culls, which keep
+/// a note whose outline is still on screen.
 ///
 /// Off comes back zero-reach AND transparent, never one or the other: the reach
-/// is what the quad grows by to make room for the outline (and what the
-/// far-edge cull keeps a leaving note alive for), so an outline that will not
-/// paint must not be paid for either.
+/// is what the far-edge cull keeps a leaving note alive for, so an outline that
+/// will not paint must not be paid for either.
 fn outline(style: harmonigraph_scene::ShadowStyle) -> (f32, Color32) {
     let reach = harmonigraph_render::spectral_shadow_reach(style);
     (reach, if style.casts() { Color32::BLACK } else { Color32::TRANSPARENT })
@@ -570,7 +569,6 @@ fn roll_instances_with_floor(
                     center: [center.x, center.y],
                     half_extent: [half_pitch * grow, half],
                     shear: 0.0,
-                    outline_reach: outline_px,
                     // The whole box is lead, so its opacity and configured tip
                     // fade apply from the now-line to its analyzer-side tip.
                     lead: lead_px,
@@ -647,13 +645,11 @@ fn roll_instances_with_floor(
             // How far that cap may reach while the lead is still on the box.
             //
             // The shader stands the cap against the note's own end UNDER the
-            // lead, so the RELEASE needs no ramp here: the lead's own ink
-            // increasingly reveals the cap as it fades, so the edge comes up
-            // through the tongue over the whole
-            // release. The alternative is an edge that arrives whole the frame
-            // the lead is dropped, which lands on a ribbon that has spent that
-            // release dissolving — nothing else in the picture moves then, and
-            // it is the one moment an edge appearing reads as a fault.
+            // lead, so a standing lead covers it. This box's lead stands whole
+            // until the key comes up and is spent from then on
+            // (`attached_alpha` below): the release fades the DETACHED tongue,
+            // which carries no cap, while this box keeps its spent lead only
+            // as a guard on the clip, and the cap shows through it.
             //
             // What is left to decide is ROOM, which is the paragraph above: the
             // cap stands OUTSIDE the note's end, in the stretch the lead opened
@@ -690,18 +686,15 @@ fn roll_instances_with_floor(
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
             // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them. Only the body's own opacity can let
-            // part of a neighboring shadow show through its color.
+            // then every body over them. Only a body faded by its Opacity
+            // reading lets part of a neighboring shadow show through its color.
             //
             // It has to be that way round rather than something gentler at the
-            // seam. Coverage is OPAQUE where the outline meets its own note
-            // whatever the fade is set to (`outline_coverage`, and the reason
-            // is in [`outline`]: a surround that is translucent against the
-            // note takes its color from the cell behind it and washes out over
-            // a bright one). Composited with its own note, that opacity landed
-            // on the neighbour it reached into — repeats of one key butt
-            // together along time, and the later one blanked the tail of the
-            // earlier.
+            // seam. The outline is at its darkest where it meets its own note,
+            // as dark as the Shadow darkness makes it (`outline_coverage`).
+            // Composited with its own note, that darkness landed on the
+            // neighbour it reached into — repeats of one key butt together
+            // along time, and the later one blanked the tail of the earlier.
             //
             // What it does cost is the seam between two notes that TOUCH:
             // same key, no gap, and the two bodies now meet directly in one
@@ -833,7 +826,6 @@ fn roll_instances_with_floor(
                 center: [center.x, center.y],
                 half_extent: [half_pitch, half_depth],
                 shear: slope,
-                outline_reach: outline_px,
                 lead: lead_px,
                 lead_fade: lead_fade_px,
                 lead_alpha: attached_alpha,
@@ -1138,7 +1130,7 @@ mod tests {
     /// A note must stay on screen until the last of its INK is past the far
     /// edge, not until the last of its box is.
     ///
-    /// The shader paints the keyline and an antialiasing ramp outside the box
+    /// The shader paints the outline and an antialiasing ramp outside the box
     /// it is handed, so testing the box against the window
     /// dropped the note while a few points of ribbon were still owed — it
     /// popped short of the edge rather than sliding under it. The overhang is
@@ -1316,66 +1308,21 @@ mod tests {
         assert!(instances(&state, 1.0).is_empty(), "the fixture's note reaches the zoom at rest");
     }
 
-    /// The outline stands the same distance off at every zoom and every note
-    /// width — an edge does not thin out because the ribbon it wraps did, and
-    /// does not thicken because the range was zoomed in.
-    ///
-    /// Constant is the requirement, not a simplification of one. An outline
-    /// tied to the ribbon would hold a steadier ratio between the two, at the
-    /// price of making the zoom change what a note IS rather than how much of
-    /// the axis it covers — and the wide end, where a scaled outline would give
-    /// way, is exactly where a picture full of notes needs its edges most.
-    ///
-    /// It is expressed as a DISTANCE OUTSIDE the note's edge, never as a wider
-    /// stroke of it; that distinction is the flood fix, and it is structural,
-    /// since the shader reads the outline off distances outside the note's own
-    /// edge. What is left to check here is that the reach is handed over
-    /// unscaled.
-    #[test]
-    fn the_outline_stands_the_same_distance_off_at_any_note_width() {
-        let thick = ribbon_with_range(1.5, 12.0);
-        // ~120 semitones over 100 points: the ribbon is under 2 points thick,
-        // which is where a centered stroke meets itself in the middle and
-        // paints the interior black.
-        let thin = ribbon_with_range(1.5, 120.0);
-        assert_eq!(one(&thick).outline_reach, 1.5, "the outline is not the reach it was set to");
-        assert_eq!(
-            one(&thin).outline_reach,
-            one(&thick).outline_reach,
-            "the outline thinned with the note",
-        );
-        assert!(
-            one(&thin).half_extent[0] < one(&thick).half_extent[0],
-            "the two notes are the same thickness; the comparison is vacuous",
-        );
-        // And nothing in between is a ramp: the reach is one number, not a
-        // reading of the ribbon it stands against.
-        let middling = ribbon_with_range(1.5, 200.0 / 3.0);
-        assert_eq!(one(&middling).outline_reach, 1.5, "the outline scaled with the ribbon");
-    }
-
-    /// The outline is OPAQUE black where it meets the note, at every reach that
-    /// draws it at all, and its fade is what takes it out from there.
-    ///
-    /// Opacity against the note is the point rather than a detail. A uniformly
-    /// translucent surround takes its color from the spectrogram behind it, so
-    /// the same note reads differently over a loud cell than a quiet one, and
-    /// washes out entirely against the bright end of a palette — the cell a
-    /// note makes for itself. Anything less than 255 here is that bug returning
-    /// quietly, and dialling the fade is not how you would ask for it.
+    /// The outline's colour is opaque black at every width that casts at all;
+    /// how dark it paints is the Shadow darkness, which the shader applies.
+    /// Anything less than 255 here would dim the outline a second time, by a
+    /// number no bar shows.
     ///
     /// Off has to mean zero reach AND no color, never one or the other: the
-    /// reach is what the quad grows by to make room for the outline (and what
-    /// keeps a leaving note alive past the far edge), so an outline that will
-    /// not paint must not be paid for either.
+    /// reach is what keeps a leaving note alive past the far edge, so an
+    /// outline that will not paint must not be paid for either.
     #[test]
-    fn the_outline_is_opaque_black_at_every_reach_that_draws_it() {
+    fn the_outline_is_opaque_black_at_every_width_that_casts() {
         // Three settings across the bar's whole travel: the least it can be set
         // to above nothing, a modest one, and full.
         for reach in [0.05, 2.0, 4.0] {
             let lit = ribbon(reach);
             let note = one(&lit);
-            assert_eq!(note.outline_reach, reach, "the outline is not the reach it was set to");
             assert_eq!(
                 note.outline,
                 [0, 0, 0, 255],
@@ -1385,13 +1332,13 @@ mod tests {
         }
 
         let off = ribbon(0.0);
-        let note = one(&off);
-        assert_eq!(note.outline_reach, 0.0, "an outline of no reach still made room for one");
-        assert_eq!(note.outline[3], 0, "an outline of no reach left a color behind");
+        assert_eq!(one(&off).outline[3], 0, "an outline of no width left a color behind");
+        let shut = harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() };
+        assert_eq!(outline(shut).0, 0.0, "an outline of no width still made room for one");
     }
 
     /// A zero-depth shadow is off everywhere upstream of the atlas too: the
-    /// instance carries no reach or color, and the roll's far-edge cull keeps
+    /// instance carries no outline color, and the roll's far-edge cull keeps
     /// it only for the ribbon's own pixel feather rather than for a transparent
     /// width-sized surround.
     #[test]
@@ -1403,7 +1350,6 @@ mod tests {
             ..Default::default()
         };
         let shut = ribbon_with_style(style(0.0), 12.0);
-        assert_eq!(one(&shut).outline_reach, 0.0, "the instance kept transparent reach");
         assert_eq!(one(&shut).outline[3], 0, "the instance kept transparent outline ink");
 
         let last_visible = |depth| {
@@ -2155,10 +2101,11 @@ mod tests {
             // the line through the screen while the pane placed the note along
             // its own axis — the two orders of arithmetic part at the last bit.
             let tip = past_the_line(&note, &axes, split);
+            let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
             let (drawn, over) = if note.lead > 0.0 {
                 (note.cap_reach > 0.0, tip - note.lead + note.cap_reach + 0.5 / PPP)
             } else {
-                (true, tip + note.outline_reach + 0.5 / PPP)
+                (true, tip + outline_px + 0.5 / PPP)
             };
             assert!(
                 !drawn || over <= 1e-3,
@@ -2299,6 +2246,7 @@ mod tests {
 
         // Growing with the room, and never shrinking — the cap comes out of the
         // note's own end rather than being faded in over it.
+        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
         let mut previous = 0.0f32;
         let mut full_at = None;
         let mut elapsed = 0.0f64;
@@ -2318,12 +2266,11 @@ mod tests {
                 note.cap_reach,
             );
             assert!(
-                note.cap_reach <= note.outline_reach + 1e-4,
-                "the cap reached {} past an outline of {}",
+                note.cap_reach <= outline_px + 1e-4,
+                "the cap reached {} past an outline of {outline_px}",
                 note.cap_reach,
-                note.outline_reach,
             );
-            if full_at.is_none() && note.cap_reach >= note.outline_reach - 1e-4 {
+            if full_at.is_none() && note.cap_reach >= outline_px - 1e-4 {
                 full_at = Some(elapsed);
             }
             previous = note.cap_reach;
@@ -2385,12 +2332,12 @@ mod tests {
             }
         }
         let last = at(with);
+        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
         assert!(
-            last.cap_reach >= last.outline_reach - 1e-4,
-            "the lead was given up at {without}s with its cap at {} of {} — the \
+            last.cap_reach >= outline_px - 1e-4,
+            "the lead was given up at {without}s with its cap at {} of {outline_px} — the \
              handover is a step, not a continuation",
             last.cap_reach,
-            last.outline_reach,
         );
     }
 

@@ -1214,6 +1214,27 @@ fn a_transient_tuning_status_does_not_move_the_adaptive_controls() {
     );
 }
 
+/// A configuration fault latches until the host resets the plugin, so its
+/// notice must not offer the pane's Reset, which leaves it set. Incomplete held
+/// state does clear on that Reset, and keeps the notice that says so. With
+/// both bits up, the fault wins: the Reset would clear the other and not it.
+#[test]
+fn a_configuration_fault_asks_for_a_host_reset() {
+    use panes::tuning::{
+        CONFIGURATION_FAULT_NOTICE as FAULT, HELD_STATE_INCOMPLETE_NOTICE as HELD,
+    };
+    let notices = |status| {
+        let mut state = fresh();
+        state.picture.runtime.configuration_status = status;
+        let shapes = tab_body(&mut state, panes::Tab::Tuning, 423.0, PANE_HEIGHT).shapes;
+        [FAULT, HELD].map(|notice| text_y(&shapes, notice).is_some())
+    };
+    assert_eq!(notices(0), [false, false]);
+    assert_eq!(notices(1), [false, true], "incomplete held state");
+    assert_eq!(notices(2), [true, false], "configuration fault");
+    assert_eq!(notices(3), [true, false], "fault and incomplete held state");
+}
+
 /// The size a settings pane is soloed at to make it scroll: narrow enough that
 /// the bars run the width of the column, and short enough that every pane in
 /// the sweep — System, the shortest list of them — overflows it.

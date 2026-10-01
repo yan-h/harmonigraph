@@ -48,6 +48,14 @@ use tuning::tuning_pane;
 /// pointer at all; Analyzer gesture routing distinguishes all three.
 pub(crate) const DOCKED_SURFACE: usize = 0;
 
+/// A length stored in a node's quad uv, read out as a percentage of the TRUE
+/// node radius: uv 1.0 is 1.8 node radii (`marker_world` in harmonigraph-scene),
+/// so it reads 180%. Every lattice bar stored in quad uv (Reach, Gap, Cross
+/// length) displays and takes typed values through this, so its readout and
+/// its hover name the same radius as the Shadow and Pickup widths (#1327).
+/// Display only: the saved numbers stay in uv.
+pub(super) const QUAD_UV_PERCENT: f32 = 180.0;
+
 /// The one target chrome both draggable pictures use in the Video preview.
 /// A translucent accent fill keeps the destination legible over either a dark
 /// spectrogram or a busy lattice, while the opaque edge keeps its bounds exact.

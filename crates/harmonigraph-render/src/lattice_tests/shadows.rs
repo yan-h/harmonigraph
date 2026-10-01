@@ -201,7 +201,7 @@ fn a_node_distance_profile_matches_the_cpu_reference() {
     let ring = layout.ring(node.cents);
     let sector = |slot: i32| {
         let i = (slot - ring.base).clamp(0, layout.span as i32 - 1) as usize;
-        [ring.seam - layout.bounds[i], ring.seam - layout.bounds[i + 1]]
+        [layout.edge(ring, i), layout.edge(ring, i + 1)]
     };
     let fold = |uv: glam::Vec2, edges: [f32; 2]| {
         let mid = 0.5 * (edges[0] + edges[1]);

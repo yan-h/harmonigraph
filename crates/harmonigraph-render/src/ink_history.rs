@@ -42,6 +42,10 @@ impl InkHistory {
                 continue;
             }
             let row = &mut self.rows[instance.glow[1] as usize];
+            // The shipped ink after Opacity, which is exactly the glow target
+            // `NodeMotion::step` hands `GlowFade`; against the carried level
+            // that is the test the CPU makes, so colour and brightness take
+            // the same attack or release.
             let target = instance.params.into_iter().fold(0.0, f32::max).clamp(0.0, 1.0);
             instance.glow[2] = if row.owner != owner || row.seen + 1 != self.frame || row.seen == 0
             {

@@ -1080,6 +1080,15 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
         (seconds * clap_sys::fixedpoint::CLAP_SECTIME_FACTOR as f64) as i64;
     transport
 }
+/// The Stop the editor sends, with the request the Video pane builds. Each
+/// fixture first aims the recorder at a renderer that does not exist, so a
+/// finished take's render launches nothing.
+fn stop(shared: &std::sync::Arc<parking_lot::Mutex<crate::editor::EditorShared>>) {
+    let shared = shared.lock();
+    shared.take.stop(harmonigraph_record::RenderRequest::from_config(
+        &shared.ui.picture.appearance.render,
+    ));
+}
 
 #[test]
 fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
@@ -1450,7 +1459,7 @@ fn a_short_stopped_export_finishes_on_restore_with_or_without_midi() {
                 dir.join("absent-renderer"),
             );
             let appearance = shared.ui.picture.appearance.serialize();
-            shared.take.start(48_000.0, appearance, true);
+            shared.take.start(48_000.0, appearance);
             shared.poll_take_end();
             probe
         };
@@ -1549,7 +1558,11 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
         let probe = {
             let shared = shared.lock();
             let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
-            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize(), true);
+            harmonigraph_record::testing::set_renderer_program(
+                &shared.take,
+                dir.join("absent-renderer"),
+            );
+            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
             probe
         };
         let events = if held { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
@@ -1566,7 +1579,7 @@ fn destruction_closes_a_stopped_take_without_another_process_callback() {
             });
         }
         if stopped {
-            shared.lock().take.stop(None);
+            stop(&shared);
         }
         // No finish_notes or other process callback: Drop uses the host's
         // stop_processing/deactivate/destroy vtables and joins the writer.
@@ -1644,7 +1657,11 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         let probe = {
             let shared = shared.lock();
             let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
-            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize(), true);
+            harmonigraph_record::testing::set_renderer_program(
+                &shared.take,
+                dir.join("absent-renderer"),
+            );
+            shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
             probe
         };
         let events = if held { vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)] } else { vec![] };
@@ -1665,7 +1682,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
             // empty, but this older callback can still publish into the take.
         }
         if stop_before_deactivate {
-            shared.lock().take.stop(None);
+            stop(&shared);
             // A main callback while activated must not manufacture closure.
             unsafe { ((*device.plugin).on_main_thread.unwrap())(device.plugin) };
             assert!(shared.lock().take.last_take().is_none());
@@ -1681,7 +1698,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         }
         if !stop_before_deactivate {
             let callbacks = device.stats.callbacks.load(Ordering::Relaxed);
-            shared.lock().take.stop(None);
+            stop(&shared);
             assert!(
                 device.stats.callbacks.load(Ordering::Relaxed) > callbacks,
                 "Stop must request host service even with no further audio"
@@ -1754,7 +1771,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
         if !incomplete {
             // Start is accepted before another process; its fresh epoch must
             // also survive the pending main wake and reactivation.
-            shared.lock().take.start(48_000.0, String::new(), true);
+            shared.lock().take.start(48_000.0, String::new());
             assert!(shared.lock().take.is_recording());
             unsafe { ((*device.plugin).on_main_thread.unwrap())(device.plugin) };
             assert!(shared.lock().take.is_recording());
@@ -1763,7 +1780,7 @@ fn deactivated_stop_finishes_without_another_process_callback() {
             }
             device.run_transport(64, vec![], false, None, Some(transport(6.0, 0)));
             assert!(shared.lock().take.has_rolled());
-            shared.lock().take.stop(None);
+            stop(&shared);
             device.run_transport(128, vec![], false, None, Some(transport(7.0, 0)));
         }
         drop(shared);
@@ -1809,7 +1826,7 @@ fn a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take(
                 dir.join("absent-renderer"),
             );
             let appearance = shared.ui.picture.appearance.serialize();
-            shared.take.start(48_000.0, appearance, true);
+            shared.take.start(48_000.0, appearance);
             assert!(shared.take.is_recording(), "armed");
             probe
         };

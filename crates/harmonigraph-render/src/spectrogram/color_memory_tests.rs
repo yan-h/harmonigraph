@@ -155,6 +155,44 @@ fn material_color_memory_carries_exact_texels_in_both_orientations() {
     }
 }
 
+/// The shader's drift jumps a whole tile repeat at a wrap, and the history
+/// must not see it: its lattice runs off the unreduced offset, so across the
+/// wrap the origin moves by the frame's own sub-texel step and the carried
+/// light survives, where an origin off the reduced drift would jump by the
+/// repeat and read the frame as a seek.
+#[test]
+fn a_drift_wrap_carries_the_colour_history() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let mut cb = fixture(CloudStyle::Mosaic);
+    let atmosphere = cb.atmosphere.unwrap();
+    let settings = atmosphere.settings.sanitized();
+    let pane = [cb.rect.width() as u32, cb.rect.height() as u32];
+    let tile = tile_key(pane, atmosphere, CloudSampling::default().tile_cells);
+    let reduced = |now| cloud_drift(settings, cloud_offset(settings, now), tile);
+    let step = 1.0 / 60.0;
+    let before = (0..60 * 600)
+        .map(|i| atmosphere.now + f64::from(i) * step)
+        .find(|&now| {
+            let (a, b) = (reduced(now), reduced(now + step));
+            (0..2).any(|k| (a[k] - b[k]).abs() > 1.0)
+        })
+        .expect("ten minutes of drift never wrapped the tile");
+    let mut resources = CallbackResources::default();
+    cb.atmosphere.as_mut().unwrap().now = before;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let origin = memory(&resources).frame.as_ref().unwrap().origin;
+    cb.grid.fill(0);
+    cb.atmosphere.as_mut().unwrap().now = before + step;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let m = memory(&resources);
+    let moved: [i32; 2] = std::array::from_fn(|a| m.frame.as_ref().unwrap().origin[a] - origin[a]);
+    assert!(moved.iter().all(|v| v.abs() <= 1), "the wrap moved the history's origin: {moved:?}");
+    let carried = pixels(&device, &queue, m).iter().filter(|texel| texel[3] > 0.1).count();
+    assert!(carried > 1000, "the wrap reset the history as a seek: {carried} texels carried");
+}
+
 fn stagger(cell: [i32; 2], salt: u32) -> f32 {
     let cell = cell.map(|n| (n & (STAR_HASH_PERIOD as i32 - 1)) as u32);
     let mut n = cell[0].wrapping_mul(0x9e3779b9)
@@ -510,6 +548,117 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
     }
     close(answers[0], answers[1]);
+}
+
+/// What switching away from the fresh Stars gives: Mosaic or Watercolor under
+/// the fresh colour response (Pickup 0.04 s, Release 0.71 s), at both ends of
+/// the production cloud sample spacing.
+///
+/// The history takes the reduced tone target's place — its grid is the
+/// reduced size, and no tone target is allocated — and it is a response in
+/// time rather than a look: held still, the picture settles on the frame drawn
+/// with no history, and sound that stops fades over Release instead of at
+/// once. Still, because under drift a history trails its colour about
+/// `Release × speed` behind the texture by design (measured at the fresh
+/// drift: a mean of 3.7/255, a quarter of this fixture's pixels past 8).
+///
+/// Measured held still: a mean of 0.10/255 natively, 0.1% of pixels past 8;
+/// at the reduced spacing 0.94/255 and 4.4%, the band edges where the history
+/// interpolates colour and the immediate path interpolates level.
+#[test]
+fn fresh_colour_memory_under_mosaic_and_watercolor_settles_then_fades() {
+    use crate::spectrogram::tests::{frame_with, relay_quad};
+    let Some((device, queue)) = headless_device() else { return };
+    const PANE: u32 = 384;
+    // Mean channel difference over 255, and the share of pixels moved past 8.
+    let apart = |a: &[u8], b: &[u8]| {
+        let pixels = a.chunks_exact(4).zip(b.chunks_exact(4));
+        let total: u32 = pixels
+            .clone()
+            .flat_map(|(p, q)| (0..3).map(move |c| u32::from(p[c].abs_diff(q[c]))))
+            .sum();
+        let moved = pixels.filter(|(p, q)| (0..3).any(|c| p[c].abs_diff(q[c]) > 8)).count();
+        let count = a.len() / 4;
+        (f64::from(total) / (count * 3) as f64, moved as f64 / count as f64)
+    };
+    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
+        for pixel_points in [0.5, 2.0] {
+            let mut cb = refracted_fixture();
+            cb.rect =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
+            relay_quad(&mut cb, 12);
+            cb.read.rows = PANE;
+            let a = cb.atmosphere.as_mut().unwrap();
+            a.region = cb.rect;
+            a.settings =
+                harmonigraph_scene::SpectralAtmosphere { cloud_style: style, ..Default::default() };
+            let sampling = CloudSampling { pixel_points, ..Default::default() };
+            let fresh = || {
+                let mut resources = CallbackResources::default();
+                resources.insert(sampling);
+                resources
+            };
+            let alone =
+                |cb: &mut SpectrogramCallback,
+                 turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+                    let held = cb.atmosphere.unwrap().settings;
+                    turn(&mut cb.atmosphere.as_mut().unwrap().settings);
+                    let frame = frame_with(&device, &queue, &mut fresh(), cb);
+                    cb.atmosphere.as_mut().unwrap().settings = held;
+                    frame
+                };
+            // Five seconds of the same sound, seven Releases.
+            let hold = |cb: &mut SpectrogramCallback, resources: &mut CallbackResources| {
+                (0..=20)
+                    .map(|i| {
+                        cb.atmosphere.as_mut().unwrap().now = 100.0 + 0.25 * f64::from(i);
+                        frame_with(&device, &queue, resources, cb)
+                    })
+                    .last()
+                    .unwrap()
+            };
+            let case = format!("{style:?} at {pixel_points} pt");
+            let shipped = cb.atmosphere.unwrap().settings;
+            cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
+            let held = hold(&mut cb, &mut fresh());
+            let (mean, moved) =
+                apart(&held, &alone(&mut cb, |s| (s.color_pickup, s.color_release) = (0.0, 0.0)));
+            let (mean_max, moved_max) =
+                if pixel_points > 1.0 { (1.5, 0.06) } else { (0.25, 0.005) };
+            assert!(
+                mean < mean_max && moved < moved_max,
+                "{case}: held still, the history is not the picture: mean {mean:.2}, {moved:.4} moved"
+            );
+            cb.atmosphere.as_mut().unwrap().settings = shipped;
+            let mut resources = fresh();
+            hold(&mut cb, &mut resources);
+            let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+            let targets = pane.cloud.as_ref().unwrap();
+            let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
+            assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");
+            assert_eq!(targets.tone_size(), None, "{case}: a tone target nothing draws");
+            assert!(targets.tile_texels().is_some(), "{case}: no texture was drawn");
+            cb.grid.fill(0);
+            let floor = alone(&mut cb, |s| s.cloud_depth = 0.0);
+            let release = cb.atmosphere.unwrap().settings.color_release;
+            let mut after = |seconds: f64| {
+                cb.atmosphere.as_mut().unwrap().now += seconds;
+                apart(&frame_with(&device, &queue, &mut resources, &cb), &floor)
+            };
+            let (frame, lit) = after(1.0 / 60.0);
+            assert!(lit > 0.99, "{case}: sound that stopped went dark at once: {lit:.3} lit");
+            let (faded, _) = after(f64::from(release));
+            assert!(
+                (0.3 * frame..0.6 * frame).contains(&faded),
+                "{case}: one Release left {faded:.1} of {frame:.1}"
+            );
+            assert_eq!(
+                after(5.0),
+                (0.0, 0.0),
+                "{case}: seven Releases on, silence is not the floor"
+            );
+        }
+    }
 }
 
 thread_local! {

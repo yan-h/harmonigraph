@@ -670,13 +670,13 @@ impl NodeMotion {
             if scene.spectral.ring_draws() {
                 node.audio_ring = fade.level(&scene.octave_layout, node.cents).max(node.activation);
             }
-            // The node glow is the node's presence, unfaded and unread by any
-            // display: the loudest slot or mark. Stateless snapshots draw it
-            // as it stands; the shell's glow pass carries it as its target.
-            node.glow.level = (0..11)
-                .map(|i| motion.levels[i])
-                .chain([melody_level, bass_level])
-                .fold(0.0, f32::max);
+            // The node glow is the drawn ink: the most opaque slot or mark,
+            // each after its Opacity, as the bloom reads it. Stateless
+            // snapshots draw it as it stands; the shell's glow pass carries it
+            // as its target. The ink strip's history (`ink_history` in
+            // harmonigraph-render) compares this same max of what it ships, so
+            // the colour picks attack or release by the test the level does.
+            node.glow.level = node.activation.max(node.melody_level).max(node.bass_level);
         }
         scene.pluses = crate::derive::derive_pluses(
             view,
@@ -973,10 +973,10 @@ mod tests {
             }
         }
     }
-    /// Pressure routed to opacity over a base of 0 fades a slot's ink and the
-    /// node's presence, straight away as the pressure moves, and nothing else:
-    /// a note faded to nothing is still held, and still departs on its own
-    /// release. The glow, which no intensity mapping reaches, stays in full.
+    /// Pressure routed to opacity over a base of 0 fades a slot's ink, the
+    /// node's presence and its glow, straight away as the pressure moves, and
+    /// nothing else: a note faded to nothing is still held, and still departs
+    /// on its own release.
     #[test]
     fn intensity_fades_the_ink_but_not_the_note() {
         use crate::IntensitySource;
@@ -995,7 +995,7 @@ mod tests {
         };
         tracker.handle_event(on(0.0, 60));
         let silent = draw(&mut motion, &mut tracker, &view, 1.1, false);
-        assert_eq!(slot(&silent), (0.0, None, false, 1.0), "unpressed: invisible, still held");
+        assert_eq!(slot(&silent), (0.0, None, false, 0.0), "unpressed: invisible, still held");
 
         tracker.handle_event(NoteEvent {
             source: SourceId::DIRECT,
@@ -1008,14 +1008,34 @@ mod tests {
             },
         });
         let pressed = draw(&mut motion, &mut tracker, &view, 1.1, false);
-        assert_eq!(slot(&pressed), (0.5, Some(0.5), false, 1.0), "the ink follows at once");
+        assert_eq!(slot(&pressed), (0.5, Some(0.5), false, 0.5), "ink and glow follow at once");
 
         tracker.handle_event(off(1.2, 60));
         let (activation, _, departing, glow) =
             slot(&draw(&mut motion, &mut tracker, &view, 1.7, false));
         assert!(departing, "released");
         assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
-        assert!((glow - 0.5).abs() < 1e-5, "the glow departs on the envelope alone: {glow}");
+        assert!((glow - 0.25).abs() < 1e-5, "the glow departs with the ink: {glow}");
+    }
+    /// Fresh settings route velocity and gain to Opacity, and the glow takes
+    /// the drawn ink there too, the melody mark included: a soft note's halo is
+    /// as faint as its most opaque slice, a loud one's is full.
+    #[test]
+    fn fresh_opacity_routes_dim_the_glow_with_the_ink() {
+        let intensity = crate::IntensitySettings::default();
+        let view = ViewConfig { fade_shape: 0.0, intensity, ..view() };
+        let held = |velocity| {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, velocity));
+            *origin(&draw(&mut motion, &mut tracker, &view, 1.1, false))
+        };
+        let (soft, loud) = (held(0.0), held(1.0));
+        assert!(soft.melody_level > 0.0, "the fixture lights a mark as well as a slot");
+        assert!((soft.activation - 0.81).abs() < 0.01, "{}", soft.activation);
+        assert_eq!(soft.glow.level, soft.activation.max(soft.melody_level));
+        assert!(soft.glow.level < 0.82, "a soft note's halo dims: {}", soft.glow.level);
+        assert_eq!(loud.glow.level, 1.0, "a loud note's halo is full");
     }
     /// An off delivered after the frame past it replays the horizon, and the
     /// release it replays fades from the note's reading at its off, as an

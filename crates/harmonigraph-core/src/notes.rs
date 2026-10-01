@@ -800,12 +800,12 @@ impl NoteTracker {
             return Err(InvalidCanonical);
         }
         let voices = frame.voices();
-        if frame.participating {
+        if frame.shown {
             self.hidden_sources.remove(&frame.source);
         } else {
             self.hidden_sources.insert(frame.source);
         }
-        self.roll.set_participating(frame.source, frame.participating);
+        self.roll.set_shown(frame.source, frame.shown);
         self.roll.replace_source(frame.source, voices, mapped.time, offset);
         self.held.retain(|key, voice| {
             key.source != frame.source
@@ -1030,7 +1030,7 @@ impl NoteTracker {
     /// already-fading notes: they finish the fade they were drawing.
     ///
     /// One case looks like an exception to that and is really the two halves
-    /// changing hands. A baseline that arrives NOT participating and still
+    /// changing hands. A baseline that arrives with Show off and still
     /// lists a note a publication gap had released withdraws that release
     /// ([`replace_source`](Self::replace_source)) — so the voice is no longer
     /// a fading one whose fade is protected, it is a HELD one, and the held
@@ -1210,7 +1210,7 @@ mod tests {
             ..Default::default()
         };
 
-        // Hidden at the release. The source stops participating while the
+        // Hidden at the release. The source's Show goes off while the
         // note is still down — its baseline still lists the note, so the
         // voice stays HELD and merely drops off the screen.
         let mut tracker = NoteTracker::new();
@@ -1743,7 +1743,7 @@ mod tests {
     /// screen, written down because it reads like a contradiction of the
     /// `voices` contract and is not one.
     ///
-    /// A repair baseline can arrive NOT participating — the source recovered
+    /// A repair baseline can arrive with Show off — the source recovered
     /// and is hidden. It still lists the note, so the release is withdrawn and
     /// the voice goes back to being HELD, and the held half of `voices` cuts a
     /// hidden source's voices in the instant they hide. So a fade that was on

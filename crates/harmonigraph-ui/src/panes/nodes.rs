@@ -173,14 +173,16 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // two axes carry one rhythm of empty space. It is a whole-note setting
     // rather than any one layer's, which is what puts it in Note layers.
     //
-    // Read out as a PERCENTAGE of quad uv 1.0, the edge no ring may cross:
-    // 1.8 × `scene.node_radius` in the world (`marker_world` in
-    // harmonigraph-scene). That makes the whole stack a budget of
-    // 100%, which is the picture the Layers bar draws. A tenth of a percent is
-    // exactly the resolution three decimals of the stored number gives. Numeric entry uses
-    // the displayed percentage too; the widget converts it back to the stored
-    // fraction.
-    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap").percent().show(ui).on_hover_text(
+    // Stored in quad uv, where 1.0 is the edge no ring may cross, and read
+    // out as a percentage of the TRUE node radius (`QUAD_UV_PERCENT`): that
+    // edge is 180%, the budget the whole stack on the Layers bar shares.
+    // Numeric entry uses the displayed percentage too; the widget converts it
+    // back to the stored uv.
+    ValueBar::new(&mut view.ring_gap, 0.0..=GAP_MAX, "Gap")
+        .unit(super::QUAD_UV_PERCENT, "%")
+        .decimals(1)
+        .show(ui)
+        .on_hover_text(
             "Space between concentric layers and between octave sectors, as a percentage of the node radius. \
                      0% joins both layers and sectors.",
         );

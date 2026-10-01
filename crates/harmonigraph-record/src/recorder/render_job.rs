@@ -122,7 +122,11 @@ pub(super) struct RenderControl {
     /// replacement waits for the cancelled run's process to be reaped rather
     /// than merely asked to stop, and a render of another take waits its turn
     /// instead of putting a second ffmpeg beside the first.
-    running: Mutex<()>,
+    ///
+    /// Visible to the writer's tests, which hold it to stand in for another
+    /// take's render in flight, so a finished take's render queues without
+    /// touching the status line.
+    pub(super) running: Mutex<()>,
 }
 
 /// The renderer process now running, and which take's video it is producing.

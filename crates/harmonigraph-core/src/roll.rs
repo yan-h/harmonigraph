@@ -367,8 +367,8 @@ impl NoteRoll {
         self.enforce_cap();
     }
 
-    pub(crate) fn set_participating(&mut self, source: SourceId, participating: bool) {
-        if participating {
+    pub(crate) fn set_shown(&mut self, source: SourceId, shown: bool) {
+        if shown {
             self.hidden_sources.remove(&source);
         } else {
             self.hidden_sources.insert(source);

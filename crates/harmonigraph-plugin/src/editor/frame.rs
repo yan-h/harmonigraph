@@ -49,6 +49,12 @@ pub(super) fn frame(
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
 
+    // A host restore since the last frame (a preset load, an undo), which
+    // nothing else applies to an open window. Before the drain, for the reason
+    // the background analyzer adopts one before its own: the settings decide
+    // how the samples about to be taken are analyzed.
+    state.params.ui_state.apply_restore(&mut shared.ui);
+
     shared.note_frame();
 
     let now = shared.input.now();

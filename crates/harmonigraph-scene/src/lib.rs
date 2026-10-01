@@ -385,12 +385,13 @@ pub struct GlowStep {
     /// it with the owner whose ink it actually encoded, across discarded UI passes.
     pub incarnation: u64,
     /// How lit this node is for the purpose of the light it gives off. Out of
-    /// [`NodeMotion::step`] it is the TARGET: the loudest octave slot or mark
-    /// level before the Opacity mapping, so a note faded to nothing still
-    /// lights its halo. The shell's glow pass (`GlowFade` in harmonigraph-ui)
-    /// then replaces it with where that target has got to on the Glow attack
-    /// and release, so it can be above zero on a node whose every layer has
-    /// gone silent — which is the whole of what makes a halo linger.
+    /// [`NodeMotion::step`] it is the TARGET: the most opaque octave slot or
+    /// mark level as drawn, after the Opacity mapping, so a soft note's halo
+    /// is as faint as its ink and one faded to nothing has none. The shell's
+    /// glow pass (`GlowFade` in harmonigraph-ui) then replaces it with where
+    /// that target has got to on the Glow attack and release, so it can be
+    /// above zero on a node whose every layer has gone silent — which is the
+    /// whole of what makes a halo linger.
     pub level: f32,
     /// Which row of this frame's ink strip holds this node's colour.
     ///

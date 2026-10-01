@@ -94,13 +94,13 @@ impl NoteAnimationConfig {
                 // to high.
                 AnimationOrder::Circular => i as f32 / (span - 1).max(1) as f32,
                 AnimationOrder::Bidirectional => {
-                    // `bounds` is measured from the seam, not from a fixed
+                    // The walk is measured from the seam, not from a fixed
                     // screen angle. Mirror the index before measuring so each
                     // opposing pair has exactly one rank; independently
                     // measuring both sides lets f32 roundoff turn a two-slice
                     // tie into the whole normalized spread.
                     let from_seam = i.min(span - 1 - i);
-                    (layout.bounds[from_seam] + layout.bounds[from_seam + 1]) * 0.5
+                    (layout.walk(from_seam as f32) + layout.walk(from_seam as f32 + 1.0)) * 0.5
                         / std::f32::consts::PI
                 }
                 AnimationOrder::RandomStagger => {

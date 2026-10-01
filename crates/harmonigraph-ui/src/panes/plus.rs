@@ -98,10 +98,10 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
                 "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
                      Raise above Idle ring brightness to keep the lattice easy to navigate.",
             );
-        // In the same quad UV a node's ring radii are dialled in, so this pair
-        // and Inner on the Layers bar are readings on ONE axis — a marker that
-        // fits inside the middle a node's rings stand around can be read off
-        // the numbers rather than by eye.
+        // Stored in the same quad UV a node's ring radii are dialled in, so this
+        // pair and the Layers bar's Inner handle are positions on ONE axis. The
+        // Layers bar shows no numbers, so whether a cross fits inside the middle
+        // a node's rings stand around is still judged by eye on the picture.
         edge_bar(
             ui,
             (&mut appearance.view.plus_arm, &mut appearance.view.plus_taper),
@@ -111,10 +111,13 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
                 let fresh = ViewConfig::default();
                 (fresh.plus_arm, fresh.plus_taper)
             },
-            |v| format!("{:.1}%", v * 100.0),
+            // In true node radii, as the Gap and the Reach read
+            // (`QUAD_UV_PERCENT`); the stored pair stays in quad uv.
+            |v| format!("{:.1}%", v * super::QUAD_UV_PERCENT),
         )
         .on_hover_text(
-            "Cross-arm length from the center, as a percentage of the node radius: the full length of the Layers bar in Note layers. \
+            "Cross-arm length from the center, as a percentage of the node radius. \
+                     180% reaches the edge no ring crosses on the Layers bar in Note layers. \
                      Solid to the inner handle, faded out by the outer handle. \
                      0% hides crosses; named nodes draw none. \
                      Double-click resets.",

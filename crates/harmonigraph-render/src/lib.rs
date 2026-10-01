@@ -53,9 +53,7 @@ pub mod startup;
 /// helpers and [`BloomChain`]; the lattice's offscreen target
 /// are beside the point for a flat ribbon.
 mod roll;
-pub use roll::{
-    roll_paint_callback, roll_paint_callback_with_clipped_tail, RollAxes, RollInstance,
-};
+pub use roll::{roll_paint_callback_with_clipped_tail, RollAxes, RollInstance};
 
 /// The spectrogram's heatmap — the pane's other heavy layer, and the one whose
 /// picture a CPU compose would build texel by texel. Here the aggregator's slab
@@ -544,11 +542,8 @@ const SPECTRUM_WORDS: usize = harmonigraph_scene::SPECTRAL_BUCKETS.div_ceil(16);
 //
 // 3 u32 words hold 12 packed levels, one byte per octave slot.
 const _: () = assert!(harmonigraph_scene::OCTAVE_SLOTS == 11);
-// `oct_bounds`'s 3 vec4s hold 12 boundary angles, and the layout needs one per
-// slice plus the closing one — so a span of 11 is the ceiling, which is also
-// every MIDI octave there is. Raising MAX_SPAN in harmonigraph-scene is what
-// would break this.
-const _: () = assert!(harmonigraph_scene::MAX_SPAN as usize + 1 == 12);
+// lattice.wgsl clamps the span to its own literal MAX_SPAN.
+const _: () = assert!(harmonigraph_scene::MAX_SPAN == 11);
 
 // The shader declares `pitch_lut` with a literal length; keep the two in
 // lockstep so the uniform buffer and the WGSL agree. `spectral_lut` beside it
