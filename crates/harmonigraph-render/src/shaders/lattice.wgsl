@@ -2980,9 +2980,9 @@ fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
 /// How lit this node is, for the purpose of the light it gives off — carried on
 /// the glow's own attack and release, and handed over per instance.
 ///
-/// Its TARGET is the largest of the node's MIDI levels, read before the Opacity
-/// mapping, and the note's own envelope is only one of them: a mark rides the
-/// marked VOICE's level rather than the node's. The audio ring is not among
+/// Its TARGET is the largest of the node's MIDI levels as drawn, after the
+/// Opacity mapping, and the note's own envelope is only one of them: a mark
+/// rides the marked VOICE's level rather than the node's. The audio ring is not among
 /// them — a halo says something is being played here, where the ring says
 /// something is being heard. But this is where that target has GOT to, not the
 /// target — a light runs slower than every layer under it, which is what makes
