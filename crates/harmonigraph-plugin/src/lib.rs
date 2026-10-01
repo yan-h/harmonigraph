@@ -1331,17 +1331,6 @@ mod tests {
     /// saves.
     #[test]
     fn a_save_with_the_editor_open_stores_what_the_window_shows() {
-        use nice_plug::params::Params;
-
-        let saved_yaw = |plugin: &Harmonigraph| {
-            let field =
-                plugin.params.serialize_fields().remove("ui-state").expect("ui-state saved");
-            let blob: String = serde_json::from_str(&field).expect("the field is a JSON string");
-            let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
-            assert!(state.load_persist(&blob), "the saved blob does not load");
-            state.picture.appearance.camera.yaw
-        };
-
         let plugin = Harmonigraph::default();
         // What the last close stored.
         let mut closed = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
@@ -1373,6 +1362,154 @@ mod tests {
             saved_yaw(&plugin),
             1.25,
             "a save with the editor open stored the settings of the last close",
+        );
+        plugin.params.editor_state.set_open(false);
+    }
+
+    /// What a host save stores in `ui-state`, read back as the camera yaw:
+    /// through the derived `serialize_fields`, which is what a host save calls.
+    fn saved_yaw(plugin: &Harmonigraph) -> f32 {
+        use nice_plug::params::Params;
+
+        let field = plugin.params.serialize_fields().remove("ui-state").expect("ui-state saved");
+        let blob: String = serde_json::from_str(&field).expect("the field is a JSON string");
+        let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+        assert!(state.load_persist(&blob), "the saved blob does not load");
+        state.picture.appearance.camera.yaw
+    }
+
+    /// A host restore of a project whose camera yaw is `yaw`: through the
+    /// derived `deserialize_fields`, which is what a host's state load calls,
+    /// so the restore reaches `UiState::set` the way a preset load does.
+    fn restore_yaw(plugin: &Harmonigraph, yaw: f32) {
+        use nice_plug::params::Params;
+
+        let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+        state.picture.appearance.camera.yaw = yaw;
+        let blob = harmonigraph_ui::shell::close(&state);
+        let field = serde_json::to_string(&blob).expect("a string serializes");
+        plugin.params.deserialize_fields(&std::collections::BTreeMap::from([(
+            "ui-state".to_string(),
+            field,
+        )]));
+    }
+
+    fn live_yaw(plugin: &Harmonigraph) -> f32 {
+        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw
+    }
+
+    fn turn_live_yaw(plugin: &Harmonigraph, yaw: f32) {
+        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = yaw;
+    }
+
+    /// An editor window open on `plugin`, as far as anything but the window
+    /// itself can tell: the flag set, and an analyzer round completed after
+    /// it. The round is what makes the window the only party left that can
+    /// apply a blob — without it, a background adopt could land after this and
+    /// pass a test of the window's own path for the wrong reason.
+    fn open_window(plugin: &Harmonigraph) {
+        plugin.params.editor_state.set_open(true);
+        let rounds = plugin._background.completed_rounds();
+        assert!(
+            a_round_after(plugin, rounds),
+            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+        );
+    }
+
+    /// The step a frame starts with, under the frame's lock. The real `frame`
+    /// cannot run here: it needs a `Queue`, which exists only inside a running
+    /// window.
+    fn next_frame(plugin: &Harmonigraph) {
+        plugin.params.ui_state.apply_restore(&mut plugin.editor_shared.lock().ui);
+    }
+
+    /// Issue #1329: a host restore while the editor is open (a preset load, an
+    /// undo) reaches the window on its next frame — the last of two, if two
+    /// land first — and only on that frame.
+    #[test]
+    fn a_restore_into_an_open_window_reaches_its_next_frame() {
+        let plugin = Harmonigraph::default();
+        open_window(&plugin);
+        turn_live_yaw(&plugin, 2.0);
+
+        restore_yaw(&plugin, 0.5);
+        restore_yaw(&plugin, 0.75);
+        assert_eq!(
+            live_yaw(&plugin),
+            2.0,
+            "the state moved with no frame run: something other than the frame applied the \
+             restore, so this test no longer reaches the frame's path",
+        );
+
+        next_frame(&plugin);
+        assert_eq!(live_yaw(&plugin), 0.75, "the open window never took the host's restore");
+
+        // Once: the frames after it are the user's again.
+        turn_live_yaw(&plugin, 1.5);
+        next_frame(&plugin);
+        assert_eq!(live_yaw(&plugin), 1.5, "a later frame re-applied the restore over the user");
+        plugin.params.editor_state.set_open(false);
+    }
+
+    /// Until the window has drawn a restore it is still showing what the
+    /// restore replaced, so a save in between stores the restore.
+    #[test]
+    fn a_save_between_a_restore_and_the_next_frame_stores_the_restore() {
+        let plugin = Harmonigraph::default();
+        open_window(&plugin);
+        turn_live_yaw(&plugin, 2.0);
+
+        restore_yaw(&plugin, 0.5);
+        assert_eq!(
+            saved_yaw(&plugin),
+            0.5,
+            "a save before the window drew the restore stored the settings it replaced",
+        );
+
+        next_frame(&plugin);
+        turn_live_yaw(&plugin, 1.25);
+        assert_eq!(saved_yaw(&plugin), 1.25, "once drawn, a save no longer stores the window");
+        plugin.params.editor_state.set_open(false);
+    }
+
+    /// A restore that lands after the window's last frame is newer than
+    /// anything the window showed, so its close must not write over it.
+    #[test]
+    fn a_restore_no_frame_has_drawn_survives_the_window_closing() {
+        let plugin = Harmonigraph::default();
+        open_window(&plugin);
+        turn_live_yaw(&plugin, 2.0);
+
+        restore_yaw(&plugin, 0.5);
+        // What `LatticeEditorHandle`'s Drop does, which needs a real window.
+        plugin.params.ui_state.store_close(&mut plugin.editor_shared.lock().ui);
+        plugin.params.editor_state.set_open(false);
+
+        assert_eq!(saved_yaw(&plugin), 0.5, "the close wrote the window's settings over a restore");
+    }
+
+    /// The frame's side of `an_open_window_keeps_the_settings_it_is_being_used_to_change`:
+    /// a restore the window was BUILT with has been applied, and the frame must
+    /// not apply it again over what the user changes afterwards.
+    #[test]
+    fn a_restore_the_window_opened_with_is_not_applied_again() {
+        let plugin = Harmonigraph::default();
+        restore_yaw(&plugin, 0.5);
+        {
+            // What the window's build closure does, which needs a real window.
+            let mut shared = plugin.editor_shared.lock();
+            let blob = plugin.params.ui_state.opening_blob();
+            assert!(shared.ui.load_persist(&blob), "the restored blob does not load");
+        }
+        open_window(&plugin);
+        turn_live_yaw(&plugin, 2.0);
+
+        next_frame(&plugin);
+
+        assert_eq!(
+            live_yaw(&plugin),
+            2.0,
+            "the first frame re-applied the blob the window opened with, reverting the user",
         );
         plugin.params.editor_state.set_open(false);
     }

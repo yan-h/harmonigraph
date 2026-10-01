@@ -188,13 +188,16 @@ impl Editor for LatticeEditor {
                 // Everything this context owes the shared UI state, which is
                 // NOT new when the context is: the theme, the release of what
                 // the closed window left behind, the fold floor, and the
-                // layout the host saved with the project (written on the way
-                // out, in `LatticeEditorHandle`'s Drop).
+                // layout the host saved with the project (written by a host
+                // restore, or on the way out, in `LatticeEditorHandle`'s Drop).
                 //
-                // Cloned out of the lock rather than read across the open, so
-                // this holds one lock at a time.
-                let serialized = state.params.ui_state.blob().read().clone();
+                // Read with the state's lock held, in the order the close and
+                // the background analyzer take the two (`shared`, then the
+                // blob): taking the blob also answers a pending restore, and a
+                // save on another thread must not see that answered before the
+                // state holds it (see `UiState`).
                 let mut shared = state.shared.lock();
+                let serialized = state.params.ui_state.opening_blob();
                 harmonigraph_ui::shell::Opening {
                     ctx: egui_ctx,
                     state: &mut shared.ui,
@@ -281,13 +284,13 @@ impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
         // Store the UI state (layout, camera, view settings) as the blob a
         // host save reads once the window is shut; while it is open, the
-        // save serializes the live state instead (see `UiState`).
+        // save serializes the live state instead (see `UiState`). A restore
+        // no frame has drawn yet is applied first, so it is not lost here.
         // The lock is taken here with `open` still TRUE, which is what keeps
         // the background analyzer off it for the whole of this — see
         // [`crate::background`] on why that ordering is load-bearing rather
         // than incidental.
-        *self.params.ui_state.blob().write() =
-            harmonigraph_ui::shell::close(&self.shared.lock().ui);
+        self.params.ui_state.store_close(&mut self.shared.lock().ui);
         self.egui_state.set_open(false);
         self.window.close();
     }
