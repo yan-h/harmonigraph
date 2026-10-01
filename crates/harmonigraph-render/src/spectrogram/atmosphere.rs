@@ -958,19 +958,20 @@ fn memory_key(
                 star_spacing_min,
                 star_spacing_max,
                 star_spacing_curve,
-                star_diameter_min: _, // core sizes do not change a star's colour
-                star_diameter_max: _, // core sizes do not change a star's colour
-                star_diameter_curve: _, // core sizes do not change a star's colour
-                star_speed_min: _,    // carried by absolute cell and per-cell life
-                star_speed_max: _,    // carried by absolute cell and per-cell life
-                star_speed_curve: _,  // carried by absolute cell and per-cell life
-                star_lifetime: _,     // carried by absolute cell and per-cell life
+                star_size_min: _,        // star sizes do not change a star's colour
+                star_size_max: _,        // star sizes do not change a star's colour
+                star_size_curve: _,      // star sizes do not change a star's colour
+                star_speed_min: _,       // carried by absolute cell and per-cell life
+                star_speed_max: _,       // carried by absolute cell and per-cell life
+                star_speed_curve: _,     // carried by absolute cell and per-cell life
+                star_lifetime: _,        // carried by absolute cell and per-cell life
                 star_halo_resolution: _, // sampling does not change material identity
-                star_halo_profile: _, // sampling does not change material identity
-                star_fringe: _,       // response/coverage changes do not change material identity
-                star_far_fill: _,     // composition does not change material identity
-                star_defocus: _,      // response/coverage changes do not change material identity
-                test_bed: _,          // its cells and bands are appended where the cells are
+                star_halo_profile: _,    // sampling does not change material identity
+                star_glow: _, // response/coverage changes do not change material identity
+                star_core: _, // response/coverage changes do not change material identity
+                star_falloff: _, // response/coverage changes do not change material identity
+                star_far_fill: _, // composition does not change material identity
+                test_bed: _,  // its cells and bands are appended where the cells are
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1855,24 +1856,24 @@ mod tests {
         )
     }
 
-    /// One `Star size` value is one core at every depth, whatever the spacing
-    /// does across them, until a depth's cap (a third of its cell) binds.
-    /// 0.5 star pixels is under every fresh cap, the far three's included.
+    /// One `Star size` value is one star at every depth, whatever the spacing
+    /// does across them, until a depth's widest read cannot hold it; then the
+    /// slice draws it at the widest that fits. 0.5 star pixels fits every
+    /// fresh cell, the far three's included.
     #[test]
-    fn one_star_size_is_one_core_at_every_depth() {
+    fn one_star_size_is_one_star_at_every_depth() {
+        use harmonigraph_scene::star_plan::StarGather;
         let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
-        (settings.stars.star_diameter_min, settings.stars.star_diameter_max) = (0.5, 0.5);
+        (settings.stars.star_size_min, settings.stars.star_size_max) = (0.5, 0.5);
         let fine = slices(settings, 0.0);
         assert!(fine[0].cell < fine[STAR_SLICES - 1].cell / 4.0, "spacing must vary");
         for slice in &fine {
-            assert!(slice.sigma < slice.cap, "{} capped at {}", slice.sigma, slice.cap);
-            assert_eq!(slice.sigma, 0.125);
+            assert_eq!(slice.radius, 0.25);
         }
-        // And the cap is what stops a core past a third of its cell.
-        (settings.stars.star_diameter_min, settings.stars.star_diameter_max) = (32.0, 32.0);
+        (settings.stars.star_size_min, settings.stars.star_size_max) = (64.0, 64.0);
         for slice in slices(settings, 0.0) {
-            assert!(slice.cap < slice.sigma);
-            assert_eq!(slice.cap, 0.33 * slice.cell);
+            let jitter = settings.stars.star_jitter;
+            assert_eq!(slice.radius, StarGather::Three.bound(jitter) * slice.cell);
         }
     }
 
@@ -1931,18 +1932,17 @@ mod tests {
         assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [1, 0]]);
         assert_eq!(super::star_far_size([161, 121], low), [54, 41]);
         assert_eq!(super::star_near_size([161, 121], low), Some([81, 61]));
-        let uniform = SpectralAtmosphere {
-            stars: harmonigraph_scene::StarSettings {
-                star_halo_profile: StarHaloProfile::Uniform,
-                ..settings.stars
-            },
-            ..settings
-        };
-        assert_ne!(
-            super::star_halo_layout([1, 1], settings.stars),
-            super::star_halo_layout([1, 1], uniform.stars),
-            "omitted far depths must remain part of allocation identity",
+        // Uniform gives every 3x3 depth one resolution; at the fresh sizes
+        // only the near two need 3x3, so they share one image.
+        let uniform =
+            harmonigraph_scene::StarSettings { star_halo_profile: StarHaloProfile::Uniform, ..low };
+        let layout = super::star_halo_layout([161, 121], uniform);
+        assert_eq!(layout.active, [false, false, false, true, true]);
+        assert_eq!(
+            layout.groups.map(|g| (g.size, g.layers)),
+            [([81, 61], 2), ([1, 1], 0), ([1, 1], 0)]
         );
+        assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [0, 1]]);
     }
 
     /// The star test bed's plan decides what is allocated and baked: an Off
@@ -1950,9 +1950,9 @@ mod tests {
     /// its tier's size, and each slice carries its gather to the shader.
     #[test]
     fn a_test_bed_plan_allocates_and_bakes_only_what_it_draws() {
-        use harmonigraph_scene::star_plan::{StarGather, StarPlan};
+        use harmonigraph_scene::star_plan::{StarGather, StarTestBed};
         let production = harmonigraph_scene::StarSettings::default();
-        let mut plan = StarPlan::production(production);
+        let mut bed = StarTestBed::default();
         let gathers = [
             StarGather::Off,
             StarGather::Two,
@@ -1960,14 +1960,14 @@ mod tests {
             StarGather::Core,
             StarGather::Three,
         ];
-        for ((depth, gather), tier) in plan.depths.iter_mut().zip(gathers).zip([0, 0, 2, 0, 0]) {
-            depth.gather = gather;
-            depth.tier = tier;
+        for ((depth, gather), tier) in bed.depths.iter_mut().zip(gathers).zip([0, 0, 2, 0, 0]) {
+            depth.gather = Some(gather);
+            depth.tier = Some(tier);
         }
-        plan.halo_tiers = [0.5, 0.3, 0.25];
-        plan.far = 1.0;
-        plan.near = 1.0;
-        let stars = harmonigraph_scene::StarSettings { test_bed: Some(plan), ..production };
+        bed.halo_tiers = [Some(0.5), Some(0.3), Some(0.25)];
+        bed.far = Some(1.0);
+        bed.near = Some(1.0);
+        let stars = harmonigraph_scene::StarSettings { test_bed: Some(bed), ..production };
 
         let halos = super::star_halo_layout([161, 121], stars);
         assert_eq!(halos.active, [false, false, true, false, true]);
@@ -1988,11 +1988,12 @@ mod tests {
     }
 
     /// Both walks include every star that can reach the pixel: one nominal
-    /// cell for the compact core, and a 3x3 ring for the original wide halo.
-    /// Every profile's halo reach sits inside the 3x3 ring's bound too.
+    /// cell for a star's inner part, and a 3x3 ring for the whole star. Every
+    /// plan holds its stars inside its gather's bound, however big the dials
+    /// ask for them.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
-        use harmonigraph_scene::star_plan::{StarGather, StarPlan};
+        use harmonigraph_scene::star_plan::{star_jitter_width, StarGather};
         use harmonigraph_scene::StarHaloProfile;
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
@@ -2000,8 +2001,9 @@ mod tests {
         let fade = star_geometry(0.0).0[2];
         assert!(fade > 0.0 && fade < 1.0);
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let [jitter, core_reach] = crate::stars::star_band(dial);
-            for (radius, reach) in [(0, core_reach), (1, StarGather::Three.bound(dial))] {
+            let jitter = star_jitter_width(dial);
+            let core = StarGather::Core.bound(dial);
+            for (radius, reach) in [(0, core), (1, StarGather::Three.bound(dial))] {
                 let nearest = nearest_outside_the_ring(jitter / 2.0, radius);
                 assert!(nearest >= reach - 1e-5,
                     "jitter={dial}, ring={radius}: excluded star at {nearest}, inside reach {reach}");
@@ -2012,13 +2014,17 @@ mod tests {
                 StarHaloProfile::Medium,
                 StarHaloProfile::Low,
             ] {
-                let settings = harmonigraph_scene::StarSettings {
-                    star_jitter: dial,
-                    star_halo_profile: profile,
-                    ..Default::default()
-                };
-                for depth in StarPlan::production(settings).depths {
-                    assert!(depth.reach <= depth.gather.bound(dial), "{profile:?} {depth:?}");
+                for size in [harmonigraph_scene::STAR_SIZE_MIN, harmonigraph_scene::STAR_SIZE_MAX] {
+                    let settings = harmonigraph_scene::StarSettings {
+                        star_jitter: dial,
+                        star_halo_profile: profile,
+                        star_size_max: size,
+                        ..Default::default()
+                    };
+                    for depth in settings.plan().depths {
+                        let bound = depth.gather.bound(dial) * depth.cell;
+                        assert!(depth.radius <= bound, "{profile:?} {depth:?}");
+                    }
                 }
             }
         }

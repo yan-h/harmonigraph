@@ -1829,8 +1829,10 @@ mod tests {
     /// it is, on a 540-point pane so a star pixel is a device pixel — and the
     /// clock steps by the time the drift takes to cover a whole number of
     /// them, and of texels in every reduced star image too (Medium's far 50%
-    /// and near 75%: 8 pixels is 4 and 6), so resampling is not read as a
-    /// move. Lives are long and the step short, so a star's fade moves a
+    /// and near 75%: 8 pixels is 4 and 6, and the nearest halo held at 50%
+    /// rather than Medium's 45%, which would move 3.6 texels), so resampling
+    /// is not read as a move. A longer step instead moves fading stars past
+    /// the threshold. Lives are long and the step short, so a star's fade moves a
     /// couple of levels at most, and a life that turns over is at zero at both
     /// ends of the turn. An ignored offset leaves the field where it was, and
     /// a flipped one moves it the other way: either fails the first assert.
@@ -1857,6 +1859,9 @@ mod tests {
         // Equal sizes: the smallest stars' cores resample unevenly in the
         // reduced halo images under a whole-pixel shift, which is not drift.
         s.stars.star_size_variation = 0.0;
+        let mut whole_texels = harmonigraph_scene::star_plan::StarTestBed::default();
+        whole_texels.halo_tiers[1] = Some(0.5);
+        s.stars.test_bed = Some(whole_texels);
         let mut resources = CallbackResources::default();
         let before = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().now +=
