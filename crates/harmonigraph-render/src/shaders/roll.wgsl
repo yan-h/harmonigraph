@@ -7,17 +7,17 @@
 //
 // TWO LAYERS, drawn as two passes over the same instances rather than
 // composited per note: every note's outline (`fs_outline_*`), then every
-// note's body (`fs_core_*`). Both use ordinary over; body opacity is independent
-// of the dark outline. One quad's worth of geometry drawn twice.
+// note's body (`fs_core_*`). Both use ordinary over, and a note's opacity (its
+// `fade`) takes the two out together. One quad's worth of geometry drawn twice.
 //
-// The order is the whole point. The outline is opaque where it meets its own
-// note — it has to be, or it takes its color from the spectrogram cell behind
-// it and washes out over the bright end of a palette — so an outline
+// The order is the whole point. The outline is at its darkest where it meets
+// its own note — as dark as the Shadow darkness makes it — so an outline
 // composited with its own note lands on the NEIGHBOURING notes it reaches
 // into, and along time those neighbours are the next note: repeats of one key
 // butt together there, and the later one blanked the tail of the earlier.
 // Under every body instead, an outline darkens the backdrop before the note
-// paints its color. Only the body's own transparency can let that shadow through.
+// paints its color. Only a body drawn at less than full opacity lets that
+// shadow through.
 //
 // What that costs is the seam between two notes that TOUCH: same key, no gap,
 // and the bodies now meet directly in one color where the outline used to
@@ -76,7 +76,9 @@ struct VertexOut {
     /// non-zero for a glide, which shears the box into a parallelogram.
     @location(2) @interpolate(flat) shear: f32,
     /// How far the outline reaches past the note's edge, in points, and 0 when
-    /// the outline is off. It wraps every side — see [`outline_coverage`].
+    /// the outline is off: the style's whole reach (`locals.shadow.w`) on
+    /// screen, and the cell's expansion radius in `vs_shadow_cell`. It wraps
+    /// every side — see [`outline_coverage`].
     @location(3) @interpolate(flat) outline_reach: f32,
     /// Four to a slot, since a stage passes sixteen at most:
     /// - `x`: how much of the box's LEADING end is a lead rather than the note
@@ -114,7 +116,6 @@ fn vs_note(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    @location(3) outline_reach: f32,
     // Lead, lead fade, lead alpha and cap reach; span then ramp.
     // Packed, since a vertex takes sixteen at most.
     @location(4) lead: vec4<f32>,
@@ -134,8 +135,8 @@ fn vs_note(
     let slope = shear;
     // How far outside its own box a note can paint, per axis. The quad is its
     // bounding box grown by that, and a shortfall here CLIPS ink rather than
-    // costing a little fill rate, so each term is the exact one `note_color`
-    // can reach to.
+    // costing a little fill rate, so each term is the exact one
+    // `outline_color` and `core_color` can reach to.
     //
     // The outline wraps the note, so it is owed room on BOTH axes: ink runs out
     // wherever the box distance passes `outline_reach`, which is `reach` past
@@ -195,7 +196,6 @@ fn vs_shadow_cell(
     @location(0) center: vec2<f32>,
     @location(1) half_extent: vec2<f32>,
     @location(2) shear: f32,
-    @location(3) outline_reach: f32,
     @location(4) lead: vec4<f32>,
     @location(8) core: vec4<f32>,
     @location(9) outline: vec4<f32>,
@@ -521,15 +521,14 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
 /// Without it that end wears no cap at all. It is INTERIOR to the box — the
 /// lead was added to the box's length, not drawn beside it — and
 /// [`outline_color`]'s mask keeps the outline out of a box's middle, correctly,
-/// since a box has no edge there. So the cap arrives only when the pane drops
-/// the spent lead and the box shrinks back to the note, and it arrives whole,
-/// in one frame, on a ribbon that has been dissolving for a quarter second.
+/// since a box has no edge there. So the cap would arrive only when the caller
+/// drops the lead and the box shrinks back to the note.
 ///
-/// Drawn under the lead it needs no ramp of its own. The outline layer goes
-/// down before ANY body (see the head of this file), so the lead's own ink
-/// covers this while the lead is opaque and uncovers it at exactly the rate the
-/// lead goes: `lead_coverage` and this are the two halves of one boundary and
-/// sum to 1 across it. The crossfade is the compositing.
+/// Drawn in the outline layer, under every body (see the head of this file),
+/// so a lead standing over the cap covers it and a spent one leaves it bare.
+/// The spectral pane gives a cap room only behind a spent lead (`lead.z` of
+/// 0): the box it keeps on a released note while that note's end scrolls
+/// clear of the now-line.
 ///
 /// `cap_reach` is the one thing the caller decides, and it is about ROOM rather
 /// than about time — the cap stands in the stretch the lead was drawn over, and
@@ -540,16 +539,15 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
 /// own outline draws once the lead is dropped.
 ///
 /// Unioned with the wrap rather than added to it: the two are the same color
-/// off two shapes that share three of their sides, and beside the note's
-/// leading corners both are looking at the same ink. Added, that overlap comes
-/// out darker than black is.
+/// off two shapes that share three of their sides, and along the note's flanks
+/// both are looking at the same ink. Added, that overlap comes out darker than
+/// the outline's own color is.
 fn cap_coverage(in: VertexOut) -> f32 {
     // Bounded by the outline the cap is part of, in both directions at once.
-    // Wider, the cap would band the note further than every other edge of it
-    // — and `vs_note` sizes the quad from `outline_reach` alone, so the
-    // surplus is CLIPPED across pitch rather than merely drawn, which is a
-    // hard vertical edge standing where a rounded corner belongs. With no
-    // outline at all there is no band for the cap to be part of.
+    // The profile itself runs out at the outline's reach, so what a wider cap
+    // would add is the antialiasing ramp's tail past it: a softer end than
+    // every other edge of the note wears. With no outline at all there is no
+    // band for the cap to be part of.
     let reach = min(in.lead.w, in.outline_reach);
     if (in.lead.x <= 0.0 || reach <= 0.0) {
         return 0.0;
@@ -614,7 +612,7 @@ fn along(in: VertexOut, ends: vec2<f32>) -> f32 {
 // 0-1 linear from 0-1 sRGB gamma. Lifted from egui's own shader, and used
 // for the same reason: on an sRGB-aware target egui hands the hardware
 // linear values and lets it encode. Both of this project's shells use a
-// plain Unorm surface and take `fs_note_gamma`.
+// plain Unorm surface and take the `_gamma` entry points.
 fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
     let cutoff = srgb < vec3<f32>(0.04045);
     let lower = srgb / vec3<f32>(12.92);
