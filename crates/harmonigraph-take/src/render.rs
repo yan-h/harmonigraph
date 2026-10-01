@@ -7,8 +7,8 @@
 //! the framing it was dialed in at rather than whatever the editor happens to
 //! be set to now. `spectrogram` is read the same way.
 //!
-//! Resolution is the deliberate exception and stays outside `RenderFrame` —
-//! see [`RenderConfig::short_edge`].
+//! The output size stays outside `RenderFrame` — see
+//! [`RenderConfig::short_edge`].
 //!
 //! They are serde-facing: each round-trips through a saved project's UI blob
 //! and through the `appearance` a take carries.
@@ -195,13 +195,13 @@ pub struct RenderConfig {
     /// to compose the same picture.
     pub frame: RenderFrame,
     /// The render's short edge in pixels; with [`frame`](Self::frame)'s aspect
-    /// this is the whole output size (see [`RenderFrame::pixels`]).
+    /// this is the whole output size (see [`RenderFrame::pixels`]). The Video
+    /// pane's Output size.
     ///
-    /// Deliberately NOT part of `RenderFrame`: the frame is a composition, and
-    /// it rides inside a take so a re-render reproduces the framing it was
-    /// dialed in at. Resolution is a per-export choice — draft at 1080, final
-    /// at 2160, same picture — so it stays out here where changing it cannot
-    /// mean the take was framed differently.
+    /// Kept beside `RenderFrame` rather than in it: the frame is the
+    /// composition, and this only scales it, so one framing renders the same
+    /// picture at any size. It rides in a take like the frame does, so a plain
+    /// re-render keeps it, and the offline renderer's `--size` overrides it.
     pub short_edge: u32,
 }
 

@@ -1844,7 +1844,7 @@ mod tests {
     ///
     /// `min_span` bounds what the bar PRODUCES, not what it is handed, so
     /// every bar that declares one can still be given a pair that breaks it:
-    /// the Colors page's Color range is two host params with nothing between
+    /// the Mappings page's Pitch color range is two host params with nothing between
     /// them (the stored pairs, `SpectrumConfig::sanitize` repairs before any
     /// bar sees them). The slide is what a closed span needs and it carries its
     /// width forward, so without the floor below it carries a zero — and the

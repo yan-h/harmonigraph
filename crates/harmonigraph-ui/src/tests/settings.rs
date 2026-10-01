@@ -35,7 +35,7 @@ fn opening_analyzer_settings_does_not_change_loaded_values() {
 /// movement that is). The y of a string drawn in both frames cannot lie.
 fn wheel_over_settings_pane(pane: panes::Tab, screen_h: f32) -> f32 {
     let mut state = fresh();
-    // The settings leaf opens on Tuning; every other settings pane is a tab
+    // The settings section opens on Tuning; every other settings pane is a tab
     // behind it.
     state.workspace.layout.select(pane);
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -101,7 +101,7 @@ fn every_settings_pane_scrolls_when_its_content_overflows() {
     // System page, the shortest list of the set.
     for pane in [
         panes::Tab::Tuning,
-        panes::Tab::Colors,
+        panes::Tab::Mappings,
         panes::Tab::LatticeSettings,
         panes::Tab::AnalyzerSettings,
         panes::Tab::System,
@@ -502,7 +502,7 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
 /// and the Options field have nowhere left to go, are where the clamp is the
 /// only thing holding the bars level.
 /// How many source-to-display mappings a fresh view carries, each drawn as a
-/// weight bar in the Colors page's Mappings section.
+/// weight bar in the Mappings page's MIDI note intensity section.
 fn fresh_mappings() -> usize {
     let fresh = harmonigraph_scene::IntensitySettings::default();
     [fresh.velocity, fresh.gain, fresh.pressure, fresh.timbre]
@@ -532,18 +532,18 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                 // reserved the button's width at all — it comes out at the
                 // column's own length and passes on the first alternative,
                 // with the button painted over its left end. So the count is
-                // exact: TWO on the Colors page, which carries both gradients
+                // exact: TWO on the Mappings page, which carries both gradients
                 // — the lattice's pitch table and the heatmap's level table, on
                 // the same three bars over the same type — and none anywhere
                 // else.
                 let track = crate::widgets::spectrum_track_width(width, 1.0);
                 // A mapping's weight bar gives the right end of its row to its
                 // Delete button, and is counted the same way: one per mapping
-                // the fresh settings carry, all of them on the Colors page. How
+                // the fresh settings carry, all of them on the Mappings page. How
                 // wide the button is is the button's business; what is held is
                 // that the bar is short of the column by the SAME amount at
                 // every width, which is the bar narrowing with the column.
-                let mappings = if pane == panes::Tab::Colors { fresh_mappings() } else { 0 };
+                let mappings = if pane == panes::Tab::Mappings { fresh_mappings() } else { 0 };
                 let mut short = 0;
                 let mut weights = 0;
                 for bar in &widths {
@@ -564,7 +564,7 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                          {first}pt short of the column like the others (all of {widths:?})"
                     );
                 }
-                let want = if pane == panes::Tab::Colors { 2 } else { 0 };
+                let want = if pane == panes::Tab::Mappings { 2 } else { 0 };
                 assert_eq!(
                     short, want,
                     "{pane:?}/{projection:?} at {width}pt drew {short} short bars, not {want} \
@@ -614,7 +614,7 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
 #[test]
 fn each_settings_tab_draws_its_own_body_and_only_that() {
     const CASES: [(panes::Tab, &str); 4] = [
-        (panes::Tab::Colors, "Opacity base"),
+        (panes::Tab::Mappings, "Opacity base"),
         (panes::Tab::LatticeSettings, "Background glow reach"),
         (panes::Tab::AnalyzerSettings, "Ribbon width"),
         (panes::Tab::System, "Lattice resolution"),
@@ -655,7 +655,7 @@ fn each_settings_tab_draws_its_own_body_and_only_that() {
 #[test]
 fn every_gradient_group_previews_itself_above_its_bars() {
     const WIDTH: f32 = 400.0;
-    let shapes = settings_pane_at_width(panes::Tab::Colors, WIDTH, PROJECTIONS[0]);
+    let shapes = settings_pane_at_width(panes::Tab::Mappings, WIDTH, PROJECTIONS[0]);
     // A preview is a full-column band of color: a spectrum's circle is the
     // track's width and a fade ramp is a row high, so the pair of measurements
     // tells all three apart.
@@ -671,7 +671,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
                 && (b.height() - crate::widgets::preview_height(1.0)).abs() < 0.6
         })
         .collect();
-    assert_eq!(drawn.len(), 2, "the Colors page drew {} gradient previews, not two", drawn.len());
+    assert_eq!(drawn.len(), 2, "the Mappings page drew {} gradient previews, not two", drawn.len());
     // Down the page, which is the order the groups are written in: note colors
     // first, heatmap colors under them.
     drawn.sort_by(|a, b| {
@@ -690,7 +690,7 @@ fn every_gradient_group_previews_itself_above_its_bars() {
             _ => None,
         })
         .collect();
-    assert_eq!(tracks.len(), 2, "the Colors page drew {tracks:?} as spectrum tracks, not two");
+    assert_eq!(tracks.len(), 2, "the Mappings page drew {tracks:?} as spectrum tracks, not two");
     tracks.sort_by(|a, b| a.top().total_cmp(&b.top()));
 
     for (group, mesh, bar, gradient) in [
@@ -901,7 +901,7 @@ fn no_settings_pane_overruns_a_narrow_column() {
 #[test]
 fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // Default dock: the Analyzer picture is the column at x ~518..720, the
-    // settings leaf is top-right. The bar is grabbed by NAME — where it sits
+    // settings section is top-right. The bar is grabbed by NAME — where it sits
     // under the Display pane's headers is layout, not this test's business.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
@@ -969,8 +969,8 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that the Analyzer's first bars are inside the settings leaf:
-    // a bar this fixture presses on outside the leaf is a press on the pane
+    // Tall enough that the Analyzer's first bars are inside the settings section:
+    // a bar this fixture presses on outside the section is a press on the pane
     // below.
     let screen_h = 360.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -1081,7 +1081,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
-    // The settings leaf, whose bars run the width of the column at x ~700..1000:
+    // The settings section, whose bars run the width of the column at x ~700..1000:
     // from under its tab bar down to the 0.55 split.
     let body = egui::Rect::from_min_max(egui::pos2(700.0, 20.0), egui::pos2(1000.0, screen_h));
     // Where a named bar was drawn, so the gesture takes hold of a bar this test
@@ -1330,7 +1330,7 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
             // edge of the lane — `SpectrumBar`'s own docs name this test as
             // what keeps it out. Bars scrolled out of the window paint nothing,
             // so the pass has to have drawn the button for that to be asked.
-            if pane == panes::Tab::Colors {
+            if pane == panes::Tab::Mappings {
                 let flip = crate::widgets::flip_button_width(scale);
                 let drew_flip = shapes.iter().any(|cs| match &cs.shape {
                     egui::Shape::Rect(r) => {
@@ -1342,8 +1342,8 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
                 assert!(drew_flip, "the Colors pane at {scale} drew no spectrum flip button");
             }
             // The pane's own shapes are the ones clipped to the tab BODY. The dock's
-            // chrome — the leaf fill, the body border, the tab bar and its rule — is
-            // clipped to the leaf, which starts a tab bar higher up.
+            // chrome — the section fill, the body border, the tab bar and its rule — is
+            // clipped to the section, which starts a tab bar higher up.
             let pane_shape = |cs: &egui::epaint::ClippedShape| {
                 let rect = cs.shape.visual_bounding_rect();
                 let mine = cs.clip_rect.top() >= body.top() - 0.5;
@@ -1452,7 +1452,7 @@ fn the_comma_tables_sideways_bar_runs_under_its_cells() {
             _ => None,
         })
     };
-    // The table spans at least its two headings, so a whole settings leaf
+    // The table spans at least its two headings, so a whole settings section
     // narrower than that span — pane margins included — cannot fit it.
     let table = {
         let out = tab_body(&mut fresh(), panes::Tab::Tuning, 400.0, PANE_HEIGHT);

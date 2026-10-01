@@ -1,12 +1,14 @@
-//! The Tuning pane: the three prime-interval bars and the tuning-learn
-//! controls, then the commas the lattice tempers out.
+//! The Tuning pane: the prime-interval bars and Learn, the commas the lattice
+//! tempers out and note matching, then how incoming notes are retuned (Pass
+//! through, Adaptive or a Lattice Map, each with its own controls) and the
+//! tuning instances.
 //!
-//! Two sections in one tab because they are two halves of one question: where
-//! the lattice's nodes sit in pitch, the bars answering it by number and the
-//! commas by identity. Which of those nodes you are then looking at is
-//! [`super::view`], and it is a tab rather than a third section here because a
-//! tab called Tuning is not where anyone looks for a camera. Everything else in
-//! the settings dock is about how what is there gets drawn.
+//! The bars and the commas share a tab because they are two halves of one
+//! question: where the lattice's nodes sit in pitch, the bars answering it by
+//! number and the commas by identity. Which of those nodes you are then
+//! looking at is [`super::view`], and it is a tab rather than a third section
+//! here because a tab called Tuning is not where anyone looks for a camera.
+//! Everything else in the settings dock is about how what is there gets drawn.
 
 use super::learn_pulse;
 use super::param_bar;
@@ -165,7 +167,7 @@ fn tuning_hint(key: ParamKey) -> &'static str {
              cents. Also sets the Analyzer's off-lattice band."
         }
         // Not on this pane: Fade is a node setting and the two pitch ends are
-        // the Colors page's Color range.
+        // the Mappings page's Pitch color range.
         ParamKey::Fade | ParamKey::DarkestPitch | ParamKey::BrightestPitch => "",
     }
 }
@@ -356,8 +358,9 @@ pub(super) fn tuning_pane(
                     },
                 );
             }
-            // v1's tuning-learn mode: while engaged, the tuning re-learns
-            // instantly whenever the set of held notes changes (see root_ui).
+            // Learn: while engaged, the tuning re-learns whenever the set of
+            // held notes changes. The plugin's audio owner does it
+            // (`Owner::group_end`); without one, `VisualRuntime::learn_step`.
             let mut learn_active = state.runtime.learn_active;
             let learn = crate::widgets::toggle_switch(ui, &mut learn_active, "Learn")
                 .on_hover_text(

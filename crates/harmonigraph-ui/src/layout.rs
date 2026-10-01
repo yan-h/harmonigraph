@@ -78,8 +78,8 @@ impl Layout {
                 Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 0.68, 1.0) },
                 Placement { pane: Pane::Spectral, rect: (0.68, 0.0, 1.0, 1.0) },
             ],
-            // The plugin's default arrangement: a wide roll under the
-            // lattice, sharing the pitch axis left to right.
+            // A wide roll under the lattice, sharing the pitch axis left to
+            // right.
             "stacked" => vec![
                 Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 1.0, 0.74) },
                 Placement { pane: Pane::Spectral, rect: (0.0, 0.74, 1.0, 1.0) },

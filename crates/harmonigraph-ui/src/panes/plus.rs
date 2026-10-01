@@ -48,7 +48,7 @@
 //!
 //! Still no HUE among them, and deliberately: the ground is neutral, and every
 //! colour control in the panel is for the music — both of those tables are on
-//! the Colors page ([`super::color`]).
+//! the Mappings page ([`super::color`]).
 
 use super::{edge_bar, section};
 use crate::widgets::ValueBar;
@@ -85,7 +85,7 @@ pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) 
         // one thing a person navigates by held above the one that is only ever
         // backdrop.
         //
-        // No off position, for the bar above's reason: Arm length at 0 is the
+        // No off position, for the bar above's reason: Cross length at 0 is the
         // marker field's own switch, and every setting of this one draws.
         ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
             .unit(1.0, "%")

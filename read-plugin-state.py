@@ -10,22 +10,15 @@ bug against real state rather than a guess.
     ./read-plugin-state.py --appearance project.bwproject > appearance.ron
     ./read-plugin-state.py path/to.bwproject
 
-THE ONE THING THAT WILL WASTE YOUR TIME
----------------------------------------
-The UI state (dock layout, camera, spiral framing, ViewConfig) is written
-into the plugin state ONLY when the editor window is CLOSED — see `impl Drop for
-LatticeEditorHandle` in crates/harmonigraph-plugin/src/editor/window.rs. Saving a
-project with the plugin window open stores whatever was there before.
-
-So the procedure is, in this order:
-
-    1. Close the Harmonigraph plugin WINDOW in Bitwig.
-    2. Save the project (Cmd+S).
-    3. Run this.
-
-If you skip step 1 you get stale values, or none at all, and nothing warns
-you. (Host-automatable params — tuning, fade, color range — are not
-affected; those live in the param system and are always current.)
+WHEN THE NUMBERS LOOK STALE
+---------------------------
+The UI state (layout, camera, spiral framing, ViewConfig) is saved as the
+editor shows it, open window or not (`UiState` in
+crates/harmonigraph-plugin/src/editor/persist.rs). Builds before issue #1301
+wrote it only when the editor window CLOSED, so a project such a build saved
+with the window open holds whatever was there before: open it in a current
+build, save, and re-run. (Host-automatable params — tuning, fade, color
+range — were never affected; those live in the param system.)
 
 WHERE THE BYTES ACTUALLY ARE
 ----------------------------
@@ -195,10 +188,7 @@ def main() -> None:
     states = find_states(path)
     if not states:
         sys.exit(
-            "No plugin state found.\n"
-            "If the plugin IS in this project, the likely cause is the trap in\n"
-            "this script's header: the UI state is only written when the editor\n"
-            "WINDOW is closed. Close it, save the project, and re-run."
+            "No plugin state found in this project."
         )
 
     if args.appearance:
@@ -209,7 +199,7 @@ def main() -> None:
         ]
         if len(appearances) != 1:
             sys.exit(f"Expected one editor appearance, found {len(appearances)}; "
-                     "close its window and save with the current plugin format.")
+                     "save it with the current plugin format.")
         print(f"({appearances[0]})")
         return
 
@@ -246,7 +236,7 @@ def main() -> None:
             if set(st.get("params", {})) == {"tuning_delay"}:
                 print("\n(a Harmonigraph Tune — no editor, so no ui-state)")
             else:
-                print("\n(no ui-state field — editor never closed before the save)")
+                print("\n(no ui-state field — the editor was never open before a save)")
             continue
         # The spiral's framing is persisted beside the camera and for the same
         # reason — a take renders from the blob, so a disc dialled in on its

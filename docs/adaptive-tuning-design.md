@@ -298,8 +298,8 @@ the [implementation record](adaptive-tuning-plugin.md) holds the formula.
 
 The following indicator proposal and its related checks below are historical.
 Yan approved retiring the production adaptive next-note outlines in [#970](https://github.com/yan-h/harmonigraph/issues/970).
-Musical neighborhood eligibility remains;
-the headless model's own `reachability` method and its test coverage are the surviving verification tool, the browser presentation that once displayed it having been retired in [#975](https://github.com/yan-h/harmonigraph/issues/975).
+Musical neighborhood eligibility remains.
+The browser presentation that once displayed reachability was retired in [#975](https://github.com/yan-h/harmonigraph/issues/975), and the headless model's `reachability` method, left with no consumer, was removed after it.
 
 Show the nodes that can actually be selected by any arbitrary next input pitch with the present context held fixed.
 Distinguish eligible candidates from reachable winners: an eligible node may never win for any input pitch.

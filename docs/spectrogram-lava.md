@@ -2,7 +2,7 @@
 
 Playhead export and its whole-song fixtures were retired under #973.
 References and measurements for that path below are historical;
-Scrolling and Whole video retain the shared live analyzer.
+Scrolling and Fit video retain the shared live analyzer.
 
 The three styles this file names are a historical record.
 PR #928 retired the Plain/Blur/Lava selector and its transfer-stage switch,

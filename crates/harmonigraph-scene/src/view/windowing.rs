@@ -118,8 +118,9 @@ impl ViewConfig {
             let steps = if steps.is_nan() { 0 } else { steps as i32 };
             steps.clamp(-MAX_DRAWN_EXTENT, MAX_DRAWN_EXTENT)
         };
-        // World x is the fifths axis and world y the thirds one, which is the
-        // one place that mapping has to be undone rather than applied.
+        // World x is the thirds axis (`fives`) and world y the fifths one
+        // (`threes`), which is the one place that mapping has to be undone
+        // rather than applied.
         //
         // No center is derived here, and that is deliberate rather than an
         // omission: it would be a relabeling the picture cannot show, and it

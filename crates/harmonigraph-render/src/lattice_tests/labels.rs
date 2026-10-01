@@ -239,6 +239,7 @@ fn a_label_takes_its_own_nodes_place_in_the_order() {
     let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
         activation,
+        envelope: activation,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,
@@ -347,6 +348,7 @@ fn two_adjacent_names_from_different_sheets_draw_the_nearer_last() {
     let node = |z: f32, activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, z),
         activation,
+        envelope: activation,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,
@@ -428,6 +430,7 @@ fn a_culled_home_nodes_name_draws_over_the_markers_behind_it() {
     let node = |activation: f32| harmonigraph_scene::NodeInstance {
         world_pos: glam::Vec3::new(0.0, 0.0, 0.0),
         activation,
+        envelope: activation,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,
@@ -882,6 +885,7 @@ fn a_names_shadow_is_the_same_after_another_name_as_after_a_node() {
     let silent = harmonigraph_scene::NodeInstance {
         world_pos: lit.world_pos + glam::Vec3::Z,
         activation: 0.0,
+        envelope: 0.0,
         octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
         melody_slots: 0,
         bass_slots: 0,

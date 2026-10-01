@@ -43,16 +43,17 @@ USAGE:
     harmonigraph-offline <take.take> [OPTIONS]
 
 OPTIONS:
-    -o, --out <PATH>       Output. .mp4/.mov/.mkv go through ffmpeg;
-                           .png writes a numbered sequence; .rgba writes
-                           a raw stream.  [default: <take>.mp4]
+    -o, --out <PATH>       Output. .png writes a numbered sequence
+                           (<stem>-00000.png on); .rgba or .raw writes a
+                           raw stream; anything else (.mp4, .mov, .mkv)
+                           goes through ffmpeg.  [default: <take>.mp4]
     -l, --layout <NAME>    Combined Lattice/Analyzer arrangement.
                            Presets: PRESET_LIST
                            [default: the take's captured placement and proportion]
     -s, --size <WxH>       Output pixels. At an aspect other than the one the
                            take was framed at, the picture is recomposed to
                            fit rather than letterboxed, and it says so.
-                           [default: the take's own aspect and Resolution]
+                           [default: the take's own aspect and Output size]
         --scale <F>        Pixels per point — the UI's zoom. Bigger means
                            chunkier text relative to the frame.
                            [default: sized so the UI reads like the plugin]
@@ -211,7 +212,7 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
 ///
 /// BOTH halves come out of the take, and that is the point — the frame decides
 /// the shape and `short_edge` decides how big, and they are the same two things
-/// the Video pane's Aspect and Resolution rows set. A plain
+/// the Video pane's Aspect and Output size rows set. A plain
 /// `harmonigraph-offline take.take` therefore reproduces what was previewed,
 /// which is what makes re-rendering a take by hand to change one unrelated flag
 /// safe: `--layout stacked` on its own must not also take a 4K take back down to
@@ -673,7 +674,7 @@ mod tests {
         harmonigraph_ui::RenderFrame { aspect_w, aspect_h, ..Default::default() }
     }
 
-    /// At a short edge the test chooses rather than the Resolution control's
+    /// At a short edge the test chooses rather than the Output size control's
     /// default, which is a look retuned with the rest of it and says nothing
     /// about how a frame is sized.
     #[test]
@@ -688,9 +689,9 @@ mod tests {
         assert!(w % 2 == 0 && h % 2 == 0, "{w}x{h} not even");
     }
 
-    /// Re-rendering a take by hand honours the Resolution it was composed at.
+    /// Re-rendering a take by hand honours the Output size it was composed at.
     ///
-    /// The take carries `short_edge` (the Video pane's Resolution row) exactly
+    /// The take carries `short_edge` (the Video pane's Output size row) exactly
     /// as it carries the frame, and the plugin's own auto-render passes it
     /// through as `--size`. A plain command line has only the blob to read it
     /// from — and a renderer that reads the frame but defaults the resolution

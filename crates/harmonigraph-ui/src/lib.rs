@@ -270,9 +270,6 @@ pub fn root_ui(
     if theme::set_ui_scale(ui.ctx(), state.workspace.interaction.ui_scale) || reskinned {
         ui.reset_style();
     }
-    // Read back rather than reused: `set_ui_scale` clamps, and the dock has to
-    // be built at the scale that actually took.
-
     // Cleared before the panes run, so a frame with the roll hidden (or the
     // Spectral pane not on screen at all) reports zero notes rather than
     // whatever the last frame that had one reported.
@@ -369,7 +366,7 @@ pub fn root_ui(
             animating,
         },
     );
-    if state.picture.appearance.view.show_perf {
+    if state.workspace.interaction.show_perf {
         // The whole editor, which is the region the HUD may be dragged around
         // in — where inside it the HUD sits is the user's, and `perf_pos` is
         // where that answer lives.
@@ -378,7 +375,7 @@ pub fn root_ui(
             ui.max_rect(),
             &mut state.workspace.interaction.perf_pos,
             &state.picture.instruments.perf,
-            state.picture.appearance.view.show_perf_detail,
+            state.workspace.interaction.show_perf_detail,
             build_tag,
         );
     }
@@ -399,7 +396,7 @@ pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64
     // point in the dock's draw order: the lattice publishes as it builds, and
     // the panes that describe the picture read the finished answer from the
     // frame before. Taking it also clears this frame's slot, so a frame where
-    // the lattice is not drawn at all — its leaf collapsed, or laid out too
+    // the lattice is not drawn at all — its section folded, or laid out too
     // small to draw — reports no window rather than going on showing the last
     // one that was. A diagnostic that holds its last good reading is the one
     // that misleads.
@@ -486,9 +483,6 @@ fn frame_interval(fps_cap: Option<f32>) -> Option<std::time::Duration> {
     }
 }
 
-/// Whether the piano roll still has something moving across it: its window
-/// reaches back to a note that was sounding. Goes quiet once the last note
-/// has scrolled off the far edge, so an idle plugin still idles.
 /// Whether a lattice note is still departing after its voice was pruned: an
 /// ordered release holds its presence for the stagger, so it runs
 /// `1 + stagger_spread` fades past the off where the voice lasts one.
@@ -506,6 +500,9 @@ fn releasing(state: &SharedState, now: f64) -> bool {
             .is_some_and(|last| now - last <= span)
 }
 
+/// Whether the piano roll still has something moving across it: its window
+/// reaches back to a note that was sounding. Goes quiet once the last note
+/// has scrolled off the far edge, so an idle plugin still idles.
 fn roll_scrolling(state: &SharedState, now: f64) -> bool {
     let cfg = &state.picture.appearance.spectrum;
     cfg.show_roll

@@ -26,7 +26,7 @@
 //! It shares the Analyzer's [`SpectrumConfig`](crate::SpectrumConfig) whole
 //! rather than carrying settings of its own. Its geometry follows the
 //! analyzer's pitch and level windows, while color comes from the volume-color
-//! range and gradient dialled on the Colors page.
+//! range and gradient dialled on the Mappings page.
 //!
 //! One consequence of sharing worth expecting: `tilt` pivots at 1 kHz, so on a
 //! spiral it lifts by RADIUS rather than along a straight axis — a brightness

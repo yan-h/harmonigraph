@@ -193,7 +193,7 @@ impl Editor for LatticeEditor {
                 //
                 // Cloned out of the lock rather than read across the open, so
                 // this holds one lock at a time.
-                let serialized = state.params.ui_state.read().clone();
+                let serialized = state.params.ui_state.blob().read().clone();
                 let mut shared = state.shared.lock();
                 harmonigraph_ui::shell::Opening {
                     ctx: egui_ctx,
@@ -279,13 +279,15 @@ unsafe impl Send for LatticeEditorHandle {}
 
 impl Drop for LatticeEditorHandle {
     fn drop(&mut self) {
-        // Persist the UI state (dock layout, camera, view settings) into
-        // the plugin state so the host saves it with the project.
+        // Store the UI state (layout, camera, view settings) as the blob a
+        // host save reads once the window is shut; while it is open, the
+        // save serializes the live state instead (see `UiState`).
         // The lock is taken here with `open` still TRUE, which is what keeps
         // the background analyzer off it for the whole of this — see
         // [`crate::background`] on why that ordering is load-bearing rather
         // than incidental.
-        *self.params.ui_state.write() = harmonigraph_ui::shell::close(&self.shared.lock().ui);
+        *self.params.ui_state.blob().write() =
+            harmonigraph_ui::shell::close(&self.shared.lock().ui);
         self.egui_state.set_open(false);
         self.window.close();
     }

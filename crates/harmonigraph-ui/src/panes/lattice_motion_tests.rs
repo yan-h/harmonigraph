@@ -1,7 +1,7 @@
 //! Final visibility is read through the same composition used by live and offline panes.
 use super::*;
 use harmonigraph_core::{LatticePos, NoteEvent, SourceId};
-use harmonigraph_scene::{AnimationOrder, NodeInstance, Scene, SpectralReading};
+use harmonigraph_scene::{AnimationOrder, NodeInstance, NoteNames, Scene, SpectralReading};
 
 fn state(order: AnimationOrder) -> PictureState {
     let mut state = crate::tests::probe::fresh().picture;

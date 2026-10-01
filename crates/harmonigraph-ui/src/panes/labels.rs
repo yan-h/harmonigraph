@@ -45,7 +45,12 @@ fn names_row(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Label visibility",
         &mut view.note_names,
         &[
-            (NoteNames::All, "All", "Every node on screen carries its name, played or not"),
+            (
+                NoteNames::All,
+                "All",
+                "Every node on the home layer carries its name, played or not. \
+                 Other seventh layers name only sounding nodes.",
+            ),
             (
                 NoteNames::Past,
                 "History",

@@ -267,7 +267,7 @@ fn scenarios() -> Vec<Scenario> {
             panes::Tab::Tuning => 7,
             // The pitch colors, then two bases and Thickness max.
             // Mapped source weights are exercised in the enabled scenario.
-            panes::Tab::Colors => 2 + 3,
+            panes::Tab::Mappings => 2 + 3,
             // The picture, then the background glow and breathing (10) with its texture
             // switched off, then two Gaussian shadow groups of three bars each.
             panes::Tab::LatticeSettings => 15 + 1 + 10 + 6,
@@ -285,7 +285,7 @@ fn scenarios() -> Vec<Scenario> {
         // backdrop, glow and Contour shadow falloff (replacing Gaussian
         // spread in each of a page's two groups).
         let visits = match pane {
-            panes::Tab::Colors => visits + 8,
+            panes::Tab::Mappings => visits + 8,
             panes::Tab::LatticeSettings => visits + 3 + 6,
             // ...the spectrogram's fourteen, the ribbons' five, and the
             // backdrop's height and stripe spacing.
@@ -412,7 +412,7 @@ fn check(edge: Edge) {
         a.spectrum.show_roll = scenario.enabled;
         a.spectrum.show_spectrogram = scenario.enabled;
         a.spectrum.note_names = scenario.enabled;
-        if scenario.pane == panes::Tab::Colors {
+        if scenario.pane == panes::Tab::Mappings {
             for source in [
                 &mut a.view.intensity.velocity,
                 &mut a.view.intensity.gain,
@@ -432,7 +432,6 @@ fn check(edge: Edge) {
         a.spectrum.atmosphere.cloud_style = scenario.style;
         a.spectrum.atmosphere.stars.star_halo_profile = scenario.halo_profile;
         a.view.atmosphere.stars.star_halo_profile = scenario.halo_profile;
-        a.view.show_perf = scenario.enabled;
         a.view.atmosphere.texture = if scenario.enabled {
             harmonigraph_scene::LatticeTexture::Clouds
         } else {
@@ -443,6 +442,7 @@ fn check(edge: Edge) {
             style.kernel =
                 if scenario.enabled { ShadowKernel::Distance } else { ShadowKernel::Gaussian };
         }
+        state.workspace.interaction.show_perf = scenario.enabled;
         state.workspace.interaction.take.supported = scenario.enabled;
         state.workspace.interaction.take.last_ready = scenario.enabled;
         let mut tab = scenario.pane;

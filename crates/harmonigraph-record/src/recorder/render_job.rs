@@ -21,7 +21,7 @@ pub struct RenderRequest {
     /// look — set for "Re-render take" so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
     pub appearance: Option<String>,
-    /// Output pixels, from the Video pane's Aspect and Resolution.
+    /// Output pixels, from the Video pane's Aspect and Output size.
     ///
     /// Passed rather than left to the renderer's own default because that
     /// default knows the take's aspect but not which resolution was picked
@@ -30,12 +30,11 @@ pub struct RenderRequest {
 }
 
 impl RenderRequest {
-    /// The render that runs when a take finishes. A finished take always renders
-    /// now — its own recorded audio as the spectrogram, laid out as the take's
-    /// own spectrogram choice says — so this is unconditional; the `Option` is kept only for `Control::stop`'s signature.
-    /// Uses the take's own recorded look.
-    pub fn from_config(config: &harmonigraph_take::RenderConfig) -> Option<RenderRequest> {
-        Some(Self::build(config, None))
+    /// The render that runs when a take finishes: its own recorded audio as the
+    /// spectrogram, laid out as the take's own spectrogram choice says, in the
+    /// take's own recorded look.
+    pub fn from_config(config: &harmonigraph_take::RenderConfig) -> RenderRequest {
+        Self::build(config, None)
     }
 
     /// Build a request for an explicit "Re-render take": always built, and it

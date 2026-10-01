@@ -2,14 +2,16 @@
 //!
 //! Three sinks, chosen by the output path's extension:
 //!
-//! - a **video file** — frames are piped raw to `ffmpeg`, which does the
-//!   encoding and muxes the bounced audio in. No encoder crate enters
-//!   this workspace to make a video; that is the whole reason for the
-//!   subprocess.
-//! - a **PNG sequence** (`out/%05d.png`) — for checking one frame, or for
-//!   handing stills to something else.
-//! - a **raw stream** (`.rgba`) — the escape hatch when ffmpeg isn't
-//!   there; pipe it in later with the geometry printed at the end.
+//! - a **video file**, for any extension but the two below — frames are
+//!   piped raw to `ffmpeg`, which picks the container from the extension,
+//!   does the encoding and muxes the take's recorded audio in. No encoder
+//!   crate enters this workspace to make a video; that is the whole reason
+//!   for the subprocess.
+//! - a **PNG sequence** (`.png`, written beside the path as
+//!   `<stem>-00000.png` on) — for checking one frame, or for handing stills
+//!   to something else.
+//! - a **raw stream** (`.rgba` or `.raw`) — the escape hatch when ffmpeg
+//!   isn't there; pipe it in later with the geometry printed at the end.
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -192,7 +194,7 @@ pub struct VideoOptions<'a> {
     pub fps: f64,
     /// Authoritative number of video frames, including the visual tail.
     pub frames: u64,
-    /// The bounced audio to mux in, if any.
+    /// The take's recorded audio to mux in, if any.
     pub audio: Option<&'a std::path::Path>,
     /// x264 constant-rate-factor: lower is better and bigger.
     pub crf: u32,
@@ -369,7 +371,7 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // Forward is a seek into the input, so it goes BEFORE the `-i` it
     // applies to; backward is real silence, because
     // `-itsoffset` delays by an edit list too — ignored, it put a render
-    // that opens before the bounce 510 ms out of sync.
+    // that opens before the audio 510 ms out of sync.
     let shift = soundtrack_seek(options.audio_offset);
     let audio = options.audio.filter(|_| options.audio_samples() > 0);
     if let Some(audio) = audio {

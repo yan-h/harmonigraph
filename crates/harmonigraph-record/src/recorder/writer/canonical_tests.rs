@@ -362,7 +362,9 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             fence.worker_after_empty.enabled.store(false, Ordering::Release);
             wait_for(&fence.worker_failure_accounted);
             fence.worker_after_stop.enabled.store(true, Ordering::Release);
-            control.stop(RenderRequest::from_config(&harmonigraph_take::RenderConfig::default()));
+            control.stop(Some(RenderRequest::from_config(
+                &harmonigraph_take::RenderConfig::default(),
+            )));
             wait_for(&fence.worker_after_stop.entered);
             fence.worker_after_empty.entered.store(false, Ordering::Release);
             fence.worker_after_empty.enabled.store(true, Ordering::Release);

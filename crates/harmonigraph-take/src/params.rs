@@ -70,8 +70,8 @@ impl ParamKey {
     pub const TUNING: [ParamKey; 5] =
         [ParamKey::COffset, ParamKey::Three, ParamKey::Five, ParamKey::Seven, ParamKey::Tolerance];
 
-    /// Pitch->color gradient endpoints (the Color range on the Colors
-    /// page).
+    /// Pitch->color gradient endpoints (the Pitch color range on the
+    /// Mappings page).
     pub const COLOR: [ParamKey; 2] = [ParamKey::DarkestPitch, ParamKey::BrightestPitch];
 
     pub fn label(self) -> &'static str {
@@ -177,7 +177,7 @@ impl ParamKey {
             // and can be read against each other.
             ParamKey::Fade => 0.0..=1.0,
             // Both ends span the whole MIDI range so the pair reads as one
-            // two-handle control (the Colors page's Color range); ordering is
+            // two-handle control (the Mappings page's Pitch color range); ordering is
             // kept by the range bar's min span, not by a hard 60-note split.
             ParamKey::DarkestPitch => 0.0..=120.0,
             ParamKey::BrightestPitch => 0.0..=120.0,

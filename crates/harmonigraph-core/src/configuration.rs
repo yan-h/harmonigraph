@@ -139,16 +139,13 @@ pub enum ConfigMutation {
         modes: TuningModes,
         policy: PolicyConfig,
     },
-    /// The keyboard tuning follows the learned fifth and the shared C offset
-    /// the learned C either way. The lattice axes and their comma judgement
-    /// follow only while no source is `retuning`: with retuning off the lattice
-    /// is a picture of the input, with it on it is the target.
-    Learn {
-        learned: LearnedTuning,
-        retuning: bool,
-    },
-    /// Host modulation can change the committed raw axes while learning's
-    /// complete-evidence judgement still describes the chord that was heard.
+    /// The keyboard tuning follows the learned fifth either way. The comma
+    /// judgement follows the learned chord only while no source is
+    /// `retuning`: with retuning off the lattice is a picture of the input,
+    /// with it on it is the target. `raw` is what the learned edit committed,
+    /// which is where the axes it moved arrive, and host modulation may have
+    /// moved them since. A comma the chord engages stays engaged; one it
+    /// releases `resolve` may engage again from that `raw`.
     LearnResolved {
         learned: LearnedTuning,
         retuning: bool,
@@ -266,33 +263,15 @@ impl ConfigReducer {
                     self.modes.learning = on;
                 }
             }
-            ConfigMutation::Learn { learned, retuning }
-            | ConfigMutation::LearnResolved { learned, retuning, .. } => {
+            ConfigMutation::LearnResolved { learned, retuning, raw } => {
                 if let Some(three) = learned.three {
                     self.resolved.policy.keyboard =
                         crate::tuning::fifth_generated(crate::tuning::microcents(three));
                 }
-                let written = if retuning { 1 } else { 4 };
-                for (axis, value) in [
-                    &mut self.raw.c_offset,
-                    &mut self.raw.three,
-                    &mut self.raw.five,
-                    &mut self.raw.seven,
-                ]
-                .into_iter()
-                .zip([learned.c_offset, learned.three, learned.five, learned.seven])
-                .take(written)
-                {
-                    if let Some(value) = value {
-                        *axis = crate::tuning::microcents(value);
-                    }
-                }
                 if !retuning {
                     self.modes = learned_modes(learned, self.modes);
                 }
-                if let ConfigMutation::LearnResolved { raw, .. } = mutation {
-                    self.raw = raw;
-                }
+                self.raw = raw;
             }
         }
         self.resolve();
@@ -410,18 +389,24 @@ mod tests {
     #[test]
     fn learning_can_release_with_complete_evidence_but_not_a_bare_fifth() {
         let mut reducer = ConfigReducer::default();
-        reducer.apply(ConfigMutation::Learn {
+        // `raw` carries what the owner's learned edit committed.
+        let mut raw = reducer.raw();
+        raw.three = microcents(700.0);
+        reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning { three: Some(700.0), ..Default::default() },
             retuning: false,
+            raw,
         });
         assert!(reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        reducer.apply(ConfigMutation::Learn {
+        raw.five = microcents(crate::tuning::FIVE_JUST);
+        reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning {
                 three: Some(700.0),
                 five: Some(crate::tuning::FIVE_JUST),
                 ..Default::default()
             },
             retuning: false,
+            raw,
         });
         assert!(!reducer.resolved().modes.tempered.has(Comma::Syntonic));
         let mut modes = TuningModes {
@@ -439,31 +424,5 @@ mod tests {
             !learned_modes(learned, modes).tempered.has(Comma::SeptimalKleisma),
             "septimal sees derived 400, not played 386"
         );
-    }
-
-    #[test]
-    fn learning_moves_the_lattice_only_while_no_source_retunes() {
-        let fifth = crate::tuning::THREE_JUST - crate::tuning::SYNTONIC_COMMA / 4.0;
-        let learned = LearnedTuning {
-            c_offset: Some(10.0),
-            three: Some(fifth),
-            five: Some(crate::tuning::FIVE_JUST),
-            ..Default::default()
-        };
-        let before = ConfigReducer::default().resolved().tuning;
-        for retuning in [false, true] {
-            let mut reducer = ConfigReducer::default();
-            reducer.apply(ConfigMutation::Learn { learned, retuning });
-            let resolved = reducer.resolved();
-            assert_eq!(resolved.policy.keyboard, crate::tuning::fifth_generated(microcents(fifth)));
-            assert_eq!(resolved.tuning.c_offset, microcents(10.0));
-            let axes = |t: Tuning| (t.three, t.five, t.seven);
-            if retuning {
-                assert_eq!(axes(resolved.tuning), axes(before));
-            } else {
-                assert_eq!(axes(reducer.raw()).0, microcents(fifth));
-                assert_eq!(axes(reducer.raw()).1, microcents(crate::tuning::FIVE_JUST));
-            }
-        }
     }
 }

@@ -1,7 +1,7 @@
 //! Callback snapshots through the exported CLAP factory, including real source
 //! admission, sequencing, departures and the allocation-guarded audio callback.
 use super::*;
-use harmonigraph_core::confirmed::{ConfirmedError, LearningState};
+use harmonigraph_core::configuration::ConfigEdit;
 
 fn snapshot(device: &Device) -> (bool, Vec<(u64, u8)>) {
     hub_wrapper(device).test_inspect_plugin(|plugin| {
@@ -65,6 +65,11 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         let _scope = crate::test_scope::enter();
         let mut hub = Device::new(false);
         hub.activate();
+        // Armed through the owner, so its own gate is what refuses and recovers.
+        let mailbox = hub_wrapper(&hub).configuration_handle().unwrap();
+        let learn = ConfigEdit { learning: Some(true), ..Default::default() };
+        mailbox.submit(crate::configuration::packet(learn)).unwrap();
+        let refused = || mailbox.visible().0.status & 1 != 0;
         let mut bad = Device::new(true);
         bad.shared().set_retune(false);
         bad.activate();
@@ -93,18 +98,12 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
         }
         hub.run(192, vec![], None);
         hub.run(256, vec![], None);
-        let infer = || {
-            hub_wrapper(&hub).test_inspect_plugin(|plugin| {
-                LearningState::default()
-                    .infer(&plugin.configuration.as_ref().unwrap().confirmed, true)
-            })
-        };
         assert_eq!(snapshot(&hub).1.len(), 3, "only the independent learnable triad remains");
-        assert_eq!(infer(), Err(ConfirmedError::Incomplete));
+        assert!(refused());
         bad.run(320, vec![note(1, 0, 1, 0, false)], None);
         hub.run(320, vec![], None);
         hub.run(384, vec![], None);
-        assert_eq!(infer(), Err(ConfirmedError::Incomplete), "release cannot repair missing state");
+        assert!(refused(), "release cannot repair missing state");
         if overflow {
             session::session().reset();
         } else {
@@ -116,10 +115,20 @@ fn incomplete_source_blocks_learning_until_departure_or_reset() {
             (true, vec![]),
             "reset and departure both authoritatively cut state"
         );
-        good.run(448, [60, 64, 67].map(|key| note(key, 0, key as i16, 0, true)).to_vec(), None);
+        assert!(!refused(), "the owner recovers with the state, not at a host reset");
+        let revision = mailbox.visible().0.revision;
+        // A just third, so what Learn derives differs from the 12-TET it heard.
+        let bend = f64::from(harmonigraph_core::tuning::FIVE_JUST - 400.0) / 100.0;
+        let mut triad: Vec<_> = [60, 64, 67].map(|key| note(key, 0, key as i16, 0, true)).to_vec();
+        triad.push(expression(64, bend, 0));
+        good.run(448, triad, None);
         hub.run(512, vec![], None);
         hub.run(576, vec![], None);
         assert_eq!(snapshot(&hub).1.len(), 3);
-        assert!(infer().unwrap().is_some(), "a complete new chord can be learned after recovery");
+        assert_ne!(
+            mailbox.visible().0.revision,
+            revision,
+            "a complete new chord is learned after recovery"
+        );
     }
 }

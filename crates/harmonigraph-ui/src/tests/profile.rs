@@ -274,8 +274,8 @@ fn profile_frame() {
     profile("idle @1x", 1.0, idle, |_| {});
     profile("idle @2x (retina)", 2.0, idle, |_| {});
     profile("idle, perf overlay on", 2.0, idle, |s| {
-        s.picture.appearance.view.show_perf = true;
-        s.picture.appearance.view.show_perf_detail = true;
+        s.workspace.interaction.show_perf = true;
+        s.workspace.interaction.show_perf_detail = true;
     });
     profile("idle, no spectrogram", 2.0, idle, |s| {
         s.picture.appearance.spectrum.show_spectrogram = false

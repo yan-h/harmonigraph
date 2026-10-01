@@ -42,7 +42,10 @@ pub(super) fn frame(
 
     // One lock for the whole frame. Uncontended by design: the audio
     // thread only ever touches the rtrb producer, and the editor-drop
-    // path runs on this same GUI thread.
+    // path runs on this same GUI thread. The one other party is a host
+    // state save with the window open (`UiState`'s `map`), which takes it
+    // for one serialization: on the host's main thread, which is this
+    // thread on macOS and Windows and a different one on X11.
     let mut guard = state.shared.lock();
     let shared = &mut *guard;
 

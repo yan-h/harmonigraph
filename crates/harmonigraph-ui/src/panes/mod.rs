@@ -87,7 +87,7 @@ pub(super) const KEY_NAMES: [&str; 12] = [
 
 /// A MIDI note as a key name and octave — "C1", "C8" — so a range's ends read
 /// as pitches rather than bare numbers. Shared by the Octaves section's Center
-/// and the Colors page's color range, which is why it is here rather than in
+/// and the Mappings page's Pitch color range, which is why it is here rather than in
 /// either.
 ///
 /// It ROUNDS, which is exact for the octave Center (its bar lands on whole
@@ -117,9 +117,8 @@ pub enum Tab {
     /// the analysis they share. Titled "Analyzer".
     AnalyzerSettings,
     /// Note and level colors and how a note's playing draws it, shared by
-    /// every picture. Titled "Mappings"; the variant keeps its saved name,
-    /// since a renamed one fails a saved workspace's whole parse.
-    Colors,
+    /// every picture. Titled "Mappings".
+    Mappings,
     /// Rendering cost and the editor's own interface.
     System,
     Console,
@@ -192,7 +191,7 @@ pub fn tab_title(tab: &Tab) -> &'static str {
         // apart.
         Tab::LatticeSettings => "Lattice",
         Tab::AnalyzerSettings => "Analyzer",
-        Tab::Colors => "Mappings",
+        Tab::Mappings => "Mappings",
         Tab::System => "System",
         Tab::Console => "Console",
         Tab::Spectral => "Analyzer",
@@ -247,7 +246,7 @@ impl Viewer<'_> {
             Tab::AnalyzerSettings => {
                 analyzer_settings_pane(ui, self.state, self.interaction, self.params)
             }
-            Tab::Colors => color_pane(ui, &mut self.state.appearance, self.params),
+            Tab::Mappings => color_pane(ui, &mut self.state.appearance, self.params),
             Tab::System => system_pane(ui, &mut self.state.appearance, self.interaction),
             Tab::Console => console_pane(ui, &mut self.state.runtime),
             Tab::Spectral => {
@@ -356,7 +355,7 @@ pub(super) fn param_bar(
 }
 
 /// A two-handle [`RangeBar`] over a PAIR of parameters — one control for a
-/// range whose ends are both automatable params (the Colors page's color range).
+/// range whose ends are both automatable params (the Mappings page's Pitch color range).
 /// `label` names the bar and `display` formats each end's readout.
 ///
 /// Both params are bracketed for the whole drag and written every changed

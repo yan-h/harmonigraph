@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PolicyRecord {
-    pub version: u32,
     pub radius: u8,
     pub axes: u8,
     pub pitch_flexibility: u16,
@@ -27,7 +26,6 @@ impl Default for PolicyRecord {
 impl From<PolicyConfig> for PolicyRecord {
     fn from(p: PolicyConfig) -> Self {
         Self {
-            version: 3,
             radius: p.radius,
             axes: p.axes,
             pitch_flexibility: p.pitch_flexibility,

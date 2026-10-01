@@ -13,7 +13,7 @@ fn distance_after_wheel_over_lattice(modifiers: egui::Modifiers) -> (f32, f32) {
     let mut h = DockHarness::new();
     let start = state.picture.appearance.camera.distance;
 
-    // A point solidly inside the top-left leaf, which holds the Lattice tab
+    // A point solidly inside the top-left section, which holds the Lattice tab
     // alone (see default_dock): past the tab bar, left of the split.
     let over_lattice = egui::pos2(150.0, 150.0);
     let moved = || vec![egui::Event::PointerMoved(over_lattice)];
@@ -61,7 +61,7 @@ fn double_click_resets_lattice_navigation_but_keeps_drafting_choices() {
     for projection in PROJECTIONS {
         let mut state = fresh();
         let mut h = DockHarness::new();
-        let at = egui::pos2(150.0, 150.0); // Inside the default dock's Lattice leaf.
+        let at = egui::pos2(150.0, 150.0); // Inside the default Lattice section.
         h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
         h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
 
@@ -119,7 +119,7 @@ fn a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming() {
     let mut state = fresh();
     let mut h = DockHarness::new();
     let ctx = h.ctx.clone();
-    // Inside the top-left leaf, which holds the Lattice tab alone.
+    // Inside the top-left section, which holds the Lattice tab alone.
     let at = egui::pos2(150.0, 150.0);
     h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
     h.frame(&mut state, vec![press(at, true)]);
@@ -829,7 +829,7 @@ fn a_seventh_dragged_clear_of_the_magnet_stays_released() {
 ///
 /// The dock draws its panes in the order the user has arranged them, so a
 /// band reading this frame's window would answer from the reach or from the
-/// picture depending on where the lattice leaf sits in the layout. `drawn` is
+/// picture depending on where the lattice section sits in the layout. `drawn` is
 /// the previous frame's, rotated in `begin_frame`, which is one answer for
 /// every reader whatever the arrangement.
 #[test]
@@ -858,10 +858,10 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
         "the published window is the reach, so nothing says it came from a camera",
     );
     // The docked pane's own, at the docked pane's own aspect — a window a
-    // dock leaf of this shape really produces, not the whole editor's.
+    // section of this shape really produces, not the whole editor's.
     assert!(
         drawn.count() < state.picture.appearance.view.reach().count(),
-        "the lattice leaf is a fraction of the window, so its cabinet view is \
+        "the lattice section is a fraction of the window, so its cabinet view is \
          well inside the reach: {} nodes against {}",
         drawn.count(),
         state.picture.appearance.view.reach().count(),

@@ -28,8 +28,8 @@ use glam::Vec4;
 /// The RATIO is what gets clamped, which is the shader's own form
 /// (`pitch_lut_color` in `lattice.wgsl`) and the reason anything can be
 /// colored to match what the shader draws. Clamping the PITCH into
-/// `darkest..brightest` instead reads the same over every range the Nodes
-/// pane can dial, and comes apart at the two the pane cannot: the ends are
+/// `darkest..brightest` instead reads the same over every range the Pitch
+/// color range bar can dial, and comes apart at the two the bar cannot: the ends are
 /// independent params over 0..120, ordered only by the range bar's min span,
 /// so a host reaches an inverted pair — where `f32::clamp` panics on
 /// `min > max` — and a collapsed one, where clamping the pitch first pins
@@ -801,7 +801,7 @@ pub const HUE_CIRCLE_N: usize = 96;
 /// key is the two knobs the circle depends on rather than a whole gradient, and
 /// a bar's track hands it a FIXED reference pair (`TRACK_LIGHTNESS`, in
 /// `harmonigraph-ui`'s `widgets`) rather than the gradient's own: two bars open
-/// at once — the two gradient groups on the Colors tab, which
+/// at once — the two gradient groups on the Mappings tab, which
 /// stand one above the other and so are both on screen together — therefore
 /// share the one entry, and no drag of any knob moves this table at all. A second caller
 /// wanting a pair of its own is what would make this want [`LUT_SLOTS`]-style
@@ -843,32 +843,26 @@ pub fn hue_circle(lightness: f32, chroma: f32) -> [Vec4; HUE_CIRCLE_N] {
 /// The pitch gradient, evaluated: [`pitch_ramp_lut`] sampled at `pitch` and
 /// interpolated between entries exactly as `pitch_lut_color` in `lattice.wgsl`
 /// does. Every pitch-colored shape reaches the ramp through this one walk —
-/// the disc, the trail, the piano roll and the melody/bass marks on the CPU,
-/// the lit octave glyphs on the GPU.
+/// the piano roll and the melody/bass marks on the CPU, the lit octave glyphs
+/// on the GPU.
 ///
 /// It is a LIT pitch that this draws: a sounding glyph stands for a position
-/// on the pitch axis rather than for the voice that lit it, and so do the
-/// glow's lobes once two octaves sound. A solo voice's glow keeps the node's
-/// own color instead, deliberately — that color is the ramp at the VOICE's
-/// pitch, which is not the lit slot's whenever the two name different pitches
-/// (see the paragraph below), so a lone voice keeps its exact color rather
-/// than the one its indicator wears. The band's unsounding slices are off this
-/// ramp altogether: they wear the rings' ground
+/// on the pitch axis rather than for the voice that lit it. The band's
+/// unsounding slices are off this ramp altogether: they wear the rings' ground
 /// ([`ViewConfig::lattice_ground`](crate::ViewConfig)), which is a brightness
-/// rather than a pitch. Do not simplify
-/// `octave_glow_color`'s `count < 2u` fallback away on the strength of this
-/// function's name.
+/// rather than a pitch.
 ///
-/// One table for all of them is what puts a note's disc and its own lit octave
-/// indicator on the same color EXACTLY, rather than to within a tolerance, for
+/// One table for all of them is what puts a mark and the lit octave sector it
+/// extends on the same color EXACTLY, rather than to within a tolerance, for
 /// a given pitch. (Which pitch each is fed is a separate question: a voice
-/// outside the wheel's Range lights the outermost slot on its side, so the
-/// disc takes the voice's pitch while the glyph takes the clamped slot's — see
-/// `derive`. They differ there because they are naming different pitches, not
-/// because two definitions of one pitch's color disagree.)
+/// past either end of the ring lights the outermost slot on its side, so the
+/// piano roll takes the voice's pitch while the glyph and its marks take the
+/// clamped slot's. They differ there because they are naming different
+/// pitches, not because two definitions of one pitch's color disagree.)
 ///
 /// The shader can only afford a lookup — a gamut search per fragment
-/// is out of reach, and the glow loops call this several times over — so the
+/// is out of reach, and each node fragment reaches this once per octave slot
+/// it draws (`oct_slot_lit`, lattice.wgsl) — so the
 /// choice is not "table vs. exact curve" but "one table vs. a table and a
 /// curve that disagree". Two shapes sharing an edge is the harshest test of a
 /// color match there is, and structural agreement passes it at any table size.

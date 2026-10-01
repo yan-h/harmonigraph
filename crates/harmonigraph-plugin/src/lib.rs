@@ -178,10 +178,11 @@ pub struct HarmonigraphParams {
     #[persist = "editor-state"]
     pub editor_state: Arc<editor::EguiState>,
 
-    /// Serialized UI state (dock layout, camera, view settings), persisted
-    /// with the plugin state. See SharedState::save_persist.
+    /// Serialized UI state (layout, camera, view settings), persisted with
+    /// the plugin state. See SharedState::save_persist, and `UiState` for why
+    /// a save with the editor open does not read the stored blob.
     #[persist = "ui-state"]
-    pub ui_state: Arc<parking_lot::RwLock<String>>,
+    pub ui_state: editor::UiState,
 
     /// Which input feeds the analyzer and the audio recorded with a take. This
     /// is a host parameter rather than part of `ui_state`, so the audio thread
@@ -319,7 +320,7 @@ impl Default for HarmonigraphParams {
                 editor::DEFAULT_SIZE.0,
                 editor::DEFAULT_SIZE.1,
             ),
-            ui_state: Arc::new(parking_lot::RwLock::new(String::new())),
+            ui_state: editor::UiState::new(),
             analysis_input: EnumParam::new("Analyzer Audio Input", AnalysisInputParam::Main)
                 .non_automatable(),
             c_offset: param_for_key(ParamKey::COffset),
@@ -602,8 +603,9 @@ impl Default for Harmonigraph {
         let _background = background::BackgroundAnalyzer::spawn(
             editor_shared.clone(),
             params.editor_state.clone(),
-            params.ui_state.clone(),
+            params.ui_state.blob().clone(),
         );
+        params.ui_state.attach(&editor_shared, params.editor_state.clone());
         Harmonigraph {
             configuration: None,
             aggregation: Some(aggregation),
@@ -1296,7 +1298,7 @@ mod tests {
         let mut plugin = Harmonigraph::default();
         // What the host does when it restores a project, and all it does: no
         // editor, no activation, just the field.
-        *plugin.params.ui_state.write() = blob;
+        *plugin.params.ui_state.blob().write() = blob;
         // A Precise window is 16384 samples; this is more than one windowful,
         // so the analyzer cannot come out of the drain empty.
         publish_test_audio(&mut plugin, 40_000);
@@ -1320,6 +1322,61 @@ mod tests {
             lag * 2000.0,
             lag_of(SpectrumWindow::Precise) * 2000.0,
         );
+    }
+
+    /// A host save with the editor open stores what the window shows, not the
+    /// blob the last close wrote (issue #1301).
+    ///
+    /// Through the derived `serialize_fields`, which is what a host save calls,
+    /// on the real plugin whose `Default` attaches the editor state: a
+    /// `UiState` attached by hand would pass here and reach nothing a host
+    /// saves.
+    #[test]
+    fn a_save_with_the_editor_open_stores_what_the_window_shows() {
+        use nice_plug::params::Params;
+
+        let saved_yaw = |plugin: &Harmonigraph| {
+            let field =
+                plugin.params.serialize_fields().remove("ui-state").expect("ui-state saved");
+            let blob: String = serde_json::from_str(&field).expect("the field is a JSON string");
+            let mut state = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+            assert!(state.load_persist(&blob), "the saved blob does not load");
+            state.picture.appearance.camera.yaw
+        };
+
+        let plugin = Harmonigraph::default();
+        // What the last close stored.
+        let mut closed = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
+        closed.picture.appearance.camera.yaw = 0.5;
+        *plugin.params.ui_state.blob().write() = harmonigraph_ui::shell::close(&closed);
+        // Two completed rounds: the second one began after the write, so the
+        // background analyzer has adopted the blob and will not again. The
+        // live state is then turned elsewhere, so only the stored blob can
+        // answer 0.5.
+        let rounds = plugin._background.completed_rounds();
+        assert!(
+            a_round_after(&plugin, rounds + 1),
+            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+        );
+        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = 2.0;
+        assert_eq!(saved_yaw(&plugin), 0.5, "a shut window saves the stored blob");
+
+        // An open window the user has since turned the camera in. A completed
+        // round after the flag is what keeps the background analyzer's adopt
+        // of the stored blob from landing over the turn.
+        plugin.params.editor_state.set_open(true);
+        let rounds = plugin._background.completed_rounds();
+        assert!(
+            a_round_after(&plugin, rounds),
+            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+        );
+        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = 1.25;
+        assert_eq!(
+            saved_yaw(&plugin),
+            1.25,
+            "a save with the editor open stored the settings of the last close",
+        );
+        plugin.params.editor_state.set_open(false);
     }
 
     /// `ParamKey::id` is what a recorded take names its automation by, and
