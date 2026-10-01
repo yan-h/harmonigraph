@@ -1699,8 +1699,7 @@ fn a_collapsed_level_window_rules_nothing() {
     assert!(!level_grid(&level_cfg(-20.0, -20.0), 400.0, 60.0).is_empty());
 }
 
-/// With the roll off, the spectrum gets the whole depth axis — the
-/// layout the voice-bar/curve calibration was set up against.
+/// With the roll off, the spectrum gets the whole depth axis.
 #[test]
 fn the_roll_only_takes_depth_when_it_is_shown() {
     // Isolate the roll's depth share. The spectrogram claims depth the
@@ -3196,4 +3195,23 @@ fn the_picture_paints_the_same_in_every_skin() {
     };
     assert!(paint(other) == default, "{other:?} changed the picture");
     set_active_skin(SkinDials::default());
+}
+
+/// The bed under the spectrogram region is the heatmap's own silence colour,
+/// so on a gradient whose floor is lifted the depths no column covers yet read
+/// as the same silence as the ones it does, rather than as black beside it.
+#[test]
+fn the_spectrogram_bed_is_the_gradients_floor() {
+    let mut state = fresh();
+    state.appearance.spectrum.spectrogram_gradient.lightness = 60.0;
+    state.appearance.spectrum.spectrogram_gradient.lightness_ramp = 60.0;
+    let floor = crate::spectrogram::silence_color(state.appearance.spectrum.spectrogram_gradient);
+    assert_ne!(floor, egui::Color32::BLACK, "the fixture's floor is not lifted");
+    let out = painted_pane(WIDE, &mut state, 0.05);
+    let beds = out
+        .shapes
+        .iter()
+        .filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == floor))
+        .count();
+    assert_eq!(beds, 1, "no bed in the gradient's floor");
 }

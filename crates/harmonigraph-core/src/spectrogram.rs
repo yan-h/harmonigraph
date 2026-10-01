@@ -17,10 +17,10 @@ pub type ColumnDb = [BucketDb; SPECTRUM_BINS];
 /// The dB a stored `0` stands for, and the step between stored values.
 ///
 /// The pair covers -120 dB to +7.5 dB. The floor is exactly where the display's
-/// own mapping bottoms out (`loudness` clamps power at 1e-12) and exactly where
-/// the heatmap's range bar stops, so the quietest cell the UI can ask to see is
-/// the quietest value there is — the encoding adds no floor of its own, and
-/// nothing fades out early against one. The ceiling sits above a full-scale
+/// own mapping bottoms out (`loudness` clamps power at 1e-12), and below the
+/// -100 dB where the range bars stop, so the quietest cell the UI can ask to
+/// see is above the quietest value there is — the encoding adds no floor of its
+/// own, and nothing fades out early against one. The ceiling sits above a full-scale
 /// sine's 0 dB, which is already saturated white at any range the bars allow,
 /// so nothing visible clips against it either.
 pub const DB_FLOOR: f32 = -120.0;
@@ -319,8 +319,9 @@ mod tests {
     /// started, across the whole range the display can read.
     #[test]
     fn quantizing_round_trips_to_half_a_step() {
-        // The whole span the display can be asked to show: its dB window stops
-        // at -120 dB, and 0 dB (a full-scale sine) is the top of every range bar.
+        // The whole span the display's mapping reads: it bottoms out at -120 dB,
+        // below the range bars' -100, and 0 dB (a full-scale sine) is the top
+        // of every range bar.
         for db in [-120.0f32, -110.0, -100.0, -90.0, -60.0, -30.0, -12.0, -0.5, 0.0, 6.0] {
             let power = 10.0f32.powf(db / 10.0);
             let back = db_of(quantize(power));

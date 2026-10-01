@@ -214,7 +214,8 @@ impl AudioSpectrum {
     pub(crate) const ANCHOR_SMOOTHING: f64 = 0.05;
     pub(crate) const ANCHOR_SNAP: f64 = 1.0;
 
-    /// Feed mono samples from the shell, analyzing one spectrum per
+    /// Feed interleaved samples, `channels` to a frame, from the shell,
+    /// analyzing one spectrum per
     /// [`FFT_INTERVAL`](Self::FFT_INTERVAL) of audio in them. `now` is the shell
     /// clock also passed to [`root_ui`](crate::root_ui), and dates the NEWEST sample of the
     /// batch — which is what a shell draining its audio ring at frame time
@@ -233,9 +234,9 @@ impl AudioSpectrum {
     /// grid exact, evenly spaced, and independent of how often — or how evenly —
     /// the shell draws.
     ///
-    /// The smoothing and peak-hold decay of the CURVE moved here with it, for
-    /// the same reason: both are per-column, so leaving them on the frame clock
-    /// would have made their time constants frame-rate dependent.
+    /// The CURVE's attack/release smoothing moved here with it, for the same
+    /// reason: it is per-column, so leaving it on the frame clock would have
+    /// made its time constants frame-rate dependent.
     ///
     /// One call therefore costs as many FFTs as the audio it is handed contains
     /// hops, where the old one cost exactly one. Normally that is a frame's

@@ -81,8 +81,8 @@ fn the_ui_scale_leaves_the_picture_alone() {
     let picture = |scale: f32| {
         let mut state = fresh();
         let backend = RecordingBackend::default();
-        // Something to draw: a held voice for the roll and the voice bars, and
-        // an analyzed column for the spectrum.
+        // Something to draw: a held voice for the roll, and an analyzed column
+        // for the spectrum.
         state.picture.runtime.tracker.handle_event(harmonigraph_core::NoteEvent::on(
             0.5,
             harmonigraph_core::SourceId::DIRECT,

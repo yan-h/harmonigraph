@@ -34,7 +34,8 @@ The [production verification](evidence/spectrogram-stars/low-preset-2026-09-28/R
 All three presets retain all five layers,
 star geometry,
 and spectrogram color history.
-High remains the default and keeps its existing saved `P3` value;
+Medium is the default (#1279);
+High keeps its existing saved `P3` value;
 Low adds a saved enum variant,
 so older binaries cannot parse appearances saved with Low selected.
 Uniform retains its manual halo-resolution override.
@@ -105,8 +106,8 @@ A [follow-up against the current profile](evidence/spectrogram-stars/resolution-
 Back-only 50% saved about 10.5% at 4K with no dependable 1080p gain;
 scaling foreground cores and existing halo dimensions to 75% saved about 34.8%/20.2% at 4K/1080p in the synthetic probe.
 Recording-derived captures quantify the accompanying softness.
-The cores-and-halos variant is now available as Medium;
-High remains the default.
+The cores-and-halos variant is now available as Medium,
+which #1279 made the default.
 The [production confirmation](evidence/spectrogram-stars/medium-preset-2026-09-28/README.md) records the port and its interleaved timing checks.
 
 ## What was tried and what remains worth considering

@@ -196,7 +196,7 @@ press Tab to show them again.
 | --- | --- |
 | Frequency range | Analyzer and Spiral views; does not limit which frequencies are analyzed. |
 | Audio input, Frequency resolution, Spectrum averaging | All audio views, including spectrogram history. They do not alter pass-through sound. |
-| Spectrum level range | Analyzer/Spiral height and lattice audio-ring levels. Audio colors have a separate Level color range. |
+| Spectrum level range | Analyzer height and lattice audio-ring levels. Audio colors, including the Spiral's, have a separate Level color range. |
 | Live attack/release | Live Analyzer, Spiral and lattice audio rings. Spectrogram history keeps unsmoothed measurements. |
 | Ring attack/release | Additional audio-ring smoothing after the shared live response. |
 | History duration | MIDI ribbons and spectrogram; also Video history → Scrolling. Fit video (max 10 min) expands both histories to the render length, up to 10 minutes. |

@@ -112,18 +112,6 @@ pub(crate) fn render_pane(
                     );
                     state.appearance.view.shadow = shadow;
                 }
-                // Unreachable, and here for the match rather than for the picture:
-                // this preview composes `Layout::split`, which places the lattice
-                // and the Analyzer and nothing else, so the Video panel cannot
-                // preview a spiral at all. Spiral remains an editor pane.
-                //
-                // Drawn rather than left as a `todo!()` so that whatever reaches
-                // here if `Layout::split` ever grows a spiral gets the pane instead
-                // of a panic inside the host.
-                Pane::Spiral => {
-                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                    super::spiral::spiral_pane(&mut child, state, now, PREVIEW_SURFACE);
-                }
                 Pane::Lattice => preview_lattice(ui, rect, state, now),
             }
         }

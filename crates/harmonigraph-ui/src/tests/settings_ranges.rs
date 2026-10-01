@@ -110,7 +110,8 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for material in
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
-        poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness);
+        poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
+            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
     }
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
@@ -239,9 +240,9 @@ struct Scenario {
     enabled: bool,
     meantone: bool,
     marvel: bool,
-    /// Which texture's dials the Spectrogram page draws. Three constructions
-    /// sharing three bars, so the page has three inventories and only one of
-    /// them is the fresh state's.
+    /// Which texture's dials the Spectrogram page draws. Each texture has its
+    /// own bars, so the page has one inventory per texture, and the base
+    /// scenario draws the mosaic's.
     style: harmonigraph_scene::CloudStyle,
     halo_profile: harmonigraph_scene::StarHaloProfile,
     material: harmonigraph_scene::LatticeMaterial,
@@ -337,8 +338,8 @@ fn scenarios() -> Vec<Scenario> {
     }
     // The wash's own inventory: it takes the three scale bars off the Spectrogram
     // section and puts six of its own there, and nothing else on the page moves.
-    // Its own scenario rather than a flag on the loop above because the fresh
-    // state selects the scales, so without this the six are drawn by no case
+    // Its own scenario rather than a flag on the loop above because the base
+    // scenario selects the mosaic, so without this the six are drawn by no case
     // here at all.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,

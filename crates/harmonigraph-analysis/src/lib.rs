@@ -10,12 +10,13 @@ use harmonigraph_core::spectrum::{
     midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
 };
 
-/// Default analysis window length in samples (~0.17 s at 48 kHz — steady
-/// enough for a meter, short enough to follow chord changes). At the axis
-/// floor (20 Hz) one FFT bin spans several semitones, so the lowest
-/// octave reads coarse; that is inherent to the window length, not a bug.
-/// [`SpectrumAnalyzer::set_fft_size`] trades response time against bass
-/// precision at runtime.
+/// The window length in samples an analyzer starts at before its caller sets
+/// one (~0.17 s at 48 kHz) — the UI's Balanced setting. The product's fresh
+/// window is Fast, 4096 samples, which the UI sets through
+/// [`SpectrumAnalyzer::set_fft_size`]; that call trades response time against
+/// bass precision at runtime. At the axis floor (20 Hz) one FFT bin spans
+/// several semitones, so the lowest octave reads coarse; that is inherent to
+/// the window length, not a bug.
 pub const DEFAULT_FFT_SIZE: usize = 8192;
 
 /// The most tapers an estimate averages: 8.
@@ -369,7 +370,7 @@ impl SpectrumAnalyzer {
 
         // One transform per taper, summed into `bin_power`. The tapers are
         // independent LOOKS at one window of audio rather than more audio, so
-        // what this loop buys is a steadier reading of the same 171 ms and not
+        // what this loop buys is a steadier reading of the same window and not
         // a longer one; `build_tapers` carries why that is worth an FFT.
         //
         // The sum stays a sum — the mean's divisor is folded into
@@ -715,8 +716,8 @@ impl ChannelBank {
 /// every bucket of every column, forever. Lengthening the window does not touch
 /// that; it trades time resolution for frequency resolution and leaves the
 /// variance where it is. Averaging columns barely touches it either, because at
-/// an 8 ms hop through a 171 ms window consecutive columns are 95% the same
-/// audio, so there is almost nothing independent to average until the filter is
+/// an 8 ms hop through even the fresh 85 ms window consecutive columns are
+/// over 90% the same audio, so there is almost nothing independent to average until the filter is
 /// longer than the window.
 ///
 /// Averaging over ORTHOGONAL tapers is the way to get independent looks at one

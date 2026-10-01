@@ -1768,14 +1768,15 @@ mod tests {
     }
 
     /// The starfield draws stars over sound and the scheme's floor over
-    /// silence, and needs neither the tile nor the reduced tone target.
+    /// silence, and reads no tile; at the fresh Medium preset its far three
+    /// depths take the reduced tone target as their precomposite.
     ///
     /// Silence is the claim the look is most likely to break: no star is drawn
     /// over silence, so a quiet pane must be the floor EXACTLY — on a palette
     /// whose floor is not black, so an invented black would show — rather than
     /// a field of faint noise. Held at a reduced cloud sample spacing too,
-    /// which is where the other textures take the tone target this one must
-    /// not.
+    /// which is where the other textures take the tone target; the starfield's
+    /// does not depend on the spacing.
     #[test]
     fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
         let Some((device, queue)) = headless_device() else { return };
@@ -2085,7 +2086,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_width_lava_skips_offscreen_passes_at_live_capacity() {
+    fn zero_width_terraces_skip_offscreen_passes_at_live_capacity() {
         let Some((device, queue)) = headless_device() else { return };
         let mut resources = CallbackResources::default();
         let mut cb = cloud_fixture();
@@ -2124,7 +2125,7 @@ mod tests {
                 .panes
                 .get(0)
                 .expect("the spectrogram prepared a pane");
-            assert!(pane.cloud_ready, "Lava must still use its transfer/composite");
+            assert!(pane.cloud_ready, "the terraces must still use their transfer/composite");
             assert_eq!(
                 pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed),
                 0,
@@ -2134,9 +2135,13 @@ mod tests {
             // bucket reads in one fragment before this assertion reports it.
             queue.submit(bufs.into_iter().chain([encoder.finish()]));
         }
-        let lava = frame_with(&device, &queue, &mut resources, &cb);
+        let terraces = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere = None;
-        assert_ne!(lava, fresh_frame(&device, &queue, &cb), "zero widths disabled Lava contours");
+        assert_ne!(
+            terraces,
+            fresh_frame(&device, &queue, &cb),
+            "zero widths disabled the terraces"
+        );
     }
 
     #[test]
@@ -3435,7 +3440,7 @@ mod tests {
         );
     }
 
-    /// Variety changes each dome's radius and weight, hence its displacement.
+    /// `Size variation` changes each dome's radius and weight, hence its displacement.
     #[test]
     fn the_variety_reaches_the_scales() {
         let Some((device, queue)) = headless_device() else {
@@ -3457,7 +3462,7 @@ mod tests {
             .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 4))
             .count() as f32
             / (plain.len() / 4) as f32;
-        assert!(moved > 0.05, "Variety moved almost none of the pane: {moved}");
+        assert!(moved > 0.05, "Size variation moved almost none of the pane: {moved}");
     }
 
     /// Every point of the plane is inside some dome, and every dome that
@@ -3964,14 +3969,14 @@ fn cs_wrap_probe() {
         let plain = painted(|_| {});
         for (name, turn) in [
             (
-                "Glob size",
+                "Patch size",
                 (|s: &mut harmonigraph_scene::SpectralAtmosphere| {
                     s.material_settings.wash_size = 1.0
                 }) as fn(&mut harmonigraph_scene::SpectralAtmosphere),
             ),
-            ("Fuzz", |s| s.material_settings.wash_fuzz = 0.0),
-            ("Lobe shape", |s| s.material_settings.wash_lobe = 0.0),
-            ("Layers", |s| s.material_settings.wash_layers = 0.0),
+            ("Edge feathering", |s| s.material_settings.wash_fuzz = 0.0),
+            ("Shape warp", |s| s.material_settings.wash_lobe = 0.0),
+            ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
         ] {
             let frame = painted(turn);
@@ -4511,25 +4516,25 @@ fn cs_rotation_probe() {
         for (name, turn) in [
             ("Drift speed", (|s| s.cloud_speed = 20.0) as Turn),
             ("Drift direction", |s| s.cloud_direction = 42.0),
-            ("Cloud depth", |s| s.cloud_depth = 0.5),
+            ("Texture mix", |s| s.cloud_depth = 0.5),
             ("Refraction", |s| s.material_settings.wash_refract = 0.2),
-            ("Layers", |s| s.material_settings.wash_layers = 0.0),
+            ("Fine layer mix", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),
             // The mosaic's own dial, which the wash's walk cannot read.
-            ("Variety", |s| s.material_settings.scale_variety = 1.0),
+            ("Size variation", |s| s.material_settings.scale_variety = 1.0),
         ] {
             assert_eq!(key(turn, 0.0), fresh, "{name} rebaked a tile it cannot reach");
         }
         for (name, turn) in [
-            ("Lobe shape", (|s| s.material_settings.wash_lobe = 0.0) as Turn),
-            ("Fuzz", |s| s.material_settings.wash_fuzz = 0.0),
+            ("Shape warp", (|s| s.material_settings.wash_lobe = 0.0) as Turn),
+            ("Edge feathering", |s| s.material_settings.wash_fuzz = 0.0),
             ("Texture", |s| s.cloud_style = harmonigraph_scene::CloudStyle::Mosaic),
             // Through the tile's texel size alone — how many cells cross the
             // pane, not what a cell draws.
-            ("Glob size", |s| s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),
+            ("Patch size", |s| s.material_settings.wash_size = harmonigraph_scene::CLOUD_SIZE_MAX),
         ] {
             assert_ne!(key(turn, 0.0), fresh, "{name} reaches the walk and did not rebake");
         }

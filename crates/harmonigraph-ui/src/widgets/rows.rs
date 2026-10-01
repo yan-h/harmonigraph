@@ -64,7 +64,7 @@ pub(crate) fn checkbox_box(ui: &mut Ui, checked: &mut bool) -> Response {
 /// rewriting tuning params; Meantone locks the third), especially next
 /// to action buttons it could be confused with. A checkbox means
 /// "include this element" — a display preference among peers in a
-/// settings stack (Fill, Peak hold, Note labels, ...). When adding a
+/// settings stack (Fill, Note labels, ...). When adding a
 /// boolean control, default to a checkbox unless it's a mode that keeps
 /// acting after the click.
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
