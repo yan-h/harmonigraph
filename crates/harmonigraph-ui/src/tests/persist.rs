@@ -49,6 +49,39 @@ fn pair_starts(blob: &str, key: &str) -> Vec<usize> {
         .collect()
 }
 
+/// The `(…)` struct whose pair opens at `at`, string-aware so a quoted paren
+/// cannot unbalance it.
+fn enclosing_struct(blob: &str, at: usize) -> &str {
+    let (mut opens, mut in_string, mut escaped) = (Vec::new(), false, false);
+    let mut target = None;
+    for (i, c) in blob.char_indices() {
+        if i == at {
+            target = Some(opens.len());
+        }
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '(' | '[' => opens.push(i),
+            ')' | ']' => {
+                let open = opens.pop().expect("balanced blob");
+                if target == Some(opens.len() + 1) {
+                    return &blob[open..=i];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("no struct encloses byte {at}");
+}
+
 /// Every key a retirement has left in saved projects, as `(a live key in the
 /// same struct, the retired pairs as those builds wrote them)`: the retired
 /// pairs are spliced back in ahead of the live key.
@@ -80,6 +113,9 @@ const RETIRED_KEYS: &[(&str, &str)] = &[
     ("label_scale", "show_labels:false,sounding_ink:12.0,mark_melody:false,mark_bass:false,"),
     // The note animation's own retired fields, inside its struct.
     ("stagger_spread", "animation:Pop,start_size:0.2,"),
+    // The overlay switches, moved out of the view to the editor's top level:
+    // one inside a view must not reach the top-level key of the same name.
+    ("render_scale", "show_perf:true,show_perf_detail:true,"),
 ];
 
 /// A retired key costs nothing: through both doors — the editor's
@@ -102,9 +138,14 @@ fn a_retired_key_is_ignored_and_the_rest_survives() {
             assert_eq!(at.len(), 1, "{anchor:?} must open exactly one pair in {blob}");
             format!("{}{retired}{}", &blob[..at[0]], &blob[at[0]..])
         };
-        // Retired rather than merely renamed: this build writes none of them.
+        // Retired from the anchor's struct rather than merely renamed: this
+        // build writes none of them THERE. Checked in that struct alone, since
+        // a key can move elsewhere under the same name (`show_perf`).
+        let at = pair_starts(&saved, anchor);
+        assert_eq!(at.len(), 1, "{anchor:?} must open exactly one pair in {saved}");
+        let live = top_level_pairs(enclosing_struct(&saved, at[0]));
         for (key, _) in top_level_pairs(&format!("({})", retired.trim_end_matches(','))) {
-            assert!(pair_starts(&saved, &key).is_empty(), "{key:?} is live, not retired");
+            assert!(live.iter().all(|(k, _)| *k != key), "{key:?} is live, not retired");
         }
 
         let mut restored = fresh();
@@ -989,6 +1030,9 @@ fn a_persist_blob_missing_any_one_section_keeps_the_rest() {
             restored.picture.appearance.camera.yaw, 1.23,
             "dropping {key:?} cost the camera too"
         );
+        // Every top-level value in `saved` is the fresh one, so a dropped key
+        // must come back exactly as it was.
+        assert_eq!(restored.save_persist(), saved, "{key:?} came back at a non-fresh value");
     }
 }
 

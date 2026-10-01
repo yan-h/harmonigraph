@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use crossbeam::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
@@ -74,12 +74,15 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, EguiState> for Arc<Egui
 /// How long a host's state save waits for a frame to let go of the editor's
 /// state before it settles for the blob the last close wrote.
 ///
-/// A frame holds that lock for its whole run, which is milliseconds, so the
-/// wait is normally one frame at most. It is bounded rather than a plain
-/// `lock` because the lock is not reentrant: a host that answered something a
-/// frame asked by saving state on the same thread would otherwise hang the
-/// host on its own save — the kind of host hang issue #296 is about.
-const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+/// Short, because on macOS and Windows the host saves on the same thread the
+/// frames run on: the lock is then either free at once, or held by a frame
+/// that is itself waiting on this save (a host answering something the frame
+/// asked by saving state), and the lock is not reentrant, so no wait helps.
+/// Only on X11, where the editor has its own thread, can a frame be mid-run
+/// in parallel, and a frame holds the lock for a few milliseconds. Bounded
+/// rather than a plain `lock` so the re-entrant case costs the save its
+/// freshness and not the host a hang — the kind issue #296 is about.
+const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// The editor's saved settings: the `ui-state` blob the host stores with the
 /// project, plus a way to serialize them live while a window is open.
@@ -93,7 +96,10 @@ const SAVE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 /// host restore or a close (see [`crate::background`]).
 pub struct UiState {
     blob: Arc<RwLock<String>>,
-    live: OnceLock<(Arc<Mutex<EditorShared>>, Arc<EguiState>)>,
+    /// Weak, so this field never keeps `EditorShared` alive: the plugin orders
+    /// where that drop happens deliberately (see `Harmonigraph::_background`),
+    /// and these params are shared beyond the plugin (the editor holds them).
+    live: OnceLock<(Weak<Mutex<EditorShared>>, Arc<EguiState>)>,
 }
 
 impl UiState {
@@ -111,8 +117,8 @@ impl UiState {
     /// Give the save the editor state to serialize while `window` says a
     /// window is open. Once per plugin; the params exist before the state
     /// does, hence the two steps.
-    pub(crate) fn attach(&self, shared: Arc<Mutex<EditorShared>>, window: Arc<EguiState>) {
-        if self.live.set((shared, window)).is_err() {
+    pub(crate) fn attach(&self, shared: &Arc<Mutex<EditorShared>>, window: Arc<EguiState>) {
+        if self.live.set((Arc::downgrade(shared), window)).is_err() {
             unreachable!("the editor state is attached once, by the plugin that owns both");
         }
     }
@@ -137,12 +143,19 @@ impl<'a> nice_plug::params::persist::PersistentField<'a, String> for UiState {
         F: Fn(&String) -> R,
     {
         if let Some((shared, window)) = self.live.get() {
-            if window.is_open() {
-                let live = shared
-                    .try_lock_for(SAVE_WAIT)
-                    .map(|shared| harmonigraph_ui::shell::close(&shared.ui));
-                if let Some(live) = live {
-                    return f(&live);
+            if let Some(shared) = shared.upgrade().filter(|_| window.is_open()) {
+                // `save_persist` rather than `shell::close`: this is a save
+                // of an editor that stays open, not the way out of one.
+                match shared.try_lock_for(SAVE_WAIT) {
+                    Some(shared) => {
+                        let live = shared.ui.save_persist();
+                        drop(shared);
+                        return f(&live);
+                    }
+                    None => nice_plug::nice_warn!(
+                        "editor state busy for {SAVE_WAIT:?}; saving the settings of the \
+                         last editor close instead of the open window's"
+                    ),
                 }
             }
         }

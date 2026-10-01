@@ -123,11 +123,12 @@ impl Frame<'_> {
 /// The blob to hand back to whatever this shell restores from, on the way out.
 ///
 /// Where "the way out" is differs and cannot be shared: the plugin writes it
-/// into `params.ui_state` from the editor handle's `Drop`, and also answers a
-/// host save made with the window open from it; the harness answers eframe's
-/// `save`. What is shared is that this is the only writer of either —
+/// into `params.ui_state` from the editor handle's `Drop`; the harness answers
+/// eframe's `save`. What is shared is that this is the only writer of either —
 /// the take recorder serializes the same state mid-session so a render
-/// reproduces the look it was dialed in at, and that is a payload, not a save.
+/// reproduces the look it was dialed in at, and that is a payload, not a save;
+/// and a plugin host save made with the window open calls
+/// [`SharedState::save_persist`] itself, writing neither.
 #[must_use = "this IS the save; dropping it closes the shell without one"]
 pub fn close(state: &SharedState) -> String {
     state.save_persist()

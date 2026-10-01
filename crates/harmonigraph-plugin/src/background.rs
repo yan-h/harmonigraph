@@ -46,7 +46,8 @@
 //!
 //! **The project's own settings arrive here too**, for the same reason: this
 //! is the only thing running before the editor's window exists, and that
-//! window's build closure is otherwise the sole reader of `params.ui_state`.
+//! window's build closure is otherwise the only thing that applies
+//! `params.ui_state` to the state (a host save reads it only to store it).
 //! Left to it, every column analyzed before the first open is analyzed at
 //! [`SpectrumConfig::default`]'s window whatever the project saved — and since
 //! `INTERP_BIN_CEILING` is a fixed BIN index, the two stretches differ in the

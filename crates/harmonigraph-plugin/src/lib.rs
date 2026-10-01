@@ -605,7 +605,7 @@ impl Default for Harmonigraph {
             params.editor_state.clone(),
             params.ui_state.blob().clone(),
         );
-        params.ui_state.attach(editor_shared.clone(), params.editor_state.clone());
+        params.ui_state.attach(&editor_shared, params.editor_state.clone());
         Harmonigraph {
             configuration: None,
             aggregation: Some(aggregation),
@@ -1349,6 +1349,16 @@ mod tests {
         let mut closed = harmonigraph_ui::SharedState::new(editor::ASSUMED_SURFACE_FORMAT);
         closed.picture.appearance.camera.yaw = 0.5;
         *plugin.params.ui_state.blob().write() = harmonigraph_ui::shell::close(&closed);
+        // Two completed rounds: the second one began after the write, so the
+        // background analyzer has adopted the blob and will not again. The
+        // live state is then turned elsewhere, so only the stored blob can
+        // answer 0.5.
+        let rounds = plugin._background.completed_rounds();
+        assert!(
+            a_round_after(&plugin, rounds + 1),
+            "no analyzer round in {ANALYSIS_DEADLINE:?}: this runner never scheduled it",
+        );
+        plugin.editor_shared.lock().ui.picture.appearance.camera.yaw = 2.0;
         assert_eq!(saved_yaw(&plugin), 0.5, "a shut window saves the stored blob");
 
         // An open window the user has since turned the camera in. A completed
