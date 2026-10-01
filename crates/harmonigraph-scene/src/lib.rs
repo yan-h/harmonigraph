@@ -37,6 +37,7 @@ pub mod motion;
 pub mod octaves;
 pub mod skin;
 pub mod spectral;
+pub mod star_plan;
 pub mod style;
 pub mod trail;
 pub mod view;

@@ -559,6 +559,11 @@ pub struct StarSettings {
     /// How much every star is widened, equally at every depth.
     /// Runs to [`STAR_DEFOCUS_MAX`].
     pub star_defocus: f32,
+    /// The dev-only star test bed: while it is `Some`, the renderer draws this
+    /// plan instead of the profile's. Never saved, so every load starts at
+    /// production.
+    #[serde(skip)]
+    pub test_bed: Option<crate::star_plan::StarPlan>,
 }
 impl Default for StarSettings {
     fn default() -> Self {
@@ -590,6 +595,7 @@ impl Default for StarSettings {
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
             star_defocus: 0.35391274,
+            test_bed: None,
         }
     }
 }
@@ -683,6 +689,8 @@ impl StarSettings {
             STAR_HALO_RESOLUTION_MAX,
         );
         self.star_defocus = clamp(self.star_defocus, fresh.star_defocus, 0.0, STAR_DEFOCUS_MAX);
+        let production = crate::star_plan::StarPlan::production(self);
+        self.test_bed = self.test_bed.map(|plan| plan.sanitized(production));
         self
     }
 }
