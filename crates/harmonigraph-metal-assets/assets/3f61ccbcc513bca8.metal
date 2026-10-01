@@ -4,19 +4,6 @@
 
 using metal::uint;
 
-struct Locals {
-    metal::float2 origin_points;
-    metal::float2 viewport_points;
-    float feather;
-    float light;
-    metal::float2 pitch_dir;
-    metal::float2 depth_dir;
-    metal::float2 _axis_pad;
-    metal::float4 shadow;
-    metal::float2 shadow_atlas_size;
-    float shadow_falloff;
-    float _shadow_pad;
-};
 struct VertexOut {
     metal::float4 position;
     metal::float2 local;
@@ -275,19 +262,13 @@ float along(
 }
 
 metal::float4 core_color(
-    VertexOut in_10,
-    constant Locals& locals
+    VertexOut in_10
 ) {
     float _e2 = box_distance(in_10);
     float _e4 = inside(in_10, _e2, 0.0);
     float _e6 = lead_coverage(in_10);
-    metal::float4 body = (in_10.core * _e4) * _e6;
-    float _e10 = locals.light;
-    if (_e10 < 0.5) {
-        float _e14 = along(in_10, in_10.fade);
-        return body * _e14;
-    }
-    return body;
+    float _e9 = along(in_10, in_10.fade);
+    return ((in_10.core * _e4) * _e6) * _e9;
 }
 
 metal::float3 linear_from_gamma_rgb(
@@ -321,10 +302,9 @@ struct fs_core_linearOutput {
 fragment fs_core_linearOutput fs_core_linear(
   fs_core_linearInput varyings [[stage_in]]
 , metal::float4 position [[position]]
-, constant Locals& locals [[buffer(0)]]
 ) {
     const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
-    metal::float4 _e1 = core_color(in, locals);
+    metal::float4 _e1 = core_color(in);
     metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
     return fs_core_linearOutput { metal::float4(_e3, _e1.w) };
 }

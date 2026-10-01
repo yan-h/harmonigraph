@@ -1,7 +1,7 @@
 //! Light and shadow for each picture: the lattice's bloom, background glow and shadows in
 //! separate Lattice sections, and the Spiral's bloom and the Analyzer
-//! and Spiral shadows on the Analyzer page. The spectrogram's own bloom sits
-//! with the MIDI ribbons it lights.
+//! and Spiral shadows on the Analyzer page. Note bloom sits with the MIDI
+//! ribbons it lights.
 
 use super::section;
 use crate::widgets::{choice_row, ValueBar};

@@ -371,8 +371,9 @@ fn draw_map_overlay(
 /// docked pane, the Render preview, and each placement of an offline layout.
 ///
 /// One id space per callback type (`lattice_paint_callback`,
-/// `harmonigraph_render::roll_paint_callback`), not one shared across all of
-/// them: each keeps a map of its own, so the same surface names a different
+/// `harmonigraph_render::roll_paint_callback_with_clipped_tail`), not one
+/// shared across all of them: each keeps a map of its own, so the same
+/// surface names a different
 /// live copy in each and none of them has to agree with the others.
 /// `crate::text`'s flush ids are a further space again — a text batch's
 /// instance buffer, not a GPU pane — and cut the surface into blocks of their
