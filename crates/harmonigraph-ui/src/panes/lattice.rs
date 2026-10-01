@@ -54,9 +54,11 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
         // settings: those are view preferences, not navigation state.
         // The window's center goes back with the camera, to the lattice's
         // ORIGIN (C) — not where a fresh view opens, one third across
-        // (`ViewConfig::default`'s `center_fives`). Without it a double-click
-        // on a scrolled view resets the camera into the middle of wherever it
-        // had scrolled to, which is not a reset.
+        // (`ViewConfig::default`'s `center_fives`). That is intended (#1327):
+        // a double-click resets to the origin, the lattice's own fixed point.
+        // Without the center going back a double-click on a scrolled view
+        // resets the camera into the middle of wherever it had scrolled to,
+        // which is not a reset.
         state.appearance.camera = Camera {
             projection: state.appearance.camera.projection,
             cabinet_angle: state.appearance.camera.cabinet_angle,

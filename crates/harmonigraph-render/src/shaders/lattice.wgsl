@@ -44,7 +44,6 @@ struct OctaveParams {
     @align(16) span: f32,
     center: f32,
     padding: vec2<f32>,
-    bounds: array<vec4<f32>, 3>,
 };
 
 struct SpectralParams {
@@ -226,7 +225,9 @@ const INK_STRIP_N: u32 = 64u;
 // rather than a share of each item.
 //
 // Zero is the geometry group off — its nodes pack no cells and each multiplies
-// by 1. NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
+// by 1. The CPU also packs 0 here for a group at Darkness 0, which casts
+// nothing either, so its quads are not grown for a shadow no draw spends.
+// NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
 // a shadow being cast with no light in the picture at all.
 fn glow_shadow() -> f32 {
     return max(u.geometry_shadow.width, 0.0);
@@ -238,12 +239,25 @@ fn glow_shadow_depth() -> f32 {
     return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
 
+// How strongly a node in front hides the ink of the nodes behind it: the
+// occlusion switch scaled by the same Darkness as the visible shadow, so 1%
+// hides next to nothing and 0 is a continuous end rather than a jump (#1288).
+// Names receive the same product through `node_occlusion` in text.wgsl.
+fn node_occlusion() -> f32 {
+    return clamp(u.geometry_shadow.occlusion, 0.0, 1.0) * glow_shadow_depth();
+}
+
 // How far this frame's renderer reaches past a caster's ink in the picture's own
 // σ (`u.geometry_shadow.reach_sigmas`, `ShadowKernel::reach_sigmas`), which is what every quad is
 // grown by.
 //
-// Floored at `SHADOW_REACH_SIGMAS` so a frame with nothing packed sizes its
-// quads as one Gaussian does.
+// Floored at `SHADOW_REACH_SIGMAS`, which grows a distance quad to 3σ where its
+// profile ends at 2σ. That slack is load-bearing rather than discarded
+// fragments: σ is fixed in POINTS at the camera's focus (`sigma_points`) while
+// this reach is converted to a node's uv by its sheet scale alone, so a node
+// standing further from the camera holds the same points in more of its uv,
+// and without the floor its quad cuts the distance tail off in a straight line
+// (six lattice goldens moved by up to 7/255 when it was removed, #1310).
 fn glow_shadow_reach() -> f32 {
     return max(u.geometry_shadow.reach_sigmas, SHADOW_REACH_SIGMAS);
 }
@@ -302,7 +316,8 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> f32 {
 
 // Node shadows interpret the field as coverage, so changing darkness cannot
 // broaden the normalized shadow profile. Gaussian receiver occlusion spends
-// that field separately at full depth (`node_visibility`). Like every other
+// that field separately (`node_visibility`), scaled by the same darkness
+// (`node_occlusion`). Like every other
 // shadow, it leaves the bright pass's copy whole, so the Shadow darkness bar
 // is the whole of how dark it lands.
 fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> f32 {
@@ -778,8 +793,7 @@ fn node_vertex(vertex_index: u32, inst: Instance) -> VsOut {
 // (octave_level unpacks without that guard, and is not the one to reach for.)
 const OCTAVE_SLOTS: u32 = 11u;
 
-// Octaves one turn can be cut into (harmonigraph_scene::MAX_SPAN). One fewer
-// than the boundary table's entries, since a slice needs a boundary each end.
+// Octaves one turn can be cut into (harmonigraph_scene::MAX_SPAN).
 const MAX_SPAN: u32 = 11u;
 
 // Length of the pitch->color LUT (mirrors harmonigraph_scene::PITCH_LUT_N
@@ -887,13 +901,12 @@ fn slice_thickness(thickness: vec3<u32>, i: u32) -> f32 {
 // at the bottom for the center's own pitch class and turns away from it with
 // everything else.
 //
-// The widths are computed on the CPU (harmonigraph_scene's `octave_layout`)
-// and read out of `oct_bounds` here — one table, shared by every node, giving
-// the angle from a ring's own seam to each of its slice boundaries.
+// Every slice is one span-th of the turn, so the angle from a ring's own seam
+// to any point along it is the closed form in oct_walk (harmonigraph_scene's
+// `OctaveLayout::walk`, in the same operation order).
 
-// The span, held inside the boundary table it indexes (oct_walk reads
-// bound(span)), so a stale or oversized uniform draws a wrong sector rather
-// than reading past the last row.
+// The span, held to the drawable range so a zero uniform cannot divide by zero
+// and a stale or oversized one cannot run the per-slice loops past the slots.
 fn oct_span() -> u32 {
     return clamp(u32(u.octave.span), 1u, MAX_SPAN);
 }
@@ -904,18 +917,13 @@ fn oct_center() -> f32 {
 // Straight up, in these angles: the bottom of a node is a quarter turn back
 // from zero and clockwise — the direction pitch rises — subtracts.
 const OCT_UP: f32 = -0.75 * TAU;
-// Boundary `j` of a ring, four to a uniform row. j runs 0..span: 0 is the seam
-// and span is the same seam a full turn on.
-fn oct_bound(j: u32) -> f32 {
-    return u.octave.bounds[j / 4u][j % 4u];
-}
-// Angle from a ring's seam to `x` slices along it, walking clockwise. Linear
-// inside a slice, so a pitch stands at the same fraction of its own octave's
-// wedge as it does of the octave.
+// Angle from a ring's seam to `x` slices along it, walking clockwise: 0 is the
+// seam and span is the same seam a full turn on. Linear in x, so a pitch
+// stands at the same fraction of its own octave's wedge as it does of the
+// octave.
 fn oct_walk(x: f32) -> f32 {
-    let c = clamp(x, 0.0, f32(oct_span()));
-    let j = min(u32(max(floor(c), 0.0)), oct_span() - 1u);
-    return mix(oct_bound(j), oct_bound(j + 1u), c - f32(j));
+    let span = f32(oct_span());
+    return TAU * clamp(x, 0.0, span) / span;
 }
 // MIDI pitch of octave slot `s` on a node whose pitch class is `cents`: slot
 // s is the octave whose C is MIDI 12*s. Signed, since a ring at the pitch
@@ -963,7 +971,7 @@ fn oct_ring(cents: f32) -> OctRing {
 // keeps the indicators meeting edge to edge and closing the ring.
 fn oct_sector(s: i32, ring: OctRing) -> vec2<f32> {
     let i = u32(clamp(s - ring.base, 0, i32(oct_span()) - 1));
-    return vec2<f32>(ring.seam - oct_bound(i), ring.seam - oct_bound(i + 1u));
+    return vec2<f32>(ring.seam - oct_walk(f32(i)), ring.seam - oct_walk(f32(i + 1u)));
 }
 // Where an indicator "points": the angle of its own pitch, which is the middle
 // of its wedge — for anything that needs one angle for the whole of it rather
@@ -2506,7 +2514,7 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var visibility = 1.0;
     if ink.alpha > 0.0 {
-        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
+        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, node_occlusion());
     }
     let visible_alpha = ink.alpha * visibility;
     var final_alpha: f32;
@@ -3513,6 +3521,11 @@ fn nebula_noise(p: vec2<f32>) -> f32 {
     );
 }
 
+// Detail cells per glow texel over which `nebula_light` fades its detail layer
+// to its mean: from 0.3 (about three texels a cell, where it starts to
+// sparkle as it drifts) to 1.1 (under a texel a cell, pure aliasing).
+const NEBULA_DETAIL_FADE: vec2<f32> = vec2<f32>(0.3, 1.1);
+
 fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     if u.texture.depth <= 0.0 || light.a <= 0.0 {
         return light;
@@ -3524,7 +3537,18 @@ fn nebula_light(light: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
     let drift = u.texture.drift;
     let warp = vec2<f32>(nebula_noise(p + drift), nebula_noise(p + vec2<f32>(8.3, 2.7) - drift));
     let cloud = nebula_noise(p + warp * 1.2 + drift);
-    let detail = nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4));
+    // The detail layer is 2.3x finer than the clouds, so at the smallest
+    // Pattern sizes its cells shrink under the glow resolve texel and alias.
+    // Fade it toward its mean (0.5) by how many detail cells one texel spans,
+    // from about three texels a cell to under one (#1319). Exactly 0 at the
+    // fresh size on any target over ~46 texels tall, so those frames are
+    // untouched.
+    let footprint = 5.0 / (u.texture.scale * f32(textureDimensions(glow_sum).y));
+    let detail = mix(
+        nebula_noise(p * 2.3 - drift + vec2<f32>(3.1, 7.4)),
+        0.5,
+        smoothstep(NEBULA_DETAIL_FADE.x, NEBULA_DETAIL_FADE.y, footprint * 2.3),
+    );
     let density = 0.08 + 0.92 * smoothstep(0.25, 0.70, cloud * 0.75 + detail * 0.25);
     // Attenuate premultiplied RGBA together: preserve note hue, valid alpha,
     // and the overlap rule's peak bound. No glow means no nebula light at all.

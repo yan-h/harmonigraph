@@ -78,9 +78,9 @@ pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
 
 /// The background glow: its reach, strength, colour, wash and clock.
 pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
-    // In the node's quad uv, the unit the Gap reads in (1.0 is the quad edge
-    // the Layers bar budgets as 100%), and measured out from the node's
-    // outermost drawn edge. Eased, because the bar spans two pictures rather
+    // Stored in the node's quad uv, as the Gap is, and measured out from the
+    // node's outermost drawn edge; read out in true node radii
+    // (`QUAD_UV_PERCENT`, uv 1.0 = 180%), as its hover says. Eased, because the bar spans two pictures rather
     // than one range of one: the accent — a halo reaching about as far as the
     // gap to a neighbour — is the bottom eighth of it, and the wash is
     // everything above. Cubic travel gives the accent
@@ -88,7 +88,8 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // hundredth at a time, and the far end is reachable in the same drag.
     ValueBar::new(&mut view.glow_reach, 0.0..=GLOW_REACH_MAX, "Background glow reach")
         .eased(true)
-        .percent()
+        .unit(super::QUAD_UV_PERCENT, "%")
+        .decimals(1)
         .show(ui)
         .on_hover_text(
             "Distance the background glow extends beyond a node, as a percentage of its radius. \

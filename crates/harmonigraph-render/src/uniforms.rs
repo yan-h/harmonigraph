@@ -96,8 +96,6 @@ uniform_group! {
         span: f32,
         center: f32,
         padding: Float2,
-        /// Clockwise angles from the ring seam, four boundaries per row.
-        bounds: [Float4; 3],
     }
 }
 uniform_group! {

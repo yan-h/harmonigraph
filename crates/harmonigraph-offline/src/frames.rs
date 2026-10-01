@@ -672,62 +672,6 @@ mod tests {
         }
     }
 
-    /// The three shadows in one picture, written to `target/scratch/`: a
-    /// node's rings, a marker's cross and a name's type, all casting into the
-    /// same frame. They no longer share one Shadow bar — the rings are the
-    /// lattice geometry group, the cross and the name the lattice notation
-    /// group — so the probe sets every group to one width to compare them.
-    ///
-    /// A probe: it asserts nothing, the verdict being whether the three read as
-    /// one shadow at a common width, and it is kept and `#[ignore]`d for the
-    /// reason the field's own probe above is — the reading conditions are the
-    /// expensive part.
-    ///
-    /// Those conditions: a chord HELD, because the light is what a shadow is
-    /// most visible on and an unlit lattice has none; `NoteNames::Played`, which is
-    /// the one setting that puts names and crosses in the same frame, the
-    /// played positions taking type and the rest keeping their marks; and the
-    /// camera pulled back far enough that a node's shadow reaches its
-    /// neighbours, which is where two shadows can be compared at all.
-    ///
-    /// The sweep is the Shadow WIDTH, set on every group at once: off, the bare
-    /// `ShadowStyle::default` width (which no fresh group ships), and two wider
-    /// ones up to the bar's top, where the pools meet.
-    ///
-    /// `PROBE_TAG` names the shots, so a before and an after can be shot from
-    /// two builds and laid side by side.
-    ///
-    /// ```text
-    /// cargo test -p harmonigraph-offline -- --ignored --nocapture lattice_shadows
-    /// ```
-    #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
-    fn the_lattice_shadows_draw_a_picture() {
-        const SIZE: [u32; 2] = [1200, 1000];
-        const PPP: f32 = 2.0;
-        const NOW: f64 = 1.0;
-
-        let Some(mut sheet) = ProbeSheet::new(SIZE, PPP) else {
-            eprintln!("no usable GPU adapter; nothing rendered");
-            return;
-        };
-        let tag = std::env::var("PROBE_TAG").unwrap_or_else(|_| "after".to_string());
-
-        let fresh = harmonigraph_scene::ShadowStyle::default();
-        for shadow in [0.0f32, fresh.width, 0.45, harmonigraph_scene::GLOW_SHADOW_MAX] {
-            let mut state = PictureState::new(FORMAT);
-            state.appearance.view.note_names = harmonigraph_scene::NoteNames::Played;
-            state.set_background((24, 25, 29));
-            state.runtime.frame_params.fade_time = 0.0;
-            hold(&mut state, &CHORD);
-            state.appearance.camera.zoom_by(2.0);
-            for style in state.appearance.view.shadow.groups_mut() {
-                style.width = shadow;
-            }
-            sheet.shoot(&mut state, NOW, &format!("shadows-{:.0}-{tag}", shadow * 100.0));
-        }
-    }
-
     /// A node is a LAMP with a sheet behind it, not a hole: its own middle is
     /// at least as bright as the ground a few pixels away, at one sheet and at
     /// two alike.

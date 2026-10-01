@@ -9,7 +9,8 @@
 //! Octaves outside MIDI's reach remain as backdrop. Notes beyond either end
 //! fold onto that end's slice.
 //!
-//! The CPU supplies one boundary table shared by all nodes and the renderer.
+//! The walk round a ring is the closed form `TAU * x / span`, which the
+//! renderer repeats rather than reading a table.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -40,8 +41,7 @@ pub const PITCH_CEIL: f32 = 127.0;
 pub const MIN_SPAN: u32 = 2;
 
 /// Most octaves one turn can be cut into: the eleven MIDI
-/// octaves, which is every slot there is and also exactly what the boundary
-/// table holds.
+/// octaves, which is every slot there is.
 pub const MAX_SPAN: u32 = OCTAVE_SLOTS as u32;
 
 /// The count a fresh view starts on: seven octaves to the turn, an octave worth
@@ -89,15 +89,6 @@ pub struct OctaveLayout {
     pub center: f32,
     /// Equal octave slices in one full turn.
     pub span: u32,
-    /// Angle from a ring's own seam to each of its slice boundaries, walking
-    /// CLOCKWISE (the direction pitch rises) and always positive: `bounds[0]`
-    /// is 0, the seam itself, and `bounds[span]` is `TAU`, the same seam a
-    /// full turn on. Every node reads the same table and subtracts it from its
-    /// own seam angle, which is what makes one ring the other turned.
-    ///
-    /// Entries past `span` repeat the last so a stale index cannot produce a
-    /// wild angle.
-    pub bounds: [f32; MAX_SPAN as usize + 1],
 }
 
 /// Where one node's ring sits: the two numbers that turn the shared widths
@@ -109,8 +100,8 @@ pub struct Ring {
     /// `0..OCTAVE_SLOTS` at the extremes of the pitch limits — those octaves
     /// draw and never light.
     pub base: i32,
-    /// Angle of the seam at the ring's LOW-pitch end, which is where the walk
-    /// through [`OctaveLayout::bounds`] starts.
+    /// Angle of the seam at the ring's LOW-pitch end, which is where
+    /// [`OctaveLayout::walk`] starts.
     ///
     /// It rests at the bottom of the node for exactly one pitch class, and
     /// WHICH one is the span's parity: half a turn is `6 * span` semitones, so
@@ -131,13 +122,7 @@ impl Default for OctaveLayout {
 
 /// Divide one turn into `count` equal octave slices centered on `center`.
 pub fn octave_layout(count: u32, center: f32) -> OctaveLayout {
-    let span = clamp_count(count);
-    let center = clamp_center(center);
-    let mut bounds = [TAU; MAX_SPAN as usize + 1];
-    for (i, bound) in bounds.iter_mut().enumerate().take(span as usize) {
-        *bound = TAU * i as f32 / span as f32;
-    }
-    OctaveLayout { center, span, bounds }
+    OctaveLayout { center: clamp_center(center), span: clamp_count(count) }
 }
 
 impl OctaveLayout {
@@ -174,19 +159,19 @@ impl OctaveLayout {
         Ring { base, seam: UP + self.walk(along) }
     }
 
-    /// Angle from a ring's seam to `x` slices along it, walking clockwise.
-    /// Linear inside a slice, so a pitch stands at the same fraction of its
-    /// own octave's wedge as it does of the octave.
-    fn walk(&self, x: f32) -> f32 {
-        let x = x.clamp(0.0, self.span as f32);
-        let i = (x.floor() as usize).min(self.span as usize - 1);
-        let t = x - i as f32;
-        self.bounds[i] + (self.bounds[i + 1] - self.bounds[i]) * t
+    /// Angle from a ring's seam to `x` slices along it, walking CLOCKWISE
+    /// (the direction pitch rises) and always positive: 0 is the seam itself
+    /// and `span` is `TAU`, the same seam a full turn on. Every slice is the
+    /// same width, so the walk is linear in `x` and a pitch stands at the same
+    /// fraction of its own octave's wedge as it does of the octave. The
+    /// shader's `oct_walk` is this, in the same operation order.
+    pub fn walk(&self, x: f32) -> f32 {
+        TAU * x.clamp(0.0, self.span as f32) / self.span as f32
     }
 
     /// Angle of boundary `i` of `ring`, counting clockwise from its seam.
     pub fn edge(&self, ring: Ring, i: usize) -> f32 {
-        ring.seam - self.bounds[i.min(self.span as usize)]
+        ring.seam - self.walk(i as f32)
     }
 
     /// The slots a node whose pitch class is `cents` draws, inclusive: `span`
@@ -218,8 +203,8 @@ impl OctaveLayout {
     }
 
     /// Where MIDI pitch `pitch` sits on the wheel of a node whose pitch class
-    /// is `cents`, in radians. Linear within each slice and monotone across
-    /// them, so an interval reads as an angle.
+    /// is `cents`, in radians. Linear in pitch across the whole ring, so an
+    /// interval reads as an angle.
     ///
     /// Outside the ring it CLAMPS, at either end — an indicator never reaches past the seam,
     /// and continuing round instead would land at the wrong pitch, since one
@@ -353,29 +338,24 @@ mod tests {
         }
     }
 
-    /// What "faithful" means, as an assertion: the map is strictly falling in
-    /// pitch across the ring, and equal intervals WITHIN one slice subtend
-    /// equal angles, so an indicator sits on its pitch rather than near it.
+    /// What "faithful" means, as an assertion: across the whole ring the
+    /// angle is the closed form, one span-th of a turn per octave measured
+    /// clockwise from the seam, so an indicator sits on its pitch rather than
+    /// near it and equal intervals subtend equal angles.
     #[test]
-    fn the_axis_is_monotone_and_linear_inside_a_slice() {
+    fn the_axis_is_a_turn_per_span_octaves() {
         for (l, cents, case) in every_case() {
+            let ring = l.ring(cents);
             let (low, high) = l.slots(cents);
             let bottom = l.slot_pitch(low, cents) - 0.5 * SEMIS;
             let top = l.slot_pitch(high, cents) + 0.5 * SEMIS;
-            let mut previous = l.angle(bottom, cents);
             let mut pitch = bottom;
-            while pitch < top - 0.25 {
-                pitch += 0.5;
+            while pitch <= top {
+                let want = ring.seam - TAU * (pitch - bottom) / (SEMIS * l.span as f32);
                 let a = l.angle(pitch, cents);
-                assert!(a < previous, "{case}: not falling at {pitch}");
-                previous = a;
+                assert!((a - want).abs() < 1e-4, "{case}: {pitch} is at {a}, not {want}");
+                pitch += 0.5;
             }
-            // Three points evenly spaced in pitch inside one slice come out
-            // evenly spaced in angle, including the lowest slice.
-            let base = l.slot_pitch(low, cents) - 4.0;
-            let (a, b, c) =
-                (l.angle(base, cents), l.angle(base + 4.0, cents), l.angle(base + 8.0, cents));
-            assert!(((a - b) - (b - c)).abs() < 1e-4, "{case}: uneven inside a slice");
         }
     }
 
@@ -430,7 +410,7 @@ mod tests {
         assert!(low < 0, "nothing reaches under the table at the floor");
     }
 
-    /// Invalid saved counts cannot overrun the shader's fixed table.
+    /// Invalid saved counts stay inside the slots the octave packing holds.
     #[test]
     fn a_wheel_outside_the_limits_is_clamped() {
         assert_eq!(clamp_count(0), MIN_SPAN);

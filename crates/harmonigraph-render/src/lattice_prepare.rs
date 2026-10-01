@@ -450,7 +450,10 @@ impl LatticeCallback {
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,
-                        node_occlusion: self.uniforms.geometry_shadow.occlusion,
+                        // The lattice's own `node_occlusion`: the switch
+                        // scaled by the geometry group's Darkness (#1288).
+                        node_occlusion: self.uniforms.geometry_shadow.occlusion.clamp(0.0, 1.0)
+                            * self.uniforms.geometry_shadow.depth.clamp(0.0, 1.0),
                         _pad: [0.0; 3],
                     }),
                 );

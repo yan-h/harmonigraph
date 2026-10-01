@@ -289,6 +289,18 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 /// old renderer produced by drawing straight into the egui pass. Runs
 /// the same scene through both paths and compares pixels; tolerance 3
 /// covers the final dither and the half-float working target's rounding.
+///
+/// With node occlusion on, as the renderer always ships it. Where a front
+/// node fades the ink of one behind it the two paths part BY DESIGN: the
+/// offscreen path keeps ink apart from the background its shadow darkens and
+/// restores that background under the faded ink, which one target cannot do
+/// (`node_split`). Those pixels — the ones occlusion moves on the offscreen
+/// path — are left out of the comparison, and the fixture has to have some.
+/// There the offscreen path may only be the BRIGHTER of the two, which is what
+/// restoring the background is.
+///
+/// The offscreen path is the one that ships; the direct draw (`fs_main` into
+/// one target) exists only as this test's reference.
 #[test]
 fn offscreen_composite_matches_direct_draw() {
     let Some((device, queue)) = headless_device() else {
@@ -297,46 +309,51 @@ fn offscreen_composite_matches_direct_draw() {
     const SIZE: [u32; 2] = [256, 256];
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let scene = parity_scene();
-    let mut cb = LatticeCallback::from_scene(
-        &scene,
-        LatticeLabels::default(),
-        egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
-        format,
-        7,
-        None,
-    );
+    let callback = || {
+        LatticeCallback::from_scene(
+            &scene,
+            LatticeLabels::default(),
+            egui::vec2(SIZE[0] as f32, SIZE[1] as f32),
+            format,
+            7,
+            None,
+        )
+    };
+    let cb = callback();
 
-    // Compare the split storage against the ordinary compositing reference,
-    // with ring occlusion zeroed. The renderer always sets it to 1
-    // (`LatticeCallback::from_scene`), so this compares the two paths on a
-    // configuration the product never draws;
-    // replacement occlusion has its own depth-independence GPU regression.
-    cb.uniforms.geometry_shadow.occlusion = 0.0;
-
-    // prepare(): uploads buffers and renders the offscreen scene pass.
-    let mut resources = CallbackResources::default();
     let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-    let mut encoder = device.create_command_encoder(&Default::default());
-    let user_bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-    queue.submit(user_bufs.into_iter().chain([encoder.finish()]));
-
     let clear = wgpu::Color { r: 0.07, g: 0.08, b: 0.09, a: 1.0 };
     let rect =
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
+    // prepare(): uploads buffers and renders the offscreen scene pass; then
+    // composite the offscreen texture, as paint() does.
+    let composite = |cb: &LatticeCallback, resources: &mut CallbackResources| {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let user_bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
+        queue.submit(user_bufs.into_iter().chain([encoder.finish()]));
+        let resources = &*resources;
+        render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: 1.0,
+                    screen_size_px: SIZE,
+                },
+                pass,
+                resources,
+            );
+        })
+    };
 
-    // Path A: composite the offscreen texture, as paint() now does.
-    let composite_tex = render_to_texture(&device, &queue, SIZE, format, clear, |pass| {
-        cb.paint(
-            egui::PaintCallbackInfo {
-                viewport: rect,
-                clip_rect: rect,
-                pixels_per_point: 1.0,
-                screen_size_px: SIZE,
-            },
-            pass,
-            &resources,
-        );
-    });
+    // Path A: the offscreen composite, occlusion as shipped.
+    assert_eq!(cb.uniforms.geometry_shadow.occlusion, 1.0, "the renderer ships occlusion on");
+    let mut resources = CallbackResources::default();
+    let composite_tex = composite(&cb, &mut resources);
+    // The same path with occlusion off, only to find the pixels it moves.
+    let mut unoccluded = callback();
+    unoccluded.uniforms.geometry_shadow.occlusion = 0.0;
+    let unoccluded_tex = composite(&unoccluded, &mut CallbackResources::default());
 
     // Path B: the pre-offscreen renderer — same buffers and draw order,
     // depthless pipelines, straight into the target pass.
@@ -395,6 +412,7 @@ fn offscreen_composite_matches_direct_draw() {
 
     let composite = readback(&device, &queue, &composite_tex, SIZE);
     let direct = readback(&device, &queue, &direct_tex, SIZE);
+    let unoccluded = readback(&device, &queue, &unoccluded_tex, SIZE);
 
     // Guard against vacuous success: the scene must actually have drawn
     // over the clear color somewhere.
@@ -404,9 +422,31 @@ fn offscreen_composite_matches_direct_draw() {
         "direct render drew nothing; the parity comparison is vacuous"
     );
 
+    let occluded: Vec<bool> =
+        composite.chunks(4).zip(unoccluded.chunks(4)).map(|(a, b)| a != b).collect();
+    let hidden = occluded.iter().filter(|&&o| o).count();
+    assert!(hidden > 50, "occlusion moved only {hidden} pixels: the fixture overlaps no nodes");
+    // 157 when measured (#1344); a few times that is a different fixture or a
+    // different occlusion, not this one with more room to hide in.
+    assert!(
+        hidden < 600,
+        "occlusion moved {hidden} pixels, far more than the 157 this fixture measured"
+    );
+    let darker = composite
+        .chunks(4)
+        .zip(direct.chunks(4))
+        .zip(&occluded)
+        .filter(|((a, b), &o)| o && brightness(a) + 3 < brightness(b))
+        .count();
+    assert_eq!(
+        darker, 0,
+        "where occlusion acts the offscreen path came out darker than the direct draw at \
+         {darker} pixels; it should only restore background"
+    );
+
     let (mut max_diff, mut at) = (0u8, 0usize);
     for (i, (&a, &b)) in composite.iter().zip(&direct).enumerate() {
-        if a.abs_diff(b) > max_diff {
+        if !occluded[i / 4] && a.abs_diff(b) > max_diff {
             max_diff = a.abs_diff(b);
             at = i;
         }
