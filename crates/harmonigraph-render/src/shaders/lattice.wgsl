@@ -239,6 +239,14 @@ fn glow_shadow_depth() -> f32 {
     return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
 
+// How strongly a node in front hides the ink of the nodes behind it: the
+// occlusion switch scaled by the same Darkness as the visible shadow, so 1%
+// hides next to nothing and 0 is a continuous end rather than a jump (#1288).
+// Names receive the same product through `node_occlusion` in text.wgsl.
+fn node_occlusion() -> f32 {
+    return clamp(u.geometry_shadow.occlusion, 0.0, 1.0) * glow_shadow_depth();
+}
+
 // How far this frame's renderer reaches past a caster's ink in the picture's own
 // σ (`u.geometry_shadow.reach_sigmas`, `ShadowKernel::reach_sigmas`), which is what every quad is
 // grown by.
@@ -308,7 +316,8 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> f32 {
 
 // Node shadows interpret the field as coverage, so changing darkness cannot
 // broaden the normalized shadow profile. Gaussian receiver occlusion spends
-// that field separately at full depth (`node_visibility`). Like every other
+// that field separately (`node_visibility`), scaled by the same darkness
+// (`node_occlusion`). Like every other
 // shadow, it leaves the bright pass's copy whole, so the Shadow darkness bar
 // is the whole of how dark it lands.
 fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> f32 {
@@ -2505,7 +2514,7 @@ fn node_paint(in: VsOut) -> Painted {
     }
     var visibility = 1.0;
     if ink.alpha > 0.0 {
-        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, u.geometry_shadow.occlusion);
+        visibility = node_visibility(in.shadow_box.x, in.shadow_at.xy, node_occlusion());
     }
     let visible_alpha = ink.alpha * visibility;
     var final_alpha: f32;

@@ -329,6 +329,10 @@ struct SceneOut {
 // excludes the receiver and its name. The point's bin lists every node caster
 // whose box can hold it, in painter order; the box test is what decides, and
 // also keeps clamped atlas edges from occluding distant ink.
+//
+// `occlusion` scales how much of each caster's field is spent: the caller
+// hands over the geometry group's Darkness (`node_occlusion`), so the hiding
+// fades with the visible shadow and is gone at 0.
 fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
     let strength = clamp(occlusion, 0.0, 1.0);
     if strength == 0.0 {
@@ -370,7 +374,8 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
                 // A wide Gaussian dilutes thin rings into fractional coverage.
                 // Spend that field at full depth to hide rear ink through its
                 // soft edge; linear coverage alone barely fades it. Darkness
-                // still controls only the ordinary shadow on the background.
+                // then scales the result through `occlusion`, as it scales
+                // the ordinary shadow's amplitude without reshaping it.
                 hidden = 1.0 - shadow_transmittance(full, 1.0, level);
             }
             visibility *= 1.0 - strength * hidden;

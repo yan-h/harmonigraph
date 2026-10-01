@@ -1511,19 +1511,24 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
                 cb.uniforms.geometry_shadow.depth = depth;
             })
         };
-        let bare_old = shot(&scene, None, false, 0.18);
-        let rear_old = shot(&scene, Some(1), false, 0.18);
-        let bare = shot(&scene, None, true, 0.18);
-        let rear = shot(&scene, Some(1), true, 0.18);
+        // Occlusion follows Darkness (#1288), so the reference is the same
+        // live field at a Darkness of 0, which hides nothing, and the reading
+        // is at full Darkness, where it hides at its whole strength. The
+        // ordinary node shadow never reaches a name with occlusion on (checked
+        // below), so the two differ by occlusion alone.
+        let bare_old = shot(&scene, None, true, 0.0);
+        let rear_old = shot(&scene, Some(1), true, 0.0);
+        let bare = shot(&scene, None, true, 1.0);
+        let rear = shot(&scene, Some(1), true, 1.0);
         let faded = (0..rear.len())
             .step_by(4)
             .filter(|&i| {
                 let old = i32::from(rear_old[i]) - i32::from(bare_old[i]);
                 let new = i32::from(rear[i]) - i32::from(bare[i]);
-                old > 32 && new > 6 && old - new > 6
+                old > 32 && old - new > 6
             })
             .count();
-        assert!(faded > 30, "{kernel:?}: only {faded} rear-label pixels partially faded");
+        assert!(faded > 30, "{kernel:?}: only {faded} rear-label pixels faded");
         if kernel == harmonigraph_scene::ShadowKernel::Gaussian {
             // Subtract the front-only contribution so foreground ink cannot
             // count as a hidden label. A faint skirt alone is not occlusion.
@@ -1541,19 +1546,29 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
             );
         }
         // A black clear with no glow or text shadows gives the ordinary node
-        // shadow nothing to darken except misplaced ink. This must be exact,
+        // shadow nothing to darken except misplaced ink, so what Darkness
+        // moves here is occlusion alone — and occlusion follows it (#1288):
+        // the deeper shadow hides more of the rear name and never less,
         // including when the label-free bloom attachment is present.
         for bloom in [0.0, 1.0] {
             scene.bloom_strength = bloom;
+            let faint = shot(&scene, Some(1), true, 0.18);
+            let deep = shot(&scene, Some(1), true, 0.8);
+            let pairs = || faint.chunks_exact(4).zip(deep.chunks_exact(4));
+            let hidden_more = pairs().filter(|(f, d)| brightness(f) - brightness(d) > 6).count();
+            let brighter = pairs().filter(|(f, d)| brightness(d) > brightness(f) + 1).count();
+            assert!(
+                hidden_more > 30,
+                "{kernel:?}, bloom={bloom}: a deeper shadow hid only {hidden_more} more rear-label pixels"
+            );
             assert_eq!(
-                shot(&scene, Some(1), true, 0.18),
-                shot(&scene, Some(1), true, 0.8),
-                "{kernel:?}, bloom={bloom}: rear text still receives ordinary node shadow"
+                brighter, 0,
+                "{kernel:?}, bloom={bloom}: a deeper shadow left rear text brighter"
             );
         }
         scene.bloom_strength = 0.0;
-        let front_old = shot(&scene, Some(0), false, 0.18);
-        let front = shot(&scene, Some(0), true, 0.18);
+        let front_old = shot(&scene, Some(0), false, 1.0);
+        let front = shot(&scene, Some(0), true, 1.0);
         let solid: Vec<_> = (0..front.len())
             .step_by(4)
             .filter(|&i| front_old[i] > 250 && bare_old[i] < 200)
@@ -1570,6 +1585,6 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
         // has no shadow cell, but still must end its receiver link at zero.
         scene.nodes.remove(0);
         rows_per_node(&mut scene);
-        assert_eq!(shot(&scene, Some(0), false, 0.18), shot(&scene, Some(0), true, 0.18));
+        assert_eq!(shot(&scene, Some(0), false, 1.0), shot(&scene, Some(0), true, 1.0));
     }
 }
