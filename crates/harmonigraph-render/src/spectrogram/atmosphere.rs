@@ -2440,19 +2440,19 @@ mod tests {
             )
             .map(|key| key.texels())
         };
-        // A 1080-pixel pane draws 20.6 pixels to a glob cell at the fresh size.
-        // Rotation is an isometry, so P20 wants 412 texels and rounds to 512.
-        assert_eq!(at(20, 1.0, 1080), Some(2 * TILE_STEP));
+        // A 1080-pixel pane draws 20.6 pixels to a glob cell at a Patch size of
+        // 1x. Rotation is an isometry, so the production period of forty wants
+        // 824 texels and rounds up to 1024.
         let period = super::CloudSampling::default().tile_cells;
         assert_eq!(period, 40);
         assert_eq!(at(period, 1.0, 1080), Some(4 * TILE_STEP));
-        // A pane resized by a tenth stays on the same step.
-        assert_eq!(at(20, 1.0, 1188), at(20, 1.0, 1080));
-        // Fine cells want few texels, and the floor is one step.
-        assert_eq!(at(20, harmonigraph_scene::CLOUD_SIZE_MIN, 1080), Some(TILE_STEP));
+        // A pane resized by a tenth wants 905 and stays on the same step.
+        assert_eq!(at(period, 1.0, 1188), at(period, 1.0, 1080));
+        // Fine cells want few texels (51 here), and the floor is one step.
+        assert_eq!(at(period, harmonigraph_scene::CLOUD_SIZE_MIN, 1080), Some(TILE_STEP));
         // Coarse cells on a tall pane run past the ceiling, where the tile is
         // simply coarser than the pane.
-        assert_eq!(at(40, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
+        assert_eq!(at(period, harmonigraph_scene::CLOUD_SIZE_MAX, 4320), Some(TILE_MAX));
     }
 
     /// A reduced tone target exists only where it would be SMALLER than the

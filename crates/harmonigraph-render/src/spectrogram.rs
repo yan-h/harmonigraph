@@ -3727,12 +3727,12 @@ mod tests {
         let Some((device, queue)) = headless_device() else {
             return;
         };
-        const COUNT: u64 = 18;
+        const COUNT: u64 = 12;
         let source = format!(
             "{}\n{}",
             SPECTROGRAM_SRC,
             r#"
-struct WrapProbe { cells: array<vec2<i32>, 18> }
+struct WrapProbe { cells: array<vec2<i32>, 12> }
 @group(0) @binding(3) var<storage, read_write> wrap_probe: WrapProbe;
 
 @compute @workgroup_size(1)
@@ -3750,13 +3750,6 @@ fn cs_wrap_probe() {
     wrap_probe.cells[9] = wrap_cell_for_tile(vec2<i32>(-73, 7), 72);
     wrap_probe.cells[10] = wrap_cell_for_tile(vec2<i32>(-1, 7), 72);
     wrap_probe.cells[11] = wrap_cell_for_tile(vec2<i32>(-73, 79), 72);
-    // P20 coarse and its 2.1 lattice.
-    wrap_probe.cells[12] = wrap_cell_for_tile(vec2<i32>(-21, 7), 20);
-    wrap_probe.cells[13] = wrap_cell_for_tile(vec2<i32>(-1, 7), 20);
-    wrap_probe.cells[14] = wrap_cell_for_tile(vec2<i32>(-21, 27), 20);
-    wrap_probe.cells[15] = wrap_cell_for_tile(vec2<i32>(-43, 7), 42);
-    wrap_probe.cells[16] = wrap_cell_for_tile(vec2<i32>(-1, 7), 42);
-    wrap_probe.cells[17] = wrap_cell_for_tile(vec2<i32>(-43, 49), 42);
 }
 "#,
         );
@@ -3809,7 +3802,7 @@ fn cs_wrap_probe() {
             [39, 7],
             "negative coordinates did not use positive modulo: {cells:?}"
         );
-        for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [12, 13, 14], [15, 16, 17]] {
+        for group in [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]] {
             assert_eq!(
                 cells[group[0]], cells[group[1]],
                 "an x-period translation changed the wrapped hash cell: {cells:?}"
@@ -3975,7 +3968,7 @@ fn cs_wrap_probe() {
             }
         };
         for palette in [[96, 128, 160, 255], [210, 230, 250, 255]] {
-            for (sampling, memory) in [(1.0, false), (3.0, false), (1.0, true)] {
+            for (sampling, memory) in [(1.0, false), (2.0, false), (1.0, true)] {
                 let mut cb = wash_fixture();
                 cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(384.0, 384.0));
                 cb.atmosphere.as_mut().unwrap().region = cb.rect;
@@ -4242,12 +4235,13 @@ fn cs_wrap_probe() {
     /// is half a tone texel wide, so it widens with the dial: invisible at the
     /// fresh 0.5 pt, which takes the native path and allocates no target at all.
     ///
-    /// Measured on this fixture at 4 pt. Before the repair the two rows inside
-    /// the region's edge read 29.21 and 9.74 mean absolute channel difference
-    /// from the native walk, against an interior that stays under 5.2; after
-    /// it they read 3.71 and 1.26. The bound below is the interior's own band,
-    /// which is the claim: an edge row is no further from the walk than the
-    /// middle of the pane is.
+    /// Measured on this fixture at two device pixels a sample, the production
+    /// maximum. With the tone pass put back on the region quad, the first row
+    /// inside the region's edge reads 18.79 mean absolute channel difference
+    /// from the native walk, against an interior that stays under 0.83;
+    /// repaired, the two edge rows read 0.16 and 0.22. The bound below sits
+    /// between the interior's own band and the seam, which is the claim: an
+    /// edge row is no further from the walk than the middle of the pane is.
     ///
     /// Only rows INSIDE the region are measured. Production draws the cloud
     /// over the backdrop's region quad and the heatmap mesh, both of which stop
@@ -4279,10 +4273,11 @@ fn cs_wrap_probe() {
         }
         let mut native_res = CallbackResources::default();
         let native = frame_with(&device, &queue, &mut native_res, &cb);
-        // 4 pt against the fixture's 1 pixel per point, so a cleared texel
-        // reaches two pixels into the region.
+        // 2 pt against the fixture's 1 pixel per point, the production maximum
+        // of two device pixels, so a cleared texel reaches a pixel into the
+        // region.
         let mut reduced_res = CallbackResources::default();
-        reduced_res.insert(atmosphere::CloudSampling { pixel_points: 4.0, ..Default::default() });
+        reduced_res.insert(atmosphere::CloudSampling { pixel_points: 2.0, ..Default::default() });
         let reduced = frame_with(&device, &queue, &mut reduced_res, &cb);
         let (w, h) = (SIZE[0] as usize, SIZE[1] as usize);
         let row_mean = |y: usize| {
