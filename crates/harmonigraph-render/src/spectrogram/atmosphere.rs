@@ -94,7 +94,11 @@ fn cloud_drift(
         let material = settings.material_settings;
         let (cells, periods) = match settings.cloud_style {
             harmonigraph_scene::CloudStyle::Watercolor => (WASH_CELLS / material.wash_size, 5),
-            _ => (SCALE_CELLS / material.scale_size, 1),
+            harmonigraph_scene::CloudStyle::Mosaic => (SCALE_CELLS / material.scale_size, 1),
+            harmonigraph_scene::CloudStyle::Stars
+            | harmonigraph_scene::CloudStyle::VelvetScales => {
+                unreachable!("only Mosaic and Watercolor draw out of a tile")
+            }
         };
         f64::from(tile.period() * periods) / f64::from(cells)
     });

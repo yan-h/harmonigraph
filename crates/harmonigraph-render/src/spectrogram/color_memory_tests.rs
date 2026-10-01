@@ -155,6 +155,44 @@ fn material_color_memory_carries_exact_texels_in_both_orientations() {
     }
 }
 
+/// The shader's drift jumps a whole tile repeat at a wrap, and the history
+/// must not see it: its lattice runs off the unreduced offset, so across the
+/// wrap the origin moves by the frame's own sub-texel step and the carried
+/// light survives, where an origin off the reduced drift would jump by the
+/// repeat and read the frame as a seek.
+#[test]
+fn a_drift_wrap_carries_the_colour_history() {
+    let Some((device, queue)) = headless_device() else {
+        return;
+    };
+    let mut cb = fixture(CloudStyle::Mosaic);
+    let atmosphere = cb.atmosphere.unwrap();
+    let settings = atmosphere.settings.sanitized();
+    let pane = [cb.rect.width() as u32, cb.rect.height() as u32];
+    let tile = tile_key(pane, atmosphere, CloudSampling::default().tile_cells);
+    let reduced = |now| cloud_drift(settings, cloud_offset(settings, now), tile);
+    let step = 1.0 / 60.0;
+    let before = (0..60 * 600)
+        .map(|i| atmosphere.now + f64::from(i) * step)
+        .find(|&now| {
+            let (a, b) = (reduced(now), reduced(now + step));
+            (0..2).any(|k| (a[k] - b[k]).abs() > 1.0)
+        })
+        .expect("ten minutes of drift never wrapped the tile");
+    let mut resources = CallbackResources::default();
+    cb.atmosphere.as_mut().unwrap().now = before;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let origin = memory(&resources).frame.as_ref().unwrap().origin;
+    cb.grid.fill(0);
+    cb.atmosphere.as_mut().unwrap().now = before + step;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let m = memory(&resources);
+    let moved: [i32; 2] = std::array::from_fn(|a| m.frame.as_ref().unwrap().origin[a] - origin[a]);
+    assert!(moved.iter().all(|v| v.abs() <= 1), "the wrap moved the history's origin: {moved:?}");
+    let carried = pixels(&device, &queue, m).iter().filter(|texel| texel[3] > 0.1).count();
+    assert!(carried > 1000, "the wrap reset the history as a seek: {carried} texels carried");
+}
+
 fn stagger(cell: [i32; 2], salt: u32) -> f32 {
     let cell = cell.map(|n| (n & (STAR_HASH_PERIOD as i32 - 1)) as u32);
     let mut n = cell[0].wrapping_mul(0x9e3779b9)
