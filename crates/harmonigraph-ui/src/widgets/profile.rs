@@ -5,11 +5,13 @@ use crate::theme;
 use egui::Ui;
 use std::ops::RangeInclusive;
 
-/// Which star property a [`depth`] control spreads from far to near.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Which star property a [`depth`] control spreads from far to near. A size
+/// or spacing carries how many times the stored value the pane draws and
+/// shows it: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1.
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Depth {
-    Size,
-    Spacing,
+    Size(f32),
+    Spacing(f32),
     Speed,
 }
 
@@ -21,17 +23,17 @@ pub(crate) fn depth(
     range: RangeInclusive<f32>,
     curve_range: RangeInclusive<f32>,
     kind: Depth,
-    // How many times the stored value a size or spacing is drawn and shown:
-    // the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1.
-    shown: f32,
 ) {
     let (name, curve_name) = match kind {
-        Depth::Size => ("Star size", "Size curve"),
-        Depth::Spacing => ("Star spacing", "Spacing curve"),
+        Depth::Size(_) => ("Star size", "Size curve"),
+        Depth::Spacing(_) => ("Star spacing", "Spacing curve"),
         Depth::Speed => ("Star speed", "Speed curve"),
     };
     // Sizes and spacings run in octaves, speed linearly.
-    let size = kind != Depth::Speed;
+    let (size, shown) = match kind {
+        Depth::Size(shown) | Depth::Spacing(shown) => (true, shown),
+        Depth::Speed => (false, 1.0),
+    };
     ui.push_id(name, |ui| {
         let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 2);
         let encode = |v: f32| {
@@ -85,7 +87,7 @@ pub(crate) fn depth(
                 )
                 .display(|octaves| format!("{:.1} px", octaves.exp2()))
                 .show(ui)
-                .on_hover_text(if kind == Depth::Size {
+                .on_hover_text(if matches!(kind, Depth::Size(_)) {
                     "How big the stars are, the farthest at the low end and the nearest at the high end. One value is one size at every depth. A star never grows past a third of its depth's spacing, so wider spacing or lower density leaves room for bigger stars."
                 } else {
                     "How far apart the stars are, the farthest at the low end and the nearest at the high end. Every place holds a star, so wider spacing is fewer stars; Star density packs every depth closer."
