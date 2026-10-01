@@ -1614,11 +1614,22 @@ mod tests {
         crate::uniforms::layout::check_binding::<SpectrogramUniforms>(SPECTROGRAM_SRC, 0, 0);
     }
 
-    /// Zero refraction is the ordinary picture, while nonzero refraction must
-    /// execute each enabled path and move structured sound without painting a
-    /// constant field. Reusing resources also exercises disabling/re-enabling.
+    /// A texture reads the light under each pixel and adds nothing to its
+    /// level: at a refraction too small to move any lookup, the effects path
+    /// draws the plain picture to the byte, so the bypass exactly zero takes is
+    /// the same picture rather than merely a cheaper one. Nonzero refraction
+    /// must execute each enabled path and move structured sound without
+    /// painting a constant field. Reusing resources also exercises
+    /// disabling/re-enabling.
+    ///
+    /// The identity is held softened at native spacing, where the composite
+    /// reads the light field directly. Unsoftened, a cloud reads that field at
+    /// its own resolution, which `Blur time step` bounds to a texel a slab, and
+    /// at a reduced spacing it reads the tone target: neither is the plain
+    /// picture to the byte on this fixture's per-slab bands (measured maxima of
+    /// 96 and 36), which is what the reduced-cloud tests bound instead.
     #[test]
-    fn textures_preserve_levels_and_zero_refraction_is_exact_identity() {
+    fn textures_preserve_levels_and_vanishing_refraction_is_exact_identity() {
         use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let Some((device, queue)) = headless_device() else { return };
         for style in [Mosaic, Watercolor] {
@@ -1635,24 +1646,32 @@ mod tests {
                     s.color_pickup = 0.0;
                     s.color_release = 0.0;
                     s.contour_strength = 1.0;
-                }
-                for (soft, contours) in [(false, 0.0), (false, 1.0), (true, 1.0)] {
-                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                    s.pitch_softness = if soft { 35.0 } else { 0.0 };
-                    s.time_softness = if soft { 120.0 } else { 0.0 };
-                    s.contour_strength = contours;
-                    s.cloud_depth = 0.0;
-                    let bare = frame_with(&device, &queue, &mut resources, &cb);
-                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                     s.cloud_depth = 1.0;
-                    s.material_settings.scale_refract = 0.0;
-                    s.material_settings.wash_refract = 0.0;
-                    assert_eq!(
-                        frame_with(&device, &queue, &mut resources, &cb),
-                        bare,
-                        "{style:?}, pixel={pixel}, soft={soft}, contours={contours}"
-                    );
                 }
+                if pixel < 1.0 {
+                    for contours in [0.0, 1.0] {
+                        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                        s.contour_strength = contours;
+                        s.material_settings.scale_refract = 0.0;
+                        s.material_settings.wash_refract = 0.0;
+                        assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
+                        let bare = frame_with(&device, &queue, &mut resources, &cb);
+                        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                        s.material_settings.scale_refract = f32::MIN_POSITIVE;
+                        s.material_settings.wash_refract = f32::MIN_POSITIVE;
+                        let vanishing = frame_with(&device, &queue, &mut resources, &cb);
+                        let pane = resources.get::<SpectrogramResources>().unwrap();
+                        let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
+                        assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
+                        assert!(
+                            vanishing == bare,
+                            "{style:?}, contours={contours}: the texture moved the levels"
+                        );
+                    }
+                }
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.material_settings.scale_refract = 0.0;
+                s.material_settings.wash_refract = 0.0;
                 let straight = frame_with(&device, &queue, &mut resources, &cb);
                 let s = &mut cb.atmosphere.as_mut().unwrap().settings;
                 s.material_settings.scale_refract = 1.0;
@@ -2194,12 +2213,49 @@ mod tests {
         let held = fresh_frame(&device, &queue, &cb);
         assert!((95..=97).contains(&held[(64 * 128 + 64) * 4 + 2]), "held strip became black");
         let mut raw = cloud_fixture();
+        // The ridge again, on a slab a pixel: the field's time axis is then at
+        // full resolution under `Blur time step`'s data bound, and zero
+        // softness is the one thing left that could take it down.
+        let slabs = SIZE[0];
+        relay_quad(&mut raw, slabs);
+        let mut bytes = vec![0; (slabs * BINS) as usize];
+        for slab in 40..80 {
+            bytes[slab * BINS as usize + 500..slab * BINS as usize + 524].fill(255);
+        }
+        raw.grid = grid_of(Arc::new(bytes), BINS, slabs, 0);
         let settings = &mut raw.atmosphere.as_mut().unwrap().settings;
         settings.pitch_softness = 0.0;
         settings.time_softness = 0.0;
+        // A cloud too faint in its bend to move a lookup: it reads the light
+        // field under each pixel, which is all that is drawn of it.
+        settings.cloud_depth = 1.0;
+        settings.material_settings.scale_refract = f32::MIN_POSITIVE;
+        let field = atmosphere::source_size(SIZE, 1.0, raw.atmosphere.unwrap());
+        assert_eq!(field, SIZE, "the field was reduced, so zero softness is not what is measured");
         let zero = fresh_frame(&device, &queue, &raw);
         raw.atmosphere = None;
-        assert!(zero == fresh_frame(&device, &queue, &raw), "zero widths added smoothing");
+        let plain = fresh_frame(&device, &queue, &raw);
+        // The field takes each pixel's own footprint — in time the box over a
+        // slab-affine ramp, in pitch the encoded-domain mean of the buckets
+        // under the row — so on the ridge's edge pixels it is not the plain
+        // point read (measured: up to 82 on 92 of them). Anywhere else it is
+        // the plain picture to the byte, and nothing reaches past an edge.
+        let at = |frame: &[u8], x: i32, y: i32| {
+            let (x, y) = (x.clamp(0, SIZE[0] as i32 - 1), y.clamp(0, SIZE[1] as i32 - 1));
+            let i = (y as usize * SIZE[0] as usize + x as usize) * 4;
+            [frame[i], frame[i + 1], frame[i + 2]]
+        };
+        let mut edges = 0;
+        for (x, y) in (0..SIZE[1] as i32).flat_map(|y| (0..SIZE[0] as i32).map(move |x| (x, y))) {
+            if at(&zero, x, y) != at(&plain, x, y) {
+                let edge = (-1..=1)
+                    .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                    .any(|(dx, dy)| at(&plain, x + dx, y + dy) != at(&plain, x, y));
+                assert!(edge, "zero widths smoothed ({x}, {y}), off the ridge's edge");
+                edges += 1;
+            }
+        }
+        assert!(edges > 0, "the fixture never reached the field: no edge pixel moved");
     }
 
     #[test]
