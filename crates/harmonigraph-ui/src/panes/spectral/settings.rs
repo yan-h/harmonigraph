@@ -141,7 +141,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 if atmosphere.cloud_style == CloudStyle::Stars {
                     super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
                 } else if atmosphere.cloud_style == CloudStyle::Watercolor {
-                    super::super::material::watercolor(ui, &mut atmosphere.material_settings);
+                    super::super::material::watercolor(ui, &mut atmosphere.material_settings, true);
                 } else if atmosphere.cloud_style == CloudStyle::VelvetScales {
                     super::super::material::velvet(ui, &mut atmosphere.material_settings);
                 } else {

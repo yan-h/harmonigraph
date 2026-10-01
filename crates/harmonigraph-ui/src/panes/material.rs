@@ -6,7 +6,12 @@ fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
     harmonigraph_scene::CLOUD_SIZE_MIN..=harmonigraph_scene::CLOUD_SIZE_MAX
 }
 
-pub(super) fn watercolor(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::MaterialSettings) {
+/// `pigment` shows the two pigment bars, which only the spectrogram draws.
+pub(super) fn watercolor(
+    ui: &mut egui::Ui,
+    atmosphere: &mut harmonigraph_scene::MaterialSettings,
+    pigment: bool,
+) {
     ValueBar::new(&mut atmosphere.wash_size, cloud_size_range(), "Patch size")
         .eased(true)
         .unit(1.0, "\u{d7}")
@@ -41,6 +46,20 @@ pub(super) fn watercolor(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene:
         .on_hover_text(
             "Mix a second layer of smaller watercolor patches over the broad layer. 0% uses the broad layer alone; 100% gives the fine layer its full strength.",
         );
+    if pigment {
+        ValueBar::new(&mut atmosphere.wash_pool, 0.0..=1.0, "Edge pooling")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Darken a patch in a soft crescent where another patch is painted over it, like pigment pooling at a dried edge. Only darkens, so silence stays black. Softer edges take less of it. 0% adds none; 50% is the strength Watercolor first shipped with.",
+            );
+        ValueBar::new(&mut atmosphere.wash_rim, 0.0..=1.0, "Rim shade")
+            .percent()
+            .show(ui)
+            .on_hover_text(
+                "Darken each patch toward its own edge, so patches read as rounded puffs. Only darkens, so silence stays black. Softer edges take less of it. 0% adds none; 50% is the strength Watercolor first shipped with.",
+            );
+    }
 }
 
 pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::MaterialSettings) {

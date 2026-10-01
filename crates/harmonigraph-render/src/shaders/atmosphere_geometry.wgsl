@@ -291,11 +291,19 @@ fn wash_scan(r: vec2<f32>, salt: u32, occupancy: f32, period: i32) -> Wash {
     return out;
 }
 
-// Each octave stores its lookup offset and an independent signed brightness draw.
+// Each octave stores its lookup offset, an independent signed brightness draw,
+// and the two pigment SHAPES the spectrogram's `Rim shade` and `Edge pooling`
+// scale: each 0..1, and neither yet carrying a dial, so a drag is not a rebake.
 struct Wet {
     offset: vec2<f32>,
     brightness: f32,
+    rim: f32,
+    tide: f32,
 };
+
+// How far outside the front glob's arc the tide line reaches, in that glob's
+// radii.
+const WASH_POOL_WIDTH: f32 = 0.55;
 
 // The cell walk chooses the lookup. Fuzz feathers and bleeds that lookup
 // across glob boundaries. Brightness follows the same feathering, with a hash
@@ -330,15 +338,21 @@ fn wash_wet(f: Wash, r: vec2<f32>, fuzz: f32, salt: u32, period: i32) -> Wet {
     let brightness = mix(
         mix(centre, under, fa),
         wash_brightness(f.front, salt, period), bl);
-    return Wet(look - r, brightness);
+    // Pigment settling toward the glob's own rim, and the tide line: a broad
+    // soft crescent lying on the OVERLAPPED glob, hugging the outside of the
+    // front glob's arc. Both squared, so they come on gently. Neither is
+    // feathered, as before #1038; how hard each bites is the dial's and Fuzz's.
+    let rim = clamp(f.edge, 0.0, 1.0);
+    let crescent = clamp((f.near + WASH_POOL_WIDTH) / WASH_POOL_WIDTH, 0.0, 1.0);
+    return Wet(look - r, brightness, rim * rim, crescent * crescent);
 }
 
 // The whole of the wash's geometry at a point, in cells: what each octave
 // carries and how much of the pixel the finer one covers.
 //
-// Seven numbers, none of which reads the light, the sound or the clock —
-// which is exactly why `fs_cloud_tile` can bake them into two `Rgba16Float`
-// targets and the per-frame shader can read them back. The bake always walks
+// Eleven numbers, none of which reads the light, the sound or the clock —
+// which is exactly why `fs_cloud_tile` can bake them into three tile targets
+// and the per-frame shader can read them back. The bake always walks
 // both octaves, because `Layers` is a mix over channels the tile already holds
 // and so is deliberately not in the tile's key.
 struct WashField {

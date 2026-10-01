@@ -82,7 +82,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             crate::widgets::drift(ui, &mut settings.material_direction, speed);
             super::block(ui, "Appearance");
             match settings.material_style {
-                LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings),
+                LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings, false),
                 LatticeMaterial::VelvetScales => super::material::velvet(ui, &mut settings.material_settings),
                 LatticeMaterial::Mosaic => super::material::mosaic(ui, &mut settings.material_settings),
                 LatticeMaterial::Stars => super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),

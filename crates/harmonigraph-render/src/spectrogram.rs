@@ -973,6 +973,7 @@ impl CallbackTrait for SpectrogramCallback {
                                         color_attachments: &[
                                             attachment(&views[0]),
                                             attachment(&views[1]),
+                                            attachment(&views[2]),
                                         ],
                                         ..Default::default()
                                     });
@@ -3939,6 +3940,41 @@ fn cs_wrap_probe() {
         }
     }
 
+    /// Pigment is subtractive: over a lit flat field it darkens the glob edges and
+    /// brightens nothing, and over silence it draws nothing at all, so the
+    /// palette's floor needs no black point. A grey ramp makes "darker" one
+    /// comparison per pixel.
+    #[test]
+    fn wash_pigment_only_darkens_and_leaves_silence_alone() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let pair = |fill: u8| {
+            let mut cb = wash_fixture();
+            cb.grid.fill(fill);
+            cb.shades.lut = Arc::new((0..=255u8).map(|v| [v, v, v, 255]).collect());
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_refract = 0.0;
+            s.material_settings.wash_fuzz = 0.5;
+            s.material_settings.wash_randomness = 0.0;
+            s.color_pickup = 0.0;
+            s.color_release = 0.0;
+            let plain = fresh_frame(&device, &queue, &cb);
+            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+            s.material_settings.wash_pool = 1.0;
+            s.material_settings.wash_rim = 1.0;
+            (plain, fresh_frame(&device, &queue, &cb))
+        };
+        let (plain, pigmented) = pair(150);
+        let pixels = plain.chunks_exact(4).zip(pigmented.chunks_exact(4));
+        assert!(pixels.clone().all(|(a, b)| b[0] <= a[0]), "pigment lifted a pixel");
+        let darker =
+            pixels.filter(|(a, b)| a[0] - b[0] > 4).count() as f32 / (plain.len() / 4) as f32;
+        assert!(darker > 0.05, "pigment darkened almost none of a lit pane: {darker}");
+        let (plain, pigmented) = pair(0);
+        assert_eq!(plain, pigmented, "pigment drew something over silence");
+    }
+
     /// Each retained wash control changes the displacement over structured sound.
     #[test]
     fn the_wash_dials_each_reach_the_globs() {
@@ -3971,6 +4007,8 @@ fn cs_wrap_probe() {
             ("Lobe shape", |s| s.material_settings.wash_lobe = 0.0),
             ("Layers", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
+            ("Edge pooling", |s| s.material_settings.wash_pool = 1.0),
+            ("Rim shade", |s| s.material_settings.wash_rim = 1.0),
         ] {
             let frame = painted(turn);
             let n = plain.len() / 4;
@@ -4398,6 +4436,11 @@ fn cs_rotation_probe() {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(&fine_view),
                 },
+                // The pigment tile, never sampled: the probe's pigment dials are 0.
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&coarse_view),
+                },
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::Sampler(&sampler),
@@ -4513,6 +4556,8 @@ fn cs_rotation_probe() {
             ("Refraction", |s| s.material_settings.wash_refract = 0.2),
             ("Layers", |s| s.material_settings.wash_layers = 0.0),
             ("Random brightness", |s| s.material_settings.wash_randomness = 1.0),
+            ("Edge pooling", |s| s.material_settings.wash_pool = 1.0),
+            ("Rim shade", |s| s.material_settings.wash_rim = 1.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
             ("Contour strength", |s| s.contour_strength = 0.0),

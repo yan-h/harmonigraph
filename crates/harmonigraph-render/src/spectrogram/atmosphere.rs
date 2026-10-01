@@ -17,6 +17,9 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 /// because what is stored is a cell offset of order one, where the eleven-bit
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The third tile target: the wash's two pigment shapes per octave, each a
+/// square of a 0..1 fraction, so eight bits are plenty.
+const PIGMENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 // Half-float feedback can stall far from the target when alpha is small.
 const MEMORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 
@@ -232,7 +235,8 @@ const WASH_CELLS: f32 = 5.25;
 /// Quantised because the pane's own pixels feed it: at one texel per pixel a
 /// resize drag would rebake a 20 to 40 ms walk on EVERY frame of the drag, where
 /// a 256-texel grain crosses a boundary a handful of times across a whole
-/// window. The ceiling is memory — two `Rgba16Float` targets, so 2048 is 67 MB —
+/// window. The ceiling is memory — two `Rgba16Float` targets and an `Rgba8Unorm`
+/// one, so 2048 is 84 MB —
 /// and past it the tile is simply coarser than the pane, which is the same
 /// trade as reducing the tone target.
 const TILE_STEP: u32 = 256;
@@ -340,6 +344,8 @@ pub(super) fn tile_key(
                 wash_refract: _,    // applied after the tile bake
                 wash_layers: _,     // applied after the tile bake
                 wash_randomness: _, // applied after coloring
+                wash_pool: _,       // the tile holds the shape, the dial scales it after
+                wash_rim: _,        // the tile holds the shape, the dial scales it after
             },
     } = settings;
     // The composite reads a cloud out of its tile and nowhere else: its
@@ -443,6 +449,8 @@ struct Uniforms {
     star_halo_samples: [StarHaloSample; STAR_SLICES],
     velvet: Float4,
     velvet_size: Float4,
+    /// The wash's `Edge pooling` and `Rim shade`; the rest of the row is padding.
+    wash_pigment: Float4,
 }
 }
 
@@ -571,6 +579,7 @@ impl Pipelines {
                 texture(4),
                 texture(5),
                 texture(6),
+                texture(13),
                 wgpu::BindGroupLayoutEntry {
                     binding: 9,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -704,7 +713,7 @@ impl Pipelines {
                 source_layout,
                 &composite_layout,
                 "fs_cloud_tile",
-                &[Some(TILE_FORMAT), Some(TILE_FORMAT)],
+                &[Some(TILE_FORMAT), Some(TILE_FORMAT), Some(PIGMENT_FORMAT)],
             ),
             stars: tile_pipeline(
                 device,
@@ -875,12 +884,12 @@ fn tile_pipeline(
 /// One period of the cell walk, and what it was filled for.
 ///
 /// The one thing here that does NOT follow the pane: every other target is
-/// rewritten from scratch each frame, where refilling these two is a whole cell
+/// rewritten from scratch each frame, where refilling these three is a whole cell
 /// walk. So they are carried across a rebuild the light's size forces (see
 /// `SpectrogramCallback::prepare`), and [`Self::baked`] is what says a bake is
 /// owed rather than a reallocation.
 pub(super) struct Tile {
-    views: [wgpu::TextureView; 2],
+    views: [wgpu::TextureView; 3],
     texels: u32,
     baked: Option<TileKey>,
 }
@@ -968,6 +977,8 @@ fn memory_key(
                 wash_refract,
                 wash_layers,
                 wash_randomness: _, // display brightness does not change held color
+                wash_pool,
+                wash_rim,
             },
     } = s;
     let mut values = vec![
@@ -1028,6 +1039,8 @@ fn memory_key(
             wash_lobe,
             wash_refract,
             wash_layers,
+            wash_pool,
+            wash_rim,
             contours,
             contour_softness,
             contour_strength,
@@ -1073,7 +1086,7 @@ pub(super) struct Targets {
     /// Reads the baked material and writes the tone target, so the tone target
     /// is the one view this group must NOT carry.
     pub tone_group: Option<wgpu::BindGroup>,
-    /// Writes both tile targets, so those are the two views it stands scratch
+    /// Writes all three tile targets, so those are the views it stands scratch
     /// in for.
     tile_group: Option<wgpu::BindGroup>,
     /// Writes the star atlas, so that is the view it stands a scratch in for.
@@ -1159,8 +1172,12 @@ impl Targets {
         let tile = tile_key.map(|key| match carried {
             Some(tile) if tile.texels == key.texels => tile,
             _ => Tile {
-                views: ["spectral_cloud_tile_a", "spectral_cloud_tile_b"]
-                    .map(|label| formatted(label, [key.texels; 2], TILE_FORMAT)),
+                views: [
+                    ("spectral_cloud_tile_a", TILE_FORMAT),
+                    ("spectral_cloud_tile_b", TILE_FORMAT),
+                    ("spectral_cloud_tile_c", PIGMENT_FORMAT),
+                ]
+                .map(|(label, format)| formatted(label, [key.texels; 2], format)),
                 texels: key.texels,
                 baked: None,
             },
@@ -1204,7 +1221,7 @@ impl Targets {
         let cloud_group =
             |front: &wgpu::TextureView,
              tone: &wgpu::TextureView,
-             tile: [&wgpu::TextureView; 2],
+             tile: [&wgpu::TextureView; 3],
              stars: &wgpu::TextureView,
              memory: &wgpu::TextureView,
              halos: &[wgpu::TextureView; STAR_HALO_GROUPS]| {
@@ -1238,6 +1255,10 @@ impl Targets {
                             resource: wgpu::BindingResource::TextureView(tile[1]),
                         },
                         wgpu::BindGroupEntry {
+                            binding: 13,
+                            resource: wgpu::BindingResource::TextureView(tile[2]),
+                        },
+                        wgpu::BindGroupEntry {
                             binding: 7,
                             resource: wgpu::BindingResource::Sampler(&pipelines.tile_sampler),
                         },
@@ -1264,9 +1285,8 @@ impl Targets {
                     ],
                 })
             };
-        let scratch_tile = [&views[0], &views[0]];
-        let tile_views =
-            tile.as_ref().map_or(scratch_tile, |tile| [&tile.views[0], &tile.views[1]]);
+        let scratch_tile = [&views[0], &views[0], &views[0]];
+        let tile_views = tile.as_ref().map_or(scratch_tile, |tile| tile.views.each_ref());
         let star_view = stars.as_ref().map_or(&star_scratch, |(view, _)| view);
         let halo_view = halos.as_ref().map_or(&halo_scratch.views, |halo| &halo.views);
         let bake_group =
@@ -1464,8 +1484,8 @@ impl Targets {
         self.tile.as_ref().is_some_and(|tile| tile.baked != Some(key))
     }
 
-    /// The tile's two targets and the group the pass that writes them binds.
-    pub fn tile_pass(&self) -> Option<(&[wgpu::TextureView; 2], &wgpu::BindGroup)> {
+    /// The tile's three targets and the group the pass that writes them binds.
+    pub fn tile_pass(&self) -> Option<(&[wgpu::TextureView; 3], &wgpu::BindGroup)> {
         Some((&self.tile.as_ref()?.views, self.tile_group.as_ref()?))
     }
 
@@ -1644,6 +1664,12 @@ impl Targets {
                 settings.material_settings.velvet_variety,
             ]),
             velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
+            wash_pigment: Float4([
+                settings.material_settings.wash_pool,
+                settings.material_settings.wash_rim,
+                0.0,
+                0.0,
+            ]),
             origin: Float2(rect.min.into()),
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
