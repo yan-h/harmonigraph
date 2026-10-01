@@ -19,7 +19,7 @@ struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
-    float light;
+    float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
     metal::float2 _axis_pad;

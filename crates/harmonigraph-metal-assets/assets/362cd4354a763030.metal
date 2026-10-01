@@ -13,7 +13,7 @@ struct Locals {
     metal::float2 origin_points;
     metal::float2 viewport_points;
     float feather;
-    float light;
+    float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
     metal::float2 _axis_pad;
@@ -119,7 +119,7 @@ struct vs_shadow_cellOutput {
     metal::float2 ramp [[user(loc13), flat]];
     metal::float2 fade [[user(loc14), flat]];
 };
-struct vb_15_type { metal::uchar data[104]; };
+struct vb_15_type { metal::uchar data[100]; };
 struct vb_14_type { metal::uchar data[64]; };
 vertex vs_shadow_cellOutput vs_shadow_cell(
   uint vertex_ [[vertex_id]]
@@ -132,23 +132,21 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     metal::float2 center = {};
     metal::float2 half_extent = {};
     float shear = {};
-    float outline_reach = {};
     metal::float4 lead = {};
     metal::float4 core = {};
     metal::float4 outline = {};
     metal::float4 taper_depth = {};
     metal::float4 taper = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 104)) {
+    if (i_id < (_buffer_sizes.buffer_size15 / 100)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         center = unpackFloat32x2_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7]);
         half_extent = unpackFloat32x2_(vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
         shear = unpackFloat32_(vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19]);
-        outline_reach = unpackFloat32_(vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23]);
-        lead = unpackFloat32x4_(vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27], vb_15_elem.data[28], vb_15_elem.data[29], vb_15_elem.data[30], vb_15_elem.data[31], vb_15_elem.data[32], vb_15_elem.data[33], vb_15_elem.data[34], vb_15_elem.data[35], vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
-        core = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
-        outline = unpackUnorm8x4_(vb_15_elem.data[44], vb_15_elem.data[45], vb_15_elem.data[46], vb_15_elem.data[47]);
-        taper_depth = unpackFloat32x4_(vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83], vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87]);
-        taper = unpackFloat32x4_(vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99], vb_15_elem.data[100], vb_15_elem.data[101], vb_15_elem.data[102], vb_15_elem.data[103]);
+        lead = unpackFloat32x4_(vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27], vb_15_elem.data[28], vb_15_elem.data[29], vb_15_elem.data[30], vb_15_elem.data[31], vb_15_elem.data[32], vb_15_elem.data[33], vb_15_elem.data[34], vb_15_elem.data[35]);
+        core = unpackUnorm8x4_(vb_15_elem.data[36], vb_15_elem.data[37], vb_15_elem.data[38], vb_15_elem.data[39]);
+        outline = unpackUnorm8x4_(vb_15_elem.data[40], vb_15_elem.data[41], vb_15_elem.data[42], vb_15_elem.data[43]);
+        taper_depth = unpackFloat32x4_(vb_15_elem.data[68], vb_15_elem.data[69], vb_15_elem.data[70], vb_15_elem.data[71], vb_15_elem.data[72], vb_15_elem.data[73], vb_15_elem.data[74], vb_15_elem.data[75], vb_15_elem.data[76], vb_15_elem.data[77], vb_15_elem.data[78], vb_15_elem.data[79], vb_15_elem.data[80], vb_15_elem.data[81], vb_15_elem.data[82], vb_15_elem.data[83]);
+        taper = unpackFloat32x4_(vb_15_elem.data[84], vb_15_elem.data[85], vb_15_elem.data[86], vb_15_elem.data[87], vb_15_elem.data[88], vb_15_elem.data[89], vb_15_elem.data[90], vb_15_elem.data[91], vb_15_elem.data[92], vb_15_elem.data[93], vb_15_elem.data[94], vb_15_elem.data[95], vb_15_elem.data[96], vb_15_elem.data[97], vb_15_elem.data[98], vb_15_elem.data[99]);
     }
     metal::float4 box_rect = {};
     metal::float4 box_cell = {};
@@ -166,21 +164,21 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     metal::float2 corner = metal::float2(((vertex_ & 1u) == 1u) ? 1.0 : 0.0, ((vertex_ & 2u) == 2u) ? 1.0 : 0.0);
     metal::float2 point = box_rect.xy + (corner * box_rect.zw);
     metal::float2 delta = point - center;
-    metal::float2 _e36 = cell_texel(point, box_rect, box_cell, box_meta.x);
-    metal::float4 _e38 = no_quad();
-    metal::float2 _e41 = locals.shadow_atlas_size;
-    metal::float4 _e43 = cell_clip(_e36, _e41, 1.0);
-    bool _e44 = cell_packed(box_cell);
-    if (_e44) {
+    metal::float2 _e35 = cell_texel(point, box_rect, box_cell, box_meta.x);
+    metal::float4 _e37 = no_quad();
+    metal::float2 _e40 = locals.shadow_atlas_size;
+    metal::float4 _e42 = cell_clip(_e35, _e40, 1.0);
+    bool _e43 = cell_packed(box_cell);
+    if (_e43) {
         local = box_who.y < 0.5;
     } else {
         local = false;
     }
-    bool _e51 = local;
-    out.position = _e51 ? _e43 : _e38;
-    metal::float2 _e56 = locals.pitch_dir;
-    metal::float2 _e60 = locals.depth_dir;
-    out.local = metal::float2(metal::dot(delta, _e56), metal::dot(delta, _e60));
+    bool _e50 = local;
+    out.position = _e50 ? _e42 : _e37;
+    metal::float2 _e55 = locals.pitch_dir;
+    metal::float2 _e59 = locals.depth_dir;
+    out.local = metal::float2(metal::dot(delta, _e55), metal::dot(delta, _e59));
     out.half_extent = half_extent;
     out.shear = shear;
     out.outline_reach = box_who.w;
@@ -194,7 +192,7 @@ vertex vs_shadow_cellOutput vs_shadow_cell(
     out.feather = 1.0 / metal::max(box_meta.x, 0.000001);
     out.ramp = metal::float2(0.0);
     out.fade = metal::float2(1.0);
-    VertexOut _e90 = out;
-    const auto _tmp = _e90;
+    VertexOut _e89 = out;
+    const auto _tmp = _e89;
     return vs_shadow_cellOutput { _tmp.position, _tmp.local, _tmp.half_extent, _tmp.shear, _tmp.outline_reach, _tmp.lead, _tmp.taper_depth, _tmp.taper, _tmp.core, _tmp.outline, _tmp.at, _tmp.who, _tmp.feather, _tmp.ramp, _tmp.fade };
 }
