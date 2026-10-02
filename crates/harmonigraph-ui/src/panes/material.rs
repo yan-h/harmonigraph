@@ -91,8 +91,8 @@ pub(super) fn stars(
     };
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_size_min,
-        &mut atmosphere.star_size_max,
+        &mut atmosphere.star_size_far,
+        &mut atmosphere.star_size_near,
         &mut atmosphere.star_size_curve,
         STAR_SIZE_MIN..=STAR_SIZE_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
@@ -413,8 +413,8 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
     };
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_speed_min,
-        &mut atmosphere.star_speed_max,
+        &mut atmosphere.star_speed_far,
+        &mut atmosphere.star_speed_near,
         &mut atmosphere.star_speed_curve,
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,

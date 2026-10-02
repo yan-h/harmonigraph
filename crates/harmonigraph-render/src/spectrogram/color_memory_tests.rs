@@ -72,8 +72,8 @@ fn fixture(style: CloudStyle) -> SpectrogramCallback {
     a.settings.cloud_direction = 37.0;
     a.settings.stars.star_lifetime = 0.5;
     // Explicit motion ensures every slice crosses a cell regardless of look defaults.
-    a.settings.stars.star_speed_min = 0.2;
-    a.settings.stars.star_speed_max = 1.0;
+    a.settings.stars.star_speed_far = 0.2;
+    a.settings.stars.star_speed_near = 1.0;
     a.settings.stars.star_speed_curve = 1.0;
     // Start away from zero to exercise initialization at an export's crop.
     a.now = 100.0;
@@ -231,8 +231,8 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let old_size = memory(&resources).size;
         let a = cb.atmosphere.as_mut().unwrap();
         match case {
-            "speed-min" => a.settings.stars.star_speed_min += 0.01,
-            "speed-max" => a.settings.stars.star_speed_max += 0.01,
+            "speed-min" => a.settings.stars.star_speed_far += 0.01,
+            "speed-max" => a.settings.stars.star_speed_near += 0.01,
             "speed-curve" => a.settings.stars.star_speed_curve += 0.01,
             "direction" => a.settings.cloud_direction += 0.1,
             "lifetime" => a.settings.stars.star_lifetime += 0.001,
@@ -313,8 +313,8 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     for budgeted in [false, true] {
         let mut cb = fixture(CloudStyle::Stars);
         let a = cb.atmosphere.as_mut().unwrap();
-        a.settings.stars.star_speed_min = 0.0;
-        a.settings.stars.star_speed_max = 0.0;
+        a.settings.stars.star_speed_far = 0.0;
+        a.settings.stars.star_speed_near = 0.0;
         if budgeted {
             a.settings.stars.star_spacing_far = harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
         }

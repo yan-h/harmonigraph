@@ -249,7 +249,7 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 /// A slice's speed, as a multiple of [`star_px_per_second`]:
 /// `min + (max - min) d^curve` over `Star speed`'s two ends.
 pub(crate) fn star_speed(settings: harmonigraph_scene::StarSettings, k: usize) -> f32 {
-    let (far, near) = (settings.star_speed_min, settings.star_speed_max);
+    let (far, near) = (settings.star_speed_far, settings.star_speed_near);
     far + (near - far) * star_depth(k).powf(settings.star_speed_curve)
 }
 

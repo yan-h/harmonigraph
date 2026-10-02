@@ -219,7 +219,7 @@ impl StarSettings {
             let (spacing, size) = (self.star_spacing_curve, self.star_size_curve);
             let cell = along(k, self.star_spacing_far, self.star_spacing_near, spacing) * o.scale;
             let wanted =
-                0.5 * along(k, self.star_size_min, self.star_size_max, size) * o.scale * o.size;
+                0.5 * along(k, self.star_size_far, self.star_size_near, size) * o.scale * o.size;
             let jitter = o.jitter.unwrap_or(self.star_jitter);
             let fits = |gather: StarGather| wanted <= gather.bound(jitter) * cell;
             let gather = if solo && !o.solo {
@@ -276,14 +276,34 @@ mod tests {
         assert_eq!(gathers, [Two, Two, Two, Three, Three]);
         assert!(fresh.depths.iter().all(|depth| !depth.clamped()));
 
-        let tiny = StarSettings { star_size_min: 0.5, star_size_max: 0.5, ..Default::default() };
+        let tiny = StarSettings { star_size_far: 0.5, star_size_near: 0.5, ..Default::default() };
         assert!(tiny.plan().depths.iter().all(|depth| depth.gather == StarGather::Core));
 
-        let huge = StarSettings { star_size_max: 64.0, ..Default::default() }.plan();
+        let huge = StarSettings { star_size_near: 64.0, ..Default::default() }.plan();
         let nearest = huge.depths[STAR_DEPTHS - 1];
         assert_eq!(nearest.gather, Three);
         assert!(nearest.clamped());
         assert_eq!(nearest.radius, Three.bound(nearest.jitter) * nearest.cell);
+    }
+
+    /// Every far-to-near pair runs either way: a reversed one survives the
+    /// load boundary as it was set, and the far depth then gets the bigger
+    /// end.
+    #[test]
+    fn a_reversed_pair_is_kept_and_drawn_reversed() {
+        let fresh = StarSettings::default();
+        let reversed = StarSettings {
+            star_spacing_far: fresh.star_spacing_near,
+            star_spacing_near: fresh.star_spacing_far,
+            star_size_far: fresh.star_size_near,
+            star_size_near: fresh.star_size_far,
+            star_speed_far: fresh.star_speed_near,
+            star_speed_near: fresh.star_speed_far,
+            ..fresh
+        };
+        assert_eq!(reversed.sanitized(), reversed);
+        let [far, .., near] = reversed.plan().depths;
+        assert!(far.cell > near.cell && far.wanted > near.wanted);
     }
 
     /// An override replaces only what it names; everything else follows the
