@@ -126,11 +126,10 @@ pub(crate) fn depth(
     });
 }
 
-/// One star from its centre (left) to its edge (right): how much of it is
-/// solid at the farthest and the nearest depth, and how its glow falls off.
-/// The far star is drawn dim and the near one in the accent; each corner
-/// handle sets that depth's solid share, and the handle halfway down the near
-/// glow sets the shared falloff.
+/// How a star looks at the farthest and the nearest depth: both drawn with
+/// the real profile ([`harmonigraph_scene::star_plan::star_profile`]),
+/// enlarged to the same size so the shape reads whatever `Star size` is, with
+/// the three bars that set it beside them.
 pub(crate) fn star_profile(
     ui: &mut Ui,
     solid_far: &mut f32,
@@ -139,41 +138,59 @@ pub(crate) fn star_profile(
 ) {
     use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile};
     use harmonigraph_scene::STAR_SOLID_MAX;
-    let plot = Plot::with_fields(ui, "Star profile · centre → edge", 3);
-    for (solid, key) in [(&mut *solid_far, "Far solid edge"), (&mut *solid_near, "Near solid edge")]
-    {
-        let (_, next) = plot.handle(ui, key, *solid, 1.0);
-        if let Some(p) = next {
-            *solid = p.x.min(STAR_SOLID_MAX);
-        }
-    }
-    // Halfway along the near glow, where the curve stands at `0.5 / (1 + bend
-    // / 2)`; its height there gives the bend back, and the bend the falloff.
-    let mid = |solid: f32| solid + 0.5 * (1.0 - solid);
-    let at = |solid: f32, falloff: f32| star_profile(mid(solid), solid, star_falloff_bend(falloff));
-    let (_, next) = plot.handle(ui, "Glow falloff", mid(*solid_near), at(*solid_near, *falloff));
-    if let Some(p) = next {
-        let y = p.y.clamp(0.01, 0.99);
-        *falloff = (((1.0 - y) / y).ln() / 16f32.ln() + 1.0) * 0.5;
-        *falloff = falloff.clamp(0.0, 1.0);
-    }
+    let plot = Plot::with_fields(ui, "Star shape · far, near", 3);
     plot.fields(ui, |ui| {
-        value_bar(ui, solid_far, 0.0..=STAR_SOLID_MAX, ["Solid, far", "Far"], 100.0, "%");
-        value_bar(ui, solid_near, 0.0..=STAR_SOLID_MAX, ["Solid, near", "Near"], 100.0, "%");
-        value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow"], 100.0, "%");
+        let solid = 0.0..=STAR_SOLID_MAX;
+        value_bar(
+            ui,
+            solid_far,
+            solid.clone(),
+            ["Solid share, far stars", "Far solid"],
+            100.0,
+            "%",
+        );
+        value_bar(ui, solid_near, solid, ["Solid share, near stars", "Near solid"], 100.0, "%");
+        value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
-        "One star's coverage from its centre (left) to its edge (right), set by Star size: the farthest depth's dim, the nearest's in colour, and the depths between follow the Star size curve. Solid is the share of the radius at full coverage; the rest is glow. Glow falloff at 0% stays bright almost to the edge, at 50% falls evenly, and at 100% drops at once into a long faint tail.",
+        "One star at the farthest depth (left) and the nearest (right), enlarged to the same size: Star size sets how big they really are, and the depths between follow the Star size curve. Far solid and Near solid are the share of each star's radius at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
     );
     let bend = star_falloff_bend(*falloff);
-    for (solid, color) in
-        [(*solid_far, super::value::curve_color()), (*solid_near, theme::accent())]
-    {
-        curve(&plot, ui, |t| (t, star_profile(t, solid, bend)), color);
+    let half = plot.rect.width() * 0.5;
+    let radius = (half * 0.9).min(plot.rect.height() * 0.5);
+    for (k, solid) in [*solid_far, *solid_near].into_iter().enumerate() {
+        let centre = egui::pos2(plot.rect.left() + half * (k as f32 + 0.5), plot.rect.center().y);
+        star(ui, centre, radius, |t| star_profile(t, solid, bend));
     }
-    plot.dot(ui, *solid_far, 1.0);
-    plot.dot(ui, *solid_near, 1.0);
-    plot.dot(ui, mid(*solid_near), at(*solid_near, *falloff));
+}
+
+/// One star as rings of light fading by `coverage` of the distance over its
+/// radius, in the panel's text colour on the plot's well.
+fn star(ui: &Ui, centre: egui::Pos2, radius: f32, coverage: impl Fn(f32) -> f32) {
+    const RINGS: u32 = 32;
+    const SPOKES: u32 = 64;
+    let light = theme::text();
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(centre, light.gamma_multiply(coverage(0.0)));
+    for ring in 1..=RINGS {
+        let t = ring as f32 / RINGS as f32;
+        let color = light.gamma_multiply(coverage(t).clamp(0.0, 1.0));
+        for spoke in 0..SPOKES {
+            let angle = std::f32::consts::TAU * spoke as f32 / SPOKES as f32;
+            mesh.colored_vertex(centre + radius * t * egui::vec2(angle.cos(), angle.sin()), color);
+        }
+    }
+    let at = |ring: u32, spoke: u32| 1 + (ring - 1) * SPOKES + spoke % SPOKES;
+    for spoke in 0..SPOKES {
+        mesh.add_triangle(0, at(1, spoke), at(1, spoke + 1));
+        for ring in 1..RINGS {
+            let (a, b) = (at(ring, spoke), at(ring, spoke + 1));
+            let (c, d) = (at(ring + 1, spoke), at(ring + 1, spoke + 1));
+            mesh.add_triangle(a, c, b);
+            mesh.add_triangle(b, c, d);
+        }
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
 }
 
 pub(crate) fn shadow(

@@ -284,8 +284,8 @@ pub(super) fn stars_test_bed(
                         .on_hover_text("Multiplies every star's coverage at this depth.");
                     override_bar(ui, &mut depth.jitter, drawn.jitter, 0.0..=1.0, "Position variation", Unit::Percent)
                         .on_hover_text("Position variation for this depth alone. More variation leaves less room in each read, so stars may be drawn smaller or need a wider read.");
-                    override_bar(ui, &mut depth.solid, drawn.solid, 0.0..=STAR_SOLID_MAX, "Solid", Unit::Percent)
-                        .on_hover_text("Solid for this depth alone: the share of the star's radius at full coverage; the rest is glow.");
+                    override_bar(ui, &mut depth.solid, drawn.solid, 0.0..=STAR_SOLID_MAX, "Solid share", Unit::Percent)
+                        .on_hover_text("Solid share for this depth alone: the share of the star's radius at full coverage; the rest is glow.");
                     override_bar(ui, &mut depth.falloff, drawn.falloff, 0.0..=1.0, "Glow falloff", Unit::Percent)
                         .on_hover_text("Glow falloff for this depth alone: low stays bright almost to the edge, 50% falls evenly, high drops at once into a long faint tail.");
                     ui.add_enabled_ui(drawn.gather == StarGather::Three, |ui| {
