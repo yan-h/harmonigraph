@@ -543,6 +543,79 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
     }
 }
 
+/// The star the shader draws is the CPU's `star_plan::star_profile`, which
+/// the Stars panel previews: one star alone in its cell, 64 pixels in radius,
+/// read at every pixel it covers at Solid and Glow falloff's ends and middles.
+#[test]
+fn a_drawn_star_follows_the_cpu_profile() {
+    use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile, StarGather};
+    let Some((device, queue)) = headless_device() else { return };
+    let _split = SplitOverride::set(Some(false));
+    // 540 points tall, so a star pixel is a point and two device pixels.
+    const PPP: f32 = 2.0;
+    let mut cb = star_fixture([540, 540], egui::Pos2::ZERO);
+    // Bright light under every star, so a star's colour sits far from the floor.
+    cb.grid.fill(230);
+    let width = (540.0 * PPP).ceil() as usize + 1;
+    let mut resources = CallbackResources::default();
+    for (solid, falloff) in
+        [0.0, 0.5, 0.9].into_iter().flat_map(|solid| [0.0, 0.5, 1.0].map(|f| (solid, f)))
+    {
+        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+        // The nearest depth alone, still, at the pane's own resolution (the
+        // presets draw it into a smaller image and filter it up), each star
+        // its full size at its cell's centre in a cell twice its diameter: a
+        // 1x1 read, so no neighbour's light adds in.
+        stars.star_solo = [false, false, false, false, true];
+        stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
+        (stars.star_size_far, stars.star_size_near) = (64.0, 64.0);
+        (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (2.0, 2.0);
+        (stars.star_speed_far, stars.star_speed_near) = (0.0, 0.0);
+        (stars.star_jitter, stars.star_size_variation) = (0.0, 0.0);
+        (stars.star_solid_far, stars.star_solid_near) = (solid, solid);
+        stars.star_glow_falloff = falloff;
+        let depth = stars.plan().depths[4];
+        assert_eq!(depth.gather, StarGather::Core);
+        cb.pass_nr += 1;
+        let frame = frame_at_ppp(&device, &queue, &mut resources, &cb, PPP);
+        let pixel = |x: usize, y: usize| &frame[(y * width + x) * 4..][..3];
+        // Cell (0, 0)'s star, whose corner is the pane's centre: every pixel
+        // of the square round it, a pixel past its edge on each side.
+        let (centre, radius) = (270.0 + 0.5 * depth.cell, depth.radius);
+        let span = ((centre - radius) * PPP) as usize - 2..((centre + radius) * PPP) as usize + 3;
+        let at = |p: usize| (p as f32 + 0.5) / PPP - centre;
+        let samples: Vec<_> = span
+            .clone()
+            .flat_map(|y| span.clone().map(move |x| (x, y)))
+            .map(|(x, y)| (at(x).hypot(at(y)) / radius, pixel(x, y)))
+            .collect();
+        let floor = pixel((270.0 * PPP) as usize, (270.0 * PPP) as usize);
+        let profile = |t| star_profile(t, solid, star_falloff_bend(falloff));
+        // The star's colour and life fade scale the whole curve, so it is
+        // read relative to the pixel nearest the centre, in the channel that
+        // moves furthest from the floor.
+        let (t0, peak) = samples.iter().min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        let channel = (0..3).max_by_key(|&c| peak[c].abs_diff(floor[c])).unwrap();
+        let contrast = f32::from(peak[channel]) - f32::from(floor[channel]);
+        let glow = samples.iter().filter(|(t, _)| (0.05..0.95).contains(&profile(*t))).count();
+        assert!(
+            contrast > 128.0 && glow > 1000,
+            "solid={solid}, falloff={falloff}: the star spans {contrast} levels, {glow} glow pixels"
+        );
+        // Half a level of 8-bit rounding in the pixel and half in the peak
+        // that scales it is one; the quarter over that is the target
+        // conversion's slack. Measured worst 0.88 over 17,689 pixels a case.
+        let worst = samples
+            .iter()
+            .map(|(t, value)| {
+                let want = f32::from(floor[channel]) + contrast * profile(*t) / profile(*t0);
+                (f32::from(value[channel]) - want).abs()
+            })
+            .fold(0.0, f32::max);
+        assert!(worst <= 1.25, "solid={solid}, falloff={falloff}: off the CPU curve by {worst}");
+    }
+}
+
 /// A depth whose stars fit their own cell reads that cell alone and loses
 /// nothing a 3x3 read would see, at stars a hair inside the 1x1 bound.
 #[test]
