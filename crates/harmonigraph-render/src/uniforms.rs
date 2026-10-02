@@ -132,22 +132,6 @@ uniform_group! {
     }
 }
 uniform_group! {
-    struct MaterialParams {
-        amount: f32,
-        scale: f32,
-        drift: Float2,
-        style: u32,
-        fuzz: f32,
-        lobe: f32,
-        refract: f32,
-        layers: f32,
-        randomness: f32,
-        /// Scales' `Squareness` and `Tilt`.
-        velvet_form: Float2,
-        velvet: Float4,
-    }
-}
-uniform_group! {
     struct PickupParams {
         intensity: f32,
         width: f32,
@@ -193,7 +177,6 @@ uniform_group! {
         spectral: SpectralParams,
         glow: GlowParams,
         texture: TextureParams,
-        material: MaterialParams,
         pickup: PickupParams,
         geometry_shadow: ShadowParams,
         marker_shadow: ShadowParams,
