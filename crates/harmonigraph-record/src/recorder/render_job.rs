@@ -28,12 +28,9 @@ pub struct RenderRequest {
     /// look — set for "Re-render take" so post-record settings reach the video;
     /// `None` for auto-render (which uses the take's own recorded look).
     pub appearance: Option<String>,
-    /// Output pixels, from the Video pane's Aspect and Output size.
-    ///
-    /// Passed rather than left to the renderer's own default because that
-    /// default knows the take's aspect but not which resolution was picked
-    /// beside it.
-    pub size: [u32; 2],
+    /// Explicit output override for Re-render. Automatic exports read the
+    /// captured Aspect and Output size from their recorded appearance.
+    pub size: Option<[u32; 2]>,
     /// A session-local completion notice, owned by this request so a new
     /// recording cannot erase the reason an earlier render was cut short.
     pub notice: Option<&'static str>,
@@ -43,8 +40,13 @@ impl RenderRequest {
     /// The render that runs when a take finishes: its own recorded audio as the
     /// spectrogram, laid out as the take's own spectrogram choice says, in the
     /// take's own recorded look.
-    pub fn from_config(config: &harmonigraph_take::RenderConfig) -> RenderRequest {
-        Self::build(config, None)
+    pub fn recorded() -> RenderRequest {
+        RenderRequest {
+            program: default_renderer_path(),
+            appearance: None,
+            size: None,
+            notice: None,
+        }
     }
 
     /// Build a request for an explicit "Re-render take": always built, and it
@@ -65,7 +67,7 @@ impl RenderRequest {
         RenderRequest {
             program: default_renderer_path(),
             appearance,
-            size: config.frame.pixels(config.short_edge),
+            size: Some(config.frame.pixels(config.short_edge)),
             notice: None,
         }
     }
@@ -404,7 +406,9 @@ fn run_job(
     if request.appearance.is_some() {
         command.arg("--appearance").arg(&appearance);
     }
-    command.arg("--size").arg(format!("{}x{}", request.size[0], request.size[1]));
+    if let Some([w, h]) = request.size {
+        command.arg("--size").arg(format!("{w}x{h}"));
+    }
     command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     let mut child = command.spawn().map_err(|e| format!("could not run paired renderer: {e}"))?;
     let stderr = child.stderr.take();

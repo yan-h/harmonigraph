@@ -1186,8 +1186,8 @@ impl Hub {
     }
 
     /// Whether any source this Hub sequences, its own included, has Retune on,
-    /// as of this callback's `begin`. Learn leaves the lattice alone while one
-    /// does, since the lattice is then what they are retuned to.
+    /// as of this callback's `begin`. The configuration owner also checks the
+    /// engine before reserving Learn's axes for an active retuning target.
     pub fn retuning(&self) -> bool {
         self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
     }

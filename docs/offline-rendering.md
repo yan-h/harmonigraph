@@ -59,7 +59,7 @@ The extraction command requires exactly one editor appearance;
 multiple editor instances are reported instead of concatenated into an invalid file.
 `--appearance` takes a standalone appearance document, not an enclosing editor save.
 It replaces the recorded document completely;
-`--size`, `--layout` and other explicit output flags retain their precedence.
+`--size` and other explicit output flags retain their precedence.
 
 Editor saves below version 7 are refused whole and a fresh instance opens at defaults, with a console message.
 Take formats v1–v4 are refused with a version error and must be recorded again.
@@ -260,7 +260,6 @@ The flags worth knowing (`--help` lists them all):
 | flag | what it does |
 |---|---|
 | `--out` | `.mp4`/`.mov`/`.mkv` → ffmpeg; `.png` → numbered stills; `.rgba` → raw |
-| `--layout` | `side-by-side` or `stacked`; omitted uses the captured placement and proportion |
 | `--size` | output pixels, e.g. `3840x2160`; default is the take's own aspect and Output size, whose fresh short edge is 720 |
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
@@ -335,19 +334,14 @@ Offline rendering does **not** reproduce the plugin's dock.
 It composes its own picture —
 no tab bars, no settings columns, and whatever proportions suit the piece.
 
-Without `--layout`, export uses the captured or overridden appearance's **Lattice placement** and **Proportion**, through the same `Layout::split` as the Video preview.
-Left, Right, Top and Bottom remain available, alongside aspect, resolution and every Analyzer orientation.
-
-Two combined CLI choices remain:
-`side-by-side` places the Lattice on the left at 68% width;
-`stacked` places it above the Analyzer at 74% height.
-These explicit presets replace placement and proportion for that export.
-They leave the captured Analyzer orientation and appearance unchanged.
+Export uses the captured or overridden appearance's **Lattice placement** and **Proportion**,
+through the same `Layout::split` as the Video preview.
+Left, Right, Top and Bottom remain available,
+alongside aspect, resolution and every Analyzer orientation.
 Nothing infers Analyzer orientation from the output aspect.
-
-The public `lattice`, `spectral` and `spiral` single-pane presets, custom RON layout files and `--dump-layout` are retired.
-Old invocations fail visibly and name the retained choices;
-editor panes, saved dock layouts and the captured Video frame are unaffected.
+The `--layout` presets and `--dump-layout` are retired;
+old invocations fail visibly.
+Editor panes, saved dock layouts and the captured Video frame are unaffected.
 Internal pixel fixtures and scratch look prototypes still compose a single pane through the offline test harness.
 
 ## What is and isn't captured
@@ -383,7 +377,7 @@ audio-thread rings, transport handling and a subprocess driver, none of which re
 synthesized input, frames read back and piped to ffmpeg.
 
 Determinism is tested, but the test is narrower than the property:
-`render.rs` renders the same take twice and asserts the frames are byte-identical, at 320x200, `side-by-side`, ten frames of one second.
+`render.rs` renders the same take twice and asserts the frames are byte-identical, at 320x200 with an explicit test composition, ten frames of one second.
 If it ever fails, something time- or machine-dependent has entered the draw path.
 
 The test is still narrower than the property, so treat it as a tripwire on the pipeline rather than a guarantee about a real export.
@@ -396,3 +390,7 @@ live in shipped renders while this stayed green.
 #135 is fixed (the tracker's collections are ordered, not hashed), and what guards it now is a set of unit tests on those collections' iteration order rather than this render.
 That is deliberate:
 a hash map can always come back sorted, so an end-to-end render is at best a probabilistic detector of one, while asserting key order over a few hundred keys fails with probability 1.
+
+Automatic exports use the Aspect and Output size captured when recording was armed,
+including when those controls change during recording.
+Re-render explicitly uses the current appearance and output dimensions.

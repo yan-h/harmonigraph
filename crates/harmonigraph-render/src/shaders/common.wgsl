@@ -235,11 +235,9 @@ const SHADOW_KEEP_FLOOR: f32 = 0.0009765625;
 // raised to the exponent `shadow_kernel` came to, with the caster's LEVEL spent
 // as a share of the result rather than inside the exponent.
 //
-// The whole of the arithmetic a caster's draw multiplies by, whatever the caster
-// is — a node's rings, a resting cross, a name's box — so every Shadow group
-// spends its depth by the same curve. What differs between them is where the
-// kernel is SAMPLED and which uniform the depth arrives in, and both stay with
-// the caller.
+// Spectral shadows spend darkness in stops, retaining stronger tails that
+// separate ribbons and labels from the spectrum. Lattice shadows use the
+// linear local_shadow_transmittance below. Each caller owns its kernel sample.
 //
 // `full` arrives already in 0..=1 and already spent through whatever its own
 // renderer owes — the gain on a Gaussian, the standoff's decay on a distance

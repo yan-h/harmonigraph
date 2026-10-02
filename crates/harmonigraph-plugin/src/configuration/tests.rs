@@ -546,22 +546,32 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
 
 #[test]
 fn real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain() {
-    learn_the_played_third(true);
+    learn_the_played_third(true, false);
 }
 
 /// Retune decides what the Hub corrects, not what Learn hears: a tuner in
 /// front of Harmonigraph states the tuning Learn is armed to find.
 #[test]
 fn learning_reads_the_hub_input_with_retune_off() {
-    learn_the_played_third(false);
+    learn_the_played_third(false, false);
 }
 
-fn learn_the_played_third(retune: bool) {
+#[test]
+fn pass_through_learns_axes_even_with_retune_enabled() {
+    learn_the_played_third(true, true);
+}
+
+fn learn_the_played_third(retune: bool, pass_through: bool) {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
     device.wrapper().test_inspect_plugin(|plugin| {
         plugin.aggregation.as_ref().unwrap().shared.set_retune(retune)
     });
+    if pass_through {
+        let mut state = device.wrapper().get_state_object();
+        state.params.insert("tuning-engine".into(), nice_plug::plugin::ParamValue::I32(0));
+        device.load(state, false);
+    }
     device.activate();
     let mailbox = device.mailbox();
     mailbox.submit(packet(ConfigEdit { learning: Some(true), ..Default::default() })).unwrap();
@@ -605,8 +615,8 @@ fn learn_the_played_third(retune: bool) {
     assert!((keyboard[0] - fifth).abs() < 1_000);
     // The C offset is learned either way; it is not part of the target.
     assert!((learned.raw[0] - 10.0).abs() < 0.001, "C offset {}", learned.raw[0]);
-    // Retune on anywhere makes the lattice the target, so Learn leaves it.
-    if retune {
+    // Only active retuning makes the lattice a fixed target.
+    if retune && !pass_through {
         assert!(resolved.modes.tempered.syntonic);
         assert_eq!(learned.raw[1..4], [700.0, 400.0, 1000.0]);
     } else {
@@ -1081,9 +1091,7 @@ fn transport(seconds: f64, time: u32) -> clap_event_transport {
 /// finished take's render launches nothing.
 fn stop(shared: &std::sync::Arc<parking_lot::Mutex<crate::editor::EditorShared>>) {
     let shared = shared.lock();
-    shared.take.stop(harmonigraph_record::RenderRequest::from_config(
-        &shared.ui.picture.appearance.render,
-    ));
+    shared.take.stop(harmonigraph_record::RenderRequest::recorded());
 }
 
 #[test]

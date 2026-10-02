@@ -536,7 +536,8 @@ pub struct ExportJob {
     pub id: u64,
     pub take: std::path::PathBuf,
     pub output: std::path::PathBuf,
-    pub size: [u32; 2],
+    /// None means the recorded appearance supplies the output size.
+    pub size: Option<[u32; 2]>,
     pub state: ExportStatus,
     pub progress: RenderProgress,
     pub detail: String,

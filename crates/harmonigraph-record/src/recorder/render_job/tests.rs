@@ -1,21 +1,21 @@
 use super::*;
 use harmonigraph_take::RenderConfig;
 
-/// Automatic and manual requests use the paired renderer and active sizing
-/// settings; only a manual request replaces the recorded appearance.
+/// Only manual requests override the recorded appearance and output size.
 #[test]
-fn automatic_and_manual_requests_keep_the_active_settings() {
+fn only_manual_requests_override_captured_settings() {
     let config = RenderConfig {
         frame: harmonigraph_take::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
         short_edge: 2160,
         ..Default::default()
     };
-    let automatic = RenderRequest::from_config(&config);
+    let automatic = RenderRequest::recorded();
     let manual = RenderRequest::render_now(&config, "current appearance".into());
     for request in [&automatic, &manual] {
         assert_eq!(request.program, default_renderer_path());
-        assert_eq!(request.size, [2160, 3840]);
     }
+    assert_eq!(automatic.size, None);
+    assert_eq!(manual.size, Some([2160, 3840]));
     assert_eq!(automatic.appearance, None);
     assert_eq!(manual.appearance.as_deref(), Some("current appearance"));
 }
@@ -273,7 +273,7 @@ echo 'progress: 10/10 frames (100%)' >&2
         RenderRequest {
             program: self.dir.join("renderer"),
             appearance: Some(look.into()),
-            size,
+            size: Some(size),
             notice: None,
         }
     }
@@ -417,6 +417,7 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     let gate = f.control.running.lock();
     let mut request = f.request("", [16, 16]);
     request.appearance = None;
+    request.size = None;
     f.enqueue(request);
     harmonigraph_take::Writer::create(
         &take,
@@ -440,7 +441,7 @@ fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_
     let first = f.jobs().remove(0);
     let second = other.snapshots(&other_progress).remove(0);
     assert_ne!(first.output, second.output);
-    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded 16x16");
+    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded ");
     assert_eq!(std::fs::read_to_string(second.output).unwrap(), "other instance 18x18");
     other.shutdown();
 }

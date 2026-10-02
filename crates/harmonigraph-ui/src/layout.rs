@@ -60,35 +60,7 @@ fn default_background() -> (u8, u8, u8) {
     (r, g, b)
 }
 
-/// Public combined export arrangements.
-pub const PRESETS: [&str; 2] = ["side-by-side", "stacked"];
-
 impl Layout {
-    /// A preset by name, or `None` if it isn't one.
-    pub fn preset(name: &str) -> Option<Layout> {
-        let panes = match name {
-            // The lattice leads and the Spectral pane takes a tall column
-            // beside it. The pane draws at whatever orientation is SET, and
-            // deliberately does not read this column's shape to pick one: a
-            // render whose picture depends on the aspect it is rendered at is
-            // not one you can dial in. Top (or Bottom) is the orientation this
-            // column wants — Left leaves the spectrogram scrolling across a
-            // narrow pane — so it has to be chosen, here or in the pane.
-            "side-by-side" => vec![
-                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 0.68, 1.0) },
-                Placement { pane: Pane::Spectral, rect: (0.68, 0.0, 1.0, 1.0) },
-            ],
-            // A wide roll under the lattice, sharing the pitch axis left to
-            // right.
-            "stacked" => vec![
-                Placement { pane: Pane::Lattice, rect: (0.0, 0.0, 1.0, 0.74) },
-                Placement { pane: Pane::Spectral, rect: (0.0, 0.74, 1.0, 1.0) },
-            ],
-            _ => return None,
-        };
-        Some(Layout { background: default_background(), margin: 0.0, gap: 0.0, panes })
-    }
-
     /// A two-pane composition of the lattice and the spectral pane, with the
     /// lattice on `side` taking `fraction` of the frame. Shared by the Video
     /// panel's live preview and the offline renderer, so both compose the
@@ -216,20 +188,10 @@ mod tests {
 
     const FRAME: egui::Vec2 = egui::vec2(1920.0, 1080.0);
 
-    #[test]
-    fn every_advertised_preset_exists_and_resolves() {
-        for name in PRESETS {
-            let layout =
-                Layout::preset(name).unwrap_or_else(|| panic!("{name} is advertised but missing"));
-            let resolved = layout.resolve(FRAME);
-            assert!(!resolved.is_empty(), "{name} resolved to nothing");
-        }
-    }
-
     /// The whole point of fractional rects: one layout, any output size.
     #[test]
     fn a_layout_covers_the_same_proportions_at_any_size() {
-        let layout = Layout::preset("side-by-side").unwrap();
+        let layout = Layout::split(LatticeSide::Left, 0.68);
         let small = layout.resolve(egui::vec2(1280.0, 720.0));
         let large = layout.resolve(egui::vec2(3840.0, 2160.0));
         assert_eq!(small.len(), large.len());
@@ -247,7 +209,7 @@ mod tests {
     /// border.
     #[test]
     fn gaps_are_only_inserted_between_panes() {
-        let layout = Layout { gap: 20.0, margin: 0.0, ..Layout::preset("side-by-side").unwrap() };
+        let layout = Layout { gap: 20.0, margin: 0.0, ..Layout::split(LatticeSide::Left, 0.68) };
         let resolved = layout.resolve(FRAME);
         let (_, left) = resolved[0];
         let (_, right) = resolved[1];
@@ -269,10 +231,9 @@ mod tests {
     /// field.
     #[test]
     fn no_layout_the_plugin_composes_shows_ground_between_two_panes() {
-        let named = PRESETS.iter().map(|n| ((*n).to_string(), Layout::preset(n).unwrap()));
         let split =
             LatticeSide::ALL.iter().map(|s| (format!("split {s:?}"), Layout::split(*s, 0.6)));
-        for (name, layout) in named.chain(split) {
+        for (name, layout) in split {
             let resolved = layout.resolve(FRAME);
             for (i, (_, a)) in resolved.iter().enumerate() {
                 for (_, b) in &resolved[i + 1..] {
@@ -357,7 +318,7 @@ mod tests {
     fn exported_dividers_use_the_same_picture_ink_under_every_editor_skin() {
         use harmonigraph_scene::skin::{self, SkinDials};
         let saved = skin::active_skin_key();
-        let layout = Layout::preset("side-by-side").unwrap();
+        let layout = Layout::split(LatticeSide::Left, 0.68);
         let placements = layout.resolve(FRAME);
         let ctx = crate::tests::probe::themed();
         let mut strokes = Vec::new();

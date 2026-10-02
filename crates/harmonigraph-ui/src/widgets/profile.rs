@@ -200,6 +200,15 @@ fn star(ui: &Ui, centre: egui::Pos2, radius: f32, coverage: impl Fn(f32) -> f32)
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
+/// Match the renderer's two compositing curves, including its ten-stop floor.
+fn shadow_darkness(depth: f32, coverage: f32, lattice: bool) -> f32 {
+    if lattice {
+        depth * coverage
+    } else {
+        1.0 - (1.0 - depth).max(1.0 / 1024.0).powf(coverage)
+    }
+}
+
 pub(crate) fn shadow(
     ui: &mut Ui,
     style: &mut harmonigraph_scene::ShadowStyle,
@@ -215,14 +224,23 @@ pub(crate) fn shadow(
     }
     if style.kernel.is_distance() {
         let level = harmonigraph_scene::standoff_level(style.falloff, 0.5);
-        let (_, next) =
-            plot.handle(ui, "Falloff", 0.5 * (style.width / max).sqrt(), style.depth * level);
+        let (_, next) = plot.handle(
+            ui,
+            "Falloff",
+            0.5 * (style.width / max).sqrt(),
+            shadow_darkness(style.depth, level, lattice),
+        );
         if let Some(p) = next {
             if style.depth > 0.0 {
                 let (mut lo, mut hi) = (SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX);
                 for _ in 0..24 {
                     let mid = (lo + hi) * 0.5;
-                    if harmonigraph_scene::standoff_level(mid, 0.5) < p.y / style.depth {
+                    if shadow_darkness(
+                        style.depth,
+                        harmonigraph_scene::standoff_level(mid, 0.5),
+                        lattice,
+                    ) < p.y
+                    {
                         lo = mid;
                     } else {
                         hi = mid;
@@ -275,7 +293,11 @@ pub(crate) fn shadow(
             |p| {
                 (
                     p * (style.width / max).sqrt(),
-                    style.depth * harmonigraph_scene::standoff_level(style.falloff, p),
+                    shadow_darkness(
+                        style.depth,
+                        harmonigraph_scene::standoff_level(style.falloff, p),
+                        lattice,
+                    ),
                 )
             },
             super::value::curve_color(),
@@ -283,7 +305,11 @@ pub(crate) fn shadow(
         plot.dot(
             ui,
             0.5 * (style.width / max).sqrt(),
-            style.depth * harmonigraph_scene::standoff_level(style.falloff, 0.5),
+            shadow_darkness(
+                style.depth,
+                harmonigraph_scene::standoff_level(style.falloff, 0.5),
+                lattice,
+            ),
         );
     } else {
         plot.line(
@@ -292,5 +318,17 @@ pub(crate) fn shadow(
             theme::accent(),
         );
         plot.dot(ui, style.spread, 0.15);
+    }
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    use super::shadow_darkness;
+    #[test]
+    fn spectral_preview_keeps_the_stronger_tails_and_finite_full_darkness() {
+        assert!((shadow_darkness(0.91, 0.3, true) - 0.273).abs() < 1e-5);
+        assert!((shadow_darkness(0.91, 0.3, false) - 0.5144066).abs() < 1e-5);
+        assert_eq!(shadow_darkness(1.0, 0.0, false), 0.0);
+        assert_eq!(shadow_darkness(1.0, 1.0, false), 1.0 - 1.0 / 1024.0);
     }
 }

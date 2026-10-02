@@ -22,14 +22,10 @@ mod wav;
 
 use harmonigraph_take::{RenderProgress, RenderTrigger};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
-use harmonigraph_ui::{Layout, PRESETS};
+use harmonigraph_ui::Layout;
 use render::Settings;
 use replay::Replay;
 use sink::{Sink, VideoOptions};
-
-/// Where [`USAGE`] carries the preset names, replaced at print time with
-/// [`PRESETS`] so there is only ever one list.
-const PRESET_TOKEN: &str = "PRESET_LIST";
 
 /// How often the progress line may be rewritten. The Video pane's bar moves
 /// at this rate, and ffmpeg's own report, which drives it for a video, comes
@@ -47,9 +43,6 @@ OPTIONS:
                            (<stem>-00000.png on); .rgba or .raw writes a
                            raw stream; anything else (.mp4, .mov, .mkv)
                            goes through ffmpeg.  [default: <take>.mp4]
-    -l, --layout <NAME>    Combined Lattice/Analyzer arrangement.
-                           Presets: PRESET_LIST
-                           [default: the take's captured placement and proportion]
     -s, --size <WxH>       Output pixels. At an aspect other than the one the
                            take was framed at, the picture is recomposed to
                            fit rather than letterboxed, and it says so.
@@ -101,7 +94,6 @@ struct Args {
     out: Option<String>,
     /// `None` means "use the frame the take was composed for" (its RenderFrame),
     /// falling back to the default RenderFrame.
-    layout: Option<String>,
     /// `None` means "size to the take's frame aspect".
     size: Option<[u32; 2]>,
     scale: Option<f32>,
@@ -129,7 +121,6 @@ impl Default for Args {
         Args {
             take: None,
             out: None,
-            layout: None,
             size: None,
             scale: None,
             fps: 60.0,
@@ -171,12 +162,10 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
         };
         match arg.as_str() {
             "-h" | "--help" => {
-                // Help and layout errors share the retained preset list.
-                print!("{}", USAGE.replace(PRESET_TOKEN, &PRESETS.join(", ")));
+                print!("{USAGE}");
                 return Ok(None);
             }
             "-o" | "--out" => args.out = Some(value("--out")?),
-            "-l" | "--layout" => args.layout = Some(value("--layout")?),
             "-s" | "--size" => args.size = Some(parse_size(&value("--size")?)?),
             "--scale" => args.scale = Some(parse_number("--scale", &value("--scale")?)?),
             "--fps" => args.fps = parse_number("--fps", &value("--fps")?)?,
@@ -215,7 +204,7 @@ fn parse_size(text: &str) -> Result<[u32; 2], String> {
 /// the Video pane's Aspect and Output size rows set. A plain
 /// `harmonigraph-offline take.take` therefore reproduces what was previewed,
 /// which is what makes re-rendering a take by hand to change one unrelated flag
-/// safe: `--layout stacked` on its own must not also take a 4K take back down to
+/// safe: changing `--fps` on its own must not also take a 4K take back down to
 /// 1080.
 ///
 /// The fallback for a take carrying no blob at all is `RenderConfig::default()`,
@@ -387,16 +376,12 @@ fn export(args: Args) -> Result<(), String> {
 
     // The frame the take was composed for in the Video pane. The offline
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
-    // take.take` reproduces exactly what was previewed; --size / --layout
-    // override.
+    // take.take` reproduces exactly what was previewed; --appearance and --size
+    // explicitly override it.
     let appearance = render::appearance_for(&take, replacement.as_deref());
     let render_config = &appearance.render;
     let frame = render_config.frame;
-    let layout = match &args.layout {
-        Some(spec) => Layout::preset(spec)
-            .ok_or_else(|| format!("unknown layout {spec:?}; choose {}", PRESETS.join(" or ")))?,
-        None => Layout::split(frame.lattice, frame.split),
-    };
+    let layout = Layout::split(frame.lattice, frame.split);
     let size = output_size(args.size, render_config);
     // An explicit --size at a different aspect renders a DIFFERENT picture
     // from the one the take was framed in — nothing letterboxes or crops to
@@ -645,11 +630,8 @@ mod tests {
         assert_ne!(control, overridden, "the replacement's visual settings must reach the picture");
         write_take(&replacement);
         assert_eq!(overridden, draw("rerecorded", &[]).unwrap());
-        let explicit = draw(
-            "explicit",
-            &["--appearance", replacement_path, "--size", "160x120", "--layout", "stacked"],
-        )
-        .unwrap();
+        let explicit =
+            draw("explicit", &["--appearance", replacement_path, "--size", "160x120"]).unwrap();
         assert_eq!(explicit.dimensions(), (160, 120));
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -695,9 +677,8 @@ mod tests {
     /// Re-rendering a take by hand honours the Output size it was composed at.
     ///
     /// The take carries `short_edge` (the Video pane's Output size row) exactly
-    /// as it carries the frame, and the plugin's own auto-render passes it
-    /// through as `--size`. A plain command line has only the blob to read it
-    /// from — and a renderer that reads the frame but defaults the resolution
+    /// as it carries the frame. Both automatic and plain command-line renders
+    /// read it from the captured appearance — and a renderer that reads the frame but defaults the resolution
     /// takes a 4K take back down to 1080 with no flag saying so.
     #[test]
     fn a_plain_command_line_renders_at_the_resolution_the_take_was_composed_at() {
