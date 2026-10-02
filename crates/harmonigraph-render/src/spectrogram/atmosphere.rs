@@ -1965,8 +1965,8 @@ mod tests {
 
         let (layout, full) = (star_layout(three, 16.0 / 9.0), star_layout(every, 16.0 / 9.0));
         let mut left_out = 0u64;
-        for k in 0..STAR_SLICES {
-            if off[k] {
+        for (k, &off) in off.iter().enumerate() {
+            if off {
                 assert_eq!(layout.grids[k], [0, 0], "depth {k}");
                 left_out += u64::from(full.grids[k][0] * full.grids[k][1]);
             } else {
