@@ -123,10 +123,9 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                     vertex.pos[1] = vertex.pos[1].clamp(region.top(), region.bottom());
                 }
                 let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-                // The old fringe's top: a broad glow, short of a flat wash.
-                settings.stars.star_glow = 0.5;
-                (settings.stars.star_core_far, settings.stars.star_core_near) =
-                    (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
+                // Half solid in a broad glow, short of a flat wash.
+                settings.stars.star_glow_falloff = 0.0;
+                (settings.stars.star_solid_far, settings.stars.star_solid_near) = (0.5, 0.5);
                 settings.stars.star_spacing_far = harmonigraph_scene::STAR_SPACING_MIN;
                 settings.stars.star_spacing_near = harmonigraph_scene::STAR_SPACING_MAX;
                 settings.cloud_depth = 1.0;
@@ -308,19 +307,18 @@ impl Drop for HaloOverride {
 }
 
 #[test]
-fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
+fn separate_halos_reconstruct_the_wide_response_including_faint_tails() {
     let Some((device, queue)) = headless_device() else { return };
     let _split = SplitOverride::set(Some(false));
     let mut cb = star_fixture([385, 217], egui::Pos2::ZERO);
     for jitter in [0.0, 0.5, 1.0] {
-        for fringe in [0.0, harmonigraph_scene::STAR_GLOW_MAX] {
+        for falloff in [0.0, 1.0] {
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
             settings.stars.star_jitter = jitter;
-            settings.stars.star_glow = fringe;
-            // Cores out to the star's edge, so even a glowless star leaves
-            // its halo image enough light to witness.
-            (settings.stars.star_core_far, settings.stars.star_core_near) =
-                (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
+            // A broad glow and a long faint tail, each round a solid half so
+            // every star leaves its halo image light to witness.
+            settings.stars.star_glow_falloff = falloff;
+            (settings.stars.star_solid_far, settings.stars.star_solid_near) = (0.5, 0.5);
             settings.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
             settings.stars.star_halo_resolution = 1.0;
             let mut frames = Vec::new();
@@ -345,7 +343,7 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
                 differences.iter().map(|&d| f64::from(d)).sum::<f64>() / differences.len() as f64;
             assert!(
                 max <= 1 && mean <= 0.03,
-                "jitter={jitter}, fringe={fringe}: reconstruction max={max}, mean={mean}"
+                "jitter={jitter}, falloff={falloff}: reconstruction max={max}, mean={mean}"
             );
             let halo_pixels = frames[0]
                 .chunks_exact(4)
@@ -354,7 +352,7 @@ fn separate_halos_reconstruct_the_wide_response_including_gaussian_tails() {
                 .count();
             assert!(
                 halo_pixels > 500,
-                "jitter={jitter}, fringe={fringe}: halo witness only {halo_pixels} pixels"
+                "jitter={jitter}, falloff={falloff}: halo witness only {halo_pixels} pixels"
             );
         }
     }
@@ -369,7 +367,7 @@ fn uniform_halos_preserve_the_original_array_lookup() {
     stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
     // Stars too big for 2x2 at every depth, so every depth owns a layer of
     // the one Uniform array.
-    (stars.star_size_min, stars.star_size_max) = (64.0, 64.0);
+    (stars.star_size_far, stars.star_size_near) = (64.0, 64.0);
     let three = harmonigraph_scene::star_plan::StarGather::Three;
     assert!(stars.plan().depths.iter().all(|depth| depth.gather == three));
     for resolution in [0.25, 0.5, 1.0] {
@@ -457,9 +455,8 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
             settings.stars.star_jitter = jitter;
             settings.stars.star_halo_profile = profile;
             settings.cloud_depth = 0.65;
-            settings.stars.star_glow = harmonigraph_scene::STAR_GLOW_MAX;
-            (settings.stars.star_core_far, settings.stars.star_core_near) =
-                (harmonigraph_scene::STAR_CORE_MAX, harmonigraph_scene::STAR_CORE_MAX);
+            (settings.stars.star_solid_far, settings.stars.star_solid_near) =
+                (harmonigraph_scene::STAR_SOLID_MAX, harmonigraph_scene::STAR_SOLID_MAX);
             if memory {
                 settings.color_pickup = 0.6;
                 settings.color_release = 0.6;

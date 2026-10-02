@@ -1878,11 +1878,11 @@ mod tests {
         const SHIFT: usize = 8;
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
-        for (profile, size_max, three) in [
+        for (profile, size_near, three) in [
             (StarHaloProfile::Medium, 6.0, false),
             (
                 StarHaloProfile::Uniform,
-                harmonigraph_scene::StarSettings::default().star_size_max,
+                harmonigraph_scene::StarSettings::default().star_size_near,
                 true,
             ),
         ] {
@@ -1899,14 +1899,14 @@ mod tests {
             s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
             s.cloud_depth = 1.0;
             (s.pitch_softness, s.time_softness) = (0.0, 0.0);
-            (s.stars.star_speed_min, s.stars.star_speed_max, s.cloud_direction) =
+            (s.stars.star_speed_far, s.stars.star_speed_near, s.cloud_direction) =
                 (SPEED, SPEED, 0.0);
             s.stars.star_lifetime = 20.0;
             // Equal sizes: the smallest stars' cores resample unevenly in the
             // reduced halo images under a whole-pixel shift, which is not drift.
             s.stars.star_size_variation = 0.0;
             (s.stars.star_halo_profile, s.stars.star_halo_resolution) = (profile, 0.5);
-            s.stars.star_size_max = size_max;
+            s.stars.star_size_near = size_near;
             let gathers = s.stars.plan().depths.map(|depth| depth.gather);
             assert_eq!(gathers.contains(&StarGather::Three), three, "{profile:?}: {gathers:?}");
             let mut resources = CallbackResources::default();
