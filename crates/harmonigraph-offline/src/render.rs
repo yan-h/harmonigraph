@@ -83,18 +83,19 @@ impl Stages {
 }
 
 /// Select and normalize once before output setup. Explicit re-render settings
-/// replace the recorded document in full. Refusal retains the existing default
-/// rendering policy and reports it where an offline user can see it.
+/// replace the recorded document in full. A malformed selected document refuses
+/// the export; only takes with no recorded appearance use the fresh settings.
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
-) -> AppearanceDocument {
+) -> Result<AppearanceDocument, String> {
     let Some(blob) = replacement.or(take.header.appearance.as_deref()) else {
-        return AppearanceDocument::default();
+        return Ok(AppearanceDocument::default());
     };
-    AppearanceDocument::parse(blob).unwrap_or_else(|err| {
-        eprintln!("warning: {err}; rendering at defaults (camera, view, spectrum and frame)");
-        AppearanceDocument::default()
+    AppearanceDocument::parse(blob).map_err(|err| {
+        let source =
+            if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
+        format!("cannot render {source}: {err}")
     })
 }
 
@@ -565,7 +566,7 @@ mod tests {
                 &mut Replay::new(take.clone()),
                 audio,
                 &settings,
-                appearance_for(&take, None),
+                appearance_for(&take, None).unwrap(),
                 |bytes| {
                     frames.push(bytes);
                     Ok(Vec::new())
@@ -638,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn export_selects_one_complete_appearance_and_defaults_a_refused_replacement() {
+    fn export_selects_one_complete_appearance_and_refuses_parse_errors() {
         let mut recorded = AppearanceDocument::default();
         recorded.camera.yaw = 1.23;
         recorded.view.max_sevens = 3;
@@ -647,7 +648,7 @@ mod tests {
         recorded.render.short_edge = 2160;
         let mut take = take();
         take.header.appearance = Some(recorded.serialize());
-        let selected = appearance_for(&take, None);
+        let selected = appearance_for(&take, None).unwrap();
         assert_eq!(selected.serialize(), recorded.serialize());
         let mut replacement = AppearanceDocument::default();
         replacement.camera.yaw = -0.5;
@@ -655,7 +656,7 @@ mod tests {
         replacement.spectrum.low_midi = 45.0;
         replacement.spectrum.roll_thickness = 0.5;
         replacement.render.short_edge = 720;
-        let selected = appearance_for(&take, Some(&replacement.serialize()));
+        let selected = appearance_for(&take, Some(&replacement.serialize())).unwrap();
         assert_eq!(selected.serialize(), replacement.serialize());
         let expected_size = replacement.render.frame.pixels(720);
         assert_eq!(crate::output_size(None, &selected.render), expected_size);
@@ -666,14 +667,17 @@ mod tests {
         for refused in
             ["broken".to_string(), replacement.serialize().replacen("version:1", "version:0", 1)]
         {
-            assert_eq!(
-                appearance_for(&take, Some(&refused)).serialize(),
-                AppearanceDocument::default().serialize()
-            );
+            let error = appearance_for(&take, Some(&refused)).err().expect("refuse replacement");
+            assert!(error.contains("replacement appearance"), "{error}");
+            take.header.appearance = Some(refused);
+            let error = appearance_for(&take, None).err().expect("refuse recorded appearance");
+            assert!(error.contains("recorded appearance"), "{error}");
+            // An explicit valid replacement can still rescue an obsolete take.
+            assert!(appearance_for(&take, Some(&replacement.serialize())).is_ok());
         }
         take.header.appearance = None;
         assert_eq!(
-            appearance_for(&take, None).serialize(),
+            appearance_for(&take, None).unwrap().serialize(),
             AppearanceDocument::default().serialize()
         );
     }
@@ -742,7 +746,7 @@ mod tests {
     fn render_take(take: Take, settings: &Settings) -> Option<Vec<Vec<u8>>> {
         let mut replay = Replay::new(take);
         let mut frames = Vec::new();
-        let appearance = appearance_for(replay.take(), None);
+        let appearance = appearance_for(replay.take(), None).unwrap();
         match render(&mut replay, None, settings, appearance, |bytes| {
             frames.push(bytes);
             Ok(Vec::new())
@@ -909,7 +913,7 @@ mod tests {
                 &mut Replay::new(take.clone()),
                 Some(&mut audio),
                 &settings,
-                appearance_for(take, None),
+                appearance_for(take, None).unwrap(),
                 |bytes| {
                     frames.push(bytes);
                     Ok(Vec::new())
