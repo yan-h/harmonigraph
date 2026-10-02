@@ -599,6 +599,43 @@ pub struct NodeInstance {
 }
 
 impl NodeInstance {
+    /// Place an unlit node before spectral folding, motion, glow and trail
+    /// supply their channels. `row` is its stable row in the scene snapshot.
+    pub fn at(
+        lattice_pos: LatticePos,
+        world_pos: Vec3,
+        scale: f32,
+        on_home: bool,
+        cents: f32,
+        hovered: bool,
+        row: u32,
+    ) -> Self {
+        Self {
+            lattice_pos,
+            world_pos,
+            scale,
+            on_home,
+            cents,
+            hovered,
+            activation: 0.0,
+            envelope: 0.0,
+            departing: false,
+            slice_progress: [1.0; OCTAVE_SLOTS],
+            thickness: [1.0; OCTAVE_SLOTS],
+            octaves: [0.0; OCTAVE_SLOTS],
+            melody_slots: 0,
+            bass_slots: 0,
+            melody_level: 0.0,
+            bass_level: 0.0,
+            melody_color: Vec4::ZERO,
+            bass_color: Vec4::ZERO,
+            // No audio has been measured, so nothing can be held back yet.
+            audio_ring: 1.0,
+            glow: GlowStep { incarnation: 0, level: 0.0, row },
+            trail: 0.0,
+        }
+    }
+
     /// Whether this node is somewhere the picture accounts for, and so can
     /// carry pitch info (hover label, tuning readout). Sounding nodes always
     /// draw; an idle one draws nothing at all, but a home-sheet position is
