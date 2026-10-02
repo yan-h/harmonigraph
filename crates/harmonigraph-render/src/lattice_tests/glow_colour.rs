@@ -51,9 +51,9 @@ fn the_wash_reaches_a_lit_slice_and_nothing_else() {
             pitch: 0.0,
             ..Default::default()
         };
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_wash = wash;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
+        scene.view.glow_wash = wash;
         scene
     };
     let dark = shooter.shot(&at(Some(slot), Some(sounding), 0.0, 1.0));
@@ -133,7 +133,7 @@ fn the_wash_reaches_a_wedge_the_volume_ramp_lit() {
         // would be 0 under either answer. The octave is held to make the node
         // active at all; the band it lights is a layer out from the wedge and
         // no pixel of it is in the set read below.
-        for style in scene.shadow.groups_mut() {
+        for style in scene.view.shadow.groups_mut() {
             style.width = 0.0;
         }
         scene.nodes[0].glow.level = 1.0;
@@ -142,9 +142,9 @@ fn the_wash_reaches_a_wedge_the_volume_ramp_lit() {
             // paints: two bars on two pages, with nothing tying them together.
             scene.spectral.levels.fill(0);
         }
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_wash = wash;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
+        scene.view.glow_wash = wash;
         scene
     };
     let differ = |a: &[u8], b: &[u8]| -> Vec<usize> {
@@ -214,9 +214,9 @@ fn a_marked_slice_the_note_has_left_keeps_the_whole_light() {
             ..Default::default()
         };
         scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 0.0;
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_wash = wash;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
+        scene.view.glow_wash = wash;
         scene
     };
     let with_mark = shooter.shot(&at(MIDDLE_C, 0.0, 1.0));
@@ -294,8 +294,8 @@ fn a_node_wearing_only_an_audio_ring_gives_off_no_light() {
         node.melody_slots = 0;
         node.bass_slots = 0;
         node.audio_ring = 1.0;
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
         scene
     };
     const PARTIAL: f32 = harmonigraph_scene::MIDDLE_C_SLOT as f32 * 12.0;
@@ -366,7 +366,7 @@ fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
     scene.mark_inner = rings.mark_inner;
-    scene.mark_thickness = rings.mark_thickness;
+    scene.view.mark_thickness = rings.mark_thickness;
     // A NARROW angular gap, where the radial one is the probe's wide one: the
     // sector gap is a constant Euclidean chord, so at the radii the innermost
     // ring occupies — it reaches the node's centre — the probe's own 0.12 would
@@ -392,8 +392,8 @@ fn two_colour_node(band_width: f32, mark_width: f32) -> Scene {
     // ring layer's own off switch.
     node.audio_ring = 1.0;
 
-    scene.glow_reach = 0.8;
-    scene.glow_strength = 1.5;
+    scene.view.glow_reach = 0.8;
+    scene.view.glow_strength = 1.5;
     scene
 }
 
@@ -435,7 +435,7 @@ fn a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing() {
         return;
     };
     let dark = |mut scene: Scene| -> Scene {
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         scene
     };
     // The ring alone: no key down and no octave sounding, so the band draws
@@ -512,7 +512,7 @@ fn a_silent_slice_puts_none_of_its_ground_in_the_light() {
     };
     let dark = || -> Scene {
         let mut scene = one_octave();
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         scene
     };
     let off = shooter.shot(&dark());
@@ -586,8 +586,8 @@ fn a_slice_part_way_out_carries_that_much_of_the_light() {
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[lit] = 1.0;
         node.octaves[beside] = releasing;
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
         scene
     };
     // The two slices sit either side of the split, so which of them is red and
@@ -644,7 +644,7 @@ fn widening_a_layer_gives_its_colour_more_of_the_light() {
     let at = |band: f32| -> Scene { two_colour_node(band, RING) };
     let dark = |band: f32| -> Scene {
         let mut scene = at(band);
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         scene
     };
     let narrow = added_light(&shooter.shot(&at(0.11)), &shooter.shot(&dark(0.11)));
@@ -708,9 +708,9 @@ fn a_nodes_light_has_no_ripple_the_ink_does_not() {
         // slices carry light at all.
         let node = &mut scene.nodes[0];
         node.octaves = std::array::from_fn(|i| f32::from(i % 2 == 0));
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        scene.glow_blend = 0.0;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
+        scene.view.glow_blend = 0.0;
         // Big enough that a circle inside the node is hundreds of pixels round,
         // which is what resolving a ripple at these rates takes.
         scene.node_radius = 1.6;
@@ -812,8 +812,8 @@ fn the_ink_strip_has_a_row_for_every_node() {
             })
             .collect();
         rows_per_node(&mut scene);
-        scene.glow_reach = 0.8;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.5;
         scene
     };
     let frame = |resources: &mut CallbackResources, n: usize| -> (u32, u32) {
@@ -995,7 +995,7 @@ fn a_node_with_no_light_writes_into_no_other_nodes_colour() {
         scene
     };
     let unlit = |mut scene: Scene| -> Scene {
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         scene
     };
 
@@ -1064,7 +1064,7 @@ fn a_light_in_its_release_survives_the_pane_changing_size() {
         scene
     };
     let unlit = |mut scene: Scene| -> Scene {
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         scene
     };
 
@@ -1130,7 +1130,7 @@ fn a_nodes_light_takes_its_colour_from_the_frame_before() {
         scene
     };
     let unlit = |mut scene: Scene| -> Scene {
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         scene
     };
     // The two ends, each settled on a pane of its own.

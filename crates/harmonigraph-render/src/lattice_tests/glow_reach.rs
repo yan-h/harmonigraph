@@ -23,8 +23,8 @@ fn the_glow_reach_says_how_far_a_node_lights_past_its_own_edge() {
     };
     let at = |reach: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -79,9 +79,9 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     };
     let at = |curve: harmonigraph_scene::GlowCurve| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.glow_reach = 0.8;
-        scene.glow_strength = 1.0;
-        scene.glow_curve = curve;
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.0;
+        scene.view.glow_curve = curve;
         // An odd scene and odd half-resolution glow share a center texel.
         // Align the node there so this tests the exact curve endpoint rather
         // than an interpolation of neighbors with different curve values.
@@ -102,7 +102,7 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
     let compact = shooter.shot(&at(compact_curve));
     let long = shooter.shot(&at(long_curve));
     let mut unlit = at(compact_curve);
-    unlit.glow_reach = 0.0;
+    unlit.view.glow_reach = 0.0;
     let off = shooter.shot(&unlit);
 
     // The fixture's node is at the frame centre. Curve endpoint 0 is fixed at
@@ -227,9 +227,9 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     let beside = slot_beside_middle_c();
     let at = |blend: f32| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, beside);
-        scene.glow_reach = 0.8;
-        scene.glow_strength = 1.5;
-        scene.glow_blend = blend;
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.5;
+        scene.view.glow_blend = blend;
         scene
     };
     let tight = shooter.shot(&at(0.0));
@@ -244,7 +244,7 @@ fn the_glow_blend_says_how_separate_a_node_keeps_its_colours() {
     // that is halo and nothing else.
     let mut edge = 0.0f32;
     let mut unlit = at(0.0);
-    unlit.glow_reach = 0.0;
+    unlit.view.glow_reach = 0.0;
     let dark = shooter.shot(&unlit);
     let row = SIZE[0] as usize;
     for (i, (a, b)) in tight.chunks(4).zip(dark.chunks(4)).enumerate() {
@@ -333,8 +333,8 @@ fn a_lattice_with_only_marker_anchors_grows_no_glow() {
                 )
             })
             .collect();
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
         scene
     };
     let off = shooter.shot(&at(0.0));
@@ -387,9 +387,9 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
             pitch: 0.0,
             ..Default::default()
         };
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
-        for style in scene.shadow.groups_mut() {
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
+        for style in scene.view.shadow.groups_mut() {
             style.width = 0.16;
         }
         scene
@@ -417,15 +417,15 @@ fn the_middle_of_a_node_is_where_its_light_is_fullest() {
     // the headroom the far node's term needs to be legible in.
     const SHEETS_STRENGTH: f32 = 0.5;
     let mut flat = at(0.8);
-    flat.glow_reach = 3.0;
-    flat.glow_strength = SHEETS_STRENGTH;
+    flat.view.glow_reach = 3.0;
+    flat.view.glow_strength = SHEETS_STRENGTH;
     let mut far = flat.nodes[0];
     far.world_pos.z = -1.0;
     far.world_pos.x += 0.6;
     far.glow = harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 1 };
     let mut sheets = at(0.8);
-    sheets.glow_reach = 3.0;
-    sheets.glow_strength = SHEETS_STRENGTH;
+    sheets.view.glow_reach = 3.0;
+    sheets.view.glow_strength = SHEETS_STRENGTH;
     sheets.nodes.push(far);
     rows_per_node(&mut sheets);
     rows_per_node(&mut flat);

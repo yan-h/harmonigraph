@@ -53,9 +53,9 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             let mut scene = a_node_behind_another(lit);
             // Full Darkness, where occlusion is at its whole strength: below
             // it the hiding is scaled down with the shadow (#1288).
-            scene.shadow = one_shadow(1.0, 1.0, kernel);
-            scene.bloom_strength = 0.0;
-            scene.glow_reach = 0.0;
+            scene.view.shadow = one_shadow(1.0, 1.0, kernel);
+            scene.view.note_bloom = 0.0;
+            scene.view.glow_reach = 0.0;
 
             // Actual rasterized receiver coverage, not an assumed disc: the
             // fixture needs rear ink inside the front shadow's exposed skirt.
@@ -64,7 +64,7 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             let ink = shot(&scene, false);
             scene.nodes.push(front);
             for glow in [0.0, 2.0] {
-                scene.glow_reach = glow;
+                scene.view.glow_reach = glow;
                 let before = shot(&scene, false);
                 let after = shot(&scene, true);
                 let mut changed_ink = 0;
@@ -127,10 +127,10 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             // so the rear ink at 0.4 is the mean of 0 and 0.8: rear ink that
             // also took the ordinary shadow on top of its fading would bow
             // well under it.
-            scene.glow_reach = 0.0;
-            scene.bloom_strength = 0.0;
+            scene.view.glow_reach = 0.0;
+            scene.view.note_bloom = 0.0;
             let mut at = |depth: f32| {
-                scene.shadow.lattice_geometry.depth = depth;
+                scene.view.shadow.lattice_geometry.depth = depth;
                 shot(&scene, true)
             };
             let (none, half, full) = (at(0.0), at(0.4), at(0.8));
@@ -145,10 +145,10 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             // And through bloom, which is not linear: a deeper shadow hides
             // more rear ink and never less.
             for bloom in [0.0, 1.0] {
-                scene.bloom_strength = bloom;
-                scene.shadow.lattice_geometry.depth = 0.18;
+                scene.view.note_bloom = bloom;
+                scene.view.shadow.lattice_geometry.depth = 0.18;
                 let faint = shot(&scene, true);
-                scene.shadow.lattice_geometry.depth = 0.8;
+                scene.view.shadow.lattice_geometry.depth = 0.8;
                 let deep = shot(&scene, true);
                 let pairs = || faint.chunks_exact(4).zip(deep.chunks_exact(4));
                 let hidden_more =
@@ -165,11 +165,11 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
             }
             // The same depth adjustment must still darken exposed glow,
             // including the cloud texture in the pooled light.
-            scene.atmosphere.texture_depth = 0.85;
-            scene.bloom_strength = 0.0;
-            scene.glow_reach = 2.0;
+            scene.view.atmosphere.texture_depth = 0.85;
+            scene.view.note_bloom = 0.0;
+            scene.view.glow_reach = 2.0;
             let deep_glow = shot(&scene, true);
-            scene.shadow.lattice_geometry.depth = 0.18;
+            scene.view.shadow.lattice_geometry.depth = 0.18;
             let faint_glow = shot(&scene, true);
             let changed_glow = faint_glow
                 .chunks_exact(4)
@@ -186,7 +186,7 @@ fn partial_occlusion_fades_rear_ink_and_preserves_the_background() {
 
             // The bloom path must also use the reduced coverage, and the
             // final surviving foreground node must never occlude itself.
-            scene.bloom_strength = 1.0;
+            scene.view.note_bloom = 1.0;
             assert!(differing_pixels(&shot(&scene, false), &shot(&scene, true)) > 50);
             scene.nodes.remove(0);
             rows_per_node(&mut scene);
@@ -218,9 +218,9 @@ fn a_nodes_faintest_shadow_hides_next_to_none_of_the_node_behind() {
     {
         let mut shot = |depth: f32, occlusion: bool| {
             let mut scene = a_node_behind_another(true);
-            scene.shadow = one_shadow(1.0, depth, kernel);
-            scene.glow_reach = 0.0;
-            scene.bloom_strength = 0.0;
+            scene.view.shadow = one_shadow(1.0, depth, kernel);
+            scene.view.glow_reach = 0.0;
+            scene.view.note_bloom = 0.0;
             shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
                 cb.uniforms.geometry_shadow.occlusion = f32::from(occlusion);
             })

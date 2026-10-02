@@ -67,15 +67,15 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
     // than per node; 0 is the off state, as it is for every layer's width.
     let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-    assert_eq!(scene.mark_thickness, 0.15);
+    assert_eq!(scene.view.mark_thickness, 0.15);
 
     let off = ViewConfig { mark_thickness: 0.0, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &off, &plain_frame(), 0.0);
-    assert_eq!(scene.mark_thickness, 0.0, "0 passes through as the off state");
+    assert_eq!(scene.view.mark_thickness, 0.0, "0 passes through as the off state");
 
     let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
-    assert!(scene.mark_thickness <= 0.3, "got {}", scene.mark_thickness);
+    assert!(scene.view.mark_thickness <= 0.3, "got {}", scene.view.mark_thickness);
 }
 
 #[test]
@@ -384,7 +384,7 @@ fn a_hand_edited_size_reaches_the_scene_as_the_sanitized_setting() {
             scene.outer_outer,
             scene.rings_outer,
             scene.mark_inner - scene.rings_outer,
-            scene.mark_thickness,
+            scene.view.mark_thickness,
             scene.octave_gap,
         ]
     };

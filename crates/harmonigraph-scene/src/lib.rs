@@ -783,13 +783,15 @@ pub struct PlusInstance {
 
 /// Everything the renderer needs for one frame.
 pub struct Scene {
+    /// The normalized look used to derive this snapshot. Geometry and colors
+    /// below are derived values; renderers read the look's dials here.
+    pub view: ViewConfig,
     /// Artistic edge half-band in logical points; the renderer keeps a one-pixel AA floor.
     pub edge_softness_points: f32,
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
     /// Base node radius in world units.
     pub node_radius: f32,
-    pub note_animation: NoteAnimationConfig,
     /// The outer octave layer's radial band (quad UV units), already
     /// sanitized: outer is always ahead of inner on a band that draws, and
     /// both are 0 when the layer is off (see [`ViewConfig::band_width`]).
@@ -920,12 +922,6 @@ pub struct Scene {
     /// does (`fs_composite` in blit.wgsl), counting the pane fill this ground
     /// will add into the cap on displayed light.
     pub background: Vec4,
-    /// How deep the melody/bass mark strip is, in quad UV units; 0 = off (see
-    /// [`ViewConfig::mark_thickness`]). It starts one
-    /// [`ViewConfig::ring_gap`] past [`rings_outer`](Self::rings_outer) — a
-    /// sum already spent, this struct carrying [`mark_inner`](Self::mark_inner)
-    /// itself. Already clamped.
-    pub mark_thickness: f32,
     /// Pitch->color lookup for the octave glyphs, the same table the marks
     /// are colored from; the renderer hands it to the shader (see [`pitch_ramp_lut`]).
     pub pitch_lut: [Vec4; PITCH_LUT_N],
@@ -936,36 +932,6 @@ pub struct Scene {
     /// to index `pitch_lut`; copied from [`FrameParams`].
     pub darkest_pitch: f32,
     pub brightest_pitch: f32,
-    /// Offscreen render resolution multiplier (see [`ViewConfig`]); the
-    /// renderer sizes its offscreen color+depth target by this.
-    pub render_scale: f32,
-    /// Bloom intensity; 0 disables the whole post-process chain.
-    pub bloom_strength: f32,
-    /// How far past a node's outermost drawn edge its close halo is shown, in
-    /// quad UV units; 0 turns the whole glow off (see
-    /// [`ViewConfig::glow_reach`]). Already clamped to [`GLOW_REACH_MAX`].
-    pub glow_reach: f32,
-    /// How much of that glow is added back as light; already clamped to
-    /// [`GLOW_STRENGTH_MAX`]. Inert while [`glow_reach`](Self::glow_reach) is
-    /// 0, which is the pair's one off switch.
-    pub glow_strength: f32,
-    /// The shape of the close halo's falloff inside its reach (see
-    /// [`ViewConfig::glow_curve`]); already sanitized.
-    pub glow_curve: GlowCurve,
-    /// The Shadow, a style per group of casters (see
-    /// [`ViewConfig::shadow`]); already clamped
-    /// ([`ShadowSettings::clamped`]). Independent of the glow — an item casts
-    /// with no light in the picture.
-    pub shadow: ShadowSettings,
-    /// How much of the light standing at a LIT slice washes over that slice's
-    /// own ink (see [`ViewConfig::glow_wash`]); already clamped to 0..=1.
-    ///
-    /// The lit ink alone: every other piece of the lattice takes the field
-    /// whole, and what a fragment's lit share is is the shader's to say
-    /// (`NodeInk::lit` in lattice.wgsl). It reads the field RAW — an item's own
-    /// shadow does not darken the light it is washed with — so the Shadow bars
-    /// move it not at all.
-    pub glow_wash: f32,
     /// One quad-uv length of the home sheet, as a world length
     /// (`marker_world`): what converts the marker field between the units its
     /// own draws are in and the units every glow bar is dialled in.
@@ -978,12 +944,6 @@ pub struct Scene {
     /// shader from carrying a second copy of the uv rule (see
     /// [`Scene::node_radius`], which is the same rule for a node).
     pub marker_unit: f32,
-    /// How widely a node's own ink is averaged into the colour of its light
-    /// (see [`ViewConfig::glow_blend`]); already clamped to 0..=1.
-    pub glow_blend: f32,
-    /// Share of the original accumulating glow blend, clamped to 0..=1
-    /// (see [`ViewConfig::glow_accumulation`]).
-    pub glow_accumulation: f32,
     /// How many rows the frame's ink strip has to hold — the ceiling on every
     /// [`GlowStep::row`] in `nodes`, plus one.
     ///
@@ -998,7 +958,6 @@ pub struct Scene {
     /// Present for carried UI and offline scenes. Without a clock, the renderer
     /// draws a stateless snapshot of the current ink.
     pub glow_timing: Option<GlowTiming>,
-    pub atmosphere: AtmosphereSettings,
 }
 
 #[cfg(test)]

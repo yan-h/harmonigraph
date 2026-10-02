@@ -11,11 +11,11 @@ const CENTRE: glam::Vec2 = glam::Vec2::new(128.5, 128.5);
 
 fn scene(levels: &[f32], gain: f32, separated: bool) -> Scene {
     let mut scene = single_marked_node(0, 0);
-    scene.glow_reach = 2.88;
-    scene.glow_strength = gain;
-    scene.glow_curve = harmonigraph_scene::GlowCurve { shape: 0.0 };
-    scene.glow_blend = 1.0;
-    scene.bloom_strength = 0.0;
+    scene.view.glow_reach = 2.88;
+    scene.view.glow_strength = gain;
+    scene.view.glow_curve = harmonigraph_scene::GlowCurve { shape: 0.0 };
+    scene.view.glow_blend = 1.0;
+    scene.view.note_bloom = 0.0;
     let original = scene.nodes[0];
     scene.nodes = levels
         .iter()
@@ -96,12 +96,12 @@ fn a_held_nodes_light_breathes_without_advancing_its_ink_history() {
     // A fresh pane at the same time must agree with the carried pane: breathing
     // is a display modulation, with no accumulated effect on the ink colour.
     assert_eq!(later, glow(&mut shooter, &scene));
-    scene.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.breath_amount = 0.0;
     let steady = glow(&mut shooter, &scene);
     scene.glow_timing.as_mut().unwrap().now = 0.0;
     assert_eq!(steady, glow(&mut shooter, &scene), "zero depth must stop breathing");
-    scene.atmosphere.breath_amount = 1.0;
-    scene.atmosphere.texture_depth = 0.0;
+    scene.view.atmosphere.breath_amount = 1.0;
+    scene.view.atmosphere.texture_depth = 0.0;
     scene.glow_timing.as_mut().unwrap().now = 4.0;
     assert_ne!(steady, glow(&mut shooter, &scene), "breathing works with both stages off");
 }
@@ -111,7 +111,7 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     for (levels, accumulation) in [(vec![1.0], 0.0), (vec![1.0, 1.0], 0.5), (vec![1.0; 32], 1.0)] {
         let mut scene = scene(&levels, 0.75, levels.len() == 2);
-        scene.glow_accumulation = accumulation;
+        scene.view.glow_accumulation = accumulation;
         scene.camera = harmonigraph_scene::Camera {
             projection: harmonigraph_scene::Projection::Orthographic,
             distance: 28.0,
@@ -121,12 +121,12 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
         };
         // The glow target is half-resolution: resolve the clouds rather
         // than testing their subpixel average at this small size.
-        scene.atmosphere.texture_scale = 4.0;
-        scene.atmosphere.breath_amount = 0.0;
+        scene.view.atmosphere.texture_scale = 4.0;
+        scene.view.atmosphere.breath_amount = 0.0;
         scene.glow_timing =
             Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
         let smooth = glow(&mut shooter, &scene);
-        scene.atmosphere.texture_depth = 1.0;
+        scene.view.atmosphere.texture_depth = 1.0;
         let textured = glow(&mut shooter, &scene);
         let mut changed = 0;
         let mut empty = 0;
@@ -165,9 +165,9 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
         let later = read_glow(&shooter);
         assert_ne!(textured, later, "materials must drift inside a held glow");
         assert_eq!(later, glow(&mut shooter, &scene), "texture cannot depend on history");
-        scene.atmosphere.texture_speed = 0.0;
+        scene.view.atmosphere.texture_speed = 0.0;
         assert_eq!(textured, glow(&mut shooter, &scene), "zero speed freezes the material field");
-        scene.atmosphere.texture_depth = 0.0;
+        scene.view.atmosphere.texture_depth = 0.0;
         assert_eq!(smooth, glow(&mut shooter, &scene), "texture off restores the smooth glow");
     }
 }
@@ -177,19 +177,19 @@ fn material_shadow_pickup_darkens_light_without_adding_coverage() {
     use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_speed = 0.0;
-    scene.atmosphere.material_settings.wash_size = 2.0;
-    scene.atmosphere.material_settings.wash_refract = 1.0;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.material_speed = 0.0;
+    scene.view.atmosphere.material_settings.wash_size = 2.0;
+    scene.view.atmosphere.material_settings.wash_refract = 1.0;
     for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
-        scene.shadow = one_shadow(0.8, 0.7, kernel);
+        scene.view.shadow = one_shadow(0.8, 0.7, kernel);
         for material in
             [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
         {
-            scene.atmosphere.material_style = material;
-            scene.atmosphere.material_shadow_pickup = 0.0;
+            scene.view.atmosphere.material_style = material;
+            scene.view.atmosphere.material_shadow_pickup = 0.0;
             let before = glow(&mut shooter, &scene);
-            scene.atmosphere.material_shadow_pickup = 1.0;
+            scene.view.atmosphere.material_shadow_pickup = 1.0;
             shooter.shot_again(&scene);
             let after = read_glow(&shooter);
             let mut changed = 0;
@@ -246,11 +246,11 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
     scene.node_radius *= 2.0; // narrow pigment still spans multiple pixels
-    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-    scene.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.view.atmosphere.breath_amount = 0.0;
     // A 0.4 reach keeps the solid band about 0.2 radii wide, so the
     // sampled arc centers sit inside pigment even after pixel rounding.
-    scene.atmosphere.pigment_reach = 0.4;
+    scene.view.atmosphere.pigment_reach = 0.4;
     // Center and end sectors at a detuned seam must agree with the drawn ring.
     for cents in [0.0, 1100.0] {
         scene.octave_layout = octave_layout(7, 60.0);
@@ -260,11 +260,11 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
                 scene.nodes[0].octaves = [0.0; 11];
                 scene.nodes[0].octaves[4] = 1.0; // keeps real light under silent sectors
                 scene.nodes[0].octaves[target_slot as usize] = level;
-                scene.atmosphere.material_shadow_pickup = 0.0;
-                scene.atmosphere.material_color_pickup = 0.0;
+                scene.view.atmosphere.material_shadow_pickup = 0.0;
+                scene.view.atmosphere.material_color_pickup = 0.0;
                 shooter.shot(&scene);
                 let before = material_source(&shooter);
-                scene.atmosphere.material_color_pickup = 1.0;
+                scene.view.atmosphere.material_color_pickup = 1.0;
                 shooter.shot_again(&scene);
                 let colored = material_source(&shooter);
                 if level > 0.0 {
@@ -278,7 +278,7 @@ fn segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage
                     "color pickup works independently of dark pickup: slot {target_slot}, level {level}, cents {cents}"
                 );
                 }
-                scene.atmosphere.material_shadow_pickup = 1.0;
+                scene.view.atmosphere.material_shadow_pickup = 1.0;
                 shooter.shot_again(&scene);
                 let after = material_source(&shooter);
                 for (a, b) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
@@ -333,11 +333,11 @@ fn pickup_spreads_around_arc_ends_and_bloom_brightens_its_source() {
     let mut scene = scene(&[1.0], 0.75, false);
     scene.octave_layout = probe_octave_layout();
     scene.pitch_lut.fill(glam::Vec4::new(0.35, 0.4, 0.5, 1.0));
-    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_shadow_pickup = 1.0;
-    scene.atmosphere.material_color_pickup = 1.0;
-    scene.atmosphere.pigment_reach = 0.7;
+    scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.material_shadow_pickup = 1.0;
+    scene.view.atmosphere.material_color_pickup = 1.0;
+    scene.view.atmosphere.pigment_reach = 0.7;
     shooter.shot(&scene);
     let plain = material_source(&shooter);
     let sample = |pixels: &[u8], uv: glam::Vec2| {
@@ -358,7 +358,7 @@ fn pickup_spreads_around_arc_ends_and_bloom_brightens_its_source() {
         assert!(near > 0.1, "pickup extends past both angular ends: {near}");
         assert!(far < 0.025, "pickup ends by distance, rather than extending a ray: {far}");
     }
-    scene.bloom_strength = 2.0;
+    scene.view.note_bloom = 2.0;
     shooter.shot_again(&scene);
     let bloomed = material_source(&shooter);
     let mut brighter = 0;
@@ -369,10 +369,10 @@ fn pickup_spreads_around_arc_ends_and_bloom_brightens_its_source() {
         brighter += usize::from(b[..3].iter().zip(a).any(|(b, a)| b.saturating_sub(*a) > 3));
     }
     assert!(brighter > 100, "fixture reaches Bloom-responsive pigment: {brighter}");
-    scene.atmosphere.material_color_pickup = 0.0;
+    scene.view.atmosphere.material_color_pickup = 0.0;
     shooter.shot_again(&scene);
     let dark = material_source(&shooter);
-    scene.bloom_strength = 0.0;
+    scene.view.note_bloom = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(dark, material_source(&shooter), "Bloom never changes dark pickup");
 }
@@ -382,21 +382,22 @@ fn shadow_pickup_bypasses_with_material_or_light_disabled() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     for turn_off in [
-        (|s: &mut Scene| s.atmosphere.material_style = LatticeMaterial::None) as fn(&mut Scene),
-        |s| s.atmosphere.material_amount = 0.0,
-        |s| s.glow_reach = 0.0,
-        |s| s.glow_strength = 0.0,
-        |s| s.atmosphere.pigment_reach = 0.0,
+        (|s: &mut Scene| s.view.atmosphere.material_style = LatticeMaterial::None)
+            as fn(&mut Scene),
+        |s| s.view.atmosphere.material_amount = 0.0,
+        |s| s.view.glow_reach = 0.0,
+        |s| s.view.glow_strength = 0.0,
+        |s| s.view.atmosphere.pigment_reach = 0.0,
     ] {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
-        scene.bloom_strength = 1.0;
-        scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-        scene.atmosphere.breath_amount = 0.0;
+        scene.view.note_bloom = 1.0;
+        scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+        scene.view.atmosphere.breath_amount = 0.0;
         turn_off(&mut scene);
-        scene.atmosphere.material_shadow_pickup = 0.0;
+        scene.view.atmosphere.material_shadow_pickup = 0.0;
         let ordinary = shooter.shot(&scene);
-        scene.atmosphere.material_shadow_pickup = 1.0;
-        scene.atmosphere.material_color_pickup = 1.0;
+        scene.view.atmosphere.material_shadow_pickup = 1.0;
+        scene.view.atmosphere.material_color_pickup = 1.0;
         assert_eq!(ordinary, shooter.shot_again(&scene), "bypass preserves ordinary shadows");
     }
 }
@@ -406,9 +407,9 @@ fn pickup_and_ordinary_shadows_are_independent() {
     use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.shadow = one_shadow(0.8, 0.7, ShadowKernel::Distance);
+    scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.shadow = one_shadow(0.8, 0.7, ShadowKernel::Distance);
     let scene_alpha = |shooter: &Shooter| {
         let resources = shooter.resources.get::<LatticeResources>().unwrap();
         let target = resources.panes[&shooter.pane].offscreen.as_ref().unwrap();
@@ -430,9 +431,9 @@ fn pickup_and_ordinary_shadows_are_independent() {
     };
     let plain = glow(&mut shooter, &scene);
     let ordinary = scene_alpha(&shooter);
-    scene.atmosphere.material_shadow_pickup = 0.5;
-    scene.atmosphere.material_color_pickup = 0.7;
-    scene.atmosphere.pigment_reach = 5.5;
+    scene.view.atmosphere.material_shadow_pickup = 0.5;
+    scene.view.atmosphere.material_color_pickup = 0.7;
+    scene.view.atmosphere.pigment_reach = 5.5;
     shooter.shot_again(&scene);
     let pigment = read_glow(&shooter);
     assert_ne!(plain, pigment, "fixture reaches the pigment source");
@@ -442,7 +443,7 @@ fn pickup_and_ordinary_shadows_are_independent() {
         (0.2, 1.0, ShadowKernel::Distance),
         (1.0, 0.3, ShadowKernel::Gaussian),
     ] {
-        scene.shadow = one_shadow(width, depth, kernel);
+        scene.view.shadow = one_shadow(width, depth, kernel);
         shooter.shot_again(&scene);
         assert_eq!(pigment, read_glow(&shooter), "actual shadow settings cannot change pickup");
         if width == 0.0 {
@@ -456,11 +457,11 @@ fn pigment_reach_extends_beyond_the_ordinary_node_quad() {
     use harmonigraph_scene::{LatticeMaterial, ShadowKernel};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 1.0, false);
-    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-    scene.atmosphere.material_settings.wash_refract = 0.0;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.shadow = one_shadow(0.0, 0.0, ShadowKernel::Distance);
-    scene.glow_reach = 6.0;
+    scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.view.atmosphere.material_settings.wash_refract = 0.0;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.shadow = one_shadow(0.0, 0.0, ShadowKernel::Distance);
+    scene.view.glow_reach = 6.0;
     let plain = glow(&mut shooter, &scene);
     let (right, _) = scene.camera.right_up();
     let radius = on_screen(&scene, SIZE, right * scene.node_radius).distance(CENTRE);
@@ -479,11 +480,11 @@ fn pigment_reach_extends_beyond_the_ordinary_node_quad() {
             })
             .count()
     };
-    scene.atmosphere.material_shadow_pickup = 0.8;
-    scene.atmosphere.pigment_reach = 0.25;
+    scene.view.atmosphere.material_shadow_pickup = 0.8;
+    scene.view.atmosphere.pigment_reach = 0.25;
     assert_eq!(far_changed(&glow(&mut shooter, &scene)), 0, "narrow pigment stays near its ring");
     for reach in [6.0, 12.0] {
-        scene.atmosphere.pigment_reach = reach;
+        scene.view.atmosphere.pigment_reach = reach;
         let count = far_changed(&glow(&mut shooter, &scene));
         assert!(count > 100, "broad pickup must extend beyond the ink quad: {reach}: {count}");
     }
@@ -493,15 +494,15 @@ fn pigment_reach_extends_beyond_the_ordinary_node_quad() {
 fn watercolor_motion_and_silence_use_the_production_light() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_amount = 0.0;
-    scene.atmosphere.material_settings.wash_size = 2.0;
-    scene.atmosphere.material_speed = 1.0;
+    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.material_amount = 0.0;
+    scene.view.atmosphere.material_settings.wash_size = 2.0;
+    scene.view.atmosphere.material_speed = 1.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
     let baseline = glow(&mut shooter, &scene);
-    scene.atmosphere.material_amount = 1.0;
+    scene.view.atmosphere.material_amount = 1.0;
     let smooth = glow(&mut shooter, &scene);
     let changed = |a: &[u8], b: &[u8]| {
         a.chunks_exact(4)
@@ -517,17 +518,17 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     scene.glow_timing.as_mut().unwrap().now = 8.0;
     shooter.shot_again(&scene);
     assert_ne!(smooth, read_glow(&shooter), "held notes still show material motion");
-    scene.atmosphere.material_speed = 0.0;
+    scene.view.atmosphere.material_speed = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(smooth, read_glow(&shooter), "zero speed freezes washes");
-    scene.atmosphere.material_amount = 0.0;
+    scene.view.atmosphere.material_amount = 0.0;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "depth zero restores the production smooth source");
-    scene.atmosphere.material_amount = 1.0;
-    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::None;
+    scene.view.atmosphere.material_amount = 1.0;
+    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::None;
     shooter.shot_again(&scene);
     assert_eq!(baseline, read_glow(&shooter), "disabled material is exact");
-    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
     shooter.shot_again(&scene);
     assert_eq!(smooth, read_glow(&shooter));
     for node in &mut scene.nodes {
@@ -548,15 +549,15 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
         harmonigraph_scene::LatticeMaterial::VelvetScales,
     ] {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
-        scene.atmosphere.material_style = style;
-        scene.atmosphere.breath_amount = 0.0;
-        scene.atmosphere.material_settings.wash_size = 2.0;
-        scene.atmosphere.material_speed = 1.0;
+        scene.view.atmosphere.material_style = style;
+        scene.view.atmosphere.breath_amount = 0.0;
+        scene.view.atmosphere.material_settings.wash_size = 2.0;
+        scene.view.atmosphere.material_speed = 1.0;
         scene.glow_timing =
             Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
-        scene.atmosphere.material_amount = 0.0;
+        scene.view.atmosphere.material_amount = 0.0;
         let plain = glow(&mut shooter, &scene);
-        scene.atmosphere.material_amount = 1.0;
+        scene.view.atmosphere.material_amount = 1.0;
         let painted = glow(&mut shooter, &scene);
         assert!(
             plain.iter().zip(&painted).filter(|(a, b)| a.abs_diff(**b) > 3).count() > 500,
@@ -565,13 +566,13 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
         // Cross both the former 40-cell boundary and the rotated tile's 200-cell
         // axis repeat, travelling in both directions along each screen axis.
         for (direction, axis) in [(0.0, 0), (90.0, 1), (180.0, 0), (270.0, 1)] {
-            scene.atmosphere.material_direction = direction;
+            scene.view.atmosphere.material_direction = direction;
             let drift =
                 |now| harmonigraph_scene::MaterialSettings::drift(1.0, direction, now)[axis];
             let cells = f64::from(if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
-                405.0 / 240.0 / scene.atmosphere.material_settings.velvet_size
+                405.0 / 240.0 / scene.view.atmosphere.material_settings.velvet_size
             } else {
-                5.25 / scene.atmosphere.material_settings.wash_size
+                5.25 / scene.view.atmosphere.material_settings.wash_size
             });
             let origin = if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
                 0.0
@@ -612,14 +613,14 @@ fn textures_feed_materials_before_sampling() {
         [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
     {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
-        scene.atmosphere.breath_amount = 0.0;
-        scene.atmosphere.texture_depth = 0.85;
-        scene.atmosphere.texture_scale = 4.0;
+        scene.view.atmosphere.breath_amount = 0.0;
+        scene.view.atmosphere.texture_depth = 0.85;
+        scene.view.atmosphere.texture_scale = 4.0;
         scene.glow_timing =
             Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
         let texture_only = glow(&mut shooter, &scene);
-        scene.atmosphere.material_settings.wash_size = 1.0;
-        scene.atmosphere.material_style = material;
+        scene.view.atmosphere.material_settings.wash_size = 1.0;
+        scene.view.atmosphere.material_style = material;
         let combined = glow(&mut shooter, &scene);
         // Read the actual material input, proving order rather than just two visible effects.
         let resources = shooter.resources.get::<LatticeResources>().unwrap();
@@ -649,7 +650,7 @@ fn textures_feed_materials_before_sampling() {
             ],
         });
         assert_eq!(texture_only, read_glow_binding(&shooter, &source_binding));
-        scene.atmosphere.texture_depth = 0.0;
+        scene.view.atmosphere.texture_depth = 0.0;
         let material_only = glow(&mut shooter, &scene);
         assert!(
             changed(&combined, &texture_only) > 500,
@@ -660,7 +661,7 @@ fn textures_feed_materials_before_sampling() {
             assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1));
             assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
         }
-        scene.atmosphere.texture_depth = 0.85;
+        scene.view.atmosphere.texture_depth = 0.85;
         for node in &mut scene.nodes {
             node.glow.level = 0.0;
         }
@@ -677,12 +678,12 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.texture_depth = 0.85;
-    scene.atmosphere.texture_scale = 2.0;
-    scene.atmosphere.material_style = LatticeMaterial::Watercolor;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.texture_speed = 0.0;
-    scene.atmosphere.material_speed = 0.0;
+    scene.view.atmosphere.texture_depth = 0.85;
+    scene.view.atmosphere.texture_scale = 2.0;
+    scene.view.atmosphere.material_style = LatticeMaterial::Watercolor;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.texture_speed = 0.0;
+    scene.view.atmosphere.material_speed = 0.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
     let still = glow(&mut shooter, &scene);
@@ -697,8 +698,8 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
     shooter.shot_again(&scene);
     assert_eq!(still, read_glow(&shooter), "both zero speeds freeze held light");
     for (texture_speed, material_speed) in [(1.0, 0.0), (0.0, 1.0)] {
-        scene.atmosphere.texture_speed = texture_speed;
-        scene.atmosphere.material_speed = material_speed;
+        scene.view.atmosphere.texture_speed = texture_speed;
+        scene.view.atmosphere.material_speed = material_speed;
         shooter.shot_again(&scene);
         assert_ne!(still, read_glow(&shooter), "each stage moves independently");
         assert_eq!(
@@ -708,9 +709,9 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         );
     }
     // Texture edits and positive material amount never invalidate active geometry.
-    scene.atmosphere.texture_depth = 0.4;
-    scene.atmosphere.texture_scale = 4.0;
-    scene.atmosphere.material_amount = 0.6;
+    scene.view.atmosphere.texture_depth = 0.4;
+    scene.view.atmosphere.texture_scale = 4.0;
+    scene.view.atmosphere.material_amount = 0.6;
     shooter.shot_again(&scene);
     assert_eq!(Some(original_tile), geometry(&shooter));
     assert_eq!(read_glow(&shooter), glow(&mut shooter, &scene));
@@ -721,14 +722,14 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         (0.4, LatticeMaterial::Watercolor, 0.0),
         (0.4, LatticeMaterial::Watercolor, 0.6),
     ] {
-        scene.atmosphere.texture_depth = contrast;
-        scene.atmosphere.material_style = material;
-        scene.atmosphere.material_amount = amount;
+        scene.view.atmosphere.texture_depth = contrast;
+        scene.view.atmosphere.material_style = material;
+        scene.view.atmosphere.material_amount = amount;
         shooter.shot_again(&scene);
         assert_eq!(geometry(&shooter).is_some(), material != LatticeMaterial::None && amount > 0.0);
         assert_eq!(read_glow(&shooter), glow(&mut shooter, &scene));
     }
-    scene.render_scale = 1.5;
+    scene.view.render_scale = 1.5;
     shooter.shot_again(&scene);
     assert_eq!(
         read_glow(&shooter),
@@ -742,10 +743,10 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
     use harmonigraph_scene::{LatticeMaterial, MaterialSettings};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut base = scene(&[1.0, 1.0], 0.75, true);
-    base.atmosphere.breath_amount = 0.0;
-    base.atmosphere.texture_depth = 0.8;
-    base.atmosphere.material_speed = 0.0;
-    base.atmosphere.material_settings = MaterialSettings {
+    base.view.atmosphere.breath_amount = 0.0;
+    base.view.atmosphere.texture_depth = 0.8;
+    base.view.atmosphere.material_speed = 0.0;
+    base.view.atmosphere.material_settings = MaterialSettings {
         wash_size: 2.0,
         wash_fuzz: 0.5,
         wash_lobe: 0.5,
@@ -773,11 +774,11 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         (LatticeMaterial::Watercolor, "random brightness", false, |s| s.wash_randomness = 1.0),
     ] {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
-        scene.atmosphere = base.atmosphere;
-        scene.atmosphere.material_style = style;
+        scene.view.atmosphere = base.view.atmosphere;
+        scene.view.atmosphere.material_style = style;
         let before = glow(&mut shooter, &scene);
         let before_tile = tile(&shooter);
-        turn(&mut scene.atmosphere.material_settings);
+        turn(&mut scene.view.atmosphere.material_settings);
         shooter.shot_again(&scene);
         let after = read_glow(&shooter);
         if label == "random brightness" {
@@ -806,15 +807,15 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
     // shape 0, or its scallop taper hides much of the corner; Tilt is turned
     // over the squares, since a round body has no rotation to show.
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere = base.atmosphere;
-    scene.atmosphere.material_style = LatticeMaterial::VelvetScales;
-    scene.atmosphere.material_settings.velvet_shape = 0.0;
+    scene.view.atmosphere = base.view.atmosphere;
+    scene.view.atmosphere.material_style = LatticeMaterial::VelvetScales;
+    scene.view.atmosphere.material_settings.velvet_shape = 0.0;
     for (label, turn) in [
         ("squareness", (|s: &mut MaterialSettings| s.velvet_square = 1.0) as Turn),
         ("tilt", |s| s.velvet_tilt = 0.0),
     ] {
         let before = glow(&mut shooter, &scene);
-        turn(&mut scene.atmosphere.material_settings);
+        turn(&mut scene.view.atmosphere.material_settings);
         shooter.shot_again(&scene);
         let after = read_glow(&shooter);
         let changed = before
@@ -825,10 +826,10 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         assert!(changed > 100, "Scales/{label}: fixture must reach the effect ({changed} pixels)");
     }
     // The inactive style must neither change the picture nor rebake the tile.
-    base.atmosphere.material_style = LatticeMaterial::Watercolor;
+    base.view.atmosphere.material_style = LatticeMaterial::Watercolor;
     let before = glow(&mut shooter, &base);
     let before_tile = tile(&shooter);
-    base.atmosphere.material_settings.velvet_variety = 0.0;
+    base.view.atmosphere.material_settings.velvet_variety = 0.0;
     shooter.shot_again(&base);
     assert_eq!(before, read_glow(&shooter));
     assert_eq!(before_tile, tile(&shooter));
@@ -857,13 +858,13 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
         let mut scene = scene(&[level], gain, false);
         // Read a 256-square glow directly: the scene stays at twice that
         // resolution. This checks the analytic profile before reconstruction.
-        scene.render_scale = 2.0;
+        scene.view.render_scale = 2.0;
         let colour = [0.8, 0.4, 0.1];
         scene.pitch_lut = [glam::Vec4::new(colour[0], colour[1], colour[2], 1.0);
             harmonigraph_scene::PITCH_LUT_N];
         let pixels = glow(&mut shooter, &scene);
         for accumulation in [0.5, 1.0] {
-            scene.glow_accumulation = accumulation;
+            scene.view.glow_accumulation = accumulation;
             assert_eq!(glow(&mut shooter, &scene), pixels, "a lone glow cannot change");
         }
         let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
@@ -872,7 +873,7 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
             let at = glam::vec2((index % 256) as f32 + 0.5, (index / 256) as f32 + 0.5);
             let d = at.distance(CENTRE) / per_uv;
             // Even unmarked nodes use the maximum configured mark rim.
-            let rim = scene.rings_outer.max(scene.mark_inner + scene.mark_thickness);
+            let rim = scene.rings_outer.max(scene.mark_inner + scene.view.mark_thickness);
             let a = (0.8 * gain * level * (1.0 - d / (rim + 2.88)).max(0.0)).min(1.0);
             for (got, channel) in pixel.iter().zip([colour[0], colour[1], colour[2], 1.0]) {
                 assert!(
@@ -976,7 +977,7 @@ fn a_fading_neighbour_returns_to_the_lone_glow_without_moving_the_ceiling() {
     distant.nodes[1].glow.level = 1.0;
     distant.nodes[1].world_pos.x = 10000.0;
     assert_eq!(glow(&mut shooter, &distant), lone, "an unrelated note cannot reset the ceiling");
-    distant.glow_strength = 0.0;
+    distant.view.glow_strength = 0.0;
     assert!(glow(&mut shooter, &distant).iter().all(|byte| *byte == 0));
 }
 
@@ -985,7 +986,7 @@ fn accumulation_sweeps_to_the_original_screen_of_each_colour_channel() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let at = |levels: &[f32], accumulation| {
         let mut scene = scene(levels, 0.35, false);
-        scene.glow_accumulation = accumulation;
+        scene.view.glow_accumulation = accumulation;
         scene.pitch_lut = std::array::from_fn(|i| {
             if i * 2 < harmonigraph_scene::PITCH_LUT_N {
                 glam::Vec4::new(0.8, 0.5, 0.2, 1.0)
@@ -1037,7 +1038,7 @@ fn marks_do_not_change_the_halo_footprint() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
     assert!(
-        scene.mark_inner + scene.mark_thickness > scene.rings_outer + 0.1,
+        scene.mark_inner + scene.view.mark_thickness > scene.rings_outer + 0.1,
         "the mark must extend beyond the rings to exercise the old size change"
     );
     scene.nodes[0].octaves.fill(1.0);
@@ -1057,16 +1058,16 @@ fn marks_do_not_change_the_halo_footprint() {
 fn the_color_transition_ends_at_the_ring_even_with_a_wider_halo() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
-    scene.glow_blend = 0.0;
+    scene.view.glow_blend = 0.0;
     scene.nodes[0].octaves.fill(1.0);
     scene.pitch_lut = std::array::from_fn(|i| {
         let t = i as f32 / (harmonigraph_scene::PITCH_LUT_N - 1) as f32;
         glam::vec4(1.0 - t, 0.05, t, 1.0)
     });
-    scene.mark_thickness = 0.0;
+    scene.view.mark_thickness = 0.0;
     let ordinary = glow(&mut shooter, &scene);
     scene.mark_inner = scene.rings_outer;
-    scene.mark_thickness = 0.6;
+    scene.view.mark_thickness = 0.6;
     let wide = glow(&mut shooter, &scene);
     let per_uv = on_screen(&scene, SIZE, glam::Vec3::X * scene.node_radius * 1.8).x - CENTRE.x;
     let hue = |p: &[u8]| {
@@ -1110,8 +1111,8 @@ fn dense_faint_overlap_order_precision() {
             .map(|i| if i < count * 500 / 4096 { 0.000382 / 0.8 } else { 0.004165 / 0.8 })
             .collect();
         let mut scene = scene(&levels, 1.0, false);
-        scene.atmosphere.texture_depth = 0.0;
-        scene.atmosphere.breath_amount = 0.0;
+        scene.view.atmosphere.texture_depth = 0.0;
+        scene.view.atmosphere.breath_amount = 0.0;
         scene.pitch_lut = std::array::from_fn(|i| {
             if i * 2 < harmonigraph_scene::PITCH_LUT_N {
                 glam::Vec4::new(1.0, 0.15, 0.1, 1.0)
@@ -1123,7 +1124,7 @@ fn dense_faint_overlap_order_precision() {
             node.cents = if i < count * 500 / 4096 { 0.0 } else { 1100.0 };
         }
         for accumulation in [0.0, 0.5, 1.0] {
-            scene.glow_accumulation = accumulation;
+            scene.view.glow_accumulation = accumulation;
             let forward = glow(&mut shooter, &scene);
             assert!(
                 forward.chunks_exact(4).any(|pixel| pixel[..3].iter().any(|v| *v > 20)),
@@ -1143,22 +1144,22 @@ fn stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence() 
     use harmonigraph_scene::{LatticeMaterial, StarHaloProfile};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0], 0.75, false);
-    scene.atmosphere.texture_depth = 0.0;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_style = LatticeMaterial::Stars;
+    scene.view.atmosphere.texture_depth = 0.0;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.material_style = LatticeMaterial::Stars;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
-    scene.atmosphere.material_amount = 0.0;
+    scene.view.atmosphere.material_amount = 0.0;
     let raw = glow(&mut shooter, &scene);
     let hue = raw.chunks_exact(4).max_by_key(|p| p[3]).unwrap();
-    scene.atmosphere.material_amount = 1.0;
+    scene.view.atmosphere.material_amount = 1.0;
     for profile in [
         StarHaloProfile::P3,
         StarHaloProfile::Medium,
         StarHaloProfile::Low,
         StarHaloProfile::Uniform,
     ] {
-        scene.atmosphere.stars.star_halo_profile = profile;
+        scene.view.atmosphere.stars.star_halo_profile = profile;
         let painted = glow(&mut shooter, &scene);
         assert!(
             painted.chunks_exact(4).filter(|p| p[3] > 20).count() > 500,
@@ -1213,17 +1214,17 @@ fn dense_stars_follow_the_pattern_darkness_of_their_light() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0, 0.6], 0.75, true);
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_amount = 1.0;
+    scene.view.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.material_amount = 1.0;
     // The spectrogram's sizes, small and dense enough to sum past coverage:
     // the lattice draws what it stores `LATTICE_STAR_SIZE_SCALE` times over.
-    scene.atmosphere.stars = harmonigraph_scene::StarSettings::default()
+    scene.view.atmosphere.stars = harmonigraph_scene::StarSettings::default()
         .scaled(1.0 / harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 1.0, attack: 0.0, release: 0.0 });
     let mut mean = |material, depth| {
-        scene.atmosphere.material_style = material;
-        scene.atmosphere.texture_depth = depth;
+        scene.view.atmosphere.material_style = material;
+        scene.view.atmosphere.texture_depth = depth;
         let px = glow(&mut shooter, &scene);
         px.chunks_exact(4).map(luminance).sum::<f64>() / (px.len() / 4) as f64
     };
@@ -1238,7 +1239,7 @@ fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
     use harmonigraph_scene::{LatticeMaterial, StarHaloProfile};
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.breath_amount = 0.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 3.0, attack: 0.0, release: 0.0 });
     for (style, amount, profile, scale) in [
@@ -1253,10 +1254,10 @@ fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Medium, 1.5),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Low, 1.5),
     ] {
-        scene.atmosphere.material_style = style;
-        scene.atmosphere.material_amount = amount;
-        scene.atmosphere.stars.star_halo_profile = profile;
-        scene.render_scale = scale;
+        scene.view.atmosphere.material_style = style;
+        scene.view.atmosphere.material_amount = amount;
+        scene.view.atmosphere.stars.star_halo_profile = profile;
+        scene.view.render_scale = scale;
         shooter.shot_again(&scene);
         let carried = read_glow(&shooter);
         assert_eq!(
@@ -1265,7 +1266,7 @@ fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
             "{style:?}, {amount}, {profile:?}, {scale}"
         );
         if amount == 0.0 {
-            scene.atmosphere.material_style = LatticeMaterial::None;
+            scene.view.atmosphere.material_style = LatticeMaterial::None;
             assert_eq!(carried, glow(&mut shooter, &scene), "amount zero is exact bypass");
         }
     }
@@ -1294,8 +1295,8 @@ fn the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel() {
         pitch: 0.0,
         ..Default::default()
     };
-    scene.atmosphere.texture_scale = PATTERN;
-    scene.atmosphere.breath_amount = 0.0;
+    scene.view.atmosphere.texture_scale = PATTERN;
+    scene.view.atmosphere.breath_amount = 0.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.3, release: 2.5 });
     // Detail cells per glow texel, as `nebula_light` reckons them: the fixture
@@ -1303,7 +1304,7 @@ fn the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel() {
     let detail = 5.0 * 2.3 / (PATTERN * (SIZE[1] / 2) as f32);
     assert!(detail > 0.6, "the detail spans {detail} cells a texel, short of the fade");
     let smooth = glow(&mut shooter, &scene);
-    scene.atmosphere.texture_depth = 1.0;
+    scene.view.atmosphere.texture_depth = 1.0;
     let textured = glow(&mut shooter, &scene);
     // The texture's share of the light at a pixel, read every other pixel so
     // neighbours are neighbouring glow texels rather than the blit's blend.

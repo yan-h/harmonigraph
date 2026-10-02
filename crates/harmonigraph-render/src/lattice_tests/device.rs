@@ -39,7 +39,7 @@ fn reopening_reuses_pipelines_with_fresh_window_resources() {
     shooter.resources.insert(instance.clone());
     let cache = std::sync::Arc::new(LatticePipelineCache::default());
     let mut scene = parity_scene();
-    scene.glow_reach = 0.8;
+    scene.view.glow_reach = 0.8;
     let first = shooter.draw_modified(&scene, LatticeLabels::default(), |cb| {
         cb.pipeline_cache = Some(cache.clone());
     });
@@ -244,8 +244,8 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
     const SIZE: [u32; 2] = [128, 128];
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut scene = parity_scene();
-    scene.glow_reach = 0.8;
-    scene.bloom_strength = 1.0;
+    scene.view.glow_reach = 0.8;
+    scene.view.note_bloom = 1.0;
     let size = egui::vec2(SIZE[0] as f32, SIZE[1] as f32);
     // Exactly the plugin's pairing: the docked Lattice pane owns id 0 and the
     // stats sink; the Video preview is a second view with neither.
