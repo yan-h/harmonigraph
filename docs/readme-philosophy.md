@@ -59,8 +59,8 @@ Omit unchosen assets rather than leaving editorial placeholders in the README.
 - `docs/images/plugin-window-lattice-analyzer.webp`:
   a wide screenshot beside the demonstration,
   showing the lattice and spectral view together without obscuring the music with settings panels.
-- `docs/images/video-export-or-customization.png`:
-  optional later image;
+- `video-export-or-customization.png` in `docs/images/`:
+  optional later image, not yet added;
   use it only if it demonstrates either a materially different export layout or the range of visual customization.
 
 For repository-hosted images,
