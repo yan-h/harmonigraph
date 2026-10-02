@@ -53,7 +53,7 @@ const QUEUE_DEPTH: usize = 2;
 /// overlapping them halves the wall" predicts — worth knowing before anyone
 /// spends a session chasing the rest. The render half alone, with the encoder
 /// stubbed out, is 6.59 s. The two halves do now overlap, but they overlap
-/// onto the same eight cores, and x264 at `-preset slow` is most of what runs
+/// onto the same eight cores, and x264 (then at `-preset slow`) is most of what runs
 /// on them: what is left of the 3.10 s is the encoder being genuinely slower
 /// than the renderer over stretches, which is backpressure rather than a
 /// stall. A deeper queue defers that; it does not remove it. See
@@ -385,7 +385,13 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // B-frames, a closed GOP of half the frame rate (x264 closes its GOPs
     // by default), 4:2:0, BT.709.
     let gop = ((options.fps / 2.0).round() as u32).max(1);
-    args.extend(["-c:v", "libx264", "-preset", "slow", "-profile:v", "high"].map(String::from));
+    // `medium`, not `slow`: the encoder, not the picture, is what an export
+    // waits on. One second of a real take at 2560x1440@60 encoded in 4.6-5.2 s
+    // against 10.8-11.3 s, for a file 1% larger and SSIM 0.99771 against
+    // 0.99784. The keyframe pop below barely moves: at 720p60 a keyframe
+    // changes 0.81 grey levels against 0.78, the frames between 0.59 against
+    // 0.58, for 4.5% more bytes.
+    args.extend(["-c:v", "libx264", "-preset", "medium", "-profile:v", "high"].map(String::from));
     args.extend(["-crf".to_string(), options.crf.to_string()]);
     // The spectrogram's noise floor is grain to an encoder, and half a
     // second of GOP puts a keyframe in front of it twice a second.
