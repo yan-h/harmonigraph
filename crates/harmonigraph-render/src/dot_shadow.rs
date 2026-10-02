@@ -268,7 +268,7 @@ impl CallbackTrait for DotShadowCallback {
             return Vec::new();
         }
         let ppp = screen.pixels_per_point.max(f32::EPSILON);
-        let sigma = crate::shadow::spectral_sigma_points(style);
+        let sigma = crate::shadow::spectral_sigma_points(style, 1.0);
         let casters: Vec<_> = self
             .dots
             .iter()
@@ -298,7 +298,7 @@ impl CallbackTrait for DotShadowCallback {
                 sigma,
                 style.depth,
                 if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
-                crate::spectral_shadow_reach(style),
+                crate::spectral_shadow_reach(style, 1.0),
             ],
             falloff: [style.falloff, 0.0, 0.0, 0.0],
         };

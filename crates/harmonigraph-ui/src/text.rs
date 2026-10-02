@@ -712,6 +712,7 @@ impl TextBatch {
         slide: harmonigraph_render::SlideAxis,
         shadow: Option<harmonigraph_scene::ShadowStyle>,
         shadow_surface_id: Option<u64>,
+        point_scale: f32,
     ) {
         if self.glyphs.is_empty() {
             return;
@@ -746,6 +747,7 @@ impl TextBatch {
                 pass_nr: painter.ctx().cumulative_pass_nr(),
             },
             shadow_surface_id,
+            point_scale,
         ));
     }
 
@@ -1582,6 +1584,7 @@ mod tests {
                     state.picture.surfaces.target_format,
                     harmonigraph_render::PaneIds { pane: 0, pass_nr: ctx.cumulative_pass_nr() },
                     None,
+                    1.0,
                 ));
             });
         }
@@ -1785,6 +1788,7 @@ mod tests {
                         harmonigraph_render::SlideAxis::default(),
                         Some(state.appearance.view.shadow.spectral_text),
                         Some(surface),
+                        1.0,
                     );
                     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
                         rect,

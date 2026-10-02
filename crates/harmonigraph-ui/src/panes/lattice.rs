@@ -425,6 +425,7 @@ fn draw_learn_overlay(
         harmonigraph_render::SlideAxis::default(),
         None,
         None,
+        1.0,
     );
 }
 
