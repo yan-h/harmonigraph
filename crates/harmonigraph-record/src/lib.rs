@@ -79,6 +79,6 @@ mod recorder;
 #[doc(hidden)]
 pub use recorder::testing;
 pub use recorder::{
-    channel, default_renderer_path, header_for, interleaved_reservation, AudioSpec, Control, Entry,
-    Recorder, RenderRequest, TAKE_CHANNELS,
+    channel, default_renderer_path, header_for, interleaved_reservation, Control, Entry, Recorder,
+    RenderRequest, TAKE_CHANNELS,
 };

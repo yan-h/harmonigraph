@@ -484,9 +484,12 @@ fn export(args: Args) -> Result<(), String> {
     )?;
 
     let [w, h] = size;
+    // The take's own length: `duration()` is where it ENDS on the host's
+    // transport, so a take armed partway into the song would count the song
+    // before it too.
+    let length = (take.duration() - capture_start.unwrap_or(0.0)).max(0.0);
     eprintln!(
-        "{take_path}: {:.1}s of events -> {total} frames at {} fps, {w}x{h} @ {scale:.2}x -> {}",
-        take.duration(),
+        "{take_path}: {length:.1}s take -> {total} frames at {} fps, {w}x{h} @ {scale:.2}x -> {}",
         args.fps,
         out.display(),
     );

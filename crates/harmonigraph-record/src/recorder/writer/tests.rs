@@ -120,7 +120,6 @@ impl Bench {
                 closed_epoch: 0,
                 producer,
                 audio,
-                with_audio: Arc::new(AtomicBool::new(false)),
                 dropped: dropped.clone(),
                 last_params: [f32::NAN; ParamKey::ALL.len()],
                 lifecycle: State::Disarmed,
@@ -903,8 +902,13 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
     let base = dir.join("take.take");
     let status = Mutex::new(String::new());
     let (mut producer, mut consumer) = rtrb::RingBuffer::new(64);
-    let mut open =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
+    let mut open = Recording::create(
+        header_for(48_000.0, String::new()),
+        base.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    );
     assert!(open.is_some(), "the fixture has to actually open a file to write into");
 
     // What a note starting leaves on its pass. The take lane's own drain sets
@@ -928,8 +932,13 @@ fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
 
     // A voiced tail renders itself, which is the ordinary loop-recording
     // case and the reason this cannot just always pick the first pass.
-    let mut open =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
+    let mut open = Recording::create(
+        header_for(48_000.0, String::new()),
+        base.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    );
     voice(&mut open);
     producer.push(Entry::NewPass).expect("ring has room");
     drain(&mut consumer, &mut open, &status);
@@ -956,9 +965,14 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let base = dir.join("take.take");
     let status = Mutex::new(String::new());
-    let mut recording =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 4, None, &status)
-            .expect("the fixture has to open a real file to roll over from");
+    let mut recording = Recording::create(
+        header_for(48_000.0, String::new()),
+        base.clone(),
+        4,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .expect("the fixture has to open a real file to roll over from");
     let marker = harmonigraph_take::IncompleteRecord {
         first_publication: 7,
         last_publication: 9,
@@ -1016,7 +1030,7 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
             header_for(48_000.0, String::new()),
             dir.join("record.take"),
             1,
-            None,
+            FIXTURE_SPEC,
             &status,
         );
         assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
@@ -1078,7 +1092,7 @@ fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() 
         .join(format!("harmonigraph-held-full-publication-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("record.take");
-    let mut writer = testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = testing::FileWriter::new(&capture, path.clone());
     recorder.hold_retired_publication();
     recorder.fail_configuration();
     writer.drain(&mut capture);

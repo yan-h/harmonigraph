@@ -753,7 +753,7 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
         std::env::temp_dir().join(format!("harmonigraph-take-gap-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("gap.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     phrase.step(
         [
             vec![note(1, 0, 50, 0, true)],
@@ -825,7 +825,7 @@ fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
         std::env::temp_dir().join(format!("harmonigraph-take-onset-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("onset.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     // Expression every callback, as a played note has: each is sequenced in
     // the callback a snapshot may be cut in, and scheduled D after it.
     for step in 0..4 {
@@ -913,7 +913,7 @@ fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
         std::env::temp_dir().join(format!("harmonigraph-partial-frame-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("partial.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     // Each Reset is a cut, and a cut owes every row a fresh snapshot on both
     // lanes. Well past SNAPSHOT_SLOTS, so the display is refusing long before
     // the end while the writer keeps up.

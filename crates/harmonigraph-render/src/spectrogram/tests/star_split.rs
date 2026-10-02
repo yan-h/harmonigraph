@@ -248,6 +248,10 @@ pub(super) fn reference_source() -> Option<String> {
     }
     let source = SPECTROGRAM_SRC.to_owned();
     if mode == 4 {
+        // Every whole-star read, 2x2 and 1x1 alike, becomes a 3x3 one.
+        let core = "slice = star_far_texel(s, f, index);";
+        assert_eq!(source.matches(core).count(), 1, "the 1x1 read moved");
+        let source = source.replace(core, "slice = star_far_gather(s, r);");
         let start = source.find("fn star_far_gather(").unwrap();
         let end = source[start..].find("\nfn star_layers(").unwrap() + start;
         return Some(format!(
@@ -458,6 +462,13 @@ fn quality_profiles_cover_partial_panes_at_fractional_scale() {
             settings.cloud_depth = 0.65;
             (settings.stars.star_solid_far, settings.stars.star_solid_near) =
                 (harmonigraph_scene::STAR_SOLID_MAX, harmonigraph_scene::STAR_SOLID_MAX);
+            // Far stars spaced so 2x2 holds them at every jitter: its bound
+            // shrinks to 0.7 cells at 1, where the fresh spacing needs 3x3 and
+            // the wide reference would compare the frame with itself.
+            settings.stars.star_spacing_ratio_far = 0.8;
+            let layout = atmosphere::star_layout(settings.stars, cb.rect.aspect_ratio());
+            let slices = atmosphere::star_slices(settings.stars, 0.0, 0.0, &layout);
+            assert_eq!(slices.map(|s| s.gather)[..3], [2; 3], "jitter={jitter}: far not 2x2");
             if memory {
                 settings.color_pickup = 0.6;
                 settings.color_release = 0.6;
@@ -602,5 +613,36 @@ fn a_drawn_star_follows_the_cpu_profile() {
             })
             .fold(0.0, f32::max);
         assert!(worst <= 1.25, "solid={solid}, falloff={falloff}: off the CPU curve by {worst}");
+    }
+}
+
+/// A depth whose stars fit their own cell reads that cell alone and loses
+/// nothing a 3x3 read would see, at stars a hair inside the 1x1 bound.
+#[test]
+fn a_core_depth_draws_its_stars_whole() {
+    let Some((device, queue)) = headless_device() else { return };
+    let _split = SplitOverride::set(Some(false));
+    let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
+    cb.grid.fill(200);
+    for jitter in [0.0, 0.5, 1.0] {
+        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+        stars.star_jitter = jitter;
+        let core = harmonigraph_scene::star_plan::StarGather::Core.bound(jitter);
+        let spacing = 1.001 * 0.5 / core;
+        (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (spacing, spacing);
+        let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
+        let slices = atmosphere::star_slices(*stars, 0.0, 0.0, &layout);
+        assert_eq!(slices.map(|s| s.gather), [1; 5], "jitter={jitter}");
+        let frames: Vec<_> = [0, 4]
+            .into_iter()
+            .map(|mode| {
+                let _halo = HaloOverride::set(mode);
+                frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.25)
+            })
+            .collect();
+        let floor = cb.shades.lut[0];
+        let lit = frames[0].chunks_exact(4).filter(|px| px[..3] != floor[..3]).count();
+        assert!(lit > 500, "jitter={jitter}: only {lit} lit pixels");
+        assert_eq!(frames[0], frames[1], "jitter={jitter}: the 1x1 read cut a star");
     }
 }
