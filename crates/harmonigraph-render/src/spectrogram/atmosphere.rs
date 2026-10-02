@@ -962,22 +962,22 @@ fn memory_key(
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
                 star_layers: _,         // read through the plan's drawn slices below
-                star_spacing_ratio_far,
-                star_spacing_ratio_near,
-                star_spacing_ratio_curve,
-                star_size_far: _,        // star sizes do not change a star's colour
-                star_size_near: _,       // star sizes do not change a star's colour
-                star_size_curve: _,      // star sizes do not change a star's colour
-                star_speed_far: _,       // carried by absolute cell and per-cell life
-                star_speed_near: _,      // carried by absolute cell and per-cell life
-                star_speed_curve: _,     // carried by absolute cell and per-cell life
-                star_lifetime: _,        // carried by absolute cell and per-cell life
+                star_spacing_ratio_far: _, // reaches the key as the cells
+                star_spacing_ratio_near: _, // reaches the key as the cells
+                star_spacing_ratio_curve: _, // reaches the key as the cells
+                star_size_far: _,       // reaches the key as the cells
+                star_size_near: _,      // reaches the key as the cells
+                star_size_curve: _,     // reaches the key as the cells
+                star_speed_far: _,      // carried by absolute cell and per-cell life
+                star_speed_near: _,     // carried by absolute cell and per-cell life
+                star_speed_curve: _,    // carried by absolute cell and per-cell life
+                star_lifetime: _,       // carried by absolute cell and per-cell life
                 star_halo_resolution: _, // sampling does not change material identity
-                star_halo_profile: _,    // sampling does not change material identity
-                star_solid_far: _, // response/coverage changes do not change material identity
-                star_solid_near: _, // response/coverage changes do not change material identity
-                star_glow_falloff: _, // response/coverage changes do not change material identity
-                star_solo: _,      // read through the plan's drawn slices below
+                star_halo_profile: _,   // sampling does not change material identity
+                star_solid_far: _,      // response/coverage changes do not change material identity
+                star_solid_near: _,     // response/coverage changes do not change material identity
+                star_glow_falloff: _,   // response/coverage changes do not change material identity
+                star_solo: _,           // read through the plan's drawn slices below
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1010,13 +1010,7 @@ fn memory_key(
     ];
     match cloud_style {
         CloudStyle::Stars => {
-            values.extend([
-                2.0,
-                star_spacing_ratio_far,
-                star_spacing_ratio_near,
-                star_spacing_ratio_curve,
-                star_randomness,
-            ]);
+            values.extend([2.0, star_randomness]);
             // Which slices hold stars at all, from `Star layers` and soloing
             // alike: each layer count draws its own set, and a solo flag on a
             // depth the layers leave out decides nothing, so neither is keyed

@@ -544,8 +544,9 @@ pub struct StarSettings {
     pub star_halo_profile: StarHaloProfile,
     /// Which depths are soloed: while any drawn depth is, only the soloed
     /// ones are drawn, and the rest cost nothing
-    /// ([`crate::star_plan::StarGather::Off`]). Indexed by depth, so a depth
-    /// `Star layers` leaves out keeps its flag without counting. A look aid,
+    /// ([`crate::star_plan::StarGather::Off`]). Indexed by depth; a flag on a
+    /// depth `Star layers` leaves out counts for nothing, and the panel clears
+    /// them all when the layer count changes. A look aid,
     /// never saved, so every load draws every layer and no export is soloed.
     #[serde(skip)]
     pub star_solo: [bool; crate::star_plan::STAR_DEPTHS],

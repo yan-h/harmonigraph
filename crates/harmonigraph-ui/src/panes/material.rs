@@ -113,6 +113,11 @@ pub(super) fn stars(
         .on_hover_text(
             "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
         );
+    // Solo is held per depth, and a new layer count puts other depths under
+    // the numbers, so a solo left on would come back on a different layer.
+    if layers as u32 != atmosphere.star_layers {
+        atmosphere.star_solo = Default::default();
+    }
     atmosphere.star_layers = layers as u32;
     star_solo(ui, atmosphere);
     crate::widgets::star_profile(
