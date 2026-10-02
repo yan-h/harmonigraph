@@ -98,7 +98,6 @@ pub(super) fn stars(
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Size(size_scale),
     );
-    held_to_fit(ui, *atmosphere, size_scale);
     crate::widgets::depth(
         ui,
         &mut atmosphere.star_spacing_far,
@@ -145,11 +144,13 @@ pub(super) fn stars(
         .on_hover_text(
             "How quickly the glow fades toward the star's edge. Low values spread it as a broad haze reaching the edge; high values draw it in as a tight bloom around the core.",
         );
+    held_to_fit(ui, *atmosphere, size_scale);
 }
 
-/// A muted line under `Star size` while any depth's stars are drawn smaller
-/// than the dials ask, to fit the widest read their spacing allows. It reads
-/// the plan the pane draws, at its `size_scale`, without the dev test bed.
+/// A muted line while any depth's stars are drawn smaller than the dials ask,
+/// to fit the widest read their spacing allows. It reads the plan the pane
+/// draws, at its `size_scale`, without the dev test bed. It sits below every
+/// control that changes it, so its appearing never moves a bar being dragged.
 fn held_to_fit(ui: &mut egui::Ui, stars: harmonigraph_scene::StarSettings, size_scale: f32) {
     let plan =
         harmonigraph_scene::StarSettings { test_bed: None, ..stars.scaled(size_scale) }.plan();
