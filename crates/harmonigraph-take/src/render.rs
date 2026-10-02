@@ -515,3 +515,29 @@ mod tests {
         }
     }
 }
+
+/// Session-only export state; never persisted in a project or take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportStatus {
+    Pending,
+    Running,
+    Cancelling,
+    Completed,
+    Failed,
+    Cancelled,
+}
+impl ExportStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+#[derive(Clone, Debug)]
+pub struct ExportJob {
+    pub id: u64,
+    pub take: std::path::PathBuf,
+    pub output: std::path::PathBuf,
+    pub size: [u32; 2],
+    pub state: ExportStatus,
+    pub progress: RenderProgress,
+    pub detail: String,
+}

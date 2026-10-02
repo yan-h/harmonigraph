@@ -2204,3 +2204,129 @@ fn lattice_map_records_shared_tuning_at_its_actual_sample_boundary() {
     assert!((configs[0].t - 64.0 / 48000.0).abs() < 1e-9);
     assert!((configs[1].t - 80.0 / 48000.0).abs() < 1e-9);
 }
+
+/// Real CLAP automation and project restoration with no editor constructed.
+/// This qualifies block-rate capture, not Bitwig or sample-offset automation.
+#[test]
+fn camera_automation_is_captured_mid_song_and_rebased_for_each_pass() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    let initial = [0.7, -0.2, 9.0, 12.25, -7.375];
+    let mut saved = device.save();
+    for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
+        saved.params.insert(key.id().into(), ParamValue::F32(value));
+    }
+    device.load(saved, false);
+    device.activate();
+    let restored = device.save();
+    for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
+        assert!((plain(&restored, key) - value).abs() < 1e-5);
+    }
+    let shared = device.wrapper().test_inspect_plugin(|plugin| plugin.editor_shared.clone());
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-camera-capture-{}", std::process::id()));
+    let probe = {
+        let mut shared = shared.lock();
+        let probe = harmonigraph_record::testing::worker_probe(&shared.take, dir.clone());
+        harmonigraph_record::testing::set_renderer_program(
+            &shared.take,
+            dir.join("absent-renderer"),
+        );
+        // A stale appearance snapshot must never own the recorded movement.
+        shared.ui.picture.appearance.camera.distance = 20.0;
+        shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
+        probe
+    };
+    let dt = 64.0 / 48_000.0;
+    device.run_transport(0, vec![], false, None, Some(transport(12.0, 0)));
+    device.run_transport(
+        64,
+        vec![device.param(ParamKey::CameraDistance, 6.0, 32)],
+        false,
+        None,
+        Some(transport(12.0 + dt, 0)),
+    );
+    device.run_transport(128, vec![], false, None, Some(transport(10.0, 0)));
+    stop(&shared);
+    device.finish_notes(192, &[]);
+    drop(shared);
+    drop(device);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !probe.finished() && !probe.failed() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!probe.failed());
+    assert!(probe.finished());
+    let mut takes: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|e| e == "take"))
+        .map(|path| harmonigraph_take::Take::read(path).unwrap())
+        .collect();
+    assert_eq!(takes.len(), 2, "fixture must reach a real loop/pass boundary");
+    takes.sort_by(|a, b| a.header.audio_start.unwrap().total_cmp(&b.header.audio_start.unwrap()));
+    for take in &takes {
+        let origin = take.header.audio_start.unwrap();
+        for (key, value) in ParamKey::CAMERA.into_iter().zip(initial) {
+            let record = take.params.iter().find(|p| p.id == key.id()).unwrap();
+            let expected =
+                if origin < 11.0 && key == ParamKey::CameraDistance { 6.0 } else { value };
+            assert!((record.value - expected).abs() < 1e-5, "{key:?}");
+            assert!((record.t - origin).abs() < 1e-8, "camera baseline at pass start");
+        }
+    }
+    let changed = takes[1]
+        .params
+        .iter()
+        .find(|p| p.id == ParamKey::CameraDistance.id() && (p.value - 6.0).abs() < 1e-5)
+        .unwrap();
+    assert!(
+        (changed.t - (12.0 + dt)).abs() < 1e-8,
+        "nonzero event offset is sampled at block origin"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn camera_orbit_gestures_reach_the_host_once_per_axis() {
+    use harmonigraph_ui::params::ParamBackend;
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let (context, _) = device.wrapper().test_gui_context("camera-yaw");
+    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+    let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
+    let gesture = std::cell::Cell::new([false; ParamKey::ALL.len()]);
+    let backend = crate::PluginParamBackend {
+        params: &params,
+        setter: &setter,
+        configuration: None,
+        gesture: &gesture,
+    };
+    let mut events = Vec::new();
+    for frame in 0..3 {
+        for key in [ParamKey::CameraYaw, ParamKey::CameraPitch] {
+            backend.begin_set(key);
+            backend.set(key, 0.1 * (frame + 1) as f32);
+        }
+        events.extend(device.run(frame * 64, vec![], false).attempts);
+    }
+    for _ in 0..2 {
+        for key in ParamKey::CAMERA {
+            backend.end_set(key);
+        }
+    }
+    events.extend(device.run(192, vec![], false).attempts);
+    for key in [ParamKey::CameraYaw, ParamKey::CameraPitch] {
+        let id = device.id(key);
+        for kind in [CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END] {
+            assert_eq!(events.iter().filter(|e| e.0 == kind && e.2 == id && e.3).count(), 1);
+        }
+        assert_eq!(
+            events.iter().filter(|e| e.0 == CLAP_EVENT_PARAM_VALUE && e.2 == id && e.3).count(),
+            3
+        );
+    }
+    assert!(gesture.get().iter().all(|active| !active));
+    drop(context);
+}

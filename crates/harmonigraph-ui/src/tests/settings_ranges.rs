@@ -430,7 +430,7 @@ fn check(edge: Edge) {
         }
         state.workspace.interaction.show_perf = scenario.enabled;
         state.workspace.interaction.take.supported = scenario.enabled;
-        state.workspace.interaction.take.last_ready = scenario.enabled;
+        state.workspace.interaction.take.last_take = scenario.enabled.then(|| "music.take".into());
         let mut tab = scenario.pane;
         let ctx = themed();
         // Observe the first load frame once, before any discarded egui pass

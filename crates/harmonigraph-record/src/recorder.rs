@@ -711,7 +711,7 @@ pub struct Control {
     /// One line for the UI, owned by whichever side last had news.
     status: Arc<Mutex<String>>,
     /// Path of the take most recently finished this session — the target for
-    /// [`render_now`](Self::render_now).
+    /// [`queue_export`](Self::queue_export).
     last_take: Arc<Mutex<Option<std::path::PathBuf>>>,
     recording: Arc<AtomicBool>,
     /// Set by the audio thread; the GUI's only honest view of whether
@@ -807,38 +807,30 @@ impl Control {
         self.last_take.lock().clone()
     }
 
-    /// Render the last finished take now, in the background, with `request`
-    /// (which carries the current look and output size).
-    pub fn render_now(&self, request: RenderRequest) {
-        match self.last_take() {
-            Some(path) => spawn_render(
-                request,
-                path,
-                self.status.clone(),
-                self.progress.clone(),
-                self.render.clone(),
-            ),
-            None => *self.status.lock() = "no take recorded yet to render".into(),
-        }
+    /// Append an independent export with settings already captured by the caller.
+    pub fn queue_export(&self, path: std::path::PathBuf, request: RenderRequest) {
+        spawn_render(
+            request,
+            path,
+            self.status.clone(),
+            self.progress.clone(),
+            self.render.clone(),
+        );
     }
-
-    /// How far the render running in the background has got, or `None` when
-    /// none is. Read every GUI frame; see [`Progress`].
-    pub fn render_progress(&self) -> Option<harmonigraph_take::RenderProgress> {
-        self.progress.read()
+    pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
+        self.render.snapshots(&self.progress)
     }
-
-    /// Stop the render running in the background and throw away the part of
-    /// the video it had written.
-    ///
-    /// The deletion is the render thread's own — see
-    /// [`RenderControl::cancel`]. A video an EARLIER render finished is not
-    /// touched: only the run in flight has anything half-written, and the
-    /// finished one is a file that came out whole.
-    pub fn cancel_render(&self) {
-        if self.render.cancel() {
-            *self.status.lock() = "render cancelled — the part-written video goes with it".into();
-        }
+    pub fn cancel_export(&self, id: u64) {
+        self.render.cancel_job(id);
+    }
+    pub fn retry_export(&self, id: u64) {
+        self.render.retry(id, self.status.clone(), self.progress.clone());
+    }
+    pub fn clear_finished_exports(&self) {
+        self.render.clear_finished();
+    }
+    pub fn shutdown_exports(&self) {
+        self.render.shutdown();
     }
 
     /// Begin a take. `appearance` is the appearance document that decides how the
@@ -875,7 +867,7 @@ impl Control {
             .unwrap_or(0);
         let base =
             dir.join(format!("take-{}.{}", stamp_for(epoch_secs), harmonigraph_take::EXTENSION));
-        let path = disambiguate(base);
+        let path = base;
         let header = header_for(sample_rate, appearance);
 
         self.dropped.store(0, Ordering::Relaxed);
@@ -1002,23 +994,6 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year = if month <= 2 { y + 1 } else { y };
     (year, month, day)
-}
-
-/// If `base` (or its `.wav` companion) already sits on disk — two takes
-/// started within the same UTC second — append `_1`, `_2`, ... until a name
-/// neither file uses, rather than let the second take silently truncate the
-/// first's. Distinct from the writer's `Pass::path_for` suffix `-N`, which numbers later
-/// PASSES of one take rather than takes that collided on a name.
-fn disambiguate(base: std::path::PathBuf) -> std::path::PathBuf {
-    let taken = |path: &std::path::Path| path.exists() || path.with_extension("wav").exists();
-    if !taken(&base) {
-        return base;
-    }
-    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
-    (1..)
-        .map(|n| base.with_file_name(format!("{stem}_{n}.{}", harmonigraph_take::EXTENSION)))
-        .find(|candidate| !taken(candidate))
-        .expect("an unbounded counter always finds a free name")
 }
 
 /// Where takes go. `LATTICE_TAKE_DIR` overrides; the default is a fixed,

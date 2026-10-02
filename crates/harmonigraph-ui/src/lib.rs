@@ -70,7 +70,8 @@ pub use harmonigraph_take::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
 pub use state::{
-    CameraPreset, Console, Interaction, PictureState, SharedState, SurfaceState, TakeState,
+    CameraPreset, Console, ExportAction, Interaction, PictureState, SharedState, SurfaceState,
+    TakeState,
 };
 pub use text::use_renderer_font_texture;
 
@@ -290,6 +291,8 @@ pub fn root_ui(
         state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
+    let before_camera = state.picture.appearance.camera_movement();
+    let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
     let frameless = state.picture.appearance.view.frameless;
@@ -307,6 +310,12 @@ pub fn root_ui(
     ) {
         workspace.window_size_change = change;
     }
+    state.workspace.interaction.appearance_editor.end_frame(
+        before_edit,
+        &mut state.picture.appearance,
+        ui.ctx(),
+    );
+    camera_movement::finish_edits(&mut state.picture.appearance, before_camera, params, ui.ctx());
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
     // Render continuously only while something is animating (sounding or
@@ -384,6 +393,7 @@ pub fn root_ui(
 /// draws [`Pane`]s directly, and skipping this would leave it rendering
 /// last frame's tuning against never-pruned voices.
 pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64) {
+    state.appearance.sync_camera(params);
     state.runtime.advance(&mut state.appearance, params, now);
 
     // Rotated here so the window belongs to a whole frame rather than to a
@@ -529,4 +539,6 @@ mod tests;
 pub mod lattice_maps;
 
 mod appearance;
+mod appearance_edit;
+mod camera_movement;
 pub use appearance::AppearanceDocument;

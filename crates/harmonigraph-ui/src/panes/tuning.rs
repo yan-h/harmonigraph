@@ -176,7 +176,14 @@ fn tuning_hint(key: ParamKey) -> &'static str {
         }
         // Not on this pane: Fade is a node setting and the two pitch ends are
         // the Mappings page's Pitch color range.
-        ParamKey::Fade | ParamKey::DarkestPitch | ParamKey::BrightestPitch => "",
+        ParamKey::Fade
+        | ParamKey::DarkestPitch
+        | ParamKey::BrightestPitch
+        | ParamKey::CameraYaw
+        | ParamKey::CameraPitch
+        | ParamKey::CameraDistance
+        | ParamKey::CameraPanX
+        | ParamKey::CameraPanY => "",
     }
 }
 

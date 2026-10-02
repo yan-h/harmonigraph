@@ -97,7 +97,8 @@ pub struct ShellTimings {
     ///
     /// The lattice's `gpu_ms` is a narrower reading inside this interval,
     /// shown separately to help attribute 3D cost. Do not add the two.
-    pub draw_gpu_ms: f32,
+    /// None means no new completion; the metric window retains its mean.
+    pub draw_gpu_ms: Option<f32>,
     /// Milliseconds the shell spent on its own per-frame work before the UI
     /// ran — draining the event rings and reconciling the take.
     ///
@@ -153,7 +154,7 @@ pub struct FrameCosts {
     /// Turning the resulting shapes into triangles.
     pub tess_ms: f32,
     /// GPU elapsed time from callback preparation through egui composition.
-    pub draw_gpu_ms: f32,
+    pub draw_gpu_ms: Option<f32>,
     /// GPU time for the lattice's passes: the 3D scene and its bloom chain.
     /// Carries the `GPU_TIME_UNSUPPORTED` / `PENDING` / `INACTIVE` sentinels.
     pub lattice_gpu_ms: f32,
@@ -508,7 +509,7 @@ pub const STAGES: [StageInfo; Stage::COUNT] = [
     // than inside any of them, so nesting either under `tick` would be a lie
     // about what contains what. They share one printed line, which is `gpu`'s,
     // so it is `gpu`'s depth that the overlay reads.
-    by_hand(Stage::DrawGpu, 0, "draw gpu", Some(|c| c.draw_gpu_ms)),
+    by_hand(Stage::DrawGpu, 0, "draw gpu", None),
     by_hand(Stage::Gpu, 0, "gpu", None),
 ];
 
@@ -702,6 +703,9 @@ impl PerfStats {
         if dt > 0.0 {
             self.windows[Stage::Frame as usize].record(dt * 1000.0);
         }
+        if let Some(ms) = costs.draw_gpu_ms {
+            self.windows[Stage::DrawGpu as usize].record(ms);
+        }
         // An active timer can go several frames without a completion. Keep
         // its mean through those gaps, but clear it when lattice work stops.
         match costs.lattice_gpu_ms.to_bits() {
@@ -866,6 +870,29 @@ fn rss_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_draw_completions_have_equal_weight_across_pending_gaps() {
+        let stats = harmonigraph_render::LatticeStats::default();
+        let mut perf = PerfStats::default();
+        let samples = [None, Some(2.0), None, None, None, None, Some(10.0)];
+        for (frame, draw_gpu_ms) in samples.into_iter().enumerate() {
+            let shell = ShellTimings { draw_gpu_ms, ..Default::default() };
+            let costs = FrameCosts::assemble(shell, 0.0, &stats, 0, (0, 0));
+            perf.record(costs, frame as f64 * 0.01, Workload::default());
+        }
+        assert_eq!(perf.windows[Stage::DrawGpu as usize].n, 2);
+        perf.record(FrameCosts::default(), 0.25, Workload::default());
+        assert_eq!(mean(&perf, Stage::DrawGpu), 6.0);
+        perf.record(FrameCosts::default(), 0.5, Workload::default());
+        assert_eq!(mean(&perf, Stage::DrawGpu), 6.0);
+        perf.record(
+            FrameCosts { draw_gpu_ms: Some(0.0), ..Default::default() },
+            0.75,
+            Workload::default(),
+        );
+        assert_eq!(mean(&perf, Stage::DrawGpu), 0.0);
+    }
 
     #[test]
     fn lattice_samples_are_consumed_across_idle_and_resume() {

@@ -8,8 +8,8 @@ use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, DrawnWindow};
 
+use crate::VisualRuntime;
 use crate::{panes, text, workspace};
-use crate::{RenderProgress, VisualRuntime};
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`Console::log`].
@@ -69,20 +69,22 @@ pub struct TakeState {
     /// Shell-supplied one-liner shown under the toggle: where the file is
     /// going, how many events, or what went wrong.
     pub status: String,
-    /// Whether a take has been recorded this session — the shell sets it so the
-    /// Video pane can offer "Re-render take".
-    pub last_ready: bool,
-    /// One-shot: set by the Video pane's "Re-render take" button, consumed by
-    /// the shell to render the last take with the CURRENT settings.
-    pub render_now: bool,
-    /// One-shot: set by the Video pane's "Cancel render" button, consumed by
-    /// the shell to stop the render in flight and delete the part of the video
-    /// it had written. The take itself is kept, so
-    /// [`render_now`](Self::render_now) can start over from it.
-    pub cancel_render: bool,
-    /// How far the video render running in the background has got, or `None`
-    /// when none is. Shell-set every frame, like [`status`](Self::status).
-    pub render_progress: Option<RenderProgress>,
+    pub last_take: Option<std::path::PathBuf>,
+    pub exports: Vec<harmonigraph_take::render::ExportJob>,
+    pub export_actions: Vec<ExportAction>,
+    pub export_paths: String,
+    /// Empty selects the current appearance; otherwise a named look.
+    pub export_look: Option<String>,
+    pub export_recorded: bool,
+    pub export_error: String,
+}
+
+/// Settings are captured at the button press, before the shell's next frame.
+pub enum ExportAction {
+    Queue { take: std::path::PathBuf, appearance: String, render: crate::RenderConfig },
+    Cancel(u64),
+    Retry(u64),
+    ClearFinished,
 }
 
 /// Shell aggregate. Drawing and runtime code borrow its domains independently.
@@ -195,6 +197,7 @@ pub struct SurfaceState {
 /// Editor interaction and shell actions. Panes borrow this separately from
 /// the layout being traversed, so a reset request cannot replace a live dock.
 pub struct Interaction {
+    pub(crate) appearance_editor: crate::appearance_edit::AppearanceEditor,
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
     ///
@@ -485,6 +488,7 @@ impl SharedState {
             folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
+            saved_looks: self.workspace.interaction.appearance_editor.saved.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
             skin_dials: self.workspace.interaction.skin_dials,
@@ -541,6 +545,10 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
+        let mut saved_looks = persist.saved_looks;
+        saved_looks.sanitize();
+        self.workspace.interaction.appearance_editor =
+            crate::appearance_edit::AppearanceEditor::restore(saved_looks);
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
@@ -633,6 +641,7 @@ pub(crate) struct UiPersist {
     pub(crate) folded_sections: std::collections::BTreeSet<String>,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
+    pub(crate) saved_looks: crate::appearance_edit::SavedLooks,
     /// A missing cap reads as uncapped.
     pub(crate) fps_cap: Option<f32>,
     /// Chrome defaults to the design size, shared with Interaction.
@@ -660,6 +669,7 @@ impl Default for UiPersist {
             folded_sections: Default::default(),
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
+            saved_looks: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
             skin_dials: Default::default(),
@@ -700,6 +710,7 @@ impl SurfaceState {
 impl Default for Interaction {
     fn default() -> Self {
         Self {
+            appearance_editor: Default::default(),
             analyzer_regions: Default::default(),
             spiral: Default::default(),
             camera_presets: Vec::new(),

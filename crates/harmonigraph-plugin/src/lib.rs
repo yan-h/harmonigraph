@@ -131,6 +131,8 @@ impl Drop for Harmonigraph {
         // graphics worker at plugin destruction, not only at the last Arc drop.
         let graphics = self.editor_shared.lock().ui.picture.editor_graphics();
         graphics.shutdown_startup();
+        let take = self.editor_shared.lock().take.clone();
+        take.shutdown_exports();
     }
 }
 
@@ -213,6 +215,16 @@ pub struct HarmonigraphParams {
     pub darkest_pitch: FloatParam,
     #[id = "brightest-pitch"]
     pub brightest_pitch: FloatParam,
+    #[id = "camera-yaw"]
+    pub camera_yaw: FloatParam,
+    #[id = "camera-pitch"]
+    pub camera_pitch: FloatParam,
+    #[id = "camera-distance"]
+    pub camera_distance: FloatParam,
+    #[id = "camera-pan-x"]
+    pub camera_pan_x: FloatParam,
+    #[id = "camera-pan-y"]
+    pub camera_pan_y: FloatParam,
 }
 
 /// Host-persisted form of the UI's analysis-input choice. Stable IDs make the
@@ -331,6 +343,11 @@ impl Default for HarmonigraphParams {
             fade: param_for_key(ParamKey::Fade),
             darkest_pitch: param_for_key(ParamKey::DarkestPitch),
             brightest_pitch: param_for_key(ParamKey::BrightestPitch),
+            camera_yaw: param_for_key(ParamKey::CameraYaw),
+            camera_pitch: param_for_key(ParamKey::CameraPitch),
+            camera_distance: param_for_key(ParamKey::CameraDistance),
+            camera_pan_x: param_for_key(ParamKey::CameraPanX),
+            camera_pan_y: param_for_key(ParamKey::CameraPanY),
         }
     }
 }
@@ -346,6 +363,11 @@ impl HarmonigraphParams {
             ParamKey::Fade => &self.fade,
             ParamKey::DarkestPitch => &self.darkest_pitch,
             ParamKey::BrightestPitch => &self.brightest_pitch,
+            ParamKey::CameraYaw => &self.camera_yaw,
+            ParamKey::CameraPitch => &self.camera_pitch,
+            ParamKey::CameraDistance => &self.camera_distance,
+            ParamKey::CameraPanX => &self.camera_pan_x,
+            ParamKey::CameraPanY => &self.camera_pan_y,
         }
     }
 }
@@ -357,10 +379,10 @@ pub(crate) struct PluginParamBackend<'a> {
     pub setter: &'a ParamSetter<'a>,
     pub configuration:
         Option<(nice_plug::wrapper::clap::configuration::ConfigurationSnapshot, bool)>,
-    /// The key currently inside an explicit begin_set/end_set gesture, if
-    /// any. Lives in EditorShared so it survives across frames (this
+    /// Keys inside explicit begin_set/end_set gestures. Lives in
+    /// EditorShared so simultaneous axes survive across frames (this
     /// adapter is rebuilt every frame).
-    pub gesture: &'a std::cell::Cell<Option<ParamKey>>,
+    pub gesture: &'a std::cell::Cell<[bool; ParamKey::ALL.len()]>,
 }
 
 impl ParamBackend for PluginParamBackend<'_> {
@@ -391,6 +413,10 @@ impl ParamBackend for PluginParamBackend<'_> {
             .map(|mailbox| mailbox.submit(configuration::packet(edit)).is_ok())
     }
 
+    fn camera_value(&self, key: ParamKey) -> Option<f32> {
+        Some(self.get(key))
+    }
+
     fn get(&self, key: ParamKey) -> f32 {
         if let (Some((snapshot, _)), Some(index)) =
             (self.configuration, ParamKey::TUNING.iter().position(|k| *k == key))
@@ -413,7 +439,7 @@ impl ParamBackend for PluginParamBackend<'_> {
             return;
         }
         let param = self.params.param_for(key);
-        if self.gesture.get() == Some(key) {
+        if self.gesture.get()[key as usize] {
             // Inside an explicit gesture (drag): just set.
             self.setter.set_parameter(param, value);
         } else {
@@ -439,22 +465,23 @@ impl ParamBackend for PluginParamBackend<'_> {
         if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
             return;
         }
-        // Close a dangling gesture first (shouldn't happen, but a host
-        // seeing unbalanced begin/end is worse than a spurious end).
-        if let Some(previous) = self.gesture.get() {
-            self.setter.end_set_parameter(self.params.param_for(previous));
+        let mut active = self.gesture.get();
+        if !active[key as usize] {
+            self.setter.begin_set_parameter(self.params.param_for(key));
+            active[key as usize] = true;
+            self.gesture.set(active);
         }
-        self.setter.begin_set_parameter(self.params.param_for(key));
-        self.gesture.set(Some(key));
     }
 
     fn end_set(&self, key: ParamKey) {
         if self.params.configuration.get().is_some() && ParamKey::TUNING.contains(&key) {
             return;
         }
-        if self.gesture.get() == Some(key) {
+        if self.gesture.get()[key as usize] {
             self.setter.end_set_parameter(self.params.param_for(key));
-            self.gesture.set(None);
+            let mut active = self.gesture.get();
+            active[key as usize] = false;
+            self.gesture.set(active);
         }
     }
 }

@@ -1,11 +1,17 @@
-//! Render requests, per-take cancellation, subprocess lifetime and progress.
-
+//! Instance-owned sequential export queue and renderer subprocess lifetime.
 use super::home_dir;
-use harmonigraph_take::RenderProgress;
+use harmonigraph_take::{
+    render::{ExportJob, ExportStatus},
+    RenderProgress,
+};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+};
 #[cfg(test)]
 mod tests;
 
@@ -15,6 +21,7 @@ mod tests;
 /// headless GPU device and an ffmpeg pipe, neither of which belongs in a
 /// real-time audio plugin. This just launches it, off the audio thread
 /// and off the GUI thread, so a long render never touches the DAW.
+#[derive(Clone)]
 pub struct RenderRequest {
     pub program: std::path::PathBuf,
     /// A appearance document passed as `--appearance`, overriding the take's record-time
@@ -71,74 +78,409 @@ pub fn default_renderer_path() -> std::path::PathBuf {
     home_dir().join("Library/Application Support/Harmonigraph/harmonigraph-offline")
 }
 
-/// Frames done and frames planned for the render(s) in flight, published by
-/// the thread following the renderer's stderr and read by the GUI each frame.
-///
-/// `in_flight` is a COUNT rather than a flag, though [`RenderControl`] now
-/// serialises renders so it only ever reaches one. It is the cheaper way to be
-/// wrong: a flag cleared by whichever render finished first would blank the
-/// bar out from under a running one, and counting cannot.
+/// Only the FIFO worker writes progress; the editor reads its active job.
 #[derive(Default)]
 pub(super) struct Progress {
     done: AtomicU64,
-    /// 0 until the renderer announces how many frames it is composing.
     total: AtomicU64,
-    in_flight: AtomicU64,
+    in_flight: AtomicBool,
 }
-
-/// What a render in flight can be reached by, so the next request can cancel
-/// it instead of running alongside it.
-///
-/// Two renders of one take write one video, and there is no useful way to
-/// merge that — so a second request is treated as a correction of the first,
-/// not an addition to it. That is nearly always what it is: the same take,
-/// with a setting changed since.
+impl Progress {
+    fn begin(&self) {
+        self.done.store(0, Ordering::Relaxed);
+        self.total.store(0, Ordering::Relaxed);
+        self.in_flight.store(true, Ordering::Release);
+    }
+    fn end(&self) {
+        self.in_flight.store(false, Ordering::Release);
+    }
+    pub(super) fn read(&self) -> Option<RenderProgress> {
+        self.in_flight.load(Ordering::Acquire).then(|| RenderProgress {
+            done: self.done.load(Ordering::Relaxed),
+            total: self.total.load(Ordering::Relaxed),
+        })
+    }
+}
+struct Job {
+    snapshot: ExportJob,
+    request: RenderRequest,
+    capture_failed: bool,
+}
+#[derive(Default)]
+struct Queue {
+    jobs: Vec<Job>,
+    next_id: u64,
+    working: bool,
+    closed: bool,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
 #[derive(Default)]
 pub(super) struct RenderControl {
-    /// Instance-owned launch override for fixtures that exercise automatic stop.
     #[cfg(feature = "test-support")]
-    pub(super) test_program: Mutex<Option<std::path::PathBuf>>,
-    /// Bumped by every request, so no two runs share a number — which is what
-    /// keeps each run's partial output under a name of its own.
-    generation: AtomicU64,
-    /// The newest generation claimed for each take.
-    ///
-    /// Keyed by take, not global, because "superseded" is a claim about ONE
-    /// video. Every finished take renders and every take is its own file, so
-    /// consecutive recordings are two requests that want two different videos,
-    /// and a global newest-wins would have the second silently discard the
-    /// first (see
-    /// `a_render_of_another_take_waits_rather_than_replacing_this_one`).
-    /// Only a second request naming the SAME take is the same video twice,
-    /// which is the case "Re-render take" makes.
-    ///
-    /// An entry is dropped when its run finishes, so this holds one key per
-    /// take being rendered rather than one per take of the session.
-    claims: Mutex<std::collections::HashMap<std::path::PathBuf, u64>>,
-    /// The renderer process now running and the take it is rendering, for a
-    /// later request to kill if it is about the same video.
-    ///
-    /// The child lives here rather than on its own thread's stack precisely so
-    /// another thread can reach it; the render thread borrows it back to reap
-    /// it once its stderr has closed.
+    pub(super) test_program: Mutex<Option<PathBuf>>,
+    queue: Mutex<Queue>,
     child: Mutex<Option<InFlight>>,
-    /// Held for the length of a render, so renders run one at a time — a
-    /// replacement waits for the cancelled run's process to be reaped rather
-    /// than merely asked to stop, and a render of another take waits its turn
-    /// instead of putting a second ffmpeg beside the first.
-    ///
-    /// Visible to the writer's tests, which hold it to stand in for another
-    /// take's render in flight, so a finished take's render queues without
-    /// touching the status line.
+    // A fixture can hold queued work without replacing a renderer process.
+    #[cfg(test)]
     pub(super) running: Mutex<()>,
+    #[cfg(test)]
+    before_publish: Mutex<()>,
 }
-
-/// The renderer process now running, and which take's video it is producing.
 struct InFlight {
-    take: std::path::PathBuf,
+    id: u64,
     child: std::process::Child,
 }
 
+impl RenderControl {
+    pub(super) fn snapshots(&self, progress: &Progress) -> Vec<ExportJob> {
+        self.queue
+            .lock()
+            .jobs
+            .iter()
+            .map(|job| {
+                let mut snapshot = job.snapshot.clone();
+                if matches!(snapshot.state, ExportStatus::Running | ExportStatus::Cancelling) {
+                    snapshot.progress = progress.read().unwrap_or_default();
+                }
+                snapshot
+            })
+            .collect()
+    }
+    pub(super) fn cancel_job(&self, id: u64) {
+        {
+            let mut queue = self.queue.lock();
+            let Some(job) = queue.jobs.iter_mut().find(|job| job.snapshot.id == id) else { return };
+            job.snapshot.state = match job.snapshot.state {
+                ExportStatus::Pending => ExportStatus::Cancelled,
+                ExportStatus::Running => ExportStatus::Cancelling,
+                state => state,
+            };
+        }
+        // Never wait for the child lock while holding queue: handover takes them
+        // in the opposite order to catch cancellation during process spawn.
+        if let Some(flight) = self.child.lock().as_mut().filter(|flight| flight.id == id) {
+            kill_render(&mut flight.child);
+        }
+    }
+    pub(super) fn clear_finished(&self) {
+        self.queue.lock().jobs.retain(|job| !job.snapshot.state.is_finished());
+    }
+    pub(super) fn shutdown(&self) {
+        let worker = {
+            let mut queue = self.queue.lock();
+            queue.closed = true;
+            for job in &mut queue.jobs {
+                match job.snapshot.state {
+                    ExportStatus::Pending => job.snapshot.state = ExportStatus::Cancelled,
+                    ExportStatus::Running => job.snapshot.state = ExportStatus::Cancelling,
+                    _ => (),
+                }
+            }
+            queue.worker.take()
+        };
+        if let Some(flight) = self.child.lock().as_mut() {
+            kill_render(&mut flight.child);
+        }
+        if let Some(worker) = worker {
+            let _ = worker.join();
+        }
+    }
+    pub(super) fn retry(
+        self: &Arc<Self>,
+        id: u64,
+        status: Arc<Mutex<String>>,
+        progress: Arc<Progress>,
+    ) {
+        let mut queue = self.queue.lock();
+        if queue.closed {
+            return;
+        }
+        if let Some(index) = queue.jobs.iter().position(|j| {
+            j.snapshot.id == id
+                && matches!(j.snapshot.state, ExportStatus::Failed | ExportStatus::Cancelled)
+        }) {
+            let job = &mut queue.jobs[index];
+            if job.capture_failed {
+                match harmonigraph_take::Header::read(&job.snapshot.take) {
+                    Ok(header) => {
+                        job.request.appearance = header.appearance;
+                        job.capture_failed = false;
+                    }
+                    Err(error) => {
+                        job.snapshot.detail =
+                            format!("could not capture recorded appearance: {error}");
+                        return;
+                    }
+                }
+            }
+            let mut job = queue.jobs.remove(index);
+            job.snapshot.state = ExportStatus::Pending;
+            job.snapshot.detail.clear();
+            job.snapshot.progress = RenderProgress::default();
+            queue.jobs.push(job);
+            start_worker(self, &mut queue, status, progress);
+        }
+    }
+}
+
+pub(super) fn spawn_render(
+    mut request: RenderRequest,
+    take: PathBuf,
+    status: Arc<Mutex<String>>,
+    progress: Arc<Progress>,
+    control: Arc<RenderControl>,
+) {
+    let error = if request.appearance.is_none() {
+        match harmonigraph_take::Header::read(&take) {
+            Ok(header) => {
+                request.appearance = header.appearance;
+                None
+            }
+            Err(error) => Some(format!("could not capture recorded appearance: {error}")),
+        }
+    } else {
+        None
+    };
+    let mut queue = control.queue.lock();
+    if queue.closed {
+        return;
+    }
+    queue.next_id += 1;
+    let id = queue.next_id;
+    let output = available_output(&take, |candidate| {
+        candidate.symlink_metadata().is_ok()
+            || queue.jobs.iter().any(|job| job.snapshot.output == candidate)
+    });
+    queue.jobs.push(Job {
+        capture_failed: error.is_some(),
+        snapshot: ExportJob {
+            id,
+            take,
+            output,
+            size: request.size,
+            state: if error.is_some() { ExportStatus::Failed } else { ExportStatus::Pending },
+            progress: RenderProgress::default(),
+            detail: error.unwrap_or_default(),
+        },
+        request,
+    });
+    start_worker(&control, &mut queue, status, progress);
+}
+
+fn start_worker(
+    control: &Arc<RenderControl>,
+    queue: &mut Queue,
+    status: Arc<Mutex<String>>,
+    progress: Arc<Progress>,
+) {
+    if queue.working {
+        return;
+    }
+    queue.working = true;
+    let control = control.clone();
+    match std::thread::Builder::new().name("harmonigraph-export-queue".into()).spawn(move || loop {
+        #[cfg(test)]
+        let _gate = control.running.lock();
+        let (snapshot, request) = {
+            let mut queue = control.queue.lock();
+            let Some(job) =
+                queue.jobs.iter_mut().find(|job| job.snapshot.state == ExportStatus::Pending)
+            else {
+                queue.working = false;
+                return;
+            };
+            progress.begin();
+            job.snapshot.state = ExportStatus::Running;
+            (job.snapshot.clone(), job.request.clone())
+        };
+        *status.lock() = format!("rendering {}...", snapshot.output.display());
+        let result = run_job(&control, &snapshot, &request, &progress);
+        let mut queue = control.queue.lock();
+        let final_progress = progress.read().unwrap_or_default();
+        progress.end();
+        let Some(job) = queue.jobs.iter_mut().find(|job| job.snapshot.id == snapshot.id) else {
+            continue;
+        };
+        job.snapshot.progress = final_progress;
+        if job.snapshot.state == ExportStatus::Cancelling {
+            job.snapshot.state = ExportStatus::Cancelled;
+            job.snapshot.detail = "Cancelled; partial output removed".into();
+        } else {
+            match result {
+                Ok((output, detail)) => {
+                    job.snapshot.output = output;
+                    job.snapshot.state = ExportStatus::Completed;
+                    job.snapshot.detail = detail;
+                }
+                Err(error) => {
+                    job.snapshot.state = ExportStatus::Failed;
+                    job.snapshot.detail = error;
+                }
+            }
+        }
+        *status.lock() = job.snapshot.detail.clone();
+    }) {
+        Ok(worker) => queue.worker = Some(worker),
+        Err(error) => {
+            queue.working = false;
+            for job in &mut queue.jobs {
+                if job.snapshot.state == ExportStatus::Pending {
+                    job.snapshot.state = ExportStatus::Failed;
+                    job.snapshot.detail = format!("could not start export worker: {error}");
+                }
+            }
+        }
+    }
+}
+
+fn available_output(take: &Path, mut occupied: impl FnMut(&Path) -> bool) -> PathBuf {
+    for suffix in 0u64.. {
+        let candidate = output_candidate(take, suffix);
+        if !occupied(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+fn output_candidate(take: &Path, suffix: u64) -> PathBuf {
+    if suffix == 0 {
+        take.with_extension("mp4")
+    } else {
+        take.with_file_name(format!(
+            "{}-{suffix}.mp4",
+            take.file_stem().unwrap_or_default().to_string_lossy()
+        ))
+    }
+}
+
+/// Exclusive directory creation owns every scratch file beneath it. Separate
+/// plugin instances can share a take without sharing partial output or cleanup.
+struct Staging(PathBuf);
+impl Staging {
+    fn create(take: &Path, id: u64) -> std::io::Result<Self> {
+        for suffix in 0u64.. {
+            let path = take.with_extension(format!("export-{}-{id}-{suffix}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!()
+    }
+}
+impl Drop for Staging {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn run_job(
+    control: &RenderControl,
+    job: &ExportJob,
+    request: &RenderRequest,
+    progress: &Progress,
+) -> Result<(PathBuf, String), String> {
+    let stage = Staging::create(&job.take, job.id)
+        .map_err(|e| format!("could not create export scratch directory: {e}"))?;
+    let partial = stage.0.join("video.mp4");
+    let appearance = stage.0.join("appearance.ron");
+    if let Some(blob) = &request.appearance {
+        std::fs::write(&appearance, blob)
+            .map_err(|e| format!("could not save queued appearance: {e}"))?;
+    }
+    #[cfg(feature = "test-support")]
+    let program = control.test_program.lock().clone().unwrap_or_else(|| request.program.clone());
+    #[cfg(not(feature = "test-support"))]
+    let program = &request.program;
+    let mut command = std::process::Command::new(program);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.arg(&job.take).arg("--out").arg(&partial);
+    if request.appearance.is_some() {
+        command.arg("--appearance").arg(&appearance);
+    }
+    command.arg("--size").arg(format!("{}x{}", request.size[0], request.size[1]));
+    command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|e| format!("could not run paired renderer: {e}"))?;
+    let stderr = child.stderr.take();
+    {
+        let mut flight = control.child.lock();
+        if !control
+            .queue
+            .lock()
+            .jobs
+            .iter()
+            .any(|j| j.snapshot.id == job.id && j.snapshot.state == ExportStatus::Running)
+        {
+            kill_render(&mut child);
+        }
+        *flight = Some(InFlight { id: job.id, child });
+    }
+    let tail = stderr.map(|pipe| follow(pipe, progress)).unwrap_or_default();
+    let result = loop {
+        let mut flight = control.child.lock();
+        match flight.as_mut().expect("worker owns child").child.try_wait() {
+            Ok(Some(exit)) => {
+                flight.take();
+                break exit;
+            }
+            Ok(None) => (),
+            Err(error) => {
+                let mut child = flight.take().expect("worker owns child").child;
+                kill_render(&mut child);
+                let _ = child.wait();
+                return Err(format!("render failed: {error}"));
+            }
+        }
+        drop(flight);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    if !result.success() {
+        return Err(format!("render failed: {}", tail.last));
+    }
+    #[cfg(test)]
+    let _gate = control.before_publish.lock();
+    // Publication and cancellation linearize under the same lock. A completed
+    // file wins over a late cancel; a cancellation can never publish a partial.
+    let mut queue = control.queue.lock();
+    let index =
+        queue.jobs.iter().position(|j| j.snapshot.id == job.id).expect("active job retained");
+    if queue.jobs[index].snapshot.state != ExportStatus::Running {
+        return Err("cancelled".into());
+    }
+    let mut output = job.output.clone();
+    let mut suffix = 0;
+    loop {
+        match std::fs::hard_link(&partial, &output) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                output = output_candidate(&job.take, suffix);
+                suffix += 1;
+                while queue
+                    .jobs
+                    .iter()
+                    .any(|j| j.snapshot.id != job.id && j.snapshot.output == output)
+                {
+                    output = output_candidate(&job.take, suffix);
+                    suffix += 1;
+                }
+            }
+            Err(e) => return Err(format!("could not publish video without overwriting: {e}")),
+        }
+    }
+    let current = &mut queue.jobs[index];
+    current.snapshot.state = ExportStatus::Completed;
+    current.snapshot.output = output.clone();
+    current.snapshot.progress = progress.read().unwrap_or_default();
+    let detail = rendered_status(&output, request.notice, tail.warning.as_deref());
+    current.snapshot.detail = detail.clone();
+    Ok((output, detail))
+}
 /// Stop the renderer and its encoder together. Killing only the renderer
 /// leaves ffmpeg holding stderr while it pads audio through the planned end,
 /// so `follow` and the next queued render would wait for all of that work.
@@ -152,108 +494,6 @@ fn kill_render(child: &mut std::process::Child) {
     }
     // Also serves non-Unix targets and falls back if group signalling failed.
     let _ = child.kill();
-}
-
-/// Hands a take's claim back when its run ends, by whichever of the render
-/// thread's several exits it takes — including the two that stand down before
-/// spawning anything. A claim left behind would make the next request for that
-/// take look superseded before it started.
-struct Claim<'a> {
-    control: &'a RenderControl,
-    take: &'a std::path::Path,
-    generation: u64,
-}
-
-impl Drop for Claim<'_> {
-    fn drop(&mut self) {
-        self.control.release(self.take, self.generation);
-    }
-}
-
-impl RenderControl {
-    /// Claim the flight for `take`, superseding any earlier claim on it.
-    fn claim(&self, take: &std::path::Path) -> u64 {
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.claims.lock().insert(take.to_path_buf(), generation);
-        generation
-    }
-
-    /// Give up `generation`'s claim on `take`, if it is still the standing one.
-    /// A newer request has already replaced it otherwise, and dropping that
-    /// would tell the newer run it had been superseded by nobody.
-    fn release(&self, take: &std::path::Path, generation: u64) {
-        let mut claims = self.claims.lock();
-        if claims.get(take) == Some(&generation) {
-            claims.remove(take);
-        }
-    }
-
-    /// Kill the render in flight if it is rendering `take`. Returns having
-    /// *asked*: the process is reaped by its own thread, which the replacement
-    /// waits for through [`running`](Self::running).
-    ///
-    /// A render of some other take is left alone — it is producing a different
-    /// video, and nothing about this request says that one is unwanted.
-    fn cancel_in_flight(&self, take: &std::path::Path) {
-        if let Some(flight) = self.child.lock().as_mut() {
-            if flight.take == take {
-                kill_render(&mut flight.child);
-            }
-        }
-    }
-
-    /// Stop the render now running and disown it, whatever take it is for.
-    ///
-    /// What its own thread then sees is the same `superseded` a replacement
-    /// request produces, so it leaves by the same door: it deletes the
-    /// part-written video and returns without reporting a failure, which is
-    /// what leaves the canceller's word the last one on the status line.
-    ///
-    /// The claim is DROPPED rather than replaced by a newer generation, so
-    /// nothing is left in `claims` for that take's next request to be measured
-    /// against — a generation no run holds would sit there for the life of the
-    /// process.
-    ///
-    /// Like [`cancel_in_flight`](Self::cancel_in_flight) this returns having
-    /// *asked*: the process is reaped by the render thread, and the bar goes
-    /// when that thread ends its flight.
-    ///
-    /// Returns whether there was a render to stop.
-    pub(super) fn cancel(&self) -> bool {
-        let mut in_flight = self.child.lock();
-        let Some(flight) = in_flight.as_mut() else { return false };
-        self.claims.lock().remove(&flight.take);
-        kill_render(&mut flight.child);
-        true
-    }
-
-    /// Whether a newer request for the SAME take has arrived since
-    /// `generation` claimed it.
-    fn superseded(&self, take: &std::path::Path, generation: u64) -> bool {
-        self.claims.lock().get(take) != Some(&generation)
-    }
-}
-
-impl Progress {
-    /// A render is starting: clear the last one's counts, then join the flight.
-    /// Release-ordered against [`read`](Self::read)'s acquire, so a bar can
-    /// never appear over the previous render's numbers.
-    fn begin(&self) {
-        self.done.store(0, Ordering::Relaxed);
-        self.total.store(0, Ordering::Relaxed);
-        self.in_flight.fetch_add(1, Ordering::Release);
-    }
-
-    fn end(&self) {
-        self.in_flight.fetch_sub(1, Ordering::Release);
-    }
-
-    pub(super) fn read(&self) -> Option<harmonigraph_take::RenderProgress> {
-        (self.in_flight.load(Ordering::Acquire) > 0).then(|| harmonigraph_take::RenderProgress {
-            done: self.done.load(Ordering::Relaxed),
-            total: self.total.load(Ordering::Relaxed),
-        })
-    }
 }
 
 /// Longest stderr run with no separator in it that is worth keeping. Past this
@@ -355,171 +595,4 @@ fn follow(mut stderr: impl std::io::Read, progress: &Progress) -> Tail {
     // Whatever the renderer left unterminated on its way out.
     take(&mut segment, &mut tail);
     tail
-}
-
-/// Run the renderer on the finished take, on a thread of its own so a
-/// long render neither blocks the writer nor the DAW. The video lands
-/// next to the take.
-pub(super) fn spawn_render(
-    request: RenderRequest,
-    take_path: std::path::PathBuf,
-    status: Arc<Mutex<String>>,
-    progress: Arc<Progress>,
-    control: Arc<RenderControl>,
-) {
-    // Claim the flight before spawning anything: a second request for THIS
-    // take cancels the one running rather than joining it. Two renders of one
-    // take write one video, and the newer request is always the wanted one —
-    // it is the same take with settings changed since.
-    //
-    // A request for another take makes no such claim. It queues on `running`
-    // instead and renders when its turn comes.
-    let generation = control.claim(&take_path);
-    // On the CALLER's thread, so the cancellation lands before the replacement
-    // starts queueing behind a run that now has no reason to finish.
-    control.cancel_in_flight(&take_path);
-
-    let _ = std::thread::Builder::new().name("harmonigraph-take-render".into()).spawn(move || {
-        let _claim = Claim { control: &control, take: &take_path, generation };
-        // Wait out the run being cancelled, so its process is reaped
-        // before this one starts. Held for the whole render, which is what
-        // makes "one render at a time" true rather than hoped for — and
-        // what a render of ANOTHER take queues on instead of cancelling.
-        let _flight = control.running.lock();
-        if control.superseded(&take_path, generation) {
-            // Another request arrived while this one queued. It is already
-            // waiting on the same lock, and rendering here would only be
-            // work to throw away.
-            return;
-        }
-
-        let out = take_path.with_extension("mp4");
-        // Written under a name of this run's own, and moved onto `out`
-        // only once it has succeeded.
-        //
-        // A failed or cancelled run never replaces a finished video. Each
-        // run also owns its partial path: on platforms without process-group
-        // cancellation, an encoder descendant may still be finalizing while
-        // its replacement starts. Only a successful run publishes by rename.
-        let partial = take_path.with_extension(format!("rendering-{generation}.mp4"));
-        // A "Re-render take" carries the current look as a appearance document; write
-        // it beside the take and pass --appearance so post-record settings
-        // override the take's record-time snapshot. Per-run for the same
-        // reason as `partial`, and removed after the run.
-        let appearance_file = request.appearance.as_ref().and_then(|blob| {
-            let path = take_path.with_extension(format!("rendernow-{generation}.ron"));
-            std::fs::write(&path, blob).ok().map(|()| path)
-        });
-
-        #[cfg(feature = "test-support")]
-        let program = control.test_program.lock().clone().unwrap_or(request.program);
-        #[cfg(not(feature = "test-support"))]
-        let program = request.program;
-        let mut command = std::process::Command::new(&program);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        command.arg(&take_path).arg("--out").arg(&partial);
-        if let Some(file) = &appearance_file {
-            command.arg("--appearance").arg(file);
-        }
-        let [w, h] = request.size;
-        command.arg("--size").arg(format!("{w}x{h}"));
-        // Progress and warnings arrive on stderr; pipe it for the status line.
-        command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
-
-        let mut rendering = format!("rendering {}...", out.display());
-        if let Some(notice) = request.notice {
-            rendering.push_str(" — ");
-            rendering.push_str(notice);
-        }
-        *status.lock() = rendering;
-        let spawned = command.spawn();
-        let cleanup = || {
-            if let Some(file) = &appearance_file {
-                let _ = std::fs::remove_file(file);
-            }
-            let _ = std::fs::remove_file(&partial);
-        };
-        let mut child = match spawned {
-            Ok(child) => child,
-            Err(err) => {
-                cleanup();
-                *status.lock() = format!(
-                    "could not run {}: {err} — reinstall the paired Harmonigraph renderer",
-                    program.display()
-                );
-                return;
-            }
-        };
-
-        let stderr = child.stderr.take();
-        // Hand the process over so a later request can reach it. Under the
-        // same lock a canceller takes, and re-checking the generation
-        // inside it: a request that arrived between the spawn and here
-        // found no child to kill, so this is where that one gets killed
-        // instead of running to completion unnoticed.
-        {
-            let mut in_flight = control.child.lock();
-            if control.superseded(&take_path, generation) {
-                kill_render(&mut child);
-            }
-            *in_flight = Some(InFlight { take: take_path.clone(), child });
-        }
-        // AFTER the handover, not before it: the bar is what the Video pane
-        // hangs its Cancel off, and `RenderControl::cancel` can only reach a
-        // child that has been published above. Begun any earlier, the bar
-        // spends the spawn offering a cancel that would quietly do nothing.
-        progress.begin();
-        // Ends at EOF on the pipe, which a kill brings about immediately.
-        let tail = stderr.map(|pipe| follow(pipe, &progress)).unwrap_or_default();
-        let result = match control.child.lock().take() {
-            Some(mut flight) => flight.child.wait(),
-            // Unreachable in practice: nothing else takes the child, only
-            // kills it. Reported rather than unwrapped, since a render
-            // thread panicking in a DAW is not worth the tidier code.
-            None => Err(std::io::Error::other("the render process went missing")),
-        };
-        progress.end();
-
-        // A cancelled render has nothing to say: its replacement is
-        // already running and the failure is one we caused on purpose.
-        // Its partial output goes, and the status line stays the new
-        // render's.
-        if control.superseded(&take_path, generation) {
-            cleanup();
-            return;
-        }
-
-        match result {
-            Ok(exit) if exit.success() => {
-                // Whole, and only now under the name anything else reads.
-                match std::fs::rename(&partial, &out) {
-                    Ok(()) => {
-                        *status.lock() =
-                            rendered_status(&out, request.notice, tail.warning.as_deref());
-                    }
-                    Err(err) => {
-                        *status.lock() = format!("rendered, but could not move into place: {err}")
-                    }
-                }
-                if let Some(file) = &appearance_file {
-                    let _ = std::fs::remove_file(file);
-                }
-            }
-            // The renderer's own diagnostics are far more useful than the
-            // exit code, and this is the only place a plugin user will
-            // ever see them.
-            Ok(_) => {
-                cleanup();
-                *status.lock() = format!("render failed: {}", tail.last);
-            }
-            Err(err) => {
-                cleanup();
-                *status.lock() = format!("render failed: {err}");
-            }
-        }
-    });
 }

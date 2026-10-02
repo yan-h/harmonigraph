@@ -27,12 +27,14 @@ use harmonigraph_ui::PictureState;
 /// they are simply overwritten by the next automation record.
 pub struct ReplayParams {
     values: [Cell<f32>; ParamKey::ALL.len()],
+    present: [Cell<bool>; ParamKey::ALL.len()],
 }
 
 impl Default for ReplayParams {
     fn default() -> Self {
         ReplayParams {
             values: std::array::from_fn(|i| Cell::new(ParamKey::ALL[i].default_value())),
+            present: std::array::from_fn(|_| Cell::new(false)),
         }
     }
 }
@@ -44,12 +46,17 @@ impl ReplayParams {
 }
 
 impl ParamBackend for ReplayParams {
+    fn camera_value(&self, key: ParamKey) -> Option<f32> {
+        self.present[Self::index(key)].get().then(|| self.get(key))
+    }
+
     fn get(&self, key: ParamKey) -> f32 {
         self.values[ReplayParams::index(key)].get()
     }
 
     fn set(&self, key: ParamKey, value: f32) {
         self.values[ReplayParams::index(key)].set(value);
+        self.present[Self::index(key)].set(true);
     }
 
     fn begin_set(&self, _key: ParamKey) {}
