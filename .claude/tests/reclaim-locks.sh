@@ -222,6 +222,91 @@ check_handmade_lock() {
   fi
 }
 
+# Remote Control's `--spawn worktree` locks with `claude agent bridge-<id> (pid
+# <n> start <date>)`, and the pid is the daemon's: alive for as long as the
+# phone bridge is up, whether or not anything still runs in the worktree. So
+# the ps shim below answers ALIVE in every case, and the lock's liveness has to
+# come from process cwds instead — the lsof shim is what varies:
+#
+#   inside  a process sits at the worktree's root              -> held
+#   none    only a sibling sharing its name as a prefix does   -> stale
+#           (the boundary a bare prefix match gets wrong)
+#   blind   lsof lists other processes but not the daemon      -> held
+#           (a sandbox that sees only part of the process table)
+#   gone    the daemon is dead, nothing is inside, and lsof     -> stale
+#           lists the script itself, the fallback control
+#
+# The stale cases assert "would remove", not just "stale lock": the idle and
+# resolved gates come after, and only reaching the removal line proves a live
+# daemon pid did not stop it first. The last case is the same `claude agent`
+# shape from the Agent tool, whose pid is its parent session's and IS the
+# signal: no cwd inside, and still held.
+check_agent_lock() {
+  mode=$1; desc=$2; reason=$3; want=$4
+  work="$TMP/agent$((++case_n))"
+  main="$work/main"
+  mkdir -p "$main" "$work/bin"
+
+  # Alive and this user's, which is what makes the daemon the control —
+  # except in `gone`, where every pid is dead.
+  if [ "$mode" = gone ]; then
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$work/bin/ps"
+  else
+    printf '#!/usr/bin/env bash\ncase "$*" in *uid=*) id -u ;; esac\nexit 0\n' > "$work/bin/ps"
+  fi
+  chmod +x "$work/bin/ps"
+
+  (
+    cd "$main" || exit 1
+    git init -q . 2>/dev/null || exit 1
+    real=$(pwd -P)
+    here=$(git rev-parse --absolute-git-dir 2>/dev/null)
+    case "$here" in
+      "$real"/*) ;;
+      *) echo "refusing: git resolves to ${here:-nothing}, not $real" >&2; exit 1 ;;
+    esac
+    git checkout -q -b main 2>/dev/null || true
+    git config user.email t@t; git config user.name t
+    git commit -q --allow-empty -m base || exit 1
+    git worktree add -q -b w1 .claude/worktrees/w1 HEAD 2>/dev/null || exit 1
+    git worktree lock --reason "$reason" .claude/worktrees/w1 2>/dev/null || exit 1
+  ) || { echo "✗ $desc: could not build the fixture" >&2; failures=$((failures + 1)); return; }
+
+  # `-Fpn` output: a `p<pid>` line, then that process's `n<cwd>`. Pid 4242 is
+  # the lock's daemon, which the script needs to see before believing the rest.
+  # In `gone` the control is the script, which is lsof's parent or, through a
+  # `$( )` subshell, its grandparent — so the shim lists both, found with the
+  # real ps since the shimmed one is dead to every pid in this mode.
+  wt=$(cd "$main/.claude/worktrees/w1" && pwd -P)
+  real_ps=$(command -v ps)
+  case "$mode" in
+    inside) listing="p4242\nn/\np7\nn$wt" ;;
+    none)   listing="p4242\nn/\np7\nn${wt}x" ;;
+    blind)  listing="p7\nn/elsewhere" ;;
+    gone)   listing="p\$PPID\nn/\np\$($real_ps -o ppid= -p \$PPID | tr -d ' ')\nn/\np7\nn${wt}x" ;;
+  esac
+  printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$listing" > "$work/bin/lsof"
+  chmod +x "$work/bin/lsof"
+
+  find "$main/.claude/worktrees" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
+
+  out=$(cd "$main" && PATH="$work/bin:$PATH" CLAUDE_PROJECT_DIR="$main" \
+    RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 \
+    RECLAIM_MIN_IDLE_MINUTES=0 "$SCRIPT" </dev/null 2>&1)
+
+  # A case that expects the lock to hold must also show nothing removable:
+  # the skip line alone would pass a branch that printed it and returned 0.
+  if grep -q "$want" <<<"$out" &&
+    { [ "${want#would remove}" != "$want" ] || ! grep -q "would remove" <<<"$out"; }; then
+    echo "✓ $desc"
+  else
+    echo "✗ $desc" >&2
+    echo "    expected a line matching: $want" >&2
+    printf '%s\n' "$out" | sed 's/^/    got: /' >&2
+    failures=$((failures + 1))
+  fi
+}
+
 # Containment is the widest removal signal, so it is the one that has to be
 # proved in BOTH directions from a single fixture: the two shapes equality
 # missed, and a branch that is genuinely still in flight. A test that only
@@ -714,6 +799,24 @@ check "an unrecognised holder's lock is live" \
 
 check_codex_ownership
 check_handmade_lock
+check_agent_lock inside "a Remote Control lock with a process inside is live" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "skip w1: Remote Control lock, and a process is running in it"
+check_agent_lock none "a Remote Control lock with nothing inside is stale" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "would remove .*w1"
+check_agent_lock none "a harness lock without a start time is still read" \
+  "claude agent bridge-cse_01Test (pid 4242)" \
+  "would remove .*w1"
+check_agent_lock blind "a Remote Control lock is live when lsof cannot see its daemon" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "skip w1: Remote Control lock, and lsof cannot show process cwds"
+check_agent_lock gone "a Remote Control lock whose daemon is gone falls back to the script" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "would remove .*w1"
+check_agent_lock none "an Agent tool lock is read by its parent session's pid" \
+  "claude agent agent-a0123456789abcdef (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "skip w1: locked by live pid 4242"
 check_containment
 check_orphan_report
 check_submodule_removal
