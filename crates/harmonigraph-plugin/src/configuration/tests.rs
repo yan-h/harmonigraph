@@ -1095,16 +1095,12 @@ fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
-    capture.arm_audio();
+    capture.arm();
     let dir =
         std::env::temp_dir().join(format!("harmonigraph-config-rewind-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(
-        &capture,
-        path.clone(),
-        Some(harmonigraph_record::AudioSpec { sample_rate: 48000.0, channels: 2 }),
-    );
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     // Warm up the transport so a subsequent rewind is a real pass split.
     device.run_transport(
         0,
@@ -1194,7 +1190,7 @@ fn a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it() {
         std::env::temp_dir().join(format!("harmonigraph-config-resume-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     let block = 64.0 / 48000.0;
     let parked = || {
         let mut parked = transport(block, 0);
@@ -1243,7 +1239,7 @@ fn a_pass_split_by_a_loop_opens_with_the_note_held_across_it() {
         std::env::temp_dir().join(format!("harmonigraph-config-held-split-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     let block = 64.0 / 48000.0;
     let struck = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
     device.run_transport(0, struck, false, None, Some(transport(9.0, 0)));
@@ -1286,7 +1282,7 @@ fn a_pass_opened_mid_callback_is_opened_in_that_callback() {
         std::env::temp_dir().join(format!("harmonigraph-config-mid-wrap-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     let block = 64.0 / 48000.0;
     let struck = vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)];
     device.run_transport(0, struck, false, None, Some(transport(9.0, 0)));
@@ -1327,7 +1323,7 @@ fn a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file() {
         .join(format!("harmonigraph-config-unrolled-rewind-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     let parked = |seconds| {
         let mut parked = transport(seconds, 0);
         parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
@@ -1360,7 +1356,7 @@ fn pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origi
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
-    capture.arm_audio();
+    capture.arm();
     for (block, seconds) in [10.0, 30.0, 5.0].into_iter().enumerate() {
         let mut stopped = transport(seconds, 0);
         stopped.flags &= !CLAP_TRANSPORT_IS_PLAYING;
@@ -1426,7 +1422,7 @@ fn a_sidechain_selection_reaches_the_armed_takes_audio() {
         });
     });
     device.activate();
-    capture.arm_audio();
+    capture.arm();
     device.run_transport(0, vec![], false, None, Some(transport(5.0, 0)));
     let expected: Vec<f32> = left.iter().zip(&right).flat_map(|(l, r)| [*l, *r]).collect();
     assert_eq!(
@@ -1900,16 +1896,12 @@ fn stop_during_parked_callback_cannot_close_its_later_playing_segment() {
     let _scope = crate::test_scope::enter();
     let (mut device, mut capture) = recorded_device();
     device.activate();
-    capture.arm_audio();
+    capture.arm();
     let dir = std::env::temp_dir()
         .join(format!("harmonigraph-config-stop-segment-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("record.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(
-        &capture,
-        path.clone(),
-        Some(harmonigraph_record::AudioSpec { sample_rate: 48000.0, channels: 2 }),
-    );
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     let mut parked = transport(0.0, 0);
     parked.flags &= !CLAP_TRANSPORT_IS_PLAYING;
     let mut events = vec![note(9, 48, 0, CLAP_EVENT_NOTE_ON), Input::Transport(transport(0.0, 32))];

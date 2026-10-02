@@ -19,6 +19,11 @@ fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
     RenderRequest { program: directory.join("no-such-renderer"), appearance: None, size: [16, 16] }
 }
 
+/// The WAV every fixture's take opens: [`TAKE_CHANNELS`], as `Control::start`
+/// asks for, at the sample rate of [`harmonigraph_take::Header::default`].
+#[cfg(any(test, feature = "test-support"))]
+const FIXTURE_SPEC: AudioSpec = AudioSpec { sample_rate: 48_000.0, channels: TAKE_CHANNELS as u16 };
+
 /// How long the writer thread sleeps when it finds the ring empty.
 const DRAIN_IDLE: std::time::Duration = std::time::Duration::from_millis(20);
 
@@ -34,8 +39,6 @@ pub fn channel() -> (Recorder, Control) {
     let dropped = Arc::new(AtomicU64::new(0));
     let recording = Arc::new(AtomicBool::new(false));
     let rolling = Arc::new(AtomicBool::new(false));
-    // Every take records audio; see `Recorder::with_audio`.
-    let with_audio = Arc::new(AtomicBool::new(true));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
     let latches = Arc::new(TakeLatches::default());
     let status = Arc::new(Mutex::new(String::new()));
@@ -64,7 +67,7 @@ pub fn channel() -> (Recorder, Control) {
                         thread_fence.fail();
                     } else {
                         pump.open =
-                            Recording::create(*header, path, epoch, Some(spec), &thread_status);
+                            Recording::create(*header, path, epoch, spec, &thread_status);
                         #[cfg(all(test, feature = "test-support"))]
                         if let Some(open) = pump.open.as_mut() {
                             open.fail_marker_on_pass = *thread_fence.test_marker_failure.lock();
@@ -169,7 +172,6 @@ pub fn channel() -> (Recorder, Control) {
             run: 0,
             run_live: false,
             audio: audio_producer,
-            with_audio,
             end_at_rewind: end_at_rewind.clone(),
             latches: latches.clone(),
         },
@@ -625,7 +627,7 @@ struct Recording {
     header: harmonigraph_take::Header,
     /// The first pass's path; later passes append `-2`, `-3`, ...
     base: std::path::PathBuf,
-    spec: Option<AudioSpec>,
+    spec: AudioSpec,
     /// The marker this RECORDING carries, not this file: written into
     /// `current`, into everything in `retained`, and by [`Recording::next_pass`]
     /// into every pass opened from here on.
@@ -654,7 +656,8 @@ struct Pass {
     /// The header THIS file was opened with, kept so the alignment rewrite
     /// below can supersede it without re-deriving the rest.
     header: harmonigraph_take::Header,
-    /// The WAV recorded beside this pass, if audio was asked for.
+    /// The WAV recorded beside this pass, until it is finalized or a write to
+    /// it fails.
     audio: Option<harmonigraph_take::WavWriter>,
     /// The three closed flags below are addressed to the EPOCH rather than to
     /// this pass, and are only ever read on `current` — but they reset with the
@@ -681,7 +684,7 @@ impl Recording {
         header: harmonigraph_take::Header,
         base: std::path::PathBuf,
         epoch: u64,
-        spec: Option<AudioSpec>,
+        spec: AudioSpec,
         status: &Mutex<String>,
     ) -> Option<Recording> {
         let current = Pass::create(header.clone(), &base, 1, spec, status)?;
@@ -761,7 +764,7 @@ impl Recording {
         else {
             return Err(std::io::Error::other(status.lock().clone()));
         };
-        if self.spec.is_some() && next.audio.is_none() {
+        if next.audio.is_none() {
             return Err(std::io::Error::other(status.lock().clone()));
         }
         // Incompleteness belongs to the RECORDING, so the new file takes the
@@ -874,15 +877,15 @@ impl Pass {
         mut header: harmonigraph_take::Header,
         base: &std::path::Path,
         number: u32,
-        spec: Option<AudioSpec>,
+        spec: AudioSpec,
         status: &Mutex<String>,
     ) -> Option<Pass> {
         let path = Self::path_for(base, number);
 
         // The WAV opens first, so its name can go in the take's header —
         // which is the take's first line and cannot be revised later.
-        let audio = spec.and_then(|spec| {
-            let wav = path.with_extension("wav");
+        let wav = path.with_extension("wav");
+        let audio =
             match harmonigraph_take::WavWriter::create(&wav, spec.sample_rate, spec.channels) {
                 Ok(writer) => {
                     header.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
@@ -892,12 +895,11 @@ impl Pass {
                     *status.lock() = format!("cannot write {}: {err}", wav.display());
                     None
                 }
-            }
-        });
+            };
 
         match harmonigraph_take::Writer::create(&path, &header) {
             Ok(writer) => {
-                if spec.is_none() || audio.is_some() {
+                if audio.is_some() {
                     let mut status = status.lock();
                     // Stop can overtake the drain of a queued loop split.
                     // Opening that pass is still finishing the old prefix.

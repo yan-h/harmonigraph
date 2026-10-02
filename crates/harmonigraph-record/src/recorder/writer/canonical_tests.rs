@@ -37,7 +37,7 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
     let (mut recorder, mut capture) = testing::channel();
     let (publisher, mut publications) = publication::channel();
     recorder.publication = publisher;
-    capture.arm_audio();
+    capture.arm();
     assert!(recorder.is_armed());
     recorder.end_at_rewind.store(true, Ordering::Relaxed);
     let duration = 64.0 / 48_000.0;
@@ -69,14 +69,10 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
 #[test]
 fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     let (mut recorder, mut capture) = testing::channel();
-    capture.arm_audio();
+    capture.arm();
     assert!(recorder.is_armed());
     let file = path("delayed");
-    let mut writer = testing::FileWriter::new(
-        &capture,
-        file.clone(),
-        Some(AudioSpec { sample_rate: 48000.0, channels: 2 }),
-    );
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
     let first = RecordAddress { epoch: 1, pass: 1 };
     let second = RecordAddress { epoch: 1, pass: 2 };
     let config = harmonigraph_core::configuration::ConfigReducer::default().resolved();
@@ -170,7 +166,7 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     capture.arm();
     recorder.is_armed();
     let file = path("full");
-    let mut writer = testing::FileWriter::new(&capture, file.clone(), None);
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
     let address = RecordAddress { epoch: 1, pass: 1 };
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     // One short of the ring: the last cell is reserved so the gap below has
@@ -224,7 +220,7 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
         capture.arm();
         recorder.is_armed();
         let file = path(if close_source { "pass-reuse" } else { "pass-full" });
-        let mut writer = testing::FileWriter::new(&capture, file.clone(), None);
+        let mut writer = testing::FileWriter::new(&capture, file.clone());
         recorder.observe_transport(10.0, true, 64.0 / 48_000.0);
         for _ in 1..RECORD_PASSES {
             recorder.observe_transport(0.0, true, 64.0 / 48_000.0);
@@ -776,9 +772,14 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
     );
 
     let status = Mutex::new(String::new());
-    let opened =
-        Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
-            .unwrap();
+    let opened = Recording::create(
+        harmonigraph_take::Header::default(),
+        file.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .unwrap();
     let mut open = Some(opened);
     fanout.drain(&mut consumer, &mut open, &fence, &failure);
     let sealed = open.take().unwrap().finish().unwrap();
@@ -947,9 +948,14 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     assert!(!pump(&mut open, &mut queued, &mut consumer, &mut fanout));
 
     let file = path("rollover-gap");
-    let opened =
-        Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
-            .unwrap();
+    let opened = Recording::create(
+        harmonigraph_take::Header::default(),
+        file.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .unwrap();
     open = Some(opened);
     assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
     assert_eq!(
@@ -1008,7 +1014,8 @@ fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
     use harmonigraph_take::canonical::{GapReasonRecord, GapRecord};
     let file = path("two-gaps");
     let status = Mutex::new(String::new());
-    let mut open = Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    let mut open =
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     let first = harmonigraph_take::IncompleteRecord {
         first_publication: 7,
         last_publication: 9,
@@ -1123,11 +1130,11 @@ fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
     let file = path("carried-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
-    current.current = Pass::create(Default::default(), &file, 3, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
+    current.current = Pass::create(Default::default(), &file, 3, FIXTURE_SPEC, &status).unwrap();
     current.fail_marker_on_pass = Some(3);
     for pass in 1..3 {
-        let mut old = Pass::create(Default::default(), &file, pass, None, &status).unwrap();
+        let mut old = Pass::create(Default::default(), &file, pass, FIXTURE_SPEC, &status).unwrap();
         if pass == 1 {
             old.writer.make_read_only_for_test(&old.path).unwrap();
         }
@@ -1164,7 +1171,7 @@ fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
     let file = path("rollover-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     current.mark_incomplete(Default::default()).unwrap();
     current.fail_marker_on_pass = Some(2);
     let mut open = Some(current);
@@ -1191,7 +1198,7 @@ fn failure_accounting_latches_its_marker_io_error() {
     let file = path("accounting-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     current.fail_marker_on_pass = Some(1);
     let mut open = Some(current);
     let fence = RecordFence::default();
@@ -1211,7 +1218,7 @@ fn pump_flushes_buffered_records_in_current_and_retained_files() {
     let file = path("pump-batched-flush");
     let status = Mutex::new(String::new());
     let mut recording =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     recording.next_pass(&status).unwrap();
     assert_eq!(recording.retained.len(), 1, "the fixture must retain an unfinished prior file");
     for pass in std::iter::once(&mut recording.current).chain(&mut recording.retained) {
@@ -1266,7 +1273,7 @@ fn pump_flush_failure_is_accounted_before_stop() {
     let file = path("pump-flush-failure");
     let status = Mutex::new(String::new());
     let mut recording =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     recording.current.writer.make_read_only_for_test(&file).unwrap();
     let mut pump = Pump { open: Some(recording), ..Default::default() };
     let (mut producer, mut entries) = rtrb::RingBuffer::<Entry>::new(8);
