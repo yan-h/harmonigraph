@@ -441,4 +441,51 @@ mod tests {
         assert!(appearance.view.frameless);
         assert_eq!(appearance.render.short_edge, 1920);
     }
+    #[test]
+    fn queued_look_survives_undo_ab_library_edits_and_incoming_camera() {
+        use crate::params::{ParamBackend, ParamKey};
+        struct Camera;
+        impl ParamBackend for Camera {
+            fn get(&self, key: ParamKey) -> f32 {
+                key.default_value()
+            }
+            fn set(&self, _: ParamKey, _: f32) {}
+            fn camera_value(&self, key: ParamKey) -> Option<f32> {
+                Some(if key == ParamKey::CameraDistance { 7.0 } else { key.default_value() })
+            }
+        }
+        let mut state = crate::tests::probe::fresh();
+        let appearance = &mut state.picture.appearance;
+        let editor = &mut state.workspace.interaction.appearance_editor;
+        let original = Look::capture(appearance);
+        appearance.spectrum.attack = 0.2;
+        editor.history.observe(original.clone(), appearance, false);
+        editor.name = "Soft".into();
+        editor.save(appearance);
+        appearance.sync_camera(&Camera);
+        appearance.render.short_edge = 1080;
+        state.workspace.interaction.take.export_look = Some("Soft".into());
+        let queued = crate::panes::render::capture_export(
+            appearance,
+            &state.workspace.interaction,
+            std::path::Path::new("music.take"),
+        )
+        .unwrap();
+        let editor = &mut state.workspace.interaction.appearance_editor;
+        editor.history.undo(appearance);
+        editor.switch(appearance);
+        appearance.spectrum.attack = 0.8;
+        editor.saved.named.clear();
+        appearance.camera.distance = 5.0;
+        appearance.render.short_edge = 720;
+        let crate::ExportAction::Queue { appearance: blob, render, .. } = queued else {
+            panic!("queue request")
+        };
+        let captured = AppearanceDocument::parse(&blob).unwrap();
+        assert_eq!(captured.spectrum.attack, 0.2);
+        assert_eq!(captured.camera.distance, 7.0);
+        assert_eq!(captured.render.short_edge, 1080);
+        assert_eq!(render.short_edge, 1080);
+        assert_eq!(appearance.spectrum.attack, 0.8);
+    }
 }

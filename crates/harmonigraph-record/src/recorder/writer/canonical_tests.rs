@@ -370,7 +370,10 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             assert_eq!(*control.status.lock(), CONFIGURATION_FAILURE);
             assert!(!control.is_recording());
             assert!(control.last_take.lock().is_none());
-            assert_eq!(control.render_progress(), None);
+            assert!(control
+                .export_jobs()
+                .iter()
+                .all(|job| job.state != harmonigraph_take::render::ExportStatus::Running));
         }
         drop(recorder); // No rescue callback or producer operation follows.
         drop(control);

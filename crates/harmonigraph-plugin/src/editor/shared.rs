@@ -104,27 +104,25 @@ impl EditorShared {
             ));
         }
 
-        // "Re-render take": render the last finished take with the CURRENT settings.
-        // The appearance rides along as --appearance, so the framing and look
-        // dialed in after recording reach the video.
-        self.ui.workspace.interaction.take.last_ready = self.take.last_take().is_some();
-        if std::mem::take(&mut self.ui.workspace.interaction.take.render_now) {
-            self.take.render_now(harmonigraph_record::RenderRequest::render_now(
-                &self.ui.picture.appearance.render,
-                self.ui.picture.appearance.serialize(),
-            ));
-        }
-
-        // "Cancel render": stop the renderer and drop the part-written video.
-        // Nothing about the take, so the button above can start another.
-        if std::mem::take(&mut self.ui.workspace.interaction.take.cancel_render) {
-            self.take.cancel_render();
+        self.ui.workspace.interaction.take.last_take = self.take.last_take();
+        for action in std::mem::take(&mut self.ui.workspace.interaction.take.export_actions) {
+            match action {
+                harmonigraph_ui::ExportAction::Queue { take, appearance, render } => {
+                    self.take.queue_export(
+                        take,
+                        harmonigraph_record::RenderRequest::render_now(&render, appearance),
+                    )
+                }
+                harmonigraph_ui::ExportAction::Cancel(id) => self.take.cancel_export(id),
+                harmonigraph_ui::ExportAction::Retry(id) => self.take.retry_export(id),
+                harmonigraph_ui::ExportAction::ClearFinished => self.take.clear_finished_exports(),
+            }
         }
 
         self.poll_take_end();
         self.take.tick(self.take_rolling, self.take_last_count);
         self.ui.workspace.interaction.take.status = self.take.status();
-        self.ui.workspace.interaction.take.render_progress = self.take.render_progress();
+        self.ui.workspace.interaction.take.exports = self.take.export_jobs();
         // The shell may have refused to start (unwritable directory);
         // don't leave the indicator claiming otherwise.
         self.ui.workspace.interaction.take.recording = self.take.is_recording();

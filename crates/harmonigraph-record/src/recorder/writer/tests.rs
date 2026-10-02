@@ -2,7 +2,6 @@
 //! and private writer state share the transport fixtures here.
 
 use super::*;
-use harmonigraph_take::RenderConfig;
 
 // 64 frames at 48 kHz; 120 BPM in 4/4 gives two seconds per bar.
 const BLOCK_SECONDS: f64 = 64.0 / 48_000.0;
@@ -1341,17 +1340,14 @@ fn the_gui_reads_back_the_rolling_the_audio_thread_published() {
     assert!(!ctrl.is_rolling(), "parked again");
 }
 
-/// "Re-render take" with nothing recorded yet says so, rather than
-/// appearing to work.
+/// Recording failure and last finished take remain available to the shell.
 #[test]
-fn re_rendering_with_no_take_yet_explains_itself() {
+fn the_shell_reads_recording_failure_and_last_finished_take() {
     let (_rec, ctrl) = channel();
     assert_eq!(ctrl.last_take(), None, "nothing recorded this session");
     ctrl.fence.fail_with_message("cannot write take.wav".into());
     *ctrl.status.lock() = CONFIGURATION_FAILURE.into();
     assert!(ctrl.status().contains("cannot write take.wav"));
-    ctrl.render_now(RenderRequest::render_now(&RenderConfig::default(), "(dummy)".into()));
-    assert_eq!(ctrl.status(), "no take recorded yet to render");
     ctrl.start(48_000.0, String::new());
     assert!(ctrl.status().contains("reload the plugin"));
 

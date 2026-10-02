@@ -759,7 +759,7 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
 fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     let mut state = fresh();
     state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_ready = true;
+    state.workspace.interaction.take.last_take = Some("music.take".into());
     // Soloed and tall, like `video_pane_shapes`: the whole control column on
     // screen, so a button that is missing is missing rather than scrolled off.
     state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
@@ -775,7 +775,7 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     let idle = h.frame(&mut state, vec![]).shapes;
     assert!(find(&idle).is_none(), "a cancel drawn with no render to cancel");
 
-    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.exports = vec![fixture_export()];
     // Two frames: egui resolves the widget under the pointer from the previous
     // pass, so the button has to have been drawn before the press.
     h.frame(&mut state, vec![]);
@@ -788,7 +788,13 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     h.frame(&mut state, vec![press(at, false)]);
-    assert!(state.workspace.interaction.take.cancel_render, "the press never reached the shell");
+    assert!(
+        matches!(
+            state.workspace.interaction.take.export_actions.last(),
+            Some(crate::ExportAction::Cancel(7))
+        ),
+        "the press never reached the shell"
+    );
 }
 
 /// Before the renderer has said how many frames it is composing there is no
@@ -1267,8 +1273,8 @@ fn scrolling_settings_pane(
     // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
     // two likeliest to reach the lane.
     state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_ready = true;
-    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.last_take = Some("music.take".into());
+    state.workspace.interaction.take.exports = vec![fixture_export()];
     for i in 0..40 {
         state
             .picture

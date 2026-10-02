@@ -91,6 +91,31 @@ pub struct Header {
     pub audio_start: Option<f64>,
 }
 
+impl Header {
+    /// Read only the header when queueing a look, without loading a take's events.
+    pub fn read(path: impl AsRef<std::path::Path>) -> Result<Self, ReadError> {
+        use std::io::Read;
+        let file = std::fs::File::open(path)?;
+        // Appearance documents are small; cap malformed input on this UI path.
+        for (index, line) in std::io::BufReader::new(file.take(8 * 1024 * 1024)).lines().enumerate()
+        {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            return match ron::from_str::<Record>(line)
+                .map_err(|e| ReadError::Parse(index + 1, e))?
+            {
+                Record::Header(header) if header.version == FORMAT_VERSION => Ok(header),
+                Record::Header(header) => Err(ReadError::Version(header.version)),
+                _ => Err(ReadError::MissingHeader),
+            };
+        }
+        Err(ReadError::MissingHeader)
+    }
+}
+
 impl Default for Header {
     fn default() -> Self {
         Header {

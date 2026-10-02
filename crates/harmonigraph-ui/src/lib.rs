@@ -70,7 +70,8 @@ pub use harmonigraph_take::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
 pub use state::{
-    CameraPreset, Console, Interaction, PictureState, SharedState, SurfaceState, TakeState,
+    CameraPreset, Console, ExportAction, Interaction, PictureState, SharedState, SurfaceState,
+    TakeState,
 };
 pub use text::use_renderer_font_texture;
 

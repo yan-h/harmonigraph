@@ -131,6 +131,8 @@ impl Drop for Harmonigraph {
         // graphics worker at plugin destruction, not only at the last Arc drop.
         let graphics = self.editor_shared.lock().ui.picture.editor_graphics();
         graphics.shutdown_startup();
+        let take = self.editor_shared.lock().take.clone();
+        take.shutdown_exports();
     }
 }
 
