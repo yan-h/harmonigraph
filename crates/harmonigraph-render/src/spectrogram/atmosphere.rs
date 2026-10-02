@@ -961,6 +961,7 @@ fn memory_key(
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
+                star_layers,            // which slices hold stars at all
                 star_spacing_far,
                 star_spacing_near,
                 star_spacing_curve,
@@ -1014,6 +1015,7 @@ fn memory_key(
             star_spacing_near,
             star_spacing_curve,
             star_randomness,
+            star_layers as f32,
         ]),
         CloudStyle::VelvetScales => values.extend([
             3.0,

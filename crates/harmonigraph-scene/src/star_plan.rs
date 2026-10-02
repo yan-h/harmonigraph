@@ -84,6 +84,21 @@ pub fn star_falloff_bend(falloff: f32) -> f32 {
     16f32.powf(2.0 * falloff - 1.0) - 1.0
 }
 
+/// Where each depth sits from far (0) to near (1) at `Star layers` `layers`,
+/// or `None` where it is not drawn. Layer `i` of `n` sits at `i / (n - 1)`,
+/// in the depth whose own place at five layers is nearest, so it keeps that
+/// depth's image and halo tier: two layers are the farthest and the nearest,
+/// three add the middle.
+pub fn star_layer_depths(layers: u32) -> [Option<f32>; STAR_DEPTHS] {
+    let n = (layers as usize).clamp(2, STAR_DEPTHS);
+    let mut depths = [None; STAR_DEPTHS];
+    for i in 0..n {
+        let d = i as f32 / (n - 1) as f32;
+        depths[(d * (STAR_DEPTHS - 1) as f32).round() as usize] = Some(d);
+    }
+    depths
+}
+
 /// The band a star's centre is drawn from, in cells, at `Position variation`
 /// `jitter`: the original 0.6 at 1.
 pub fn star_jitter_width(jitter: f32) -> f32 {
@@ -94,6 +109,10 @@ pub fn star_jitter_width(jitter: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StarDepthPlan {
     pub gather: StarGather,
+    /// Where the depth sits from far (0) to near (1): its layer's place among
+    /// `Star layers` ([`star_layer_depths`]), or its own place at five layers
+    /// where it is not drawn. Every far-to-near control is read here.
+    pub depth: f32,
     /// The cell one star is hashed into, in star pixels, before the atlas's
     /// floor.
     pub cell: f32,
@@ -230,7 +249,9 @@ impl StarSettings {
         let halo_tiers = [nearer, nearest, far];
         let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
         let solo = bed.depths.iter().any(|depth| depth.solo);
-        let depth = |k: usize, curve: f32| (k as f32 / (STAR_DEPTHS - 1) as f32).powf(curve);
+        let layers = star_layer_depths(self.star_layers);
+        let place = |k: usize| layers[k].unwrap_or(k as f32 / (STAR_DEPTHS - 1) as f32);
+        let depth = |k: usize, curve: f32| place(k).powf(curve);
         let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
         let depths = std::array::from_fn(|k| {
             let o = bed.depths[k];
@@ -240,7 +261,7 @@ impl StarSettings {
                 0.5 * along(k, self.star_size_far, self.star_size_near, size) * o.scale * o.size;
             let jitter = o.jitter.unwrap_or(self.star_jitter);
             let fits = |gather: StarGather| wanted <= gather.bound(jitter) * cell;
-            let gather = if solo && !o.solo {
+            let gather = if layers[k].is_none() || solo && !o.solo {
                 StarGather::Off
             } else {
                 o.gather.unwrap_or_else(|| {
@@ -254,6 +275,7 @@ impl StarSettings {
             });
             StarDepthPlan {
                 gather,
+                depth: place(k),
                 cell,
                 radius: wanted.min(gather.bound(jitter) * cell),
                 wanted,
@@ -321,6 +343,34 @@ mod tests {
         assert_eq!(reversed.sanitized(), reversed);
         let [far, .., near] = reversed.plan().depths;
         assert!(far.cell > near.cell && far.wanted > near.wanted);
+    }
+
+    /// Fewer layers keep the farthest and the nearest and space the rest
+    /// evenly between, each in the depth nearest its place, and every
+    /// far-to-near control spreads over just the drawn ones.
+    #[test]
+    fn star_layers_keep_both_ends_and_spread_the_rest() {
+        let fresh = StarSettings::default();
+        for (layers, drawn) in [
+            (2, vec![(0, 0.0), (4, 1.0)]),
+            (3, vec![(0, 0.0), (2, 0.5), (4, 1.0)]),
+            (4, vec![(0, 0.0), (1, 1.0 / 3.0), (3, 2.0 / 3.0), (4, 1.0)]),
+            (5, vec![(0, 0.0), (1, 0.25), (2, 0.5), (3, 0.75), (4, 1.0)]),
+        ] {
+            let plan = StarSettings { star_layers: layers, ..fresh }.plan();
+            let got: Vec<_> = (0..STAR_DEPTHS)
+                .filter(|&k| plan.depths[k].gather != StarGather::Off)
+                .map(|k| (k, plan.depths[k].depth))
+                .collect();
+            assert_eq!(got, drawn, "{layers} layers");
+            let [far, .., near] = plan.depths;
+            assert_eq!((far.cell, near.cell), (fresh.star_spacing_far, fresh.star_spacing_near));
+        }
+        let middle = StarSettings { star_layers: 3, ..fresh }.plan().depths[2];
+        let half =
+            |far: f32, near: f32| far * (near / far).powf(0.5f32.powf(fresh.star_spacing_curve));
+        let want = half(fresh.star_spacing_far, fresh.star_spacing_near);
+        assert!((middle.cell - want).abs() < 1e-5 * want, "{} vs {want}", middle.cell);
     }
 
     /// A star is full out to its solid share and nothing at its edge, its glow

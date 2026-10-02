@@ -161,6 +161,9 @@ pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 /// glow keeps a tenth of the radius at least, so no star has a hard edge to
 /// alias as it drifts.
 pub const STAR_SOLID_MAX: f32 = 0.9;
+/// The fewest [`StarSettings::star_layers`]; the most is
+/// [`crate::star_plan::STAR_DEPTHS`].
+pub const STAR_LAYERS_MIN: u32 = 2;
 /// Bounds for the per-axis resolution of the Stars halo images.
 pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
@@ -459,6 +462,12 @@ pub struct StarSettings {
     /// the original 0.6-cell jitter width at 1. More variation shortens how
     /// far each read holds a star whole ([`crate::star_plan::StarGather::bound`]).
     pub star_jitter: f32,
+    /// How many depths the starfield draws, from
+    /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
+    /// farthest and the nearest, with the rest spaced evenly between, so every
+    /// far-to-near control spreads over just these
+    /// ([`crate::star_plan::star_layer_depths`]).
+    pub star_layers: u32,
     /// The farthest depth's star spacing in star pixels. A depth `d` from 0
     /// (far) to 1 (near) spaces its stars at `far · (near / far)^(d^curve)`.
     /// Every cell holds a star, so how many a depth has follows its spacing
@@ -542,6 +551,7 @@ impl Default for StarSettings {
             // where it was 0.69..1.45.
             star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
+            star_layers: crate::star_plan::STAR_DEPTHS as u32,
             // The captured spacings at the captured Star density of 10, which
             // divided them by sqrt(5) before the spacing alone set the cell.
             star_spacing_far: 1.0355378,
@@ -601,6 +611,8 @@ impl StarSettings {
         self.star_size_variation =
             clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
+        self.star_layers =
+            self.star_layers.clamp(STAR_LAYERS_MIN, crate::star_plan::STAR_DEPTHS as u32);
         // Each pair runs far to near and may run either way, so its ends are
         // clamped apart and never reordered.
         let pair = |far: &mut f32,

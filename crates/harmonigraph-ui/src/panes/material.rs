@@ -88,6 +88,15 @@ pub(super) fn stars(
         STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
         STAR_SPACING_MIN,
     };
+    let mut layers = atmosphere.star_layers as f32;
+    let top = harmonigraph_scene::star_plan::STAR_DEPTHS as f32;
+    ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
+        );
+    atmosphere.star_layers = layers as u32;
     crate::widgets::depth(
         ui,
         &mut atmosphere.star_size_far,
@@ -140,13 +149,19 @@ pub(super) fn stars(
 fn held_to_fit(ui: &mut egui::Ui, stars: harmonigraph_scene::StarSettings, size_scale: f32) {
     let plan =
         harmonigraph_scene::StarSettings { test_bed: None, ..stars.scaled(size_scale) }.plan();
-    let held: Vec<_> =
-        plan.depths.iter().enumerate().filter(|(_, depth)| depth.clamped()).collect();
+    // Numbered as layers, far to near, so the names match `Star layers`.
+    let held: Vec<_> = plan
+        .depths
+        .iter()
+        .filter(|depth| depth.gather != harmonigraph_scene::star_plan::StarGather::Off)
+        .enumerate()
+        .filter(|(_, depth)| depth.clamped())
+        .collect();
     let Some(widest) = held.iter().map(|(_, depth)| 2.0 * depth.radius).reduce(f32::max) else {
         return;
     };
     let names = held.iter().map(|(k, _)| (k + 1).to_string()).collect::<Vec<_>>().join(", ");
-    let (depths, their) = if held.len() == 1 { ("Depth", "its") } else { ("Depths", "their") };
+    let (depths, their) = if held.len() == 1 { ("Layer", "its") } else { ("Layers", "their") };
     crate::widgets::weak(
         ui,
         format!("{depths} {names} drawn smaller to fit {their} spacing, at most {widest:.1} px."),
