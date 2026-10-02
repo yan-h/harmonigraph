@@ -59,9 +59,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             (LatticeMaterial::VelvetScales, "Scales", "Soft overlapping scallops carrying the note light"),
             (LatticeMaterial::Stars, "Stars", "Drifting stars colored by the note light"),
         ]);
-        if settings.material_style == LatticeMaterial::Stars {
-            super::material::stars_quality(ui, &mut settings.stars);
-        }
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
@@ -73,17 +70,32 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 .percent().show(ui).on_hover_text("Full width of the pigment source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
             ValueBar::new(&mut settings.material_shadow_softness, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup softness")
                 .percent().show(ui).on_hover_text("Soft fade by distance around each segment, including its rounded ends, as a percentage of the node radius. Up to 800% for very diffuse pigment. Does not alter the actual shadow.");
+            // Stars put their look first: size and spacing matter more than
+            // how they drift, and the rendering profile comes last.
+            let stars = settings.material_style == LatticeMaterial::Stars;
+            if stars {
+                super::block(ui, "Appearance");
+                super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
+            }
             super::block(ui, "Motion");
-            if settings.material_style == LatticeMaterial::Stars {
+            if stars {
                 super::material::stars_motion(ui, &mut settings.stars);
             }
-            let speed = (settings.material_style != LatticeMaterial::Stars).then_some(&mut settings.material_speed);
+            let speed = (!stars).then_some(&mut settings.material_speed);
             crate::widgets::drift(ui, &mut settings.material_direction, speed);
-            super::block(ui, "Appearance");
             match settings.material_style {
-                LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings),
-                LatticeMaterial::VelvetScales => super::material::velvet(ui, &mut settings.material_settings),
-                LatticeMaterial::Stars => super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                LatticeMaterial::Watercolor => {
+                    super::block(ui, "Appearance");
+                    super::material::watercolor(ui, &mut settings.material_settings);
+                }
+                LatticeMaterial::VelvetScales => {
+                    super::block(ui, "Appearance");
+                    super::material::velvet(ui, &mut settings.material_settings);
+                }
+                LatticeMaterial::Stars => {
+                    super::block(ui, "Rendering");
+                    super::material::stars_quality(ui, &mut settings.stars);
+                }
                 LatticeMaterial::None => {},
             }
         }

@@ -152,6 +152,8 @@ impl StarSettings {
         let halo_tiers = [nearer, nearest, far];
         let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
         let layers = star_layer_depths(self.star_layers);
+        let drawn = |k: usize| layers[k].is_some();
+        let solo = (0..STAR_DEPTHS).any(|k| drawn(k) && self.star_solo[k]);
         let place = |k: usize| layers[k].unwrap_or(k as f32 / (STAR_DEPTHS - 1) as f32);
         let depth = |k: usize, curve: f32| place(k).powf(curve);
         let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
@@ -163,7 +165,7 @@ impl StarSettings {
                 along(k, self.star_spacing_ratio_far, self.star_spacing_ratio_near, spacing);
             let (cell, radius) = (ratio * diameter, 0.5 * diameter);
             let fits = |gather: StarGather| radius <= gather.bound(jitter) * cell;
-            let gather = if layers[k].is_none() {
+            let gather = if !drawn(k) || solo && !self.star_solo[k] {
                 StarGather::Off
             } else {
                 StarGather::DRAWN.into_iter().find(|&g| fits(g)).unwrap_or(StarGather::Three)
@@ -238,6 +240,26 @@ mod tests {
                 assert!(depth.radius > reach * 0.999, "the floor is looser than it needs");
             }
         }
+    }
+
+    /// Soloing draws only the soloed layers, each as it was, and a flag on a
+    /// depth `Star layers` leaves out solos nothing.
+    #[test]
+    fn soloing_draws_only_the_soloed_layers() {
+        let fresh = StarSettings::default();
+        let mut solo = [false; STAR_DEPTHS];
+        (solo[1], solo[3]) = (true, true);
+        let plan = StarSettings { star_solo: solo, ..fresh }.plan();
+        for (k, (got, all)) in plan.depths.iter().zip(fresh.plan().depths).enumerate() {
+            if solo[k] {
+                assert_eq!(*got, all, "depth {k}");
+            } else {
+                assert_eq!(got.gather, StarGather::Off, "depth {k}");
+            }
+        }
+        // At three layers depths 1 and 3 are not drawn, so neither solos.
+        let three = StarSettings { star_layers: 3, ..fresh };
+        assert_eq!(StarSettings { star_solo: solo, ..three }.plan(), three.plan());
     }
 
     /// Every far-to-near pair runs either way: a reversed one survives the

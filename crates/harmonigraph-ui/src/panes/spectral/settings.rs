@@ -113,32 +113,35 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                         (CloudStyle::VelvetScales, "Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
                     ],
                 );
-            if atmosphere.cloud_style == CloudStyle::Stars {
-                super::super::material::stars_quality(ui, &mut atmosphere.stars);
-            }
             ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                 .percent().show(ui).on_hover_text(
                     "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
                 );
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+                // Stars put their look first: size and spacing matter more
+                // than how they drift, and the rendering profile comes last.
+                let stars = atmosphere.cloud_style == CloudStyle::Stars;
+                if stars {
+                    block(ui, "Appearance");
+                    super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
+                }
                 block(ui, "Motion");
-                if atmosphere.cloud_style == CloudStyle::Stars {
+                if stars {
                     super::super::material::stars_motion(ui, &mut atmosphere.stars);
                 }
-                let speed = (atmosphere.cloud_style != CloudStyle::Stars)
-                    .then_some(&mut atmosphere.cloud_speed);
+                let speed = (!stars).then_some(&mut atmosphere.cloud_speed);
                 crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
-                block(ui, "Appearance");
                 // Each style has its own controls: nothing a wash carries means
                 // anything to a scallop, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
-                if atmosphere.cloud_style == CloudStyle::Stars {
-                    super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
-                } else if atmosphere.cloud_style == CloudStyle::Watercolor {
-                    super::super::material::watercolor(ui, &mut atmosphere.material_settings);
-                    super::super::material::edge_pooling(ui, atmosphere);
-                } else {
-                    super::super::material::velvet(ui, &mut atmosphere.material_settings);
+                if !stars {
+                    block(ui, "Appearance");
+                    if atmosphere.cloud_style == CloudStyle::Watercolor {
+                        super::super::material::watercolor(ui, &mut atmosphere.material_settings);
+                        super::super::material::edge_pooling(ui, atmosphere);
+                    } else {
+                        super::super::material::velvet(ui, &mut atmosphere.material_settings);
+                    }
                 }
                 block(ui, "Color response");
                 crate::widgets::response(
@@ -149,6 +152,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     ["Color pickup", "Color release"],
                     1.0,
                 );
+                if stars {
+                    block(ui, "Rendering");
+                    super::super::material::stars_quality(ui, &mut atmosphere.stars);
+                }
             });
         },
     );

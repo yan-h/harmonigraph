@@ -542,6 +542,13 @@ pub struct StarSettings {
     /// resolutions, for the far three depths' one shared image and the
     /// nearest two's halos. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
+    /// Which depths are soloed: while any drawn depth is, only the soloed
+    /// ones are drawn, and the rest cost nothing
+    /// ([`crate::star_plan::StarGather::Off`]). Indexed by depth, so a depth
+    /// `Star layers` leaves out keeps its flag without counting. A look aid,
+    /// never saved, so every load draws every layer and no export is soloed.
+    #[serde(skip)]
+    pub star_solo: [bool; crate::star_plan::STAR_DEPTHS],
 }
 impl Default for StarSettings {
     fn default() -> Self {
@@ -585,6 +592,7 @@ impl Default for StarSettings {
             star_glow_falloff: 0.5,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
+            star_solo: [false; crate::star_plan::STAR_DEPTHS],
         }
     }
 }
