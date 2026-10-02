@@ -998,6 +998,7 @@ fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
     let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    capture.arm();
     // The Tune runs first, then after the Hub, at the same block boundary.
     tune.run_format(0, vec![], None, None, 512);
     hub.run_format(0, vec![], None, None, 512);
