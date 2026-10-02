@@ -166,10 +166,7 @@ use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_BINS};
 // per-wedge read written out on the CPU, and so test-only along with them.
 #[cfg(test)]
 use harmonigraph_core::spectrum::{SPECTRUM_MAX_MIDI, SPECTRUM_MIN_MIDI};
-use harmonigraph_scene::{
-    bucket_pitch, Scene, SpectralPaint, SpectralReading, ViewConfig, SPECTRAL_WIDTH_MAX,
-    SPECTRAL_WIDTH_MIN,
-};
+use harmonigraph_scene::{bucket_pitch, Scene, SpectralPaint, SpectralReading, ViewConfig};
 
 use super::spectral::axes::{loudness, power_db, spectrogram_level_db};
 use crate::spectrum::SpectrumBuckets;
@@ -235,25 +232,11 @@ pub(crate) struct Fold {
 }
 
 impl Fold {
-    pub(crate) fn clamped_width(width: f32) -> f32 {
-        if width.is_finite() {
-            width.clamp(SPECTRAL_WIDTH_MIN, SPECTRAL_WIDTH_MAX)
-        } else {
-            SPECTRAL_WIDTH_MIN
-        }
-    }
-
     /// Measure the frame's floor and fold the kernel over it. `width` is the
     /// kernel's standard deviation in cents
     /// ([`ViewConfig::spectral_width`](harmonigraph_scene::ViewConfig)).
     ///
-    /// The width is clamped here as well as in `ViewConfig::sanitize`, and not
-    /// as a second opinion about the range: this is the one place a zero or a
-    /// NaN would divide, and the shells reach the drawing code by more routes
-    /// than the persist door (a take replay, the offline renderer's layout, a
-    /// standalone harness), so the guard belongs where the division is.
     pub(crate) fn measure(levels: &SpectrumBuckets, width: f32) -> Fold {
-        let width = Self::clamped_width(width);
         let sigma = width / CENTS_PER_BUCKET;
 
         // The floor, then the excess over it, both per bucket. One pass each
@@ -911,7 +894,7 @@ mod tests {
     }
 
     /// A width no bar can produce — a hand-edited blob's 0, a NaN — folds to
-    /// finite numbers rather than dividing by zero and drawing a ring that is
+    /// finite numbers after view normalization, rather than dividing by zero into a ring that is
     /// silently dark.
     ///
     /// The whole grid and not one node's wedges, because the divisor is the
@@ -921,6 +904,9 @@ mod tests {
     fn a_width_no_bar_can_produce_still_folds() {
         let bench = Bench::on(&sine(60.0));
         for width in [0.0, -3.0, f32::NAN, f32::INFINITY, 1e9] {
+            let mut view = ViewConfig { spectral_width: width, ..Default::default() };
+            view.sanitize();
+            let width = view.spectral_width;
             let fold = Fold::measure(&bench.levels, width);
             assert!(
                 fold.grid().iter().all(|p| p.is_finite()),
@@ -1218,7 +1204,7 @@ mod tests {
         // whole of the difference.
         let ring = harmonigraph_scene::pitch_ramp_lut(harmonigraph_scene::ring_gradient(
             cfg.spectrogram_gradient,
-            state.appearance.view.lattice_ground_lightness(),
+            state.appearance.view.lattice_ground,
         ));
         for (k, entry) in scene.spectral.lut.iter().enumerate() {
             let got = crate::panes::scene_color(*entry, 1.0);
@@ -1430,7 +1416,7 @@ mod tests {
         let mut levels = [0.0f32; SPECTRUM_BINS];
         let bucket = 2000;
         levels[bucket] = 1.0;
-        let fold = Fold::measure(&levels, SPECTRAL_WIDTH_MIN);
+        let fold = Fold::measure(&levels, harmonigraph_scene::SPECTRAL_WIDTH_MIN);
 
         // Tolerances are f32 grid arithmetic, not slack: recovering the index
         // from an absolute pitch wobbles by ~1e-4 of a bucket, and the levels

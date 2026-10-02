@@ -17,6 +17,9 @@ fn motion_scene(
 ) -> Scene {
     let mut scene =
         derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None);
+    let mut normalized = view.clone();
+    normalized.sanitize();
+    let view = &normalized;
     motion.step(
         &mut scene,
         tracker,
@@ -638,17 +641,8 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     assert_eq!(at(1.0 + DELAY + ramp), 1.0);
 }
 
-/// The Delay's range is held in `NodeMotion` and nowhere else — `sanitize`
-/// deliberately does range work for nothing, only finiteness — so a view out
-/// of range comes from a file and lands here. Both ends matter and they fail
-/// in opposite directions: a negative delay starts the ramp BEFORE the note
-/// took the end, which is every mark at full the frame it is claimed, exactly
-/// what easing them in exists to prevent; a huge one is the mark layer gone
-/// for as long as the take lasts, from a bar that cannot say so.
-///
-/// Asserted on the LEVEL rather than on a scene field, because unlike every
-/// geometry clamp this one reaches the picture only through
-/// the mark's ease — there is no `Scene::mark_delay` to read back.
+/// The normalized delay is consumed by motion without another repair. Both
+/// ends are measured through the mark's level, not just the saved number.
 #[test]
 fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     let tracker = held(60);
@@ -683,9 +677,7 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
 /// the crate's whole-scene finite sweep passes over this one: there is no NaN
 /// left in the scene for it to find.
 ///
-/// BOTH doors, because the picture is reached through both. A blob crosses
-/// `sanitize`; the offline layout, take replay and the harness each build a
-/// view in code and never do, so shared motion normalizes the delay too.
+/// The scene fixture normalizes the post-pass input, as production load does.
 #[test]
 fn a_non_finite_delay_draws_as_no_delay_at_all() {
     let tracker = held(60);

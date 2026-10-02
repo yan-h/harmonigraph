@@ -6,10 +6,10 @@ use crate::camera::Camera;
 use crate::color::pitch_ramp_lut;
 use crate::octaves::octave_layout;
 use crate::trail::TrailField;
-use crate::view::{finite_or, size, DrawnWindow, FrameParams, ViewConfig};
+use crate::view::{DrawnWindow, FrameParams, ViewConfig};
 use crate::{
     lattice_to_world, NodeInstance, PlusInstance, Scene, SpectralPaint, NODE_RADIUS_FACTOR,
-    PLUS_SIZE_MAX, PLUS_WIDTH_PER_LABEL_SCALE, SCALE_BAR_RANGE,
+    PLUS_WIDTH_PER_LABEL_SCALE,
 };
 use glam::Vec4;
 use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
@@ -53,6 +53,9 @@ pub fn derive_scene_with_extra(
     camera: Camera,
     hovered: Option<LatticePos>,
 ) -> Scene {
+    let mut normalized = view.clone();
+    normalized.sanitize();
+    let view = &normalized;
     let mut nodes = Vec::with_capacity(window.count() + extra.len());
     // Kept parallel to `nodes` for the trail, which matches remembered
     // pitches against every node afterwards and would otherwise have to
@@ -60,15 +63,7 @@ pub fn derive_scene_with_extra(
     let mut node_pcs = Vec::with_capacity(window.count() + extra.len());
     let center = view.center();
     // The ground both of a node's rings stand on where nothing is lit.
-    let ground = crate::grey_of_lightness(view.lattice_ground_lightness());
-    // Sanitized once, outside the node loop. Capped at 1: this axis makes
-    // off-sheet nodes SMALLER, never larger, so the home sheet stays the
-    // biggest thing on screen (see `ViewConfig::sevens_size`). The floor
-    // keeps a sheet from collapsing to an invisible speck at extent 4, and is
-    // where a value that is not a number lands as well — the clamp alone is no
-    // guard against one, and this factor is raised to the sheet count, so a
-    // NaN here is every off-sheet node drawn at no size at all.
-    let sevens_size = finite_or(view.sevens_size, 0.15).clamp(0.15, 1.0);
+    let ground = crate::grey_of_lightness(view.lattice_ground);
     // The octave wheel is a pitch axis, so it is a property of the VIEW and is
     // built once: every node draws the same slice WIDTHS. Which octaves those
     // slices are, and how far the ring is turned to put them on their pitches,
@@ -104,7 +99,7 @@ pub fn derive_scene_with_extra(
         nodes.push(NodeInstance::at(
             pos,
             world_pos,
-            sevens_size.powi(sheets as i32),
+            view.sevens_size.powi(sheets as i32),
             pos.sevens == view.center_sevens,
             node_cents,
             hovered == Some(pos),
@@ -124,7 +119,7 @@ pub fn derive_scene_with_extra(
     let nodes_len = nodes.len() as u32;
 
     // Every radius on a node, off the one stack the size bars describe
-    // (`ViewConfig::rings`, which is also where their clamps live): each ring
+    // (`ViewConfig::rings`): each ring
     // is a width a gap out from whatever is inside it — or from the node's own
     // center, for the innermost one on — and a layer dialled to 0 is off and
     // hands its slot back. The shader can trust outer > inner on a band that
@@ -137,12 +132,12 @@ pub fn derive_scene_with_extra(
         nodes,
         camera,
         node_radius: NODE_RADIUS_FACTOR,
-        note_animation: view.note_animation.sanitized(),
+        note_animation: view.note_animation,
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,
         mark_inner: rings.mark_inner,
-        octave_gap: view.octave_gap_width(),
+        octave_gap: view.ring_gap,
         lattice_ground: ground,
         // The MIDI picture, whole: nothing here reads audio, so the audio
         // channel arrives empty and the Lattice pane's fold is what fills it.
@@ -157,42 +152,24 @@ pub fn derive_scene_with_extra(
         pitch_lut_spacing: crate::LutSpacing::of(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
-        // Repaired but not bounded: the renderer owns the range and
-        // deliberately keeps it wider than the bar (`RENDER_SCALE_RANGE`), so a
-        // range imposed here would narrow what a shell is allowed to ask for.
-        // What the renderer's own clamp cannot do is catch a NaN, so this hands
-        // it a real number and leaves the range where it is.
-        render_scale: finite_or(view.render_scale, 1.0),
-        bloom_strength: view.note_bloom_strength(),
-        // Clamped here as well as in `sanitize`, for the shells that never come
-        // through that door: reach sizes the halo's analytic span and its CPU
-        // culling bound, which must describe the same supported range. Through
-        // `finite_or` because a clamp is no guard against a NaN, and onto each
-        // bar's low end, which for both of these is the halo switched off.
-        glow_reach: finite_or(view.glow_reach, 0.0).clamp(0.0, crate::GLOW_REACH_MAX),
-        glow_strength: finite_or(view.glow_strength, 0.0).clamp(0.0, crate::GLOW_STRENGTH_MAX),
-        glow_curve: view.glow_curve.sanitized(),
-        // Every Shadow group on the same footing, a bar's range rather than a
-        // billboard's: every caster's quad is grown by its group's width, so a
-        // number from outside the bar is a quad nothing can fill.
-        shadow: view.shadow.clamped(),
-        glow_wash: finite_or(view.glow_wash, 0.0).clamp(0.0, 1.0),
+        render_scale: view.render_scale,
+        bloom_strength: view.note_bloom,
+        glow_reach: view.glow_reach,
+        glow_strength: view.glow_strength,
+        glow_curve: view.glow_curve,
+        shadow: view.shadow,
+        glow_wash: view.glow_wash,
         // The shader divides each marker's world radius by this fixed unit
         // to recover the arm its bar was dialled at.
         marker_unit: marker_world(1.0),
-        glow_blend: finite_or(view.glow_blend, 0.0).clamp(0.0, 1.0),
-        // Shells may bypass `sanitize`; a mix factor outside this range would
-        // extrapolate beyond the two glow treatments instead of blending them,
-        // and one that is not a number would leave every blended value NaN. 0
-        // is one END of the mix rather than an off position — the low bound,
-        // for want of a reading here that is more neutral than another.
-        glow_accumulation: finite_or(view.glow_accumulation, 0.0).clamp(0.0, 1.0),
+        glow_blend: view.glow_blend,
+        glow_accumulation: view.glow_accumulation,
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
         // this to their high-water mark.
         glow_rows: nodes_len,
         glow_timing: None,
-        atmosphere: view.atmosphere.sanitized(),
+        atmosphere: view.atmosphere,
     }
 }
 
@@ -205,7 +182,7 @@ pub fn derive_scene_with_extra(
 /// units. This is the one place that conversion happens, and the one place the
 /// cross filling its own square is decided.
 pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
-    let arm = size(view.plus_arm, PLUS_SIZE_MAX);
+    let arm = view.plus_arm;
     // An arm of 0 draws no markers at all, so this is only ever asked of one
     // with length — answer a proportion the shader can use rather than divide
     // by nothing, and leave the emptiness to `derive_pluses`.
@@ -213,9 +190,8 @@ pub(crate) fn derive_plus_half_width(view: &ViewConfig) -> f32 {
         return 0.0;
     }
     // Half, because the constant is the WHOLE thickness across an arm and the
-    // shader measures out from the arm's centre line. `size` because a shell
-    // that skips `sanitize` can hand over a NaN scale.
-    let scale = size(view.label_scale, *SCALE_BAR_RANGE.end());
+    // shader measures out from the arm's centre line.
+    let scale = view.label_scale;
     let half = PLUS_WIDTH_PER_LABEL_SCALE * scale * 0.5;
     // At 1 the cross has filled its own square: every fragment inside the quad
     // is inside one arm or the other, and a wider one has nowhere left to
@@ -243,20 +219,14 @@ const TAPER_START_MAX: f32 = 0.999;
 /// shader wants the POINT on an axis whose 1 is the tip. This is the one place
 /// that conversion happens.
 pub(crate) fn derive_plus_taper_start(view: &ViewConfig) -> f32 {
-    // `size` and not a bare `clamp`, and this is the site where the difference
-    // is a CRASH rather than a wrong picture: a NaN reach survives `clamp`,
-    // survives `reach <= 0.0`, and then becomes the `max` of the taper's own
-    // clamp below — which panics on a NaN bound. `sanitize` repairs the arm at
-    // the blob's door, so what reaches this is every shell that has no such
-    // door: the offline renderer's layout, a take replay, the harness.
-    let reach = size(view.plus_arm, PLUS_SIZE_MAX);
+    let reach = view.plus_arm;
     // A reach of 0 draws no markers at all, so this is only ever asked of an
     // arm that has length — answer the square end rather than dividing by
     // nothing, and leave the emptiness to `derive_pluses`.
     if reach <= 0.0 {
         return TAPER_START_MAX;
     }
-    let taper = size(view.plus_taper, reach);
+    let taper = view.plus_taper;
     ((reach - taper) / reach).clamp(0.0, TAPER_START_MAX)
 }
 
@@ -314,29 +284,15 @@ pub(crate) fn derive_pluses(
     nodes: &[NodeInstance],
     ink: Vec4,
 ) -> Vec<PlusInstance> {
-    let radius = marker_world(size(view.plus_arm, PLUS_SIZE_MAX));
+    let radius = marker_world(view.plus_arm);
     // 0 takes the markers away, and with them everything a resting lattice
     // draws but the node rings. Skipping the instances is the same picture the
     // shader would discard to, one draw earlier.
-    //
-    // An arm that is not a real number takes them away through this SAME test,
-    // and that is a property of `size` rather than of the line below: it is the
-    // only door into the radius and it answers every non-finite value with 0 —
-    // the repair `sanitize` spends at the blob's door, spent again on the
-    // picture's side for the shells that never come through it.
-    //
-    // So there is no second branch to write, and a NaN test here would be one
-    // nothing can reach. What a later factor owes is the door, not the test: a
-    // NaN arriving at this line would answer no to `<= 0.0` the way it answers
-    // no to every comparison, and ship the whole field sized NaN — a quad the
-    // shader cannot draw, the lattice's resting structure gone, nothing on
-    // screen saying why. Multiply something in that `size` has not been over
-    // and the repair is owed at that factor.
     if radius <= 0.0 {
         return Vec::new();
     }
     // The markers' own grey, handed in already resolved from the Marker ink
-    // bar (`ViewConfig::marker_ink_lightness`). OPAQUE, and that is what makes
+    // bar (`ViewConfig::marker_ink`). OPAQUE, and that is what makes
     // the bar's number the grey on screen rather than nearly it: `strength` is
     // the marker's own opacity and the shader premultiplies by it, so a marker
     // carrying a standing alpha of its own would land on a blend of that grey

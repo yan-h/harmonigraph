@@ -29,9 +29,9 @@ impl GlowCurve {
         exponential_level(p, self.shape())
     }
 
-    /// The finite, bounded shape consumed by the renderer.
+    /// The normalized shape consumed by the renderer.
     pub fn shape(self) -> f32 {
-        self.sanitized().shape
+        self.shape
     }
 
     /// Repair the value into the finite range the editor can produce.

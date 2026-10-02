@@ -285,7 +285,7 @@ pub(super) fn draw_roll(
     let axes_size = axes.rect.size();
     let dir = |v: egui::Vec2| [v.x, v.y];
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
-    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.note_bloom_strength());
+    let bloom = harmonigraph_render::bloom_strength(state.appearance.view.note_bloom);
     let pane = crate::panes::lattice::pane_id(options.surface);
     let shadow_surface = crate::text::spectral_shadow_surface(options.surface);
     let clipped_start = notes.len();
