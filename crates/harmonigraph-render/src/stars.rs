@@ -304,13 +304,6 @@ pub(crate) fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
     let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
     edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
 }
-/// What every slice shares: `Overlap light`, where a 3x3 star's inner part
-/// starts fading, as a share of its reach, and `Distant gap fill`. The second
-/// lane is unused; each slice carries its own band and inner reach.
-pub(crate) fn star_geometry(settings: harmonigraph_scene::StarSettings) -> Float4 {
-    Float4([settings.star_overlap_light, 0.0, 0.7, settings.star_far_fill])
-}
-
 /// Per-depth halo sampling follows pane pixels and the sanitized resolution
 /// dial. The rounded texture shape is the whole allocation key: jitter, halo
 /// width, drift and color edits refill the same targets.
@@ -515,7 +508,6 @@ uniform_group! {
         star_size_variation: f32,
         star_far: Float4,
         star_near: Float4,
-        star_geometry: Float4,
         star_slices: [StarSlice; STAR_SLICES],
         star_halo_samples: [StarHaloSample; STAR_SLICES],
     }
@@ -545,7 +537,6 @@ impl StarUniforms {
                 0.0,
             ]),
             star_near: Float4([near[0] as f32, near[1] as f32, 0.0, 0.0]),
-            star_geometry: star_geometry(settings),
             star_slices: star_slices(settings, direction, now, layout),
             star_halo_samples: halos.samples(),
         }

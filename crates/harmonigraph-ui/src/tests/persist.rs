@@ -1724,7 +1724,6 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
     assert_eq!(old.stars.star_halo_profile, StarHaloProfile::Medium);
     assert_eq!(old.stars, harmonigraph_scene::StarSettings::default());
     assert_eq!(old.pitch_softness, 12.0);
-    assert_eq!(old.stars.star_far_fill, 0.0);
 
     let partial: harmonigraph_scene::StarSettings = ron::from_str("(star_jitter:0.23)").unwrap();
     assert_eq!(
@@ -1744,7 +1743,6 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
             harmonigraph_scene::LatticeMaterial::Stars;
         state.picture.appearance.spectrum.atmosphere.stars.star_halo_profile = profile;
         state.picture.appearance.spectrum.atmosphere.stars.star_halo_resolution = 0.625;
-        state.picture.appearance.spectrum.atmosphere.stars.star_far_fill = 0.42;
         let saved = state.save_persist();
         let mut editor = fresh();
         assert!(editor.load_persist(&saved));
@@ -1761,8 +1759,6 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
         assert_eq!(offline.spectrum.atmosphere.stars.star_halo_profile, profile);
         assert_eq!(offline.view.atmosphere.stars.star_halo_profile, profile);
         assert_eq!(offline.spectrum.atmosphere.stars.star_halo_resolution, 0.625);
-        assert_eq!(offline.spectrum.atmosphere.stars.star_far_fill, 0.42);
-        assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_far_fill, 0.42);
     }
 }
 
@@ -1778,7 +1774,6 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
         stars: harmonigraph_scene::StarSettings {
             star_jitter: 2.0,
-            star_far_fill: 2.0,
             star_halo_resolution: 0.1,
             ..Default::default()
         },
@@ -1796,7 +1791,6 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     let expected = SpectralAtmosphere {
         stars: harmonigraph_scene::StarSettings {
             star_jitter: 1.0,
-            star_far_fill: 1.0,
             star_halo_resolution: 0.25,
             ..Default::default()
         },

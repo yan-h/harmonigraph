@@ -40,7 +40,6 @@ struct StarUniforms {
     star_size_variation: f32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
-    star_geometry: vec4<f32>,
     star_slices: array<StarSlice, 5>,
     star_halo_samples: array<StarHaloSample, 5>,
 };
@@ -74,6 +73,8 @@ const STAR_LIFE_PERIOD: u32 = 4096u;
 const STAR_FADE: f32 = 0.2;
 // How far up the palette the brightest-ranked star is lifted past its level.
 const STAR_LIFT: f32 = 0.18;
+// Where a 3x3 star's inner part starts fading, as a share of its reach.
+const STAR_INNER_FADE: f32 = 0.7;
 // `wash_hash`'s mixer cut into four eight-bit draws, each centred in its
 // step so none is 0 or 1: fine enough for anything about a star, and a star's
 // four draws take two hashes.
@@ -185,7 +186,7 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32, halo: bool) -> vec4<f32> {
     let full = star_profile(s, dist * shape.x);
     if full <= 0.0 { return vec4<f32>(0.0); }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
-    let inner = full * (1.0 - smoothstep(star_geometry().z * reach, reach, dist));
+    let inner = full * (1.0 - smoothstep(STAR_INNER_FADE * reach, reach, dist));
     let cover = select(inner, max(full - inner, 0.0), halo) * shape.y;
     return vec4<f32>(colour * cover, cover);
 }
@@ -258,8 +259,7 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
 }
 
 // The consumer's floor, then every slice laid over it far to near: within a slice
-// the stars' coverages add and their colours average by coverage (past full
-// coverage `Overlap light` adds back what the average drops), and the slice
+// the stars' coverages add and their colours average by coverage, and the slice
 // covers what is under it by its summed coverage, capped at one. The salts
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past
 // it, a cell's stagger at the second.
@@ -268,7 +268,6 @@ fn star_far_gather(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
 // halo array. Both paths use this same per-slice composition.
 fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f32> {
     var out = under;
-    var far_gap = 1.0;
     let sp = (pt - star_size() * 0.5) * (STAR_PANE / star_size().y);
     for (var k = first; k < last; k += 1u) {
         let s = star_slice(k);
@@ -290,32 +289,6 @@ fn star_layers(pt: vec2<f32>, first: u32, last: u32, under: vec4<f32>) -> vec4<f
             let cover = min(slice.w, 1.0);
             // Preserve the spectral RGB arithmetic; alpha independently follows over.
             out = vec4<f32>(mix(out.rgb, slice.rgb / slice.w, cover), out.a + (1.0 - out.a) * cover);
-            // Up to full coverage that IS the stars' light added; past it the
-            // divide averages them instead. `Overlap light` adds that excess
-            // back, eased into each channel's headroom: one for one at first,
-            // continuous where coverage fills, never past one. Each channel
-            // eases on its own, so a bright crowd pales as its channels fill.
-            let light = star_geometry().x;
-            if slice.w > 1.0 && light > 0.0 {
-                let base = slice.rgb / slice.w;
-                let room = max(1.0 - base, vec3<f32>(0.0));
-                let excess = base * (slice.w - 1.0) * light;
-                out = vec4<f32>(out.rgb + room * (1.0 - exp(-excess / max(room, vec3<f32>(1e-4)))), out.a);
-            }
-        }
-        if star_geometry().w > 0.0 && k < STAR_FAR_LAYERS {
-            far_gap *= 1.0 - min(slice.w, 1.0);
-            if k + 1u == STAR_FAR_LAYERS && first == 0u {
-                // Fill only background leakage from the far group. Applying
-                // at its boundary also covers Uniform's unsplit small panes.
-                // 0/50/100% reproduce original / gap^2 / gap^4 coverage;
-                // bounded polynomial gains stay stable at zero coverage.
-                let amount = star_geometry().w * 2.0;
-                let gentle = min(amount, 1.0);
-                let strong = max(amount - 1.0, 0.0);
-                let gain = (1.0 + gentle * far_gap) * (1.0 + strong * far_gap * far_gap);
-                out = under + (out - under) * gain;
-            }
         }
     }
     return out;
