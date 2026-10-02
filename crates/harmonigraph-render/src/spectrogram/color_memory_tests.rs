@@ -380,54 +380,82 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     }
 }
 
-/// Dropping a layer, or soloing others, changes which stars exist, so history
+/// Dropping a layer changes which stars exist, so history
 /// resets. Equal far and near spacing and size give every slot the same cell,
 /// so the cells in the key cannot see the change and only the drawn slices can.
 #[test]
 fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
     let Some((device, queue)) = headless_device() else { return };
-    // Each drops one slice, which keeps the history's allocation, so only the
-    // key can reset it.
-    let drop_one = |s: &mut harmonigraph_scene::StarSettings| s.star_layers = 4;
-    let solo_four =
-        |s: &mut harmonigraph_scene::StarSettings| s.star_solo = [true, true, false, true, true];
-    for (name, edit) in [("layers", &drop_one as &dyn Fn(&mut _)), ("solo", &solo_four)] {
-        let mut cb = fixture(CloudStyle::Stars);
-        let a = cb.atmosphere.as_mut().unwrap();
-        (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
-        a.settings.stars.star_spacing_ratio_near = a.settings.stars.star_spacing_ratio_far;
-        a.settings.stars.star_size_near = a.settings.stars.star_size_far;
-        let aspect = cb.rect.width() / cb.rect.height();
-        let old_cells = star_layout(a.settings.stars, aspect).cells;
-        let mut resources = CallbackResources::default();
-        cb.grid.fill(255);
-        prepare_once(&device, &queue, &mut resources, &cb);
-        let old_texture = memory(&resources).views[0].texture().clone();
-        assert!(
-            pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count()
-                > 1000
-        );
-        let a = cb.atmosphere.as_mut().unwrap();
-        edit(&mut a.settings.stars);
-        let cells = star_layout(a.settings.stars, aspect).cells;
-        assert_eq!(old_cells, cells, "{name}: cells alone would see it");
-        cb.grid.fill(0);
-        a.now += 1.0 / 60.0;
-        prepare_once(&device, &queue, &mut resources, &cb);
-        let current = memory(&resources);
-        assert_eq!(current.views[0].texture(), &old_texture, "{name}: reset through allocation");
-        let mut fresh = CallbackResources::default();
-        prepare_once(&device, &queue, &mut fresh, &cb);
-        // History is laid out like the atlas, a texel a cell, and a dropped
-        // layer needs fewer rows; the kept allocation's rows past them hold no
-        // cell.
-        let current = pixels(&device, &queue, current);
-        let fresh = pixels(&device, &queue, memory(&fresh));
-        assert!(current.len() > fresh.len(), "{name}: fixture did not drop a layer's cells");
-        assert!(
-            current[..fresh.len()] == fresh[..],
-            "{name}: a dropped layer's stars kept their color"
-        );
+    // Dropping one slice keeps the history allocation, so only the key resets it.
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+    a.settings.stars.star_spacing_ratio_near = a.settings.stars.star_spacing_ratio_far;
+    a.settings.stars.star_size_near = a.settings.stars.star_size_far;
+    let aspect = cb.rect.width() / cb.rect.height();
+    let old_cells = star_layout(a.settings.stars, aspect).cells;
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let old_texture = memory(&resources).views[0].texture().clone();
+    assert!(
+        pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count() > 1000
+    );
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.settings.stars.star_layers = 4;
+    let cells = star_layout(a.settings.stars, aspect).cells;
+    assert_eq!(old_cells, cells, "cells alone would see it");
+    cb.grid.fill(0);
+    a.now += 1.0 / 60.0;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let current = memory(&resources);
+    assert_eq!(current.views[0].texture(), &old_texture, "reset through allocation");
+    let mut fresh = CallbackResources::default();
+    prepare_once(&device, &queue, &mut fresh, &cb);
+    // History is laid out like the atlas, a texel a cell, and a dropped
+    // layer needs fewer rows; the kept allocation's rows past them hold no
+    // cell.
+    let current = pixels(&device, &queue, current);
+    let fresh = pixels(&device, &queue, memory(&fresh));
+    assert!(current.len() > fresh.len(), "fixture did not drop a layer's cells");
+    assert!(current[..fresh.len()] == fresh[..], "a dropped layer's stars kept their color");
+}
+
+/// Hidden layers keep updating their held colour, and both Solo transitions
+/// match the full field's history instead of resetting or freezing it.
+#[test]
+fn soloing_carries_and_updates_every_layers_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+    a.settings.stars.star_lifetime = harmonigraph_scene::STAR_LIFETIME_MAX;
+    let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
+    let mut changed = CallbackResources::default();
+    let mut control = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut changed, &cb);
+    prepare_once(&device, &queue, &mut control, &cb);
+    let lit = pixels(&device, &queue, memory(&changed));
+    cb.grid.fill(0);
+    for solo in [true, true, false] {
+        cb.atmosphere.as_mut().unwrap().now += 0.1;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = [false; 5];
+        prepare_once(&device, &queue, &mut control, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo[4] = solo;
+        prepare_once(&device, &queue, &mut changed, &cb);
+        let current = pixels(&device, &queue, memory(&changed));
+        assert_eq!(current, pixels(&device, &queue, memory(&control)), "solo={solo}");
+        for k in 0..4 {
+            let start = layout.bases[k] as usize;
+            let end = start + (layout.grids[k][0] * layout.grids[k][1]) as usize;
+            let held = current[start..end]
+                .iter()
+                .zip(&lit[start..end])
+                .filter(|(now, before)| before[3] > 0.1 && now[3] > 0.1 && now[3] < before[3])
+                .count();
+            assert!(held > 100, "hidden depth {k} must retain and advance colour, got {held}");
+        }
     }
 }
 

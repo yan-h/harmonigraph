@@ -4399,7 +4399,7 @@ fn cs_rotation_probe() {
             ("Pooling softness", |s| s.wash_pool_softness = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
             ("Spread", |s| s.spread = 1.0),
-            ("Contour strength", |s| s.contour_strength = 0.0),
+            ("Contour strength", |s| s.contour_strength = 1.0),
             // Scales' own dial, which the wash's walk cannot read.
             ("Size variation", |s| s.material_settings.velvet_variety = 1.0),
         ] {

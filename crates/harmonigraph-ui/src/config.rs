@@ -874,7 +874,7 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Right,
-            window: SpectrumWindow::Fast,
+            window: SpectrumWindow::Balanced,
             // One taper — the picture with no averaging in it. The steadier
             // counts cost contrast as well as CPU (see `SpectrumTapers`), so
             // which of them is worth it is a judgement about material, and the

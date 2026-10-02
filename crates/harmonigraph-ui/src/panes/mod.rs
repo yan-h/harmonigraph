@@ -270,7 +270,12 @@ impl Viewer<'_> {
                 // `spectral_pane` too, and either holding its own size would be
                 // a second answer overwriting this one in the single fraction
                 // all three compose from.
-                self.interaction.analyzer_regions.draw(ui, self.state, self.now);
+                self.interaction.analyzer_regions.draw(
+                    ui,
+                    self.state,
+                    self.now,
+                    self.interaction.frameless,
+                );
             }
             Tab::Spiral => spiral_pane(ui, self.state, &mut self.interaction.spiral, self.now),
             Tab::Video => render_pane(ui, self.state, self.interaction, self.now),

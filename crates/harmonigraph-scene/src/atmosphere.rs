@@ -543,8 +543,8 @@ pub struct StarSettings {
     /// nearest two's halos. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
     /// Which depths are soloed: while any drawn depth is, only the soloed
-    /// ones are drawn, and the rest cost nothing
-    /// ([`crate::star_plan::StarGather::Off`]). Indexed by depth; a flag on a
+    /// ones are composited. Hidden layers keep baking and updating colour
+    /// history, so toggles preserve the look and cost the full field. A flag on a
     /// depth `Star layers` leaves out counts for nothing, and the panel clears
     /// them all when the layer count changes. A look aid,
     /// never saved, so every load draws every layer and no export is soloed.
@@ -725,9 +725,8 @@ impl Default for SpectralAtmosphere {
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
             blur_time_step: 1.0,
-            // Full strength is what the `Lava` style drew, and that style was
-            // the fresh one.
-            contour_strength: 1.0,
+            // A fresh texture starts smooth; terracing is an explicit choice.
+            contour_strength: 0.0,
             contours: 16.0,
             contour_softness: 0.492_202_6,
             cloud_depth: 1.0,
