@@ -44,6 +44,9 @@ impl Runtime {
         self.walked -= count;
     }
     pub fn reset(&mut self) {
+        // Lifecycle cancellation, not an acknowledgement: timed work belongs
+        // to the abandoned callback. Only still-untimed flush input survives,
+        // with every consumer restarted at the compacted pool's beginning.
         self.storage.reset_timed();
         self.configured = 0;
         self.performed = 0;

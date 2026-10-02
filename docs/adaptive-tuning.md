@@ -615,6 +615,9 @@ The vendored `nice-plug` wrapper supplies what the plugin cannot get for itself:
 - **Per-event host-acceptance feedback**, because `send_event` throws the result away and a plugin that owns downstream note ownership cannot infer acceptance.
 It is now the return value of the push rather than a later completion, which is why the callback that chose the event is the one that hears about it.
 
+The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership, input-pool reuse argument and allocation-check reach.
+Configuration command reduction snapshots the queued prefix once per callback so concurrent restores cannot extend audio-thread work indefinitely.
+
 Removed from it during the #712 simplification:
 the retain-and-acknowledge input contract (`Consumption::Pending`), the legacy input walker, and a second complete notification emitter reachable only from fixtures.
 Kept, against an earlier plan to remove them:

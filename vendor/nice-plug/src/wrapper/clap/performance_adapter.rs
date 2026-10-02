@@ -1,5 +1,7 @@
-//! Serializes owned commands without holding any plugin, input, output or
-//! configuration borrow across a host callback.
+//! Serializes wrapper-owned parameter notifications without holding plugin,
+//! input, output or configuration borrows across their host callbacks.
+//! Plugin performance hooks themselves run under the plugin lock, including
+//! when they push musical output to the host.
 use super::*;
 
 impl<P: ClapPlugin> Wrapper<P> {
