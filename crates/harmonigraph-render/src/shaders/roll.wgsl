@@ -16,8 +16,16 @@
 // into, and along time those neighbours are the next note: repeats of one key
 // butt together there, and the later one blanked the tail of the earlier.
 // Under every body instead, an outline darkens the backdrop before the note
-// paints its color. Only a body drawn at less than full opacity lets that
-// shadow through.
+// paints its color.
+//
+// A body drawn at less than full opacity would let that shadow through, so
+// every outline is also HELD OUT wherever any body covers (#1293): `prepare`
+// draws the union of the bodies' coverage into `body_holdout` first, and the
+// outline layer takes it off ([`body_held`]). One note's shadow darkens only
+// the picture behind the ribbons, never another ribbon, at any opacity. That
+// includes a note's own shadow under its own body, so a translucent ribbon
+// shows the picture behind it unshadowed. Outside every body the holdout is 0
+// and the outline is what it was.
 //
 // What that costs is the seam between two notes that TOUCH: same key, no gap,
 // and the bodies now meet directly in one color where the outline used to
@@ -54,7 +62,9 @@ struct Locals {
     /// pane's short side, depth (time) along its long side.
     pitch_dir: vec2<f32>,
     depth_dir: vec2<f32>,
-    _axis_pad: vec2<f32>,
+    /// Where `body_holdout`'s first texel stands on the surface, in device
+    /// pixels: the roll's own rect, which is all the holdout covers.
+    holdout_origin: vec2<f32>,
     /// σ, depth, kernel kind (Distance = 1), and whole kernel reach, in points.
     shadow: vec4<f32>,
     shadow_atlas_size: vec2<f32>,
@@ -65,6 +75,11 @@ struct Locals {
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
+
+/// The union of every body's coverage, one texel per device pixel of the
+/// roll's rect, read only by the outline layer. Binding 2 keeps it clear of
+/// the common module's glow slots in the same group.
+@group(1) @binding(2) var body_holdout: texture_2d<f32>;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -542,7 +557,7 @@ fn tapered_distance(in: VertexOut, trim: f32) -> f32 {
 /// off two shapes that share three of their sides, and along the note's flanks
 /// both are looking at the same ink. Added, that overlap comes out darker than
 /// the outline's own color is.
-fn cap_coverage(in: VertexOut) -> f32 {
+fn cap_coverage(in: VertexOut, held: f32) -> f32 {
     // Bounded by the outline the cap is part of, in both directions at once.
     // The profile itself runs out at the outline's reach, so what a wider cap
     // would add is the antialiasing ramp's tail past it: a softer end than
@@ -553,7 +568,28 @@ fn cap_coverage(in: VertexOut) -> f32 {
         return 0.0;
     }
     let d = box_distance_trimmed(in, in.lead.x);
-    return outline_coverage(in, d, reach) * (1.0 - inside(in, d, 0.0));
+    return outline_coverage(in, d, reach) * (1.0 - max(inside(in, d, 0.0), held));
+}
+
+/// How much of this fragment any body covers: the union `prepare` drew into
+/// `body_holdout`, and 0 off the roll's rect, where no body is.
+///
+/// It is coverage and not opacity — a body's fade and color alpha are not in
+/// it — so a translucent body holds a shadow out as fully as an opaque one.
+/// A lead counts as far as it still stands ([`lead_coverage`]), so a spent
+/// lead leaves the cap behind it bare, as it always has.
+///
+/// The outline's masks take the larger of this and their own shape's fill
+/// rather than the product. The union already holds that fill, so the max is
+/// exact where the note stands alone, and a product would take it out twice
+/// along every antialiased edge.
+fn body_held(in: VertexOut) -> f32 {
+    let texel = vec2<i32>(floor(in.position.xy - locals.holdout_origin));
+    let size = vec2<i32>(textureDimensions(body_holdout));
+    if any(texel < vec2<i32>(0)) || any(texel >= size) {
+        return 0.0;
+    }
+    return textureLoad(body_holdout, texel, 0).r;
 }
 
 /// Premultiplied gamma-space color of the OUTLINE layer: the dark surround
@@ -565,13 +601,12 @@ fn cap_coverage(in: VertexOut) -> f32 {
 /// is used at the two long edges would meet in the middle and flood the note
 /// with the outline's own color.
 ///
-/// Masked by the note's OWN fill, which is the one thing this layer still
-/// knows about its body. `outline_coverage` clamps the distance at the note's
-/// edge, so without the mask the outline runs solid across the interior and a
-/// note drawn in anything less than an opaque color has a black slab under it.
-/// The mask is that note's fill and no other's, so it takes nothing back off
-/// the fix: over a NEIGHBOUR the outline still paints in full, and the
-/// neighbour's body — drawn in the pass after this one — covers it to its own opacity.
+/// Masked by the note's OWN fill. `outline_coverage` clamps the distance at
+/// the note's edge, so without the mask the outline runs solid across the
+/// interior and a note drawn in anything less than an opaque color has a black
+/// slab under it. Masked too by every OTHER body ([`body_held`]), so over a
+/// neighbour the outline is held out rather than left for that neighbour's
+/// body to cover only as far as its opacity does.
 ///
 /// Coverage here is `1 - fill` where the body is `fill`, so the dark wrap
 /// retreats as the note takes over its antialiased boundary. The body blends
@@ -582,9 +617,17 @@ fn cap_coverage(in: VertexOut) -> f32 {
 /// keeps the wrap out of, correctly, and where an edge nonetheless is.
 fn outline_color(in: VertexOut) -> vec4<f32> {
     let d = box_distance(in);
-    let wrap =
-        outline_coverage(in, d, in.outline_reach) * (1.0 - inside(in, d, 0.0)) * lead_coverage(in);
-    return in.outline * max(wrap, cap_coverage(in)) * along(in, in.fade);
+    let held = body_held(in);
+    let wrap = outline_coverage(in, d, in.outline_reach) * (1.0 - max(inside(in, d, 0.0), held))
+        * lead_coverage(in);
+    return in.outline * max(wrap, cap_coverage(in, held)) * along(in, in.fade);
+}
+
+/// This note's share of `body_holdout`: its geometric coverage, as far as a
+/// lead still stands, without its fade. Blended into the union in `prepare`.
+@fragment
+fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(inside(in, box_distance(in), 0.0) * lead_coverage(in), 0.0, 0.0, 1.0);
 }
 
 /// Flat premultiplied gamma-space body color, at the note's own opacity

@@ -54,6 +54,7 @@ pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
     "fs_core_linear",
     "vs_shadow_cell",
     "fs_shadow_coverage",
+    "fs_body_holdout",
 ];
 
 /// One note segment: a solid box in the pane's (pitch, depth) plane, its
@@ -316,7 +317,8 @@ struct RollUniforms {
     _feather_pad: f32,
     pitch_dir: Float2,
     depth_dir: Float2,
-    _axis_pad: Float2,
+    /// Where the body holdout's first texel stands, in device pixels.
+    holdout_origin: Float2,
     shadow: Float4,
     shadow_atlas_size: Float2,
     /// The group's Shadow falloff, in what was the block's own tail padding —
@@ -354,6 +356,10 @@ struct RollResources {
     /// second draw costs.
     outline_pipeline: wgpu::RenderPipeline,
     core_pipeline: wgpu::RenderPipeline,
+    /// The bodies' coverage, unioned into a [`RollHoldout`] before either
+    /// layer is drawn, and the layout the outline layer reads it through.
+    holdout_pipeline: wgpu::RenderPipeline,
+    holdout_layout: wgpu::BindGroupLayout,
     /// The bodies again, into the bloom chain's own [`BLOOM_FORMAT`] rather
     /// than the target's, shaded as the target is and at each note's own
     /// opacity reading, so the halo is the colour and strength the notes are.
@@ -398,7 +404,34 @@ struct RollPane {
     /// asks for bloom, and rebuilt when the rect resizes — a roll with the
     /// strength at 0 pays for none of it.
     bloom: Option<RollBloom>,
+    /// Built when the roll casts a shadow, and rebuilt when the rect resizes.
+    holdout: Option<RollHoldout>,
 }
+
+/// The union of every note's body coverage over the roll's rect, one texel
+/// per device pixel, which the outline layer takes off every shadow (#1293).
+///
+/// A shadow drawn under every body still shows through any body drawn at
+/// less than full opacity, and blending cannot take it back out afterwards:
+/// by the time a body lands, the frame under it no longer says how much of it
+/// was shadow. So the bodies' coverage is drawn first, offscreen, and the
+/// shadows read it where they are composited. Full resolution because it
+/// meets the body edges pixel for pixel; half floats because the outline's
+/// own edge takes the larger of this and its note's exact fill, and eight bits
+/// of coverage would shift those edges by a rounding step.
+struct RollHoldout {
+    view: wgpu::TextureView,
+    /// Notes mapped into that texture rather than onto the surface.
+    notes_uniform: wgpu::Buffer,
+    notes_bind_group: wgpu::BindGroup,
+    /// The texture, as the outline layer's group 1.
+    read_bind_group: wgpu::BindGroup,
+    /// The roll's size in device pixels this was built for.
+    size: [u32; 2],
+}
+
+/// The holdout's format: see [`RollHoldout`] for why half floats.
+const HOLDOUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
 
 /// The roll's picture to bloom, and the lattice's own [`crate::BloomChain`] over it:
 /// the notes rendered again offscreen, thresholded, blurred separably, and
@@ -503,6 +536,11 @@ impl RollResources {
             label: Some("roll_filter_bind_group_layout"),
             entries: &[texture_entry(0), sampler_entry(1)],
         });
+        // Binding 2, matching `body_holdout` in roll.wgsl.
+        let holdout_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("roll_holdout_bind_group_layout"),
+            entries: &[texture_entry(2)],
+        });
         // Binding 4 for the strength, matching `AddUniforms` in blit.wgsl —
         // the lattice's own composite holds 3.
         let bloom_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -533,6 +571,7 @@ impl RollResources {
                 format,
                 target_format.is_srgb(),
                 &layout,
+                &holdout_layout,
                 &shadow_layouts.atlas,
                 &shadow_layouts.casters,
                 layer,
@@ -564,6 +603,8 @@ impl RollResources {
             core_pipeline: note_pipeline(target_format, "core"),
             light_pipeline: note_pipeline(BLOOM_FORMAT, "core"),
             shadow_cell_pipeline: create_shadow_cell_pipeline(device, &shader, &layout),
+            holdout_pipeline: create_holdout_pipeline(device, &shader, &layout),
+            holdout_layout,
             layout,
             bright_pipeline: filter("fs_bright_coverage"),
             downsample_pipeline: filter("fs_blit"),
@@ -639,8 +680,59 @@ impl RollPane {
                 capacity: INITIAL_NOTE_CAPACITY,
                 count: 0,
                 bloom: None,
+                holdout: None,
             }
         })
+    }
+}
+
+impl RollHoldout {
+    fn new(
+        device: &wgpu::Device,
+        notes_layout: &wgpu::BindGroupLayout,
+        read_layout: &wgpu::BindGroupLayout,
+        size: [u32; 2],
+    ) -> Self {
+        let view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("roll_holdout"),
+                size: wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: HOLDOUT_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let notes_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("roll_holdout_uniforms"),
+            size: std::mem::size_of::<RollUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        RollHoldout {
+            notes_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("roll_holdout_notes_bind_group"),
+                layout: notes_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: notes_uniform.as_entire_binding(),
+                }],
+            }),
+            read_bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("roll_holdout_read_bind_group"),
+                layout: read_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                }],
+            }),
+            view,
+            notes_uniform,
+            size,
+        }
     }
 }
 
@@ -733,12 +825,13 @@ fn create_roll_pipeline(
     target_format: wgpu::TextureFormat,
     srgb: bool,
     layout: &wgpu::BindGroupLayout,
+    holdout: &wgpu::BindGroupLayout,
     shadow: &wgpu::BindGroupLayout,
     casters: &wgpu::BindGroupLayout,
     layer: &str,
 ) -> wgpu::RenderPipeline {
     let bind_group_layouts = if layer == "outline" {
-        vec![Some(layout), None, Some(shadow), Some(casters)]
+        vec![Some(layout), Some(holdout), Some(shadow), Some(casters)]
     } else {
         vec![Some(layout)]
     };
@@ -768,6 +861,53 @@ fn create_roll_pipeline(
                 format: target_format,
                 blend: Some(EGUI_BLEND),
                 write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The bodies' coverage into a [`RollHoldout`], unioned as it lands: each
+/// note leaves `1 - coverage` of what is already there uncovered.
+fn create_holdout_pipeline(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("roll_holdout_pipeline_layout"),
+        bind_group_layouts: &[Some(layout)],
+        ..Default::default()
+    });
+    let union = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrc,
+        operation: wgpu::BlendOperation::Add,
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("roll_holdout"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_note"),
+            compilation_options: Default::default(),
+            buffers: &[RollInstance::LAYOUT],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_body_holdout"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: HOLDOUT_FORMAT,
+                blend: Some(wgpu::BlendState { color: union, alpha: union }),
+                write_mask: wgpu::ColorWrites::RED,
             })],
         }),
         primitive: wgpu::PrimitiveState {
@@ -884,6 +1024,26 @@ impl CallbackTrait for RollCallback {
                 }
             })
             .collect();
+        // The roll's own rect in device pixels, which is what the bloom chain
+        // and the body holdout are sized against. Through epaint's own
+        // conversion rather than a rounded `width * ppp`, because that
+        // conversion is what `paint` stretches the finished halo across: it
+        // rounds each EDGE and subtracts, then clamps to the screen, so a rect
+        // whose edges round in opposite directions measures a pixel less than
+        // its width does, and a rect hanging off the screen measures less
+        // again. Sized either way but stretched this way, the halo comes out
+        // scaled against the notes it grew from, and slid by whatever the
+        // clamp took.
+        //
+        // A roll thinner than a pixel in either direction has no picture to
+        // bloom or hold out.
+        let viewport = egui::epaint::ViewportInPixels::from_points(
+            &self.rect,
+            ppp,
+            screen_descriptor.size_in_pixels,
+        );
+        let roll_size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
+        let has_area = !self.instances.is_empty() && roll_size.iter().all(|&d| d > 0);
         let uniforms = RollUniforms {
             // The whole surface, which is the viewport `paint` draws into.
             origin_points: Float2([0.0, 0.0]),
@@ -900,7 +1060,7 @@ impl CallbackTrait for RollCallback {
             _feather_pad: 0.0,
             pitch_dir: Float2(self.axes.pitch_dir),
             depth_dir: Float2(self.axes.depth_dir),
-            _axis_pad: Float2([0.0; 2]),
+            holdout_origin: Float2([viewport.left_px as f32, viewport.top_px as f32]),
             shadow: Float4(shadow),
             // Patched with the shared target's actual retained allocation by
             // the surface finalizer after every spectral group has arrived.
@@ -909,45 +1069,22 @@ impl CallbackTrait for RollCallback {
             _shadow_pad: 0.0,
         };
 
-        // The roll's own rect in device pixels, which is what the bloom chain
-        // is sized against. Through epaint's own conversion rather than a
-        // rounded `width * ppp`, because that conversion is what `paint`
-        // stretches the finished halo across: it rounds each EDGE and
-        // subtracts, then clamps to the screen, so a rect whose edges round
-        // in opposite directions measures a pixel less than its width does,
-        // and a rect hanging off the screen measures less again. Sized either
-        // way but stretched this way, the halo comes out scaled against the
-        // notes it grew from, and slid by whatever the clamp took.
-        //
-        // A roll thinner than a pixel in either direction has no picture to
-        // bloom.
-        let viewport = egui::epaint::ViewportInPixels::from_points(
-            &self.rect,
-            ppp,
-            screen_descriptor.size_in_pixels,
-        );
-        let bloom_size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
-        let wants_bloom =
-            self.bloom > 0.0 && !self.instances.is_empty() && bloom_size.iter().all(|&d| d > 0);
-
-        let bloom_pass = wants_bloom.then(|| {
-            // Half the roll's size for the notes, so this is what one pixel of
-            // THAT target measures in points — twice the display's, and the
-            // ramp has to follow it to conserve a hairline ribbon's weight.
-            let half_ppp = ppp * 0.5;
-            // The viewport's own edges, back in points: the texture covers
-            // exactly the pixels `paint` will lay it over, so the notes in it
-            // stand where the notes under it do.
-            RollUniforms {
-                origin_points: Float2([
-                    viewport.left_px as f32 / ppp,
-                    viewport.top_px as f32 / ppp,
-                ]),
-                viewport_points: Float2([bloom_size[0] as f32 / ppp, bloom_size[1] as f32 / ppp]),
-                feather: 1.0 / half_ppp,
-                ..uniforms
-            }
-        });
+        // The viewport's own edges, back in points: a texture over the roll's
+        // rect covers exactly the pixels `paint` will lay it over, so the
+        // notes in it stand where the notes under it do.
+        let roll_uniforms = RollUniforms {
+            origin_points: Float2([viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp]),
+            viewport_points: Float2([roll_size[0] as f32 / ppp, roll_size[1] as f32 / ppp]),
+            ..uniforms
+        };
+        // Half the roll's size for the bloom's notes, so this is what one
+        // pixel of THAT target measures in points — twice the display's, and
+        // the ramp has to follow it to conserve a hairline ribbon's weight.
+        let half_ppp = ppp * 0.5;
+        let bloom_pass = (self.bloom > 0.0 && has_area)
+            .then(|| RollUniforms { feather: 1.0 / half_ppp, ..roll_uniforms });
+        // Only a roll that casts draws the outline layer that reads it.
+        let wants_holdout = sigma > 0.0 && has_area;
 
         // Split apart so the pane can be borrowed mutably while the pipelines
         // and layouts beside it are still readable.
@@ -955,6 +1092,8 @@ impl CallbackTrait for RollCallback {
             light_pipeline,
             layout,
             shadow_cell_pipeline,
+            holdout_pipeline,
+            holdout_layout,
             bright_pipeline,
             downsample_pipeline,
             blur_h_pipeline,
@@ -988,12 +1127,12 @@ impl CallbackTrait for RollCallback {
         // to 0 and back is one drag: what is skipped is the work, not the
         // textures. They go when the roll's size changes, which is the one
         // thing that invalidates them.
-        if pane.bloom.as_ref().is_some_and(|b| b.size != bloom_size) {
+        if pane.bloom.as_ref().is_some_and(|b| b.size != roll_size) {
             pane.bloom = None;
         }
         if let Some(notes_uniforms) = bloom_pass {
             let bloom =
-                pane.bloom.get_or_insert_with(|| RollBloom::new(device, &shared, bloom_size));
+                pane.bloom.get_or_insert_with(|| RollBloom::new(device, &shared, roll_size));
             queue.write_buffer(&bloom.notes_uniform, 0, bytemuck::bytes_of(&notes_uniforms));
             queue.write_buffer(
                 &bloom.strength_buffer,
@@ -1038,6 +1177,56 @@ impl CallbackTrait for RollCallback {
                 "roll",
                 None,
             );
+        }
+
+        // Kept while the roll casts, and dropped with the shadow, since only
+        // the outline layer reads it.
+        if !wants_holdout || pane.holdout.as_ref().is_some_and(|h| h.size != roll_size) {
+            pane.holdout = None;
+        }
+        if wants_holdout {
+            let holdout = pane
+                .holdout
+                .get_or_insert_with(|| RollHoldout::new(device, layout, holdout_layout, roll_size));
+            queue.write_buffer(&holdout.notes_uniform, 0, bytemuck::bytes_of(&roll_uniforms));
+            let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("roll_holdout"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &holdout.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(holdout_pipeline);
+            pass.set_bind_group(0, &holdout.notes_bind_group, &[]);
+            pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+            // A clipped tail holds out only where `paint` lets it draw.
+            let tail = self.clipped_tail.map(|(start, rect)| (start.min(pane.count), rect));
+            let start = tail.map_or(pane.count, |(start, _)| start);
+            pass.draw(0..4, 0..start);
+            if let Some((start, tail_rect)) = tail.filter(|&(start, _)| start < pane.count) {
+                let clip = egui::epaint::ViewportInPixels::from_points(
+                    &tail_rect.intersect(self.rect),
+                    ppp,
+                    screen_descriptor.size_in_pixels,
+                );
+                let left = (clip.left_px - viewport.left_px).max(0) as u32;
+                let top = (clip.top_px - viewport.top_px).max(0) as u32;
+                let width = (clip.width_px.max(0) as u32).min(roll_size[0].saturating_sub(left));
+                let height = (clip.height_px.max(0) as u32).min(roll_size[1].saturating_sub(top));
+                if width > 0 && height > 0 {
+                    pass.set_scissor_rect(left, top, width, height);
+                    pass.draw(0..4, start..pane.count);
+                }
+            }
         }
 
         let submission = crate::spectral_shadow::Submission {
@@ -1142,7 +1331,12 @@ impl CallbackTrait for RollCallback {
                 pass.draw(0..4, 0..pane.count);
             }
         };
-        if shadow.as_ref().is_some_and(|binding| binding.active) {
+        // `prepare` keeps a holdout whenever the roll casts, so an active
+        // shadow always finds one.
+        if let (true, Some(holdout)) =
+            (shadow.as_ref().is_some_and(|binding| binding.active), &pane.holdout)
+        {
+            render_pass.set_bind_group(1, &holdout.read_bind_group, &[]);
             draw_layer(render_pass, &resources.outline_pipeline);
         }
         draw_layer(render_pass, &resources.core_pipeline);
@@ -1592,6 +1786,45 @@ mod tests {
             near(capped, wrap_only),
             "the flank with a cap {capped:?} differs from the wrap alone {wrap_only:?} — the \
              wrap and the cap are being summed rather than unioned",
+        );
+    }
+
+    /// One note's shadow never darkens under another note's body, however
+    /// translucent that body is (#1293): every shadow is held out wherever
+    /// any body covers.
+    ///
+    /// Two half-opaque ribbons overlapping by four points on a bright
+    /// background. The probe is inside the upper ribbon a point and a half past
+    /// the lower one's edge, well within the harness shadow's two-point reach,
+    /// so the lower ribbon's shadow reaches it and only the holdout keeps it
+    /// off. It has to read exactly as it does with that shadow switched off.
+    #[test]
+    fn a_shadow_never_darkens_under_another_ribbons_translucent_body() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let bright = wgpu::Color { r: 0.9, g: 0.9, b: 0.9, a: 1.0 };
+        let at = |lower_outline: [u8; 4]| {
+            let lower = RollInstance {
+                center: [118.0, 128.0],
+                half_extent: [10.0, 60.0],
+                outline: lower_outline,
+                fade: [0.5, 0.5],
+                ..centered_note()
+            };
+            let upper = RollInstance {
+                center: [136.0, 128.0],
+                half_extent: [12.0, 60.0],
+                core: [0, 0, 255, 255],
+                fade: [0.5, 0.5],
+                ..centered_note()
+            };
+            pixel(&draw(&device, &queue, vec![lower, upper], bright), 129, 128)
+        };
+        let (shadowed, unshadowed) = (at([0, 0, 0, 255]), at([0; 4]));
+        assert_eq!(
+            shadowed, unshadowed,
+            "the lower ribbon's shadow darkened the upper ribbon's body",
         );
     }
 
