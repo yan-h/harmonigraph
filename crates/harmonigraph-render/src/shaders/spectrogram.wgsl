@@ -747,15 +747,13 @@ fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
     if d.blend > 0.0 { paint = mix(paint, star_paint(level, star_rank(d.other.x)), d.blend); }
     let current = vec4<f32>(linear_from_gamma_rgb(paint), level);
     if cloud.memory_valid == 0u { return current; }
-    let stagger = star_hash(hashed, salt + 2u).x;
-    let life = u32(floor(cloud.star_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
-    let old_life = u32(floor(cloud.previous_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
+    let old_life = u32(floor(cloud.previous_life + d.stagger)) & (STAR_LIFE_PERIOD - 1u);
     let previous = cloud.previous_slices[k];
     // Signed nearest periodic cell difference carries identity across drift's wrap.
     let local = ((cell - previous.origin + STAR_HASH_PERIOD / 2) & vec2<i32>(STAR_HASH_PERIOD - 1)) - STAR_HASH_PERIOD / 2;
     // A star that keeps its place is one star through all its lives, so its
     // colour carries across them; any other is new each life.
-    let new_star = s.twinkle >= 1.0 && old_life != life;
+    let new_star = !d.held && old_life != d.life;
     if new_star || any(local < vec2<i32>(0)) || any(local >= previous.grid) { return current; }
     let index = previous.base + local.y * previous.grid.x + local.x;
     return remembered(current, textureLoad(color_memory, atlas_texel(index), 0));

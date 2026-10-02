@@ -111,6 +111,11 @@ struct StarDraw {
     blend: f32,
     // Its coverage this far through its life.
     fade: f32,
+    // The cell's stagger and the life it is in, and whether its star keeps its
+    // place across lives: the colour memory carries one through them.
+    stagger: f32,
+    life: u32,
+    held: bool,
 };
 
 // `hashed` is the slice's cell wrapped to the hash's period, `salt` the slice's.
@@ -119,12 +124,15 @@ fn star_draw(s: StarSlice, hashed: vec2<i32>, salt: u32) -> StarDraw {
     // keyed on the life is a new star. The high half of the key is the life
     // plus one: the stagger hashes at zero there, and the slices' salts all
     // sit in the low half.
-    let age = star_life() + star_hash(hashed, salt + 2u).x;
+    var d: StarDraw;
+    d.stagger = star_hash(hashed, salt + 2u).x;
+    let age = star_life() + d.stagger;
     let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
+    d.life = life;
     let key = salt + ((life + 1u) << 16u);
     let through = fract(age);
     let held = s.twinkle < 1.0;
-    var d: StarDraw;
+    d.held = held;
     // Position variation. Every life holds a star, so a depth's count is its
     // cell size alone. A star that keeps its place hashes it at the salt
     // alone, which no life's key is.
@@ -134,9 +142,9 @@ fn star_draw(s: StarSlice, hashed: vec2<i32>, salt: u32) -> StarDraw {
     d.other = d.own;
     d.blend = 0.0;
     // It fades in over the start of its life and out over the end, as far
-    // as its slice twinkles: all the way at 1, exactly as before the dial.
+    // as its slice twinkles: all the way at 1, as before the dial.
     let dip = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
-    d.fade = select(dip, 1.0 - s.twinkle * (1.0 - dip), held);
+    d.fade = 1.0 - s.twinkle * (1.0 - dip);
     let early = through < STAR_FADE;
     if held && (early || through > 1.0 - STAR_FADE) {
         // Where it keeps its place it turns into the next life's star over
