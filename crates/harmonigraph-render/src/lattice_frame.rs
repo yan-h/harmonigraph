@@ -451,6 +451,9 @@ impl LatticeCallback {
                     render_scale,
                     bloom_strength: bloom_strength(scene.bloom_strength),
                     background: Float4(scene.background.to_array()),
+                    edge_softness_pixels: scene.edge_softness_points,
+                    padding: 0.0,
+                    padding2: Float2::default(),
                 },
                 camera: CameraParams {
                     view_proj: Matrix4(view_proj.to_cols_array_2d().map(Float4)),

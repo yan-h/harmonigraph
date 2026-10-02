@@ -112,7 +112,13 @@ pub(crate) fn render_pane(
                     );
                     state.appearance.view.shadow = shadow;
                 }
-                Pane::Lattice => preview_lattice(ui, rect, state, now),
+                Pane::Lattice => preview_lattice(
+                    ui,
+                    rect,
+                    state,
+                    now,
+                    preview_scale(box_rect.width(), &state.appearance.render),
+                ),
             }
         }
 
@@ -492,7 +498,13 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 /// live copy never overwrites the docked pane's buffers within a frame — and
 /// with no GPU-time slot, since the Video pane's preview is a second lattice
 /// on screen, and reporting its cost as THE lattice cost would be wrong.
-fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState, now: f64) {
+fn preview_lattice(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    state: &mut PictureState,
+    now: f64,
+    point_scale: f32,
+) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
@@ -516,7 +528,17 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState
             state.appearance.camera.zoom_by(zoom);
         }
     }
-    super::lattice::draw_lattice(ui, rect, state, now, PREVIEW_SURFACE, background, None, None);
+    super::lattice::draw_lattice(
+        ui,
+        rect,
+        state,
+        now,
+        PREVIEW_SURFACE,
+        background,
+        None,
+        None,
+        point_scale,
+    );
 }
 
 /// Capturing a take: the switch, what it is doing, and the clear that gives it
@@ -1189,7 +1211,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        preview_lattice(ui, rect, &mut state, 0.0);
+                        preview_lattice(ui, rect, &mut state, 0.0, 1.0);
                         remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
                     },
                 );

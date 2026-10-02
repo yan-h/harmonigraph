@@ -189,6 +189,7 @@ pub(super) fn parity_scene() -> Scene {
     ];
     let glow_rows = nodes.len() as u32;
     Scene {
+        edge_softness_points: 1.0,
         nodes,
         camera: harmonigraph_scene::Camera::default(),
         // The ground the lattice stands on, as the app hands it in.

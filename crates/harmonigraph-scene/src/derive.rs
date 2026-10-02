@@ -152,6 +152,7 @@ pub fn derive_scene_with_extra(
     let rings = view.rings();
 
     Scene {
+        edge_softness_points: 1.0,
         nodes,
         camera,
         node_radius: NODE_RADIUS_FACTOR,

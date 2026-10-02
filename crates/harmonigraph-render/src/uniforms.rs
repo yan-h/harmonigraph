@@ -58,6 +58,9 @@ uniform_group! {
         bloom_strength: f32,
         /// Pane fill participates in the local display-range cap.
         background: Float4,
+        edge_softness_pixels: f32,
+        padding: f32,
+        padding2: Float2,
     }
 }
 uniform_group! {

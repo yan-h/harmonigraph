@@ -257,6 +257,7 @@ fn vs_shadow_cell(
 
 @fragment
 fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
+    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
     let d = box_distance(in);
     var source = in;
     // Only the producer repurposes outline_reach as the expansion radius.
@@ -616,6 +617,7 @@ fn body_held(in: VertexOut) -> f32 {
 /// end of the note INSIDE a box that carries a lead — a place the mask above
 /// keeps the wrap out of, correctly, and where an edge nonetheless is.
 fn outline_color(in: VertexOut) -> vec4<f32> {
+    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
     let d = box_distance(in);
     let held = body_held(in);
     let wrap = outline_coverage(in, d, in.outline_reach) * (1.0 - max(inside(in, d, 0.0), held))
@@ -627,6 +629,7 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
 /// lead still stands, without its fade. Blended into the union in `prepare`.
 @fragment
 fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
+    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
     return vec4<f32>(inside(in, box_distance(in), 0.0) * lead_coverage(in), 0.0, 0.0, 1.0);
 }
 
@@ -637,6 +640,7 @@ fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
 /// The bloom pass draws the bodies through this too, so a note's halo is lit
 /// at the opacity the note is drawn at (#1289).
 fn core_color(in: VertexOut) -> vec4<f32> {
+    if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
     return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, in.fade);
 }
 
