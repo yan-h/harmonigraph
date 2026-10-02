@@ -740,22 +740,23 @@ fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
     let s = cloud.star_slices[k];
     let salt = 1000u + 3u * k;
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
+    let d = star_draw(s, hashed, salt);
+    let at = (vec2<f32>(cell) + d.centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
+    let level = star_level_at(at);
+    var paint = star_paint(level, star_rank(d.own.x));
+    if d.blend > 0.0 { paint = mix(paint, star_paint(level, star_rank(d.other.x)), d.blend); }
+    let current = vec4<f32>(linear_from_gamma_rgb(paint), level);
+    if cloud.memory_valid == 0u { return current; }
     let stagger = star_hash(hashed, salt + 2u).x;
     let life = u32(floor(cloud.star_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
-    let key = salt + ((life + 1u) << 16u);
-    let a = star_hash(hashed, key);
-    let centre = 0.5 + s.width * (a.xy - 0.5);
-    let at = (vec2<f32>(cell) + centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
-    let level = star_level_at(at);
-    let rank_draw = star_hash(hashed, key + 1u).x;
-    let rank = pow(rank_draw, 1.0 + 6.0 * cloud.star_randomness) * (2.0 + 6.0 * cloud.star_randomness);
-    let current = vec4<f32>(linear_from_gamma_rgb(star_paint(level, rank)), level);
-    if cloud.memory_valid == 0u { return current; }
     let old_life = u32(floor(cloud.previous_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
     let previous = cloud.previous_slices[k];
     // Signed nearest periodic cell difference carries identity across drift's wrap.
     let local = ((cell - previous.origin + STAR_HASH_PERIOD / 2) & vec2<i32>(STAR_HASH_PERIOD - 1)) - STAR_HASH_PERIOD / 2;
-    if old_life != life || any(local < vec2<i32>(0)) || any(local >= previous.grid) { return current; }
+    // A star that keeps its place is one star through all its lives, so its
+    // colour carries across them; any other is new each life.
+    let new_star = s.twinkle >= 1.0 && old_life != life;
+    if new_star || any(local < vec2<i32>(0)) || any(local >= previous.grid) { return current; }
     let index = previous.base + local.y * previous.grid.x + local.x;
     return remembered(current, textureLoad(color_memory, atlas_texel(index), 0));
 }

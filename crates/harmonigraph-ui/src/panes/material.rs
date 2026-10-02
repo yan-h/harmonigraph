@@ -216,8 +216,16 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
     .unit(1.0, " s")
     .show(ui)
     .on_hover_text(
-        "How long each star lives before a new one takes its place, fading in and out, alike at every depth.",
+        "How long each star lives before a new one takes its place, alike at every depth. Twinkle says how it gives way.",
     );
+    for (value, name, end) in [
+        (&mut atmosphere.star_twinkle_far, "Far twinkle", "farthest"),
+        (&mut atmosphere.star_twinkle_near, "Near twinkle", "nearest"),
+    ] {
+        ValueBar::new(value, 0.0..=1.0, name).percent().show(ui).on_hover_text(format!(
+            "How far the {end} layer's stars fade out when their lifetime ends; the layers between take evenly spaced values. At 100% each star fades to nothing and a new one appears somewhere else nearby. Below 100% each star stays in its place, dims only this far and changes into its next life's brightness and size. At 0% it never dims, so a layer packed tight enough to cover the sky never shows a gap."
+        ));
+    }
 }
 
 /// The S1 body-light material; every body contributes its own sampled light.

@@ -646,3 +646,62 @@ fn a_core_depth_draws_its_stars_whole() {
         assert_eq!(frames[0], frames[1], "jitter={jitter}: the 1x1 read cut a star");
     }
 }
+
+/// At `Twinkle` 0 a layer at the closest `Star spacing` covers the sky at
+/// every moment, at full `Position variation`: no star dips as its life turns
+/// over. At 100% the same layer shows the floor through cracks wherever the
+/// one star that reached a pixel is fading, which is what this fixture
+/// measured before the dial.
+#[test]
+fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
+    let Some((device, queue)) = headless_device() else { return };
+    let _split = SplitOverride::set(Some(false));
+    let (width, height) = (480, 270);
+    let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
+    // Even light under every star, and every star the same brightness and
+    // size, so a pixel below the stars' level is the floor showing through.
+    cb.grid.fill(220);
+    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+    stars.star_solo = [false, false, false, false, true];
+    stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
+    stars.star_halo_resolution = 1.0;
+    (stars.star_size_far, stars.star_size_near) = (30.0, 30.0);
+    let closest = harmonigraph_scene::STAR_SPACING_MIN;
+    (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (closest, closest);
+    (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (1.0, 0.0, 0.0);
+    (stars.star_solid_far, stars.star_solid_near, stars.star_glow_falloff) = (0.9, 0.9, 0.0);
+    let mut darkest = Vec::new();
+    for twinkle in [0.0, 1.0] {
+        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+        (stars.star_twinkle_far, stars.star_twinkle_near) = (twinkle, twinkle);
+        let mut resources = CallbackResources::default();
+        let mut sums = Vec::new();
+        // A dozen moments over four lives, so every cell turns over.
+        for step in 0..12u64 {
+            cb.pass_nr = step;
+            cb.atmosphere.as_mut().unwrap().now = 3.25 + step as f64;
+            let frame = frame_at_ppp(&device, &queue, &mut resources, &cb, 1.0);
+            let side = width as usize + 1;
+            for y in 10..height as usize - 10 {
+                for x in 10..width as usize - 10 {
+                    let pixel = &frame[(y * side + x) * 4..][..3];
+                    sums.push(pixel.iter().map(|&c| u32::from(c)).sum::<u32>());
+                }
+            }
+        }
+        let mut sorted = sums.clone();
+        sorted.sort_unstable();
+        let level = sorted[sorted.len() / 2] as f32;
+        darkest.push((
+            sorted[0] as f32 / level,
+            sums.iter().filter(|&&s| (s as f32) < 0.8 * level).count(),
+        ));
+    }
+    let [(held, _), (twinkling, cracks)] = darkest[..] else { unreachable!() };
+    // Measured 0.96 held; 0.75 is the floor showing through.
+    assert!(held > 0.9, "a held layer dipped to {held} of its level");
+    assert!(
+        twinkling < 0.8 && cracks > 50,
+        "the twinkling layer showed {cracks} cracks, darkest {twinkling}"
+    );
+}

@@ -518,9 +518,20 @@ pub struct StarSettings {
     /// [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
     pub star_speed_curve: f32,
     /// How long one star lives, in seconds, before its cell draws a new one,
-    /// alike at every depth. Each fades in and out over its life. Runs over
+    /// alike at every depth. Each fades in and out over its life, as far as
+    /// [`Self::star_twinkle_far`] says. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
+    /// How far the farthest depth's stars fade out as one life gives way to
+    /// the next, over 0..=1. At 1 each star fades to nothing and the next is
+    /// drawn somewhere new in its cell. Below 1 a cell's star keeps its place
+    /// across lives, dips only this far, and blends into the next life's
+    /// brightness and size, so at 0 a layer dense enough to cover the sky
+    /// never opens a hole. A depth `d` from 0 (far) to 1 (near) takes
+    /// `far + (near - far) d`.
+    pub star_twinkle_far: f32,
+    /// The nearest depth's twinkle. See [`Self::star_twinkle_far`].
+    pub star_twinkle_near: f32,
     /// How much of the farthest depth's stars is solid: the share of the
     /// star's radius at full coverage, the rest being glow that falls to
     /// nothing at the star's edge ([`crate::star_plan::star_profile`]). A depth
@@ -586,6 +597,9 @@ impl Default for StarSettings {
             star_speed_near: 0.16860056,
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
+            // Every star fades to nothing and is drawn anew, as before the dial.
+            star_twinkle_far: 1.0,
+            star_twinkle_near: 1.0,
             // Fitted to the Gaussian-core-and-glow stars this replaced, at their
             // fresh dials, over the star's area at every depth.
             star_solid_far: 0.48,
@@ -670,6 +684,12 @@ impl StarSettings {
         );
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
+        pair(
+            &mut self.star_twinkle_far,
+            &mut self.star_twinkle_near,
+            [fresh.star_twinkle_far, fresh.star_twinkle_near],
+            0.0..=1.0,
+        );
         self.star_solid_far = clamp(self.star_solid_far, fresh.star_solid_far, 0.0, STAR_SOLID_MAX);
         self.star_solid_near =
             clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);

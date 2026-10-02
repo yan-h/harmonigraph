@@ -972,6 +972,8 @@ fn memory_key(
                 star_speed_near: _,     // carried by absolute cell and per-cell life
                 star_speed_curve: _,    // carried by absolute cell and per-cell life
                 star_lifetime: _,       // carried by absolute cell and per-cell life
+                star_twinkle_far: _,    // only whether a depth holds its stars, below
+                star_twinkle_near: _,   // only whether a depth holds its stars, below
                 star_halo_resolution: _, // sampling does not change material identity
                 star_halo_profile: _,   // sampling does not change material identity
                 star_solid_far: _,      // response/coverage changes do not change material identity
@@ -1018,6 +1020,10 @@ fn memory_key(
             values.extend(s.stars.plan().depths.map(|depth| {
                 u32::from(depth.gather != harmonigraph_scene::star_plan::StarGather::Off) as f32
             }));
+            // Whether each depth's stars keep their place across lives: that
+            // moves every star and makes a life's colour its last one's. How
+            // far a held star dips or blends is response, not identity.
+            values.extend(s.stars.plan().depths.map(|depth| u32::from(depth.twinkle < 1.0) as f32));
         }
         CloudStyle::VelvetScales => values.extend([
             3.0,
