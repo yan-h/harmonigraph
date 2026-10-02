@@ -98,6 +98,9 @@
 #     what says, is stale and does not protect anything. Every other reading
 #     of a live pid counts as live; `.claude/tests/reclaim-locks.sh` is the
 #     gate on that, because getting it wrong deletes a directory
+#   - it is not locked by a live AGENT — the `claude agent` lock that Remote
+#     Control's `--spawn worktree` writes names the long-lived daemon's pid,
+#     so liveness there is read from process cwds instead; see the lock check
 #   - nothing near its top level was touched in the last MIN_IDLE_MINUTES
 #
 # A worktree's cache is PRUNED (tier 1) on the same ownership, session and
@@ -427,6 +430,45 @@ detach_delete() {
   return 0
 }
 
+# Every process cwd on the machine, one physical path per line, read once per
+# run and only when a `claude agent` lock asks (see usable). CWDS_OK is the
+# positive control: this script's own cwd has to be in the list, because an
+# lsof that cannot see the cwd of the process that ran it cannot be trusted to
+# see a session's, and an empty list would read every agent lock as stale.
+PROC_CWDS=""
+CWDS_TRIED=0
+CWDS_OK=0
+
+load_cwds() {
+  [ "$CWDS_TRIED" = 1 ] && return 0
+  CWDS_TRIED=1
+  command -v lsof >/dev/null 2>&1 || return 0
+  # -Fn prints `n<path>` per cwd; -n -P -w skip DNS, port names and warnings.
+  PROC_CWDS=$(lsof -nP -w -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+  grep -Fxq "$(pwd -P)" <<<"$PROC_CWDS" && CWDS_OK=1
+  return 0
+}
+
+# 0 when some process has its cwd at or below $1, 1 when none does, 2 when the
+# cwds could not be read — which the caller treats as held.
+cwd_inside() {
+  load_cwds
+  [ "$CWDS_OK" = 1 ] || return 2
+  real=$(cd "$1" 2>/dev/null && pwd -P) || return 2
+  # ENVIRON rather than -v, which would read backslashes in the path as escapes.
+  P=$real awk 'BEGIN { p = ENVIRON["P"] }
+    $0 == p || index($0, p "/") == 1 { found = 1; exit }
+    END { exit !found }' <<<"$PROC_CWDS"
+}
+
+# The cache a skipped worktree goes on holding, for the dry run's closing tally.
+note_held() {
+  [ "$DRY_RUN" = 1 ] || return 0
+  kb=$(du -sk "$2/target/debug" "$2/target/doc" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  HELD_LOCKED_KB=$((HELD_LOCKED_KB + ${kb:-0}))
+  note "skip $1: $3 (holding $(human "${kb:-0}") of cache)"
+}
+
 # Ownership checks shared by both tiers. Non-zero means leave this worktree
 # completely alone.
 usable() {
@@ -450,24 +492,53 @@ usable() {
   # Never saw off the branch we are sitting on.
   case "$SESSION_CWD/" in
     "$path"/*)
-      if [ "$DRY_RUN" = 1 ]; then
-        kb=$(du -sk "$path/target/debug" "$path/target/doc" 2>/dev/null | awk '{s+=$1} END{print s+0}')
-        HELD_LOCKED_KB=$((HELD_LOCKED_KB + ${kb:-0}))
-        note "skip $name: this session is running in it (holding $(human "${kb:-0}") of cache)"
-      fi
+      note_held "$name" "$path" "this session is running in it"
       return 1 ;;
   esac
 
   # A lock naming a live pid means a session still owns this worktree. A lock we
   # cannot attribute to a pid is left alone rather than guessed at.
   #
-  # Attributable means written by the harness, in its own format, and the whole
-  # string has to match — a bare `pid <n>` anywhere in the reason is not enough.
-  # Prose naming a number is what a PERSON writes, and a person's lock is the
-  # one this script must never answer for: CLAUDE.md tells sessions a
-  # hand-written lock stands until a human clears it, so reading a pid out of
-  # its prose and finding it dead would delete the worktree that promise covers.
+  # Attributable means written by the harness, in one of its own two formats,
+  # and the whole string has to match — a bare `pid <n>` anywhere in the reason
+  # is not enough. Prose naming a number is what a PERSON writes, and a
+  # person's lock is the one this script must never answer for: CLAUDE.md tells
+  # sessions a hand-written lock stands until a human clears it, so reading a
+  # pid out of its prose and finding it dead would delete the worktree that
+  # promise covers.
   if [ "$locked" = 1 ]; then
+    # `claude agent <name> (pid <n> start <date>)` is what Remote Control writes
+    # for a worktree it spawns (`claude remote-control --spawn worktree`), and
+    # its pid is the DAEMON's, not the session's. The daemon outlives every
+    # session it spawns, so that pid is alive for as long as the phone bridge
+    # is up — reading it the way the session branch below does made each of
+    # these locks permanent. One held 8.2G (7.3G of it target/debug) on a disk
+    # at 95%, its HEAD the head sha of merged #1354, with nothing running in it
+    # (2026-10-02).
+    #
+    # So the pid is ignored and the question is asked of the worktree itself:
+    # does any process have its cwd there? A session, the cargo build it
+    # started, and a terminal someone left open in it all do, which is why
+    # this asks every process and not only `claude`. It errs live wherever it
+    # cannot read — lsof missing, or failing to see even this script's own cwd.
+    #
+    # What it cannot see is a session that holds no process between turns. A
+    # cwd-less agent worktree is still only pruned after PRUNE_IDLE_MINUTES of
+    # no build and removed after MIN_IDLE_MINUTES of no writes, resolved work
+    # and a clean tree, so the most a wrong "stale" here costs is a debug
+    # rebuild or the release build of a branch whose PR is already decided.
+    if [ -n "$(printf '%s' "$reason" | \
+      sed -n '/^ *claude agent .* (pid [0-9][0-9]* start .*)$/p')" ]; then
+      cwd_inside "$path"
+      case $? in
+        0) note_held "$name" "$path" "agent lock, and a process is running in it"
+           return 1 ;;
+        1) note "stale lock $name: agent lock, and no process has its cwd inside"
+           return 0 ;;
+        *) note_held "$name" "$path" "agent lock, and process cwds are unreadable"
+           return 1 ;;
+      esac
+    fi
     pid=$(printf '%s' "$reason" | \
       sed -n 's/^ *claude session .* (pid \([0-9][0-9]*\) start .*)$/\1/p')
     if [ -z "$pid" ]; then
@@ -506,11 +577,7 @@ usable() {
             return 0
           fi ;;
       esac
-      if [ "$DRY_RUN" = 1 ]; then
-        kb=$(du -sk "$path/target/debug" "$path/target/doc" 2>/dev/null | awk '{s+=$1} END{print s+0}')
-        HELD_LOCKED_KB=$((HELD_LOCKED_KB + ${kb:-0}))
-        note "skip $name: locked by live pid $pid (holding $(human "${kb:-0}") of cache)"
-      fi
+      note_held "$name" "$path" "locked by live pid $pid"
       return 1
     fi
   fi
