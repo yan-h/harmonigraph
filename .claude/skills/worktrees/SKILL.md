@@ -67,7 +67,9 @@ claude agent <name> (pid <n> start <date>)
 The harness drops ` start <date>` when it cannot read the start time, and the script accepts both.
 The Agent tool's `isolation: "worktree"` writes the `agent` shape as `agent-a<hex>` with its parent session's pid, which the script reads like a session's.
 Remote Control writes it as `bridge-<id>` for a worktree `claude remote-control --spawn worktree` creates, and that pid is the daemon's, which outlives every session it spawns.
-For `bridge-` alone, the script ignores the pid's liveness and reads the lock as live while any process has its cwd inside the worktree, or while `lsof` cannot show it the daemon's cwd.
+For `bridge-` alone, a live pid does not hold the lock:
+the script reads it as live while any of the user's processes has its cwd inside the worktree, or while `lsof` cannot show the cwd of a control process —
+the daemon while it lives, the script itself once the daemon is gone.
 
 A reason that matches neither belongs to nobody, and all of them are right to leave it alone rather than guess at whose it is.
 That makes a hand-written lock the one lock here that NOTHING can release:

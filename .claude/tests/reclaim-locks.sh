@@ -233,6 +233,8 @@ check_handmade_lock() {
 #           (the boundary a bare prefix match gets wrong)
 #   blind   lsof lists other processes but not the daemon      -> held
 #           (a sandbox that sees only part of the process table)
+#   gone    the daemon is dead, nothing is inside, and lsof     -> stale
+#           lists the script itself, the fallback control
 #
 # The stale cases assert "would remove", not just "stale lock": the idle and
 # resolved gates come after, and only reaching the removal line proves a live
@@ -245,7 +247,13 @@ check_agent_lock() {
   main="$work/main"
   mkdir -p "$main" "$work/bin"
 
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$work/bin/ps"
+  # Alive and this user's, which is what makes the daemon the control —
+  # except in `gone`, where every pid is dead.
+  if [ "$mode" = gone ]; then
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$work/bin/ps"
+  else
+    printf '#!/usr/bin/env bash\ncase "$*" in *uid=*) id -u ;; esac\nexit 0\n' > "$work/bin/ps"
+  fi
   chmod +x "$work/bin/ps"
 
   (
@@ -266,11 +274,16 @@ check_agent_lock() {
 
   # `-Fpn` output: a `p<pid>` line, then that process's `n<cwd>`. Pid 4242 is
   # the lock's daemon, which the script needs to see before believing the rest.
+  # In `gone` the control is the script, which is lsof's parent or, through a
+  # `$( )` subshell, its grandparent — so the shim lists both, found with the
+  # real ps since the shimmed one is dead to every pid in this mode.
   wt=$(cd "$main/.claude/worktrees/w1" && pwd -P)
+  real_ps=$(command -v ps)
   case "$mode" in
     inside) listing="p4242\nn/\np7\nn$wt" ;;
     none)   listing="p4242\nn/\np7\nn${wt}x" ;;
     blind)  listing="p7\nn/elsewhere" ;;
+    gone)   listing="p\$PPID\nn/\np\$($real_ps -o ppid= -p \$PPID | tr -d ' ')\nn/\np7\nn${wt}x" ;;
   esac
   printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$listing" > "$work/bin/lsof"
   chmod +x "$work/bin/lsof"
@@ -281,8 +294,10 @@ check_agent_lock() {
     RECLAIM_DRY_RUN=1 RECLAIM_FORCE=1 RECLAIM_NO_NETWORK=1 \
     RECLAIM_MIN_IDLE_MINUTES=0 "$SCRIPT" </dev/null 2>&1)
 
+  # A case that expects the lock to hold must also show nothing removable:
+  # the skip line alone would pass a branch that printed it and returned 0.
   if grep -q "$want" <<<"$out" &&
-    { [ "$mode" = none ] || ! grep -q "would remove" <<<"$out"; }; then
+    { [ "${want#would remove}" != "$want" ] || ! grep -q "would remove" <<<"$out"; }; then
     echo "✓ $desc"
   else
     echo "✗ $desc" >&2
@@ -796,6 +811,9 @@ check_agent_lock none "a harness lock without a start time is still read" \
 check_agent_lock blind "a Remote Control lock is live when lsof cannot see its daemon" \
   "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
   "skip w1: Remote Control lock, and lsof cannot show process cwds"
+check_agent_lock gone "a Remote Control lock whose daemon is gone falls back to the script" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "would remove .*w1"
 check_agent_lock none "an Agent tool lock is read by its parent session's pid" \
   "claude agent agent-a0123456789abcdef (pid 4242 start Thu Oct  1 09:00:00 2026)" \
   "skip w1: locked by live pid 4242"

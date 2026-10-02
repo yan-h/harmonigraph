@@ -430,9 +430,11 @@ detach_delete() {
   return 0
 }
 
-# Every process's cwd on the machine, read once per run and only when a
+# The cwd of every process this user owns, read once per run and only when a
 # Remote Control lock asks (see usable): `p<pid>` and `n<path>` lines, the
-# paths physical. -n -P -w skip DNS, port names and warnings; -b keeps lsof
+# paths physical. Another user's processes are left out because a non-root
+# lsof cannot read their cwds anyway, and sessions, builds and terminals are
+# all this user's. -n -P -w skip DNS, port names and warnings; -b keeps lsof
 # from blocking on a stale network mount at session start.
 LSOF_OUT=""
 LSOF_TRIED=0
@@ -440,19 +442,23 @@ LSOF_TRIED=0
 # 0 when some process has its cwd at or below $1, 1 when none does, 2 when the
 # cwds could not be read — which the caller treats as held.
 #
-# $2 is the positive control: a pid lsof must list before its silence about
-# the worktree means anything. The lock's daemon while it is alive, since it is
-# outside this script's own process tree, which is the one thing a sandboxed
-# hand-run still sees; this script itself once the daemon has gone. An empty
-# list, or one that misses the control, would read every lock as stale.
+# $2 is the positive control: a pid whose cwd lsof must list before its
+# silence about the worktree means anything, since an empty or failed listing
+# would otherwise read every lock as stale. It is the lock's daemon while ps
+# shows it alive and this user's, which also proves lsof sees past this
+# script's own process tree; otherwise this script itself, which proves only
+# that lsof works. A recycled pid owned by someone else is the reason for the
+# owner test — its cwd is unreadable, and the control would never pass. An
+# environment that hides other processes from ps and lsof alike is not
+# detected; the SessionStart hook does not run in one.
 cwd_inside() {
   if [ "$LSOF_TRIED" = 0 ]; then
     LSOF_TRIED=1
     command -v lsof >/dev/null 2>&1 &&
-      LSOF_OUT=$(lsof -nP -w -b -d cwd -Fpn 2>/dev/null)
+      LSOF_OUT=$(lsof -nP -w -b -a -u "$(id -u)" -d cwd -Fpn 2>/dev/null)
   fi
   ctl=$2
-  ps -p "$ctl" >/dev/null 2>&1 || ctl=$$
+  [ "$(ps -p "$ctl" -o uid= 2>/dev/null | tr -d ' ')" = "$(id -u)" ] || ctl=$$
   real=$(cd "$1" 2>/dev/null && pwd -P) || return 2
   # The control needs a PATH under its pid, not just the pid: a listing whose
   # `n` lines went missing would otherwise pass it and find nothing inside.
@@ -513,13 +519,12 @@ usable() {
   # so reading a pid out of its prose and finding it dead would delete the
   # worktree that promise covers.
   if [ "$locked" = 1 ]; then
-    lock=$(printf '%s' "$reason" | sed -nE \
-      's/^ *claude (agent bridge-|agent |session ).+ \(pid ([0-9]+)( start .+)?\)$/\1|\2/p')
-    if [ -z "$lock" ]; then
+    pid=$(printf '%s' "$reason" | sed -nE \
+      's/^ *claude (agent|session) .+ \(pid ([0-9]+)( start .+)?\)$/\2/p')
+    if [ -z "$pid" ]; then
       note "skip $name: locked by a reason this script did not write"
       return 1
     fi
-    pid=${lock##*|}
 
     # `claude agent bridge-<id>` is Remote Control's lock, for a worktree
     # `claude remote-control --spawn worktree` creates, and its pid is the
@@ -545,8 +550,9 @@ usable() {
     # resolved includes a worktree still sitting on main's own commit, so a
     # session that had made no commit could lose its worktree. That needs its
     # child process gone while the session lives on, which the daemon does not
-    # do; anything this cannot read reads live.
-    if [ "${lock%|*}" = "agent bridge-" ]; then
+    # do: it keeps each child unless told to exit on idle (`idleExitAfterMs`,
+    # zero for these). A listing that cannot show the control reads live.
+    if [ -n "$(printf '%s' "$reason" | sed -n '/^ *claude agent bridge-/p')" ]; then
       cwd_inside "$path" "$pid"
       case $? in
         0) note_held "$name" "$path" "Remote Control lock, and a process is running in it"
