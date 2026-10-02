@@ -33,8 +33,8 @@ JSON-quoted a second time (a persisted field is stored serialized), so it
 arrives as `"(version:..)"` and is decoded once more before parsing as RON.
 Its `appearance` member holds camera, view, spectrum and video settings;
 --appearance prints that complete document for the offline renderer.
-nice-plug can also zstd-compress that JSON (see its wrapper/state.rs), so
-this tries zstd too, and plaintext, before giving up.
+This tries raw DEFLATE, zlib-wrapped DEFLATE and plaintext before giving up;
+nice-plug's optional zstd compression is not enabled in this build.
 """
 
 import argparse

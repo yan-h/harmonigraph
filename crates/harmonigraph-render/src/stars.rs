@@ -104,9 +104,9 @@ pub(crate) const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb
 /// Apply it to drawn device pixels, independent of display scale and star count.
 pub(crate) const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
 /// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
-/// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
-/// million; only the finest `Star spacing`, or a still wider pane, asks for
-/// more (see [`star_layout`]).
+/// fresh dials a 16:9 pane takes about 1.2 million and an 8:1 strip about 5.4
+/// million; a pane wider than about 6.3:1, or a finer `Star spacing`, asks
+/// for more (see [`star_layout`]).
 const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
 /// cell's index splits into a texel with a mask and a shift.
@@ -202,14 +202,19 @@ impl StarLayout {
 /// the finest `Star spacing`, where a far cell is a fraction of a pixel on any
 /// real pane — the finest cells are raised to the
 /// smallest floor that fits, so those slices hold fewer, sparser stars and
-/// every other slice is untouched.
+/// every other slice is untouched. The floor is the whole field's: solo only
+/// leaves slices unbaked, so a soloed layer keeps the cells it is mixed at.
 pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f32) -> StarLayout {
     let wanted = star_cells(settings);
-    let drawn = settings.plan().depths.map(|depth| depth.gather != StarGather::Off);
-    let at = |floor| StarLayout::at(wanted, drawn, floor, aspect);
-    let whole = at(0.0);
-    if whole.fits() {
-        return whole;
+    let drawn_by = |settings: harmonigraph_scene::StarSettings| {
+        settings.plan().depths.map(|depth| depth.gather != StarGather::Off)
+    };
+    let drawn = drawn_by(settings);
+    let unsoloed = harmonigraph_scene::StarSettings { star_solo: Default::default(), ..settings };
+    let field = drawn_by(unsoloed);
+    let at = |floor| StarLayout::at(wanted, field, floor, aspect);
+    if at(0.0).fits() {
+        return StarLayout::at(wanted, drawn, 0.0, aspect);
     }
     let mut high = wanted.iter().copied().fold(f32::INFINITY, f32::min).max(1e-3);
     while !at(high).fits() {
@@ -224,7 +229,7 @@ pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f3
             low = mid;
         }
     }
-    at(high)
+    StarLayout::at(wanted, drawn, high, aspect)
 }
 
 /// The atlas to allocate for `needed` texels, keeping the one `held` while it
