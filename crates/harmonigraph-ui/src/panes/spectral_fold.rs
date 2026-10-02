@@ -1595,6 +1595,20 @@ mod tests {
         use crate::{SpectrumTapers, SpectrumWindow};
         for (window, tapers, reading, strict, held) in [
             (
+                SpectrumWindow::Fast,
+                SpectrumTapers::One,
+                SpectralReading::Fold,
+                0.001724211,
+                0.00089501316,
+            ),
+            (
+                SpectrumWindow::Fast,
+                SpectrumTapers::One,
+                SpectralReading::Spectrum,
+                0.0017096889,
+                0.0008874749,
+            ),
+            (
                 SpectrumWindow::Balanced,
                 SpectrumTapers::One,
                 SpectralReading::Fold,
