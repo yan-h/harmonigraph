@@ -356,7 +356,7 @@ pub(super) fn fixture_export() -> harmonigraph_take::render::ExportJob {
         id: 7,
         take: "music.take".into(),
         output: "music.mp4".into(),
-        size: [1280, 720],
+        size: Some([1280, 720]),
         state: harmonigraph_take::render::ExportStatus::Running,
         progress: FIXTURE_RENDER,
         detail: String::new(),

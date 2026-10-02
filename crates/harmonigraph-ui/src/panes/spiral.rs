@@ -139,10 +139,9 @@ const SEAM_SEGMENT_PT: f32 = 6.0;
 /// this.
 const DOT: (f32, f32) = (0.7, 3.0);
 
-/// The retired fixed backing's inset. It remains only as the colored dot's
-/// established body size; the backing itself is now the inherited spectral
-/// geometry shadow.
-const DOT_RING_PT: f32 = 1.25;
+/// Clearance inside the nominal dot extent, keeping the coloured body distinct
+/// from the track. On narrow tracks the body retains at least half its extent.
+const DOT_CLEARANCE_PT: f32 = 1.25;
 
 /// How far past the track's own thickness a note's mark may reach, as a share
 /// of half the track. The turns abut, so the overhang runs into the octaves
@@ -466,8 +465,8 @@ impl Spiral {
     }
 
     /// The radius of the coloured dot a sounding note is marked with: the
-    /// extent [`DOT`] sets, less the retired backing's inset
-    /// ([`DOT_RING_PT`]).
+    /// extent [`DOT`] sets, less the body clearance
+    /// ([`DOT_CLEARANCE_PT`]).
     ///
     /// Capped at HALF the track, which is the bound that is not a matter of
     /// taste: a dot past it crosses into the octaves either side, and which
@@ -482,7 +481,7 @@ impl Spiral {
         // Never under half the extent, so a track thin enough to shrink the
         // mark below two insets' worth still has a dot to carry the note's
         // colour, which is what says WHICH note this is.
-        (extent - DOT_RING_PT).max(extent * 0.5)
+        (extent - DOT_CLEARANCE_PT).max(extent * 0.5)
     }
 
     /// How much of [`NAME_PT`] the rim names are drawn at: the whole band

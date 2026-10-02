@@ -34,7 +34,7 @@ mod spectrum;
 mod state;
 pub use runtime::VisualRuntime;
 
-pub use layout::{Layout, Placement, PRESETS};
+pub use layout::{Layout, Placement};
 
 // `config`, `spectrum` and `state` are an arrangement of this file's insides,
 // not a change to what the crate exports: everything that was `pub` here is

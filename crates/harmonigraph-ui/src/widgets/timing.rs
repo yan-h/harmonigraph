@@ -34,6 +34,7 @@ pub(crate) fn fade(ui: &mut Ui, seconds: &mut f32, shape: &mut f32) -> Response 
     curve(&plot, ui, |p| (p * *seconds, sample(*shape, p as f64)), super::value::curve_color());
     plot.dot(ui, *seconds, 1.0);
     plot.dot(ui, *seconds * 0.5, sample(*shape, 0.5));
+    plot.response.on_hover_text("Note fade controls MIDI slices, marks, labels and ring visibility. A release during arrival reverses from the current level.");
     duration_response | numeric
 }
 
@@ -44,7 +45,7 @@ pub(crate) fn response(
     max: f32,
     labels: [&str; 2],
     unit: f32,
-) {
+) -> egui::Response {
     ui.push_id(labels[0], |ui| {
         let plot = Plot::with_fields(ui, "Response", 2);
         let rise_y = |t:f32| if t == 0.0 { 1.0 } else { 1.0 - (-1.0f32).exp() };
@@ -62,6 +63,6 @@ pub(crate) fn response(
         curve(&plot,ui,|p| {let t=p*p*max; (0.55+0.45*p,if *fall==0.0 {0.0}else{(-t / *fall).exp()})},theme::accent());
         plot.dot(ui,0.45*(*rise/max).sqrt(),rise_y(*rise));
         plot.dot(ui,0.55+0.45*(*fall/max).sqrt(),fall_y(*fall));
-        plot.response.on_hover_text("Independent exponential response times. Each handle marks one time constant: 63% risen or 37% remaining. Zero responds immediately. The time axis is expanded near zero.");
-    });
+        plot.response.on_hover_text("Independent exponential response times. Each handle marks one time constant: 63% risen or 37% remaining. Zero responds immediately. The time axis is expanded near zero.")
+    }).inner
 }

@@ -644,11 +644,10 @@ fn export_queue(
     for job in &interaction.take.exports {
         ui.push_id(job.id, |ui| {
             ui.label(format!(
-                "#{} {:?} · {}×{} · {}",
+                "#{} {:?} · {} · {}",
                 job.id,
                 job.state,
-                job.size[0],
-                job.size[1],
+                job.size.map_or_else(|| "captured size".into(), |[w, h]| format!("{w}×{h}")),
                 job.take.file_name().unwrap_or_default().to_string_lossy()
             ));
             crate::widgets::weak(ui, job.output.display().to_string());

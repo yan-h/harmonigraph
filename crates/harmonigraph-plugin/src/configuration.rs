@@ -412,13 +412,15 @@ impl Owner {
         self.recording.block_frames = frames;
     }
 
-    /// `retuning`: some source has Retune on, so the lattice is the target
-    /// and Learn moves only the C offset there, besides the keyboard tuning.
+    /// A Retune-enabled source reserves the lattice axes only while the engine
+    /// actually retunes. Pass through learns the axes from unchanged input.
     ///
     /// Status bit 1 reports this evaluation alone rather than latching. The
     /// held state is rebuilt every callback, so the bit clears as soon as a
     /// departure or a Reset's cut makes it complete again.
     pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
+        let retuning = retuning
+            && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.snapshot.status &= !1;
         if self.snapshot.status & 2 != 0
             || self.maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap

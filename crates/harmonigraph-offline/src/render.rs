@@ -680,7 +680,7 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
-            layout: Layout::preset("side-by-side").unwrap(),
+            layout: Layout::split(harmonigraph_ui::LatticeSide::Left, 0.68),
             // Small and 256-aligned-friendly; the point is the pipeline,
             // not the resolution.
             size: [320, 200],

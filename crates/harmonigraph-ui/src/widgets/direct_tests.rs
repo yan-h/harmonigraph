@@ -72,7 +72,13 @@ fn softness_handle_edits_both_axes() {
 #[test]
 fn threshold_can_keep_a_band_below_zero_without_changing_the_gate() {
     let (mut gate, mut band) = (0.05, 0.1);
-    drag(|ui| threshold(ui, &mut gate, &mut band), 1, egui::vec2(-80.0, 0.0));
+    drag(
+        |ui| {
+            threshold(ui, &mut gate, &mut band);
+        },
+        1,
+        egui::vec2(-80.0, 0.0),
+    );
     assert_eq!(gate, 0.05);
     assert_eq!(band, harmonigraph_scene::SPECTRAL_HYSTERESIS_MAX);
 }
@@ -106,7 +112,9 @@ fn fade_duration_gesture_is_bracketed_and_shape_does_not_edit_time() {
 fn response_times_are_independent_and_zero_is_reachable() {
     let (mut rise, mut fall) = (0.4, 0.7);
     drag(
-        |ui| response(ui, &mut rise, &mut fall, 2.0, ["Rise", "Fall"], 1000.0),
+        |ui| {
+            response(ui, &mut rise, &mut fall, 2.0, ["Rise", "Fall"], 1000.0);
+        },
         0,
         egui::vec2(-150.0, 0.0),
     );

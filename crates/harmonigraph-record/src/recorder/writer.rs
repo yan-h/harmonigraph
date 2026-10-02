@@ -19,7 +19,7 @@ fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
     RenderRequest {
         program: directory.join("no-such-renderer"),
         appearance: None,
-        size: [16, 16],
+        size: Some([16, 16]),
         notice: None,
     }
 }

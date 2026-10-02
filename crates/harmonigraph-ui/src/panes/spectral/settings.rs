@@ -70,6 +70,9 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Wide blur mix").percent().show(ui)
                     .on_hover_text("Blend the close blur with a blur five times wider. 0% uses the close blur only; 100% uses the wider field. Pitch and Time softness set their base widths.");
             });
+            let contours_visible = atmosphere.cloud_style != harmonigraph_scene::CloudStyle::Stars
+                || atmosphere.cloud_depth < 1.0;
+            ui.add_enabled_ui(contours_visible, |ui| {
             block(ui, "Level contours");
             ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
                 .percent()
@@ -90,6 +93,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 .show(ui)
                 .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
             });
+            }).response.on_disabled_hover_text("Contours affect the underlying picture, which Stars hides at 100% Texture mix.");
             block(ui, "Texture");
             use harmonigraph_scene::CloudStyle;
             choice_row(

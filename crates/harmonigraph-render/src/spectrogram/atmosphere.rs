@@ -1699,7 +1699,14 @@ impl Targets {
             spread: settings.spread,
             contours: settings.contours,
             contour_softness: settings.contour_softness,
-            contour_strength: settings.contour_strength,
+            // At full Stars mix the underlying terraced picture is hidden.
+            contour_strength: if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars
+                && settings.cloud_depth >= 1.0
+            {
+                0.0
+            } else {
+                settings.contour_strength
+            },
             tone_baked: u32::from(self.tone.is_some()),
             drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },

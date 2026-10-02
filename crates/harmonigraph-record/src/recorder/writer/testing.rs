@@ -164,7 +164,7 @@ impl FileWriter {
         let unlaunched = RenderRequest {
             program: std::path::PathBuf::new(),
             appearance: None,
-            size: [0, 0],
+            size: Some([0, 0]),
             notice: None,
         };
         self.pump.pending_stop = Some((self.fence.epoch(), Box::new(unlaunched)));

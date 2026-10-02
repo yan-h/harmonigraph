@@ -99,7 +99,8 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // section's Fade rather than at the instant the level crosses. Both are in
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
-    crate::widgets::threshold(ui, &mut view.spectral_ring_gate, &mut view.spectral_ring_hysteresis);
+    crate::widgets::threshold(ui, &mut view.spectral_ring_gate, &mut view.spectral_ring_hysteresis)
+        .on_hover_text("MIDI notes always show their rings. For other nodes, the loudest wedge opens the ring at this threshold; hysteresis sets the closing threshold. Ring visibility follows Note fade.");
     crate::widgets::response(
         ui,
         &mut view.spectral_ring_attack,
@@ -107,7 +108,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
         SPECTRAL_BALLISTICS_MAX,
         ["Ring attack", "Ring release"],
         1000.0,
-    );
+    ).on_hover_text("Ring attack and release smooth the ring levels after the Analyzer’s Live attack and release.");
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to

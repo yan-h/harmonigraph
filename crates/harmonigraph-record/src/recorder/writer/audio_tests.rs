@@ -85,7 +85,7 @@ impl Worker {
         self.control.as_ref().unwrap().stop(RenderRequest {
             program,
             appearance: None,
-            size: [16, 16],
+            size: Some([16, 16]),
             notice: None,
         });
         assert_no_alloc(|| self.close(1));
@@ -262,7 +262,7 @@ fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
         let request = || RenderRequest {
             program: program.clone(),
             appearance: None,
-            size: [16, 16],
+            size: Some([16, 16]),
             notice: None,
         };
         let recorder = worker.recorder.as_mut().unwrap();

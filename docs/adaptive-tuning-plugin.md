@@ -135,9 +135,10 @@ The learned third and seventh are not used, because on a Pythagorean-side keyboa
 The Tuning pane shows the three sizes, still editable, in a collapsed group under the Learn toggle,
 with a **Derive from fifth** button that does from the fifth shown what Learn does from the fifth it hears.
 
-The lattice axes belong to Learn only while no source has Retune on.
-With retuning off, the lattice is a picture of the input and should equal the keyboard;
-with it on, the lattice is the target, and Learn moves only the shared C offset and the keyboard tuning.
+Pass through lets Learn update the lattice axes even when a source has Retune checked.
+The lattice is then a picture of unchanged input.
+While the engine actively retunes a source,
+the lattice is its fixed target and Learn moves only the shared C offset and keyboard tuning.
 Toggling Retune copies nothing in either direction.
 
 The simulator uses the same score but has no keyboard filter.
