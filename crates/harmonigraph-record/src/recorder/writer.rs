@@ -570,12 +570,8 @@ impl CanonicalFanout {
                     if let Some(address) = route.address.filter(|a| !failure.contains(a.epoch)) {
                         record.translate(route.time_offset);
                         if let Some(pass) = open.as_mut().and_then(|o| o.addressed(address)) {
-                            if pass.source_complete {
+                            if pass.source_complete || pass.writer.canonical(record).is_err() {
                                 fence.fail();
-                            } else {
-                                if pass.writer.canonical(record).is_err() {
-                                    fence.fail();
-                                }
                             }
                         } else {
                             fence.fail();

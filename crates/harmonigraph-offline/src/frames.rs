@@ -771,8 +771,8 @@ mod tests {
     /// The audio ring's picture, written to `target/scratch/` — the only way
     /// to LOOK at this change without the DAW.
     ///
-    /// A probe: it asserts nothing, because what it produces is a judgement
-    /// (#381's verdict is Yan's, at the plugin). It is kept, and kept
+    /// A visual probe: it checks that each shot enables its subject, while
+    /// #381's visual verdict remains Yan's, at the plugin. It is kept, and kept
     /// `#[ignore]`d, because the reading conditions are the expensive part
     /// rather than the plumbing — #351 measured that the fresh extents draw a
     /// C3 saw as a haze of comma neighbours, so a picture taken at them says
@@ -795,7 +795,7 @@ mod tests {
     /// a wedge is a zoom on the node's own pitch or a copy of the whole wheel,
     /// and the two ends look nothing alike.
     #[test]
-    #[ignore = "a probe: writes PNGs and asserts nothing"]
+    #[ignore = "a visual probe: writes PNGs for inspection"]
     fn the_audio_ring_draws_a_picture() {
         const SIZE: [u32; 2] = [1200, 1000];
         // Retina-ish, so the wedges and the note names are resolved rather

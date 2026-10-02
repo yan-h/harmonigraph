@@ -55,6 +55,7 @@ if [ "$?" -ne 0 ] || [ ! -s "$TMP/guard.sh" ]; then
   exit 1
 fi
 cargo() {
+  [ "${RUSTC_WRAPPER-unset}" = '' ] || return 101
   case "$AUDIT_TREE_CASE" in
     absent) printf 'harmonigraph-plugin v0.1.0\n' ;;
     present) printf 'harmonigraph-plugin v0.1.0\nquick-xml v0.40.0\n' ;;
@@ -63,7 +64,7 @@ cargo() {
 }
 export -f cargo
 for scenario in absent present failed; do
-  AUDIT_TREE_CASE="$scenario" bash "$TMP/guard.sh" > "$TMP/output" 2>&1
+  RUSTC_WRAPPER=unavailable-sccache AUDIT_TREE_CASE="$scenario" bash "$TMP/guard.sh" > "$TMP/output" 2>&1
   result=$?
   if { [ "$scenario" = absent ] && [ "$result" -ne 0 ]; } || \
      { [ "$scenario" != absent ] && [ "$result" -eq 0 ]; }; then

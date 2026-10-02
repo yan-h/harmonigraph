@@ -148,7 +148,9 @@ jobs:
         run: |
           set -euo pipefail
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            tree=$(cargo tree --locked --target "$target" --prefix none --format '{p}')
+            # This metadata query needs rustc, but no compilation cache.
+            # Ubuntu does not install the repository's sccache wrapper.
+            tree=$(RUSTC_WRAPPER= cargo tree --locked --target "$target" --prefix none --format '{p}')
             if printf '%s\n' "$tree" | grep -E '^quick-xml v' >/dev/null; then
               echo "::error file=.cargo/audit.toml::quick-xml is now reachable on $target."
               echo "RUSTSEC-2026-0194/0195 are suppressed in .cargo/audit.toml only because"
