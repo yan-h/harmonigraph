@@ -80,8 +80,9 @@ struct StarSlice {
     inner: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
-    /// The rest of the slice's 16-byte stride is padding.
-    pad: u32,
+    /// How far its stars fade between lives: the plan's. Below 1 a star
+    /// keeps its place across its lives.
+    twinkle: f32,
 }
 }
 
@@ -287,7 +288,7 @@ pub(crate) fn star_slices(
             width: star_jitter_width(jitter),
             inner: StarGather::Core.bound(jitter),
             gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(depth.gather) },
-            pad: 0,
+            twinkle: depth.twinkle,
         }
     })
 }

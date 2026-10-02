@@ -29,7 +29,9 @@ struct StarSlice {
     // 0 not drawn, 1 the whole star from its own cell, 2 the whole star from a
     // 2x2 read, 3 its inner part plus the rest from a 3x3 halo image.
     gather: u32,
-    pad: u32,
+    // How far its stars fade between lives; below 1 a star keeps its place
+    // across them (`star_draw`).
+    twinkle: f32,
 };
 struct StarUniforms {
     origin: vec2<f32>,
@@ -88,6 +90,75 @@ fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
     return (vec4<f32>(bytes) + 0.5) / 256.0;
 }
 
+// A star's brightness rank from its draw, normalised to a mean of ONE: most
+// stars below it, a rare bright one far above, steeper with `Brightness
+// variation`.
+fn star_rank(draw: f32) -> f32 {
+    let randomness = star_randomness();
+    return pow(draw, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness);
+}
+
+// One cell's star this frame, as the bake draws it and the spectrogram's
+// colour memory remembers it.
+struct StarDraw {
+    // Its centre, from the cell's corner, in cells.
+    centre: vec2<f32>,
+    // This life's brightness and size draws, the neighbouring life's, and how
+    // far the star has turned into that one: above zero only for a star that
+    // keeps its place, within `STAR_FADE` of the turnover.
+    own: vec2<f32>,
+    other: vec2<f32>,
+    blend: f32,
+    // Its coverage this far through its life.
+    fade: f32,
+    // The cell's stagger and the life it is in, and whether its star keeps its
+    // place across lives: the colour memory carries one through them.
+    stagger: f32,
+    life: u32,
+    held: bool,
+};
+
+// `hashed` is the slice's cell wrapped to the hash's period, `salt` the slice's.
+fn star_draw(s: StarSlice, hashed: vec2<i32>, salt: u32) -> StarDraw {
+    // How far through its lives this cell is, staggered per cell. Every hash
+    // keyed on the life is a new star. The high half of the key is the life
+    // plus one: the stagger hashes at zero there, and the slices' salts all
+    // sit in the low half.
+    var d: StarDraw;
+    d.stagger = star_hash(hashed, salt + 2u).x;
+    let age = star_life() + d.stagger;
+    let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
+    d.life = life;
+    let key = salt + ((life + 1u) << 16u);
+    let through = fract(age);
+    let held = s.twinkle < 1.0;
+    d.held = held;
+    // Position variation. Every life holds a star, so a depth's count is its
+    // cell size alone. A star that keeps its place hashes it at the salt
+    // alone, which no life's key is.
+    let a = star_hash(hashed, select(key, salt, held));
+    d.centre = 0.5 + s.width * (a.xy - 0.5);
+    d.own = star_hash(hashed, key + 1u).xy;
+    d.other = d.own;
+    d.blend = 0.0;
+    // It fades in over the start of its life and out over the end, as far
+    // as its slice twinkles: all the way at 1, as before the dial.
+    let dip = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
+    d.fade = 1.0 - s.twinkle * (1.0 - dip);
+    let early = through < STAR_FADE;
+    if held && (early || through > 1.0 - STAR_FADE) {
+        // Where it keeps its place it turns into the next life's star over
+        // the window it would have faded through: from the previous life
+        // early in this one, toward the next late in it. The life clock
+        // wraps with the mask, so life 0's previous is the period's last.
+        let other = select(life + 1u, life - 1u, early) & (STAR_LIFE_PERIOD - 1u);
+        d.other = star_hash(hashed, salt + ((other + 1u) << 16u) + 1u).xy;
+        let later = smoothstep(-STAR_FADE, STAR_FADE, select(through - 1.0, through, early));
+        d.blend = select(later, 1.0 - later, early);
+    }
+    return d;
+}
+
 // One cell's star this frame, packed for `star_atlas`, or zero where the cell
 // holds none. `cell` is the slice's cell, `salt` the slice's.
 //
@@ -103,36 +174,27 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // The period is a power of two, so a mask IS the Euclidean wrap, negative
     // cells included, without `wrap_cell`'s integer divisions.
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
-    // How far through its lives this cell is, staggered per cell. Every hash
-    // below is keyed on the life, so each is a new star. The high half of the
-    // key is the life plus one: the stagger hashes at zero there, and the
-    // slices' salts all sit in the low half.
-    let age = star_life() + star_hash(hashed, salt + 2u).x;
-    let life = u32(floor(age)) & (STAR_LIFE_PERIOD - 1u);
-    let key = salt + ((life + 1u) << 16u);
-    // Position variation. Every life holds a star, so a depth's count is its cell size
-    // alone.
-    let a = star_hash(hashed, key);
-    let through = fract(age);
-    let centre = 0.5 + s.width * (a.xy - 0.5);
-    let at = (vec2<f32>(cell) + centre + s.offset) * s.cell
+    let d = star_draw(s, hashed, salt);
+    let at = (vec2<f32>(cell) + d.centre + s.offset) * s.cell
         * (star_size().y / STAR_PANE) + star_size() * 0.5;
-    let c = star_hash(hashed, key + 1u);
-    let randomness = star_randomness();
-    let paint = star_source(at, pow(c.x, 1.0 + 6.0 * randomness) * (2.0 + 6.0 * randomness), index);
+    let paint = star_source(at, star_rank(d.own.x), index);
     if paint.a <= 0.0 { return vec4<u32>(0u); }
-    let colour = paint.rgb;
+    var colour = paint.rgb;
     // Its own draw, shrinking from its depth's size: a star that grew would
     // reach past what its depth's read holds.
-    let radius = s.radius * exp(-2.4 * star_size_variation() * c.y);
-    // It fades in over the start of its life and out over the end.
-    let fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
+    var radius = s.radius * exp(-2.4 * star_size_variation() * d.own.y);
+    if d.blend > 0.0 {
+        // The same place in both lives, so the same source: only the draws
+        // differ.
+        colour = mix(colour, star_source(at, star_rank(d.other.x), index).rgb, d.blend);
+        radius = mix(radius, s.radius * exp(-2.4 * star_size_variation() * d.other.y), d.blend);
+    }
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
     return vec4<u32>(
-        bitcast<u32>(centre.x),
-        bitcast<u32>(centre.y),
+        bitcast<u32>(d.centre.x),
+        bitcast<u32>(d.centre.y),
         (tens.r << 20u) | (tens.g << 10u) | tens.b,
-        pack2x16float(vec2<f32>(1.0 / radius, fade)),
+        pack2x16float(vec2<f32>(1.0 / radius, d.fade)),
     );
 }
 

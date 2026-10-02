@@ -209,12 +209,27 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    for case in
-        ["time", "wrap", "speed-min", "speed-max", "speed-curve", "direction", "lifetime", "width"]
-    {
+    for case in [
+        "time",
+        "wrap",
+        "speed-min",
+        "speed-max",
+        "speed-curve",
+        "direction",
+        "lifetime",
+        "width",
+        "held",
+    ] {
         eprintln!("Stars memory change: {case}");
         let wrap = case == "wrap";
+        // A star that does not twinkle keeps its place, and so its colour,
+        // across its lives.
+        let held = case == "held";
         let mut cb = fixture(CloudStyle::Stars);
+        if held {
+            let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+            (stars.star_twinkle_far, stars.star_twinkle_near) = (0.0, 0.0);
+        }
         if wrap {
             let a = cb.atmosphere.as_mut().unwrap();
             a.settings.cloud_direction = 0.0;
@@ -249,7 +264,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         prepare_once(&device, &queue, &mut resources, &cb);
         let m = memory(&resources);
         assert_eq!(m.size, old_size, "{case}: fixture replaced the history allocation");
-        let held = pixels(&device, &queue, m);
+        let after = pixels(&device, &queue, m);
         let frame = m.frame.as_ref().unwrap();
         if case == "width" {
             assert!(
@@ -266,7 +281,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         }
         let floor = floor(&cb);
         let decay = (-0.25f32 / 0.6).exp();
-        let (mut carried, mut new_lives) = (0, 0);
+        let (mut carried, mut new_lives, mut carried_across) = (0, 0, 0);
         for (k, s) in frame.slices.iter().enumerate() {
             assert_ne!(s.origin, old_slices[k].origin, "slice {k} did not cross a cell");
             for y in 0..s.grid.0[1] {
@@ -279,8 +294,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
                     let hash = stagger(cell, 1002 + 3 * k as u32);
                     let same_life = (frame.life + hash).floor() as u32 & 4095
                         == (old_life + hash).floor() as u32 & 4095;
-                    let actual = held[(s.base + y * s.grid.0[0] + x) as usize];
-                    if same_life
+                    let actual = after[(s.base + y * s.grid.0[0] + x) as usize];
+                    new_lives += usize::from(!same_life);
+                    if (same_life || held)
                         && (0..previous.grid.0[0]).contains(&local[0])
                         && (0..previous.grid.0[1]).contains(&local[1])
                     {
@@ -291,9 +307,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
                             std::array::from_fn(|c| floor[c] + (old[c] - floor[c]) * decay),
                         );
                         carried += usize::from(old[3] > 0.1);
+                        carried_across += usize::from(old[3] > 0.1 && !same_life);
                     } else {
                         close(actual, floor);
-                        new_lives += usize::from(!same_life);
                     }
                 }
             }
@@ -302,6 +318,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
             carried > 1000 && new_lives > 1000,
             "{case}: carry={carried}, new lives={new_lives}"
         );
+        assert_eq!(held, carried_across > 1000, "{case}: {carried_across} carried into a new life");
     }
 }
 

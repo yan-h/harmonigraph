@@ -115,6 +115,10 @@ pub struct StarDepthPlan {
     /// The star's solid share ([`star_profile`]), between
     /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`].
     pub solid: f32,
+    /// How far its stars fade as one life gives way to the next, between
+    /// [`StarSettings::star_twinkle_far`] and [`StarSettings::star_twinkle_near`]
+    /// evenly in depth. Below 1 a star keeps its place across its lives.
+    pub twinkle: f32,
     /// Which of [`StarPlan::halo_tiers`] a [`StarGather::Three`] halo is
     /// drawn at.
     pub tier: usize,
@@ -186,6 +190,10 @@ impl StarSettings {
                 solid: {
                     let (far, near) = (self.star_solid_far, self.star_solid_near);
                     far + (near - far) * depth(k, size)
+                },
+                twinkle: {
+                    let (far, near) = (self.star_twinkle_far, self.star_twinkle_near);
+                    far + (near - far) * place(k)
                 },
                 tier,
             }
@@ -295,6 +303,21 @@ mod tests {
         );
         let want = ratio * half(fresh.star_size_far, fresh.star_size_near, fresh.star_size_curve);
         assert!((middle.cell - want).abs() < 1e-5 * want, "{} vs {want}", middle.cell);
+    }
+
+    /// Twinkle runs evenly in depth over the drawn layers, whatever the Star
+    /// size curve, and a 100% end draws that layer as before the dial.
+    #[test]
+    fn twinkle_runs_evenly_in_depth() {
+        let three = StarSettings {
+            star_layers: 3,
+            star_twinkle_far: 0.3,
+            star_twinkle_near: 1.0,
+            ..Default::default()
+        };
+        let [far, _, middle, _, near] = three.plan().depths;
+        assert_eq!((far.twinkle, near.twinkle), (0.3, 1.0));
+        assert!((middle.twinkle - 0.65).abs() < 1e-6, "{}", middle.twinkle);
     }
 
     /// A star is full out to its solid share and nothing at its edge, its glow
