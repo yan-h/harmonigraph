@@ -156,11 +156,14 @@ pub enum ConfigMutation {
 /// Pure comma resolver, used by the CLAP audio owner and synchronously by the
 /// standalone/legacy display adapter. Each comma judges the axes after earlier
 /// commas derive them, before its own derivation. Only those inputs key its verdict.
+/// An explicit release instead holds until the comma's raw axes change, so an
+/// earlier comma's switch moving the derived third does not undo it.
 #[derive(Clone, Debug)]
 pub struct ConfigReducer {
     raw: Tuning,
     modes: TuningModes,
     judged: [Option<(i32, i32, i32)>; Comma::COUNT],
+    released: [Option<(i32, i32, i32)>; Comma::COUNT],
     resolved: ResolvedConfig,
 }
 
@@ -176,6 +179,7 @@ impl ConfigReducer {
             raw,
             modes,
             judged: [None; Comma::COUNT],
+            released: [None; Comma::COUNT],
             resolved: ResolvedConfig {
                 revision: 0,
                 tuning: raw,
@@ -183,7 +187,7 @@ impl ConfigReducer {
                 policy: crate::policy::CONFIG,
             },
         };
-        reducer.resolve(None);
+        reducer.resolve();
         reducer
     }
 
@@ -200,11 +204,13 @@ impl ConfigReducer {
     /// Ask the next display observation to judge this comma again.
     pub fn recheck(&mut self, comma: Comma) {
         self.judged[comma.index()] = None;
+        self.released[comma.index()] = None;
     }
 
     /// A new display or restored appearance has no verdict about its tuning yet.
     pub fn recheck_all(&mut self) {
         self.judged = [None; Comma::COUNT];
+        self.released = [None; Comma::COUNT];
     }
 
     /// Synchronous display adapter only. CLAP must submit explicit commands;
@@ -239,6 +245,7 @@ impl ConfigReducer {
                 self.raw = raw;
                 self.modes = modes;
                 self.judged = [None; Comma::COUNT];
+                self.released = [None; Comma::COUNT];
             }
             ConfigMutation::Edit(edit) => {
                 if let Some(policy) = edit.policy {
@@ -260,11 +267,15 @@ impl ConfigReducer {
                     let i = comma.index();
                     if let Some(on) = edit.tempered[i] {
                         self.modes.tempered = self.modes.tempered.with(comma, on);
+                        self.released[i] = (!on).then(|| judged_axes(comma, self.raw));
                     }
                     if let Some(on) = edit.auto[i] {
                         self.modes.auto[i] = on;
+                        // Explicitly enabling Auto in the same command still
+                        // asks to recheck.
                         if on {
                             self.judged[i] = None;
+                            self.released[i] = None;
                         }
                     }
                 }
@@ -283,10 +294,7 @@ impl ConfigReducer {
                 self.raw = raw;
             }
         }
-        self.resolve(match mutation {
-            ConfigMutation::Edit(edit) => Some(edit),
-            _ => None,
-        });
+        self.resolve();
         // Display tolerance and acknowledgements are not musical changes.
         let mut before = previous.resolved;
         before.tuning.tolerance = self.resolved.tuning.tolerance;
@@ -300,16 +308,17 @@ impl ConfigReducer {
         true
     }
 
-    fn resolve(&mut self, edit: Option<ConfigEdit>) {
+    fn resolve(&mut self) {
         let mut tuning = self.raw;
         for comma in Comma::ALL {
             let i = comma.index();
             let axes = judged_axes(comma, tuning);
-            // An explicit choice judges these same effective inputs. It must
-            // survive this resolution and inert raw edits until an input changes;
-            // explicitly enabling Auto in the same command still asks to recheck.
-            let explicit = edit.is_some_and(|e| e.tempered[i].is_some() && e.auto[i] != Some(true));
-            if !explicit
+            if self.modes.tempered.has(comma)
+                || self.released[i] != Some(judged_axes(comma, self.raw))
+            {
+                self.released[i] = None;
+            }
+            if self.released[i].is_none()
                 && self.modes.auto[i]
                 && !self.modes.tempered.has(comma)
                 && self.judged[i] != Some(axes)
@@ -405,6 +414,27 @@ mod tests {
             ..Default::default()
         }));
         assert!(reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
+    }
+
+    #[test]
+    fn releasing_meantone_after_marvel_does_not_re_engage_marvel() {
+        // Not exactly four fifths, so releasing Meantone moves Marvel's third.
+        let mut reducer = ConfigReducer::new(
+            Tuning::from_cents(0.0, 700.0, 400.1, 1000.0, 0.5),
+            TuningModes::default(),
+        );
+        assert!(reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
+        reducer.apply(ConfigMutation::Edit(ConfigEdit {
+            tempered: [None, Some(false)],
+            ..Default::default()
+        }));
+        reducer.apply(ConfigMutation::Edit(ConfigEdit {
+            tempered: [Some(false), None],
+            ..Default::default()
+        }));
+        let modes = reducer.resolved().modes;
+        assert!(!modes.tempered.has(Comma::Syntonic));
+        assert!(!modes.tempered.has(Comma::SeptimalKleisma), "the user's release holds");
     }
 
     #[test]

@@ -744,8 +744,9 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
 }
 
 /// Both explicit releases must survive the same observation. Meantone derives
-/// the third the septimal identity reads, so releasing it changes Marvel's key;
-/// the simultaneous Marvel release judges that new key instead of re-engaging.
+/// the third the septimal identity reads, so releasing it moves that third;
+/// Marvel's release holds on the raw axes and does not re-engage. The reducer's
+/// own test covers releasing them in two separate commands.
 #[test]
 fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
     let mut state = unlocked();

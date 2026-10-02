@@ -1978,6 +1978,23 @@ mod tests {
         assert!(off.iter().zip(slices).all(|(&off, slice)| off == (slice.gather == 0)));
     }
 
+    /// Solo shows a layer as the whole field draws it. On a pane wide enough
+    /// that the atlas floors the finest cells, leaving the other layers
+    /// unbaked must not lift that floor off the soloed one.
+    #[test]
+    fn soloing_keeps_the_cells_the_whole_field_draws() {
+        use harmonigraph_scene::star_plan::STAR_DEPTHS;
+        let every = harmonigraph_scene::StarSettings::default();
+        let full = star_layout(every, 8.0);
+        assert_ne!(full.cells, crate::stars::star_cells(every), "the fixture must floor a cell");
+        for k in 0..STAR_DEPTHS {
+            let mut star_solo = [false; STAR_DEPTHS];
+            star_solo[k] = true;
+            let solo = harmonigraph_scene::StarSettings { star_solo, ..every };
+            assert_eq!(star_layout(solo, 8.0).cells, full.cells, "solo {k}");
+        }
+    }
+
     /// The halo images are allocated for exactly the depths the plan draws
     /// 3x3, at the lattice's scale too, scaled past the range a stored size
     /// can hold: Star size 20 shows as 100 there. A spacing is a multiple of
