@@ -538,6 +538,26 @@ fn tuning_of(output: &[(u32, Event)]) -> Option<f64> {
     })
 }
 
+#[test]
+fn tune_and_hub_diagnostics_publish_once_per_audio_interval() {
+    let _scope = crate::test_scope::enter();
+    for tuner in [true, false] {
+        let mut device = Device::new(tuner);
+        device.activate_format(48_000.0, 64);
+        let shared = device.shared();
+        assert_eq!(shared.diagnostics.test_publications(), (0, (!tuner).then_some(0)));
+        for callback in 0..=1500 {
+            device.run(i64::from(callback) * 64, vec![], None);
+            let sequence = 2 * (1 + callback as u64 / 750);
+            assert_eq!(
+                shared.diagnostics.test_publications(),
+                (sequence, (!tuner).then_some(sequence)),
+                "both snapshots share one countdown, callback {callback}, tuner {tuner}",
+            );
+        }
+    }
+}
+
 /// The whole of the delay contract: an input emits at its own sample plus D,
 /// with the correction that came back for it.
 #[test]

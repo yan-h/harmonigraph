@@ -666,7 +666,8 @@ impl Tune {
         true
     }
 
-    pub fn end(&mut self) {
+    /// Finish this callback and report whether its diagnostics were published.
+    pub fn end(&mut self) -> bool {
         if let Link::Row(attached) = &self.link {
             session::session().row(attached.slot).capture_epoch.store(0, Ordering::SeqCst);
         }
@@ -691,8 +692,10 @@ impl Tune {
                     status: self.status,
                 });
                 self.shared.request_main();
+                return true;
             }
         }
+        false
     }
 
     /// The Hub's half of the direct link.

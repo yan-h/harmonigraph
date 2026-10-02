@@ -37,3 +37,40 @@ case "$group" in
     exit 1
     ;;
 esac
+
+# Exercise the actual reachability step: failed dependency resolution is not
+# evidence that a suppressed crate is absent.
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+python3 - "$WORKFLOW" > "$TMP/guard.sh" <<'PY'
+from pathlib import Path
+import sys
+import textwrap
+step = Path(sys.argv[1]).read_text().split("- name: Are the suppressed crates still unreachable?", 1)[1]
+body = step.split("run: |\n", 1)[1].split("\n      - name:", 1)[0]
+print(textwrap.dedent(body))
+PY
+if [ "$?" -ne 0 ] || [ ! -s "$TMP/guard.sh" ]; then
+  echo "✗ could not extract the actual suppression guard" >&2
+  exit 1
+fi
+cargo() {
+  [ "${RUSTC_WRAPPER-unset}" = '' ] || return 101
+  case "$AUDIT_TREE_CASE" in
+    absent) printf 'harmonigraph-plugin v0.1.0\n' ;;
+    present) printf 'harmonigraph-plugin v0.1.0\nquick-xml v0.40.0\n' ;;
+    failed) return 101 ;;
+  esac
+}
+export -f cargo
+for scenario in absent present failed; do
+  RUSTC_WRAPPER=unavailable-sccache AUDIT_TREE_CASE="$scenario" bash "$TMP/guard.sh" > "$TMP/output" 2>&1
+  result=$?
+  if { [ "$scenario" = absent ] && [ "$result" -ne 0 ]; } || \
+     { [ "$scenario" != absent ] && [ "$result" -eq 0 ]; }; then
+    echo "✗ suppression guard mishandled $scenario (exit $result)" >&2
+    cat "$TMP/output" >&2
+    exit 1
+  fi
+done
+echo "✓ suppressions require a successful dependency tree with no suppressed crate"

@@ -281,3 +281,59 @@ fn arm_edges_reset_history_but_repeated_arm_cannot_revive_completion() {
     next = transport(next, 5.0 + BLOCK, false, p);
     assert_eq!(next.action, Action::Record, "repeated arm does not reset continuity");
 }
+
+#[test]
+fn forward_audio_continuity_survives_pauses_and_observation_jitter() {
+    for one_file in [false, true] {
+        let p = Policy { end_at_rewind: one_file, ..Default::default() };
+        let first = transport(fresh(), 0.0, true, p);
+        assert_eq!(first.history.recorded_end, Some(BLOCK));
+        // Current callback size changes without moving the paused audio end.
+        let paused = observe(
+            first,
+            Observation::Transport { position: 10.0, playing: false, duration: BLOCK * 4.0 },
+            p,
+        );
+        let paused = transport(paused, 10.0, false, p);
+        assert_eq!(paused.history.recorded_end, Some(BLOCK));
+        assert_eq!(paused.action, Action::HistoryOnly);
+        let seek = transport(paused, 10.0, true, p);
+        assert_eq!(
+            seek.action,
+            if one_file { Action::Complete(End::ForwardSeek) } else { Action::SplitAndRecord }
+        );
+        for (gap, splits) in [(0.05, false), (0.050001, true)] {
+            let next = transport(first, BLOCK + gap, true, p);
+            assert_eq!(
+                next.action,
+                if splits {
+                    if one_file {
+                        Action::Complete(End::ForwardSeek)
+                    } else {
+                        Action::SplitAndRecord
+                    }
+                } else {
+                    Action::Record
+                }
+            );
+        }
+        let mut paused = transport(first, 0.0, false, p);
+        paused = transport(paused, 0.0, false, p);
+        let resumed = observe(
+            paused,
+            Observation::Transport { position: BLOCK, playing: true, duration: BLOCK * 4.0 },
+            p,
+        );
+        assert_eq!(resumed.action, Action::Record);
+        assert_eq!(resumed.history.recorded_end, Some(BLOCK * 5.0));
+        // Individually tolerated forward jitter cannot continually re-anchor
+        // audio and hide a growing mismatch between host time and WAV time.
+        let next = transport(first, 0.03, true, p);
+        assert_eq!(next.action, Action::Record);
+        let next = transport(next, 0.06, true, p);
+        assert_eq!(
+            next.action,
+            if one_file { Action::Complete(End::ForwardSeek) } else { Action::SplitAndRecord }
+        );
+    }
+}

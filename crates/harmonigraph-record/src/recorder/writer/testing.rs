@@ -40,6 +40,7 @@ pub struct Capture {
     /// the display would without standing a writer thread up.
     displayed: publication::Consumer,
     fence: Arc<RecordFence>,
+    latches: Arc<TakeLatches>,
     _records: rtrb::Consumer<Entry>,
     audio: rtrb::Consumer<f32>,
 }
@@ -148,7 +149,7 @@ impl FileWriter {
         .unwrap();
         assert!(open.current.audio.is_some(), "{}", status.lock());
         Self {
-            pump: Pump { open: Some(open), ..Default::default() },
+            pump: Pump { latches: capture.latches.clone(), open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),
             status,
             finished: None,
@@ -160,8 +161,12 @@ impl FileWriter {
     ///
     /// [`drain`]: Self::drain
     pub fn stop(&mut self) {
-        let unlaunched =
-            RenderRequest { program: std::path::PathBuf::new(), appearance: None, size: [0, 0] };
+        let unlaunched = RenderRequest {
+            program: std::path::PathBuf::new(),
+            appearance: None,
+            size: [0, 0],
+            notice: None,
+        };
         self.pump.pending_stop = Some((self.fence.epoch(), Box::new(unlaunched)));
     }
     pub fn drain(&mut self, capture: &mut Capture) {
@@ -191,6 +196,7 @@ pub fn channel() -> (Recorder, Capture) {
     let rolling = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
     let fence = Arc::new(RecordFence::default());
+    let latches = Arc::new(TakeLatches::default());
     let recorder = Recorder {
         _writer_lifetime: None,
         publication,
@@ -211,9 +217,15 @@ pub fn channel() -> (Recorder, Capture) {
         run: 0,
         run_live: false,
         end_at_rewind,
-        latches: Arc::new(TakeLatches::default()),
+        latches: latches.clone(),
     };
-    let capture =
-        Capture { fence, publications, displayed, _records: records, audio: audio_consumer };
+    let capture = Capture {
+        fence,
+        latches,
+        publications,
+        displayed,
+        _records: records,
+        audio: audio_consumer,
+    };
     (recorder, capture)
 }

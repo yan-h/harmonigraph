@@ -157,7 +157,7 @@ impl EditorShared {
         // events arriving: music has gaps, and a gap is not a stop.
         self.take_rolling = self.take.is_rolling();
 
-        // One-file triggers finish on a rewind after accepted forward motion.
+        // One-file triggers finish at transport discontinuities.
         let trigger = self.ui.picture.appearance.render.trigger;
         let ends_at_rewind = trigger.ends_at_rewind();
         self.take.set_end_at_rewind(ends_at_rewind);
@@ -166,15 +166,10 @@ impl EditorShared {
         // of them.
         self.take.set_stop_bar(self.ui.picture.appearance.render.stop_at_bar());
 
-        // The audio thread ended the take itself, either because the transport
-        // went backwards — one pass, cut exactly at the loop boundary or at the
-        // point the host took the playhead back — or because it played through
-        // the stop bar. Reflect it in the toggle and render that pass. This is
-        // what the export case needs and the frame-counted stop below cannot
-        // give it: a host that restores the playhead does so before the
-        // debounce runs out, and whatever the transport does next would
-        // otherwise open a pass that ends up being the one rendered.
-        let ended = (ends_at_rewind && self.take.hit_rewind()) || self.take.hit_stop_bar();
+        // Honor the audio-owned completion even if the trigger changed before
+        // this poll. Stop still waits for every publication lane to close the
+        // prefix; a forward seek carries its cutoff notice into the render.
+        let ended = self.take.has_ended();
         if self.take.is_recording() && ended {
             self.ui.workspace.interaction.take.recording = false;
             self.take.stop(harmonigraph_record::RenderRequest::from_config(

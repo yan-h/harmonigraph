@@ -467,10 +467,8 @@ fn offscreen_composite_matches_direct_draw() {
 /// timer's readback cycle turns over, and that cycle is driven from inside
 /// the scene pass. Since nodes that paint nothing are no longer shipped, a
 /// lattice can encode no pass at all, and can then sit there indefinitely
-/// rather than for a frame. Left alone, the overlay would keep re-averaging
-/// a figure from whenever the lattice last drew, which is the one thing
-/// `GPU_TIME_PENDING` exists to make impossible to confuse with a live
-/// reading.
+/// rather than for a frame. `GPU_TIME_INACTIVE` clears its previous readout;
+/// `GPU_TIME_PENDING` instead preserves the mean between active readbacks.
 ///
 /// The scene is built empty here rather than dialled empty, which keeps the
 /// guard independent of which settings happen to reach the state. Two do: a
@@ -537,7 +535,7 @@ fn a_lattice_with_nothing_to_draw_reports_no_gpu_time() {
     frame(&blank);
     assert_eq!(
         stats.gpu_ms.load(std::sync::atomic::Ordering::Relaxed),
-        GPU_TIME_PENDING,
+        GPU_TIME_INACTIVE,
         "a pane that encodes no pass must not keep reporting the time it took \
          when it last drew",
     );

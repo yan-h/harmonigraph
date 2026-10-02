@@ -133,12 +133,13 @@ pub struct SurfaceState {
     /// of lag on a window that only moves with the camera is invisible; an
     /// answer that changes with the dock arrangement is not.
     ///
-    /// The DOCKED copy alone. The Video tab's preview is a second lattice at
+    /// The primary picture: the docked copy live, the layout's copy offline.
+    /// The Video tab's preview is a second lattice at
     /// a second aspect, and letting it publish would make these answers jump
     /// with a tab that is not the one being read — the same argument that
     /// keeps the preview out of the GPU timing slot.
     pub drawn: Option<DrawnWindow>,
-    /// What the docked lattice has published so far THIS frame, rotated into
+    /// What the primary lattice has published so far THIS frame, rotated into
     /// [`drawn`](Self::drawn) by `begin_frame`. The perf overlay's node count
     /// reads it directly, because that read happens after every pane has
     /// drawn and a diagnostic holding its last good reading is the one that
@@ -374,17 +375,10 @@ impl Workspace {
 /// values, so a future offline READ of either is exactly what would break
 /// determinism.
 pub struct Instruments {
-    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
-    /// by the render callback and read by the performance overlay. Carries the
-    /// `GPU_TIME_UNSUPPORTED` / `GPU_TIME_PENDING` sentinels, which are NaN bit
-    /// patterns rather than zero — a lattice pass below the timer's resolution
-    /// is a real reading of 0.0 ms, so zero cannot mean "nothing" here. See the
-    /// seed in [`Instruments::default`], which is what stops a fresh editor
-    /// reporting a fabricated 0.0 before the first readback lands.
-    ///
-    /// Same shape the plugin already uses to publish its sample rate. Never
-    /// read by the offline renderer, which also never asks for the feature, so
-    /// it has no timer to begin with.
+    /// Lattice callback timings, as f32 bits, consumed once by the performance
+    /// overlay. The renderer's default distinguishes absent samples from real
+    /// zero-cost measurements. Never read by the offline renderer, which also
+    /// never asks for the GPU timestamp feature.
     pub(crate) lattice_stats: std::sync::Arc<harmonigraph_render::LatticeStats>,
     /// How many note segments the docked roll handed its paint callback last
     /// frame — the geometry `verts` does NOT see, four vertices at a time
@@ -421,19 +415,7 @@ pub struct Instruments {
 impl Default for Instruments {
     fn default() -> Self {
         Instruments {
-            lattice_stats: {
-                let stats = harmonigraph_render::LatticeStats::default();
-                // The sentinel that says "no reading has landed yet", which the
-                // overlay draws as `—` rather than as a zero. Set here rather
-                // than being `LatticeStats`'s own default: zero is a legitimate
-                // GPU time, so the distinction belongs to whoever is going to
-                // read it back.
-                stats.gpu_ms.store(
-                    harmonigraph_render::GPU_TIME_PENDING,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                std::sync::Arc::new(stats)
-            },
+            lattice_stats: std::sync::Arc::new(harmonigraph_render::LatticeStats::default()),
             roll_notes: std::sync::atomic::AtomicU32::new(0),
             font_atlas: Default::default(),
             lattice_atlas: Default::default(),

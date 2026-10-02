@@ -16,7 +16,12 @@ mod tests;
 /// leaves only "could not run" on the status line.
 #[cfg(test)]
 fn unlaunchable_render(directory: &std::path::Path) -> RenderRequest {
-    RenderRequest { program: directory.join("no-such-renderer"), appearance: None, size: [16, 16] }
+    RenderRequest {
+        program: directory.join("no-such-renderer"),
+        appearance: None,
+        size: [16, 16],
+        notice: None,
+    }
 }
 
 /// The WAV every fixture's take opens: [`TAKE_CHANNELS`], as `Control::start`
@@ -48,12 +53,13 @@ pub fn channel() -> (Recorder, Control) {
 
     let fence = Arc::new(RecordFence::default());
     let thread_fence = fence.clone();
+    let thread_latches = latches.clone();
     let thread_status = status.clone();
     let thread_last_take = last_take.clone();
     let thread_progress = progress.clone();
     let thread_render = render.clone();
     let _ = std::thread::Builder::new().name("harmonigraph-take-writer".into()).spawn(move || {
-        let mut pump = Pump::default();
+        let mut pump = Pump { latches: thread_latches, ..Default::default() };
         loop {
             #[cfg(feature = "test-support")]
             thread_fence.worker_before_commands.reach();
@@ -205,6 +211,9 @@ pub fn channel() -> (Recorder, Control) {
 /// files across two crates were testing a pump the plugin does not run (#895).
 #[derive(Default)]
 struct Pump {
+    /// Shared with the producer: Stop intent can precede the admitted
+    /// callback's completion, so the ready prefix owns the final reason.
+    latches: Arc<TakeLatches>,
     open: Option<Recording>,
     fanout: CanonicalFanout,
     failure: FailureAccount,
@@ -309,8 +318,14 @@ impl Pump {
             .as_ref()
             .is_some_and(|(epoch, _)| self.open.as_ref().is_some_and(|o| o.ready(*epoch)))
         {
-            let (_, render) = self.pending_stop.take().unwrap();
+            let (_, mut render) = self.pending_stop.take().unwrap();
             if let Some(path) = finish_ready(&mut self.open, fence.epoch(), fence) {
+                // All admitted callbacks have retired. Capture their final
+                // reason before releasing finishing: the next Start clears
+                // these shared latches, but this render must retain its own.
+                if self.latches.end() == Some(End::ForwardSeek) {
+                    render.notice = Some("take ended before a forward transport seek");
+                }
                 // Publish before Start is permitted again. A render or error
                 // may already own the line; completion only retires its own
                 // finishing message, under the same lock as a refused Start.
@@ -555,13 +570,8 @@ impl CanonicalFanout {
                     if let Some(address) = route.address.filter(|a| !failure.contains(a.epoch)) {
                         record.translate(route.time_offset);
                         if let Some(pass) = open.as_mut().and_then(|o| o.addressed(address)) {
-                            if pass.source_complete {
+                            if pass.source_complete || pass.writer.canonical(record).is_err() {
                                 fence.fail();
-                            } else {
-                                pass.voiced |= record.voiced();
-                                if pass.writer.canonical(record).is_err() {
-                                    fence.fail();
-                                }
                             }
                         } else {
                             fence.fail();
@@ -637,10 +647,6 @@ struct Recording {
     /// naming a pass this recording has usually not opened yet.
     #[cfg(all(test, feature = "test-support"))]
     fail_marker_on_pass: Option<u32>,
-    /// The most recent pass BEFORE `current` that anything played in, and its
-    /// number, so a run of unvoiced passes keeps pointing at the music.
-    last_voiced: Option<std::path::PathBuf>,
-    last_voiced_number: u32,
     /// Passes the transport has rolled past that the configuration and source
     /// lanes have not both released yet.
     retained: Vec<Pass>,
@@ -671,10 +677,6 @@ struct Pass {
     /// completion says nothing about this one's.
     configuration_complete: bool,
     source_complete: bool,
-    /// Whether a note has STARTED in this pass. A pass without one draws an
-    /// empty lattice however many parameter records it holds, so it is not a
-    /// pass worth rendering; see [`Recording::finish`].
-    voiced: bool,
     /// Whether this FILE already holds the recording's incomplete marker.
     marked: bool,
 }
@@ -696,8 +698,6 @@ impl Recording {
             incomplete: None,
             #[cfg(all(test, feature = "test-support"))]
             fail_marker_on_pass: None,
-            last_voiced: None,
-            last_voiced_number: 0,
             retained: Vec::new(),
             current,
         })
@@ -718,30 +718,16 @@ impl Recording {
         result
     }
 
-    /// Close both of the current pass's files and hand back the take to render.
-    ///
-    /// **That is the last VOICED pass, not simply the last one opened.** A take
-    /// can end on a pass that holds parameter records and no notes — a host
-    /// restoring the playhead when an audio export finishes lands as a backward
-    /// jump, and a split rewrites every parameter into the pass it opens — and
-    /// rendering that one produces a video of an empty lattice while the pass
-    /// with the music sits unused beside it. An unvoiced tail is left on disk
-    /// rather than deleted: it is evidence about what the host did, and it costs
-    /// a few hundred bytes.
+    /// Close the last recorded pass and hand it back for rendering. A pass
+    /// with audio and no MIDI is just as intentional as one with notes; the
+    /// lifecycle defers stopped rewinds so restoration alone opens no tail.
     fn finish(&mut self) -> std::io::Result<std::path::PathBuf> {
         let path = self.take_path();
         self.current.finish().map(|_| path)
     }
 
-    /// Which of the current pass and its predecessors is the take: this one if
-    /// anything played in it, else the last one where something did. A first
-    /// pass with no notes has nothing to fall back to and stands as the (empty)
-    /// take, which is what "you recorded nothing" looks like.
     fn take_path(&self) -> std::path::PathBuf {
-        match &self.last_voiced {
-            Some(previous) if !self.current.voiced => previous.clone(),
-            _ => self.current.path.clone(),
-        }
+        self.current.path.clone()
     }
 
     /// Open the next pass's files and make it `current`, retaining the one it
@@ -774,8 +760,8 @@ impl Recording {
         // and that includes passes it has not opened yet: an outage spanning a
         // boundary is exactly the one that arrives address-less. Marking only
         // the passes that existed when it arrived left the take EXPORTABLE and
-        // unmarked whenever a later pass was the voiced one, because
-        // [`Recording::take_path`] picks the last voiced pass and
+        // unmarked whenever a later pass became the render target, because
+        // [`Recording::take_path`] picks the last recorded pass and
         // `mark_incomplete` reaches downward into `retained` rather than
         // forward in time (#712).
         if let Some(record) = self.incomplete {
@@ -786,16 +772,9 @@ impl Recording {
             }
             next.write_incomplete(record)?;
         }
-        // Read before the swap, applied after it: a pass that cannot close is
-        // not a pass this recording has rolled past.
-        let voiced = self.current.voiced.then(|| (self.current.path.clone(), self.current.number));
         // Keep the old owner until the next file and its inherited marker exist.
         let previous = std::mem::replace(&mut self.current, next);
         self.retained.push(previous);
-        if let Some((path, number)) = voiced {
-            self.last_voiced = Some(path);
-            self.last_voiced_number = number;
-        }
         Ok(())
     }
 
@@ -812,11 +791,7 @@ impl Recording {
         while index < self.retained.len() {
             if self.retained[index].configuration_complete && self.retained[index].source_complete {
                 self.retained[index].finish()?;
-                let old = self.retained.remove(index);
-                if old.voiced && old.number > self.last_voiced_number {
-                    self.last_voiced = Some(old.path);
-                    self.last_voiced_number = old.number;
-                }
+                self.retained.remove(index);
             } else {
                 index += 1;
             }
@@ -922,7 +897,6 @@ impl Pass {
                     source_closed: false,
                     configuration_complete: false,
                     source_complete: false,
-                    voiced: false,
                     marked: false,
                 })
             }
@@ -1028,17 +1002,6 @@ fn finish_open(open: &mut Option<Recording>, fence: &RecordFence) -> Option<std:
             None
         }
     }
-}
-
-/// Move everything queued into the writer (discarding it if none is
-/// open). Returns whether anything was there.
-#[cfg(test)]
-fn drain(
-    consumer: &mut rtrb::Consumer<Entry>,
-    open: &mut Option<Recording>,
-    status: &Mutex<String>,
-) -> bool {
-    drain_with_audio(consumer, None, open, status, None)
 }
 
 #[cfg(test)]

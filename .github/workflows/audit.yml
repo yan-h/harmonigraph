@@ -141,15 +141,17 @@ jobs:
       # suppression would silently cover that too. So assert the premise
       # mechanically rather than trusting a comment to age well.
       #
-      # `cargo tree -i` exits 0 either way and prints nothing to stdout when the
-      # crate is absent, so the presence of output is the signal.
-      # Runnable by hand: cargo tree --target aarch64-apple-darwin -i quick-xml
+      # Resolve the complete target tree successfully before asking whether it
+      # contains the crate. A failed query must never count as absence.
       - name: Are the suppressed crates still unreachable?
         if: steps.deps.outputs.audit == 'true'
         run: |
           set -euo pipefail
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            if cargo tree --target "$target" -i quick-xml 2>/dev/null | grep -q .; then
+            # This metadata query needs rustc, but no compilation cache.
+            # Ubuntu does not install the repository's sccache wrapper.
+            tree=$(RUSTC_WRAPPER= cargo tree --locked --target "$target" --prefix none --format '{p}')
+            if printf '%s\n' "$tree" | grep -E '^quick-xml v' >/dev/null; then
               echo "::error file=.cargo/audit.toml::quick-xml is now reachable on $target."
               echo "RUSTSEC-2026-0194/0195 are suppressed in .cargo/audit.toml only because"
               echo "quick-xml is Wayland-gated and absent from the macOS graph. That premise"

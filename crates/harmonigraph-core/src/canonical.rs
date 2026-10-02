@@ -450,6 +450,37 @@ mod tests {
     }
 
     #[test]
+    fn a_recovered_release_keeps_history_ordered_for_activity_and_trimming() {
+        let source = SourceId(1);
+        let mut tracker = NoteTracker::new();
+        tracker
+            .handle_canonical(CanonicalEvent::Note(delta(
+                NoteEvent::on(0.0, source, 0, 60, 0.8),
+                1,
+            )))
+            .unwrap();
+        tracker
+            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
+                source: Some(source),
+                time: 1.0,
+                through: 1.0,
+                first: 2,
+                last: 2,
+                reason: GapReason::PublicationFull,
+            }))
+            .unwrap();
+        tracker.handle_event(NoteEvent::on(1.5, SourceId::DIRECT, 0, 64, 0.8));
+        tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 64));
+        tracker
+            .handle_canonical(CanonicalEvent::Note(delta(NoteEvent::off(3.0, source, 0, 60), 3)))
+            .unwrap();
+        assert_eq!(tracker.roll().latest_activity(4.0), Some(3.0));
+        tracker.prune(crate::NoteRoll::MAX_AGE + 2.5, &crate::Envelope::default());
+        let notes: Vec<_> = tracker.roll().notes().map(|note| note.note).collect();
+        assert_eq!(notes, [60], "the expired neighbor is not hidden behind the recovered off");
+    }
+
+    #[test]
     fn empty_baseline_keeps_completed_history_and_duplicates_do_not_replay() {
         let mut tracker = NoteTracker::new();
         let source = SourceId(1);

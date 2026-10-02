@@ -27,6 +27,9 @@ pub struct RenderRequest {
     /// default knows the take's aspect but not which resolution was picked
     /// beside it.
     pub size: [u32; 2],
+    /// A session-local completion notice, owned by this request so a new
+    /// recording cannot erase the reason an earlier render was cut short.
+    pub notice: Option<&'static str>,
 }
 
 impl RenderRequest {
@@ -56,6 +59,7 @@ impl RenderRequest {
             program: default_renderer_path(),
             appearance,
             size: config.frame.pixels(config.short_edge),
+            notice: None,
         }
     }
 }
@@ -281,11 +285,13 @@ struct Tail {
 /// What the status line says when a render finished. A warning it printed on
 /// the way rides along, because "rendered X" alone would say a take with holes
 /// in its note history came out whole.
-fn rendered_status(out: &std::path::Path, warning: Option<&str>) -> String {
-    match warning {
-        Some(warning) => format!("rendered {} — {warning}", out.display()),
-        None => format!("rendered {}", out.display()),
+fn rendered_status(out: &std::path::Path, notice: Option<&str>, warning: Option<&str>) -> String {
+    let mut status = format!("rendered {}", out.display());
+    for detail in [notice, warning].into_iter().flatten() {
+        status.push_str(" — ");
+        status.push_str(detail);
     }
+    status
 }
 
 /// Follow the renderer's stderr to its end, publishing progress as it arrives,
@@ -424,7 +430,12 @@ pub(super) fn spawn_render(
         // Progress and warnings arrive on stderr; pipe it for the status line.
         command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
 
-        *status.lock() = format!("rendering {}...", out.display());
+        let mut rendering = format!("rendering {}...", out.display());
+        if let Some(notice) = request.notice {
+            rendering.push_str(" — ");
+            rendering.push_str(notice);
+        }
+        *status.lock() = rendering;
         let spawned = command.spawn();
         let cleanup = || {
             if let Some(file) = &appearance_file {
@@ -487,7 +498,8 @@ pub(super) fn spawn_render(
                 // Whole, and only now under the name anything else reads.
                 match std::fs::rename(&partial, &out) {
                     Ok(()) => {
-                        *status.lock() = rendered_status(&out, tail.warning.as_deref());
+                        *status.lock() =
+                            rendered_status(&out, request.notice, tail.warning.as_deref());
                     }
                     Err(err) => {
                         *status.lock() = format!("rendered, but could not move into place: {err}")

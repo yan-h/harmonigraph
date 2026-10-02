@@ -178,10 +178,6 @@ pub fn render(
 
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.install_appearance(appearance);
-    // Nothing offline is interactive, and both would draw over the
-    // picture: no armed-mode pulse, no hover highlight.
-    state.runtime.learn_active = false;
-    state.surfaces.hovered = None;
     // The comma auto-detects are interactive too, in the sense that matters
     // here: they answer a tuning EDIT, and a replay has no editor. This only
     // governs LEAD-IN frames, before the take's first configuration record:
@@ -760,6 +756,26 @@ mod tests {
             }
             Err(e) => panic!("{e}"),
         }
+    }
+
+    #[test]
+    fn recorded_learn_mode_does_not_paint_editor_chrome_in_export() {
+        let mut settings = settings();
+        settings.end = 0.1;
+        let fixture = |learning| {
+            let mut take = take();
+            take.events.clear();
+            take.params.clear();
+            take.configurations =
+                vec![harmonigraph_take::ConfigurationRecord { learning, ..Default::default() }];
+            take
+        };
+        let Some(plain) = render_take(fixture(false), &settings) else { return };
+        let learning = render_take(fixture(true), &settings).expect("the second export has a GPU");
+        assert_eq!(plain.len(), 1, "the fixture must replay and draw one actual frame");
+        let distinct: std::collections::HashSet<_> = plain[0].chunks_exact(4).collect();
+        assert!(distinct.len() > 32, "the clean picture must have actual rendered content");
+        assert_eq!(plain, learning, "recorded Learn mode changed the exported picture");
     }
 
     #[test]

@@ -746,13 +746,12 @@ impl GpuPlus {
 ///
 /// An atomic bag rather than return values because none of this comes back up
 /// the call stack that asked for it: `prepare` runs inside egui-wgpu, and the
-/// GPU timing arrives several frames after the frame it describes. All three
-/// are f32 bits.
-#[derive(Default)]
+/// GPU timing arrives several frames after the frame it describes. Values
+/// are f32 bits, consumed once by the performance overlay.
 pub struct LatticeStats {
     /// GPU time of all lattice preparation passes, before the final composite
     /// in egui's own pass. Carries the
-    /// [`GPU_TIME_UNSUPPORTED`] / [`GPU_TIME_PENDING`] sentinels.
+    /// [`GPU_TIME_UNSUPPORTED`] / [`GPU_TIME_PENDING`] / [`GPU_TIME_INACTIVE`] sentinels.
     pub gpu_ms: std::sync::atomic::AtomicU32,
     /// Wall time of the whole `prepare` callback. egui-wgpu runs this from
     /// inside `update_buffers`, so it is billed to the frame's upload stage
@@ -763,6 +762,7 @@ pub struct LatticeStats {
     /// It also encodes shadows, ink history/convolution, glow, ordered scene
     /// composition and optional bloom onto egui's encoder — CPU work in the
     /// frame, sitting inside a row the overlay calls "buf up".
+    /// NaN means no callback has published since the previous consumption.
     pub prepare_ms: std::sync::atomic::AtomicU32,
     /// Of that, the time in `device.poll` draining the timestamp readback:
     /// what the GPU measurement costs to take. Kept separate so the
@@ -778,6 +778,19 @@ pub struct LatticeStats {
     /// No GPU work happens here; this is the CPU cost of building the command
     /// stream, separate from packing, target creation and writes above.
     pub scene_ms: std::sync::atomic::AtomicU32,
+}
+
+impl Default for LatticeStats {
+    fn default() -> Self {
+        use std::sync::atomic::AtomicU32;
+        Self {
+            gpu_ms: AtomicU32::new(GPU_TIME_PENDING),
+            prepare_ms: AtomicU32::new(f32::NAN.to_bits()),
+            poll_ms: AtomicU32::new(0),
+            write_ms: AtomicU32::new(0),
+            scene_ms: AtomicU32::new(0),
+        }
+    }
 }
 
 /// `stats` receives this pane's own measurements. Pass `None` for panes whose
@@ -1132,8 +1145,11 @@ const TIMER_BYTES: u64 = 16;
 /// landed-but-zero measurement indistinguishable from a stuck one.
 pub const GPU_TIME_UNSUPPORTED: u32 = 0x7fc0_0001;
 
-/// The initial value: a timer exists, but no measurement has come back yet.
+/// No new measurement has come back from the active timer.
 pub const GPU_TIME_PENDING: u32 = 0x7fc0_0002;
+
+/// No lattice pass is active; discard the previous interval's GPU readout.
+pub const GPU_TIME_INACTIVE: u32 = 0x7fc0_0003;
 
 impl GpuTimer {
     /// Build the query set and buffers, or `None` when the device can't.

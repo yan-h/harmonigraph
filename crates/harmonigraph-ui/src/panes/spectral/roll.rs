@@ -177,7 +177,9 @@ pub(super) fn lead(cfg: &crate::SpectrumConfig, axes: &Axes, split: f32) -> (f32
 /// its bottom is asking for.
 fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
     let Some(end) = note.end else {
-        return 1.0;
+        // Loss of observation is not a factual release, but no longer proves
+        // the held extension. Remove it without inventing a note-off or fade.
+        return if note.is_live() { 1.0 } else { 0.0 };
     };
     if release <= 0.0 {
         return 0.0;
@@ -606,7 +608,13 @@ fn roll_instances_with_floor(
             if t1 < edge {
                 continue;
             }
-            let (t0, t1) = (t0.max(edge), t1.max(edge));
+            let cropped_t0 = t0.max(edge);
+            let p0 = if cropped_t0 > t0 && t1 > t0 {
+                p0 + (p1 - p0) * ((cropped_t0 - t0) / (t1 - t0)) as f32
+            } else {
+                p0
+            };
+            let t0 = cropped_t0;
             // Unclamped: `edge` already bounds how far past the region these
             // can reach, and clamping is what squashed the leaving ribbon
             // against the far end rather than letting it slide out.
@@ -809,7 +817,7 @@ fn roll_instances_with_floor(
             // of its final bend), so the one segment a lead can reach has no
             // shear to correct for. Written out because the correction belongs
             // to the shift rather than to that fact about the segments.
-            let attached_alpha = if note.end.is_none() { standing } else { 0.0 };
+            let attached_alpha = if note.is_live() { standing } else { 0.0 };
             let (center, half_depth, lead_px, lead_fade_px, attached_alpha, cap_px) = if leads {
                 let half = lead_px * 0.5;
                 (
@@ -1793,6 +1801,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_bend_crossing_the_history_edge_keeps_its_pitch_and_expression() {
+        for orientation in SpectralOrientation::ALL {
+            let mut state = fresh();
+            state.appearance.spectrum.orientation = orientation;
+            state.appearance.spectrum.roll_seconds = 10.0;
+            state.appearance.spectrum.low_midi = 48.0;
+            state.appearance.spectrum.high_midi = 84.0;
+            state.appearance.view.shadow.spectral_geometry.width = 0.0;
+            state.appearance.view.intensity = IntensitySettings {
+                velocity: Default::default(),
+                gain: Default::default(),
+                pressure: harmonigraph_scene::IntensitySource {
+                    opacity: Some(1.0),
+                    thickness: Some(2.0),
+                },
+                opacity_rest: 0.0,
+                thickness_base: 1.0,
+                thickness_max: 3.0,
+                ..Default::default()
+            };
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+            for (time, value) in [(4.0, 0.25), (8.0, 0.9)] {
+                state.runtime.tracker.handle_event(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Expression {
+                        expression: harmonigraph_core::Expression::Pressure,
+                        value,
+                    },
+                });
+            }
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: 10.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 12.0 },
+            });
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 400.0));
+            let axes = Axes::new(rect, &state.appearance.spectrum);
+            let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+            let now = 15.0;
+            let (notes, _) = roll_instances_with_floor(&axes, &scale, &state, 0.5, now, PPP, 1.0);
+            let bent = notes
+                .iter()
+                .find(|note| note.shear != 0.0 && note.span[1] == f32::MAX)
+                .expect("a bend straddles the crop and retains its oldest expression piece");
+            assert!(
+                bent.half_extent[1] > 10.0 * min_half_depth_for(PPP),
+                "the length floor must not bind in this fixture"
+            );
+            let time = TimeAxis::new(&state, 0.5, now);
+            let target = axes.at(scale.t_of(69.0), time.depth_of_unclamped(7.5));
+            let center = egui::pos2(bent.center[0], bent.center[1]);
+            let along = (target - center).dot(axes.dir_depth());
+            let drawn = center + axes.dir_depth() * along + axes.dir_pitch() * (bent.shear * along);
+            assert!(drawn.distance(target) < 0.01,
+                "{orientation:?}: retained bend draws {drawn:?} instead of source pitch at {target:?}");
+            // The crop is after the first pressure step and before the second;
+            // neither the discarded note-on intensity nor its full bend survives.
+            assert!((bent.fade[1] - 0.25).abs() < 1e-5, "{bent:?}");
+            assert!((bent.taper[2] - 1.5 / 2.8).abs() < 1e-5, "{bent:?}");
+        }
+    }
+
     /// A bend that FINISHED before the region begins leaves nothing at the
     /// edge — the segment carrying it is dropped, not squashed onto the crop.
     ///
@@ -2114,6 +2190,46 @@ mod tests {
                  the analyzer",
             );
         }
+    }
+
+    #[test]
+    fn an_observation_cut_removes_the_lead_without_releasing_the_note() {
+        use harmonigraph_core::canonical::{CanonicalEvent, GapReason, PublicationGap};
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_seconds = 10.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
+        state.appearance.spectrum.roll_lead = 0.5;
+        state.appearance.spectrum.roll_lead_release = 0.25;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let (held, detached) = instance_groups(&state, 0.5);
+        assert!(held.iter().any(|note| note.lead > 0.0 && note.lead_alpha == 1.0));
+        assert!(detached.is_empty());
+        state
+            .runtime
+            .tracker
+            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
+                source: Some(SourceId::DIRECT),
+                time: 1.0,
+                through: 1.0,
+                first: 1,
+                last: 1,
+                reason: GapReason::PublicationFull,
+            }))
+            .unwrap();
+        let note = state.roll().notes().next().unwrap();
+        assert_eq!(note.end, None);
+        assert_eq!(note.observed_until, Some(1.0));
+        assert!(!note.is_live());
+        for now in [1.0, 2.0] {
+            let (history, detached) = instance_groups(&state, now);
+            assert!(!history.is_empty(), "observation loss must retain observed history");
+            assert!(history.iter().all(|note| note.lead_alpha == 0.0), "{history:?}");
+            assert!(detached.is_empty(), "an observation cut invented a released extension");
+        }
+        let (history, detached) = instance_groups(&state, 20.0);
+        assert!(history.is_empty() && detached.is_empty(), "the cut's lead retained old history");
     }
 
     /// In between, a released note's lead FADES rather than going: it holds its

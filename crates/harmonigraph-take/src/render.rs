@@ -75,8 +75,10 @@ pub enum RenderTrigger {
 }
 
 impl RenderTrigger {
-    /// Whether the transport going BACKWARDS ends the take rather than splitting
-    /// it into another pass.
+    /// Whether a transport discontinuity ends the take rather than splitting
+    /// it into another pass. Forward seeks finish the contiguous prefix and
+    /// report that cutoff with the automatic render; rewinds also need the
+    /// accepted forward-motion evidence described below.
     ///
     /// [`OnDisarm`](Self::OnDisarm) is the one trigger that has to survive a
     /// looping transport, so it keeps splitting. The other two want a single

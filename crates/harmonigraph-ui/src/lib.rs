@@ -414,10 +414,9 @@ pub enum Pane {
 
 /// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
 ///
-/// Callers must have run [`begin_frame`] for this `now` already. Panes
-/// still read hover and pointer state from `ui`, so an offline caller
-/// feeding synthetic input simply gets no hover — which is what a
-/// recording wants.
+/// Callers must have run [`begin_frame`] for this `now` already. These are
+/// picture copies: the lattice omits editor navigation, picking, map
+/// annotations and Learn-mode chrome, as the Video preview does.
 ///
 /// `surface` is which live copy of the pane this is — offline, the placement's
 /// index in the resolved [`Layout`] — and it is what makes two placements of
@@ -442,7 +441,26 @@ pub fn draw_pane(
     surface: usize,
 ) {
     match pane {
-        Pane::Lattice => panes::lattice::lattice_pane(ui, state, now, surface),
+        Pane::Lattice => {
+            let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+            if rect.width() < 1.0 || rect.height() < 1.0 {
+                return;
+            }
+            ui.painter().rect_filled(rect, 0.0, state.background_ink());
+            // Exported pictures share the preview's scene path, without the
+            // working pane's navigation, picking, or Learn-mode chrome.
+            let window = panes::lattice::draw_lattice(
+                ui,
+                rect,
+                state,
+                now,
+                surface,
+                state.surfaces.background,
+                None,
+                None,
+            );
+            state.surfaces.drawn_this_frame = Some(window);
+        }
         // Text sizes itself off the pane, here as everywhere.
         Pane::Spectral => panes::spectral::spectral_pane(
             ui,
