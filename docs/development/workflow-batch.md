@@ -30,3 +30,34 @@ Initial skills read: worktrees, pr-hygiene, persistence-contract, build-handover
 GPU timing implementation is in progress;
 Rust checks require sandbox escalation for sccache.
 No Bitwig integration has been qualified.
+
+## State ownership decision
+
+The live appearance remains `PictureState.appearance`.
+Host parameters own camera movement and tuning;
+the editor appearance fields are a synchronized drawing/saving snapshot of movement.
+Camera projection and Cabinet shear are static appearance.
+Settings history, A/B and named looks include static camera geometry, visual view and spectrum settings.
+They exclude movement, tuning mirrors, editor chrome/layout and output settings.
+Existing automatable fade and color endpoints remain under host undo too.
+This avoids undo or recall unexpectedly replacing incoming automation.
+Named looks are project/instance-local, matching saved camera angles.
+History is transient and bounded to 64 actions per comparison slot.
+Queued exports capture appearance and output at enqueue;
+recorded movement overrides corresponding movement channels in the selected appearance.
+Old takes without movement channels retain the selected appearance camera.
+Recorded parameter evaluation uses the existing block-timestamp step semantics.
+The export queue lasts for the plugin instance, survives editor closure, and has no crash resume.
+
+## Correctness fix evidence
+
+#1388 is commit `5f602135`.
+All 16 perf tests and the patched vendored queue test pass;
+plugin check passes.
+Independent review found no correctness defect.
+#1381 is commit `e68a6d2d`.
+All 100 recorder tests passed, including simultaneous exclusive pair creation and failure cleanup.
+All 28 take tests passed after fixing the validation-order regression caught by the existing no-truncation test and independent review.
+Obsolete partial-initialization failure branches were removed;
+optional audio ownership remains necessary for finalization.
+PR #1397 is open as draft and not merged.

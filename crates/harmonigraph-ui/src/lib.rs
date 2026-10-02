@@ -290,7 +290,6 @@ pub fn root_ui(
         state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
-    state.workspace.interaction.appearance_editor.begin_frame();
     let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
@@ -311,7 +310,7 @@ pub fn root_ui(
     }
     state.workspace.interaction.appearance_editor.end_frame(
         before_edit,
-        &state.picture.appearance,
+        &mut state.picture.appearance,
         ui.ctx(),
     );
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;

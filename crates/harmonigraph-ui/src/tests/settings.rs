@@ -278,25 +278,16 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 /// above it to be separated from, and a rule there reads as the pane hanging
 /// off a line.
 ///
-/// The Video pane and not every pane, because it is the only one that leads
-/// with a `section` call: the rest draw content first, so their rules all
-/// separate something. What this pins is the MECHANISM in `section`, which
-/// any pane gets — so a new pane that leads with a section needs no test of
-/// its own, and this one has to keep working for it to stay that way.
-///
-/// Both shells, because which section leads the Video pane depends on the
-/// shell: a host can record takes, so Record leads; the standalone cannot, so
-/// `record_controls` returns early and Frame leads instead. `section` decides
-/// it from what has been drawn rather than from the caller, and this is what
-/// holds it to that for the case the caller could not have known.
+/// Appearance actions lead the Video pane in either shell. A section rule may
+/// separate those actions from Record/Frame, but must not precede all content.
 #[test]
-fn the_video_pane_does_not_start_with_a_rule() {
+fn the_video_pane_starts_with_appearance_actions_before_any_rule() {
     // Which section leads, per shell: a host can record takes, so Record
     // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "RECORD"), (false, "FRAME")] {
         let (shapes, rule) = video_pane_shapes(supported);
-        let heading = text_y(&shapes, leads)
-            .unwrap_or_else(|| panic!("the Video pane drew no {leads:?} heading"));
+        let heading = text_y(&shapes, "Undo").expect("appearance actions lead the pane");
+        assert!(text_y(&shapes, leads).unwrap() > heading);
         // Only rules BELOW the tab bar are the pane's own. The dock's chrome
         // draws lines of its own above the body, in its own colors, and those
         // are not this test's business — hence matching on the separator

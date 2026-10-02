@@ -486,6 +486,7 @@ impl SharedState {
             folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
+            saved_looks: self.workspace.interaction.appearance_editor.saved.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
             skin_dials: self.workspace.interaction.skin_dials,
@@ -542,7 +543,10 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
-        self.workspace.interaction.appearance_editor = Default::default();
+        let mut saved_looks = persist.saved_looks;
+        saved_looks.sanitize();
+        self.workspace.interaction.appearance_editor =
+            crate::appearance_edit::AppearanceEditor::restore(saved_looks);
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
@@ -635,6 +639,7 @@ pub(crate) struct UiPersist {
     pub(crate) folded_sections: std::collections::BTreeSet<String>,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
+    pub(crate) saved_looks: crate::appearance_edit::SavedLooks,
     /// A missing cap reads as uncapped.
     pub(crate) fps_cap: Option<f32>,
     /// Chrome defaults to the design size, shared with Interaction.
@@ -662,6 +667,7 @@ impl Default for UiPersist {
             folded_sections: Default::default(),
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
+            saved_looks: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
             skin_dials: Default::default(),

@@ -225,7 +225,10 @@ impl Viewer<'_> {
         if tab.is_picture() {
             return self.body(ui, tab);
         }
-        self.interaction.appearance_editor.toolbar(ui, &mut self.state.appearance);
+        if matches!(tab, Tab::LatticeSettings | Tab::AnalyzerSettings | Tab::Mappings | Tab::Video)
+        {
+            self.interaction.appearance_editor.toolbar(ui);
+        }
         // Before the body too — see [`SectionFolds`].
         let folds = SectionFolds {
             page: tab_title(tab),
