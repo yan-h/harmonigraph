@@ -682,6 +682,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn recorded_and_replacement_appearances_normalize_before_rendering() {
+        let mut appearance = AppearanceDocument::default();
+        appearance.view.glow_reach = f32::NAN;
+        appearance.view.sevens_size = -1.0;
+        appearance.view.center_sevens = i32::MAX;
+        let serialized = appearance.serialize();
+        let mut expected = appearance.view.clone();
+        expected.sanitize();
+        let mut take = take();
+        take.header.appearance = Some(serialized.clone());
+        for replacement in [None, Some(serialized.as_str())] {
+            let selected = appearance_for(&take, replacement).unwrap();
+            assert_eq!(selected.view, expected);
+        }
+    }
+
     fn settings() -> Settings {
         Settings {
             layout: Layout::split(harmonigraph_ui::LatticeSide::Left, 0.68),

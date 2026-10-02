@@ -76,6 +76,7 @@ fn double_click_resets_lattice_navigation_but_keeps_drafting_choices() {
         let view = &mut state.picture.appearance.view;
         view.center_threes = 3;
         view.center_fives = -2;
+        view.max_sevens = 1;
         view.center_sevens = 1;
 
         h.frame(&mut state, vec![press(at, true)]);
