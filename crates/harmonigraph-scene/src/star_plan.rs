@@ -113,6 +113,9 @@ pub struct StarDepthPlan {
     /// `Star layers` ([`star_layer_depths`]), or its own place at five layers
     /// where it is not drawn. Every far-to-near control is read here.
     pub depth: f32,
+    /// How fast the depth drifts, as a multiple of the renderer's star pixels
+    /// a second: `far + (near - far) d^curve` over `Star speed`.
+    pub speed: f32,
     /// The cell one star is hashed into, in star pixels, before the atlas's
     /// floor.
     pub cell: f32,
@@ -276,6 +279,10 @@ impl StarSettings {
             StarDepthPlan {
                 gather,
                 depth: place(k),
+                speed: {
+                    let (far, near) = (self.star_speed_far, self.star_speed_near);
+                    far + (near - far) * depth(k, self.star_speed_curve)
+                },
                 cell,
                 radius: wanted.min(gather.bound(jitter) * cell),
                 wanted,
@@ -365,6 +372,7 @@ mod tests {
             assert_eq!(got, drawn, "{layers} layers");
             let [far, .., near] = plan.depths;
             assert_eq!((far.cell, near.cell), (fresh.star_spacing_far, fresh.star_spacing_near));
+            assert_eq!((far.speed, near.speed), (fresh.star_speed_far, fresh.star_speed_near));
         }
         let middle = StarSettings { star_layers: 3, ..fresh }.plan().depths[2];
         let half =

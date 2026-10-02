@@ -378,6 +378,42 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     }
 }
 
+/// Dropping a layer changes which stars exist, so history resets. Equal far and
+/// near spacing gives every slot the same cell, so the cells in the key cannot
+/// see the change and only `Star layers` can.
+#[test]
+fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+    a.settings.stars.star_spacing_near = a.settings.stars.star_spacing_far;
+    let aspect = cb.rect.width() / cb.rect.height();
+    let old_cells = star_layout(a.settings.stars, aspect).cells;
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let old_texture = memory(&resources).views[0].texture().clone();
+    assert!(
+        pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count() > 1000
+    );
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.settings.stars.star_layers = 4;
+    assert_eq!(old_cells, star_layout(a.settings.stars, aspect).cells, "cells alone would see it");
+    cb.grid.fill(0);
+    a.now += 1.0 / 60.0;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let current = memory(&resources);
+    assert_eq!(current.views[0].texture(), &old_texture, "reset through allocation");
+    let mut fresh = CallbackResources::default();
+    prepare_once(&device, &queue, &mut fresh, &cb);
+    // History is laid out like the atlas, a texel a cell, and a dropped layer
+    // needs fewer rows; the kept allocation's rows past them hold no cell.
+    let (kept, fresh) = (pixels(&device, &queue, current), pixels(&device, &queue, memory(&fresh)));
+    assert!(kept.len() > fresh.len(), "fixture did not drop a layer's cells");
+    assert!(kept[..fresh.len()] == fresh[..], "a dropped layer's stars kept their color");
+}
+
 /// Moving star centers changes the sampled material. Reset that history even
 /// while paused, but keep other styles' history when an inactive dial changes.
 #[test]

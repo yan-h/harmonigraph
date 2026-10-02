@@ -243,14 +243,6 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
     (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
 }
 
-/// A slice's speed at `depth`, 0 far to 1 near, as a multiple of
-/// [`star_px_per_second`]: `far + (near - far) d^curve` over `Star speed`'s
-/// two ends.
-pub(crate) fn star_speed(settings: harmonigraph_scene::StarSettings, depth: f32) -> f32 {
-    let (far, near) = (settings.star_speed_far, settings.star_speed_near);
-    far + (near - far) * depth.powf(settings.star_speed_curve)
-}
-
 /// Every slice's numbers for this frame. Each depth moves as one sheet at its
 /// own speed.
 pub(crate) fn star_slices(
@@ -266,7 +258,7 @@ pub(crate) fn star_slices(
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
-        let speed = f64::from(star_speed(settings, depth.depth));
+        let speed = f64::from(depth.speed);
         let shift = |axis: f64| {
             (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
         };
