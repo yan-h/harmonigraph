@@ -44,7 +44,7 @@ fn default_cabinet_scale() -> f32 {
 /// Default` below is the one source of a field's fallback, so a blob
 /// missing a key costs that key alone rather than failing the parse and
 /// taking the whole persist with it.
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Camera {
     pub target: Vec3,

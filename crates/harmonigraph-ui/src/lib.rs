@@ -290,6 +290,8 @@ pub fn root_ui(
         state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
+    state.workspace.interaction.appearance_editor.begin_frame();
+    let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
     let frameless = state.picture.appearance.view.frameless;
@@ -307,6 +309,11 @@ pub fn root_ui(
     ) {
         workspace.window_size_change = change;
     }
+    state.workspace.interaction.appearance_editor.end_frame(
+        before_edit,
+        &state.picture.appearance,
+        ui.ctx(),
+    );
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
     // Render continuously only while something is animating (sounding or
@@ -529,4 +536,5 @@ mod tests;
 pub mod lattice_maps;
 
 mod appearance;
+mod appearance_edit;
 pub use appearance::AppearanceDocument;

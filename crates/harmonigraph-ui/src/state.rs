@@ -195,6 +195,7 @@ pub struct SurfaceState {
 /// Editor interaction and shell actions. Panes borrow this separately from
 /// the layout being traversed, so a reset request cannot replace a live dock.
 pub struct Interaction {
+    pub(crate) appearance_editor: crate::appearance_edit::AppearanceEditor,
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
     ///
@@ -541,6 +542,7 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
+        self.workspace.interaction.appearance_editor = Default::default();
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
@@ -700,6 +702,7 @@ impl SurfaceState {
 impl Default for Interaction {
     fn default() -> Self {
         Self {
+            appearance_editor: Default::default(),
             analyzer_regions: Default::default(),
             spiral: Default::default(),
             camera_presets: Vec::new(),

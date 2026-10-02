@@ -94,7 +94,7 @@ pub const SEVENS_LAYER_LIMIT: i32 = 4;
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 // Every field falls back to `impl Default` below, so a blob missing one costs
 // that key alone rather than failing to parse and taking the whole persist —
 // the camera, the dock and every other setting — down with it.
