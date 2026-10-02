@@ -55,7 +55,9 @@ git -C "$repo" add seed
 git -C "$repo" commit -q -m seed
 sha=$(git -C "$repo" rev-parse --short HEAD)
 
-cp "$ROOT/load-plugin.sh" "$ROOT/update-plugin.sh" "$repo/"
+cp "$ROOT/load-plugin.sh" "$ROOT/update-plugin.sh" "$ROOT/session-lifecycle.sh" "$repo/"
+mkdir -p "$repo/.claude"
+cp "$ROOT/.claude/build-handoffs.sh" "$repo/.claude/"
 
 # Codex-managed worktrees normally live under $CODEX_HOME rather than inside
 # the checkout. The loader must discover this one through Git registration,

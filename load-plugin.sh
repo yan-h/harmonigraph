@@ -28,6 +28,14 @@
 # stale: nothing rebuilds it unless a session names `-p harmonigraph-offline`.
 set -euo pipefail
 
+HERE_SCRIPT="$(cd "$(dirname "$0")" && pwd)"
+source "$HERE_SCRIPT/.claude/build-handoffs.sh"
+# A retention sweep cannot retire a publication while this load is copying it.
+COMMON_GIT="$(git rev-parse --path-format=absolute --git-common-dir)"
+if [[ -d "$COMMON_GIT/agent-lifecycle/builds" && -z "${AGENT_LIFECYCLE_CATALOG_FD:-}" ]]; then
+  exec "$HERE_SCRIPT/session-lifecycle.sh" load -- "$HERE_SCRIPT/load-plugin.sh" "$@"
+fi
+
 PKG="harmonigraph-plugin"
 NAME="Harmonigraph"
 # Cargo names a LIB artifact after the lib target, which is the package name
@@ -67,6 +75,7 @@ while IFS= read -r line; do
     "detached") WT_BRANCH+=("(detached)") ;;
   esac
 done < <(git worktree list --porcelain)
+collect_handoffs
 
 loaded_wt=""
 [[ -f "$LOADED" ]] && loaded_wt="$(awk -F= '/^worktree=/{print $2}' "$LOADED")"
@@ -108,8 +117,8 @@ build_info() {
     local mtime head_ct head_short tag sha
     mtime="$(stat -f %m "$dylib")"
     built="$(ago "$mtime")"
-    head_ct="$(git -C "$path" show -s --format=%ct HEAD 2>/dev/null || echo 0)"
-    head_short="$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
+    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
     tag="$(build_tag "$dylib" "${WT_BRANCH[$1]}")"
     sha="${tag##*@}"
     [[ "$sha" == "$tag" ]] && sha=""   # no tag read; ${..##*@} echoes the input
@@ -137,7 +146,8 @@ build_info() {
   else
     built="- not built -"; overlay=""; vshead=""
   fi
-  marker=""; [[ -n "$loaded_wt" && "$path" == "$loaded_wt" ]] && marker="<- now"
+  marker=""; [[ -f "$path/handoff.json" ]] && marker="preserved"
+  [[ -n "$loaded_wt" && "$path" == "$loaded_wt" ]] && marker="<- now"
   printf '%s\t%s\t%s\t%s' "$built" "$overlay" "$vshead" "$marker"
 }
 
@@ -320,8 +330,8 @@ load_build() {  # $1 = worktree index
     # flags matched pairs as often as mismatched ones.
     local offline_mtime head_ct head_short
     offline_mtime="$(stat -f %m "$offline")"
-    head_ct="$(git -C "$path" show -s --format=%ct HEAD 2>/dev/null || echo 0)"
-    head_short="$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
+    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
     if (( head_ct > offline_mtime )); then
       echo "WARNING: that renderer was built before $head_short ($(ago "$offline_mtime")). Video exports" >&2
       echo "         come out drawn by the older build while the editor shows the new one, and" >&2
@@ -347,7 +357,7 @@ load_build() {  # $1 = worktree index
   local loaded_tag; loaded_tag="$(build_tag "$dylib" "$branch")"
   { echo "worktree=$path"
     echo "branch=$branch"
-    echo "commit=$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    echo "commit=$(build_commit "$path" 2>/dev/null | cut -c1-7)"
     echo "tag=${loaded_tag:-unknown}"
     echo "loaded_at=$(date +%s)"
   } > "$LOADED"
@@ -357,7 +367,7 @@ load_build() {  # $1 = worktree index
   if [[ -n "$loaded_tag" ]]; then
     echo "The performance overlay will read:  build  $loaded_tag"
     local head_short loaded_sha
-    head_short="$(git -C "$path" show -s --format=%h HEAD 2>/dev/null || echo '?')"
+    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
     loaded_sha="${loaded_tag##*@}"
     if [[ "$head_short" != '?' \
        && "$head_short" != "$loaded_sha"* && "$loaded_sha" != "$head_short"* ]]; then
@@ -412,7 +422,7 @@ case "${1:-}" in
         [[ "${WT_BRANCH[$i]}" == *"$2"* ]] && tag_matches+=("$i")
       done
       if (( ${#tag_matches[@]} == 0 )); then
-        echo "No worktree branch matching '$2'." >&2; exit 1
+        echo "No build branch matching '$2'." >&2; exit 1
       elif (( ${#tag_matches[@]} > 1 )); then
         echo "'$2' matches multiple branches:" >&2
         for i in "${tag_matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done
@@ -452,7 +462,7 @@ case "${1:-}" in
       [[ "${WT_BRANCH[$i]}" == *"$1"* ]] && matches+=("$i")
     done
     if (( ${#matches[@]} == 0 )); then
-      echo "No worktree branch matching '$1'." >&2; print_table; exit 1
+      echo "No build branch matching '$1'." >&2; print_table; exit 1
     elif (( ${#matches[@]} > 1 )); then
       echo "'$1' matches multiple branches:" >&2
       for i in "${matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done

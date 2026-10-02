@@ -18,6 +18,8 @@ takes the lock nothing here may take by hand;
 default or its configured Worktree root.
 Start from the requested committed base, normally `main`, and create the requested branch (`codex/<slug>` by default) before the first edit because a managed worktree begins detached.
 Stay there through commit, push and draft PR, using the app's approval flow for Git metadata and network access.
+At completion follow `session-lifecycle`: preserve deliverables, reclaim compilation caches, then request owner release once the work is resolved.
+A primary, pinned or shared worktree may require an app action outside the current chat; report that instead of deleting it with Git.
 Codex owns its cleanup and snapshots, so the Claude reclaimer deliberately leaves it alone.
 
 Keep those ownership domains separate:

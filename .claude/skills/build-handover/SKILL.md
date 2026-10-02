@@ -22,7 +22,7 @@ so the build is the contract, and touching the shared slot yourself would just e
 **Push before you build, not after.** CI reads the pushed commit and never reads `target/`, so the release build and the checks are independent and can overlap.
 Building first serializes them for no reason:
 a 1m28s build followed by a 6-7 minute CI run is eight minutes where pushing first is seven.
-Commit, push, open the draft PR, then build while the checks run —
+Commit, push, open the draft PR, then run `./session-lifecycle.sh handoff` while the checks run —
 the handover message still goes out when the build lands.
 
 **Don't use `cargo xtask bundle` from a nested Claude worktree** —
@@ -40,7 +40,8 @@ substring is fine).
 - `./load-plugin.sh --list` — just print the table, load nothing.
 
 It copies only, never builds;
-a build must already exist in the worktree.
+a build must already exist in a registered worktree or a verified lifecycle handoff.
+The handoff includes both the plugin and offline renderer and remains loadable after source cleanup.
 Stale builds (dylib older than the branch's HEAD) are flagged but still loadable.
 After installing a build,
 deactivate and reactivate Bitwig's audio engine.
@@ -167,6 +168,8 @@ The loader intentionally preserves that process's old file instead of changing m
 ## Recovering a build someone else's swap evicted
 
 Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
+Completed `session-lifecycle` handoffs preserve both binaries outside the checkout;
+`./load-plugin.sh <branch>` finds the latest preserved build when no local binary remains.
 Match the dylib's mtime to the branch's last commit time to identify it, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
 To rebuild one without cd'ing into the branch's own worktree:
