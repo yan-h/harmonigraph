@@ -16,7 +16,7 @@ struct Locals {
     float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
-    metal::float2 _axis_pad;
+    metal::float2 holdout_origin;
     metal::float4 shadow;
     metal::float2 shadow_atlas_size;
     float shadow_falloff;
