@@ -7,12 +7,14 @@ use std::ops::RangeInclusive;
 
 /// Which star property a [`depth`] control spreads from far to near, either
 /// way round: the plot's two end handles cross freely, and the bar under it
-/// edits the pair's extent and keeps its direction. A size or spacing carries how many times the stored value the pane draws and
-/// shows it: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1.
+/// edits the pair's extent and keeps its direction. A size carries how many
+/// times the stored value the pane draws and shows it: the lattice's
+/// `LATTICE_STAR_SIZE_SCALE`, else 1. A spacing is a multiple of the size,
+/// so it shows as stored.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Depth {
     Size(f32),
-    Spacing(f32),
+    Spacing,
     Speed,
 }
 
@@ -27,12 +29,13 @@ pub(crate) fn depth(
 ) {
     let (name, curve_name) = match kind {
         Depth::Size(_) => ("Star size", "Size curve"),
-        Depth::Spacing(_) => ("Star spacing", "Spacing curve"),
+        Depth::Spacing => ("Star spacing", "Spacing curve"),
         Depth::Speed => ("Star speed", "Speed curve"),
     };
     // Sizes and spacings run in octaves, speed linearly.
     let (size, shown) = match kind {
-        Depth::Size(shown) | Depth::Spacing(shown) => (true, shown),
+        Depth::Size(shown) => (true, shown),
+        Depth::Spacing => (true, 1.0),
         Depth::Speed => (false, 1.0),
     };
     ui.push_id(name, |ui| {
@@ -94,12 +97,16 @@ pub(crate) fn depth(
                     octaves(*range.start())..=octaves(*range.end()),
                     &label,
                 )
-                .display(|octaves| format!("{:.1} px", octaves.exp2()))
+                .display(if kind == Depth::Spacing {
+                    |octaves: f32| format!("{:.2}× size", octaves.exp2())
+                } else {
+                    |octaves: f32| format!("{:.1} px", octaves.exp2())
+                })
                 .show(ui)
                 .on_hover_text(if matches!(kind, Depth::Size(_)) {
-                    "How big the stars are across, glow included, from the smallest to the largest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the smallest. One value is one size at every depth. A depth whose stars would not fit its spacing is drawn smaller, and a note below the Stars controls says so; wider spacing leaves room for bigger stars."
+                    "How big the stars are across, glow included, from the smallest to the largest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the smallest. One value is one size at every depth, always drawn as set: Star spacing is a multiple of it, so bigger stars sit farther apart."
                 } else {
-                    "How far apart the stars are, from the closest to the widest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the densest. Every place holds a star, so wider spacing is fewer stars."
+                    "How far apart the stars are, as a multiple of their depth's Star size, from the closest to the widest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the densest. Every place holds a star, so wider spacing is fewer stars; one value covers the same share of the sky at any size. The closest is as close as a star can sit and still be drawn whole."
                 });
                 if response.changed() {
                     put(a.exp2() / shown, b.exp2() / shown);

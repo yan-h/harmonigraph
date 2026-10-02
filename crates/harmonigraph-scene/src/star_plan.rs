@@ -105,28 +105,19 @@ pub struct StarDepthPlan {
     /// a second: `far + (near - far) d^curve` over `Star speed`.
     pub speed: f32,
     /// The cell one star is hashed into, in star pixels, before the atlas's
-    /// floor.
+    /// floor: the depth's star size times its `Star spacing`.
     pub cell: f32,
     /// The stars' outer radius in star pixels before each star's own size
-    /// draw shrinks it: what the dials ask for, held to the gather's
-    /// [`StarGather::bound`].
+    /// draw shrinks it: half the depth's `Star size`, always whole within
+    /// [`Self::gather`], because `Star spacing` never runs below
+    /// [`crate::STAR_SPACING_MIN`].
     pub radius: f32,
-    /// What the dials ask for.
-    pub wanted: f32,
     /// The star's solid share ([`star_profile`]), between
     /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`].
     pub solid: f32,
     /// Which of [`StarPlan::halo_tiers`] a [`StarGather::Three`] halo is
     /// drawn at.
     pub tier: usize,
-}
-
-impl StarDepthPlan {
-    /// Whether the depth's stars are drawn smaller than the dials ask, to fit
-    /// the widest read its spacing allows.
-    pub fn clamped(&self) -> bool {
-        self.gather != StarGather::Off && self.radius < self.wanted
-    }
 }
 
 /// Everything the renderer needs to know about how to draw each depth.
@@ -166,10 +157,12 @@ impl StarSettings {
         let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
         let jitter = self.star_jitter;
         let depths = std::array::from_fn(|k| {
-            let (spacing, size) = (self.star_spacing_curve, self.star_size_curve);
-            let cell = along(k, self.star_spacing_far, self.star_spacing_near, spacing);
-            let wanted = 0.5 * along(k, self.star_size_far, self.star_size_near, size);
-            let fits = |gather: StarGather| wanted <= gather.bound(jitter) * cell;
+            let (spacing, size) = (self.star_spacing_ratio_curve, self.star_size_curve);
+            let diameter = along(k, self.star_size_far, self.star_size_near, size);
+            let ratio =
+                along(k, self.star_spacing_ratio_far, self.star_spacing_ratio_near, spacing);
+            let (cell, radius) = (ratio * diameter, 0.5 * diameter);
+            let fits = |gather: StarGather| radius <= gather.bound(jitter) * cell;
             let gather = if layers[k].is_none() {
                 StarGather::Off
             } else {
@@ -188,8 +181,7 @@ impl StarSettings {
                     far + (near - far) * depth(k, self.star_speed_curve)
                 },
                 cell,
-                radius: wanted.min(gather.bound(jitter) * cell),
-                wanted,
+                radius,
                 solid: {
                     let (far, near) = (self.star_solid_far, self.star_solid_near);
                     far + (near - far) * depth(k, size)
@@ -205,26 +197,47 @@ impl StarSettings {
 mod tests {
     use super::*;
 
-    /// Each depth is read by the cheapest gather that holds its stars whole,
-    /// and one too big for the widest is drawn at the widest that fits and
-    /// says so. At the fresh dials the far three fit 2x2 and the near two
-    /// need 3x3, which is what the presets drew before sizes chose.
+    /// Each depth is read by the cheapest gather that holds its stars whole.
+    /// At the fresh dials the far three fit 2x2 and the near two need 3x3,
+    /// which is what the presets drew before sizes chose.
     #[test]
     fn each_depth_takes_the_cheapest_gather_that_holds_its_stars() {
         let fresh = StarSettings::default().plan();
         let gathers = fresh.depths.map(|depth| depth.gather);
         use StarGather::{Three, Two};
         assert_eq!(gathers, [Two, Two, Two, Three, Three]);
-        assert!(fresh.depths.iter().all(|depth| !depth.clamped()));
 
-        let tiny = StarSettings { star_size_far: 0.5, star_size_near: 0.5, ..Default::default() };
-        assert!(tiny.plan().depths.iter().all(|depth| depth.gather == StarGather::Core));
+        let sparse = StarSettings {
+            star_spacing_ratio_far: 2.0,
+            star_spacing_ratio_near: 2.0,
+            ..Default::default()
+        };
+        assert!(sparse.plan().depths.iter().all(|depth| depth.gather == StarGather::Core));
+    }
 
-        let huge = StarSettings { star_size_near: 64.0, ..Default::default() }.plan();
-        let nearest = huge.depths[STAR_DEPTHS - 1];
-        assert_eq!(nearest.gather, Three);
-        assert!(nearest.clamped());
-        assert_eq!(nearest.radius, Three.bound(StarSettings::default().star_jitter) * nearest.cell);
+    /// `Star size` is drawn as set at any size, `Star spacing` and `Position
+    /// variation`: the closest spacing is a hair inside the widest read at
+    /// full variation, never past it, and a cell is the size times the
+    /// spacing.
+    #[test]
+    fn a_star_is_drawn_at_its_size_and_held_whole_by_its_spacing() {
+        for size in [crate::STAR_SIZE_MIN, 15.8, crate::STAR_SIZE_MAX] {
+            let tight = StarSettings {
+                star_size_far: size,
+                star_size_near: size,
+                star_spacing_ratio_far: crate::STAR_SPACING_MIN,
+                star_spacing_ratio_near: crate::STAR_SPACING_MIN,
+                star_jitter: 1.0,
+                ..Default::default()
+            };
+            for depth in tight.plan().depths {
+                assert_eq!(depth.radius, 0.5 * size);
+                assert!((depth.cell - crate::STAR_SPACING_MIN * size).abs() <= 1e-6 * size);
+                let reach = StarGather::Three.bound(1.0) * depth.cell;
+                assert!(depth.radius <= reach * (1.0 + 1e-6), "{} past {reach}", depth.radius);
+                assert!(depth.radius > reach * 0.999, "the floor is looser than it needs");
+            }
+        }
     }
 
     /// Every far-to-near pair runs either way: a reversed one survives the
@@ -234,8 +247,8 @@ mod tests {
     fn a_reversed_pair_is_kept_and_drawn_reversed() {
         let fresh = StarSettings::default();
         let reversed = StarSettings {
-            star_spacing_far: fresh.star_spacing_near,
-            star_spacing_near: fresh.star_spacing_far,
+            star_spacing_ratio_far: fresh.star_spacing_ratio_near,
+            star_spacing_ratio_near: fresh.star_spacing_ratio_far,
             star_size_far: fresh.star_size_near,
             star_size_near: fresh.star_size_far,
             star_speed_far: fresh.star_speed_near,
@@ -244,7 +257,7 @@ mod tests {
         };
         assert_eq!(reversed.sanitized(), reversed);
         let [far, .., near] = reversed.plan().depths;
-        assert!(far.cell > near.cell && far.wanted > near.wanted);
+        assert!(far.cell > near.cell && far.radius > near.radius);
     }
 
     /// Fewer layers keep the farthest and the nearest and space the rest
@@ -266,13 +279,20 @@ mod tests {
                 .collect();
             assert_eq!(got, drawn, "{layers} layers");
             let [far, .., near] = plan.depths;
-            assert_eq!((far.cell, near.cell), (fresh.star_spacing_far, fresh.star_spacing_near));
+            let cells =
+                |far: f32, near: f32| (far * fresh.star_size_far, near * fresh.star_size_near);
+            let want = cells(fresh.star_spacing_ratio_far, fresh.star_spacing_ratio_near);
+            assert_eq!((far.cell, near.cell), want);
             assert_eq!((far.speed, near.speed), (fresh.star_speed_far, fresh.star_speed_near));
         }
         let middle = StarSettings { star_layers: 3, ..fresh }.plan().depths[2];
-        let half =
-            |far: f32, near: f32| far * (near / far).powf(0.5f32.powf(fresh.star_spacing_curve));
-        let want = half(fresh.star_spacing_far, fresh.star_spacing_near);
+        let half = |far: f32, near: f32, curve: f32| far * (near / far).powf(0.5f32.powf(curve));
+        let ratio = half(
+            fresh.star_spacing_ratio_far,
+            fresh.star_spacing_ratio_near,
+            fresh.star_spacing_ratio_curve,
+        );
+        let want = ratio * half(fresh.star_size_far, fresh.star_size_near, fresh.star_size_curve);
         assert!((middle.cell - want).abs() < 1e-5 * want, "{} vs {want}", middle.cell);
     }
 

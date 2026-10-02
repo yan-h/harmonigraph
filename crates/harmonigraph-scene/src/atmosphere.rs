@@ -169,11 +169,17 @@ pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
 
 /// Bounds shared by the two ends of the `Star spacing` control
-/// ([`StarSettings::star_spacing_far`], [`StarSettings::star_spacing_near`])
-/// and their sanitizer, in star pixels.
-pub const STAR_SPACING_MIN: f32 = 0.25;
+/// ([`StarSettings::star_spacing_ratio_far`], [`StarSettings::star_spacing_ratio_near`])
+/// and their sanitizer, in multiples of the depth's star size.
+///
+/// The low end is the closest a star of any size can sit and still be read
+/// whole by the widest gather at full `Position variation`:
+/// [`crate::star_plan::StarGather::Three`]'s reach of 1.2 cells holds a
+/// radius of half the star's size in a cell of 5/12 of it. So `Star size` is
+/// always drawn as set, and no star is ever cut off at a cell edge.
+pub const STAR_SPACING_MIN: f32 = 5.0 / 12.0;
 /// See [`STAR_SPACING_MIN`].
-pub const STAR_SPACING_MAX: f32 = 64.0;
+pub const STAR_SPACING_MAX: f32 = 32.0;
 /// Bounds shared by the two ends of the `Star size` control
 /// ([`StarSettings::star_size_far`], [`StarSettings::star_size_near`])
 /// and their sanitizer: a star's whole diameter, glow included, in star
@@ -181,13 +187,13 @@ pub const STAR_SPACING_MAX: f32 = 64.0;
 pub const STAR_SIZE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_MIN`].
 pub const STAR_SIZE_MAX: f32 = 64.0;
-/// How many times its stored `Star size` and `Star spacing` the lattice draws
-/// and shows them. The glow has no fine detail for stars to pick up, so its
+/// How many times its stored `Star size` the lattice draws and shows it, and
+/// so its spacing, which is a multiple of the size. The glow has no fine detail for stars to pick up, so its
 /// stars run bigger. Applied where the lattice draws and in its bars, never
 /// stored, so both panes share one [`StarSettings::default`] and a key a blob
 /// lacks takes the right fresh value in either.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
-/// Bounds shared by the two depth curves, [`StarSettings::star_spacing_curve`]
+/// Bounds shared by the two depth curves, [`StarSettings::star_spacing_ratio_curve`]
 /// and [`StarSettings::star_size_curve`], and their sanitizer.
 pub const STAR_DEPTH_CURVE_MIN: f32 = 0.5;
 /// See [`STAR_DEPTH_CURVE_MIN`].
@@ -468,33 +474,34 @@ pub struct StarSettings {
     /// far-to-near control spreads over just these
     /// ([`crate::star_plan::star_layer_depths`]).
     pub star_layers: u32,
-    /// The farthest depth's star spacing in star pixels. A depth `d` from 0
-    /// (far) to 1 (near) spaces its stars at `far · (near / far)^(d^curve)`.
-    /// Every cell holds a star, so how many a depth has follows its spacing
-    /// alone. Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`] (the
-    /// lattice draws it [`LATTICE_STAR_SIZE_SCALE`] times over). Either end may
-    /// be the larger, so the near stars can be the denser ones.
-    pub star_spacing_far: f32,
-    /// The nearest depth's star spacing. See [`Self::star_spacing_far`].
-    pub star_spacing_near: f32,
+    /// The farthest depth's star spacing, as a multiple of its star size. A
+    /// depth `d` from 0 (far) to 1 (near) spaces its stars at
+    /// `far · (near / far)^(d^curve)` times its own [`Self::star_size_far`]
+    /// curve's size. Every cell holds a star, so at one value a depth's stars
+    /// cover the same share of the sky whatever their size. Runs over
+    /// [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`], whose low end is what
+    /// holds every star whole. Either end may be the larger, so the near
+    /// stars can be the denser ones.
+    pub star_spacing_ratio_far: f32,
+    /// The nearest depth's star spacing. See [`Self::star_spacing_ratio_far`].
+    pub star_spacing_ratio_near: f32,
     /// The exponent on depth in the spacing: 1 spreads it evenly over the
     /// depths, higher puts most depths in the fine dust. Runs over
     /// [`STAR_DEPTH_CURVE_MIN`]..=[`STAR_DEPTH_CURVE_MAX`].
-    pub star_spacing_curve: f32,
+    pub star_spacing_ratio_curve: f32,
     /// The farthest depth's star size: the whole star's diameter, glow
     /// included, in star pixels. A depth `d` spreads it like the spacing,
     /// `far · (near / far)^(d^curve)`, and the size is a function of that value
-    /// alone, so one value on the control is one star size at every depth. A
-    /// depth whose stars would not fit the widest read its spacing allows is
-    /// drawn at the widest that fits, and the panel says so
-    /// ([`crate::star_plan::StarDepthPlan::clamped`]). Runs over
+    /// alone, so one value on the control is one star size at every depth,
+    /// always drawn as set: the spacing is a multiple of it
+    /// ([`Self::star_spacing_ratio_far`]). Runs over
     /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`] (the lattice draws it
     /// [`LATTICE_STAR_SIZE_SCALE`] times over). Either end may be the larger,
     /// so the near stars can be the smaller ones.
     pub star_size_far: f32,
     /// The nearest depth's star size. See [`Self::star_size_far`].
     pub star_size_near: f32,
-    /// The exponent on depth in the size, as [`Self::star_spacing_curve`].
+    /// The exponent on depth in the size, as [`Self::star_spacing_ratio_curve`].
     pub star_size_curve: f32,
     /// The farthest depth's drift speed. A depth `d` from 0 (far) to 1 (near)
     /// drifts at `far + (near - far) d^curve`, along the
@@ -547,11 +554,12 @@ impl Default for StarSettings {
             star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
             star_layers: crate::star_plan::STAR_DEPTHS as u32,
-            // The captured spacings at the captured Star density of 10, which
-            // divided them by sqrt(5) before the spacing alone set the cell.
-            star_spacing_far: 1.0355378,
-            star_spacing_near: 6.597476,
-            star_spacing_curve: 2.1178954,
+            // The captured spacings (1.036..6.597 star pixels, curve 2.118)
+            // over the sizes below, fitted within 1% at all five depths. The
+            // nearest sits at the floor, as close as its stars ever fit.
+            star_spacing_ratio_far: 0.624,
+            star_spacing_ratio_near: STAR_SPACING_MIN,
+            star_spacing_ratio_curve: 3.5,
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
@@ -581,12 +589,10 @@ impl Default for StarSettings {
     }
 }
 impl StarSettings {
-    /// These settings with every size and spacing `scale` times over: what
-    /// the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
+    /// These settings with every size `scale` times over, and so every
+    /// spacing: what the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
     pub fn scaled(self, scale: f32) -> Self {
         Self {
-            star_spacing_far: self.star_spacing_far * scale,
-            star_spacing_near: self.star_spacing_near * scale,
             star_size_far: self.star_size_far * scale,
             star_size_near: self.star_size_near * scale,
             ..self
@@ -618,9 +624,9 @@ impl StarSettings {
             *near = clamp(*near, fresh[1], low, high);
         };
         pair(
-            &mut self.star_spacing_far,
-            &mut self.star_spacing_near,
-            [fresh.star_spacing_far, fresh.star_spacing_near],
+            &mut self.star_spacing_ratio_far,
+            &mut self.star_spacing_ratio_near,
+            [fresh.star_spacing_ratio_far, fresh.star_spacing_ratio_near],
             STAR_SPACING_MIN..=STAR_SPACING_MAX,
         );
         pair(
@@ -629,9 +635,9 @@ impl StarSettings {
             [fresh.star_size_far, fresh.star_size_near],
             STAR_SIZE_MIN..=STAR_SIZE_MAX,
         );
-        self.star_spacing_curve = clamp(
-            self.star_spacing_curve,
-            fresh.star_spacing_curve,
+        self.star_spacing_ratio_curve = clamp(
+            self.star_spacing_ratio_curve,
+            fresh.star_spacing_ratio_curve,
             STAR_DEPTH_CURVE_MIN,
             STAR_DEPTH_CURVE_MAX,
         );

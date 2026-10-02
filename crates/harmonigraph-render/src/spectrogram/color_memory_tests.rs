@@ -316,7 +316,9 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
         a.settings.stars.star_speed_far = 0.0;
         a.settings.stars.star_speed_near = 0.0;
         if budgeted {
-            a.settings.stars.star_spacing_far = harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
+            a.settings.stars.star_spacing_ratio_far =
+                harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
+            a.settings.stars.star_size_far = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
         }
         let settings = a.settings;
         let old_cells = star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells;
@@ -379,15 +381,16 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
 }
 
 /// Dropping a layer changes which stars exist, so history resets. Equal far and
-/// near spacing gives every slot the same cell, so the cells in the key cannot
-/// see the change and only `Star layers` can.
+/// near spacing and size give every slot the same cell, so the cells in the key
+/// cannot see the change and only `Star layers` can.
 #[test]
 fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
     let Some((device, queue)) = headless_device() else { return };
     let mut cb = fixture(CloudStyle::Stars);
     let a = cb.atmosphere.as_mut().unwrap();
     (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
-    a.settings.stars.star_spacing_near = a.settings.stars.star_spacing_far;
+    a.settings.stars.star_spacing_ratio_near = a.settings.stars.star_spacing_ratio_far;
+    a.settings.stars.star_size_near = a.settings.stars.star_size_far;
     let aspect = cb.rect.width() / cb.rect.height();
     let old_cells = star_layout(a.settings.stars, aspect).cells;
     let mut resources = CallbackResources::default();

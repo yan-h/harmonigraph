@@ -107,12 +107,12 @@ pub(super) fn stars(
     );
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_spacing_far,
-        &mut atmosphere.star_spacing_near,
-        &mut atmosphere.star_spacing_curve,
+        &mut atmosphere.star_spacing_ratio_far,
+        &mut atmosphere.star_spacing_ratio_near,
+        &mut atmosphere.star_spacing_ratio_curve,
         STAR_SPACING_MIN..=STAR_SPACING_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
-        Depth::Spacing(size_scale),
+        Depth::Spacing,
     );
     crate::widgets::star_profile(
         ui,
@@ -136,34 +136,8 @@ pub(super) fn stars(
         .percent()
         .show(ui)
         .on_hover_text(
-            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. More variation leaves less room for big stars, so a depth may be drawn smaller to fit. Brightness and size have their own bars, Brightness variation and Size variation.",
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Brightness and size have their own bars, Brightness variation and Size variation.",
         );
-    held_to_fit(ui, *atmosphere, size_scale);
-}
-
-/// A muted line while any depth's stars are drawn smaller than the dials ask,
-/// to fit the widest read their spacing allows. It reads the plan the pane
-/// draws, at its `size_scale`. It sits below every
-/// control that changes it, so its appearing never moves a bar being dragged.
-fn held_to_fit(ui: &mut egui::Ui, stars: harmonigraph_scene::StarSettings, size_scale: f32) {
-    let plan = stars.scaled(size_scale).plan();
-    // Numbered as layers, far to near, so the names match `Star layers`.
-    let held: Vec<_> = plan
-        .depths
-        .iter()
-        .filter(|depth| depth.gather != harmonigraph_scene::star_plan::StarGather::Off)
-        .enumerate()
-        .filter(|(_, depth)| depth.clamped())
-        .collect();
-    let Some(widest) = held.iter().map(|(_, depth)| 2.0 * depth.radius).reduce(f32::max) else {
-        return;
-    };
-    let names = held.iter().map(|(k, _)| (k + 1).to_string()).collect::<Vec<_>>().join(", ");
-    let (depths, their) = if held.len() == 1 { ("Layer", "its") } else { ("Layers", "their") };
-    crate::widgets::weak(
-        ui,
-        format!("{depths} {names} drawn smaller to fit {their} spacing, at most {widest:.1} px."),
-    );
 }
 
 /// Always visible near the material choice, before motion and appearance controls.

@@ -962,9 +962,9 @@ fn memory_key(
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
                 star_layers,            // which slices hold stars at all
-                star_spacing_far,
-                star_spacing_near,
-                star_spacing_curve,
+                star_spacing_ratio_far,
+                star_spacing_ratio_near,
+                star_spacing_ratio_curve,
                 star_size_far: _,        // star sizes do not change a star's colour
                 star_size_near: _,       // star sizes do not change a star's colour
                 star_size_curve: _,      // star sizes do not change a star's colour
@@ -1010,9 +1010,9 @@ fn memory_key(
     match cloud_style {
         CloudStyle::Stars => values.extend([
             2.0,
-            star_spacing_far,
-            star_spacing_near,
-            star_spacing_curve,
+            star_spacing_ratio_far,
+            star_spacing_ratio_near,
+            star_spacing_ratio_curve,
             star_randomness,
             star_layers as f32,
         ]),
@@ -1864,23 +1864,18 @@ mod tests {
     }
 
     /// One `Star size` value is one star at every depth, whatever the spacing
-    /// does across them, until a depth's widest read cannot hold it; then the
-    /// slice draws it at the widest that fits. 0.5 star pixels fits every
-    /// fresh cell, the far three's included.
+    /// does across them, and at any size: the spacing is a multiple of it, so
+    /// no slice draws a star smaller than asked.
     #[test]
     fn one_star_size_is_one_star_at_every_depth() {
-        use harmonigraph_scene::star_plan::StarGather;
         let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
-        (settings.stars.star_size_far, settings.stars.star_size_near) = (0.5, 0.5);
-        let fine = slices(settings, 0.0);
-        assert!(fine[0].cell < fine[STAR_SLICES - 1].cell / 4.0, "spacing must vary");
-        for slice in &fine {
-            assert_eq!(slice.radius, 0.25);
-        }
-        (settings.stars.star_size_far, settings.stars.star_size_near) = (64.0, 64.0);
-        for slice in slices(settings, 0.0) {
-            let jitter = settings.stars.star_jitter;
-            assert_eq!(slice.radius, StarGather::Three.bound(jitter) * slice.cell);
+        for size in [4.0, harmonigraph_scene::STAR_SIZE_MAX] {
+            (settings.stars.star_size_far, settings.stars.star_size_near) = (size, size);
+            let slices = slices(settings, 0.0);
+            assert!(slices[0].cell > slices[STAR_SLICES - 1].cell * 1.4, "spacing must vary");
+            for slice in &slices {
+                assert_eq!(slice.radius, 0.5 * size);
+            }
         }
     }
 
@@ -1981,9 +1976,9 @@ mod tests {
     }
 
     /// The halo images are allocated for exactly the depths the plan draws
-    /// 3x3, even where the settings are the lattice's, scaled past the range
-    /// a stored value can hold: Star size 20 shows as 100 there, which at
-    /// the stored scale would gather depth 2 by 2x2.
+    /// 3x3, at the lattice's scale too, scaled past the range a stored size
+    /// can hold: Star size 20 shows as 100 there. A spacing is a multiple of
+    /// the size, so the lattice reads every depth as the stored settings do.
     #[test]
     fn halos_follow_the_drawn_plan_at_the_lattice_scale() {
         use harmonigraph_scene::star_plan::StarGather;
@@ -1991,7 +1986,7 @@ mod tests {
             harmonigraph_scene::StarSettings { star_size_near: 20.0, ..Default::default() };
         let lattice = stored.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
         let three = lattice.plan().depths.map(|depth| depth.gather == StarGather::Three);
-        assert_ne!(three, lattice.sanitized().plan().depths.map(|d| d.gather == StarGather::Three));
+        assert_eq!(three, stored.plan().depths.map(|d| d.gather == StarGather::Three));
         assert_eq!(super::star_halo_layout([161, 121], lattice).active, three);
     }
 
@@ -2087,7 +2082,8 @@ mod tests {
         let fresh = harmonigraph_scene::SpectralAtmosphere::default();
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_spacing_ratio_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_size_far: harmonigraph_scene::STAR_SIZE_MIN,
                 ..fresh.stars
             },
 
@@ -2151,9 +2147,9 @@ mod tests {
         // Exercise the below-budget path independently of the current look defaults.
         let coarse = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_far: 4.25,
-                star_spacing_near: 21.0,
-                star_spacing_curve: 1.0,
+                star_spacing_ratio_far: 2.5,
+                star_spacing_ratio_near: 1.3,
+                star_spacing_ratio_curve: 1.0,
                 ..Default::default()
             },
 
@@ -2165,8 +2161,9 @@ mod tests {
         }
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_far: harmonigraph_scene::STAR_SPACING_MIN,
-                star_spacing_near: 6.6,
+                star_spacing_ratio_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_size_far: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_ratio_near: 0.42,
                 ..coarse.stars
             },
 

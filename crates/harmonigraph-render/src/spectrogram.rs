@@ -1864,7 +1864,7 @@ mod tests {
     /// them, and of texels in every reduced star image too, so resampling is
     /// not read as a move. No one profile is whole at 8 pixels everywhere
     /// (Medium's nearest halo at 45% would move 3.6 texels), so the field is
-    /// drawn twice: Medium with no depth big enough to read 3x3, for its
+    /// drawn twice: Medium with no depth close enough to read 3x3, for its
     /// far 50% and near 75% images (4 and 6 texels), and Uniform at 50%, for
     /// the 3x3 halos (4). A longer step instead moves fading stars past the
     /// threshold. Lives are long and the step short, so a star's fade moves a
@@ -1878,13 +1878,10 @@ mod tests {
         const SHIFT: usize = 8;
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
-        for (profile, size_near, three) in [
-            (StarHaloProfile::Medium, 6.0, false),
-            (
-                StarHaloProfile::Uniform,
-                harmonigraph_scene::StarSettings::default().star_size_near,
-                true,
-            ),
+        let fresh = harmonigraph_scene::StarSettings::default();
+        for (profile, spacing_near, three) in [
+            (StarHaloProfile::Medium, fresh.star_spacing_ratio_far, false),
+            (StarHaloProfile::Uniform, fresh.star_spacing_ratio_near, true),
         ] {
             let mut cb = refracted_fixture();
             cb.rect =
@@ -1906,7 +1903,7 @@ mod tests {
             // reduced halo images under a whole-pixel shift, which is not drift.
             s.stars.star_size_variation = 0.0;
             (s.stars.star_halo_profile, s.stars.star_halo_resolution) = (profile, 0.5);
-            s.stars.star_size_near = size_near;
+            s.stars.star_spacing_ratio_near = spacing_near;
             let gathers = s.stars.plan().depths.map(|depth| depth.gather);
             assert_eq!(gathers.contains(&StarGather::Three), three, "{profile:?}: {gathers:?}");
             let mut resources = CallbackResources::default();
