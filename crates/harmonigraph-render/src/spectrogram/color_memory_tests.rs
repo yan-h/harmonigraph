@@ -316,7 +316,9 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
         a.settings.stars.star_speed_far = 0.0;
         a.settings.stars.star_speed_near = 0.0;
         if budgeted {
-            a.settings.stars.star_spacing_far = harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
+            a.settings.stars.star_spacing_ratio_far =
+                harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
+            a.settings.stars.star_size_far = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
         }
         let settings = a.settings;
         let old_cells = star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells;
@@ -378,40 +380,55 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     }
 }
 
-/// Dropping a layer changes which stars exist, so history resets. Equal far and
-/// near spacing gives every slot the same cell, so the cells in the key cannot
-/// see the change and only `Star layers` can.
+/// Dropping a layer, or soloing others, changes which stars exist, so history
+/// resets. Equal far and near spacing and size give every slot the same cell,
+/// so the cells in the key cannot see the change and only the drawn slices can.
 #[test]
 fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
     let Some((device, queue)) = headless_device() else { return };
-    let mut cb = fixture(CloudStyle::Stars);
-    let a = cb.atmosphere.as_mut().unwrap();
-    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
-    a.settings.stars.star_spacing_near = a.settings.stars.star_spacing_far;
-    let aspect = cb.rect.width() / cb.rect.height();
-    let old_cells = star_layout(a.settings.stars, aspect).cells;
-    let mut resources = CallbackResources::default();
-    cb.grid.fill(255);
-    prepare_once(&device, &queue, &mut resources, &cb);
-    let old_texture = memory(&resources).views[0].texture().clone();
-    assert!(
-        pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count() > 1000
-    );
-    let a = cb.atmosphere.as_mut().unwrap();
-    a.settings.stars.star_layers = 4;
-    assert_eq!(old_cells, star_layout(a.settings.stars, aspect).cells, "cells alone would see it");
-    cb.grid.fill(0);
-    a.now += 1.0 / 60.0;
-    prepare_once(&device, &queue, &mut resources, &cb);
-    let current = memory(&resources);
-    assert_eq!(current.views[0].texture(), &old_texture, "reset through allocation");
-    let mut fresh = CallbackResources::default();
-    prepare_once(&device, &queue, &mut fresh, &cb);
-    // History is laid out like the atlas, a texel a cell, and a dropped layer
-    // needs fewer rows; the kept allocation's rows past them hold no cell.
-    let (kept, fresh) = (pixels(&device, &queue, current), pixels(&device, &queue, memory(&fresh)));
-    assert!(kept.len() > fresh.len(), "fixture did not drop a layer's cells");
-    assert!(kept[..fresh.len()] == fresh[..], "a dropped layer's stars kept their color");
+    // Each drops one slice, which keeps the history's allocation, so only the
+    // key can reset it.
+    let drop_one = |s: &mut harmonigraph_scene::StarSettings| s.star_layers = 4;
+    let solo_four =
+        |s: &mut harmonigraph_scene::StarSettings| s.star_solo = [true, true, false, true, true];
+    for (name, edit) in [("layers", &drop_one as &dyn Fn(&mut _)), ("solo", &solo_four)] {
+        let mut cb = fixture(CloudStyle::Stars);
+        let a = cb.atmosphere.as_mut().unwrap();
+        (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+        a.settings.stars.star_spacing_ratio_near = a.settings.stars.star_spacing_ratio_far;
+        a.settings.stars.star_size_near = a.settings.stars.star_size_far;
+        let aspect = cb.rect.width() / cb.rect.height();
+        let old_cells = star_layout(a.settings.stars, aspect).cells;
+        let mut resources = CallbackResources::default();
+        cb.grid.fill(255);
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let old_texture = memory(&resources).views[0].texture().clone();
+        assert!(
+            pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count()
+                > 1000
+        );
+        let a = cb.atmosphere.as_mut().unwrap();
+        edit(&mut a.settings.stars);
+        let cells = star_layout(a.settings.stars, aspect).cells;
+        assert_eq!(old_cells, cells, "{name}: cells alone would see it");
+        cb.grid.fill(0);
+        a.now += 1.0 / 60.0;
+        prepare_once(&device, &queue, &mut resources, &cb);
+        let current = memory(&resources);
+        assert_eq!(current.views[0].texture(), &old_texture, "{name}: reset through allocation");
+        let mut fresh = CallbackResources::default();
+        prepare_once(&device, &queue, &mut fresh, &cb);
+        // History is laid out like the atlas, a texel a cell, and a dropped
+        // layer needs fewer rows; the kept allocation's rows past them hold no
+        // cell.
+        let current = pixels(&device, &queue, current);
+        let fresh = pixels(&device, &queue, memory(&fresh));
+        assert!(current.len() > fresh.len(), "{name}: fixture did not drop a layer's cells");
+        assert!(
+            current[..fresh.len()] == fresh[..],
+            "{name}: a dropped layer's stars kept their color"
+        );
+    }
 }
 
 /// Moving star centers changes the sampled material. Reset that history even

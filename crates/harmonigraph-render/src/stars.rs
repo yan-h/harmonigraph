@@ -15,12 +15,14 @@ pub(crate) const STAR_SLICES: usize = harmonigraph_scene::star_plan::STAR_DEPTHS
 /// Without the reduction a session left running for hours would carry a drift
 /// of millions of star pixels into an f32, and the stars would start stepping
 /// by fractions of a pixel. It is wider than any pane is in the finest cells,
-/// so the repeat never shows: those are `STAR_SPACING_MIN`, 0.25 star pixels,
-/// which puts a 16:9 pane 3840 cells wide and a 16:1 pane 34,560.
+/// so the repeat never shows: those are `STAR_SPACING_MIN` times
+/// `STAR_SIZE_MIN`, 5/24 of a star pixel, which puts a 16:9 pane 4608 cells
+/// wide and a 16:1 pane 41,472.
 ///
 /// The price is the offset's own precision: an f32 near 65536 resolves a 256th
-/// of a cell, which is 0.03 star pixels in the fresh nearest cells and a
-/// quarter of a star pixel only in the biggest cell `Star spacing` allows.
+/// of a cell, which is 0.03 star pixels in the fresh nearest cells. A bigger
+/// cell resolves coarser in proportion, and takes as much longer to drift
+/// that far.
 pub(crate) const STAR_HASH_PERIOD: f64 = 65536.0;
 /// The period the life clock is reduced by, in lives: a power of two, so the
 /// shader's mask on the life index wraps with it and a star's life runs
@@ -53,12 +55,11 @@ struct StarSlice {
     /// This slice's drift, in its own cells, reduced modulo
     /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
     offset: Float2,
-    /// The cell one star is hashed into: `Star spacing`'s low end at the far
-    /// end over the square root of half the density, times the ratio of its
-    /// ends raised to `d^Spacing curve`.
+    /// The cell one star is hashed into: the plan's, its star size times its
+    /// `Star spacing`, unless the atlas raised it ([`star_layout`]).
     cell: f32,
     /// The stars' outer radius in star pixels before each star's own size
-    /// draw shrinks it: the plan's, held to what the slice's gather reads.
+    /// draw shrinks it: the plan's, half the depth's `Star size`.
     radius: f32,
     /// The star's shape ([`star_profile`]): its solid share of the radius,
     /// `1 / (1 - solid)`, and the glow's [`star_falloff_bend`].
@@ -121,9 +122,8 @@ const STAR_GRID_MARGIN: u32 = 1;
 /// dial that sizes cells reallocates at steps rather than every frame.
 const STAR_ATLAS_STEP: u32 = 64;
 
-/// Each slice's cell as the dials ask for it, in star pixels: `Star
-/// spacing`'s low end at the far end over the square root of half the
-/// density, times the ratio of its ends raised to `d^Spacing curve`.
+/// Each slice's cell as the dials ask for it, in star pixels: its star size
+/// times its `Star spacing`.
 pub(crate) fn star_cells(settings: harmonigraph_scene::StarSettings) -> [f32; STAR_SLICES] {
     settings.plan().depths.map(|depth| depth.cell)
 }

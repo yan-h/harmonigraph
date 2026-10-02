@@ -87,15 +87,6 @@ pub(super) fn stars(
         STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
         STAR_SPACING_MIN,
     };
-    let mut layers = atmosphere.star_layers as f32;
-    let top = harmonigraph_scene::star_plan::STAR_DEPTHS as f32;
-    ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
-        .integer()
-        .show(ui)
-        .on_hover_text(
-            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
-        );
-    atmosphere.star_layers = layers as u32;
     crate::widgets::depth(
         ui,
         &mut atmosphere.star_size_far,
@@ -107,13 +98,28 @@ pub(super) fn stars(
     );
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_spacing_far,
-        &mut atmosphere.star_spacing_near,
-        &mut atmosphere.star_spacing_curve,
+        &mut atmosphere.star_spacing_ratio_far,
+        &mut atmosphere.star_spacing_ratio_near,
+        &mut atmosphere.star_spacing_ratio_curve,
         STAR_SPACING_MIN..=STAR_SPACING_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
-        Depth::Spacing(size_scale),
+        Depth::Spacing,
     );
+    let mut layers = atmosphere.star_layers as f32;
+    let top = harmonigraph_scene::star_plan::STAR_DEPTHS as f32;
+    ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
+        );
+    // Solo is held per depth, and a new layer count puts other depths under
+    // the numbers, so a solo left on would come back on a different layer.
+    if layers as u32 != atmosphere.star_layers {
+        atmosphere.star_solo = Default::default();
+    }
+    atmosphere.star_layers = layers as u32;
+    star_solo(ui, atmosphere);
     crate::widgets::star_profile(
         ui,
         &mut atmosphere.star_solid_far,
@@ -136,37 +142,30 @@ pub(super) fn stars(
         .percent()
         .show(ui)
         .on_hover_text(
-            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. More variation leaves less room for big stars, so a depth may be drawn smaller to fit. Brightness and size have their own bars, Brightness variation and Size variation.",
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Brightness and size have their own bars, Brightness variation and Size variation.",
         );
-    held_to_fit(ui, *atmosphere, size_scale);
 }
 
-/// A muted line while any depth's stars are drawn smaller than the dials ask,
-/// to fit the widest read their spacing allows. It reads the plan the pane
-/// draws, at its `size_scale`. It sits below every
-/// control that changes it, so its appearing never moves a bar being dragged.
-fn held_to_fit(ui: &mut egui::Ui, stars: harmonigraph_scene::StarSettings, size_scale: f32) {
-    let plan = stars.scaled(size_scale).plan();
-    // Numbered as layers, far to near, so the names match `Star layers`.
-    let held: Vec<_> = plan
-        .depths
-        .iter()
-        .filter(|depth| depth.gather != harmonigraph_scene::star_plan::StarGather::Off)
-        .enumerate()
-        .filter(|(_, depth)| depth.clamped())
-        .collect();
-    let Some(widest) = held.iter().map(|(_, depth)| 2.0 * depth.radius).reduce(f32::max) else {
-        return;
-    };
-    let names = held.iter().map(|(k, _)| (k + 1).to_string()).collect::<Vec<_>>().join(", ");
-    let (depths, their) = if held.len() == 1 { ("Layer", "its") } else { ("Layers", "their") };
-    crate::widgets::weak(
-        ui,
-        format!("{depths} {names} drawn smaller to fit {their} spacing, at most {widest:.1} px."),
-    );
+/// One toggle per drawn layer, numbered far to near as `Star layers` counts
+/// them. While any is on, only the soloed layers are drawn.
+fn star_solo(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
+    let layers = harmonigraph_scene::star_plan::star_layer_depths(stars.star_layers);
+    ui.horizontal_wrapped(|ui| {
+        crate::widgets::label(ui, "Solo");
+        ui.spacing_mut().item_spacing.x = crate::theme::button_gap(crate::theme::ui_scale(ui.ctx()));
+        let drawn = (0..layers.len()).filter(|&k| layers[k].is_some());
+        for (n, k) in drawn.enumerate() {
+            let name = (n + 1).to_string();
+            ui.toggle_value(&mut stars.star_solo[k], crate::widgets::option_label(&name))
+                .on_hover_text(format!(
+                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is the farthest). Not saved: every project opens with all layers drawn."
+                ));
+        }
+    });
 }
 
-/// Always visible near the material choice, before motion and appearance controls.
+/// The rendering profile, last among the Stars controls: a quality and cost
+/// choice made once, where the rest shape the look.
 pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::StarHaloProfile;
     crate::widgets::choice_row(

@@ -126,8 +126,8 @@ fn star_split_matches_native_at_fractional_scale_with_and_without_memory() {
                 // Half solid in a broad glow, short of a flat wash.
                 settings.stars.star_glow_falloff = 0.0;
                 (settings.stars.star_solid_far, settings.stars.star_solid_near) = (0.5, 0.5);
-                settings.stars.star_spacing_far = harmonigraph_scene::STAR_SPACING_MIN;
-                settings.stars.star_spacing_near = harmonigraph_scene::STAR_SPACING_MAX;
+                settings.stars.star_spacing_ratio_far = harmonigraph_scene::STAR_SPACING_MIN;
+                settings.stars.star_spacing_ratio_near = harmonigraph_scene::STAR_SPACING_MAX;
                 settings.cloud_depth = 1.0;
             }
             let a = {
@@ -365,9 +365,10 @@ fn uniform_halos_preserve_the_original_array_lookup() {
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
     let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
     stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
-    // Stars too big for 2x2 at every depth, so every depth owns a layer of
+    // Stars too close for 2x2 at every depth, so every depth owns a layer of
     // the one Uniform array.
-    (stars.star_size_far, stars.star_size_near) = (64.0, 64.0);
+    let closest = harmonigraph_scene::STAR_SPACING_MIN;
+    (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (closest, closest);
     let three = harmonigraph_scene::star_plan::StarGather::Three;
     assert!(stars.plan().depths.iter().all(|depth| depth.gather == three));
     for resolution in [0.25, 0.5, 1.0] {
