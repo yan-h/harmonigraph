@@ -86,7 +86,8 @@ run .claude/semantic-breaks.py --check
 run python3 -B .claude/tests/semantic-breaks.py
 
 # Rustdoc below checks Rust comments only. Local Markdown links must also
-# resolve to tracked targets and current headings, including after docs move.
+# resolve to tracked targets and current headings, including after docs move,
+# and so must repository paths written as inline code.
 run python3 -B .claude/markdown-links.py
 run python3 -B .claude/tests/markdown-links.py
 

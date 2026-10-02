@@ -50,14 +50,8 @@ Jitter itself is unchanged.
 The previous wide support is 1.2 cells:
 four neighbors cannot reproduce it simply by dropping five reads.
 
-The Stars **Far fill** slider reduces background leakage through the farthest three layers without adding stars or texture reads.
-It works in every rendering profile:
-0% preserves the original coverage,
-50% gives gentle filling,
-and 100% gives stronger filling,
-with continuous interpolation between them.
-New and older appearances default to 0%.
-Changing fill preserves star color history.
+A Stars **Far fill** slider (#1259), later renamed Distant gap fill, reduced background leakage through the farthest three layers without adding stars or texture reads.
+It defaulted to 0% and was removed in #1356, so the fresh picture never used it.
 It strengthens partial tails and lifetime fades but cannot fill a pixel with zero star contribution.
 The [bounded prototype report](https://github.com/yan-h/harmonigraph/tree/e90cca23/docs/evidence/spectrogram-stars/crack-fill-2026-09-28) records the appearance and cost comparison.
 The [slider validation](evidence/spectrogram-stars/far-fill-2026-09-28/README.md) records production parity and measured overhead.
@@ -128,7 +122,7 @@ and visual comparisons.
 | Far-three short glow at native dimensions | One balanced run saved 26.1%/16.9% against old P3. Simpler coordinates and retained sharpness, but less saving than the visually accepted 75% target. |
 | Far-three short glow at 50%, or wide glow at 50% | Faster alternatives with more distant softness. Both were measured; neither was selected. The wide50 family also received workload confirmations. |
 | All-five reduced-resolution groups | Wide glow at 75% saved roughly 37–40%/31%; at 50%, roughly 53–55%/56.5% against old P3. Softer foreground detail made the visual tradeoff worse. |
-| Five distant layers instead of three, to fill black cracks | Five far layers at 50% cost 20–21% more at dense 1080p and roughly tied at 4K; three at 50% saved 9–10% at 4K with slight softness and no dense-1080p gain. Five layers nearly closed the cracks (far opacity below 230/255 fell from 1.04% to 0.004% of lit pixels) but kept the larger dark pattern. Superseded by **Far fill**, which fills the same cracks with no extra stars or reads. [Report](https://github.com/yan-h/harmonigraph/pull/1257). |
+| Five distant layers instead of three, to fill black cracks | Five far layers at 50% cost 20–21% more at dense 1080p and roughly tied at 4K; three at 50% saved 9–10% at 4K with slight softness and no dense-1080p gain. Five layers nearly closed the cracks (far opacity below 230/255 fell from 1.04% to 0.004% of lit pixels) but kept the larger dark pattern. Superseded by **Far fill** (#1259), which filled the same cracks with no extra stars or reads until its removal in #1356. [Report](https://github.com/yan-h/harmonigraph/pull/1257). |
 | Omit impossible neighboring core work | Small same-look gains around 2% in confirmation; environment-sensitive and not enough to justify additional machinery in this port. |
 | Fused seed/horizontal filtering | Roughly 2.1× existing blur cost at 1080p and 20–22% slower at 4K. Rejected. Matching a shared blurred image does not reconstruct each analytic halo. |
 | Seed quads, sprites and shared bloom | Previously investigated. Additional draws/filtering or changed halo structure did not establish a better visual-plus-maintenance tradeoff. Consult the archived evidence and #1242 before retrying. |

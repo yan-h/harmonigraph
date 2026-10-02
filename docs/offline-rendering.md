@@ -347,11 +347,15 @@ Internal pixel fixtures and scratch look prototypes still compose a single pane 
 ## What is and isn't captured
 
 **Captured:** every note event with its own sub-frame timestamp (so a 60 fps render is not quantized to 60 fps —
-envelopes start where they actually started), per-note tuning and MPE bends, all eight automatable parameters over time, and the view/camera/spectrum settings.
+envelopes start where they actually started), per-note tuning and MPE bends, all thirteen automatable parameters over time, and the view/camera/spectrum settings.
 
 **Captured alongside the notes:** the selected analysis input as 32-bit float, aligned to them.
 
-**Not captured:** camera *movement* (the camera is a UI control, not an automatable parameter, so a take holds one fixed angle), and anything you click mid-piece.
+**Camera movement is captured through its five host parameters** (yaw, pitch, distance and the two pan axes).
+Dragging or navigating the lattice, and choosing a camera preset, writes those parameters, so a take records the move like any other automation and the export replays it.
+A take with no camera parameter changes keeps the camera of its captured appearance.
+
+**Not captured:** anything else you click mid-piece.
 
 ## Why not just record the plugin window?
 

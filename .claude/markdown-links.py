@@ -10,6 +10,14 @@ Fenced/indented code, inline code examples and HTML comments are ignored.
 This is a repository link gate, not a full Markdown renderer: raw HTML links
 and custom HTML anchors are outside its scope. Stage new documents and assets
 with git add before running it, just like semantic-breaks.py.
+
+Inline code naming a repository path (`crates/x/src/y.rs`, `tools/z.py:12`)
+must name a tracked file or directory too, because a moved or deleted file
+leaves exactly that behind and the audits kept finding it by hand. Only paths
+under a tracked top-level directory are checked; patterns, placeholders,
+gitignored paths and docs/evidence (a frozen archive) are skipped, and so is a
+path on a line citing an issue, PR or commit, which is how a document says the
+file is gone on purpose ("deleted in #715").
 """
 
 from __future__ import annotations
@@ -28,6 +36,8 @@ FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 INLINE = re.compile(r"(?<!\\)!?\[((?:\\.|[^\[\]\\]|\[[^\]]*\])*)\]\(\s*")
 REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*", re.M)
 ESCAPE = re.compile(r"\\([" + re.escape(string.punctuation) + r"])")
+CODE_SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+HISTORY = re.compile(r"#\d+|\b[0-9a-f]{7,40}\b")
 
 
 def blank(text: str) -> str:
@@ -119,11 +129,24 @@ def anchors(text: str) -> set[str]:
     return result
 
 
-def check(root: Path, tracked: set[str]) -> list[str]:
+def code_paths(text: str, tops: set[str]):
+    """Repository paths named in inline code, skipping lines that cite history."""
+    for n, line in enumerate(text.splitlines(), 1):
+        if HISTORY.search(line):
+            continue
+        for match in CODE_SPAN.finditer(line):
+            path = re.sub(r"(?::[\d-]+|#L[\dL-]+)$", "", match[1].strip().removeprefix("./")).rstrip("/")
+            if (path.split("/")[0] in tops and "/" in path
+                    and not re.search(r"[\s*?<>{}\[\]$]|\.\.\.|-$", path)):
+                yield n, path
+
+
+def check(root: Path, tracked: set[str], ignored=lambda path: False) -> list[str]:
     sources = sorted(p for p in tracked if p.endswith(".md")
                      and not p.startswith("vendor/") and not (root / p).is_symlink())
     heading_ids: dict[str, set[str]] = {}
     failures = []
+    tops = {p.split("/")[0] for p in tracked if "/" in p}
     for source in sources:
         if not (root / source).is_file():
             failures.append(f"{source}: tracked Markdown source is missing")
@@ -143,6 +166,12 @@ def check(root: Path, tracked: set[str]) -> list[str]:
                     heading_ids[target] = anchors(prose(path.read_text(encoding="utf-8")))
                 if unquote(parsed.fragment) not in heading_ids[target]:
                     failures.append(f"{source}:{line}: missing heading anchor: {url!r}")
+        if source.startswith("docs/evidence/"):
+            continue
+        for line, path in code_paths(text, tops):
+            present = path in tracked or any(p.startswith(path + "/") for p in tracked)
+            if not present and not ignored(path):
+                failures.append(f"{source}:{line}: inline code names a missing tracked path: {path!r}")
     return failures
 
 
@@ -151,12 +180,17 @@ def main() -> int:
     tracked = set(subprocess.run(
         ["git", "ls-files", "-z"], capture_output=True, text=True, check=True,
     ).stdout.split("\0")) - {""}
-    failures = check(Path.cwd(), tracked)
+    def ignored(path: str) -> bool:
+        # A directory-only pattern (`dir/`) matches only the slash form.
+        return any(subprocess.run(["git", "check-ignore", "-q", "--no-index", name]).returncode == 0
+                   for name in (path, path + "/"))
+
+    failures = check(Path.cwd(), tracked, ignored)
     for failure in failures:
         print(failure, file=sys.stderr)
     if failures:
         return 1
-    print("✓ tracked Markdown local targets and heading anchors resolve")
+    print("✓ tracked Markdown local targets, heading anchors and inline code paths resolve")
     return 0
 
 

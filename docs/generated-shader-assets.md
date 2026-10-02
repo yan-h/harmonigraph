@@ -79,7 +79,7 @@ The local machine has Command Line Tools but no `metal` or `metallib` executable
 The existing macOS CI job can obtain Apple's Metal toolchain, as the earlier #704 probe already does.
 No local toolchain installation is required to inspect exported inputs or run downloaded libraries.
 
-From the repository root, use a fresh experiment directory (historical only — `backend.py` and `exercise.py` no longer exist; `tools/metal-precompile/` now holds only `compile.py`, for the later, separate one-pipeline passthrough probe described in its own `README.md`):
+From the repository root, use a fresh experiment directory (historical only — #1222 deleted `tools/metal-precompile/` with `backend.py`, `exercise.py` and the later one-pipeline `compile.py` probe, superseded by `tools/shader-assets.py`):
 
 ```sh
 python3 tools/metal-precompile/backend.py prepare /tmp/generated-metal-assets
