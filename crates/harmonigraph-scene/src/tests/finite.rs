@@ -112,7 +112,6 @@ fn poisoned_view() -> ViewConfig {
         meantone_auto: base.meantone_auto,
         marvel: base.marvel,
         marvel_auto: base.marvel_auto,
-        frameless: base.frameless,
         render_scale: nan,
         spiral_bloom: nan,
         glow_reach: nan,

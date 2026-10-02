@@ -78,11 +78,12 @@ fn memory(s: &mut SpectralAtmosphere) {
 const CASES: &[(&str, Option<Turn>)] = &[
     ("plain", None),
     ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
-    ("blur + terraces", Some(|s| s.cloud_depth = 0.0)),
+    ("blur + terraces", Some(|s| (s.cloud_depth, s.contour_strength) = (0.0, 1.0))),
     (
         "terraces only",
         Some(|s| {
             (s.pitch_softness, s.time_softness, s.cloud_depth) = (0.0, 0.0, 0.0);
+            s.contour_strength = 1.0;
         }),
     ),
     ("velvet, defaults", Some(|s| s.cloud_style = CloudStyle::VelvetScales)),
@@ -101,7 +102,7 @@ const CASES: &[(&str, Option<Turn>)] = &[
         }),
     ),
     ("watercolor, defaults", Some(|_| {})),
-    ("watercolor, no terraces", Some(|s| s.contour_strength = 0.0)),
+    ("watercolor, terraces", Some(|s| s.contour_strength = 1.0)),
     ("watercolor, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
     ("watercolor, layers 0", Some(|s| s.material_settings.wash_layers = 0.0)),
     ("watercolor, lobe 0", Some(|s| s.material_settings.wash_lobe = 0.0)),

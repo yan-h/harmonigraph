@@ -981,6 +981,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "saved_looks",
         "fps_cap",
         "ui_scale",
+        "frameless",
         "skin_dials",
         "perf_pos",
         "show_perf",
@@ -2218,4 +2219,22 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
     );
     let partial: MaterialSettings = ron::from_str("(wash_fuzz:0.23)").unwrap();
     assert_eq!(partial, MaterialSettings { wash_fuzz: 0.23, ..Default::default() });
+}
+
+/// Tab visibility belongs to the editor, so loading a look cannot move it and
+/// an older appearance key is ignored without a compatibility path.
+#[test]
+fn tab_visibility_is_saved_only_with_the_editor() {
+    let mut state = fresh();
+    state.workspace.interaction.frameless = true;
+    let saved = state.save_persist();
+    let mut restored = fresh();
+    assert!(restored.load_persist(&saved));
+    assert!(restored.workspace.interaction.frameless);
+    let appearance = ron::to_string(&state.picture.appearance).unwrap();
+    assert!(!appearance.contains("frameless"));
+    let old = appearance.replacen("view:(", "view:(frameless:true,", 1);
+    assert_ne!(old, appearance, "the old appearance key must be present");
+    let loaded: crate::AppearanceDocument = ron::from_str(&old).unwrap();
+    assert_eq!(loaded.view, state.picture.appearance.view);
 }

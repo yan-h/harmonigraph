@@ -6,7 +6,7 @@ use crate::*;
 
 #[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
-    // The fresh 4096-sample window draws A4 on its nearest bin, about 21¢
+    // The Fast 4096-sample window draws A4 on its nearest bin, about 21¢
     // (seven buckets) sharp; the 8192-sample one resolves it to within a
     // bucket.
     for (window, buckets) in [(SpectrumWindow::Fast, 8), (SpectrumWindow::Balanced, 1)] {

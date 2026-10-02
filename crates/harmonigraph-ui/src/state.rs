@@ -254,6 +254,9 @@ pub struct Interaction {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+    /// Hide the editor's tab and fold bars for a continuous live picture.
+    /// Tab toggles them back; this preference is never recorded in a take.
+    pub frameless: bool,
     /// What the chrome's colours are made of (see
     /// [`harmonigraph_scene::skin::Skin::from_dials`]). Persisted. Here beside
     /// `ui_scale` for the same reason: it colors the panel, never the picture
@@ -491,6 +494,7 @@ impl SharedState {
             saved_looks: self.workspace.interaction.appearance_editor.saved.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
+            frameless: self.workspace.interaction.frameless,
             skin_dials: self.workspace.interaction.skin_dials,
             perf_pos: self.workspace.interaction.perf_pos,
             show_perf: self.workspace.interaction.show_perf,
@@ -554,6 +558,7 @@ impl SharedState {
             preset.sanitize();
         }
         self.workspace.interaction.fps_cap = persist.fps_cap;
+        self.workspace.interaction.frameless = persist.frameless;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
         // would take a hand-edited 5.0 down to the top of the range while
@@ -646,6 +651,7 @@ pub(crate) struct UiPersist {
     pub(crate) fps_cap: Option<f32>,
     /// Chrome defaults to the design size, shared with Interaction.
     pub(crate) ui_scale: f32,
+    pub(crate) frameless: bool,
     /// See [`Interaction::skin_dials`]; a blob without them opens at the
     /// default.
     pub(crate) skin_dials: harmonigraph_scene::skin::SkinDials,
@@ -672,6 +678,7 @@ impl Default for UiPersist {
             saved_looks: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            frameless: false,
             skin_dials: Default::default(),
             perf_pos: None,
             show_perf: false,
@@ -719,6 +726,7 @@ impl Default for Interaction {
             folded_sections: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            frameless: false,
             skin_dials: Default::default(),
             perf_pos: None,
             show_perf: false,

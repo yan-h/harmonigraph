@@ -69,7 +69,7 @@ struct StarSlice {
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
     /// many cells it holds across and down. See [`StarLayout`]. An undrawn
-    /// slice holds no cells.
+    /// slice omitted by the layer count holds no cells; a solo-hidden slice keeps them.
     base: i32,
     origin: Int2,
     grid: Int2,
@@ -202,19 +202,14 @@ impl StarLayout {
 /// the finest `Star spacing`, where a far cell is a fraction of a pixel on any
 /// real pane — the finest cells are raised to the
 /// smallest floor that fits, so those slices hold fewer, sparser stars and
-/// every other slice is untouched. The floor is the whole field's: solo only
-/// leaves slices unbaked, so a soloed layer keeps the cells it is mixed at.
+/// every other slice is untouched. Solo only changes composition: hidden
+/// layers keep their cells and colour history running at the full field's cost.
 pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f32) -> StarLayout {
     let wanted = star_cells(settings);
-    let drawn_by = |settings: harmonigraph_scene::StarSettings| {
-        settings.plan().depths.map(|depth| depth.gather != StarGather::Off)
-    };
-    let drawn = drawn_by(settings);
-    let unsoloed = harmonigraph_scene::StarSettings { star_solo: Default::default(), ..settings };
-    let field = drawn_by(unsoloed);
-    let at = |floor| StarLayout::at(wanted, field, floor, aspect);
+    let drawn = settings.plan().depths.map(|depth| depth.gather != StarGather::Off);
+    let at = |floor| StarLayout::at(wanted, drawn, floor, aspect);
     if at(0.0).fits() {
-        return StarLayout::at(wanted, drawn, 0.0, aspect);
+        return at(0.0);
     }
     let mut high = wanted.iter().copied().fold(f32::INFINITY, f32::min).max(1e-3);
     while !at(high).fits() {
@@ -229,7 +224,7 @@ pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f3
             low = mid;
         }
     }
-    StarLayout::at(wanted, drawn, high, aspect)
+    at(high)
 }
 
 /// The atlas to allocate for `needed` texels, keeping the one `held` while it
@@ -260,6 +255,11 @@ pub(crate) fn star_slices(
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
+    let solo = plan
+        .depths
+        .iter()
+        .enumerate()
+        .any(|(k, depth)| depth.gather != StarGather::Off && settings.star_solo[k]);
     let (jitter, bend) = (settings.star_jitter, star_falloff_bend(settings.star_glow_falloff));
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
@@ -286,7 +286,7 @@ pub(crate) fn star_slices(
             grid: Int2(grid.map(|side| side as i32)),
             width: star_jitter_width(jitter),
             inner: StarGather::Core.bound(jitter),
-            gather: star_gather_code(depth.gather),
+            gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(depth.gather) },
             pad: 0,
         }
     })

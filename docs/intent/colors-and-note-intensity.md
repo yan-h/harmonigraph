@@ -6,3 +6,7 @@ One line per decision; the audit reads this before asking anything.
 ## 2026-09-29 (all-areas run, #1314)
 
 - Fresh intensity (velocity and gain to Opacity) leaves velocity visible only on soft notes, because unity gain adds its whole weight. That is fine; Yan may retune the defaults later.
+
+## 2026-10-02 (issue sweep)
+
+- Spiral note dots follow the Opacity mapping, including their bloom and shadows. Rim names retain their envelope-driven legibility. #1314 Colors Q2

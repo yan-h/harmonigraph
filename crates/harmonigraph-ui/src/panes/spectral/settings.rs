@@ -399,7 +399,7 @@ pub(crate) fn analysis_section(
             }
         }
         let windows = [
-            (SpectrumWindow::Fast, "Fast", "snappy response, coarse bass pitch"),
+            (SpectrumWindow::Fast, "Fast", "snappy response, coarse pitch especially in the bass; low audio-ring fundamentals can disappear while their harmonics remain"),
             (SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
             (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
         ];

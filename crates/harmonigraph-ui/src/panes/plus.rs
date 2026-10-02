@@ -2,22 +2,9 @@
 //! draws when nothing is playing — how bright that picture is, and the cross
 //! standing at each node position that makes up most of it.
 //!
-//! An idle position draws no disc of its own, so the markers and the node
-//! rings standing at their empty state are the whole of it. Two brightness bars
-//! open the section, on one `L*` axis so they are read against each other:
-//! Idle ring brightness is the NODE at rest, one grey under the audio ring where
-//! it reads silence and the octave band where an octave is not sounding
-//! ([`ViewConfig::lattice_ground`](harmonigraph_scene::ViewConfig)), and Idle
-//! label/cross brightness is the field of crosses
-//! ([`ViewConfig::marker_ink`](harmonigraph_scene::ViewConfig)).
-//!
-//! They are both here rather than one of them living under the note whose rings
-//! it moves, because the question they answer is the same one and it is about
-//! this picture: how visible is the lattice with nothing playing. Equal numbers
-//! are the whole resting lattice in one grey. What wants them apart is the glow
-//! — an Idle ring brightness dark enough for the light behind the notes to read
-//! takes the node rings down where it should and the marker field with them, and the field is
-//! what says where the positions ARE.
+//! Idle positions draw crosses or names, not empty node rings. Their brightness
+//! is independent of the silent slices within a sounding node; that control
+//! belongs to Note layers ([`super::nodes`]).
 //!
 //! Nothing is drawn BETWEEN the positions, and a CROSS is why that costs the
 //! picture nothing: it draws exactly what a pair of gridlines draws where they
@@ -25,7 +12,7 @@
 //! getting from one junction to the next. What the eye reads the lattice's rows
 //! and columns off is the regularity of the field itself.
 //!
-//! Under those pair the marker's LENGTH — how far an arm reaches and how much
+//! Under the brightness bar, the marker's LENGTH — how far an arm reaches and how much
 //! of it tapers. Its thickness has no bar here: it follows Label size, so a
 //! cross weighs what the letters beside it weigh
 //! ([`PLUS_WIDTH_PER_LABEL_SCALE`](harmonigraph_scene::PLUS_WIDTH_PER_LABEL_SCALE)).
@@ -59,44 +46,15 @@ use harmonigraph_scene::{ViewConfig, PLUS_SIZE_MAX};
 /// everything drawn on top of it.
 pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Idle lattice", |ui| {
-        // First, because it is the one setting here that reaches past this
-        // section: the rings it moves belong to the note, and every other bar
-        // under this heading is the marker field's.
-        //
-        // No off position, and none is missing: each ring has a width bar, so
-        // every setting of THIS one draws something. The bottom of it is black
-        // rather than nothing, which against the panel reads as holes punched
-        // through the lattice: a picture worth being able to reach, and worth
-        // reaching by dragging rather than by falling off the end.
-        ValueBar::new(&mut appearance.view.lattice_ground, 0.0..=100.0, "Idle ring brightness")
-            .unit(1.0, "%")
-            // L*, the units the gradients' own Brightness is authored in, so a
-            // ground and a gradient can be compared by their numbers. Whole
-            // points: the axis is 100 wide and a tenth of one is under a
-            // quantization step of the grey it names.
-            .integer()
-            .show(ui)
-            .on_hover_text(
-                "Brightness of silent audio and MIDI rings: 0% is black, 100% is white. \
-                     Lower values let active notes and their glow stand out.",
-            );
-        // Second, and on the same axis, so the pair is dialled by comparing two
-        // numbers. Together they are the whole resting picture; apart they are the
-        // one thing a person navigates by held above the one that is only ever
-        // backdrop.
-        //
-        // No off position, for the bar above's reason: Cross length at 0 is the
-        // marker field's own switch, and every setting of this one draws.
+        // Black is a visible ink choice, not off; Cross length hides the marks.
         ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
             .unit(1.0, "%")
-            // Whole points on the same L* axis as Idle ring brightness, and that
-            // IS the point of the units: two bars a person is meant to read against each other
-            // have to be counted in the same thing.
+            // Whole L* points, matching the gradients' brightness scale.
             .integer()
             .show(ui)
             .on_hover_text(
                 "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
-                     Raise above Idle ring brightness to keep the lattice easy to navigate.",
+                     Raise it to keep the resting lattice easy to navigate.",
             );
         // Stored in the same quad UV a node's ring radii are dialled in, so this
         // pair and the Layers bar's Inner handle are positions on ONE axis. The

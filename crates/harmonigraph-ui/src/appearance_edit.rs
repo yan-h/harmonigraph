@@ -35,7 +35,6 @@ impl Look {
         to.meantone_auto = from.meantone_auto;
         to.marvel = from.marvel;
         to.marvel_auto = from.marvel_auto;
-        to.frameless = from.frameless;
     }
 
     pub(crate) fn apply(&self, appearance: &mut AppearanceDocument) {
@@ -403,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_preserves_incoming_camera_tuning_output_and_editor_state() {
+    fn undo_preserves_incoming_camera_tuning_and_output() {
         let mut appearance = AppearanceDocument::default();
         let mut history = History::default();
         let before = Look::capture(&appearance);
@@ -422,7 +421,6 @@ mod tests {
         appearance.view.meantone_auto = !tuning.1;
         appearance.view.marvel = !tuning.2;
         appearance.view.marvel_auto = !tuning.3;
-        appearance.view.frameless = true;
         appearance.render.short_edge = 1920;
         history.finish(&appearance);
         history.undo(&mut appearance);
@@ -438,7 +436,6 @@ mod tests {
             ),
             (!tuning.0, !tuning.1, !tuning.2, !tuning.3)
         );
-        assert!(appearance.view.frameless);
         assert_eq!(appearance.render.short_edge, 1920);
     }
     #[test]

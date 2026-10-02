@@ -750,13 +750,6 @@ pub struct ViewConfig {
     /// anyone said "marvel", and the detect respelling the sevens sheet is
     /// the tuning's own arithmetic showing up in the names.
     pub marvel_auto: bool,
-    /// Hide every tab bar so adjacent panes — lattice above spectrum, in the
-    /// default layout — record as one seamless surface. Tab toggles it.
-    ///
-    /// The separators keep their regular width, so the spacing between panes
-    /// is the same in both modes and a take framed in one is framed in the
-    /// other.
-    pub frameless: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -1672,7 +1665,6 @@ impl Default for ViewConfig {
             meantone_auto: true,
             marvel: true,
             marvel_auto: true,
-            frameless: false,
             render_scale: 1.0,
             // The lattice's bloom strength (`bloom_strength`, retired into
             // `note_bloom` by #1140), which the Spiral shared until it had its
