@@ -1126,31 +1126,20 @@ mod tests {
     /// `a_name_arriving_is_no_brighter_than_the_note_it_names`.
     fn fading(activation: f32, on_home: bool) -> harmonigraph_scene::NodeInstance {
         harmonigraph_scene::NodeInstance {
-            lattice_pos: harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
-            world_pos: glam::Vec3::ZERO,
             activation,
             envelope: activation,
             departing: true,
-            slice_progress: [1.0; 11],
-            thickness: [1.0; 11],
-            octaves: [0.0; harmonigraph_scene::OCTAVE_SLOTS],
-            hovered: false,
-            on_home,
-            scale: 1.0,
-            cents: 0.0,
-            melody_slots: 0,
-            bass_slots: 0,
-            melody_level: 0.0,
-            bass_level: 0.0,
             melody_color: glam::Vec4::ONE,
             bass_color: glam::Vec4::ONE,
-            // The lattice pass draws the ring on every node it ships; the
-            // gate is the fold's answer and there is no fold here.
-            audio_ring: 1.0,
-            // Nothing here draws a glow, and the labels this fixture is for do
-            // not read one: an unlit light on the first row.
-            glow: harmonigraph_scene::GlowStep::default(),
-            trail: 0.0,
+            ..harmonigraph_scene::NodeInstance::at(
+                harmonigraph_core::LatticePos::new(0, 0, if on_home { 0 } else { 1 }),
+                glam::Vec3::ZERO,
+                1.0,
+                on_home,
+                0.0,
+                false,
+                0,
+            )
         }
     }
 

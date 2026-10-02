@@ -8,8 +8,8 @@ use crate::octaves::octave_layout;
 use crate::trail::TrailField;
 use crate::view::{finite_or, size, DrawnWindow, FrameParams, ViewConfig};
 use crate::{
-    lattice_to_world, GlowStep, NodeInstance, PlusInstance, Scene, SpectralPaint,
-    NODE_RADIUS_FACTOR, OCTAVE_SLOTS, PLUS_SIZE_MAX, PLUS_WIDTH_PER_LABEL_SCALE, SCALE_BAR_RANGE,
+    lattice_to_world, NodeInstance, PlusInstance, Scene, SpectralPaint, NODE_RADIUS_FACTOR,
+    PLUS_SIZE_MAX, PLUS_WIDTH_PER_LABEL_SCALE, SCALE_BAR_RANGE,
 };
 use glam::Vec4;
 use harmonigraph_core::{LatticePos, NoteTracker, Tuning};
@@ -101,34 +101,15 @@ pub fn derive_scene_with_extra(
         // sheet in front of it is no more the subject than one behind (see
         // `ViewConfig::sevens_size`).
         let sheets = centered.sevens.unsigned_abs();
-        nodes.push(NodeInstance {
-            lattice_pos: pos,
+        nodes.push(NodeInstance::at(
+            pos,
             world_pos,
-            activation: 0.0,
-            envelope: 0.0,
-            departing: false,
-            slice_progress: [1.0; OCTAVE_SLOTS],
-            thickness: [1.0; OCTAVE_SLOTS],
-            octaves: [0.0; OCTAVE_SLOTS],
-            hovered: hovered == Some(pos),
-            on_home: pos.sevens == view.center_sevens,
-            scale: sevens_size.powi(sheets as i32),
-            cents: node_cents,
-            melody_slots: 0,
-            bass_slots: 0,
-            melody_level: 0.0,
-            bass_level: 0.0,
-            melody_color: Vec4::ZERO,
-            bass_color: Vec4::ZERO,
-            // Nothing has been measured yet, so nothing can be held back: the
-            // audio channel arrives empty here and `crate::NodeMotion::step` is
-            // what answers this once the shell's fold has filled it.
-            audio_ring: 1.0,
-            // Stable snapshot row; motion supplies current ink, then the
-            // shell's glow pass carries its brightness and row ownership.
-            glow: GlowStep { incarnation: 0, level: 0.0, row: nodes.len() as u32 },
-            trail: 0.0,
-        });
+            sevens_size.powi(sheets as i32),
+            pos.sevens == view.center_sevens,
+            node_cents,
+            hovered == Some(pos),
+            nodes.len() as u32,
+        ));
         node_pcs.push(node_pc);
     }
 

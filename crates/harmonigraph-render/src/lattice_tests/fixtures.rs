@@ -73,27 +73,16 @@ pub(super) fn standalone_marker(
 ) -> harmonigraph_scene::PlusInstance {
     let node = nodes.len();
     nodes.push(harmonigraph_scene::NodeInstance {
-        lattice_pos: harmonigraph_core::LatticePos::new(node as i32, 0, 0),
-        world_pos: glam::vec3(0.0, 0.0, -0.001),
-        activation: 0.0,
-        envelope: 0.0,
-        departing: false,
-        slice_progress: [1.0; 11],
-        thickness: [1.0; 11],
-        octaves: [0.0; 11],
-        hovered: false,
-        on_home: true,
-        scale: 1.0,
-        cents: 0.0,
-        melody_slots: 0,
-        bass_slots: 0,
-        melody_level: 0.0,
-        bass_level: 0.0,
-        melody_color: glam::Vec4::ZERO,
-        bass_color: glam::Vec4::ZERO,
         audio_ring: 0.0,
-        glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 0.0, row: node as u32 },
-        trail: 0.0,
+        ..harmonigraph_scene::NodeInstance::at(
+            harmonigraph_core::LatticePos::new(node as i32, 0, 0),
+            glam::vec3(0.0, 0.0, -0.001),
+            1.0,
+            true,
+            0.0,
+            false,
+            node as u32,
+        )
     });
     one_marker(node, pos, radius, color, strength)
 }
@@ -125,25 +114,9 @@ pub(super) fn parity_scene() -> Scene {
         octaves[slot(i as usize + 5)] = 0.4;
         let activation = if i % 3 == 0 { 1.0 } else { 0.3 + f * 0.1 };
         nodes.push(harmonigraph_scene::NodeInstance {
-            lattice_pos: LatticePos::new(i as i32 - 3, i as i32 % 2, 0),
-            // Cluster tightly around the origin so discs overlap and
-            // draw order shows in the output.
-            world_pos: Vec3::new(f * 0.45 - 1.1, (f % 3.0) * 0.4 - 0.4, f * 0.3 - 0.75),
             activation,
             envelope: activation,
-            // Nothing the shader draws reads this — it is the label layer's,
-            // and labels are the UI crate's text pass, not the lattice pass.
-            departing: false,
-            slice_progress: [1.0; 11],
-            thickness: [1.0; 11],
             octaves,
-            hovered: i == 1,
-            on_home: i % 2 == 0,
-            // The off-sheet half draws small, so the every-draw-path scene
-            // exercises the scaled billboard as well. What every node here
-            // knocks out is `parity_scene`'s own Shadow.
-            scale: if i % 2 == 0 { 1.0 } else { 0.55 },
-            cents: f * 190.0,
             // Exercise the mark paths: one node marked melody, one bass, and
             // one wearing both — on its two lit slots, so the pair is drawn as
             // two extensions rather than as one slice claimed twice.
@@ -157,15 +130,22 @@ pub(super) fn parity_scene() -> Scene {
             bass_level: if i == 2 || i == 4 { 1.0 } else { 0.0 },
             melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
             bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
-            // The lattice pass draws the ring on every node it ships; the
-            // gate is the fold's answer and there is no fold here.
-            audio_ring: 1.0,
             // A row per node in the order they are built, settled: the light's
             // own clock is the shell's pass and no shell has run here, so this
             // fixture is the picture with nothing carried — which is exactly
             // what a still image of the draw paths wants.
             glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: i },
-            trail: 0.0,
+            // Cluster tightly so painter order and scaled off-sheet nodes
+            // both contribute to the fixture.
+            ..harmonigraph_scene::NodeInstance::at(
+                LatticePos::new(i as i32 - 3, i as i32 % 2, 0),
+                Vec3::new(f * 0.45 - 1.1, (f % 3.0) * 0.4 - 0.4, f * 0.3 - 0.75),
+                if i % 2 == 0 { 1.0 } else { 0.55 },
+                i % 2 == 0,
+                f * 190.0,
+                i == 1,
+                i,
+            )
         });
     }
     // Two markers, one under a node and one clear of every node, so the pass is
@@ -537,19 +517,9 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
     octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
     let mut scene = parity_scene();
     scene.nodes = vec![harmonigraph_scene::NodeInstance {
-        lattice_pos: LatticePos::ORIGIN,
-        world_pos: Vec3::ZERO,
         activation: 1.0,
         envelope: 1.0,
-        // Held at full, so neither end of the envelope is running.
-        departing: false,
-        slice_progress: [1.0; 11],
-        thickness: [1.0; 11],
         octaves,
-        hovered: false,
-        on_home: true,
-        scale: 1.0,
-        cents: 0.0,
         melody_slots,
         bass_slots,
         // A mark draws at the level its own note is at; these stand in for
@@ -561,12 +531,17 @@ pub(super) fn single_marked_node(melody_slots: u32, bass_slots: u32) -> Scene {
         // which are the same color wherever the two name one sector.
         melody_color: Vec4::new(1.0, 0.85, 0.4, 1.0),
         bass_color: Vec4::new(0.45, 0.8, 1.0, 1.0),
-        // The lattice pass draws the ring on every node it ships; the
-        // gate is the fold's answer and there is no fold here.
-        audio_ring: 1.0,
         // Lit and settled on the strip's first row: one node, nothing carried.
         glow: harmonigraph_scene::GlowStep { incarnation: 0, level: 1.0, row: 0 },
-        trail: 0.0,
+        ..harmonigraph_scene::NodeInstance::at(
+            LatticePos::ORIGIN,
+            Vec3::ZERO,
+            1.0,
+            true,
+            0.0,
+            false,
+            0,
+        )
     }];
     // BLACK, which is the colour `Shooter::shot` clears to, so the pane and the
     // ground the scene names are one value: every reading taken off this fixture
