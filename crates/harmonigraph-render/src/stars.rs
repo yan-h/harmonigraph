@@ -77,10 +77,10 @@ struct StarSlice {
     /// slice's `Position variation`.
     width: f32,
     inner: f32,
-    /// A multiplier on every star's coverage.
-    gain: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
+    /// The rest of the slice's 16-byte stride is padding.
+    pad: u32,
 }
 }
 
@@ -255,6 +255,7 @@ pub(crate) fn star_slices(
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
+    let (jitter, bend) = (settings.star_jitter, star_falloff_bend(settings.star_glow_falloff));
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
@@ -274,14 +275,14 @@ pub(crate) fn star_slices(
             radius: depth.radius,
             solid: depth.solid,
             ramp: 1.0 / (1.0 - depth.solid),
-            bend: star_falloff_bend(depth.falloff),
+            bend,
             base: layout.bases[k] as i32,
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
-            width: star_jitter_width(depth.jitter),
-            inner: StarGather::Core.bound(depth.jitter),
-            gain: depth.gain,
+            width: star_jitter_width(jitter),
+            inner: StarGather::Core.bound(jitter),
             gather: star_gather_code(depth.gather),
+            pad: 0,
         }
     })
 }

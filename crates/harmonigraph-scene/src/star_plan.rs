@@ -4,8 +4,7 @@
 //!
 //! The renderer draws every frame from the [`StarPlan`] its settings give
 //! ([`StarSettings::plan`]), worked out afresh each time from the dials, so
-//! nothing in it is ever stale. The dev-only star test bed is a set of
-//! overrides on top ([`StarTestBed`], [`StarSettings::test_bed`]), never saved.
+//! nothing in it is ever stale.
 use crate::{StarHaloProfile, StarSettings};
 
 /// How many depths the starfield draws, far (0) to near. The renderer's
@@ -18,17 +17,6 @@ pub const STAR_FAR_DEPTHS: usize = 3;
 /// halo image array per resolution, and the spectrogram's shader has no room
 /// for more.
 pub const STAR_HALO_TIERS: usize = 3;
-/// The test bed's range for [`StarDepthOverride::scale`] and
-/// [`StarDepthOverride::size`], as multipliers.
-pub const STAR_PLAN_SCALE_MIN: f32 = 0.25;
-pub const STAR_PLAN_SCALE_MAX: f32 = 4.0;
-/// The test bed's top for [`StarDepthOverride::gain`].
-pub const STAR_GAIN_MAX: f32 = 4.0;
-/// The test bed's range for image resolutions, as a fraction of the pane's
-/// device pixels on each axis.
-pub const STAR_IMAGE_RESOLUTION_MIN: f32 = 0.25;
-pub const STAR_IMAGE_RESOLUTION_MAX: f32 = 1.0;
-
 /// Which cells a pixel reads to draw one depth's stars.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StarGather {
@@ -125,15 +113,9 @@ pub struct StarDepthPlan {
     pub radius: f32,
     /// What the dials ask for.
     pub wanted: f32,
-    /// The star's shape ([`star_profile`]): its solid share between
-    /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`],
-    /// and [`StarSettings::star_glow_falloff`].
+    /// The star's solid share ([`star_profile`]), between
+    /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`].
     pub solid: f32,
-    pub falloff: f32,
-    /// A multiplier on every star's coverage.
-    pub gain: f32,
-    /// `Position variation` at this depth.
-    pub jitter: f32,
     /// Which of [`StarPlan::halo_tiers`] a [`StarGather::Three`] halo is
     /// drawn at.
     pub tier: usize,
@@ -163,84 +145,11 @@ pub struct StarPlan {
     pub near: f32,
 }
 
-/// The dev-only star test bed: overrides on the plan the settings give. Every
-/// `None` follows the settings live.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct StarTestBed {
-    pub depths: [StarDepthOverride; STAR_DEPTHS],
-    pub halo_tiers: [Option<f32>; STAR_HALO_TIERS],
-    pub far: Option<f32>,
-    pub near: Option<f32>,
-}
-
-/// One depth's overrides. The multipliers are 1 when untouched.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct StarDepthOverride {
-    /// `None` picks the cheapest gather that holds the stars whole.
-    pub gather: Option<StarGather>,
-    /// Zooms the depth: its cell and its stars together.
-    pub scale: f32,
-    /// The stars' size relative to the scaled depth.
-    pub size: f32,
-    pub gain: f32,
-    pub jitter: Option<f32>,
-    pub solid: Option<f32>,
-    pub falloff: Option<f32>,
-    pub tier: Option<usize>,
-    /// While any depth is soloed, only soloed depths are drawn.
-    pub solo: bool,
-}
-
-impl Default for StarDepthOverride {
-    fn default() -> Self {
-        Self {
-            gather: None,
-            scale: 1.0,
-            size: 1.0,
-            gain: 1.0,
-            jitter: None,
-            solid: None,
-            falloff: None,
-            tier: None,
-            solo: false,
-        }
-    }
-}
-
-impl StarTestBed {
-    /// Every value inside its range; a non-finite one is dropped back to
-    /// following the settings, or to 1 for a multiplier.
-    pub fn sanitized(mut self) -> Self {
-        let clamp =
-            |value: f32, low: f32, high: f32| value.is_finite().then(|| value.clamp(low, high));
-        let range = |value: Option<f32>, low, high| value.and_then(|value| clamp(value, low, high));
-        for depth in &mut self.depths {
-            let scale =
-                |value| clamp(value, STAR_PLAN_SCALE_MIN, STAR_PLAN_SCALE_MAX).unwrap_or(1.0);
-            depth.scale = scale(depth.scale);
-            depth.size = scale(depth.size);
-            depth.gain = clamp(depth.gain, 0.0, STAR_GAIN_MAX).unwrap_or(1.0);
-            depth.jitter = range(depth.jitter, 0.0, 1.0);
-            depth.solid = range(depth.solid, 0.0, crate::STAR_SOLID_MAX);
-            depth.falloff = range(depth.falloff, 0.0, 1.0);
-            depth.tier = depth.tier.map(|tier| tier.min(STAR_HALO_TIERS - 1));
-        }
-        let image = |value| range(value, STAR_IMAGE_RESOLUTION_MIN, STAR_IMAGE_RESOLUTION_MAX);
-        self.halo_tiers = self.halo_tiers.map(image);
-        self.far = image(self.far);
-        self.near = image(self.near);
-        self
-    }
-}
-
 impl StarSettings {
     /// The plan the renderer draws: the `Stars rendering` profile's images and
     /// halo tiers, every depth's cell and star from the dials, each gathered
-    /// by the cheapest read that holds its stars whole, and the test bed's
-    /// overrides on top. The test bed is sanitized here, and only here, so
-    /// every reader of the plan draws the same values.
+    /// by the cheapest read that holds its stars whole.
     pub fn plan(self) -> StarPlan {
-        let bed = self.test_bed.map(StarTestBed::sanitized).unwrap_or_default();
         let ([nearer, nearest], far, near) = match self.star_halo_profile {
             StarHaloProfile::Uniform => ([self.star_halo_resolution, 1.0], 1.0, 1.0),
             StarHaloProfile::P3 => ([1.0, 0.6], 0.75, 1.0),
@@ -251,31 +160,26 @@ impl StarSettings {
         // 3x3: at the far image's own resolution.
         let halo_tiers = [nearer, nearest, far];
         let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
-        let solo = bed.depths.iter().any(|depth| depth.solo);
         let layers = star_layer_depths(self.star_layers);
         let place = |k: usize| layers[k].unwrap_or(k as f32 / (STAR_DEPTHS - 1) as f32);
         let depth = |k: usize, curve: f32| place(k).powf(curve);
         let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
+        let jitter = self.star_jitter;
         let depths = std::array::from_fn(|k| {
-            let o = bed.depths[k];
             let (spacing, size) = (self.star_spacing_curve, self.star_size_curve);
-            let cell = along(k, self.star_spacing_far, self.star_spacing_near, spacing) * o.scale;
-            let wanted =
-                0.5 * along(k, self.star_size_far, self.star_size_near, size) * o.scale * o.size;
-            let jitter = o.jitter.unwrap_or(self.star_jitter);
+            let cell = along(k, self.star_spacing_far, self.star_spacing_near, spacing);
+            let wanted = 0.5 * along(k, self.star_size_far, self.star_size_near, size);
             let fits = |gather: StarGather| wanted <= gather.bound(jitter) * cell;
-            let gather = if layers[k].is_none() || solo && !o.solo {
+            let gather = if layers[k].is_none() {
                 StarGather::Off
             } else {
-                o.gather.unwrap_or_else(|| {
-                    StarGather::DRAWN.into_iter().find(|&g| fits(g)).unwrap_or(StarGather::Three)
-                })
+                StarGather::DRAWN.into_iter().find(|&g| fits(g)).unwrap_or(StarGather::Three)
             };
-            let tier = o.tier.unwrap_or(match (uniform, k < STAR_FAR_DEPTHS) {
+            let tier = match (uniform, k < STAR_FAR_DEPTHS) {
                 (true, _) => 0,
                 (false, true) => 2,
                 (false, false) => (k - STAR_FAR_DEPTHS).min(1),
-            });
+            };
             StarDepthPlan {
                 gather,
                 depth: place(k),
@@ -286,23 +190,14 @@ impl StarSettings {
                 cell,
                 radius: wanted.min(gather.bound(jitter) * cell),
                 wanted,
-                solid: o.solid.unwrap_or_else(|| {
+                solid: {
                     let (far, near) = (self.star_solid_far, self.star_solid_near);
                     far + (near - far) * depth(k, size)
-                }),
-                falloff: o.falloff.unwrap_or(self.star_glow_falloff),
-                gain: o.gain,
-                jitter,
+                },
                 tier,
             }
         });
-        let pick = |over: Option<f32>, base: f32| over.unwrap_or(base);
-        StarPlan {
-            depths,
-            halo_tiers: std::array::from_fn(|t| pick(bed.halo_tiers[t], halo_tiers[t])),
-            far: pick(bed.far, far),
-            near: pick(bed.near, near),
-        }
+        StarPlan { depths, halo_tiers, far, near }
     }
 }
 
@@ -329,7 +224,7 @@ mod tests {
         let nearest = huge.depths[STAR_DEPTHS - 1];
         assert_eq!(nearest.gather, Three);
         assert!(nearest.clamped());
-        assert_eq!(nearest.radius, Three.bound(nearest.jitter) * nearest.cell);
+        assert_eq!(nearest.radius, Three.bound(StarSettings::default().star_jitter) * nearest.cell);
     }
 
     /// Every far-to-near pair runs either way: a reversed one survives the
@@ -399,44 +294,5 @@ mod tests {
         let mid = solid + 0.5 * (1.0 - solid);
         assert!((glow(mid, 0.5) - 0.5).abs() < 1e-6);
         assert!(glow(mid, 0.0) > glow(mid, 0.5) && glow(mid, 0.5) > glow(mid, 1.0));
-    }
-
-    /// An override replaces only what it names; everything else follows the
-    /// settings live, and soloing a depth draws it alone.
-    #[test]
-    fn test_bed_overrides_follow_the_settings_where_unset() {
-        let mut bed = StarTestBed::default();
-        bed.depths[3].solo = true;
-        bed.depths[3].solid = Some(0.1);
-        bed.depths[3].gather = Some(StarGather::Two);
-        let settings =
-            StarSettings { star_glow_falloff: 0.8, test_bed: Some(bed), ..Default::default() };
-        let plan = settings.plan();
-        for (k, depth) in plan.depths.iter().enumerate() {
-            let want = if k == 3 { StarGather::Two } else { StarGather::Off };
-            assert_eq!(depth.gather, want, "depth {k}");
-        }
-        assert_eq!(plan.depths[3].solid, 0.1);
-        assert_eq!(plan.depths[3].falloff, 0.8);
-        assert_eq!(plan.depths[3].jitter, StarSettings::default().plan().depths[3].jitter);
-    }
-
-    /// A test bed value off its range is drawn at the range's edge, and a
-    /// non-finite one follows the settings, so the panel never shows a value
-    /// the renderer is not drawing.
-    #[test]
-    fn a_test_bed_is_sanitized() {
-        let mut bed = StarTestBed::default();
-        bed.depths[0].scale = f32::NAN;
-        bed.depths[1].solid = Some(9.0);
-        bed.depths[2].gain = -1.0;
-        bed.depths[3].tier = Some(7);
-        bed.far = Some(0.0);
-        let bed = bed.sanitized();
-        assert_eq!(bed.depths[0].scale, 1.0);
-        assert_eq!(bed.depths[1].solid, Some(crate::STAR_SOLID_MAX));
-        assert_eq!(bed.depths[2].gain, 0.0);
-        assert_eq!(bed.depths[3].tier, Some(STAR_HALO_TIERS - 1));
-        assert_eq!(bed.far, Some(STAR_IMAGE_RESOLUTION_MIN));
     }
 }
