@@ -53,34 +53,90 @@ fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
     assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
 }
 
-/// Two takes landing on the same stamp — the second starting within the
-/// same UTC second as the first — number `_1`, `_2`, ... rather than the
-/// second silently truncating the first's file. Covers both the `.take`
-/// and the `.wav` companion, since either already existing is a collision.
+/// Independent workers receive the same candidate before either creates it.
+/// Distinct headers/audio prove that both retained their own file pair.
 #[test]
-fn a_repeated_stamp_counts_up_instead_of_overwriting() {
-    let dir =
-        std::env::temp_dir().join(format!("harmonigraph-disambiguate-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let base = dir.join("take-2026-08-25_12-00-00.take");
+fn simultaneous_recordings_own_distinct_pairs_and_passes() {
+    let dir = std::env::temp_dir().join(format!("harmonigraph-collision-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("same.take");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let paths = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2)
+            .map(|index| {
+                let barrier = barrier.clone();
+                let base = base.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    let status = Mutex::new(String::new());
+                    let mut recording = Recording::create(
+                        header_for(48_000.0, index.to_string()),
+                        base,
+                        1,
+                        FIXTURE_SPEC,
+                        &status,
+                    )
+                    .unwrap();
+                    let path = recording.current.path.clone();
+                    assert_eq!(recording.base, path);
+                    recording.current.audio.as_mut().unwrap().write(&[index as f32; 4]).unwrap();
+                    recording.current.finish().unwrap();
+                    recording.next_pass(&status).unwrap();
+                    assert_eq!(recording.current.path, Pass::path_for(&path, 2));
+                    recording.current.finish().unwrap();
+                    (index, path)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
+    });
+    assert_ne!(paths[0].1, paths[1].1);
+    for (index, path) in paths {
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        assert_eq!(take.header.appearance, Some(index.to_string()));
+        assert_eq!(
+            take.header.audio_file.as_deref(),
+            path.with_extension("wav").file_name().unwrap().to_str()
+        );
+        let wav = std::fs::read(path.with_extension("wav")).unwrap();
+        assert_eq!(wav.len(), 60);
+        assert_eq!(&wav[44..48], &(index as f32).to_le_bytes());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
-    assert_eq!(disambiguate(base.clone()), base, "a free name is used as-is");
-
-    std::fs::write(&base, "").expect("write base take");
-    let first_dup = disambiguate(base.clone());
-    assert_eq!(first_dup, dir.join("take-2026-08-25_12-00-00_1.take"));
-
-    // A free `.take` name whose `.wav` companion is already taken is
-    // still a collision — the audio would clobber, even though the take
-    // file itself would not.
-    std::fs::write(first_dup.with_extension("wav"), "").expect("write wav companion");
-    assert_eq!(
-        disambiguate(base),
-        dir.join("take-2026-08-25_12-00-00_2.take"),
-        "the wav-only collision at _1 is skipped, not just the take file's",
+#[test]
+fn collision_and_initialization_failure_remove_only_owned_files() {
+    let dir = std::env::temp_dir().join(format!("harmonigraph-owned-pair-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("same.take");
+    let status = Mutex::new(String::new());
+    std::fs::write(base.with_extension("wav"), b"preexisting audio").unwrap();
+    let mut recording = Recording::create(
+        header_for(48_000.0, String::new()),
+        base.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .unwrap();
+    assert_eq!(recording.base, dir.join("same_1.take"));
+    assert!(!base.exists(), "failed companion acquisition removes our empty take");
+    let next = Pass::path_for(&recording.base, 2);
+    std::fs::write(&next, b"preexisting take").unwrap();
+    recording.next_pass(&status).unwrap();
+    assert_eq!(recording.current.path, dir.join("same_1-2_1.take"));
+    assert_eq!(std::fs::read(&next).unwrap(), b"preexisting take");
+    assert_eq!(std::fs::read(base.with_extension("wav")).unwrap(), b"preexisting audio");
+    let failed = dir.join("failed.take");
+    let invalid = AudioSpec { sample_rate: f32::MAX, channels: u16::MAX };
+    assert!(
+        Pass::create(header_for(48_000.0, String::new()), &failed, 1, invalid, &status).is_none()
     );
-
-    std::fs::remove_dir_all(&dir).ok();
+    assert!(!failed.exists());
+    assert!(!failed.with_extension("wav").exists());
+    drop(recording);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A [`Recorder`] whose rings the test keeps the far end of.

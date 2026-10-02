@@ -479,7 +479,11 @@ pub struct Writer {
 impl Writer {
     /// Create (or truncate) `path` and write the header.
     pub fn create(path: impl AsRef<std::path::Path>, header: &Header) -> std::io::Result<Writer> {
-        let file = std::fs::File::create(path)?;
+        Self::from_file(std::fs::File::create(path)?, header)
+    }
+
+    /// Initialize a caller-owned file, allowing exclusive creation at the recording boundary.
+    pub fn from_file(file: std::fs::File, header: &Header) -> std::io::Result<Writer> {
         let mut writer = Writer { out: std::io::BufWriter::new(file) };
         writer.write(&Record::Header(header.clone()))?;
         writer.flush()?;
@@ -1007,6 +1011,23 @@ impl WavWriter {
         sample_rate: f32,
         channels: u16,
     ) -> std::io::Result<WavWriter> {
+        Self::with_file(|| std::fs::File::create(path), sample_rate, channels)
+    }
+
+    /// Initialize a caller-owned file, allowing exclusive creation at the recording boundary.
+    pub fn from_file(
+        file: std::fs::File,
+        sample_rate: f32,
+        channels: u16,
+    ) -> std::io::Result<WavWriter> {
+        Self::with_file(|| Ok(file), sample_rate, channels)
+    }
+
+    fn with_file(
+        open: impl FnOnce() -> std::io::Result<std::fs::File>,
+        sample_rate: f32,
+        channels: u16,
+    ) -> std::io::Result<WavWriter> {
         let channels = channels.max(1);
         let rate = sample_rate.max(1.0) as u32;
         let invalid = || {
@@ -1018,8 +1039,7 @@ impl WavWriter {
         let block_align = channels.checked_mul(Self::BITS / 8).ok_or_else(invalid)?;
         let byte_rate = rate.checked_mul(u32::from(block_align)).ok_or_else(invalid)?;
         let max_frames = u64::from(u32::MAX - (Self::HEADER_BYTES - 8)) / u64::from(block_align);
-        let mut file = std::fs::File::create(path)?;
-
+        let mut file = open()?;
         let mut header = Vec::with_capacity(Self::HEADER_BYTES as usize);
         header.extend(b"RIFF");
         header.extend(0u32.to_le_bytes()); // patched by finish()

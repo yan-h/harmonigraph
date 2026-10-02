@@ -88,10 +88,7 @@ pub fn channel() -> (Recorder, Control) {
                                 audio.fail_finish_for_test();
                             }
                         }
-                        if pump
-                            .open
-                            .as_ref()
-                            .is_none_or(|o| o.current.audio.is_none())
+                        if pump.open.is_none()
                         {
                             thread_fence.fail_with_message(thread_status.lock().clone());
                             pump.failure.account(&mut pump.open, epoch, &thread_status, Some(&thread_fence), harmonigraph_take::IncompleteRecord {
@@ -693,7 +690,7 @@ impl Recording {
         Some(Recording {
             epoch,
             header,
-            base,
+            base: current.path.clone(),
             spec,
             incomplete: None,
             #[cfg(all(test, feature = "test-support"))]
@@ -750,9 +747,6 @@ impl Recording {
         else {
             return Err(std::io::Error::other(status.lock().clone()));
         };
-        if next.audio.is_none() {
-            return Err(std::io::Error::other(status.lock().clone()));
-        }
         // Incompleteness belongs to the RECORDING, so the new file takes the
         // marker before it becomes the one being written into.
         //
@@ -855,56 +849,94 @@ impl Pass {
         spec: AudioSpec,
         status: &Mutex<String>,
     ) -> Option<Pass> {
-        let path = Self::path_for(base, number);
-
-        // The WAV opens first, so its name can go in the take's header —
-        // which is the take's first line and cannot be revised later.
-        let wav = path.with_extension("wav");
-        let audio =
-            match harmonigraph_take::WavWriter::create(&wav, spec.sample_rate, spec.channels) {
-                Ok(writer) => {
-                    header.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
-                    Some(writer)
-                }
+        // Acquire both paths exclusively before initializing either writer.
+        // Each pass retries independently: a later pass name may also belong
+        // to another recorder or to a preexisting orphan companion.
+        let candidate = Self::path_for(base, number);
+        let stem = candidate.file_stem().and_then(|s| s.to_str()).unwrap_or("take");
+        for suffix in 0u64.. {
+            let path = if suffix == 0 {
+                candidate.clone()
+            } else {
+                candidate
+                    .with_file_name(format!("{stem}_{suffix}.{}", harmonigraph_take::EXTENSION))
+            };
+            let wav = path.with_extension("wav");
+            let take_file = match std::fs::File::create_new(&path) {
+                Ok(file) => file,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(err) => {
-                    *status.lock() = format!("cannot write {}: {err}", wav.display());
-                    None
+                    *status.lock() = format!("cannot create {}: {err}", path.display());
+                    return None;
                 }
             };
-
-        match harmonigraph_take::Writer::create(&path, &header) {
-            Ok(writer) => {
-                if audio.is_some() {
-                    let mut status = status.lock();
-                    // Stop can overtake the drain of a queued loop split.
-                    // Opening that pass is still finishing the old prefix.
-                    if !matches!(status.as_str(), FINISHING | FINISHING_PREVIOUS) {
-                        *status = if number <= 1 {
-                            format!("recording to {}", path.display())
-                        } else {
-                            format!("pass {number} -> {}", path.display())
-                        };
+            let wav_file = match std::fs::File::create_new(&wav) {
+                Ok(file) => file,
+                Err(err) => {
+                    drop(take_file);
+                    // Only the take was acquired by this attempt; never
+                    // remove the companion whose creation just failed.
+                    if let Err(cleanup) = std::fs::remove_file(&path) {
+                        *status.lock() =
+                            format!("cannot remove unused {}: {cleanup}", path.display());
+                        return None;
                     }
+                    if err.kind() == std::io::ErrorKind::AlreadyExists {
+                        continue;
+                    }
+                    *status.lock() = format!("cannot create {}: {err}", wav.display());
+                    return None;
                 }
-                Some(Pass {
-                    number,
-                    path,
-                    writer,
-                    header,
-                    audio,
-                    producer_closed: false,
-                    configuration_closed: false,
-                    source_closed: false,
-                    configuration_complete: false,
-                    source_complete: false,
-                    marked: false,
-                })
+            };
+            header.audio_file = wav.file_name().and_then(|n| n.to_str()).map(str::to_owned);
+            let initialized = (|| {
+                let audio = harmonigraph_take::WavWriter::from_file(
+                    wav_file,
+                    spec.sample_rate,
+                    spec.channels,
+                )?;
+                let writer = harmonigraph_take::Writer::from_file(take_file, &header)?;
+                Ok::<_, std::io::Error>((writer, audio))
+            })();
+            let (writer, audio) = match initialized {
+                Ok(pair) => pair,
+                Err(err) => {
+                    // Both handles have closed and both paths belong to us.
+                    let cleanup_take = std::fs::remove_file(&path);
+                    let cleanup_wav = std::fs::remove_file(&wav);
+                    *status.lock() = format!(
+                        "cannot initialize {}: {err}; cleanup: {:?}, {:?}",
+                        path.display(),
+                        cleanup_take.err(),
+                        cleanup_wav.err()
+                    );
+                    return None;
+                }
+            };
+            let mut message = status.lock();
+            if !matches!(message.as_str(), FINISHING | FINISHING_PREVIOUS) {
+                *message = if number <= 1 {
+                    format!("recording to {}", path.display())
+                } else {
+                    format!("pass {number} -> {}", path.display())
+                };
             }
-            Err(err) => {
-                *status.lock() = format!("cannot write {}: {err}", path.display());
-                None
-            }
+            return Some(Pass {
+                number,
+                path,
+                writer,
+                header,
+                audio: Some(audio),
+                producer_closed: false,
+                configuration_closed: false,
+                source_closed: false,
+                configuration_complete: false,
+                source_complete: false,
+                marked: false,
+            });
         }
+        *status.lock() = "recording filename suffix exhausted".into();
+        None
     }
 
     fn path_for(base: &std::path::Path, pass: u32) -> std::path::PathBuf {

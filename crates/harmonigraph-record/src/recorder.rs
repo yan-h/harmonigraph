@@ -875,7 +875,7 @@ impl Control {
             .unwrap_or(0);
         let base =
             dir.join(format!("take-{}.{}", stamp_for(epoch_secs), harmonigraph_take::EXTENSION));
-        let path = disambiguate(base);
+        let path = base;
         let header = header_for(sample_rate, appearance);
 
         self.dropped.store(0, Ordering::Relaxed);
@@ -1002,23 +1002,6 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year = if month <= 2 { y + 1 } else { y };
     (year, month, day)
-}
-
-/// If `base` (or its `.wav` companion) already sits on disk — two takes
-/// started within the same UTC second — append `_1`, `_2`, ... until a name
-/// neither file uses, rather than let the second take silently truncate the
-/// first's. Distinct from the writer's `Pass::path_for` suffix `-N`, which numbers later
-/// PASSES of one take rather than takes that collided on a name.
-fn disambiguate(base: std::path::PathBuf) -> std::path::PathBuf {
-    let taken = |path: &std::path::Path| path.exists() || path.with_extension("wav").exists();
-    if !taken(&base) {
-        return base;
-    }
-    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
-    (1..)
-        .map(|n| base.with_file_name(format!("{stem}_{n}.{}", harmonigraph_take::EXTENSION)))
-        .find(|candidate| !taken(candidate))
-        .expect("an unbounded counter always finds a free name")
 }
 
 /// Where takes go. `LATTICE_TAKE_DIR` overrides; the default is a fixed,
