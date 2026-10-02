@@ -75,8 +75,10 @@ pub enum RenderTrigger {
 }
 
 impl RenderTrigger {
-    /// Whether the transport going BACKWARDS ends the take rather than splitting
-    /// it into another pass.
+    /// Whether a transport discontinuity ends the take rather than splitting
+    /// it into another pass. Forward seeks finish the contiguous prefix and
+    /// report that cutoff with the automatic render; rewinds also need the
+    /// accepted forward-motion evidence described below.
     ///
     /// [`OnDisarm`](Self::OnDisarm) is the one trigger that has to survive a
     /// looping transport, so it keeps splitting. The other two want a single
@@ -512,4 +514,31 @@ mod tests {
             assert!(!saved.contains(removed), "retired field saved again: {removed}");
         }
     }
+}
+
+/// Session-only export state; never persisted in a project or take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportStatus {
+    Pending,
+    Running,
+    Cancelling,
+    Completed,
+    Failed,
+    Cancelled,
+}
+impl ExportStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+#[derive(Clone, Debug)]
+pub struct ExportJob {
+    pub id: u64,
+    pub take: std::path::PathBuf,
+    pub output: std::path::PathBuf,
+    /// None means the recorded appearance supplies the output size.
+    pub size: Option<[u32; 2]>,
+    pub state: ExportStatus,
+    pub progress: RenderProgress,
+    pub detail: String,
 }

@@ -139,10 +139,9 @@ const SEAM_SEGMENT_PT: f32 = 6.0;
 /// this.
 const DOT: (f32, f32) = (0.7, 3.0);
 
-/// The retired fixed backing's inset. It remains only as the colored dot's
-/// established body size; the backing itself is now the inherited spectral
-/// geometry shadow.
-const DOT_RING_PT: f32 = 1.25;
+/// Clearance inside the nominal dot extent, keeping the coloured body distinct
+/// from the track. On narrow tracks the body retains at least half its extent.
+const DOT_CLEARANCE_PT: f32 = 1.25;
 
 /// How far past the track's own thickness a note's mark may reach, as a share
 /// of half the track. The turns abut, so the overhang runs into the octaves
@@ -466,8 +465,8 @@ impl Spiral {
     }
 
     /// The radius of the coloured dot a sounding note is marked with: the
-    /// extent [`DOT`] sets, less the retired backing's inset
-    /// ([`DOT_RING_PT`]).
+    /// extent [`DOT`] sets, less the body clearance
+    /// ([`DOT_CLEARANCE_PT`]).
     ///
     /// Capped at HALF the track, which is the bound that is not a matter of
     /// taste: a dot past it crosses into the octaves either side, and which
@@ -482,7 +481,7 @@ impl Spiral {
         // Never under half the extent, so a track thin enough to shrink the
         // mark below two insets' worth still has a dot to carry the note's
         // colour, which is what says WHICH note this is.
-        (extent - DOT_RING_PT).max(extent * 0.5)
+        (extent - DOT_CLEARANCE_PT).max(extent * 0.5)
     }
 
     /// How much of [`NAME_PT`] the rim names are drawn at: the whole band
@@ -829,6 +828,7 @@ fn rays(painter: &egui::Painter, spiral: &Spiral) {
 struct Sounding {
     pitch: f32,
     strength: f32,
+    opacity: f32,
 }
 
 /// The voices the disc can show, lowest first.
@@ -847,10 +847,15 @@ fn sounding(spiral: &Spiral, state: &PictureState, now: f64) -> Vec<Sounding> {
     // property of the view and the frame, and rebuilding it per voice would
     // read as if it could vary between them.
     let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let intensity = state.appearance.view.intensity.sanitized();
     voices
         .into_iter()
         .filter(|v| v.pitch >= spiral.min_midi && v.pitch <= spiral.max_midi)
-        .map(|v| Sounding { pitch: v.pitch, strength: v.activation(now, &env) })
+        .map(|v| Sounding {
+            pitch: v.pitch,
+            strength: v.activation(now, &env),
+            opacity: intensity.read(v.velocity, v.expressions).opacity,
+        })
         .filter(|v| v.strength > 0.0)
         .collect()
 }
@@ -881,9 +886,10 @@ fn dots(
     let fill = spiral.dot();
     sounding
         .iter()
+        .filter(|voice| voice.opacity > 0.0)
         .map(|voice| {
             let at = spiral.at(voice.pitch, 0.0);
-            let color = note_color(state, voice.pitch, voice.strength);
+            let color = note_color(state, voice.pitch, voice.strength * voice.opacity);
             harmonigraph_render::GlowDot {
                 center: [at.x, at.y],
                 radius: fill,
@@ -1455,6 +1461,32 @@ mod tests {
         assert_eq!(marks.len(), 4, "the fixture's four notes are four coloured discs");
         assert!(marks.iter().all(|mark| mark.radius == spiral.dot()));
         assert!(marks.iter().all(|mark| mark.color[3] > 0));
+    }
+
+    /// Opacity mapping dims the dot and its effects, while the rim name stays
+    /// legible on the note envelope, like the lattice's note names.
+    #[test]
+    fn opacity_mapping_dims_spiral_dots_without_dimming_names() {
+        let mut state = fresh();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.5));
+        let spiral = Spiral::new(PANE, &state.appearance.spectrum);
+        let intensity = &mut state.appearance.view.intensity;
+        intensity.opacity_rest = 0.0;
+        intensity.velocity.opacity = Some(1.0);
+        intensity.gain.opacity = None;
+        let mapped = sounding(&spiral, &state, 1.0);
+        let dim = dots(&spiral, &state, &mapped);
+        assert_eq!(dim.len(), 1);
+        state.appearance.view.intensity.opacity_rest = 1.0;
+        let full = sounding(&spiral, &state, 1.0);
+        let bright = dots(&spiral, &state, &full);
+        assert_eq!(mapped[0].strength, full[0].strength, "rim-name envelope is independent");
+        assert!(dim[0].color[3] > 0 && dim[0].color[3] < bright[0].color[3]);
+        state.appearance.view.intensity.opacity_rest = 0.0;
+        state.appearance.view.intensity.velocity.opacity = None;
+        let hidden = sounding(&spiral, &state, 1.0);
+        assert_eq!(hidden[0].strength, full[0].strength);
+        assert!(dots(&spiral, &state, &hidden).is_empty(), "no invisible dot or halo remains");
     }
 
     /// The halo's callback goes in on every frame this pane draws, the silent

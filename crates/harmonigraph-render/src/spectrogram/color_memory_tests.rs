@@ -72,8 +72,8 @@ fn fixture(style: CloudStyle) -> SpectrogramCallback {
     a.settings.cloud_direction = 37.0;
     a.settings.stars.star_lifetime = 0.5;
     // Explicit motion ensures every slice crosses a cell regardless of look defaults.
-    a.settings.stars.star_speed_min = 0.2;
-    a.settings.stars.star_speed_max = 1.0;
+    a.settings.stars.star_speed_far = 0.2;
+    a.settings.stars.star_speed_near = 1.0;
     a.settings.stars.star_speed_curve = 1.0;
     // Start away from zero to exercise initialization at an export's crop.
     a.now = 100.0;
@@ -106,7 +106,7 @@ fn material_color_memory_carries_exact_texels_in_both_orientations() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor, CloudStyle::VelvetScales] {
+    for style in [CloudStyle::Watercolor, CloudStyle::VelvetScales] {
         for vertical in [false, true] {
             let mut cb = fixture(style);
             cb.atmosphere.as_mut().unwrap().pitch_vertical = vertical;
@@ -165,7 +165,7 @@ fn a_drift_wrap_carries_the_colour_history() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    let mut cb = fixture(CloudStyle::Mosaic);
+    let mut cb = fixture(CloudStyle::Watercolor);
     let atmosphere = cb.atmosphere.unwrap();
     let settings = atmosphere.settings.sanitized();
     let pane = [cb.rect.width() as u32, cb.rect.height() as u32];
@@ -209,12 +209,27 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    for case in
-        ["time", "wrap", "speed-min", "speed-max", "speed-curve", "direction", "lifetime", "width"]
-    {
+    for case in [
+        "time",
+        "wrap",
+        "speed-min",
+        "speed-max",
+        "speed-curve",
+        "direction",
+        "lifetime",
+        "width",
+        "held",
+    ] {
         eprintln!("Stars memory change: {case}");
         let wrap = case == "wrap";
+        // A star that does not twinkle keeps its place, and so its colour,
+        // across its lives.
+        let held = case == "held";
         let mut cb = fixture(CloudStyle::Stars);
+        if held {
+            let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+            (stars.star_twinkle_far, stars.star_twinkle_near) = (0.0, 0.0);
+        }
         if wrap {
             let a = cb.atmosphere.as_mut().unwrap();
             a.settings.cloud_direction = 0.0;
@@ -231,8 +246,8 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let old_size = memory(&resources).size;
         let a = cb.atmosphere.as_mut().unwrap();
         match case {
-            "speed-min" => a.settings.stars.star_speed_min += 0.01,
-            "speed-max" => a.settings.stars.star_speed_max += 0.01,
+            "speed-min" => a.settings.stars.star_speed_far += 0.01,
+            "speed-max" => a.settings.stars.star_speed_near += 0.01,
             "speed-curve" => a.settings.stars.star_speed_curve += 0.01,
             "direction" => a.settings.cloud_direction += 0.1,
             "lifetime" => a.settings.stars.star_lifetime += 0.001,
@@ -249,7 +264,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         prepare_once(&device, &queue, &mut resources, &cb);
         let m = memory(&resources);
         assert_eq!(m.size, old_size, "{case}: fixture replaced the history allocation");
-        let held = pixels(&device, &queue, m);
+        let after = pixels(&device, &queue, m);
         let frame = m.frame.as_ref().unwrap();
         if case == "width" {
             assert!(
@@ -266,7 +281,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         }
         let floor = floor(&cb);
         let decay = (-0.25f32 / 0.6).exp();
-        let (mut carried, mut new_lives) = (0, 0);
+        let (mut carried, mut new_lives, mut carried_across) = (0, 0, 0);
         for (k, s) in frame.slices.iter().enumerate() {
             assert_ne!(s.origin, old_slices[k].origin, "slice {k} did not cross a cell");
             for y in 0..s.grid.0[1] {
@@ -279,8 +294,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
                     let hash = stagger(cell, 1002 + 3 * k as u32);
                     let same_life = (frame.life + hash).floor() as u32 & 4095
                         == (old_life + hash).floor() as u32 & 4095;
-                    let actual = held[(s.base + y * s.grid.0[0] + x) as usize];
-                    if same_life
+                    let actual = after[(s.base + y * s.grid.0[0] + x) as usize];
+                    new_lives += usize::from(!same_life);
+                    if (same_life || held)
                         && (0..previous.grid.0[0]).contains(&local[0])
                         && (0..previous.grid.0[1]).contains(&local[1])
                     {
@@ -291,9 +307,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
                             std::array::from_fn(|c| floor[c] + (old[c] - floor[c]) * decay),
                         );
                         carried += usize::from(old[3] > 0.1);
+                        carried_across += usize::from(old[3] > 0.1 && !same_life);
                     } else {
                         close(actual, floor);
-                        new_lives += usize::from(!same_life);
                     }
                 }
             }
@@ -302,6 +318,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
             carried > 1000 && new_lives > 1000,
             "{case}: carry={carried}, new lives={new_lives}"
         );
+        assert_eq!(held, carried_across > 1000, "{case}: {carried_across} carried into a new life");
     }
 }
 
@@ -313,10 +330,12 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     for budgeted in [false, true] {
         let mut cb = fixture(CloudStyle::Stars);
         let a = cb.atmosphere.as_mut().unwrap();
-        a.settings.stars.star_speed_min = 0.0;
-        a.settings.stars.star_speed_max = 0.0;
+        a.settings.stars.star_speed_far = 0.0;
+        a.settings.stars.star_speed_near = 0.0;
         if budgeted {
-            a.settings.stars.star_spacing_far = harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
+            a.settings.stars.star_spacing_ratio_far =
+                harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
+            a.settings.stars.star_size_far = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
         }
         let settings = a.settings;
         let old_cells = star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells;
@@ -378,12 +397,91 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     }
 }
 
+/// Dropping a layer changes which stars exist, so history
+/// resets. Equal far and near spacing and size give every slot the same cell,
+/// so the cells in the key cannot see the change and only the drawn slices can.
+#[test]
+fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
+    let Some((device, queue)) = headless_device() else { return };
+    // Dropping one slice keeps the history allocation, so only the key resets it.
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+    a.settings.stars.star_spacing_ratio_near = a.settings.stars.star_spacing_ratio_far;
+    a.settings.stars.star_size_near = a.settings.stars.star_size_far;
+    let aspect = cb.rect.width() / cb.rect.height();
+    let old_cells = star_layout(a.settings.stars, aspect).cells;
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let old_texture = memory(&resources).views[0].texture().clone();
+    assert!(
+        pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count() > 1000
+    );
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.settings.stars.star_layers = 4;
+    let cells = star_layout(a.settings.stars, aspect).cells;
+    assert_eq!(old_cells, cells, "cells alone would see it");
+    cb.grid.fill(0);
+    a.now += 1.0 / 60.0;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let current = memory(&resources);
+    assert_eq!(current.views[0].texture(), &old_texture, "reset through allocation");
+    let mut fresh = CallbackResources::default();
+    prepare_once(&device, &queue, &mut fresh, &cb);
+    // History is laid out like the atlas, a texel a cell, and a dropped
+    // layer needs fewer rows; the kept allocation's rows past them hold no
+    // cell.
+    let current = pixels(&device, &queue, current);
+    let fresh = pixels(&device, &queue, memory(&fresh));
+    assert!(current.len() > fresh.len(), "fixture did not drop a layer's cells");
+    assert!(current[..fresh.len()] == fresh[..], "a dropped layer's stars kept their color");
+}
+
+/// Hidden layers keep updating their held colour, and both Solo transitions
+/// match the full field's history instead of resetting or freezing it.
+#[test]
+fn soloing_carries_and_updates_every_layers_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+    a.settings.stars.star_lifetime = harmonigraph_scene::STAR_LIFETIME_MAX;
+    let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
+    let mut changed = CallbackResources::default();
+    let mut control = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut changed, &cb);
+    prepare_once(&device, &queue, &mut control, &cb);
+    let lit = pixels(&device, &queue, memory(&changed));
+    cb.grid.fill(0);
+    for solo in [true, true, false] {
+        cb.atmosphere.as_mut().unwrap().now += 0.1;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo = [false; 5];
+        prepare_once(&device, &queue, &mut control, &cb);
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_solo[4] = solo;
+        prepare_once(&device, &queue, &mut changed, &cb);
+        let current = pixels(&device, &queue, memory(&changed));
+        assert_eq!(current, pixels(&device, &queue, memory(&control)), "solo={solo}");
+        for k in 0..4 {
+            let start = layout.bases[k] as usize;
+            let end = start + (layout.grids[k][0] * layout.grids[k][1]) as usize;
+            let held = current[start..end]
+                .iter()
+                .zip(&lit[start..end])
+                .filter(|(now, before)| before[3] > 0.1 && now[3] > 0.1 && now[3] < before[3])
+                .count();
+            assert!(held > 100, "hidden depth {k} must retain and advance colour, got {held}");
+        }
+    }
+}
+
 /// Moving star centers changes the sampled material. Reset that history even
 /// while paused, but keep other styles' history when an inactive dial changes.
 #[test]
 fn jitter_edits_reset_only_the_stars_color_history() {
     let Some((device, queue)) = headless_device() else { return };
-    for style in [CloudStyle::Stars, CloudStyle::Mosaic, CloudStyle::Watercolor] {
+    for style in [CloudStyle::Stars, CloudStyle::Watercolor] {
         let mut cb = fixture(style);
         let mut resources = CallbackResources::default();
         cb.grid.fill(255);
@@ -450,13 +548,6 @@ fn halo_resolution_changes_carry_stars_color_history() {
         prior_layout = layout;
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
     }
-    // Composition-only fill edits must not erase held star colors, even
-    // when the current input is dark and the clock is paused.
-    for fill in [0.5, 1.0, 0.0] {
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_far_fill = fill;
-        prepare_once(&device, &queue, &mut changed, &cb);
-        assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
-    }
     cb.atmosphere.as_mut().unwrap().now += 0.05;
     prepare_once(&device, &queue, &mut changed, &cb);
     prepare_once(&device, &queue, &mut control, &cb);
@@ -472,7 +563,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    let mut cb = fixture(CloudStyle::Mosaic);
+    let mut cb = fixture(CloudStyle::Watercolor);
     cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
     cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
     let mut answers = Vec::new();
@@ -497,7 +588,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         // A changed source at the identical clock, and an unrelated style dial,
         // must neither advance nor invalidate the active material's history.
         cb.grid.fill(0);
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_glow += 0.1;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_glow_falloff += 0.1;
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources))[5000], held);
         // Palette interpretation changes are immediate even on a paused frame.
@@ -542,14 +633,14 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
             .unwrap()
             .memory
             .is_none());
-        cb = fixture(CloudStyle::Mosaic);
+        cb = fixture(CloudStyle::Watercolor);
         cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
         cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
     }
     close(answers[0], answers[1]);
 }
 
-/// What switching away from the fresh Stars gives: Mosaic or Watercolor under
+/// What switching away from the fresh Stars gives: Watercolor under
 /// the fresh colour response (Pickup 0.04 s, Release 0.71 s), at both ends of
 /// the production cloud sample spacing.
 ///
@@ -565,7 +656,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
 /// at the reduced spacing 0.94/255 and 4.4%, the band edges where the history
 /// interpolates colour and the immediate path interpolates level.
 #[test]
-fn fresh_colour_memory_under_mosaic_and_watercolor_settles_then_fades() {
+fn fresh_colour_memory_under_watercolor_settles_then_fades() {
     use crate::spectrogram::tests::{frame_with, relay_quad};
     let Some((device, queue)) = headless_device() else { return };
     const PANE: u32 = 384;
@@ -580,83 +671,75 @@ fn fresh_colour_memory_under_mosaic_and_watercolor_settles_then_fades() {
         let count = a.len() / 4;
         (f64::from(total) / (count * 3) as f64, moved as f64 / count as f64)
     };
-    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
-        for pixel_points in [0.5, 2.0] {
-            let mut cb = refracted_fixture();
-            cb.rect =
-                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
-            relay_quad(&mut cb, 12);
-            cb.read.rows = PANE;
-            let a = cb.atmosphere.as_mut().unwrap();
-            a.region = cb.rect;
-            a.settings =
-                harmonigraph_scene::SpectralAtmosphere { cloud_style: style, ..Default::default() };
-            let sampling = CloudSampling { pixel_points, ..Default::default() };
-            let fresh = || {
-                let mut resources = CallbackResources::default();
-                resources.insert(sampling);
-                resources
-            };
-            let alone =
-                |cb: &mut SpectrogramCallback,
-                 turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
-                    let held = cb.atmosphere.unwrap().settings;
-                    turn(&mut cb.atmosphere.as_mut().unwrap().settings);
-                    let frame = frame_with(&device, &queue, &mut fresh(), cb);
-                    cb.atmosphere.as_mut().unwrap().settings = held;
-                    frame
-                };
-            // Five seconds of the same sound, seven Releases.
-            let hold = |cb: &mut SpectrogramCallback, resources: &mut CallbackResources| {
-                (0..=20)
-                    .map(|i| {
-                        cb.atmosphere.as_mut().unwrap().now = 100.0 + 0.25 * f64::from(i);
-                        frame_with(&device, &queue, resources, cb)
-                    })
-                    .last()
-                    .unwrap()
-            };
-            let case = format!("{style:?} at {pixel_points} pt");
-            let shipped = cb.atmosphere.unwrap().settings;
-            cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
-            let held = hold(&mut cb, &mut fresh());
-            let (mean, moved) =
-                apart(&held, &alone(&mut cb, |s| (s.color_pickup, s.color_release) = (0.0, 0.0)));
-            let (mean_max, moved_max) =
-                if pixel_points > 1.0 { (1.5, 0.06) } else { (0.25, 0.005) };
-            assert!(
-                mean < mean_max && moved < moved_max,
-                "{case}: held still, the history is not the picture: mean {mean:.2}, {moved:.4} moved"
-            );
-            cb.atmosphere.as_mut().unwrap().settings = shipped;
-            let mut resources = fresh();
-            hold(&mut cb, &mut resources);
-            let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
-            let targets = pane.cloud.as_ref().unwrap();
-            let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
-            assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");
-            assert_eq!(targets.tone_size(), None, "{case}: a tone target nothing draws");
-            assert!(targets.tile_texels().is_some(), "{case}: no texture was drawn");
-            cb.grid.fill(0);
-            let floor = alone(&mut cb, |s| s.cloud_depth = 0.0);
-            let release = cb.atmosphere.unwrap().settings.color_release;
-            let mut after = |seconds: f64| {
-                cb.atmosphere.as_mut().unwrap().now += seconds;
-                apart(&frame_with(&device, &queue, &mut resources, &cb), &floor)
-            };
-            let (frame, lit) = after(1.0 / 60.0);
-            assert!(lit > 0.99, "{case}: sound that stopped went dark at once: {lit:.3} lit");
-            let (faded, _) = after(f64::from(release));
-            assert!(
-                (0.3 * frame..0.6 * frame).contains(&faded),
-                "{case}: one Release left {faded:.1} of {frame:.1}"
-            );
-            assert_eq!(
-                after(5.0),
-                (0.0, 0.0),
-                "{case}: seven Releases on, silence is not the floor"
-            );
-        }
+    let style = CloudStyle::Watercolor;
+    for pixel_points in [0.5, 2.0] {
+        let mut cb = refracted_fixture();
+        cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
+        relay_quad(&mut cb, 12);
+        cb.read.rows = PANE;
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.region = cb.rect;
+        a.settings =
+            harmonigraph_scene::SpectralAtmosphere { cloud_style: style, ..Default::default() };
+        let sampling = CloudSampling { pixel_points, ..Default::default() };
+        let fresh = || {
+            let mut resources = CallbackResources::default();
+            resources.insert(sampling);
+            resources
+        };
+        let alone = |cb: &mut SpectrogramCallback,
+                     turn: fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+            let held = cb.atmosphere.unwrap().settings;
+            turn(&mut cb.atmosphere.as_mut().unwrap().settings);
+            let frame = frame_with(&device, &queue, &mut fresh(), cb);
+            cb.atmosphere.as_mut().unwrap().settings = held;
+            frame
+        };
+        // Five seconds of the same sound, seven Releases.
+        let hold = |cb: &mut SpectrogramCallback, resources: &mut CallbackResources| {
+            (0..=20)
+                .map(|i| {
+                    cb.atmosphere.as_mut().unwrap().now = 100.0 + 0.25 * f64::from(i);
+                    frame_with(&device, &queue, resources, cb)
+                })
+                .last()
+                .unwrap()
+        };
+        let case = format!("{style:?} at {pixel_points} pt");
+        let shipped = cb.atmosphere.unwrap().settings;
+        cb.atmosphere.as_mut().unwrap().settings.cloud_speed = 0.0;
+        let held = hold(&mut cb, &mut fresh());
+        let (mean, moved) =
+            apart(&held, &alone(&mut cb, |s| (s.color_pickup, s.color_release) = (0.0, 0.0)));
+        let (mean_max, moved_max) = if pixel_points > 1.0 { (1.5, 0.06) } else { (0.25, 0.005) };
+        assert!(
+            mean < mean_max && moved < moved_max,
+            "{case}: held still, the history is not the picture: mean {mean:.2}, {moved:.4} moved"
+        );
+        cb.atmosphere.as_mut().unwrap().settings = shipped;
+        let mut resources = fresh();
+        hold(&mut cb, &mut resources);
+        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let targets = pane.cloud.as_ref().unwrap();
+        let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
+        assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");
+        assert_eq!(targets.tone_size(), None, "{case}: a tone target nothing draws");
+        assert!(targets.tile_texels().is_some(), "{case}: no texture was drawn");
+        cb.grid.fill(0);
+        let floor = alone(&mut cb, |s| s.cloud_depth = 0.0);
+        let release = cb.atmosphere.unwrap().settings.color_release;
+        let mut after = |seconds: f64| {
+            cb.atmosphere.as_mut().unwrap().now += seconds;
+            apart(&frame_with(&device, &queue, &mut resources, &cb), &floor)
+        };
+        let (frame, lit) = after(1.0 / 60.0);
+        assert!(lit > 0.99, "{case}: sound that stopped went dark at once: {lit:.3} lit");
+        let (faded, _) = after(f64::from(release));
+        assert!(
+            (0.3 * frame..0.6 * frame).contains(&faded),
+            "{case}: one Release left {faded:.1} of {frame:.1}"
+        );
+        assert_eq!(after(5.0), (0.0, 0.0), "{case}: seven Releases on, silence is not the floor");
     }
 }
 
@@ -670,69 +753,68 @@ thread_local! {
 fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
     use crate::spectrogram::tests::frame_with;
     let Some((device, queue)) = headless_device() else { return };
-    for style in [CloudStyle::Mosaic, CloudStyle::Watercolor] {
-        let mut cb = fixture(style);
-        let mut bucketed = CallbackResources::default();
-        let mut exact = CallbackResources::default();
-        let mut prior = None;
-        let mut reused = 0;
-        let mut replaced = 0;
-        for (frame, (width, pixel_points)) in [
-            (100.0, 0.5),
-            (100.0, 0.5),
-            (101.0, 0.5),
-            (140.0, 0.5),
-            (140.0, 0.5),
-            (145.0, 0.5),
-            (100.0, 0.5),
-            (100.0, 1.1),
-            (100.0, 1.1),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            cb.rect = egui::Rect::from_min_size(egui::pos2(11.0, 7.0), egui::vec2(width, 90.0));
-            let a = cb.atmosphere.as_mut().unwrap();
-            a.region = cb.rect;
-            a.now = 100.0 + frame as f64 / 60.0;
-            cb.grid.fill(if frame % 2 == 0 { 255 } else { 0 });
-            for resources in [&mut bucketed, &mut exact] {
-                resources.insert(CloudSampling { pixel_points, ..Default::default() });
-            }
-            let actual = frame_with(&device, &queue, &mut bucketed, &cb);
-            EXACT_ALLOCATION.set(true);
-            let expected = frame_with(&device, &queue, &mut exact, &cb);
-            EXACT_ALLOCATION.set(false);
-            assert_eq!(actual, expected, "{style:?} frame {frame} changed displayed pixels");
-            let held = memory(&bucketed);
-            assert_eq!(
-                pixels(&device, &queue, held),
-                pixels(&device, &queue, memory(&exact)),
-                "{style:?} frame {frame} changed history's logical texels"
-            );
-            assert!(held.extent.iter().zip(held.size).all(|(&n, size)| n <= size && size - n < 64));
-            let texture = held.views[0].texture().clone();
-            if let Some((old_size, old_extent, old_rect, old_texture)) = prior {
-                if frame == 7 {
-                    assert_eq!(old_size, held.size, "sampling fixture changed physical bucket");
-                    assert_eq!(old_rect, cb.rect, "sampling fixture changed pane geometry");
-                    assert_ne!(old_extent, held.extent, "sampling fixture kept its logical grid");
-                }
-                if old_size == held.size {
-                    assert_eq!(texture, old_texture, "same bucket replaced its allocation");
-                    reused += 1;
-                } else {
-                    assert_ne!(texture, old_texture, "bucket boundary did not replace allocation");
-                    replaced += 1;
-                }
-            }
-            prior = Some((held.size, held.extent, cb.rect, texture));
+    let style = CloudStyle::Watercolor;
+    let mut cb = fixture(style);
+    let mut bucketed = CallbackResources::default();
+    let mut exact = CallbackResources::default();
+    let mut prior = None;
+    let mut reused = 0;
+    let mut replaced = 0;
+    for (frame, (width, pixel_points)) in [
+        (100.0, 0.5),
+        (100.0, 0.5),
+        (101.0, 0.5),
+        (140.0, 0.5),
+        (140.0, 0.5),
+        (145.0, 0.5),
+        (100.0, 0.5),
+        (100.0, 1.1),
+        (100.0, 1.1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        cb.rect = egui::Rect::from_min_size(egui::pos2(11.0, 7.0), egui::vec2(width, 90.0));
+        let a = cb.atmosphere.as_mut().unwrap();
+        a.region = cb.rect;
+        a.now = 100.0 + frame as f64 / 60.0;
+        cb.grid.fill(if frame % 2 == 0 { 255 } else { 0 });
+        for resources in [&mut bucketed, &mut exact] {
+            resources.insert(CloudSampling { pixel_points, ..Default::default() });
         }
-        assert!(
-            reused >= 4 && replaced >= 2,
-            "fixture missed allocation transitions: {reused} reused, {replaced} replaced"
+        let actual = frame_with(&device, &queue, &mut bucketed, &cb);
+        EXACT_ALLOCATION.set(true);
+        let expected = frame_with(&device, &queue, &mut exact, &cb);
+        EXACT_ALLOCATION.set(false);
+        assert_eq!(actual, expected, "{style:?} frame {frame} changed displayed pixels");
+        let held = memory(&bucketed);
+        assert_eq!(
+            pixels(&device, &queue, held),
+            pixels(&device, &queue, memory(&exact)),
+            "{style:?} frame {frame} changed history's logical texels"
         );
+        assert!(held.extent.iter().zip(held.size).all(|(&n, size)| n <= size && size - n < 64));
+        let texture = held.views[0].texture().clone();
+        if let Some((old_size, old_extent, old_rect, old_texture)) = prior {
+            if frame == 7 {
+                assert_eq!(old_size, held.size, "sampling fixture changed physical bucket");
+                assert_eq!(old_rect, cb.rect, "sampling fixture changed pane geometry");
+                assert_ne!(old_extent, held.extent, "sampling fixture kept its logical grid");
+            }
+            if old_size == held.size {
+                assert_eq!(texture, old_texture, "same bucket replaced its allocation");
+                reused += 1;
+            } else {
+                assert_ne!(texture, old_texture, "bucket boundary did not replace allocation");
+                replaced += 1;
+            }
+        }
+        prior = Some((held.size, held.extent, cb.rect, texture));
     }
+    assert!(
+        reused >= 4 && replaced >= 2,
+        "fixture missed allocation transitions: {reused} reused, {replaced} replaced"
+    );
     assert_eq!(memory_allocation_size([16383, 16384], 16384), [16384; 2]);
     assert_eq!(memory_allocation_size([998, 1000], 1000), [1000; 2]);
 }

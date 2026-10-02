@@ -2,7 +2,6 @@
 //! and private writer state share the transport fixtures here.
 
 use super::*;
-use harmonigraph_take::RenderConfig;
 
 // 64 frames at 48 kHz; 120 BPM in 4/4 gives two seconds per bar.
 const BLOCK_SECONDS: f64 = 64.0 / 48_000.0;
@@ -53,34 +52,90 @@ fn a_take_stamp_reads_as_the_calendar_date_and_time_it_names() {
     assert_eq!(stamp_for(0), "1970-01-01_00-00-00", "the Unix epoch itself");
 }
 
-/// Two takes landing on the same stamp — the second starting within the
-/// same UTC second as the first — number `_1`, `_2`, ... rather than the
-/// second silently truncating the first's file. Covers both the `.take`
-/// and the `.wav` companion, since either already existing is a collision.
+/// Independent workers receive the same candidate before either creates it.
+/// Distinct headers/audio prove that both retained their own file pair.
 #[test]
-fn a_repeated_stamp_counts_up_instead_of_overwriting() {
-    let dir =
-        std::env::temp_dir().join(format!("harmonigraph-disambiguate-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let base = dir.join("take-2026-08-25_12-00-00.take");
+fn simultaneous_recordings_own_distinct_pairs_and_passes() {
+    let dir = std::env::temp_dir().join(format!("harmonigraph-collision-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("same.take");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let paths = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2)
+            .map(|index| {
+                let barrier = barrier.clone();
+                let base = base.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    let status = Mutex::new(String::new());
+                    let mut recording = Recording::create(
+                        header_for(48_000.0, index.to_string()),
+                        base,
+                        1,
+                        FIXTURE_SPEC,
+                        &status,
+                    )
+                    .unwrap();
+                    let path = recording.current.path.clone();
+                    assert_eq!(recording.base, path);
+                    recording.current.audio.as_mut().unwrap().write(&[index as f32; 4]).unwrap();
+                    recording.current.finish().unwrap();
+                    recording.next_pass(&status).unwrap();
+                    assert_eq!(recording.current.path, Pass::path_for(&path, 2));
+                    recording.current.finish().unwrap();
+                    (index, path)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect::<Vec<_>>()
+    });
+    assert_ne!(paths[0].1, paths[1].1);
+    for (index, path) in paths {
+        let take = harmonigraph_take::Take::read(&path).unwrap();
+        assert_eq!(take.header.appearance, Some(index.to_string()));
+        assert_eq!(
+            take.header.audio_file.as_deref(),
+            path.with_extension("wav").file_name().unwrap().to_str()
+        );
+        let wav = std::fs::read(path.with_extension("wav")).unwrap();
+        assert_eq!(wav.len(), 60);
+        assert_eq!(&wav[44..48], &(index as f32).to_le_bytes());
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
-    assert_eq!(disambiguate(base.clone()), base, "a free name is used as-is");
-
-    std::fs::write(&base, "").expect("write base take");
-    let first_dup = disambiguate(base.clone());
-    assert_eq!(first_dup, dir.join("take-2026-08-25_12-00-00_1.take"));
-
-    // A free `.take` name whose `.wav` companion is already taken is
-    // still a collision — the audio would clobber, even though the take
-    // file itself would not.
-    std::fs::write(first_dup.with_extension("wav"), "").expect("write wav companion");
-    assert_eq!(
-        disambiguate(base),
-        dir.join("take-2026-08-25_12-00-00_2.take"),
-        "the wav-only collision at _1 is skipped, not just the take file's",
+#[test]
+fn collision_and_initialization_failure_remove_only_owned_files() {
+    let dir = std::env::temp_dir().join(format!("harmonigraph-owned-pair-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("same.take");
+    let status = Mutex::new(String::new());
+    std::fs::write(base.with_extension("wav"), b"preexisting audio").unwrap();
+    let mut recording = Recording::create(
+        header_for(48_000.0, String::new()),
+        base.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .unwrap();
+    assert_eq!(recording.base, dir.join("same_1.take"));
+    assert!(!base.exists(), "failed companion acquisition removes our empty take");
+    let next = Pass::path_for(&recording.base, 2);
+    std::fs::write(&next, b"preexisting take").unwrap();
+    recording.next_pass(&status).unwrap();
+    assert_eq!(recording.current.path, dir.join("same_1-2_1.take"));
+    assert_eq!(std::fs::read(&next).unwrap(), b"preexisting take");
+    assert_eq!(std::fs::read(base.with_extension("wav")).unwrap(), b"preexisting audio");
+    let failed = dir.join("failed.take");
+    let invalid = AudioSpec { sample_rate: f32::MAX, channels: u16::MAX };
+    assert!(
+        Pass::create(header_for(48_000.0, String::new()), &failed, 1, invalid, &status).is_none()
     );
-
-    std::fs::remove_dir_all(&dir).ok();
+    assert!(!failed.exists());
+    assert!(!failed.with_extension("wav").exists());
+    drop(recording);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// A [`Recorder`] whose rings the test keeps the far end of.
@@ -120,7 +175,6 @@ impl Bench {
                 closed_epoch: 0,
                 producer,
                 audio,
-                with_audio: Arc::new(AtomicBool::new(false)),
                 dropped: dropped.clone(),
                 last_params: [f32::NAN; ParamKey::ALL.len()],
                 lifecycle: State::Disarmed,
@@ -156,7 +210,7 @@ impl Bench {
     }
 
     fn hit_rewind(&self) -> bool {
-        self.latches.hit_rewind.load(Ordering::Relaxed)
+        self.latches.end() == Some(End::Rewind)
     }
 
     fn stop_at_bar(&self, bar: f64) {
@@ -164,7 +218,7 @@ impl Bench {
     }
 
     fn hit_stop_bar(&self) -> bool {
-        self.latches.stop_at_bar.hit.load(Ordering::Relaxed)
+        self.latches.end() == Some(End::Bar)
     }
 
     /// Everything pushed since the last call, rendered as comparable
@@ -301,9 +355,9 @@ fn at_loop_end_ends_the_take_on_the_first_wrap_without_splitting() {
     assert!(rec.is_armed(), "arming clears the position history and the done latch");
 
     // One loop's worth of forward motion.
-    assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(rec.observe_transport(1.0, true, 64.0 / 48_000.0));
-    assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS));
+    assert!(rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(!ctrl.hit_rewind(), "still mid-loop");
 
     // The transport wraps back to the loop start: end the take here, and
@@ -321,8 +375,8 @@ fn a_wrap_without_at_loop_end_splits_and_keeps_rolling() {
     ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
     // end_at_rewind stays off — the default OnDisarm/looping behavior.
     assert!(rec.is_armed());
-    assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     // The wrap starts a new pass but keeps recording, as before.
     assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0), "a normal loop keeps going");
     assert!(!ctrl.hit_rewind());
@@ -334,8 +388,8 @@ fn re_arming_clears_the_loop_end_latch() {
     ctrl.fence.intent.store((ctrl.fence.epoch() + 1) << 1 | 1, Ordering::Release);
     ctrl.set_end_at_rewind(true);
     assert!(rec.is_armed());
-    assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(!rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the wrap ends the first take");
     assert!(ctrl.hit_rewind());
 
@@ -362,12 +416,12 @@ fn at_loop_end_ignores_the_jump_to_the_loop_start_when_playback_begins() {
     // Hit play: the transport snaps back to the loop start. This is the bug
     // that produced empty takes — it must NOT end the take, because nothing
     // has been recorded yet. It begins the pass instead.
-    assert!(rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the jump-to-start begins the pass");
+    assert!(rec.observe_transport(1.0, true, BLOCK_SECONDS), "the jump-to-start begins the pass");
     assert!(!ctrl.hit_rewind(), "the initial jump is not a loop end");
 
     // Now it rolls forward through the loop...
-    assert!(rec.observe_transport(1.0, true, 64.0 / 48_000.0));
-    assert!(rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS));
+    assert!(rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
 
     // ...and THIS wrap, after real forward motion, is the loop end.
     assert!(!rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the real wrap ends the take");
@@ -480,10 +534,7 @@ fn a_playhead_parked_for_several_blocks_has_not_advanced() {
 
     // Hit play: the transport snaps back to the loop start. Nothing has
     // been recorded yet, so this begins the pass rather than ending it.
-    assert!(
-        b.rec.observe_transport(0.0, true, 64.0 / 48_000.0),
-        "the jump-to-start begins the pass"
-    );
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS), "the jump-to-start begins the pass");
     assert!(!b.hit_rewind(), "a parked playhead has not advanced");
     // Beginning the pass is not splitting it: AtLoopEnd only ever wants one
     // file, and a `NewPass` here would leave the take's notes in the second
@@ -492,7 +543,7 @@ fn a_playhead_parked_for_several_blocks_has_not_advanced() {
     assert!(begun.is_empty(), "the jump-to-start must not split the take: {begun:?}");
 
     // Real forward motion, and only then does a wrap mean the loop end.
-    assert!(b.rec.observe_transport(1.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0 + BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(!b.rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the real wrap ends the take");
     assert!(b.hit_rewind());
 }
@@ -715,16 +766,16 @@ fn a_step_back_smaller_than_the_threshold_is_jitter_rather_than_a_wrap() {
 fn a_plain_wrap_splits_the_file_and_a_loop_end_wrap_does_not() {
     let mut b = Bench::new();
     b.arm();
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0), "a plain wrap keeps recording");
     assert_eq!(b.pushed(), ["new-pass"], "the plain wrap opens the next pass");
 
     let mut b = Bench::new();
     b.arm();
     b.end_at_rewind();
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(!b.rec.observe_transport(0.0, true, 64.0 / 48_000.0), "the loop end ends the take");
     let split = b.pushed();
     assert!(
@@ -778,7 +829,7 @@ fn a_rewind_while_stopped_splits_at_the_block_that_records_again() {
     let mut b = Bench::new();
     b.arm();
     assert!(b.rec.observe_transport(60.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(90.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(60.0 + BLOCK_SECONDS, true, BLOCK_SECONDS));
     b.pushed();
 
     assert!(
@@ -789,7 +840,7 @@ fn a_rewind_while_stopped_splits_at_the_block_that_records_again() {
 
     assert!(b.rec.observe_transport(0.5, true, 64.0 / 48_000.0), "playing again");
     assert_eq!(b.pushed(), ["new-pass"]);
-    assert!(b.rec.observe_transport(1.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(0.5 + BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(b.pushed().is_empty(), "the split is owed once, not every block after");
 }
 
@@ -890,59 +941,6 @@ fn a_one_file_trigger_refuses_an_owed_split_that_comes_due_rolling_forward() {
     assert!(b.pushed().is_empty(), "a dropped split stays dropped");
 }
 
-/// A take that ends on a pass with no notes renders the pass that has them.
-///
-/// "The last file opened" and "the file worth rendering" are different
-/// questions, and an unvoiced tail is not empty enough to tell apart by size:
-/// a split rewrites every parameter into the pass it opens, so the file has
-/// content and draws nothing.
-#[test]
-fn a_take_ending_on_an_unvoiced_pass_renders_the_pass_that_was_played() {
-    let dir = std::env::temp_dir().join(format!("harmonigraph-unvoiced-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let base = dir.join("take.take");
-    let status = Mutex::new(String::new());
-    let (mut producer, mut consumer) = rtrb::RingBuffer::new(64);
-    let mut open =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
-    assert!(open.is_some(), "the fixture has to actually open a file to write into");
-
-    // What a note starting leaves on its pass. The take lane's own drain sets
-    // it (`a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports`);
-    // this is about which pass that makes the take.
-    let voice = |open: &mut Option<Recording>| open.as_mut().unwrap().current.voiced = true;
-    voice(&mut open);
-    producer.push(Entry::NewPass).expect("ring has room");
-    producer.push(Entry::Param { t: 1.0, key: 0, value: 0.5 }).expect("ring has room");
-    drain(&mut consumer, &mut open, &status);
-    assert_eq!(
-        open.as_ref().expect("still open").current.number,
-        2,
-        "the split did open a second file"
-    );
-    assert_eq!(
-        open.expect("still open").take_path(),
-        base,
-        "the pass with the notes is the take that renders",
-    );
-
-    // A voiced tail renders itself, which is the ordinary loop-recording
-    // case and the reason this cannot just always pick the first pass.
-    let mut open =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 1, None, &status);
-    voice(&mut open);
-    producer.push(Entry::NewPass).expect("ring has room");
-    drain(&mut consumer, &mut open, &status);
-    voice(&mut open);
-    assert_eq!(
-        open.expect("still open").take_path(),
-        Pass::path_for(&base, 2),
-        "the second pass was played too, so it is the take",
-    );
-
-    std::fs::remove_dir_all(&dir).ok();
-}
-
 /// What a pass boundary carries, and what it resets.
 ///
 /// The [`Recording`] / [`Pass`] split is what makes the carry structural —
@@ -956,9 +954,14 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let base = dir.join("take.take");
     let status = Mutex::new(String::new());
-    let mut recording =
-        Recording::create(header_for(48_000.0, String::new()), base.clone(), 4, None, &status)
-            .expect("the fixture has to open a real file to roll over from");
+    let mut recording = Recording::create(
+        header_for(48_000.0, String::new()),
+        base.clone(),
+        4,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .expect("the fixture has to open a real file to roll over from");
     let marker = harmonigraph_take::IncompleteRecord {
         first_publication: 7,
         last_publication: 9,
@@ -966,7 +969,6 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
     };
     recording.mark_incomplete(marker).expect("the first pass takes the marker");
     let first = &mut recording.current;
-    first.voiced = true;
     first.producer_closed = true;
     first.configuration_closed = true;
     first.source_closed = true;
@@ -986,12 +988,9 @@ fn a_rollover_carries_the_recording_and_resets_the_file() {
         Some(marker),
         "which the new FILE holds too, not merely the recording",
     );
-    assert_eq!(recording.last_voiced.as_deref(), Some(base.as_path()));
-    assert_eq!(recording.last_voiced_number, 1);
-    assert_eq!(recording.take_path(), base, "so an unvoiced pass 2 renders the one with the music");
+    assert_eq!(recording.take_path(), Pass::path_for(&base, 2), "the last pass renders");
     assert_eq!(recording.retained.len(), 1, "and pass 1 waits for both lanes to release it");
     let second = &recording.current;
-    assert!(!second.voiced, "nothing has played in the new file");
     assert!(!second.producer_closed, "and no lane has closed over it");
     assert!(!second.configuration_closed);
     assert!(!second.source_closed);
@@ -1016,13 +1015,12 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
             header_for(48_000.0, String::new()),
             dir.join("record.take"),
             1,
-            None,
+            FIXTURE_SPEC,
             &status,
         );
         assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
-        for _ in 1..RECORD_PASSES {
-            assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-            assert!(b.rec.observe_transport(10.0, true, 64.0 / 48_000.0));
+        for pass in 1..RECORD_PASSES {
+            assert!(b.rec.observe_transport(10.0 - pass as f64, true, BLOCK_SECONDS));
         }
         drain_with_audio(&mut b.entries, Some(&mut b.samples), &mut open, &status, Some(&fence));
         assert_eq!(open.as_ref().unwrap().retained.len(), RECORD_PASSES - 1);
@@ -1033,7 +1031,7 @@ fn configuration_pass_capacity_requires_actual_retirement_before_reuse() {
             // no fanout to deliver.
             open.as_mut().unwrap().retained[0].source_complete = true;
         }
-        assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+        assert!(b.rec.observe_transport(10.0 - RECORD_PASSES as f64, true, BLOCK_SECONDS));
         drain_with_audio(&mut b.entries, Some(&mut b.samples), &mut open, &status, Some(&fence));
         assert_eq!(fence.failed.load(Ordering::Acquire), !retire);
         assert_eq!(
@@ -1078,7 +1076,7 @@ fn retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss() 
         .join(format!("harmonigraph-held-full-publication-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("record.take");
-    let mut writer = testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = testing::FileWriter::new(&capture, path.clone());
     recorder.hold_retired_publication();
     recorder.fail_configuration();
     writer.drain(&mut capture);
@@ -1141,8 +1139,8 @@ fn the_audio_start_is_declared_once_per_pass() {
     assert_eq!(b.pushed(), ["audio-start @0.25"], "the first call is the one that counts");
 
     // The wrap re-arms it, because the next pass's audio starts elsewhere.
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
     b.rec.mark_audio_start(7.5);
     assert_eq!(b.pushed(), ["new-pass", "audio-start @7.5"]);
@@ -1174,8 +1172,8 @@ fn params_record_only_changes_and_a_wrap_rewrites_every_one() {
 
     // The wrap opens an empty file, so every parameter is written again
     // even though none of them changed.
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
-    assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS));
+    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
     b.rec.params(3.0, values);
     let after = b.pushed();
@@ -1218,9 +1216,9 @@ fn re_checking_armed_mid_take_does_not_reset_the_take() {
     let mut b = Bench::new();
     b.arm();
     b.end_at_rewind();
-    assert!(b.rec.observe_transport(0.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0, true, BLOCK_SECONDS));
     assert!(b.rec.is_armed(), "still armed, one block later");
-    assert!(b.rec.observe_transport(2.0, true, 64.0 / 48_000.0));
+    assert!(b.rec.observe_transport(1.0 + 2.0 * BLOCK_SECONDS, true, BLOCK_SECONDS));
     assert!(b.rec.is_armed());
 
     // The wrap is still seen as one, and still ends the take.
@@ -1342,17 +1340,14 @@ fn the_gui_reads_back_the_rolling_the_audio_thread_published() {
     assert!(!ctrl.is_rolling(), "parked again");
 }
 
-/// "Re-render take" with nothing recorded yet says so, rather than
-/// appearing to work.
+/// Recording failure and last finished take remain available to the shell.
 #[test]
-fn re_rendering_with_no_take_yet_explains_itself() {
+fn the_shell_reads_recording_failure_and_last_finished_take() {
     let (_rec, ctrl) = channel();
     assert_eq!(ctrl.last_take(), None, "nothing recorded this session");
     ctrl.fence.fail_with_message("cannot write take.wav".into());
     *ctrl.status.lock() = CONFIGURATION_FAILURE.into();
     assert!(ctrl.status().contains("cannot write take.wav"));
-    ctrl.render_now(RenderRequest::render_now(&RenderConfig::default(), "(dummy)".into()));
-    assert_eq!(ctrl.status(), "no take recorded yet to render");
     ctrl.start(48_000.0, String::new());
     assert!(ctrl.status().contains("reload the plugin"));
 

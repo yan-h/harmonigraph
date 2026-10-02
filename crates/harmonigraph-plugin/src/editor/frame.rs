@@ -64,6 +64,13 @@ pub(super) fn frame(
     }
     let now = shared.input.display_now(now);
     let sample_rate = shared.input.sample_rate();
+    // Snapshot current host movement before arming or queuing a render.
+    shared.ui.picture.appearance.sync_camera(&PluginParamBackend {
+        params: &state.params,
+        setter: &setter,
+        gesture: &shared.gesture,
+        configuration: None,
+    });
     shared.sync_take(sample_rate);
 
     let backend = PluginParamBackend {
@@ -82,7 +89,7 @@ pub(super) fn frame(
     // `shell_ms` comes last because it measures everything above it.
     shared.ui.picture.instruments.timings = harmonigraph_perf::ShellTimings {
         tess_ms: queue.tess_ms(),
-        draw_gpu_ms: queue.draw_gpu_ms(),
+        draw_gpu_ms: queue.take_draw_gpu_ms(),
         acquire_ms: queue.acquire_ms(),
         tick_ms: queue.tick_ms(),
         render_ms: queue.render_ms(),

@@ -112,7 +112,13 @@ pub(crate) fn render_pane(
                     );
                     state.appearance.view.shadow = shadow;
                 }
-                Pane::Lattice => preview_lattice(ui, rect, state, now),
+                Pane::Lattice => preview_lattice(
+                    ui,
+                    rect,
+                    state,
+                    now,
+                    preview_scale(box_rect.width(), &state.appearance.render),
+                ),
             }
         }
 
@@ -434,22 +440,7 @@ fn render_controls(
             return;
         }
 
-        // Re-render the last take with the frame you've dialed in since recording.
-        // The take carries only a record-time snapshot, so this is how a reframed
-        // preview reaches the video without recording again.
-        if interaction.take.last_ready {
-            ui.add_space(2.0);
-            if ui
-                .button("Re-render take")
-                .on_hover_text(
-                    "Render the last take using the current appearance and video settings. Saves the video beside the take. If a render is running, it is replaced by this one.",
-                )
-                .clicked()
-            {
-                interaction.take.render_now = true;
-            }
-        }
-        render_progress(ui, interaction);
+        export_queue(ui, &state.appearance, interaction);
     });
 }
 
@@ -507,7 +498,13 @@ fn letterbox(outer: egui::Rect, aspect: f32) -> egui::Rect {
 /// live copy never overwrites the docked pane's buffers within a frame — and
 /// with no GPU-time slot, since the Video pane's preview is a second lattice
 /// on screen, and reporting its cost as THE lattice cost would be wrong.
-fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState, now: f64) {
+fn preview_lattice(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    state: &mut PictureState,
+    now: f64,
+    point_scale: f32,
+) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
     }
@@ -531,7 +528,17 @@ fn preview_lattice(ui: &mut egui::Ui, rect: egui::Rect, state: &mut PictureState
             state.appearance.camera.zoom_by(zoom);
         }
     }
-    super::lattice::draw_lattice(ui, rect, state, now, PREVIEW_SURFACE, background, None, None);
+    super::lattice::draw_lattice(
+        ui,
+        rect,
+        state,
+        now,
+        PREVIEW_SURFACE,
+        background,
+        None,
+        None,
+        point_scale,
+    );
 }
 
 /// Capturing a take: the switch, what it is doing, and the clear that gives it
@@ -574,12 +581,12 @@ fn record_controls(
                 (
                     crate::RenderTrigger::OnTransportStop,
                     "Transport stop",
-                    "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
+                    "Finish recording and render when the host transport stops or jumps after recording has begun.",
                 ),
                 (
                     crate::RenderTrigger::AtLoopEnd,
                     "Loop end",
-                    "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
+                    "Record one loop, then render when playback wraps to its start. A forward seek also ends the take before the jump. Without a wrap or seek, recording continues until you turn Record take off.",
                 ),
                 (
                     crate::RenderTrigger::AtBar,
@@ -611,60 +618,129 @@ fn record_controls(
     });
 }
 
-/// How far the background render has got, while one is running — and the way
-/// to call it off.
-///
-/// A render is minutes of work started by a button that then looks like
-/// nothing happened: the status line names the file and never changes again
-/// until it is finished, so a long render and a hung one read identically. The
-/// bar is the difference between them.
-///
-/// The readout is a percentage: "3400/5400" is two numbers to divide before
-/// they say anything. The frames stay in the hover text. They are ENCODED
-/// frames, so the bar keeps moving through the encoder's backlog after the
-/// last frame is drawn, and it fills only when the video is written.
-///
-/// Absent, not greyed, when nothing is rendering: the take controls are the
-/// pane's steady state and a permanent empty bar under them would read as a
-/// render stuck at zero.
-///
-/// The cancel shares that lifetime, because a running render is the only thing
-/// it can act on. What it stops is the RENDER: the recording on disk is
-/// untouched, so "Re-render take" above starts a fresh one from the same take,
-/// and a video some earlier render finished stays where it landed — only the
-/// run in flight has anything half-written to throw away.
-fn render_progress(ui: &mut egui::Ui, interaction: &mut crate::Interaction) {
-    let Some(progress) = interaction.take.render_progress else { return };
-    let (value, frames) = match progress.total {
-        0 => ("starting".to_owned(), String::new()),
-        // Floored, so 100% means written rather than nearly. Padded to the
-        // width of "100%" so the readout keeps one width as it counts up:
-        // monospace, so that holds the name still beside it — `progress_bar`
-        // has no range to reserve from, unlike `ValueBar`.
-        total => (
-            format!("{:>3}%", progress.done.min(total) * 100 / total),
-            format!("{} of {total} frames encoded. ", progress.done),
-        ),
-    };
-    ui.add_space(2.0);
-    crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value).on_hover_text(
-        format!(
-            "{frames}Rendering runs in the background while the DAW and editor remain available."
-        ),
-    );
-    button_row(ui, |ui| {
-        if ui
-            .button("Cancel render")
-            .on_hover_text(
-                "Stop this render and delete the part of the video it has \
-                 written. The take is kept — \"Re-render take\" starts over from \
-                 it.",
-            )
-            .clicked()
-        {
-            interaction.take.cancel_render = true;
+/// Captured export requests and instance-owned job controls. The builder is
+/// folded independently of the jobs so progress and failures remain visible.
+fn export_queue(
+    ui: &mut egui::Ui,
+    appearance: &crate::AppearanceDocument,
+    interaction: &mut crate::Interaction,
+) {
+    use crate::ExportAction;
+    use harmonigraph_take::render::ExportStatus;
+    egui::CollapsingHeader::new("Exports").show(ui, |ui| {
+        crate::widgets::weak(ui, "One take path per line. Videos are saved beside each take; existing videos get a numbered variant.");
+        ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"));
+        ui.checkbox(&mut interaction.take.export_recorded, "Use each take's recorded appearance");
+        if !interaction.take.export_recorded {
+            let selected = interaction.take.export_look.as_deref().unwrap_or("Current appearance");
+            egui::ComboBox::from_id_salt("export-look").selected_text(selected).width(ui.available_width()).truncate().show_ui(ui, |ui| {
+                ui.selectable_value(&mut interaction.take.export_look, None, "Current appearance");
+                for name in interaction.appearance_editor.saved.named.keys() {
+                    ui.selectable_value(&mut interaction.take.export_look, Some(name.clone()), name);
+                }
+            });
         }
+        crate::widgets::weak(ui, "Every job captures the selected look and current Video settings. Recorded camera movement wins during replay.");
+        let mut paths = Vec::new();
+        button_row(ui, |ui| {
+            if ui.add_enabled(interaction.take.last_take.is_some(), egui::Button::new("Queue last take")).clicked() {
+                paths.extend(interaction.take.last_take.clone());
+            }
+            if ui.button("Queue paths").clicked() {
+                paths.extend(interaction.take.export_paths.lines().map(str::trim).filter(|line| !line.is_empty()).map(std::path::PathBuf::from));
+            }
+        });
+        if !paths.is_empty() { interaction.take.export_error.clear(); }
+        for path in paths {
+            match capture_export(appearance, interaction, &path) {
+                Ok(action) => interaction.take.export_actions.push(action),
+                Err(error) => {
+                    if !interaction.take.export_error.is_empty() { interaction.take.export_error.push('\n'); }
+                    interaction.take.export_error.push_str(&format!("{}: {error}", path.display()));
+                }
+            }
+        }
+        if !interaction.take.export_error.is_empty() { ui.label(&interaction.take.export_error); }
+        crate::widgets::weak(ui, "Queue survives closing this editor. Removing the plugin or closing the project cancels unfinished jobs. No crash resume.");
     });
+    for job in &interaction.take.exports {
+        ui.push_id(job.id, |ui| {
+            ui.label(format!(
+                "#{} {:?} · {} · {}",
+                job.id,
+                job.state,
+                job.size.map_or_else(|| "captured size".into(), |[w, h]| format!("{w}×{h}")),
+                job.take.file_name().unwrap_or_default().to_string_lossy()
+            ));
+            crate::widgets::weak(ui, job.output.display().to_string());
+            if matches!(job.state, ExportStatus::Running | ExportStatus::Cancelling) {
+                let progress = job.progress;
+                let value = progress.fraction().map_or_else(
+                    || "starting".into(),
+                    |f| format!("{:>3}%", (f * 100.0).floor() as u32),
+                );
+                crate::widgets::progress_bar(ui, progress.fraction(), "Rendering", &value)
+                    .on_hover_text(format!(
+                        "{} of {} frames encoded",
+                        progress.done, progress.total
+                    ));
+            }
+            if !job.detail.is_empty() {
+                ui.label(&job.detail);
+            }
+            button_row(ui, |ui| {
+                if matches!(job.state, ExportStatus::Pending | ExportStatus::Running)
+                    && ui.button("Cancel render").clicked()
+                {
+                    interaction.take.export_actions.push(ExportAction::Cancel(job.id));
+                }
+                if matches!(job.state, ExportStatus::Failed | ExportStatus::Cancelled)
+                    && ui.button("Retry").clicked()
+                {
+                    interaction.take.export_actions.push(ExportAction::Retry(job.id));
+                }
+            });
+        });
+    }
+    if interaction.take.exports.iter().any(|job| job.state.is_finished())
+        && ui.button("Clear finished jobs").clicked()
+    {
+        interaction.take.export_actions.push(ExportAction::ClearFinished);
+    }
+}
+
+pub(crate) fn capture_export(
+    appearance: &crate::AppearanceDocument,
+    interaction: &crate::Interaction,
+    path: &std::path::Path,
+) -> Result<crate::ExportAction, String> {
+    let mut captured = if interaction.take.export_recorded {
+        let header = harmonigraph_take::Header::read(path).map_err(|error| error.to_string())?;
+        header
+            .appearance
+            .as_deref()
+            .map(crate::AppearanceDocument::parse)
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        let mut captured = appearance.clone();
+        if let Some(name) = &interaction.take.export_look {
+            let look = interaction
+                .appearance_editor
+                .saved
+                .named
+                .get(name)
+                .ok_or_else(|| format!("saved look {name} was deleted; choose another look"))?;
+            look.apply(&mut captured);
+        }
+        captured
+    };
+    captured.render = appearance.render.clone();
+    Ok(crate::ExportAction::Queue {
+        take: path.to_owned(),
+        appearance: captured.serialize(),
+        render: captured.render,
+    })
 }
 
 #[cfg(test)]
@@ -1135,7 +1211,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        preview_lattice(ui, rect, &mut state, 0.0);
+                        preview_lattice(ui, rect, &mut state, 0.0, 1.0);
                         remaining_scroll.set(ui.input(|input| input.smooth_scroll_delta));
                     },
                 );
@@ -1295,5 +1371,99 @@ mod tests {
         assert!(samples[1].0 > 1.0, "the large preview did not exercise enlargement");
         assert!(samples[0].1 < samples[1].1, "the enlarged preview kept the smaller floor");
         assert!((samples[0].1 / samples[1].1 - samples[0].0 / samples[1].0).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    #[test]
+    fn expanded_builder_fits_and_queues_each_path_with_captured_settings() {
+        let ctx = crate::tests::probe::themed();
+        let mut interaction = crate::Interaction::default();
+        interaction.take.export_paths = "/tmp/first.take\n/tmp/path with spaces/second.take".into();
+        let mut appearance = crate::AppearanceDocument::default();
+        appearance.render.short_edge = 1080;
+        let mut time = 0.0;
+        let mut frame = |events| {
+            time += 0.1;
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(120.0, 2500.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    interaction.appearance_editor.toolbar(ui);
+                    export_queue(ui, &appearance, &mut interaction);
+                },
+            )
+        };
+        let text = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + egui::vec2(3.0, 3.0))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label}"))
+        };
+        let press = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let first = frame(vec![]);
+        let at = text(&first, "Looks");
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+        for _ in 0..5 {
+            frame(vec![]);
+        }
+        let library = frame(vec![]);
+        let at = text(&library, "Exports");
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+        for _ in 0..5 {
+            frame(vec![]);
+        }
+        let expanded = frame(vec![]);
+        let at = text(&expanded, "Queue paths");
+        for shape in &expanded.shapes {
+            let rect = shape.shape.visual_bounding_rect();
+            if shape.clip_rect.right() >= 119.5 && rect.is_finite() && rect.width() < 1.0e4 {
+                assert!(rect.right() <= 120.5, "expanded builder overruns: {:?}", shape.shape);
+            }
+        }
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+        assert_eq!(interaction.take.export_actions.len(), 2);
+        for (action, path) in interaction
+            .take
+            .export_actions
+            .iter()
+            .zip(["/tmp/first.take", "/tmp/path with spaces/second.take"])
+        {
+            let crate::ExportAction::Queue { take, appearance, render } = action else {
+                panic!("queue action")
+            };
+            assert_eq!(take, std::path::Path::new(path));
+            assert_eq!(render.short_edge, 1080);
+            assert_eq!(
+                crate::AppearanceDocument::parse(appearance).unwrap().render.short_edge,
+                1080
+            );
+        }
     }
 }

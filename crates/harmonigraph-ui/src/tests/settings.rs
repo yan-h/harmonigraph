@@ -278,25 +278,16 @@ fn text_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
 /// above it to be separated from, and a rule there reads as the pane hanging
 /// off a line.
 ///
-/// The Video pane and not every pane, because it is the only one that leads
-/// with a `section` call: the rest draw content first, so their rules all
-/// separate something. What this pins is the MECHANISM in `section`, which
-/// any pane gets — so a new pane that leads with a section needs no test of
-/// its own, and this one has to keep working for it to stay that way.
-///
-/// Both shells, because which section leads the Video pane depends on the
-/// shell: a host can record takes, so Record leads; the standalone cannot, so
-/// `record_controls` returns early and Frame leads instead. `section` decides
-/// it from what has been drawn rather than from the caller, and this is what
-/// holds it to that for the case the caller could not have known.
+/// Appearance actions lead the Video pane in either shell. A section rule may
+/// separate those actions from Record/Frame, but must not precede all content.
 #[test]
-fn the_video_pane_does_not_start_with_a_rule() {
+fn the_video_pane_starts_with_appearance_actions_before_any_rule() {
     // Which section leads, per shell: a host can record takes, so Record
     // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "RECORD"), (false, "FRAME")] {
         let (shapes, rule) = video_pane_shapes(supported);
-        let heading = text_y(&shapes, leads)
-            .unwrap_or_else(|| panic!("the Video pane drew no {leads:?} heading"));
+        let heading = text_y(&shapes, "Undo").expect("appearance actions lead the pane");
+        assert!(text_y(&shapes, leads).unwrap() > heading);
         // Only rules BELOW the tab bar are the pane's own. The dock's chrome
         // draws lines of its own above the body, in its own colors, and those
         // are not this test's business — hence matching on the separator
@@ -768,7 +759,7 @@ fn the_render_bar_fills_to_the_share_of_frames_done() {
 fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     let mut state = fresh();
     state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_ready = true;
+    state.workspace.interaction.take.last_take = Some("music.take".into());
     // Soloed and tall, like `video_pane_shapes`: the whole control column on
     // screen, so a button that is missing is missing rather than scrolled off.
     state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
@@ -784,7 +775,7 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     let idle = h.frame(&mut state, vec![]).shapes;
     assert!(find(&idle).is_none(), "a cancel drawn with no render to cancel");
 
-    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.exports = vec![fixture_export()];
     // Two frames: egui resolves the widget under the pointer from the previous
     // pass, so the button has to have been drawn before the press.
     h.frame(&mut state, vec![]);
@@ -797,7 +788,13 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     h.frame(&mut state, vec![egui::Event::PointerMoved(at)]);
     h.frame(&mut state, vec![egui::Event::PointerMoved(at), press(at, true)]);
     h.frame(&mut state, vec![press(at, false)]);
-    assert!(state.workspace.interaction.take.cancel_render, "the press never reached the shell");
+    assert!(
+        matches!(
+            state.workspace.interaction.take.export_actions.last(),
+            Some(crate::ExportAction::Cancel(7))
+        ),
+        "the press never reached the shell"
+    );
 }
 
 /// Before the renderer has said how many frames it is composing there is no
@@ -966,6 +963,8 @@ enum Grab {
 /// told along the way.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
+    // Contours must affect the picture for their bar to accept a drag.
+    state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
@@ -1074,10 +1073,12 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
+    // Contours must affect the picture for their bar to accept a drag.
+    state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that Mix is actually on screen below the view,
+    // Tall enough that Contour strength is actually on screen below the view,
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -1101,7 +1102,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // state read below is the one the frames wrote.
     let ctx = h.ctx.clone();
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Contour strength: a plain 0..=1 bar , so where the
+    // Contour strength: a plain 0..=1 bar, so where the
     // pointer is says what the value should be, and the far end of the range is
     // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
@@ -1277,8 +1278,8 @@ fn scrolling_settings_pane(
     // `widgets::bar_width` calls out as having nowhere to wrap to, and so the
     // two likeliest to reach the lane.
     state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_ready = true;
-    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.last_take = Some("music.take".into());
+    state.workspace.interaction.take.exports = vec![fixture_export()];
     for i in 0..40 {
         state
             .picture

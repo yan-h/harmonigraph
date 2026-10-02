@@ -538,6 +538,26 @@ fn tuning_of(output: &[(u32, Event)]) -> Option<f64> {
     })
 }
 
+#[test]
+fn tune_and_hub_diagnostics_publish_once_per_audio_interval() {
+    let _scope = crate::test_scope::enter();
+    for tuner in [true, false] {
+        let mut device = Device::new(tuner);
+        device.activate_format(48_000.0, 64);
+        let shared = device.shared();
+        assert_eq!(shared.diagnostics.test_publications(), (0, (!tuner).then_some(0)));
+        for callback in 0..=1500 {
+            device.run(i64::from(callback) * 64, vec![], None);
+            let sequence = 2 * (1 + callback as u64 / 750);
+            assert_eq!(
+                shared.diagnostics.test_publications(),
+                (sequence, (!tuner).then_some(sequence)),
+                "both snapshots share one countdown, callback {callback}, tuner {tuner}",
+            );
+        }
+    }
+}
+
 /// The whole of the delay contract: an input emits at its own sample plus D,
 /// with the correction that came back for it.
 #[test]
@@ -977,7 +997,8 @@ fn a_tune_run_after_the_hub_keeps_the_recorder_whole() {
     tune.activate();
     let dir = std::env::temp_dir().join(format!("harmonigraph-tune-after-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"), None);
+    let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
+    capture.arm();
     // The Tune runs first, then after the Hub, at the same block boundary.
     tune.run_format(0, vec![], None, None, 512);
     hub.run_format(0, vec![], None, None, 512);
@@ -1012,8 +1033,7 @@ fn the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded() {
         let dir = std::env::temp_dir()
             .join(format!("harmonigraph-cut-{}-{destroy}-{lagging}-{armed}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let writer =
-            harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"), None);
+        let writer = harmonigraph_record::testing::FileWriter::new(&capture, dir.join("t.take"));
         if armed {
             capture.arm();
         }

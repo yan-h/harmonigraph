@@ -12,8 +12,8 @@ use crate::{create_vertex_buffer, wgpu};
 
 pub(super) const SOURCE: &str = include_str!("../shaders/spectral_atmosphere.wgsl");
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
-/// The tile's own format. Four channels because the mosaic's walk produces two
-/// vectors and the wash's produces five numbers over two targets; half floats
+/// The tile's own format. Four channels because the wash's walk produces seven
+/// numbers over two targets, the fine octave's four filling one; half floats
 /// because what is stored is a cell offset of order one, where the eleven-bit
 /// mantissa is a thousandth of a cell.
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -74,8 +74,8 @@ fn cloud_offset(settings: harmonigraph_scene::SpectralAtmosphere, now: f64) -> [
     harmonigraph_scene::MaterialSettings::drift(settings.cloud_speed, settings.cloud_direction, now)
 }
 
-/// [`cloud_offset`] as the shader takes it. Mosaic and Watercolor repeat their
-/// `tile`, so the offset is reduced by whole repeats before it narrows to f32,
+/// [`cloud_offset`] as the shader takes it. Watercolor repeats its `tile`, so
+/// the offset is reduced by whole repeats before it narrows to f32,
 /// as Stars and the lattice reduce theirs: unreduced, a long clock leaves the
 /// f32 fewer and fewer bits of the cell it lands in. A screen-axis repeat of
 /// the Watercolor tile is five periods, because its basis is the 3-4-5
@@ -94,10 +94,9 @@ fn cloud_drift(
         let material = settings.material_settings;
         let (cells, periods) = match settings.cloud_style {
             harmonigraph_scene::CloudStyle::Watercolor => (WASH_CELLS / material.wash_size, 5),
-            harmonigraph_scene::CloudStyle::Mosaic => (SCALE_CELLS / material.scale_size, 1),
             harmonigraph_scene::CloudStyle::Stars
             | harmonigraph_scene::CloudStyle::VelvetScales => {
-                unreachable!("only Mosaic and Watercolor draw out of a tile")
+                unreachable!("only Watercolor draws out of a tile")
             }
         };
         f64::from(tile.period() * periods) / f64::from(cells)
@@ -251,15 +250,14 @@ pub(super) fn tone_size(
     Some(std::array::from_fn(|axis| ((pixels[axis] as f32 / pixel).ceil() as u32).max(1)))
 }
 
-/// The shader's own `CLOUD_UNITS`, `SCALE_CELLS` and `WASH_CELLS`: how many
-/// cloud units cross the pane's height and how many cells of each texture cross
-/// one unit at a size of 1x. Nothing else here needs to know what a cell is —
+/// The shader's own `CLOUD_UNITS` and `WASH_CELLS`: how many cloud units cross
+/// the pane's height and how many of the wash's cells cross one unit at a size
+/// of 1x. Nothing else here needs to know what a cell is —
 /// the tile does, because how fine it has to be is how fine the pane draws one.
 ///
 /// Held against the shipped shader text by
 /// `the_tile_is_as_fine_as_the_pane_draws_a_cell`.
 const CLOUD_UNITS: f32 = 10.0;
-const SCALE_CELLS: f32 = 6.0 / 2.2;
 const WASH_CELLS: f32 = 5.25;
 /// The tile's texel size: a whole number of these, and never fewer or more.
 ///
@@ -278,37 +276,33 @@ const TILE_MAX: u32 = 2048;
 /// **A key is wrong in two directions and this one is worth writing out.**
 /// Anything that feeds the baked channels and is missing here serves a stale
 /// picture; anything carried here that decides nothing rebakes a full cell walk
-/// at the rate of whatever it should not be watching. So the key is the STYLE,
-/// the period, the texel size, the wash's pane orientation, and the dials the
-/// WALK reads — `Size variation` for the mosaic; `Shape warp` and `Edge
-/// feathering` for the wash, which are the warp and the feather/bleed widths. Orientation decides
-/// the rotated wash basis; the unrotated mosaic neither bakes nor reads it.
+/// at the rate of whatever it should not be watching. So the key is the period,
+/// the texel size, the pane orientation, and the dials the WALK reads —
+/// `Shape warp` and `Edge feathering`, which are the warp and the feather/bleed
+/// widths. Orientation decides the rotated wash basis. Not the style: only the
+/// wash bakes a tile, so there is no other walk for a key to tell it from.
 ///
 /// Not the DRIFT and not the clock. The walk's output is a fixed field that the
-/// drift slides over — `drift` enters both styles only as a translation of the
+/// drift slides over — `drift` enters only as a translation of the
 /// cell coordinate — so it is a texture coordinate here rather than an input,
 /// and a tile is never rebaked because time passed.
 ///
 /// Not the light, the palette, the softness or `Texture mix`: none of them
 /// reaches the walk at all. Not `Refraction` or `Fine layer mix`, which are
-/// read AFTER the tile, out of channels it already holds. Not `Cell size` or
-/// `Patch size`, which decide how many cells cross the pane rather than what a
+/// read AFTER the tile, out of channels it already holds. Not `Patch size`,
+/// which decides how many cells cross the pane rather than what a
 /// cell draws, and not the pane's pixels: both reach this only through
 /// [`Self::texels`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TileKey {
-    /// 0 for the mosaic, 1 for the wash — the same word the uniform carries.
-    style: u32,
     /// The period in cells; production always uses forty.
     period: u32,
     /// One side of the square tile, in texels.
     texels: u32,
-    /// Which pane axis is pitch for the wash's rotation. Always false for the
-    /// mosaic, whose square bake stays in physical pane coordinates.
-    wash_pitch_vertical: bool,
+    /// Which pane axis is pitch for the wash's rotation.
+    pitch_vertical: bool,
     /// The walk's own dials as bits, so this compares by value. Sanitized, so
-    /// there is no NaN here to compare unequal to itself. The mosaic reads one
-    /// and leaves the rest at zero.
+    /// there is no NaN here to compare unequal to itself.
     dials: [u32; 2],
 }
 
@@ -359,8 +353,8 @@ pub(super) fn tile_key(
         wash_pool: _,          // the tile holds the distance, the dials shape it after
         wash_pool_width: _,    // the tile holds the distance, the dials shape it after
         wash_pool_softness: _, // the tile holds the distance, the dials shape it after
-        cloud_style,
-        stars: _, // Stars do not use a displacement tile.
+        cloud_style: _,        // only the wash reaches here; the rest returned above
+        stars: _,              // Stars do not use a displacement tile.
         material_settings:
             harmonigraph_scene::MaterialSettings {
                 velvet_size: _,
@@ -368,9 +362,8 @@ pub(super) fn tile_key(
                 velvet_edge: _,
                 velvet_irregularity: _,
                 velvet_shape: _,
-                scale_size,
-                scale_variety,
-                scale_refract: _, // applied after the tile bake
+                velvet_square: _,
+                velvet_tilt: _,
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
@@ -383,17 +376,7 @@ pub(super) fn tile_key(
     // live-walk arm was retired because, never taken, it still cost the
     // full-resolution shader 16 to 21% (#1100).
     assert!(period > 0, "a cloud is drawn only out of a tile, so its period cannot be 0");
-    let (style, cells, dials) = match cloud_style {
-        harmonigraph_scene::CloudStyle::Mosaic => {
-            (0, SCALE_CELLS / scale_size, [scale_variety, 0.0])
-        }
-        harmonigraph_scene::CloudStyle::Watercolor => {
-            (1, WASH_CELLS / wash_size, [wash_lobe, wash_fuzz])
-        }
-        harmonigraph_scene::CloudStyle::Stars | harmonigraph_scene::CloudStyle::VelvetScales => {
-            unreachable!("returned above")
-        }
-    };
+    let cells = WASH_CELLS / wash_size;
     // As fine as the pane itself draws a cell, so a tiled picture is the walk
     // resampled rather than a coarser one — and then rounded UP to a whole
     // [`TILE_STEP`], which is what keeps a resize off the bake. The 3-4-5
@@ -404,11 +387,10 @@ pub(super) fn tile_key(
         .saturating_mul(TILE_STEP)
         .min(TILE_MAX);
     Some(TileKey {
-        style,
         period,
         texels,
-        wash_pitch_vertical: style == 1 && atmosphere.pitch_vertical,
-        dials: dials.map(f32::to_bits),
+        pitch_vertical: atmosphere.pitch_vertical,
+        dials: [wash_lobe, wash_fuzz].map(f32::to_bits),
     })
 }
 
@@ -433,12 +415,9 @@ struct Uniforms {
     /// notices.
     drift: Float2,
     cloud_depth: f32,
-    scale_size: f32,
-    scale_variety: f32,
-    scale_refract: f32,
-    /// 0 for the refracting scales (Mosaic), 1 for the watercolour wash, 2 for
-    /// the starfield, 3 for Scales. None reads another's own settings; all
-    /// share what sits above them.
+    /// 1 for the watercolour wash, 2 for the starfield, 3 for Scales; 0 is
+    /// unused. None reads another's own settings; all share what sits above
+    /// them.
     cloud_style: u32,
     wash_size: f32,
     wash_fuzz: f32,
@@ -452,21 +431,17 @@ struct Uniforms {
     /// 1 when pitch is vertical, 0 when it is horizontal.
     pitch_vertical: u32,
     /// The starfield's brightness variation and life clock ([`star_life`]).
-    /// The geometry and slice rows that follow both start on 16-byte boundaries.
+    /// The far, near and slice rows that follow all start on 16-byte boundaries.
     star_randomness: f32,
     star_life: f32,
     /// The starfield's size variation; the rest of its row is padding.
     star_size_variation: f32,
     star_pad0: u32,
     star_pad1: u32,
-    star_pad2: u32,
     /// Exact far target dimensions, optimized-far flag, and padding.
     star_far: Float4,
     /// Exact reduced foreground dimensions; zero means native foreground.
     star_near: Float4,
-    /// Overlap light, the core's fade-start fraction and far fill; see
-    /// [`star_geometry`].
-    star_geometry: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
     memory_valid: u32,
@@ -481,7 +456,8 @@ struct Uniforms {
     /// Actual rounded dimensions and array address for each depth.
     star_halo_samples: [StarHaloSample; STAR_SLICES],
     velvet: Float4,
-    velvet_size: Float4,
+    /// Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
+    velvet_form: Float4,
     /// The wash's `Edge pooling`, its width, and its softness as an exponent;
     /// w is padding.
     wash_pigment: Float4,
@@ -982,25 +958,25 @@ fn memory_key(
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
-                star_spacing_far,
-                star_spacing_near,
-                star_spacing_curve,
-                star_size_min: _,        // star sizes do not change a star's colour
-                star_size_max: _,        // star sizes do not change a star's colour
-                star_size_curve: _,      // star sizes do not change a star's colour
-                star_speed_min: _,       // carried by absolute cell and per-cell life
-                star_speed_max: _,       // carried by absolute cell and per-cell life
-                star_speed_curve: _,     // carried by absolute cell and per-cell life
-                star_lifetime: _,        // carried by absolute cell and per-cell life
+                star_layers: _,         // read through the plan's drawn slices below
+                star_spacing_ratio_far: _, // reaches the key as the cells
+                star_spacing_ratio_near: _, // reaches the key as the cells
+                star_spacing_ratio_curve: _, // reaches the key as the cells
+                star_size_far: _,       // reaches the key as the cells
+                star_size_near: _,      // reaches the key as the cells
+                star_size_curve: _,     // reaches the key as the cells
+                star_speed_far: _,      // carried by absolute cell and per-cell life
+                star_speed_near: _,     // carried by absolute cell and per-cell life
+                star_speed_curve: _,    // carried by absolute cell and per-cell life
+                star_lifetime: _,       // carried by absolute cell and per-cell life
+                star_twinkle_far: _,    // only whether a depth holds its stars, below
+                star_twinkle_near: _,   // only whether a depth holds its stars, below
                 star_halo_resolution: _, // sampling does not change material identity
-                star_halo_profile: _,    // sampling does not change material identity
-                star_glow: _, // response/coverage changes do not change material identity
-                star_core_far: _, // response/coverage changes do not change material identity
-                star_core_near: _, // response/coverage changes do not change material identity
-                star_falloff: _, // response/coverage changes do not change material identity
-                star_far_fill: _, // composition does not change material identity
-                star_overlap_light: _, // composition does not change material identity
-                test_bed: _,  // its cells and bands are appended where the cells are
+                star_halo_profile: _,   // sampling does not change material identity
+                star_solid_far: _,      // response/coverage changes do not change material identity
+                star_solid_near: _,     // response/coverage changes do not change material identity
+                star_glow_falloff: _,   // response/coverage changes do not change material identity
+                star_solo: _,           // composition only; hidden slices keep their history
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1009,9 +985,8 @@ fn memory_key(
                 velvet_edge,
                 velvet_irregularity,
                 velvet_shape,
-                scale_size,
-                scale_variety,
-                scale_refract,
+                velvet_square,
+                velvet_tilt,
                 wash_size,
                 wash_fuzz,
                 wash_lobe,
@@ -1032,13 +1007,19 @@ fn memory_key(
         time_softness,
     ];
     match cloud_style {
-        CloudStyle::Stars => values.extend([
-            2.0,
-            star_spacing_far,
-            star_spacing_near,
-            star_spacing_curve,
-            star_randomness,
-        ]),
+        CloudStyle::Stars => {
+            values.extend([2.0, star_randomness]);
+            // Each layer count draws its own set. Solo only hides composition
+            // and leaves these slices running. Where the layers sit reaches
+            // the key as the cells.
+            values.extend(s.stars.plan().depths.map(|depth| {
+                u32::from(depth.gather != harmonigraph_scene::star_plan::StarGather::Off) as f32
+            }));
+            // Whether each depth's stars keep their place across lives: that
+            // moves every star and makes a life's colour its last one's. How
+            // far a held star dips or blends is response, not identity.
+            values.extend(s.stars.plan().depths.map(|depth| u32::from(depth.twinkle < 1.0) as f32));
+        }
         CloudStyle::VelvetScales => values.extend([
             3.0,
             size[0],
@@ -1049,18 +1030,8 @@ fn memory_key(
             velvet_edge,
             velvet_irregularity,
             velvet_shape,
-            contours,
-            contour_softness,
-            contour_strength,
-        ]),
-        CloudStyle::Mosaic => values.extend([
-            0.0,
-            size[0],
-            cloud_direction,
-            cloud_speed,
-            scale_size,
-            scale_variety,
-            scale_refract,
+            velvet_square,
+            velvet_tilt,
             contours,
             contour_softness,
             contour_strength,
@@ -1703,7 +1674,12 @@ impl Targets {
                 settings.material_settings.velvet_shape,
                 settings.material_settings.velvet_variety,
             ]),
-            velvet_size: Float4([settings.material_settings.velvet_size, 0.0, 0.0, 0.0]),
+            velvet_form: Float4([
+                settings.material_settings.velvet_size,
+                settings.material_settings.velvet_square,
+                settings.material_settings.velvet_tilt,
+                0.0,
+            ]),
             wash_pigment: Float4([
                 settings.wash_pool,
                 settings.wash_pool_width,
@@ -1717,15 +1693,18 @@ impl Targets {
             padding: 0,
             contours: settings.contours,
             contour_softness: settings.contour_softness,
-            contour_strength: settings.contour_strength,
+            // At full Stars mix the underlying terraced picture is hidden.
+            contour_strength: if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars
+                && settings.cloud_depth >= 1.0
+            {
+                0.0
+            } else {
+                settings.contour_strength
+            },
             tone_baked: u32::from(self.tone.is_some()),
             drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },
-            scale_size: settings.material_settings.scale_size,
-            scale_variety: settings.material_settings.scale_variety,
-            scale_refract: settings.material_settings.scale_refract,
             cloud_style: match settings.cloud_style {
-                harmonigraph_scene::CloudStyle::Mosaic => 0,
                 harmonigraph_scene::CloudStyle::Watercolor => 1,
                 harmonigraph_scene::CloudStyle::Stars => 2,
                 harmonigraph_scene::CloudStyle::VelvetScales => 3,
@@ -1744,7 +1723,6 @@ impl Targets {
             star_size_variation: settings.stars.star_size_variation,
             star_pad0: 0,
             star_pad1: 0,
-            star_pad2: 0,
             star_far: {
                 let [width, height] = self.tone_size().unwrap_or([1, 1]);
                 Float4([
@@ -1758,7 +1736,6 @@ impl Targets {
                 let [width, height] = self.near_size().unwrap_or([0, 0]);
                 Float4([width as f32, height as f32, 0.0, 0.0])
             },
-            star_geometry: star_geometry(settings.stars),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -1862,10 +1839,9 @@ fn source_group(
 #[cfg(test)]
 mod tests {
     use super::{
-        cloud_drift, cloud_offset, retained_size, source_size, star_geometry, star_layout,
-        star_slices, tile_key, tone_size, SpectrogramAtmosphere, CLOUD_UNITS, SCALE_CELLS,
-        STAR_ATLAS_WIDTH, STAR_HASH_PERIOD, STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX,
-        TILE_STEP, WASH_CELLS,
+        cloud_drift, cloud_offset, retained_size, source_size, star_layout, star_slices, tile_key,
+        tone_size, SpectrogramAtmosphere, CLOUD_UNITS, STAR_ATLAS_WIDTH, STAR_HASH_PERIOD,
+        STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
     /// Every slice at `now` over a 16:9 pane.
@@ -1882,23 +1858,18 @@ mod tests {
     }
 
     /// One `Star size` value is one star at every depth, whatever the spacing
-    /// does across them, until a depth's widest read cannot hold it; then the
-    /// slice draws it at the widest that fits. 0.5 star pixels fits every
-    /// fresh cell, the far three's included.
+    /// does across them, and at any size: the spacing is a multiple of it, so
+    /// no slice draws a star smaller than asked.
     #[test]
     fn one_star_size_is_one_star_at_every_depth() {
-        use harmonigraph_scene::star_plan::StarGather;
         let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
-        (settings.stars.star_size_min, settings.stars.star_size_max) = (0.5, 0.5);
-        let fine = slices(settings, 0.0);
-        assert!(fine[0].cell < fine[STAR_SLICES - 1].cell / 4.0, "spacing must vary");
-        for slice in &fine {
-            assert_eq!(slice.radius, 0.25);
-        }
-        (settings.stars.star_size_min, settings.stars.star_size_max) = (64.0, 64.0);
-        for slice in slices(settings, 0.0) {
-            let jitter = settings.stars.star_jitter;
-            assert_eq!(slice.radius, StarGather::Three.bound(jitter) * slice.cell);
+        for size in [4.0, harmonigraph_scene::STAR_SIZE_MAX] {
+            (settings.stars.star_size_far, settings.stars.star_size_near) = (size, size);
+            let slices = slices(settings, 0.0);
+            assert!(slices[0].cell > slices[STAR_SLICES - 1].cell * 1.4, "spacing must vary");
+            for slice in &slices {
+                assert_eq!(slice.radius, 0.5 * size);
+            }
         }
     }
 
@@ -1970,59 +1941,84 @@ mod tests {
         assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [0, 1]]);
     }
 
-    /// The star test bed's plan decides what is allocated and baked: an Off
-    /// depth holds no atlas cells, only 3x3 depths own halo images, each at
-    /// its tier's size, and each slice carries its gather to the shader.
+    /// A depth `Star layers` leaves out holds no atlas cells, owns no halo
+    /// image and reaches the shader as not drawn; the others are laid out as
+    /// with every layer.
     #[test]
-    fn a_test_bed_plan_allocates_and_bakes_only_what_it_draws() {
-        use harmonigraph_scene::star_plan::{StarGather, StarTestBed};
-        let production = harmonigraph_scene::StarSettings::default();
-        let mut bed = StarTestBed::default();
-        let gathers = [
-            StarGather::Off,
-            StarGather::Two,
-            StarGather::Three,
-            StarGather::Core,
-            StarGather::Three,
-        ];
-        for ((depth, gather), tier) in bed.depths.iter_mut().zip(gathers).zip([0, 0, 2, 0, 0]) {
-            depth.gather = Some(gather);
-            depth.tier = Some(tier);
+    fn a_layer_left_out_is_not_allocated_or_baked() {
+        let every = harmonigraph_scene::StarSettings::default();
+        let three = harmonigraph_scene::StarSettings { star_layers: 3, ..every };
+        let off = [false, true, false, true, false];
+        let gathers = three.plan().depths.map(|depth| depth.gather);
+        assert_eq!(gathers.map(|g| g == harmonigraph_scene::star_plan::StarGather::Off), off);
+
+        let (layout, full) = (star_layout(three, 16.0 / 9.0), star_layout(every, 16.0 / 9.0));
+        let mut left_out = 0u64;
+        for (k, &off) in off.iter().enumerate() {
+            if off {
+                assert_eq!(layout.grids[k], [0, 0], "depth {k}");
+                left_out += u64::from(full.grids[k][0] * full.grids[k][1]);
+            } else {
+                assert_ne!(layout.grids[k], [0, 0], "depth {k}");
+            }
         }
-        bed.halo_tiers = [Some(0.5), Some(0.3), Some(0.25)];
-        bed.far = Some(1.0);
-        bed.near = Some(1.0);
-        let stars = harmonigraph_scene::StarSettings { test_bed: Some(bed), ..production };
+        assert_eq!(layout.texels, full.texels - left_out);
+        let active = super::star_halo_layout([161, 121], three).active;
+        assert!(off.iter().zip(active).all(|(&off, active)| !(off && active)));
+        let slices = star_slices(three, 0.0, 0.0, &layout);
+        assert!(off.iter().zip(slices).all(|(&off, slice)| off == (slice.gather == 0)));
+    }
 
-        let halos = super::star_halo_layout([161, 121], stars);
-        assert_eq!(halos.active, [false, false, true, false, true]);
-        assert_eq!(
-            halos.groups.map(|g| (g.size, g.layers)),
-            [([41, 31], 1), ([81, 61], 1), ([1, 1], 0)]
-        );
-        assert!(!crate::stars::star_far_reduced(stars));
-        assert_eq!(super::star_near_size([161, 121], stars), None);
+    /// Solo shows a layer as the whole field draws it. On a pane wide enough
+    /// that the atlas floors the finest cells, hiding the other layers
+    /// leaves the whole layout and each layer's cells in place.
+    #[test]
+    fn soloing_keeps_the_cells_the_whole_field_draws() {
+        use harmonigraph_scene::star_plan::STAR_DEPTHS;
+        let every = harmonigraph_scene::StarSettings::default();
+        let full = star_layout(every, 8.0);
+        assert_ne!(full.cells, crate::stars::star_cells(every), "the fixture must floor a cell");
+        for k in 0..STAR_DEPTHS {
+            let mut star_solo = [false; STAR_DEPTHS];
+            star_solo[k] = true;
+            let solo = harmonigraph_scene::StarSettings { star_solo, ..every };
+            assert_eq!(star_layout(solo, 8.0), full, "solo {k}");
+        }
+    }
 
-        let layout = star_layout(stars, 16.0 / 9.0);
-        let every = star_layout(production, 16.0 / 9.0);
-        assert_eq!(layout.grids[0], [0, 0]);
-        assert_eq!(layout.grids[1..], every.grids[1..]);
-        assert_eq!(layout.texels, every.texels - u64::from(every.grids[0][0] * every.grids[0][1]));
-        let slices = star_slices(stars, 0.0, 0.0, &layout);
-        assert_eq!(slices.map(|s| s.gather), [0, 2, 3, 1, 3]);
+    /// Solo changes only composition; hidden slices still bake and keep memory.
+    /// A flag on a depth omitted by Star layers solos nothing.
+    #[test]
+    fn soloing_draws_only_the_soloed_layers() {
+        let fresh = harmonigraph_scene::StarSettings::default();
+        let solo = [false, true, false, true, false];
+        for layers in [3, 5] {
+            let full = harmonigraph_scene::StarSettings { star_layers: layers, ..fresh };
+            let selected = harmonigraph_scene::StarSettings { star_solo: solo, ..full };
+            let layout = star_layout(full, 16.0 / 9.0);
+            let slices = star_slices(selected, 37.0, 5.0, &layout);
+            let baseline = star_slices(full, 37.0, 5.0, &layout);
+            for (k, (got, mut expected)) in slices.into_iter().zip(baseline).enumerate() {
+                if layers == 5 && !solo[k] {
+                    expected.gather = 0;
+                }
+                assert_eq!(got, expected, "layers {layers}, depth {k}");
+            }
+        }
     }
 
     /// The halo images are allocated for exactly the depths the plan draws
-    /// 3x3, even where the settings are the lattice's, scaled past the range
-    /// a stored value can hold: Star size 20 shows as 100 there, which at
-    /// the stored scale would gather depth 2 by 2x2.
+    /// 3x3, at the lattice's scale too, scaled past the range a stored size
+    /// can hold: Star size 20 shows as 100 there. A spacing is a multiple of
+    /// the size, so the lattice reads every depth as the stored settings do.
     #[test]
     fn halos_follow_the_drawn_plan_at_the_lattice_scale() {
         use harmonigraph_scene::star_plan::StarGather;
-        let stored = harmonigraph_scene::StarSettings { star_size_max: 20.0, ..Default::default() };
+        let stored =
+            harmonigraph_scene::StarSettings { star_size_near: 20.0, ..Default::default() };
         let lattice = stored.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
         let three = lattice.plan().depths.map(|depth| depth.gather == StarGather::Three);
-        assert_ne!(three, lattice.sanitized().plan().depths.map(|d| d.gather == StarGather::Three));
+        assert_eq!(three, stored.plan().depths.map(|d| d.gather == StarGather::Three));
         assert_eq!(super::star_halo_layout([161, 121], lattice).active, three);
     }
 
@@ -2037,7 +2033,7 @@ mod tests {
         assert_eq!(STAR_SLICES as f64, shader_number("STAR_SLICES"));
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
-        let fade = star_geometry(Default::default()).0[2];
+        let fade = shader_number("STAR_INNER_FADE");
         assert!(fade > 0.0 && fade < 1.0);
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let jitter = star_jitter_width(dial);
@@ -2057,7 +2053,7 @@ mod tests {
                     let settings = harmonigraph_scene::StarSettings {
                         star_jitter: dial,
                         star_halo_profile: profile,
-                        star_size_max: size,
+                        star_size_near: size,
                         ..Default::default()
                     };
                     for depth in settings.plan().depths {
@@ -2118,7 +2114,8 @@ mod tests {
         let fresh = harmonigraph_scene::SpectralAtmosphere::default();
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_spacing_ratio_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_size_far: harmonigraph_scene::STAR_SIZE_MIN,
                 ..fresh.stars
             },
 
@@ -2182,9 +2179,9 @@ mod tests {
         // Exercise the below-budget path independently of the current look defaults.
         let coarse = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_far: 4.25,
-                star_spacing_near: 21.0,
-                star_spacing_curve: 1.0,
+                star_spacing_ratio_far: 2.5,
+                star_spacing_ratio_near: 1.3,
+                star_spacing_ratio_curve: 1.0,
                 ..Default::default()
             },
 
@@ -2196,8 +2193,9 @@ mod tests {
         }
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_far: harmonigraph_scene::STAR_SPACING_MIN,
-                star_spacing_near: 6.6,
+                star_spacing_ratio_far: harmonigraph_scene::STAR_SPACING_MIN,
+                star_size_far: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_ratio_near: 0.42,
                 ..coarse.stars
             },
 
@@ -2229,8 +2227,8 @@ mod tests {
         // stated against, whatever the fresh far speed is.
         let fresh = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_speed_min: 0.15,
-                star_speed_max: 1.0,
+                star_speed_far: 0.15,
+                star_speed_near: 1.0,
                 ..Default::default()
             },
             cloud_direction: 0.0,
@@ -2250,7 +2248,7 @@ mod tests {
         assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
         let together = travelled(
             harmonigraph_scene::SpectralAtmosphere {
-                stars: harmonigraph_scene::StarSettings { star_speed_min: 1.0, ..fresh.stars },
+                stars: harmonigraph_scene::StarSettings { star_speed_far: 1.0, ..fresh.stars },
                 ..fresh
             },
             10.0,
@@ -2339,60 +2337,51 @@ mod tests {
         close(at(220.0, 0.0, 10_000.0), phase);
     }
 
-    /// A tiled texture's drift reaches the shader reduced by whole repeats of
-    /// its tile, so a long clock lands on the cell the f64 offset names — the
-    /// 3-4-5 rotated basis included — within a millionth of a cell, where a
-    /// plain cast to f32 misses it by 1.1 cells (Mosaic) and 2.4 (Watercolor)
-    /// at this clock. A short clock passes bit for bit.
+    /// The wash's drift reaches the shader reduced by whole repeats of its
+    /// tile, so a long clock lands on the cell the f64 offset names — the 3-4-5
+    /// rotated basis included — within a millionth of a cell, where a plain
+    /// cast to f32 misses it by 2.4 cells at this clock. A short clock passes
+    /// bit for bit.
     #[test]
     fn a_tiled_drift_is_reduced_by_whole_repeats_before_it_narrows() {
-        use harmonigraph_scene::CloudStyle::{Mosaic, Watercolor};
         let period = super::CloudSampling::default().tile_cells;
         // Four months at the fresh speed: two million cloud units.
         let long = 1.0e7;
-        for style in [Mosaic, Watercolor] {
-            let settings = harmonigraph_scene::SpectralAtmosphere {
-                cloud_style: style,
-                cloud_direction: 37.0,
-                ..Default::default()
-            };
-            let atmosphere = SpectrogramAtmosphere {
-                settings,
-                region: egui::Rect::ZERO,
-                pitch_vertical: true,
-                points_per_cent: 0.03,
-                points_per_ms: 0.01,
-                points_per_slab: 0.0,
-                now: 0.0,
-            };
-            let tile = tile_key([1920, 1080], atmosphere, period);
-            assert!(tile.is_some(), "{style:?} drew no tile");
-            let short = cloud_offset(settings, 2.0);
-            assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32), "{style:?}");
-            // The tile coordinate the shader samples, in periods: a whole
-            // number apart is the same texel.
-            let cells = f64::from(match style {
-                Watercolor => WASH_CELLS / settings.material_settings.wash_size,
-                _ => SCALE_CELLS / settings.material_settings.scale_size,
-            });
-            let uv = |q: [f64; 2]| {
-                let r = q.map(|v| v * cells / f64::from(period));
-                match style {
-                    Watercolor => [0.8 * r[0] + 0.6 * r[1], -0.6 * r[0] + 0.8 * r[1]],
-                    _ => r,
-                }
-            };
-            let off = |a: [f64; 2], b: [f64; 2]| {
-                let (a, b) = (uv(a), uv(b));
-                (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
-                    * f64::from(period)
-            };
-            let exact = cloud_offset(settings, long);
-            let reduced = cloud_drift(settings, exact, tile).map(f64::from);
-            let cast = exact.map(|v| f64::from(v as f32));
-            assert!(off(reduced, exact) < 1e-4, "{style:?}: {} cells off", off(reduced, exact));
-            assert!(off(cast, exact) > 0.01, "{style:?}: the clock is too short to need reducing");
-        }
+        let settings = harmonigraph_scene::SpectralAtmosphere {
+            cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
+            cloud_direction: 37.0,
+            ..Default::default()
+        };
+        let atmosphere = SpectrogramAtmosphere {
+            settings,
+            region: egui::Rect::ZERO,
+            pitch_vertical: true,
+            points_per_cent: 0.03,
+            points_per_ms: 0.01,
+            points_per_slab: 0.0,
+            now: 0.0,
+        };
+        let tile = tile_key([1920, 1080], atmosphere, period);
+        assert!(tile.is_some(), "the wash drew no tile");
+        let short = cloud_offset(settings, 2.0);
+        assert_eq!(cloud_drift(settings, short, tile), short.map(|v| v as f32));
+        // The tile coordinate the shader samples, in periods: a whole number
+        // apart is the same texel.
+        let cells = f64::from(WASH_CELLS / settings.material_settings.wash_size);
+        let uv = |q: [f64; 2]| {
+            let r = q.map(|v| v * cells / f64::from(period));
+            [0.8 * r[0] + 0.6 * r[1], -0.6 * r[0] + 0.8 * r[1]]
+        };
+        let off = |a: [f64; 2], b: [f64; 2]| {
+            let (a, b) = (uv(a), uv(b));
+            (0..2).map(|i| (a[i] - b[i] - (a[i] - b[i]).round()).abs()).fold(0.0, f64::max)
+                * f64::from(period)
+        };
+        let exact = cloud_offset(settings, long);
+        let reduced = cloud_drift(settings, exact, tile).map(f64::from);
+        let cast = exact.map(|v| f64::from(v as f32));
+        assert!(off(reduced, exact) < 1e-4, "{} cells off", off(reduced, exact));
+        assert!(off(cast, exact) > 0.01, "the clock is too short to need reducing");
     }
 
     /// The tile is as fine as the pane draws a cell, in whole [`TILE_STEP`]s —
@@ -2417,7 +2406,6 @@ mod tests {
                 .expect("a constant has a value")
         };
         assert_eq!(CLOUD_UNITS, number("CLOUD_UNITS"));
-        assert_eq!(SCALE_CELLS, number("SCALE_CELLS"));
         assert_eq!(WASH_CELLS, number("WASH_CELLS"));
 
         let at = |cloud_tile, wash_size, height| {
@@ -2470,7 +2458,7 @@ mod tests {
                     // A cloud that reduces at all: the starfield never does.
                     settings: harmonigraph_scene::SpectralAtmosphere {
                         cloud_depth,
-                        cloud_style: harmonigraph_scene::CloudStyle::Mosaic,
+                        cloud_style: harmonigraph_scene::CloudStyle::Watercolor,
                         ..Default::default()
                     },
                     region: egui::Rect::ZERO,

@@ -32,7 +32,7 @@ A completed change is committed, pushed and opened as a **draft** PR with `gh pr
 the handoff says it is open, draft and **not merged**, and nothing merges unless Yan asks.
 A change that touches the picture also owes the build below, and satisfying one of the two is not satisfying both.
 
-**Never run `git worktree lock`.** Every releaser recognizes only the harness's own reason format, so a hand-written lock stands until a human clears it (#369).
+**Never run `git worktree lock`.** Every releaser recognizes only the harness's own reason formats, so a hand-written lock stands until a human clears it (#369).
 
 **The merge audit is Yan's to start, and no session's.** When a batch looks worth `/audit-merges`, say so and stop.
 

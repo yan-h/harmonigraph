@@ -4,8 +4,8 @@
 //! and terraces-only cases), and ends on the final composite. Historical
 //! `end/full`, `begin/full`, light and paint columns used independent stamp
 //! passes and are not comparable to this `source/full` interval (#1203).
-//! Memory is off except in explicitly named memory cases; Mosaic is selected
-//! explicitly because the production default style can change.
+//! Memory is off except in explicitly named memory cases; Watercolor is
+//! selected explicitly because the production default style can change.
 //!
 //! ```sh
 //! cargo test --release -p harmonigraph-render cloud_costs_by_style_and_dial \
@@ -69,10 +69,6 @@ type Turn = fn(&mut SpectralAtmosphere);
 /// costs UNDER the history from what the texture costs at all.
 const FILLS: [f32; 2] = [1.0, 0.02];
 
-fn watercolor(s: &mut SpectralAtmosphere) {
-    s.cloud_style = CloudStyle::Watercolor;
-}
-
 fn memory(s: &mut SpectralAtmosphere) {
     let defaults = SpectralAtmosphere::default();
     s.color_pickup = defaults.color_pickup;
@@ -82,11 +78,12 @@ fn memory(s: &mut SpectralAtmosphere) {
 const CASES: &[(&str, Option<Turn>)] = &[
     ("plain", None),
     ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
-    ("blur + terraces", Some(|s| s.cloud_depth = 0.0)),
+    ("blur + terraces", Some(|s| (s.cloud_depth, s.contour_strength) = (0.0, 1.0))),
     (
         "terraces only",
         Some(|s| {
             (s.pitch_softness, s.time_softness, s.cloud_depth) = (0.0, 0.0, 0.0);
+            s.contour_strength = 1.0;
         }),
     ),
     ("velvet, defaults", Some(|s| s.cloud_style = CloudStyle::VelvetScales)),
@@ -104,19 +101,14 @@ const CASES: &[(&str, Option<Turn>)] = &[
             memory(s);
         }),
     ),
-    ("mosaic, defaults", Some(|_| {})),
-    ("mosaic, no terraces", Some(|s| s.contour_strength = 0.0)),
-    ("mosaic, variety 0", Some(|s| s.material_settings.scale_variety = 0.0)),
-    ("mosaic, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
-    ("watercolor, defaults", Some(watercolor)),
-    ("watercolor, layers 0", Some(|s| (watercolor(s), s.material_settings.wash_layers = 0.0).0)),
-    ("watercolor, lobe 0", Some(|s| (watercolor(s), s.material_settings.wash_lobe = 0.0).0)),
+    ("watercolor, defaults", Some(|_| {})),
+    ("watercolor, terraces", Some(|s| s.contour_strength = 1.0)),
+    ("watercolor, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
+    ("watercolor, layers 0", Some(|s| s.material_settings.wash_layers = 0.0)),
+    ("watercolor, lobe 0", Some(|s| s.material_settings.wash_lobe = 0.0)),
     (
         "watercolor, lobe 0 layers 0",
-        Some(|s| {
-            watercolor(s);
-            (s.material_settings.wash_lobe, s.material_settings.wash_layers) = (0.0, 0.0);
-        }),
+        Some(|s| (s.material_settings.wash_lobe, s.material_settings.wash_layers) = (0.0, 0.0)),
     ),
     (
         "stars, high",
@@ -139,14 +131,7 @@ const CASES: &[(&str, Option<Turn>)] = &[
             s.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Low;
         }),
     ),
-    ("mosaic, memory", Some(memory)),
-    (
-        "watercolor, memory",
-        Some(|s| {
-            watercolor(s);
-            memory(s);
-        }),
-    ),
+    ("watercolor, memory", Some(memory)),
     (
         "stars, medium memory",
         Some(|s| {
@@ -364,7 +349,7 @@ fn cloud_costs_by_style_and_dial() {
             cb.pass_nr = frame as u64;
             cb.atmosphere = turn.map(|turn| {
                 let mut settings = SpectralAtmosphere {
-                    cloud_style: CloudStyle::Mosaic,
+                    cloud_style: CloudStyle::Watercolor,
                     color_pickup: 0.0,
                     color_release: 0.0,
                     ..Default::default()
@@ -462,15 +447,18 @@ fn cloud_costs_by_style_and_dial() {
             median(&case.cpu_prepare),
             source
         );
-        let baseline =
-            if case.name.ends_with("memory") { "mosaic, memory" } else { "mosaic, defaults" };
-        if let Some(mosaic) = cases.iter().find(|c| {
+        let baseline = if case.name.ends_with("memory") {
+            "watercolor, memory"
+        } else {
+            "watercolor, defaults"
+        };
+        if let Some(watercolor) = cases.iter().find(|c| {
             c.name == baseline && c.fill == case.fill && c.history_seconds == case.history_seconds
         }) {
-            let mosaic_ms = median(&mosaic.gpu_total);
+            let watercolor_ms = median(&watercolor.gpu_total);
             eprintln!(
-                "  {:.3}x Mosaic ({mosaic_ms:.3} ms, {baseline})",
-                median(&case.gpu_total) / mosaic_ms
+                "  {:.3}x Watercolor ({watercolor_ms:.3} ms, {baseline})",
+                median(&case.gpu_total) / watercolor_ms
             );
         }
     }

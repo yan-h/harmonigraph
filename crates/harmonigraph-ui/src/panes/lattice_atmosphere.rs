@@ -50,13 +50,8 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             (LatticeMaterial::None, "None", "Keep the textured light as it is; preserves material settings"),
             (LatticeMaterial::Watercolor, "Watercolor", "Overlapping washes of the textured note light"),
             (LatticeMaterial::VelvetScales, "Scales", "Soft overlapping scallops carrying the note light"),
-            (LatticeMaterial::Mosaic, "Mosaic", "Soft-edged facets of the textured note light"),
             (LatticeMaterial::Stars, "Stars", "Drifting stars colored by the note light"),
         ]);
-        if settings.material_style == LatticeMaterial::Stars {
-            super::material::stars_quality(ui, &mut settings.stars);
-            super::material::stars_test_bed(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
-        }
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
@@ -66,18 +61,32 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by the material. Follows each segment’s activation and Bloom brightness. Spreads by distance around the segment, including its ends. 0% disables colored pickup.");
             ValueBar::new(&mut settings.pigment_reach, 0.0..=PIGMENT_REACH_MAX, "Pigment reach")
                 .percent().show(ui).on_hover_text("Distance pigment reaches from each ring segment, as a percentage of the node radius. Grows the source band and its soft feather together. 0% disables dark and colored pickup; actual shadows are unchanged.");
+            // Stars put their look first: size and spacing matter more than
+            // how they drift, and the rendering profile comes last.
+            let stars = settings.material_style == LatticeMaterial::Stars;
+            if stars {
+                super::block(ui, "Appearance");
+                super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
+            }
             super::block(ui, "Motion");
-            if settings.material_style == LatticeMaterial::Stars {
+            if stars {
                 super::material::stars_motion(ui, &mut settings.stars);
             }
-            let speed = (settings.material_style != LatticeMaterial::Stars).then_some(&mut settings.material_speed);
+            let speed = (!stars).then_some(&mut settings.material_speed);
             crate::widgets::drift(ui, &mut settings.material_direction, speed);
-            super::block(ui, "Appearance");
             match settings.material_style {
-                LatticeMaterial::Watercolor => super::material::watercolor(ui, &mut settings.material_settings),
-                LatticeMaterial::VelvetScales => super::material::velvet(ui, &mut settings.material_settings),
-                LatticeMaterial::Mosaic => super::material::mosaic(ui, &mut settings.material_settings),
-                LatticeMaterial::Stars => super::material::stars(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                LatticeMaterial::Watercolor => {
+                    super::block(ui, "Appearance");
+                    super::material::watercolor(ui, &mut settings.material_settings);
+                }
+                LatticeMaterial::VelvetScales => {
+                    super::block(ui, "Appearance");
+                    super::material::velvet(ui, &mut settings.material_settings);
+                }
+                LatticeMaterial::Stars => {
+                    super::block(ui, "Rendering");
+                    super::material::stars_quality(ui, &mut settings.stars);
+                }
                 LatticeMaterial::None => {},
             }
         }

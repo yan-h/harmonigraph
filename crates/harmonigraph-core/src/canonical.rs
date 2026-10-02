@@ -219,6 +219,67 @@ impl VoiceBaseline {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidCanonical;
 
+/// Ordering and deduplication for one non-RT publication stream. Callers
+/// validate payloads first. These counters own no musical state and authorize
+/// no journal reclamation; gaps, resets and file boundaries do not clear them.
+#[derive(Default)]
+pub struct CanonicalOrder {
+    sources: std::collections::BTreeMap<SourceId, CanonicalCursor>,
+}
+
+#[derive(Default)]
+struct CanonicalCursor {
+    output: u64,
+    baseline: u64,
+    state_cut: u64,
+}
+
+impl CanonicalOrder {
+    /// False identifies an already consumed delta. Unsequenced observations
+    /// neither advance ordering nor establish membership in this stream.
+    pub fn note(&mut self, source: SourceId, sequence: u64) -> Result<bool, InvalidCanonical> {
+        if sequence == 0 {
+            return Ok(true);
+        }
+        let cursor = self.sources.entry(source).or_default();
+        if sequence <= cursor.output {
+            return Ok(false);
+        }
+        // Available history must precede its baseline. A baseline is not
+        // permission to silently discard history we have never consumed.
+        if sequence <= cursor.state_cut {
+            return Err(InvalidCanonical);
+        }
+        cursor.output = sequence;
+        Ok(true)
+    }
+
+    /// False identifies an already consumed baseline. Its cut records state
+    /// coverage, not consumed output, and may retreat as long as it still
+    /// covers all output this consumer has seen.
+    pub fn baseline(
+        &mut self,
+        source: SourceId,
+        id: u64,
+        output_cut: u64,
+    ) -> Result<bool, InvalidCanonical> {
+        let cursor = self.sources.entry(source).or_default();
+        if id <= cursor.baseline {
+            return Ok(false);
+        }
+        if cursor.output > output_cut {
+            return Err(InvalidCanonical);
+        }
+        cursor.baseline = id;
+        cursor.state_cut = output_cut;
+        Ok(true)
+    }
+
+    pub(crate) fn sources(&self) -> impl Iterator<Item = SourceId> + '_ {
+        self.sources.keys().copied()
+    }
+}
+
 /// One complete immutable source frame. A transport carries a handle to this
 /// separately allocated payload; it must not inline 64 voices in ordinary cells.
 ///
@@ -377,6 +438,28 @@ mod tests {
     use super::*;
     use crate::NoteTracker;
 
+    #[test]
+    fn ordering_distinguishes_duplicates_from_history_missing_before_a_cut() {
+        let mut order = CanonicalOrder::default();
+        let source = SourceId(1);
+        assert_eq!(order.note(SourceId(3), 0), Ok(true));
+        assert_eq!(order.sources().count(), 0);
+        assert_eq!(order.note(source, 5), Ok(true));
+        assert_eq!(order.baseline(source, 1, 8), Ok(true));
+        assert_eq!(order.note(source, 5), Ok(false));
+        assert_eq!(order.note(source, 6), Err(InvalidCanonical));
+        assert_eq!(order.baseline(source, 1, 0), Ok(false));
+        assert_eq!(order.baseline(source, 2, 4), Err(InvalidCanonical));
+        // A newer baseline can retreat to a cut that still covers consumed
+        // output. The rejected baseline above must not consume its ID.
+        assert_eq!(order.baseline(source, 2, 6), Ok(true));
+        assert_eq!(order.note(source, 7), Ok(true));
+        assert_eq!(order.note(SourceId(2), 1), Ok(true));
+        assert_eq!(order.baseline(SourceId(2), 1, 4), Ok(true));
+        assert_eq!(order.note(SourceId(2), 2), Err(InvalidCanonical));
+        assert_eq!(order.sources().collect::<Vec<_>>(), [source, SourceId(2)]);
+    }
+
     fn voice(note: u8) -> VoiceBaseline {
         VoiceBaseline {
             note,
@@ -447,6 +530,37 @@ mod tests {
             }),
             pitch_microcents: None,
         }
+    }
+
+    #[test]
+    fn a_recovered_release_keeps_history_ordered_for_activity_and_trimming() {
+        let source = SourceId(1);
+        let mut tracker = NoteTracker::new();
+        tracker
+            .handle_canonical(CanonicalEvent::Note(delta(
+                NoteEvent::on(0.0, source, 0, 60, 0.8),
+                1,
+            )))
+            .unwrap();
+        tracker
+            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
+                source: Some(source),
+                time: 1.0,
+                through: 1.0,
+                first: 2,
+                last: 2,
+                reason: GapReason::PublicationFull,
+            }))
+            .unwrap();
+        tracker.handle_event(NoteEvent::on(1.5, SourceId::DIRECT, 0, 64, 0.8));
+        tracker.handle_event(NoteEvent::off(2.0, SourceId::DIRECT, 0, 64));
+        tracker
+            .handle_canonical(CanonicalEvent::Note(delta(NoteEvent::off(3.0, source, 0, 60), 3)))
+            .unwrap();
+        assert_eq!(tracker.roll().latest_activity(4.0), Some(3.0));
+        tracker.prune(crate::NoteRoll::MAX_AGE + 2.5, &crate::Envelope::default());
+        let notes: Vec<_> = tracker.roll().notes().map(|note| note.note).collect();
+        assert_eq!(notes, [60], "the expired neighbor is not hidden behind the recovered off");
     }
 
     #[test]

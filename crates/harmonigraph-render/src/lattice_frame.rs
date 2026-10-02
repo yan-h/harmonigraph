@@ -38,27 +38,15 @@ impl LatticeCallback {
         // Reduce the decorative clock in f64 before uploading bounded phases.
         let texture_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
-        let watercolor =
-            atmosphere.material_style == harmonigraph_scene::LatticeMaterial::Watercolor;
         let velvet = atmosphere.material_style == harmonigraph_scene::LatticeMaterial::VelvetScales;
-        let material_scale = if velvet {
-            atmosphere.material_settings.velvet_size
-        } else if watercolor {
-            atmosphere.material_settings.wash_size
-        } else {
-            atmosphere.material_settings.scale_size
-        };
-        let cells = if velvet {
-            405.0 / 240.0
-        } else if watercolor {
-            5.25
-        } else {
-            6.0 / 2.2
-        };
+        let (material_scale, cells) = lattice_material::size_and_cells(
+            atmosphere.material_style,
+            &atmosphere.material_settings,
+        );
         // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling
         // its 40-cell tile. A screen-axis wrap must span five tile periods
         // so that the rotated jump is still a whole-number tile repeat.
-        let drift_period = if watercolor { 200.0 } else { 40.0 };
+        let drift_period = 200.0;
         let offsets = harmonigraph_scene::MaterialSettings::drift(
             atmosphere.material_speed,
             atmosphere.material_direction,
@@ -436,8 +424,14 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
-            material_stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
-            material_direction: atmosphere.material_direction,
+            material: lattice_material::Material {
+                style: atmosphere.material_style,
+                amount: atmosphere.material_amount,
+                drift: material_drift,
+                settings: atmosphere.material_settings,
+                stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                direction: atmosphere.material_direction,
+            },
             glow_blend: scene.glow_blend,
             glyphs,
             casters,
@@ -457,6 +451,9 @@ impl LatticeCallback {
                     render_scale,
                     bloom_strength: bloom_strength(scene.bloom_strength),
                     background: Float4(scene.background.to_array()),
+                    edge_softness_pixels: scene.edge_softness_points,
+                    padding: 0.0,
+                    padding2: Float2::default(),
                 },
                 camera: CameraParams {
                     view_proj: Matrix4(view_proj.to_cols_array_2d().map(Float4)),
@@ -524,31 +521,6 @@ impl LatticeCallback {
                     ]),
                     target_size: Float2([1.0; 2]),
                     padding: Float2([0.0; 2]),
-                },
-                material: MaterialParams {
-                    amount: atmosphere.material_amount,
-                    scale: material_scale,
-                    drift: Float2(material_drift),
-                    style: atmosphere.material_style as u32,
-                    fuzz: atmosphere.material_settings.wash_fuzz,
-                    lobe: atmosphere.material_settings.wash_lobe,
-                    variety: atmosphere.material_settings.scale_variety,
-                    refract: if atmosphere.material_style
-                        == harmonigraph_scene::LatticeMaterial::Watercolor
-                    {
-                        atmosphere.material_settings.wash_refract
-                    } else {
-                        atmosphere.material_settings.scale_refract
-                    },
-                    layers: atmosphere.material_settings.wash_layers,
-                    randomness: atmosphere.material_settings.wash_randomness,
-                    velvet: Float4([
-                        atmosphere.material_settings.velvet_edge,
-                        atmosphere.material_settings.velvet_irregularity,
-                        atmosphere.material_settings.velvet_shape,
-                        atmosphere.material_settings.velvet_variety,
-                    ]),
-                    padding: 0.0,
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },

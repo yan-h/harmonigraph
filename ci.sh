@@ -90,6 +90,9 @@ run python3 -B .claude/tests/semantic-breaks.py
 run python3 -B .claude/markdown-links.py
 run python3 -B .claude/tests/markdown-links.py
 
+# Real compressed state sections must retain distinct instances and JSON strings.
+run python3 -B .claude/tests/read-plugin-state.py
+
 # The adaptive-tuning browser retired, but its Node model remains the musical
 # reference that generates the fixtures consumed by harmonigraph-core. Its
 # focused suite uses only Node's built-ins and costs under a second.

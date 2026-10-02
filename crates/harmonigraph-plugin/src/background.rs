@@ -154,9 +154,8 @@ impl BackgroundAnalyzer {
 
 impl Drop for BackgroundAnalyzer {
     /// Stops the thread and waits for it, so the plugin never outlives its own
-    /// worker. The wait is up to one [`POLL`] — the flag is read at the top of
-    /// each round, and a round is a drain plus, on the rounds a host has just
-    /// written state, one RON parse.
+    /// worker. Joining can wait for the current bounded drain and restore,
+    /// one [`POLL`] sleep, and the final drain in [`run`].
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
@@ -238,6 +237,12 @@ impl Restore {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Pause an admitted closed-window tick before it obtains shared state.
+    static TICK_PAUSE: std::cell::RefCell<Option<Arc<std::sync::Barrier>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// One round: adopt whatever the host has restored, then drain the rings —
 /// both of them only while no frame is doing either.
 ///
@@ -249,7 +254,7 @@ impl Restore {
 /// restore or window close, so re-applying it under an open window would revert
 /// whatever has been changed since. See [`Restore::adopt`].
 ///
-/// **Both checks exist to keep this thread off a lock a frame is holding.**
+/// **The early window check and try_lock avoid waiting on a frame.**
 /// `frame` takes the `EditorShared` mutex for its whole run, on an argument
 /// spelled out there as "uncontended by design" — and issue #296's leading
 /// hypothesis for a close-time host hang is that this argument is an assumption
@@ -281,9 +286,19 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
     if editor_state.is_open() {
         return;
     }
+    #[cfg(test)]
+    if let Some(gate) = TICK_PAUSE.with_borrow_mut(Option::take) {
+        gate.wait();
+        gate.wait();
+    }
     let Some(mut shared) = shared.try_lock() else {
         return;
     };
+    // Opening may have completed after the first check. Live edits use this
+    // same lock, so an admitted old tick must check again before restoring.
+    if editor_state.is_open() {
+        return;
+    }
     let shared = &mut *shared;
     // BEFORE the drain: the settings decide how the samples about to be taken
     // are analyzed, so a round that adopted them afterwards would still leave
@@ -303,8 +318,8 @@ fn tick(shared: &Mutex<EditorShared>, editor_state: &EguiState, restore: &mut Re
 
 /// Drain, sleep, repeat, until the plugin goes away.
 ///
-/// The flag is read once per round and a round is bounded work, which is what
-/// bounds the join in [`BackgroundAnalyzer::drop`] to a single [`POLL`].
+/// The stop flag is read once per round. Joining waits for any current tick
+/// and sleep, followed by the final drain below.
 ///
 /// The [`Restore`] mirror lives here, for the length of the thread: it is what
 /// the host has already been answered about, and a fresh one every round would
@@ -738,6 +753,40 @@ mod tests {
             "the saved blob was re-applied under an open window, reverting the setting the \
              user is holding the window open to change",
         );
+    }
+
+    #[test]
+    fn a_tick_admitted_before_opening_cannot_overwrite_a_live_edit() {
+        use harmonigraph_ui::SpectrumWindow;
+        use std::sync::Barrier;
+
+        let mut h = harness();
+        let blob = blob_with_window(SpectrumWindow::Precise);
+        h.restore(&blob);
+        let gate = Arc::new(Barrier::new(2));
+        let shared = h.shared.clone();
+        let editor_state = h.editor_state.clone();
+        let ui_state = h.ui_state.clone();
+        std::thread::scope(|scope| {
+            let worker_gate = gate.clone();
+            let worker = scope.spawn(move || {
+                TICK_PAUSE.with_borrow_mut(|pause| *pause = Some(worker_gate));
+                // This worker has not adopted the blob yet.
+                let mut restore = Restore::of(ui_state);
+                tick(&shared, &editor_state, &mut restore);
+            });
+            gate.wait();
+            {
+                let mut shared = h.shared.lock();
+                shared.ui.load_persist(&blob);
+                h.editor_state.set_open(true);
+                shared.ui.picture.appearance.spectrum.window = SpectrumWindow::Fast;
+            }
+            gate.wait();
+            worker.join().unwrap();
+        });
+        assert!(h.editor_state.is_open());
+        assert_eq!(h.configured_window(), SpectrumWindow::Fast);
     }
 
     /// A host writes that field more than once — a preset change or an undo

@@ -1,7 +1,5 @@
 //! Shared material controls; each pane supplies its own saved settings.
 use crate::widgets::ValueBar;
-use harmonigraph_scene::{SCALE_REFRACT_MAX, SCALE_REFRACT_MIN};
-use std::ops::RangeInclusive;
 
 fn cloud_size_range() -> std::ops::RangeInclusive<f32> {
     harmonigraph_scene::CLOUD_SIZE_MIN..=harmonigraph_scene::CLOUD_SIZE_MAX
@@ -71,32 +69,6 @@ pub(super) fn edge_pooling(
         );
 }
 
-pub(super) fn mosaic(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::MaterialSettings) {
-    ValueBar::new(&mut atmosphere.scale_size, cloud_size_range(), "Cell size")
-                        .eased(true)
-                        .unit(1.0, "\u{d7}")
-                        .show(ui)
-                        .on_hover_text(
-                            "Size of each mosaic cell relative to the pane. 1× is the reference size; larger values make broader cells. Refraction is a fraction of each cell's width, so larger cells also displace the picture farther.",
-                        );
-    ValueBar::new(&mut atmosphere.scale_variety, 0.0..=1.0, "Size variation")
-                        .percent()
-                        .show(ui)
-                        .on_hover_text(
-                            "Variation in mosaic cell size. 0% makes an even grid; 100% mixes small and large cells, with the largest about four times the smallest. The cells continue to cover the whole picture.",
-                        );
-    ValueBar::new(
-                        &mut atmosphere.scale_refract,
-                        SCALE_REFRACT_MIN..=SCALE_REFRACT_MAX,
-                        "Refraction",
-                    )
-                    .unit(100.0, "%")
-                    .show(ui)
-                    .on_hover_text(
-                        "Displacement of the picture within each mosaic cell, as a percentage of cell width. Positive values bend bands outward; negative values pull toward the center. -100% gives each cell one level; 0% leaves the picture unchanged.",
-                    );
-}
-
 /// The starfield: pinpoints in depth drifting with parallax, and the one texture
 /// that is light rather than a displaced reading of it.
 ///
@@ -112,28 +84,47 @@ pub(super) fn stars(
 ) {
     use crate::widgets::Depth;
     use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_FALLOFF_MAX,
-        STAR_FALLOFF_MIN, STAR_GLOW_MAX, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
+        STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
         STAR_SPACING_MIN,
     };
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_size_min,
-        &mut atmosphere.star_size_max,
+        &mut atmosphere.star_size_far,
+        &mut atmosphere.star_size_near,
         &mut atmosphere.star_size_curve,
         STAR_SIZE_MIN..=STAR_SIZE_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Size(size_scale),
     );
-    held_to_fit(ui, *atmosphere, size_scale);
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_spacing_far,
-        &mut atmosphere.star_spacing_near,
-        &mut atmosphere.star_spacing_curve,
+        &mut atmosphere.star_spacing_ratio_far,
+        &mut atmosphere.star_spacing_ratio_near,
+        &mut atmosphere.star_spacing_ratio_curve,
         STAR_SPACING_MIN..=STAR_SPACING_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
-        Depth::Spacing(size_scale),
+        Depth::Spacing,
+    );
+    let mut layers = atmosphere.star_layers as f32;
+    let top = harmonigraph_scene::star_plan::STAR_DEPTHS as f32;
+    ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
+        );
+    // Solo is held per depth, and a new layer count puts other depths under
+    // the numbers, so a solo left on would come back on a different layer.
+    if layers as u32 != atmosphere.star_layers {
+        atmosphere.star_solo = Default::default();
+    }
+    atmosphere.star_layers = layers as u32;
+    star_solo(ui, atmosphere);
+    crate::widgets::star_profile(
+        ui,
+        &mut atmosphere.star_solid_far,
+        &mut atmosphere.star_solid_near,
+        &mut atmosphere.star_glow_falloff,
     );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
@@ -151,61 +142,30 @@ pub(super) fn stars(
         .percent()
         .show(ui)
         .on_hover_text(
-            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. More variation leaves less room for big stars, so a depth may be drawn smaller to fit. Brightness and size have their own bars, Brightness variation and Size variation.",
-        );
-    ValueBar::new(&mut atmosphere.star_far_fill, 0.0..=1.0, "Distant gap fill")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Fills thin background gaps between distant stars using their own colors. 0% keeps the original coverage, 50% fills gently, and 100% fills more strongly. Completely empty gaps remain empty.",
-        );
-    ValueBar::new(&mut atmosphere.star_overlap_light, 0.0..=1.0, "Overlap light")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "How overlapping stars at the same depth combine where together they cover the background completely. 0% averages their colors, so a cluster is no brighter than its average star; 100% adds their light, so a cluster grows brighter and paler as its colors fill. Stars that do not fully cover the background already add their light either way.",
-        );
-    ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "A soft glow around every star's core in the star's own color, fading out at the star's edge. This is its strength at the center; 0% draws bare cores, 100% a glow as bright as the core.",
-        );
-    for (core, label, end) in [
-        (&mut atmosphere.star_core_far, "Core, far", "farthest"),
-        (&mut atmosphere.star_core_near, "Core, near", "nearest"),
-    ] {
-        ValueBar::new(core, STAR_CORE_MIN..=STAR_CORE_MAX, label).percent().show(ui).on_hover_text(
-            format!("How much of each of the {end} depth's stars is its bright core, as a share of the star's radius; the glow fills the rest. Depths between follow the Star size curve. Low values draw pinpoints in a wide glow; 100% spreads the core to the star's edge, a dense bed of soft stars."),
-        );
-    }
-    ValueBar::new(&mut atmosphere.star_falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff")
-        .show(ui)
-        .on_hover_text(
-            "How quickly the glow fades toward the star's edge. Low values spread it as a broad haze reaching the edge; high values draw it in as a tight bloom around the core.",
+            "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. Brightness and size have their own bars, Brightness variation and Size variation.",
         );
 }
 
-/// A muted line under `Star size` while any depth's stars are drawn smaller
-/// than the dials ask, to fit the widest read their spacing allows. It reads
-/// the plan the pane draws, at its `size_scale`, without the dev test bed.
-fn held_to_fit(ui: &mut egui::Ui, stars: harmonigraph_scene::StarSettings, size_scale: f32) {
-    let plan =
-        harmonigraph_scene::StarSettings { test_bed: None, ..stars.scaled(size_scale) }.plan();
-    let held: Vec<_> =
-        plan.depths.iter().enumerate().filter(|(_, depth)| depth.clamped()).collect();
-    let Some(widest) = held.iter().map(|(_, depth)| 2.0 * depth.radius).reduce(f32::max) else {
-        return;
-    };
-    let names = held.iter().map(|(k, _)| (k + 1).to_string()).collect::<Vec<_>>().join(", ");
-    let (depths, their) = if held.len() == 1 { ("Depth", "its") } else { ("Depths", "their") };
-    crate::widgets::weak(
-        ui,
-        format!("{depths} {names} drawn smaller to fit {their} spacing, at most {widest:.1} px."),
-    );
+/// One toggle per drawn layer, numbered far to near as `Star layers` counts
+/// them. While any is on, only the soloed layers are drawn.
+fn star_solo(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
+    let layers = harmonigraph_scene::star_plan::star_layer_depths(stars.star_layers);
+    ui.horizontal_wrapped(|ui| {
+        crate::widgets::label(ui, "Solo");
+        ui.spacing_mut().item_spacing.x = crate::theme::button_gap(crate::theme::ui_scale(ui.ctx()));
+        let drawn = (0..layers.len()).filter(|&k| layers[k].is_some());
+        for (n, k) in drawn.enumerate() {
+            let name = (n + 1).to_string();
+            ui.toggle_value(&mut stars.star_solo[k], crate::widgets::option_label(&name))
+                .on_hover_text(format!(
+                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is the farthest). Not saved: every project opens with all layers drawn."
+                ));
+        }
+    });
 }
 
-/// Always visible near the material choice, before motion and appearance controls.
+/// The rendering profile, last among the Stars controls: a quality and cost
+/// choice made once, where the rest shape the look.
 pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::StarHaloProfile;
     crate::widgets::choice_row(
@@ -233,217 +193,6 @@ pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::S
     }
 }
 
-/// Dev only: overrides on the [`StarPlan`](harmonigraph_scene::star_plan::StarPlan)
-/// the settings give, per depth and per image, to measure what each choice
-/// costs and looks like. Every row shows what the renderer draws, at the
-/// pane's `size_scale`, and an edit there becomes an override. Nothing here is
-/// saved; every load starts at production.
-pub(super) fn stars_test_bed(
-    ui: &mut egui::Ui,
-    stars: &mut harmonigraph_scene::StarSettings,
-    size_scale: f32,
-) {
-    use crate::widgets::choice_row;
-    use harmonigraph_scene::star_plan::{
-        StarGather, StarTestBed, STAR_DEPTHS, STAR_FAR_DEPTHS, STAR_GAIN_MAX,
-        STAR_IMAGE_RESOLUTION_MAX, STAR_IMAGE_RESOLUTION_MIN, STAR_PLAN_SCALE_MAX,
-        STAR_PLAN_SCALE_MIN,
-    };
-    use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_FALLOFF_MAX, STAR_FALLOFF_MIN, STAR_GLOW_MAX,
-    };
-    let window = |gather: StarGather| match gather {
-        StarGather::Off => "Off",
-        StarGather::Core => "1×1",
-        StarGather::Two => "2×2",
-        StarGather::Three => "3×3",
-    };
-    super::subsection(ui, "Star test bed (dev, not saved)", |ui| {
-        let mut on = stars.test_bed.is_some();
-        if crate::widgets::checkbox(ui, &mut on, "Draw from the test bed")
-            .on_hover_text(
-                "Apply the overrides below on top of what the settings draw. Every row shows the value drawn now; editing one overrides it. Not saved; every load starts at production.",
-            )
-            .changed()
-        {
-            stars.test_bed = on.then(StarTestBed::default);
-        }
-        // What the renderer draws, the bed included, in the pane's star pixels.
-        let plan = stars.scaled(size_scale).plan();
-        let Some(bed) = stars.test_bed.as_mut() else {
-            return;
-        };
-        if ui
-            .button("Reset all")
-            .on_hover_text("Follow the settings again on every row below.")
-            .clicked()
-        {
-            *bed = StarTestBed::default();
-        }
-        let image = STAR_IMAGE_RESOLUTION_MIN..=STAR_IMAGE_RESOLUTION_MAX;
-        override_bar(ui, &mut bed.far, plan.far, image.clone(), "Far image", Unit::Percent).on_hover_text(
-            "The far three depths are drawn into one image at this resolution and filtered up. 100% draws them at the pane's own resolution.",
-        );
-        override_bar(ui, &mut bed.near, plan.near, image.clone(), "Near image", Unit::Percent).on_hover_text(
-            "The near two depths are drawn over the far image at this resolution. 100% draws them straight into the pane, as does any value while Far image is at 100%.",
-        );
-        for ((tier, live), name) in
-            bed.halo_tiers.iter_mut().zip(plan.halo_tiers).zip(["Halo A", "Halo B", "Halo C"])
-        {
-            override_bar(ui, tier, live, image.clone(), name, Unit::Percent).on_hover_text(
-                "Resolution of the halo image for every 3×3 depth that picks this tier.",
-            );
-        }
-        let any_solo = bed.depths.iter().any(|depth| depth.solo);
-        for (k, (depth, drawn)) in bed.depths.iter_mut().zip(plan.depths).enumerate() {
-            let image = if k < STAR_FAR_DEPTHS { "far image" } else { "near image" };
-            let end = match k {
-                0 => " · farthest",
-                k if k == STAR_DEPTHS - 1 => " · nearest",
-                _ => "",
-            };
-            let silenced = if any_solo && !depth.solo { " · silenced by solo" } else { "" };
-            super::block(ui, &format!("Depth {} · {image}{end}{silenced}", k + 1));
-            ui.push_id(k, |ui| {
-                crate::widgets::checkbox(ui, &mut depth.solo, "Solo").on_hover_text(
-                    "Draw only the soloed depths. The others count as Off, cost included, until no depth is soloed.",
-                );
-                choice_row(ui, "Gather", &mut depth.gather, &[
-                    (None, "Auto", "The cheapest read that holds the stars whole, or 3×3 with the stars drawn smaller to fit."),
-                    (Some(StarGather::Off), "Off", "Not drawn or baked."),
-                    (Some(StarGather::Core), "1×1", "The whole star from its own cell, held inside it."),
-                    (Some(StarGather::Two), "2×2", "The whole star, glow included, from the four surrounding cells."),
-                    (Some(StarGather::Three), "3×3", "The star's part inside its own cell, plus a halo image gathered from nine cells."),
-                ]);
-                ui.add_enabled_ui(drawn.gather != StarGather::Off, |ui| {
-                    let read = match depth.gather {
-                        None => format!("Auto → {}", window(drawn.gather)),
-                        Some(gather) => window(gather).to_owned(),
-                    };
-                    let held = if drawn.clamped() {
-                        format!(" (asked {:.1}, held to fit {})", drawn.wanted, window(drawn.gather))
-                    } else {
-                        String::new()
-                    };
-                    crate::widgets::weak(ui, format!("{read} · radius {:.1} px{held}", drawn.radius));
-                    let scale = STAR_PLAN_SCALE_MIN..=STAR_PLAN_SCALE_MAX;
-                    let times = Unit::Times;
-                    multiplier_bar(ui, &mut depth.scale, scale.clone(), "Scale", times).on_hover_text(
-                        "Zooms this depth: its cells and its stars grow together, so it keeps its look with fewer, larger stars. Smaller means more stars and more cost.",
-                    );
-                    multiplier_bar(ui, &mut depth.size, scale, "Size", times).on_hover_text(
-                        "Star size relative to the scale. Auto picks a wider read for bigger stars; past 3×3, or the gather picked here, they are drawn smaller to fit.",
-                    );
-                    multiplier_bar(ui, &mut depth.gain, 0.0..=STAR_GAIN_MAX, "Opacity", times)
-                        .on_hover_text("Multiplies every star's coverage at this depth.");
-                    override_bar(ui, &mut depth.jitter, drawn.jitter, 0.0..=1.0, "Position variation", Unit::Percent)
-                        .on_hover_text("Position variation for this depth alone. More variation leaves less room in each read, so stars may be drawn smaller or need a wider read.");
-                    override_bar(ui, &mut depth.core, drawn.core, STAR_CORE_MIN..=STAR_CORE_MAX, "Core", Unit::Percent)
-                        .on_hover_text("Core for this depth alone: the share of the star's radius that is its bright core.");
-                    override_bar(ui, &mut depth.glow, drawn.glow, 0.0..=STAR_GLOW_MAX, "Glow", Unit::Percent)
-                        .on_hover_text("Glow for this depth alone: its strength at the star's center.");
-                    override_bar(ui, &mut depth.falloff, drawn.falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff", Unit::Plain)
-                        .on_hover_text("Glow falloff for this depth alone: low spreads the glow as a broad haze, high draws it in as a tight bloom.");
-                    ui.add_enabled_ui(drawn.gather == StarGather::Three, |ui| {
-                        follow_row(ui, &mut depth.tier, None, |ui| {
-                            let mut tier = drawn.tier;
-                            choice_row(ui, "Halo", &mut tier, &[
-                                (0, "A", "Drawn at Halo A's resolution."),
-                                (1, "B", "Drawn at Halo B's resolution."),
-                                (2, "C", "Drawn at Halo C's resolution."),
-                            ]);
-                            ((tier != drawn.tier).then_some(Some(tier)), ())
-                        });
-                    });
-                });
-            });
-        }
-    });
-}
-
-/// How a test bed bar reads out.
-#[derive(Clone, Copy)]
-enum Unit {
-    Percent,
-    Times,
-    Plain,
-}
-
-/// One test bed row with a follow control ahead of it: `row` draws the row
-/// and returns the value to set, if it was edited, and ↺, shown while `value`
-/// is not `follow`, puts it back. The control keeps its place while hidden, so
-/// a bar does not shift under the pointer as an edit starts.
-fn follow_row<T: PartialEq, R>(
-    ui: &mut egui::Ui,
-    value: &mut T,
-    follow: T,
-    row: impl FnOnce(&mut egui::Ui) -> (Option<T>, R),
-) -> R {
-    ui.horizontal(|ui| {
-        let side = crate::theme::row_height(crate::theme::ui_scale(ui.ctx()));
-        let reset = egui::Button::new("\u{21ba}").min_size(egui::Vec2::splat(side));
-        let followed = ui
-            .add_visible(*value != follow, reset)
-            .on_hover_text("Follow the settings again")
-            .clicked();
-        let (edited, out) = row(ui);
-        if let Some(edited) = edited {
-            *value = edited;
-        }
-        if followed {
-            *value = follow;
-        }
-        out
-    })
-    .inner
-}
-
-fn unit_bar<'a>(
-    value: &'a mut f32,
-    range: RangeInclusive<f32>,
-    label: &'a str,
-    unit: Unit,
-) -> ValueBar<'a> {
-    let bar = ValueBar::new(value, range, label);
-    match unit {
-        Unit::Percent => bar.percent(),
-        Unit::Times => bar.unit(1.0, "\u{d7}"),
-        Unit::Plain => bar,
-    }
-}
-
-/// A bar over an override that follows the settings while `None`: it shows
-/// `live`, what the renderer draws, and an edit sets the override.
-fn override_bar(
-    ui: &mut egui::Ui,
-    over: &mut Option<f32>,
-    live: f32,
-    range: RangeInclusive<f32>,
-    label: &str,
-    unit: Unit,
-) -> egui::Response {
-    follow_row(ui, over, None, |ui| {
-        let mut value = live;
-        let response = unit_bar(&mut value, range, label, unit).show(ui);
-        (response.changed().then_some(Some(value)), response)
-    })
-}
-
-/// A bar over a multiplier that follows the settings at 1.
-fn multiplier_bar(
-    ui: &mut egui::Ui,
-    times: &mut f32,
-    range: RangeInclusive<f32>,
-    label: &str,
-    unit: Unit,
-) -> egui::Response {
-    let mut value = *times;
-    follow_row(ui, times, 1.0, |ui| {
-        let response = unit_bar(&mut value, range, label, unit).show(ui);
-        (response.changed().then_some(value), response)
-    })
-}
-
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::{
         STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
@@ -451,8 +200,8 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
     };
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_speed_min,
-        &mut atmosphere.star_speed_max,
+        &mut atmosphere.star_speed_far,
+        &mut atmosphere.star_speed_near,
         &mut atmosphere.star_speed_curve,
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
@@ -467,8 +216,16 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
     .unit(1.0, " s")
     .show(ui)
     .on_hover_text(
-        "How long each star lives before a new one takes its place, fading in and out, alike at every depth.",
+        "How long each star lives before a new one takes its place, alike at every depth. Twinkle says how it gives way.",
     );
+    for (value, name, end) in [
+        (&mut atmosphere.star_twinkle_far, "Far twinkle", "farthest"),
+        (&mut atmosphere.star_twinkle_near, "Near twinkle", "nearest"),
+    ] {
+        ValueBar::new(value, 0.0..=1.0, name).percent().show(ui).on_hover_text(format!(
+            "How far the {end} layer's stars fade out when their lifetime ends; the layers between take evenly spaced values. At 100% each star fades to nothing and a new one appears somewhere else nearby. Below 100% each star stays in its place, dims only this far and changes into its next life's brightness and size. At 0% it never dims, so a layer packed tight enough to cover the sky never shows a gap."
+        ));
+    }
 }
 
 /// The S1 body-light material; every body contributes its own sampled light.
@@ -493,4 +250,11 @@ pub(super) fn velvet(ui: &mut egui::Ui, s: &mut harmonigraph_scene::MaterialSett
         .percent()
         .show(ui)
         .on_hover_text("Round bodies at 0%; tapered overlapping scallops at 100%.");
+    ValueBar::new(&mut s.velvet_square, 0.0..=1.0, "Squareness")
+        .percent()
+        .show(ui)
+        .on_hover_text("Round scales at 0%; squares at 100%. For a tiled grid, also set Tilt, Irregularity and Scale shape to 0%.");
+    ValueBar::new(&mut s.velvet_tilt, 0.0..=1.0, "Tilt").percent().show(ui).on_hover_text(
+        "How far each scale turns off the pane's axes. 0% lines every scale up with the grid.",
+    );
 }

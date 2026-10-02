@@ -34,7 +34,7 @@ mod spectrum;
 mod state;
 pub use runtime::VisualRuntime;
 
-pub use layout::{Layout, Placement, PRESETS};
+pub use layout::{Layout, Placement};
 
 // `config`, `spectrum` and `state` are an arrangement of this file's insides,
 // not a change to what the crate exports: everything that was `pub` here is
@@ -70,7 +70,8 @@ pub use harmonigraph_take::{
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
 pub use state::{
-    CameraPreset, Console, Interaction, PictureState, SharedState, SurfaceState, TakeState,
+    CameraPreset, Console, ExportAction, Interaction, PictureState, SharedState, SurfaceState,
+    TakeState,
 };
 pub use text::use_renderer_font_texture;
 
@@ -269,30 +270,21 @@ pub fn root_ui(
     // whatever the last frame that had one reported.
     state.picture.instruments.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
 
-    // Frameless mode hides every tab bar (the Lattice and Spectral panes
-    // meet with no chrome between them — clean for captures). The pane
-    // separators keep their regular width, so the spacing between windows
-    // matches framed mode. No tab bar also means no way to click back to
-    // the System tab (which holds the checkbox) if it's hidden, so Tab
-    // works from anywhere. It toggles rather than only restoring, so the
-    // chrome comes and goes on one key while a take is set up — the
-    // checkbox is then just where the feature is documented.
-    //
-    // Tab is egui's focus-walk key, and this takes it: nothing here is
-    // driven from the keyboard, and the one place typing Tab means
-    // something else — a text field mid-edit — keeps it. Cancelling the
-    // focus move egui already queued from the same press is part of the
-    // toggle, or a capture grows a focus ring around whatever control the
-    // walk landed on.
+    // Hide chrome for a continuous live picture. Tab stays available even
+    // when hidden bars leave no route to System settings or a folded pane.
+    // It takes precedence over keyboard focus traversal outside text edits;
+    // cancelling the queued focus move keeps the toggle from moving focus too.
     if !ui.ctx().text_edit_focused()
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
     {
-        state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
+        state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
+    let before_camera = state.picture.appearance.camera_movement();
+    let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
-    let frameless = state.picture.appearance.view.frameless;
+    let frameless = workspace.interaction.frameless;
     if let Some(change) = workspace::show(
         ui,
         &mut workspace.layout,
@@ -307,6 +299,12 @@ pub fn root_ui(
     ) {
         workspace.window_size_change = change;
     }
+    state.workspace.interaction.appearance_editor.end_frame(
+        before_edit,
+        &mut state.picture.appearance,
+        ui.ctx(),
+    );
+    camera_movement::finish_edits(&mut state.picture.appearance, before_camera, params, ui.ctx());
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
 
     // Render continuously only while something is animating (sounding or
@@ -384,6 +382,7 @@ pub fn root_ui(
 /// draws [`Pane`]s directly, and skipping this would leave it rendering
 /// last frame's tuning against never-pruned voices.
 pub fn begin_frame(state: &mut PictureState, params: &dyn ParamBackend, now: f64) {
+    state.appearance.sync_camera(params);
     state.runtime.advance(&mut state.appearance, params, now);
 
     // Rotated here so the window belongs to a whole frame rather than to a
@@ -414,10 +413,9 @@ pub enum Pane {
 
 /// Draw one pane's body into `ui`, filling it, with no dock or tab bar.
 ///
-/// Callers must have run [`begin_frame`] for this `now` already. Panes
-/// still read hover and pointer state from `ui`, so an offline caller
-/// feeding synthetic input simply gets no hover — which is what a
-/// recording wants.
+/// Callers must have run [`begin_frame`] for this `now` already. These are
+/// picture copies: the lattice omits editor navigation, picking, map
+/// annotations and Learn-mode chrome, as the Video preview does.
 ///
 /// `surface` is which live copy of the pane this is — offline, the placement's
 /// index in the resolved [`Layout`] — and it is what makes two placements of
@@ -442,7 +440,27 @@ pub fn draw_pane(
     surface: usize,
 ) {
     match pane {
-        Pane::Lattice => panes::lattice::lattice_pane(ui, state, now, surface),
+        Pane::Lattice => {
+            let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+            if rect.width() < 1.0 || rect.height() < 1.0 {
+                return;
+            }
+            ui.painter().rect_filled(rect, 0.0, state.background_ink());
+            // Exported pictures share the preview's scene path, without the
+            // working pane's navigation, picking, or Learn-mode chrome.
+            let window = panes::lattice::draw_lattice(
+                ui,
+                rect,
+                state,
+                now,
+                surface,
+                state.surfaces.background,
+                None,
+                None,
+                1.0,
+            );
+            state.surfaces.drawn_this_frame = Some(window);
+        }
         // Text sizes itself off the pane, here as everywhere.
         Pane::Spectral => panes::spectral::spectral_pane(
             ui,
@@ -511,4 +529,6 @@ mod tests;
 pub mod lattice_maps;
 
 mod appearance;
+mod appearance_edit;
+mod camera_movement;
 pub use appearance::AppearanceDocument;

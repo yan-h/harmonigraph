@@ -403,6 +403,14 @@ pub(crate) struct TextPiece {
 }
 
 impl TextBatch {
+    /// Bounds of the letterforms already laid out, excluding mark bitmap padding.
+    pub(crate) fn bounds(&self) -> egui::Rect {
+        self.glyphs.iter().fold(egui::Rect::NOTHING, |bounds, glyph| {
+            let [x, y, w, h] = glyph.sdf_rect;
+            bounds.union(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)))
+        })
+    }
+
     /// Close one layer after all its letters and marks have been collected.
     pub(crate) fn finish_layer(&mut self) {
         let end = self.glyphs.len() as u32;

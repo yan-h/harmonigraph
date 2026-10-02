@@ -1,4 +1,4 @@
-//! Watercolor and Mosaic sample the production note light through reusable pure geometry.
+//! Watercolor and Velvet Scales sample the production note light through reusable pure geometry.
 //! Tile lifetime belongs to the pane, separately from resize-dependent light.
 use super::*;
 
@@ -9,13 +9,69 @@ const SOURCE: &str = concat!(
 );
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// How many cells cross one of the pane height's ten units at Size 1x, matching
+/// the spectrogram: a Scales cell is 24/405 of the height, and Watercolor packs
+/// its `WASH_CELLS` into each unit.
+const SCALES_CELLS: f32 = 405.0 / 240.0;
+const WATERCOLOR_CELLS: f32 = 5.25;
+
+/// A displaced material's Size dial and its cells per unit at Size 1x.
+pub(super) fn size_and_cells(
+    style: harmonigraph_scene::LatticeMaterial,
+    settings: &harmonigraph_scene::MaterialSettings,
+) -> (f32, f32) {
+    if style == harmonigraph_scene::LatticeMaterial::VelvetScales {
+        (settings.velvet_size, SCALES_CELLS)
+    } else {
+        (settings.wash_size, WATERCOLOR_CELLS)
+    }
+}
+
+/// The material dials one lattice frame draws with. CPU-side only: [`prepare`]
+/// derives the pass's [`Settings`] from them by name.
+#[derive(Clone, Copy)]
+pub(super) struct Material {
+    pub(super) style: harmonigraph_scene::LatticeMaterial,
+    pub(super) amount: f32,
+    /// Pattern offset in cells, already reduced to a bounded phase.
+    pub(super) drift: [f32; 2],
+    pub(super) settings: harmonigraph_scene::MaterialSettings,
+    pub(super) stars: harmonigraph_scene::StarSettings,
+    pub(super) direction: f32,
+}
+
+uniform_group! {
+    /// `Settings` in `lattice_material.wgsl`.
+    struct Settings {
+        size: Float2,
+        cell: f32,
+        depth: f32,
+        drift: Float2,
+        refract: f32,
+        layers: f32,
+        randomness: f32,
+        padding: f32,
+        /// Scales' `Squareness` and `Tilt`.
+        velvet_form: Float2,
+        /// Scales' edge, irregularity, shape and variety.
+        velvet: Float4,
+    }
+}
+
+uniform_group! {
+    /// `Geometry` in `lattice_material.wgsl`: what a baked tile is keyed on.
+    struct Geometry {
+        fuzz: f32,
+        lobe: f32,
+        padding: Float2,
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct Pipelines {
     stars: lattice_stars::Pipelines,
     bake: wgpu::RenderPipeline,
     bake_layout: wgpu::BindGroupLayout,
-    bake_mosaic: wgpu::RenderPipeline,
-    mosaic: wgpu::RenderPipeline,
     velvet: wgpu::RenderPipeline,
     material: wgpu::RenderPipeline,
     source_layout: wgpu::BindGroupLayout,
@@ -124,14 +180,8 @@ impl Pipelines {
         Self {
             stars: lattice_stars::Pipelines::new(device, filter_layout),
             bake: pipeline("fs_tile", &[Some(&bake_layout)], &[FORMAT, FORMAT]),
-            bake_mosaic: pipeline("fs_mosaic_tile", &[Some(&bake_layout)], &[FORMAT]),
             bake_layout,
             velvet: pipeline("fs_velvet", &[Some(&source_layout)], &[LATTICE_COLOR_FORMAT]),
-            mosaic: pipeline(
-                "fs_mosaic",
-                &[Some(&source_layout), Some(&tile_layout)],
-                &[LATTICE_COLOR_FORMAT],
-            ),
             material: pipeline(
                 "fs_material",
                 &[Some(&source_layout), Some(&tile_layout)],
@@ -190,7 +240,6 @@ pub(super) struct Tile {
     // Only baked geometry and quantized density belong in this key.
     // Refraction, layer mix, amount, drift, light and camera are live inputs.
     texels: u32,
-    material: u32,
     geometry: [u32; 2],
     bind_group: wgpu::BindGroup,
 }
@@ -204,16 +253,10 @@ impl Tile {
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
         texels: u32,
-        material: u32,
         geometry: [u32; 2],
     ) -> Self {
         let a = texture(device, "lattice_material_tile_a", [texels; 2], FORMAT);
-        let mosaic = material == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
-        let b = if mosaic {
-            a.clone()
-        } else {
-            texture(device, "lattice_material_tile_b", [texels; 2], FORMAT)
-        };
+        let b = texture(device, "lattice_material_tile_b", [texels; 2], FORMAT);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("lattice_material_tile"),
             layout: &pipelines.tile_layout,
@@ -233,14 +276,14 @@ impl Tile {
             ],
         });
         use wgpu::util::DeviceExt;
-        let values = if mosaic {
-            [0.0, 0.0, f32::from_bits(geometry[0]), 0.0]
-        } else {
-            [f32::from_bits(geometry[0]), f32::from_bits(geometry[1]), 0.0, 0.0]
+        let values = Geometry {
+            fuzz: f32::from_bits(geometry[0]),
+            lobe: f32::from_bits(geometry[1]),
+            padding: Float2([0.0; 2]),
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material_geometry"),
-            contents: bytemuck::cast_slice(&values),
+            contents: bytemuck::bytes_of(&values),
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let bake_binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -248,17 +291,15 @@ impl Tile {
             layout: &pipelines.bake_layout,
             entries: &[wgpu::BindGroupEntry { binding: 3, resource: buffer.as_entire_binding() }],
         });
-        let attachments =
-            if mosaic { vec![attachment(&a)] } else { vec![attachment(&a), attachment(&b)] };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("lattice_material_geometry_bake"),
-            color_attachments: &attachments,
+            color_attachments: &[attachment(&a), attachment(&b)],
             ..Default::default()
         });
-        pass.set_pipeline(if mosaic { &pipelines.bake_mosaic } else { &pipelines.bake });
+        pass.set_pipeline(&pipelines.bake);
         pass.set_bind_group(0, &bake_binding, &[]);
         pass.draw(0..4, 0..1);
-        Self { texels, material, geometry, bind_group }
+        Self { texels, geometry, bind_group }
     }
 }
 
@@ -276,7 +317,7 @@ impl Source {
         let view = texture(device, "lattice_material_light_source", size, LATTICE_COLOR_FORMAT);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lattice_material_settings"),
-            size: 64,
+            size: size_of::<Settings>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -318,6 +359,10 @@ impl Source {
             color_attachments: &[attachment(output)],
             ..Default::default()
         });
+        // Clear the previous light before skipping transparent material work.
+        if !has_light {
+            return;
+        }
         if self.velvet {
             pass.set_pipeline(&pipelines.velvet);
             pass.set_bind_group(0, &self.bind_group, &[]);
@@ -325,11 +370,7 @@ impl Source {
             return;
         }
         let tile = tile.expect("displaced material tile");
-        pass.set_pipeline(if tile.material == harmonigraph_scene::LatticeMaterial::Mosaic as u32 {
-            &pipelines.mosaic
-        } else {
-            &pipelines.material
-        });
+        pass.set_pipeline(&pipelines.material);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_bind_group(1, &tile.bind_group, &[]);
         pass.draw(0..4, 0..1);
@@ -344,18 +385,16 @@ pub(super) fn prepare(
     pane: &mut PaneBuffers,
     callback: &LatticeCallback,
 ) {
-    let settings = &callback.uniforms.material;
+    let material = &callback.material;
     let Some(offscreen) = pane.offscreen.as_mut() else { return };
     let Some(glow) = offscreen.glow.as_mut() else {
         pane.material_tile = None;
         return;
     };
-    let velvet = settings.style == harmonigraph_scene::LatticeMaterial::VelvetScales as u32;
-    let displaced = velvet
-        || settings.style == harmonigraph_scene::LatticeMaterial::Watercolor as u32
-        || settings.style == harmonigraph_scene::LatticeMaterial::Mosaic as u32;
-    let starfield = settings.style == harmonigraph_scene::LatticeMaterial::Stars as u32;
-    if (!displaced && !starfield) || settings.amount <= 0.0 {
+    let velvet = material.style == harmonigraph_scene::LatticeMaterial::VelvetScales;
+    let displaced = velvet || material.style == harmonigraph_scene::LatticeMaterial::Watercolor;
+    let starfield = material.style == harmonigraph_scene::LatticeMaterial::Stars;
+    if (!displaced && !starfield) || material.amount <= 0.0 {
         glow.material_source = None;
         pane.material_tile = None;
         return;
@@ -373,67 +412,62 @@ pub(super) fn prepare(
             &source.view,
             offscreen.size,
             lattice_stars::Frame {
-                settings: callback.material_stars,
-                direction: callback.material_direction,
+                settings: material.stars,
+                direction: material.direction,
                 now: callback.glow_timing.map_or(0.0, |clock| clock.now),
-                amount: settings.amount,
+                amount: material.amount,
             },
         );
         return;
     }
     // Match the spectrogram's pane-height calibration. Quantized density keeps
     // nearby resizes from rebaking; a 2048 cap bounds memory to 64 MiB.
-    let watercolor = settings.style == harmonigraph_scene::LatticeMaterial::Watercolor as u32;
-    let cell = size[1] as f32 * settings.scale
-        / (10.0
-            * if velvet {
-                405.0 / 240.0
-            } else if watercolor {
-                5.25
-            } else {
-                6.0 / 2.2
-            });
-    let geometry = if watercolor {
-        [settings.fuzz.to_bits(), settings.lobe.to_bits()]
-    } else {
-        [settings.variety.to_bits(), 0]
-    };
+    let (scale, cells) = size_and_cells(material.style, &material.settings);
+    let cell = size[1] as f32 * scale / (10.0 * cells);
+    let dials = &material.settings;
+    let geometry = [dials.wash_fuzz.to_bits(), dials.wash_lobe.to_bits()];
     let texels = ((40.0 * cell / 128.0).ceil() as u32 * 128).clamp(128, 2048);
     if velvet {
         pane.material_tile = None;
-    } else if pane.material_tile.as_ref().is_none_or(|tile| {
-        tile.texels != texels || tile.material != settings.style || tile.geometry != geometry
-    }) {
-        pane.material_tile =
-            Some(Tile::new(device, encoder, pipelines, texels, settings.style, geometry));
+    } else if pane
+        .material_tile
+        .as_ref()
+        .is_none_or(|tile| tile.texels != texels || tile.geometry != geometry)
+    {
+        pane.material_tile = Some(Tile::new(device, encoder, pipelines, texels, geometry));
     }
     let source = glow.material_source.get_or_insert_with(|| Source::new(device, pipelines, size));
     source.stars = None;
     source.velvet = velvet;
-    let values = [
-        size[0] as f32,
-        size[1] as f32,
+    let values = Settings {
+        size: Float2(size.map(|n| n as f32)),
         cell,
-        settings.amount,
-        settings.drift.0[0],
-        settings.drift.0[1],
-        settings.refract,
-        settings.layers,
-        settings.randomness,
-        0.0,
-        0.0,
-        0.0,
-        settings.velvet.0[0],
-        settings.velvet.0[1],
-        settings.velvet.0[2],
-        settings.velvet.0[3],
-    ];
-    queue.write_buffer(&source.buffer, 0, bytemuck::cast_slice(&values));
+        depth: material.amount,
+        drift: Float2(material.drift),
+        refract: dials.wash_refract,
+        layers: dials.wash_layers,
+        randomness: dials.wash_randomness,
+        padding: 0.0,
+        velvet_form: Float2([dials.velvet_square, dials.velvet_tilt]),
+        velvet: Float4([
+            dials.velvet_edge,
+            dials.velvet_irregularity,
+            dials.velvet_shape,
+            dials.velvet_variety,
+        ]),
+    };
+    queue.write_buffer(&source.buffer, 0, bytemuck::bytes_of(&values));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_match_the_shader() {
+        crate::uniforms::layout::check_binding::<Settings>(SOURCE, 0, 0);
+        crate::uniforms::layout::check_binding::<Geometry>(SOURCE, 0, 3);
+    }
+
     #[test]
     fn shader_validates() {
         let module =

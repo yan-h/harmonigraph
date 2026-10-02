@@ -1,6 +1,6 @@
 # Spectrogram color memory
 
-Color pickup and Color release are shared by Stars, Mosaic and Watercolor.
+Color pickup and Color release are shared by Stars, Watercolor and Scales.
 The defaults reproduce prototype B: pickup 0.08 seconds and release 0.6 seconds.
 Both bars run from zero to five seconds and specify exponential time constants:
 after one time constant, about 37% of the previous value remains.
@@ -22,13 +22,13 @@ color history never stores the stars' screen-space shapes.
 A star over current silence remains while its retained source level is positive.
 Never-lit stars still contribute no coverage.
 
-Mosaic and Watercolor retain color on a fixed material lattice.
+Watercolor retains color on a fixed material lattice.
 Drift splits into an integer lattice origin and a fractional display offset.
 Feedback copies exact texels with integer loads; only the final displayed color is bilinearly sampled.
 Repeated drift therefore adds no feedback blur.
 The ordinary cloud tone pass is skipped while memory supplies color.
 
-With memory enabled, Mosaic and Watercolor's Texture mix blends the plain color and remembered color in linear light.
+With memory enabled, Watercolor's Texture mix blends the plain color and remembered color in linear light.
 This is bounded and preserves the zero and full-strength endpoints, but intermediate colors can leave the authored palette ramp.
 With both times zero, the original scalar-before-palette Texture mix remains exact.
 Zero refraction disables displacement but leaves temporal memory available.

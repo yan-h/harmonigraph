@@ -103,16 +103,17 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     );
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
-        star_randomness, star_size_variation, star_jitter, star_glow, star_core_far, star_core_near, star_falloff,
-        star_far_fill, star_overlap_light, star_halo_resolution, star_speed_min, star_speed_max, star_spacing_far, star_spacing_near,
-        star_spacing_curve, star_size_min, star_size_max, star_size_curve,
-        star_speed_curve, star_lifetime);
+        star_randomness, star_size_variation, star_jitter, star_solid_far, star_solid_near, star_glow_falloff,
+        star_halo_resolution, star_speed_far, star_speed_near, star_spacing_ratio_far, star_spacing_ratio_near,
+        star_spacing_ratio_curve, star_size_far, star_size_near, star_size_curve,
+        star_speed_curve, star_lifetime, star_twinkle_far, star_twinkle_near);
     }
     for material in
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
     {
-        poison!(material; scale_size, scale_variety, scale_refract, wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
-            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape);
+        poison!(material; wash_size, wash_fuzz, wash_lobe, wash_refract, wash_layers, wash_randomness,
+            velvet_size, velvet_variety, velvet_edge, velvet_irregularity, velvet_shape, velvet_square,
+            velvet_tilt);
     }
     saved.workspace.interaction.ui_scale = v;
     poison!(saved.workspace.interaction.skin_dials; lightness, tint_hue, tint, accent_hue, accent_saturation);
@@ -243,7 +244,7 @@ struct Scenario {
     marvel: bool,
     /// Which texture's dials the Spectrogram page draws. Each texture has its
     /// own bars, so the page has one inventory per texture, and the base
-    /// scenario draws the mosaic's.
+    /// scenario draws the wash's.
     style: harmonigraph_scene::CloudStyle,
     halo_profile: harmonigraph_scene::StarHaloProfile,
     material: harmonigraph_scene::LatticeMaterial,
@@ -258,7 +259,7 @@ fn scenarios() -> Vec<Scenario> {
         enabled: false,
         meantone: false,
         marvel: false,
-        style: harmonigraph_scene::CloudStyle::Mosaic,
+        style: harmonigraph_scene::CloudStyle::Watercolor,
         halo_profile: harmonigraph_scene::StarHaloProfile::default(),
         material: harmonigraph_scene::LatticeMaterial::None,
         visits: 0,
@@ -289,9 +290,9 @@ fn scenarios() -> Vec<Scenario> {
         let visits = match pane {
             panes::Tab::Mappings => visits + 8,
             panes::Tab::LatticeSettings => visits + 6,
-            // ...the spectrogram's thirteen, the ribbons' five, and the
-            // backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 13 + 5 + 2,
+            // ...the spectrogram's nineteen (the wash's nine among them), the
+            // ribbons' five, and the backdrop's height and stripe spacing.
+            panes::Tab::AnalyzerSettings => visits + 19 + 5 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
@@ -303,13 +304,6 @@ fn scenarios() -> Vec<Scenario> {
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
         visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 3,
-        ..base
-    });
-    cases.push(Scenario {
-        pane: panes::Tab::LatticeSettings,
-        material: harmonigraph_scene::LatticeMaterial::Mosaic,
-        enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 3 + 3,
         ..base
     });
     for profile in [
@@ -337,33 +331,23 @@ fn scenarios() -> Vec<Scenario> {
             ..base
         });
     }
-    // The wash's own inventory: it takes the three scale bars off the Spectrogram
-    // section and puts nine of its own there, and nothing else on the page moves.
-    // Its own scenario rather than a flag on the loop above because the base
-    // scenario selects the mosaic, so without this the nine are drawn by no case
-    // here at all.
-    cases.push(Scenario {
-        pane: panes::Tab::AnalyzerSettings,
-        style: harmonigraph_scene::CloudStyle::Watercolor,
-        enabled: true,
-        visits: 13 + 13 + 5 + 2 + 2 - 3 + 9,
-        ..base
-    });
+    // Scales' own inventory: it takes the wash's nine bars off the Spectrogram
+    // section and puts seven of its own there, and nothing else on the page moves.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::VelvetScales,
         enabled: true,
-        visits: 13 + 13 + 5 + 2 + 2 - 3 + 5,
+        visits: 13 + 19 + 5 + 2 + 2 - 9 + 7,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::VelvetScales,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 5 + 3,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 7 + 3,
         ..base
     });
-    // Stars replace the scale bars and shared Drift speed. Only the Uniform
+    // Stars replace the wash's bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
     for (halo_profile, bars) in [
         (harmonigraph_scene::StarHaloProfile::P3, 16),
@@ -377,7 +361,7 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile,
             expanded: true,
             enabled: true,
-            visits: 13 + 13 + 5 + 2 + 2 - 3 - 1 + bars,
+            visits: 13 + 19 + 5 + 2 + 2 - 9 - 1 + bars,
             ..base
         });
     }
@@ -444,7 +428,7 @@ fn check(edge: Edge) {
         }
         state.workspace.interaction.show_perf = scenario.enabled;
         state.workspace.interaction.take.supported = scenario.enabled;
-        state.workspace.interaction.take.last_ready = scenario.enabled;
+        state.workspace.interaction.take.last_take = scenario.enabled.then(|| "music.take".into());
         let mut tab = scenario.pane;
         let ctx = themed();
         // Observe the first load frame once, before any discarded egui pass

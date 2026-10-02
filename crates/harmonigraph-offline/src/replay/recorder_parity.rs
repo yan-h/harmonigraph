@@ -69,7 +69,7 @@ fn unsequenced_recorder_display_and_disk_replay_share_note_semantics() {
     capture.arm();
     assert!(recorder.is_armed());
     let path = parity_path("unsequenced");
-    let mut writer = testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = testing::FileWriter::new(&capture, path.clone());
     let live_events = [
         NoteEvent::on(ORIGIN + 0.125, SourceId::DIRECT, 0, 60, 0.8),
         NoteEvent {
@@ -192,7 +192,7 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
     capture.arm();
     assert!(recorder.is_armed());
     let path = parity_path("canonical");
-    let mut writer = testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = testing::FileWriter::new(&capture, path.clone());
     let configuration = harmonigraph_core::configuration::ConfigReducer::default().resolved();
     recorder.configuration_at(address, 0.0, configuration);
 
@@ -324,5 +324,51 @@ fn canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing() {
         assert!(!tracker.history_missing(), "the recovered source leaves nothing missing");
     }
 
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// Movement is evaluated on recorded block time, independent of frame cadence.
+/// The renderer's appearance replacement changes style, never captured motion.
+#[test]
+fn camera_records_override_replacement_and_replay_at_any_frame_cadence() {
+    // Use the real writer's header version rather than a hand-maintained fixture.
+    let path = parity_path("camera");
+    let mut writer =
+        harmonigraph_take::Writer::create(&path, &harmonigraph_take::Header::default()).unwrap();
+    for (t, values) in
+        [(12.0, [0.4, 0.3, 12.0, 1.0, 0.0]), (12.125, [0.8, -0.3, 8.0, 12.25, -7.375])]
+    {
+        for (key, value) in ParamKey::CAMERA.into_iter().zip(values) {
+            writer
+                .write(&harmonigraph_take::Record::Param(harmonigraph_take::ParamRecord {
+                    t,
+                    id: key.id().into(),
+                    value,
+                }))
+                .unwrap();
+        }
+    }
+    writer.flush().unwrap();
+    let take = Take::read(&path).unwrap();
+    for cadence in [vec![12.2], vec![12.0, 12.05, 12.1, 12.15, 12.2], vec![12.0, 12.125, 12.2]] {
+        let mut replay = Replay::new(take.clone());
+        let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
+        state.appearance.camera.distance = 20.0;
+        state.appearance.camera.projection = harmonigraph_scene::Projection::Cabinet;
+        for t in cadence {
+            replay.advance_to(&mut state.runtime, t);
+            harmonigraph_ui::begin_frame(&mut state, &replay.params, t);
+        }
+        assert_eq!(state.appearance.camera_movement(), [0.8, -0.3, 8.0, 12.25, -7.375]);
+        assert_eq!(state.appearance.camera.projection, harmonigraph_scene::Projection::Cabinet);
+    }
+    let mut old = take;
+    old.params.clear();
+    let mut replay = Replay::new(old);
+    let mut state = PictureState::new(TextureFormat::Bgra8Unorm);
+    state.appearance.camera.distance = 20.0;
+    replay.advance_to(&mut state.runtime, 12.2);
+    harmonigraph_ui::begin_frame(&mut state, &replay.params, 12.2);
+    assert_eq!(state.appearance.camera.distance, 20.0);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

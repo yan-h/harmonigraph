@@ -1882,6 +1882,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
                 samples,
                 plot_budget(1.0, axes.depth_len()),
                 1.0,
+                1.0,
             );
         });
         let mut meshes: Vec<_> = out
@@ -1970,7 +1971,7 @@ fn analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark() {
 /// The backdrop lights only the space above the curve, at its strength on the
 /// floor and fading to nothing at its height, and a segment rising through that
 /// height is cut at the crossing rather than laid over the flank below it.
-/// Stripes light one column in `backdrop_gap + 1`, each a single column wide;
+/// Stripes light one point in `backdrop_gap + 1`, each a logical point wide;
 /// a gap of 0 lights them all, and a strength of 0 draws no backdrop at all.
 #[test]
 fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
@@ -1999,9 +2000,10 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
     let ink = crate::theme::picture_ruling().gamma_multiply(cfg.backdrop_strength);
     let stops = atmosphere::BODY_STOPS;
     let at = |v: &egui::epaint::Vertex| (axes.pitch_at(v.pos), axes.depth_at(v.pos));
-    let meshes = |cfg: &SpectrumConfig| -> Vec<egui::Mesh> {
-        let out = painted_into(SCREEN, WIDE, |ui| {
-            atmosphere::draw_profile(ui.painter(), &axes, cfg, &visible, budget, 1.0);
+    let meshes = |cfg: &SpectrumConfig, ppp: f32, point_scale: f32| -> Vec<egui::Mesh> {
+        let ctx = crate::tests::probe::themed_at(ppp);
+        let out = crate::tests::probe::frame_into(&ctx, SCREEN, WIDE, |ui| {
+            atmosphere::draw_profile(ui.painter(), &axes, cfg, &visible, budget, 1.0, point_scale);
         });
         out.shapes
             .into_iter()
@@ -2013,63 +2015,84 @@ fn analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height() {
     };
     let off = SpectrumConfig { backdrop_strength: 0.0, ..cfg };
     assert_eq!(
-        meshes(&off).len(),
+        meshes(&off, 2.0, 1.0).len(),
         2,
         "strength 0 still drew a backdrop under the body and outline"
     );
-    for (gap, stripe) in [(0.0, None), (2.0, Some(3))] {
-        cfg.backdrop_gap = gap;
-        let meshes = meshes(&cfg);
-        let [sky, body, _outline] = &meshes[..] else {
-            panic!("expected the backdrop, the body and the outline only")
-        };
-        let edge: Vec<_> = (0..n).map(|i| at(&body.vertices[i * stops + stops - 1])).collect();
-        assert!(edge[..10].iter().all(|&(_, d)| d.abs() < 1e-6), "fixture needs silence");
-        assert!(edge[20].1 > 0.0 && edge[20].1 < top, "fixture needs a shelf under the height");
-        assert!(edge[40].1 > 2.0 * top, "fixture needs a spike through the height");
-        let edge_at = |t: f32| {
-            let k = edge.windows(2).position(|w| w[1].0 >= t).unwrap_or(n - 2);
-            let (a, b) = (edge[k], edge[k + 1]);
-            a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
-        };
-        let mut columns = std::collections::BTreeSet::new();
-        for triangle in sky.indices.chunks_exact(3) {
-            let corners =
-                triangle.iter().map(|&k| at(&sky.vertices[k as usize])).collect::<Vec<_>>();
-            let (lo, hi) =
-                corners.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.0), hi.max(c.0)));
-            if hi - lo < 1e-6 {
-                continue;
-            }
-            let centroid =
-                corners.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / 3.0, s.1 + c.1 / 3.0));
-            assert!(
-                centroid.1 >= edge_at(centroid.0) - 1e-4,
-                "gap {gap}: over the fill at {centroid:?}"
-            );
-            assert!(centroid.1 <= top + 1e-4, "gap {gap}: above its height at {centroid:?}");
-            if let Some(spacing) = stripe {
-                let column = (lo * n as f32 + 1e-3).floor() as usize;
+    for (ppp, point_scale) in [(0.5, 1.0), (1.5, 0.5), (2.0, 2.0)] {
+        for (gap, stripe) in [(0.0, None), (2.0, Some(3))] {
+            cfg.backdrop_gap = gap;
+            let meshes = meshes(&cfg, ppp, point_scale);
+            let [sky, body, _outline] = &meshes[..] else {
+                panic!("expected the backdrop, the body and the outline only")
+            };
+            let edge: Vec<_> = (0..n).map(|i| at(&body.vertices[i * stops + stops - 1])).collect();
+            assert!(edge[..10].iter().all(|&(_, d)| d.abs() < 1e-6), "fixture needs silence");
+            assert!(edge[20].1 > 0.0 && edge[20].1 < top, "fixture needs a shelf under the height");
+            assert!(edge[40].1 > 2.0 * top, "fixture needs a spike through the height");
+            let edge_at = |t: f32| {
+                let k = edge.windows(2).position(|w| w[1].0 >= t).unwrap_or(n - 2);
+                let (a, b) = (edge[k], edge[k + 1]);
+                a.1 + (b.1 - a.1) * ((t - a.0) / (b.0 - a.0)).clamp(0.0, 1.0)
+            };
+            let mut columns = std::collections::BTreeSet::new();
+            for triangle in sky.indices.chunks_exact(3) {
+                let corners =
+                    triangle.iter().map(|&k| at(&sky.vertices[k as usize])).collect::<Vec<_>>();
+                let (lo, hi) = corners
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.0), hi.max(c.0)));
+                if hi - lo < 1e-6 {
+                    continue;
+                }
+                let centroid =
+                    corners.iter().fold((0.0, 0.0), |s, c| (s.0 + c.0 / 3.0, s.1 + c.1 / 3.0));
                 assert!(
-                    hi * n as f32 <= column as f32 + 1.0 + 1e-3,
-                    "a stripe wider than a column"
+                    centroid.1 >= edge_at(centroid.0) - 1e-4,
+                    "gap {gap}: over the fill at {centroid:?}"
                 );
-                assert_eq!(column % spacing, 0, "stripe in column {column}");
-                columns.insert(column);
+                assert!(centroid.1 <= top + 1e-4, "gap {gap}: above its height at {centroid:?}");
+                if let Some(spacing) = stripe {
+                    let column = (lo * axes.pitch_len() / point_scale + 1e-3).floor() as usize;
+                    assert!(
+                        hi * axes.pitch_len() / point_scale <= column as f32 + 1.0 + 1e-3,
+                        "a stripe wider than a column"
+                    );
+                    assert_eq!(column % spacing, 0, "stripe in column {column}");
+                    columns.insert(column);
+                }
             }
+            if let Some(spacing) = stripe {
+                // In the silent part every complete stripe must be present.
+                // The measured profile's first half-sample and the spike above
+                // the backdrop height deliberately leave some others empty.
+                let full_silent: Vec<_> = (0..(axes.pitch_len() / point_scale).ceil() as usize)
+                    .step_by(spacing)
+                    .filter(|&column| {
+                        let lo = column as f32 * point_scale / axes.pitch_len();
+                        let hi = (column + 1) as f32 * point_scale / axes.pitch_len();
+                        lo >= edge[0].0 && hi <= edge[9].0
+                    })
+                    .collect();
+                assert!(full_silent.len() >= 2, "fixture needs several silent stripes");
+                assert!(
+                    full_silent.iter().all(|column| columns.contains(column)),
+                    "missing silent stripe"
+                );
+            }
+            for v in &sky.vertices {
+                let (_, d) = at(v);
+                let want = f32::from(ink.a()) * (1.0 - d / top).clamp(0.0, 1.0);
+                assert!(
+                    (f32::from(v.color.a()) - want).abs() <= 2.0,
+                    "gap {gap}: alpha at depth {d}"
+                );
+            }
+            assert!(
+                sky.vertices.iter().any(|v| at(v).1.abs() < 1e-6 && v.color == ink),
+                "silence must be lit at full strength down to the floor"
+            );
         }
-        if let Some(spacing) = stripe {
-            assert_eq!(columns, (0..n).step_by(spacing).collect(), "not every stripe was lit");
-        }
-        for v in &sky.vertices {
-            let (_, d) = at(v);
-            let want = f32::from(ink.a()) * (1.0 - d / top).clamp(0.0, 1.0);
-            assert!((f32::from(v.color.a()) - want).abs() <= 2.0, "gap {gap}: alpha at depth {d}");
-        }
-        assert!(
-            sky.vertices.iter().any(|v| at(v).1.abs() < 1e-6 && v.color == ink),
-            "silence must be lit at full strength down to the floor"
-        );
     }
 }
 

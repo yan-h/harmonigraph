@@ -1,292 +1,23 @@
-use super::super::channel;
 use super::*;
 use harmonigraph_take::RenderConfig;
 
-/// Automatic and manual requests use the paired renderer and active sizing
-/// settings; only a manual request replaces the recorded appearance.
+/// Only manual requests override the recorded appearance and output size.
 #[test]
-fn automatic_and_manual_requests_keep_the_active_settings() {
+fn only_manual_requests_override_captured_settings() {
     let config = RenderConfig {
         frame: harmonigraph_take::RenderFrame { aspect_w: 9, aspect_h: 16, ..Default::default() },
         short_edge: 2160,
         ..Default::default()
     };
-    let automatic = RenderRequest::from_config(&config);
+    let automatic = RenderRequest::recorded();
     let manual = RenderRequest::render_now(&config, "current appearance".into());
     for request in [&automatic, &manual] {
         assert_eq!(request.program, default_renderer_path());
-        assert_eq!(request.size, [2160, 3840]);
     }
+    assert_eq!(automatic.size, None);
+    assert_eq!(manual.size, Some([2160, 3840]));
     assert_eq!(automatic.appearance, None);
     assert_eq!(manual.appearance.as_deref(), Some("current appearance"));
-}
-
-/// A second request for the same take supersedes the first, which is what
-/// makes "Render now" during a render mean restart rather than a second
-/// render writing the same video — and a request for a DIFFERENT take
-/// supersedes nothing, because it is not about that video at all.
-#[test]
-fn a_later_request_supersedes_the_one_in_flight() {
-    let control = RenderControl::default();
-    let take = std::path::Path::new("/takes/take-1.take");
-    let other = std::path::Path::new("/takes/take-2.take");
-    let first = control.claim(take);
-    assert!(!control.superseded(take, first), "the only request in flight is current");
-
-    let second = control.claim(take);
-    assert!(control.superseded(take, first), "the first must stand down");
-    assert!(!control.superseded(take, second), "the second is now the live one");
-
-    // Another take's request stands beside it rather than over it.
-    let elsewhere = control.claim(other);
-    assert!(!control.superseded(take, second), "take-2's request is not about take-1");
-    assert!(!control.superseded(other, elsewhere));
-
-    // Generations are not reused, so a render cannot be revived by a
-    // later one happening to land on its number.
-    let third = control.claim(take);
-    assert!(third > elsewhere && elsewhere > second && second > first);
-    assert!(control.superseded(take, first) && control.superseded(take, second));
-
-    // A finished run gives its claim back, and a stale one cannot take
-    // away the claim that replaced it.
-    control.release(take, second);
-    assert!(!control.superseded(take, third), "a stale release must not unseat the live run");
-    control.release(take, third);
-    assert!(control.claims.lock().get(take).is_none(), "the finished take is not kept");
-}
-
-/// Cancelling with nothing running is a no-op rather than a panic: the
-/// first render of a session takes exactly that path, since every request
-/// cancels before it spawns.
-///
-/// The Video pane's button reaches the same state — it is drawn off a bar
-/// the shell read at the top of the frame, so a render that ends before the
-/// press is consumed is cancelled after it is already gone — and answers
-/// that there was nothing to stop, which is what keeps the status line from
-/// reporting a cancellation that cancelled nothing.
-#[test]
-fn cancelling_an_idle_render_control_does_nothing() {
-    let control = RenderControl::default();
-    control.cancel_in_flight(std::path::Path::new("/nowhere/take-1.take"));
-    assert!(control.child.lock().is_none());
-    assert!(!control.cancel(), "an idle control claimed to have stopped a render");
-}
-
-/// Spin until `done` or the budget runs out, so the concurrency tests
-/// below wait on the thing they mean rather than on a fixed sleep.
-#[cfg(unix)]
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if done() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("timed out waiting for {what}");
-}
-
-/// Pressing "Re-render take" during a render kills the one in flight instead
-/// of running a second alongside it.
-///
-/// Against a real process, because that is the whole claim: the generation
-/// bookkeeping above proves only that the arithmetic is right, and the
-/// thing that goes wrong — two renderers writing one video — lives
-/// entirely in the part that spawns and kills.
-#[cfg(unix)]
-#[test]
-fn a_second_request_kills_the_render_in_flight() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = std::env::temp_dir().join(format!("harmonigraph-cancel-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    // Stands in for the renderer: `exec` makes the tracked child the
-    // sleeper itself, so killing it also closes the stderr pipe the render
-    // thread waits on.
-    let fake = dir.join("slow-renderer");
-    std::fs::write(&fake, "#!/bin/sh\nexec sleep 300\n").expect("write fake renderer");
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-
-    let take = dir.join("take-1.take");
-    let control = Arc::new(RenderControl::default());
-    let status = Arc::new(Mutex::new(String::new()));
-    let progress = Arc::new(Progress::default());
-    let start = || {
-        spawn_render(
-            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16] },
-            take.clone(),
-            status.clone(),
-            progress.clone(),
-            control.clone(),
-        )
-    };
-
-    start();
-    wait_until("the first render to start", || control.child.lock().is_some());
-    let first = control.child.lock().as_ref().map(|f| f.child.id()).expect("a first child");
-
-    start();
-    // The second cannot run until the first has been reaped, so seeing a
-    // different process here is the cancellation having completed rather
-    // than merely been asked for.
-    wait_until("the second render to replace the first", || {
-        control.child.lock().as_ref().is_some_and(|f| f.child.id() != first)
-    });
-
-    // The cancelled render must not have reported anything: its failure
-    // was one we caused, and its replacement owns the status line.
-    assert!(
-        !status.lock().contains("failed"),
-        "a cancelled render reported failure: {}",
-        status.lock()
-    );
-    // And exactly one render is in flight, not two.
-    assert!(progress.read().is_some(), "the bar still shows a render");
-
-    control.cancel_in_flight(&take);
-    wait_until("the last render to be reaped", || control.child.lock().is_none());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Cancelling a running render kills it and takes the part of the video it
-/// had written with it.
-///
-/// Against a real process and real files, for the reason the supersede test
-/// spawns one: the claim bookkeeping proves only that the arithmetic is
-/// right, and what the button is for — a renderer still running, and an mp4
-/// that is a fragment of one — lives entirely in the killing and the
-/// cleanup.
-///
-/// The fixture asks for a `appearance` blob as well, so the sweep covers both
-/// things a run leaves beside the take: a partial that is only ever renamed
-/// into place on success, and the look a "Re-render take" wrote out for it.
-#[cfg(unix)]
-#[test]
-fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = std::env::temp_dir().join(format!("harmonigraph-cancelled-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    // The encoder descendant inherits stderr, just as ffmpeg does. Killing
-    // only the renderer leaves that pipe open until the child finishes its
-    // planned audio. Start the child before publishing the partial output so
-    // the fixture cannot cancel before reaching the process-tree boundary.
-    let fake = dir.join("slow-renderer");
-    std::fs::write(&fake, "#!/bin/sh\nsleep 5 &\necho half a video > \"$3\"\nwait\n")
-        .expect("write fake renderer");
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-
-    let take = dir.join("take-1.take");
-    let control = Arc::new(RenderControl::default());
-    let status = Arc::new(Mutex::new(String::new()));
-    let progress = Arc::new(Progress::default());
-    spawn_render(
-        RenderRequest { program: fake.clone(), appearance: Some("(dummy)".into()), size: [16, 16] },
-        take.clone(),
-        status.clone(),
-        progress.clone(),
-        control.clone(),
-    );
-    // Everything the run put beside the take under a name of its own.
-    let strays = || {
-        std::fs::read_dir(&dir)
-            .expect("the take's directory")
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                name.contains("rendering-") || name.contains("rendernow-")
-            })
-            .count()
-    };
-    wait_until("the render to start", || control.child.lock().is_some());
-    wait_until("the renderer to write some of the video", || strays() == 2);
-
-    let cancelled_at = std::time::Instant::now();
-    assert!(control.cancel(), "there was a render in flight to stop");
-    wait_until("the part-written video to go", || strays() == 0);
-    wait_until("the cancelled render to be reaped", || control.child.lock().is_none());
-    assert!(progress.read().is_none(), "the bar outlived the render it was measuring");
-    assert!(
-        cancelled_at.elapsed() < std::time::Duration::from_secs(2),
-        "cancellation waited for the encoder descendant to finish"
-    );
-    // A cancellation is not a failure: the run ended because it was asked
-    // to, and the line belongs to whoever asked.
-    assert!(
-        !status.lock().contains("failed"),
-        "a cancelled render reported failure: {}",
-        status.lock()
-    );
-    // And nothing is left holding the take, so it can be rendered again.
-    let again = control.claim(&take);
-    assert!(!control.superseded(&take, again), "a cancelled take cannot be rendered again");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A render of ANOTHER take queues behind the one in flight rather than
-/// killing it.
-///
-/// Auto-render fires for every finished take (see
-/// [`RenderRequest::from_config`]) and each take is a new file, so
-/// recording twice in a row is two requests naming two different videos.
-/// Cancelling on that would drop the first take's video on the floor
-/// silently — a superseded run cleans up its partial and returns without
-/// touching the status line, so there is nothing on screen to say the
-/// video is never coming, and `last_take` has already moved on so
-/// "Re-render take" cannot reach it either.
-#[cfg(unix)]
-#[test]
-fn a_render_of_another_take_waits_rather_than_replacing_this_one() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = std::env::temp_dir().join(format!("harmonigraph-queue-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let fake = dir.join("slow-renderer");
-    std::fs::write(&fake, "#!/bin/sh\nexec sleep 300\n").expect("write fake renderer");
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-
-    let control = Arc::new(RenderControl::default());
-    let status = Arc::new(Mutex::new(String::new()));
-    let progress = Arc::new(Progress::default());
-    let start = |take: std::path::PathBuf| {
-        spawn_render(
-            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16] },
-            take,
-            status.clone(),
-            progress.clone(),
-            control.clone(),
-        )
-    };
-
-    start(dir.join("take-1.take"));
-    wait_until("the first take's render to start", || control.child.lock().is_some());
-    let first = control.child.lock().as_ref().map(|f| f.child.id()).expect("a first child");
-
-    // A second take finishes while the first is still rendering.
-    start(dir.join("take-2.take"));
-    // Long enough that a cancellation would have landed: the existing
-    // same-take test sees the replacement inside this window.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert_eq!(
-        control.child.lock().as_ref().map(|f| f.child.id()),
-        Some(first),
-        "take-1's render was killed by take-2's, so take-1.mp4 is never produced"
-    );
-    assert!(
-        !status.lock().contains("failed"),
-        "the surviving render reported failure: {}",
-        status.lock()
-    );
-
-    control.cancel_in_flight(&dir.join("take-1.take"));
-    wait_until("the queued render to take over", || {
-        control.child.lock().as_ref().is_some_and(|f| f.child.id() != first)
-    });
-    control.cancel_in_flight(&dir.join("take-2.take"));
-    wait_until("the last render to be reaped", || control.child.lock().is_none());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A renderer stream with CR-delimited progress, followed by diagnostics.
@@ -395,13 +126,13 @@ fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
     );
 
     let status =
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), tail.warning.as_deref());
+        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, tail.warning.as_deref());
     assert!(status.contains("rendered /takes/take-1.mp4"), "{status}");
     assert!(status.contains("note history 6..=8 is missing"), "{status}");
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
     assert_eq!(
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None),
+        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, None),
         "rendered /takes/take-1.mp4",
     );
 }
@@ -420,43 +151,10 @@ fn an_unterminated_last_counter_still_counts() {
     assert_eq!(progress.read(), Some(harmonigraph_take::RenderProgress { done: 240, total: 300 }));
 }
 
-/// The bar survives a render ending while another is in flight.
-///
-/// `RenderControl` serialises renders, so nothing should reach two — but
-/// the count is what makes that a belt rather than the only strap, and a
-/// flag cleared by whichever finished first would blank the bar out from
-/// under a running render. This holds the counting to that.
-#[test]
-fn the_bar_lasts_until_the_last_render_ends() {
-    let progress = Progress::default();
-    progress.begin();
-    progress.begin();
-    progress.end();
-    assert!(progress.read().is_some(), "one render is still in flight");
-    progress.end();
-    assert_eq!(progress.read(), None);
-}
-
 #[test]
 fn the_default_renderer_path_is_where_update_plugin_installs_it() {
     let path = default_renderer_path();
     assert!(path.ends_with("Harmonigraph/harmonigraph-offline"), "{path:?}");
-}
-
-/// The Video pane's bar reads the counter the render thread writes.
-#[test]
-fn the_panes_bar_reads_the_render_threads_progress() {
-    let (_rec, ctrl) = channel();
-    assert_eq!(ctrl.render_progress(), None, "no bar while nothing is rendering");
-    ctrl.progress.begin();
-    ctrl.progress.done.store(7, Ordering::Relaxed);
-    ctrl.progress.total.store(9, Ordering::Relaxed);
-    assert_eq!(
-        ctrl.render_progress(),
-        Some(harmonigraph_take::RenderProgress { done: 7, total: 9 })
-    );
-    ctrl.progress.end();
-    assert_eq!(ctrl.render_progress(), None);
 }
 
 /// A signal arriving mid-read is not the end of the render, and a real
@@ -536,4 +234,214 @@ fn the_default_renderer_path_is_absolute() {
     let path = default_renderer_path();
     assert!(path.is_absolute(), "resolved against the host's cwd: {path:?}");
     assert!(path.starts_with(&home), "{path:?} is not under {home}");
+}
+
+#[cfg(unix)]
+struct Fixture {
+    dir: std::path::PathBuf,
+    control: Arc<RenderControl>,
+    progress: Arc<Progress>,
+    status: Arc<Mutex<String>>,
+}
+#[cfg(unix)]
+impl Fixture {
+    fn new(name: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("harmonigraph-queue-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("renderer"), r#"#!/bin/sh
+look=$(cat "$5")
+case "$look" in
+ retry) if [ ! -e "$1.retry" ]; then touch "$1.retry"; echo 'transient encoder failure' >&2; exit 7; fi ;;
+ slow) sleep 300 & echo partial > "$3"; echo 'progress: 1/10 frames (10%)' >&2; wait ;;
+esac
+printf '%s %s' "$look" "$7" > "$3"
+echo 'progress: 10/10 frames (100%)' >&2
+"#).unwrap();
+        std::fs::set_permissions(dir.join("renderer"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        Self {
+            dir,
+            control: Arc::new(RenderControl::default()),
+            progress: Arc::new(Progress::default()),
+            status: Arc::new(Mutex::new(String::new())),
+        }
+    }
+    fn request(&self, look: &str, size: [u32; 2]) -> RenderRequest {
+        RenderRequest {
+            program: self.dir.join("renderer"),
+            appearance: Some(look.into()),
+            size: Some(size),
+            notice: None,
+        }
+    }
+    fn enqueue(&self, request: RenderRequest) {
+        spawn_render(
+            request,
+            self.dir.join("music.take"),
+            self.status.clone(),
+            self.progress.clone(),
+            self.control.clone(),
+        );
+    }
+    fn jobs(&self) -> Vec<ExportJob> {
+        self.control.snapshots(&self.progress)
+    }
+    fn finished(&self) {
+        wait_until("queue to finish", || !self.control.queue.lock().working);
+    }
+}
+#[cfg(unix)]
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.control.shutdown();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+#[cfg(unix)]
+fn wait_until(label: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !condition() {
+        assert!(std::time::Instant::now() < deadline, "timed out: {label}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure() {
+    let f = Fixture::new("fifo");
+    std::fs::write(f.dir.join("music.mp4"), "existing video").unwrap();
+    let gate = f.control.running.lock();
+    f.enqueue(f.request("first", [16, 18]));
+    f.enqueue(f.request("retry", [20, 22]));
+    f.enqueue(f.request("third", [24, 26]));
+    assert!(f.jobs().iter().all(|j| j.state == ExportStatus::Pending));
+    assert_eq!(
+        f.jobs()
+            .iter()
+            .map(|j| j.output.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        ["music-1.mp4", "music-2.mp4", "music-3.mp4"]
+    );
+    // Another writer wins a chosen destination after enqueue. Publication must
+    // choose another name rather than overwrite it.
+    std::os::unix::fs::symlink(f.dir.join("missing-video"), f.dir.join("music-1.mp4")).unwrap();
+    drop(gate);
+    f.finished();
+    let jobs = f.jobs();
+    assert_eq!(
+        jobs.iter().map(|j| j.state).collect::<Vec<_>>(),
+        [ExportStatus::Completed, ExportStatus::Failed, ExportStatus::Completed]
+    );
+    assert!(jobs[1].detail.contains("transient encoder failure"));
+    assert_eq!(std::fs::read_to_string(&jobs[0].output).unwrap(), "first 16x18");
+    assert_eq!(std::fs::read_to_string(&jobs[2].output).unwrap(), "third 24x26");
+    assert_eq!(jobs[2].progress, RenderProgress { done: 10, total: 10 });
+    f.control.retry(2, f.status.clone(), f.progress.clone());
+    f.finished();
+    let retried = f.jobs().into_iter().find(|j| j.id == 2).unwrap();
+    assert_eq!(retried.state, ExportStatus::Completed);
+    assert_eq!(std::fs::read_to_string(retried.output).unwrap(), "retry 20x22");
+    assert_eq!(std::fs::read_to_string(f.dir.join("music.mp4")).unwrap(), "existing video");
+    assert_eq!(std::fs::read_link(f.dir.join("music-1.mp4")).unwrap(), f.dir.join("missing-video"));
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jobs() {
+    let f = Fixture::new("cancel");
+    let orphan = f.dir.join(format!("music.export-{}-1-0", std::process::id()));
+    std::fs::create_dir(&orphan).unwrap();
+    std::fs::write(orphan.join("keep"), "owned elsewhere").unwrap();
+    f.enqueue(f.request("slow", [16, 16]));
+    wait_until("descendant and partial output", || f.progress.read().is_some_and(|p| p.done == 1));
+    f.enqueue(f.request("cancel pending", [18, 18]));
+    f.enqueue(f.request("survivor", [20, 20]));
+    f.control.cancel_job(2);
+    f.control.cancel_job(1);
+    f.finished();
+    assert_eq!(
+        f.jobs().iter().map(|j| j.state).collect::<Vec<_>>(),
+        [ExportStatus::Cancelled, ExportStatus::Cancelled, ExportStatus::Completed]
+    );
+    assert!(orphan.join("keep").exists());
+    assert_eq!(
+        std::fs::read_dir(&f.dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().unwrap().is_dir())
+            .count(),
+        1,
+        "only the unowned directory remains"
+    );
+    let completed = f.jobs()[2].output.clone();
+    f.control.cancel_job(3);
+    assert_eq!(std::fs::read_to_string(completed).unwrap(), "survivor 20x20");
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs() {
+    let f = Fixture::new("publish");
+    let gate = f.control.before_publish.lock();
+    f.enqueue(f.request("finished bytes", [16, 16]));
+    wait_until("renderer to finish", || {
+        f.progress.read().is_some_and(|p| p.done == 10) && f.control.child.lock().is_none()
+    });
+    f.control.cancel_job(1);
+    drop(gate);
+    f.finished();
+    assert_eq!(f.jobs()[0].state, ExportStatus::Cancelled);
+    assert!(!f.jobs()[0].output.exists());
+    f.enqueue(f.request("slow", [16, 16]));
+    wait_until("renderer to start", || f.progress.read().is_some_and(|p| p.done == 1));
+    f.enqueue(f.request("pending", [16, 16]));
+    f.control.shutdown();
+    assert!(f.jobs().iter().all(|j| j.state == ExportStatus::Cancelled));
+    assert!(f.control.child.lock().is_none());
+    f.enqueue(f.request("late recorder completion", [16, 16]));
+    assert_eq!(f.jobs().len(), 3);
+}
+
+#[cfg(unix)]
+#[test]
+fn two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_enqueue() {
+    let f = Fixture::new("instances");
+    let take = f.dir.join("music.take");
+    let header =
+        harmonigraph_take::Header { appearance: Some("recorded".into()), ..Default::default() };
+    harmonigraph_take::Writer::create(&take, &header).unwrap().flush().unwrap();
+    let gate = f.control.running.lock();
+    let mut request = f.request("", [16, 16]);
+    request.appearance = None;
+    request.size = None;
+    f.enqueue(request);
+    harmonigraph_take::Writer::create(
+        &take,
+        &harmonigraph_take::Header { appearance: Some("changed after enqueue".into()), ..header },
+    )
+    .unwrap()
+    .flush()
+    .unwrap();
+    let other = Arc::new(RenderControl::default());
+    let other_progress = Arc::new(Progress::default());
+    spawn_render(
+        f.request("other instance", [18, 18]),
+        take,
+        f.status.clone(),
+        other_progress.clone(),
+        other.clone(),
+    );
+    drop(gate);
+    f.finished();
+    wait_until("second instance", || !other.queue.lock().working);
+    let first = f.jobs().remove(0);
+    let second = other.snapshots(&other_progress).remove(0);
+    assert_ne!(first.output, second.output);
+    assert_eq!(std::fs::read_to_string(first.output).unwrap(), "recorded ");
+    assert_eq!(std::fs::read_to_string(second.output).unwrap(), "other instance 18x18");
+    other.shutdown();
 }

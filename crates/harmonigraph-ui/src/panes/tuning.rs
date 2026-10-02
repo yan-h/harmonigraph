@@ -16,7 +16,7 @@ use super::{section, subsection};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
-use harmonigraph_core::configuration::ConfigEdit;
+use harmonigraph_core::configuration::{ConfigEdit, PolicyEdit};
 use harmonigraph_core::tuning;
 
 #[cfg(test)]
@@ -176,7 +176,14 @@ fn tuning_hint(key: ParamKey) -> &'static str {
         }
         // Not on this pane: Fade is a node setting and the two pitch ends are
         // the Mappings page's Pitch color range.
-        ParamKey::Fade | ParamKey::DarkestPitch | ParamKey::BrightestPitch => "",
+        ParamKey::Fade
+        | ParamKey::DarkestPitch
+        | ParamKey::BrightestPitch
+        | ParamKey::CameraYaw
+        | ParamKey::CameraPitch
+        | ParamKey::CameraDistance
+        | ParamKey::CameraPanX
+        | ParamKey::CameraPanY => "",
     }
 }
 
@@ -451,6 +458,7 @@ pub(super) fn tuning_pane(
 fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     let mut p = state.runtime.adaptive_policy;
     let before = p;
+    let mut derive_keyboard = false;
     subsection(ui, "Keyboard", |ui| {
         for (value, label) in p.keyboard.iter_mut().zip(["Fifth", "Third", "Seventh"]) {
             *value =
@@ -458,7 +466,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                     as i32;
         }
         if ui.button("Derive from fifth").on_hover_text("Set the input keyboard's third and seventh from its fifth.").clicked() {
-            p.keyboard = tuning::fifth_generated(p.keyboard[0]);
+            derive_keyboard = true;
         }
         let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
         crate::widgets::weak(ui, format!("From the fifth: third is {third}, seventh is {seventh}."));
@@ -469,11 +477,15 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
          pitch cost outweighs harmonic benefit. Learn sets the keyboard from the \
          fifth it hears.",
     );
-    if p != before {
+    let mut policy = PolicyEdit::changed(before, p);
+    if derive_keyboard {
+        policy = policy.derive_keyboard();
+    }
+    if !policy.is_empty() {
         state.runtime.edit_tuning(
             &mut state.appearance,
             params,
-            ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+            ConfigEdit { policy: Some(policy), ..Default::default() },
         );
     }
 }
@@ -563,7 +575,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             state.runtime.edit_tuning(
                 &mut state.appearance,
                 params,
-                ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+                ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
             );
         }
     });
@@ -582,7 +594,10 @@ fn instance_controls(
     instances: &[crate::params::TuningInstance],
 ) {
     use crate::params::InstanceEdit;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
+        // Wrap whole controls; a label split into the last few points of a row
+        // can still leave its checkbox icon outside the column.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for (label, retune) in [("Retune all", true), ("Show all", false)] {
             let enabled =
                 instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
@@ -608,64 +623,76 @@ fn instance_controls(
     if !instances.iter().any(|row| row.id == selected) {
         selected = instances[0].id;
     }
-    let name_width = (ui.available_width() - 120.0).max(45.0);
-    egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
-        crate::widgets::weak(ui, "Instance");
-        crate::widgets::weak(ui, "Retune");
-        crate::widgets::weak(ui, "Show");
-        ui.end_row();
+    let compact = ui.available_width() < 160.0 * theme::ui_scale(ui.ctx());
+    let name_width =
+        if compact { ui.available_width() } else { (ui.available_width() - 120.0).max(45.0) };
+    let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
+        ui.vertical(|ui| {
+            ui.set_width(name_width);
+            let name = if row.name.is_empty() {
+                if row.is_hub {
+                    "Harmonigraph input".to_owned()
+                } else {
+                    format!("Tune {}", row.id)
+                }
+            } else {
+                row.name.clone()
+            };
+            if ui.add(egui::Button::selectable(selected == row.id, name).truncate()).clicked() {
+                selected = row.id;
+            }
+            let status = if row.misses != 0 {
+                format!("{} held · {} missed", row.held, row.misses)
+            } else {
+                format!("{} held · {} out", row.held, row.notes_out)
+            };
+            crate::widgets::label(ui, egui::RichText::new(status).small())
+                .on_hover_text(&row.status);
+            if row.status != "No faults" {
+                crate::widgets::label(
+                    ui,
+                    egui::RichText::new("Check status").small().color(theme::armed()),
+                )
+                .on_hover_text(&row.status);
+            }
+        });
+    };
+    let flags = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
+        let mut retune = row.retune;
+        if crate::widgets::checkbox(ui, &mut retune, if compact { "Retune" } else { "" })
+            .on_hover_text("Tune new notes with the selected engine")
+            .changed()
+        {
+            params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
+        }
+        let mut show = row.show;
+        if crate::widgets::checkbox(ui, &mut show, if compact { "Show" } else { "" })
+            .on_hover_text("Show this instance's output notes")
+            .changed()
+        {
+            params.edit_tuning_instance(row.id, InstanceEdit::Show(show));
+        }
+    };
+    if compact {
         for row in instances {
             ui.push_id(row.id, |ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(name_width);
-                    let name = if row.name.is_empty() {
-                        if row.is_hub {
-                            "Harmonigraph input".to_owned()
-                        } else {
-                            format!("Tune {}", row.id)
-                        }
-                    } else {
-                        row.name.clone()
-                    };
-                    if ui
-                        .add(egui::Button::selectable(selected == row.id, name).truncate())
-                        .clicked()
-                    {
-                        selected = row.id;
-                    }
-                    let status = if row.misses != 0 {
-                        format!("{} held · {} missed", row.held, row.misses)
-                    } else {
-                        format!("{} held · {} out", row.held, row.notes_out)
-                    };
-                    crate::widgets::label(ui, egui::RichText::new(status).small())
-                        .on_hover_text(&row.status);
-                    if row.status != "No faults" {
-                        crate::widgets::label(
-                            ui,
-                            egui::RichText::new("Check status").small().color(theme::armed()),
-                        )
-                        .on_hover_text(&row.status);
-                    }
-                });
+                identity(ui, row);
+                ui.vertical(|ui| flags(ui, row));
             });
-            let mut retune = row.retune;
-            if crate::widgets::checkbox(ui, &mut retune, "")
-                .on_hover_text("Tune new notes with the selected engine")
-                .changed()
-            {
-                params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
-            }
-            let mut show = row.show;
-            if crate::widgets::checkbox(ui, &mut show, "")
-                .on_hover_text("Show this instance's output notes")
-                .changed()
-            {
-                params.edit_tuning_instance(row.id, InstanceEdit::Show(show));
-            }
-            ui.end_row();
         }
-    });
+    } else {
+        egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
+            crate::widgets::weak(ui, "Instance");
+            crate::widgets::weak(ui, "Retune");
+            crate::widgets::weak(ui, "Show");
+            ui.end_row();
+            for row in instances {
+                ui.push_id(row.id, |ui| identity(ui, row));
+                flags(ui, row);
+                ui.end_row();
+            }
+        });
+    }
     ui.data_mut(|data| data.insert_temp(selection, selected));
     if let Some(row) = instances.iter().find(|row| row.id == selected) {
         ui.push_id(row.id, |ui| {
@@ -710,7 +737,7 @@ fn instance_controls(
                 if row.max_delay > 1 {
                     let id = ui.id().with("delay-draft");
                     let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(row.delay);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         crate::widgets::label(ui, "Buffers of delay");
                         let response =
                             ui.add(egui::DragValue::new(&mut delay).range(1..=row.max_delay));
@@ -741,7 +768,7 @@ fn instance_controls(
         subsection(ui, "Tuning delay", |ui| {
             let id = ui.id().with("all-delay-draft");
             let mut delay = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(tuner.delay);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 crate::widgets::label(ui, "Buffers");
                 ui.add(egui::DragValue::new(&mut delay).range(1..=tuner.max_delay));
                 if ui.button("Apply to all tuners").clicked() {

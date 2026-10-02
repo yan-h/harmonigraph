@@ -1186,8 +1186,8 @@ impl Hub {
     }
 
     /// Whether any source this Hub sequences, its own included, has Retune on,
-    /// as of this callback's `begin`. Learn leaves the lattice alone while one
-    /// does, since the lattice is then what they are retuned to.
+    /// as of this callback's `begin`. The configuration owner also checks the
+    /// engine before reserving Learn's axes for an active retuning target.
     pub fn retuning(&self) -> bool {
         self.rows.iter().any(|row| row.live && row.retune & 1 != 0)
     }
@@ -1199,7 +1199,7 @@ impl Hub {
         self.status |= session::POLICY;
     }
 
-    pub fn end(&mut self, callback: api::Callback, owner: &mut Owner, recorder: &mut Recorder) {
+    pub fn end(&mut self, owner: &mut Owner, recorder: &mut Recorder) {
         // Whatever no sub-block reached is published against whatever segment
         // the recorder does have, and says so if there is none.
         self.flush(owner, recorder, true);
@@ -1208,17 +1208,16 @@ impl Hub {
         if self.callback.is_some() {
             self.snapshots(owner, recorder);
         }
-        self.tune.end();
+        let diagnostics_due = self.tune.end();
         self.status |= self.tune.status();
         self.shared.status.store(self.status, Ordering::Release);
-        self.publish_diagnostics(callback);
+        if diagnostics_due {
+            self.publish_diagnostics();
+        }
         self.callback = None;
     }
 
-    fn publish_diagnostics(&self, callback: api::Callback) {
-        if !self.shared.diagnostics.due(callback.frames, self.rate) {
-            return;
-        }
+    fn publish_diagnostics(&self) {
         self.shared.diagnostics.publish_hub(super::diagnostics::HubReport {
             epoch: self.epoch,
             rows: self.rows.iter().take(TUNERS).filter(|row| row.live).count() as u64,

@@ -69,7 +69,7 @@ impl Regions {
         }
     }
 
-    pub fn draw(&mut self, ui: &mut egui::Ui, state: &mut PictureState, now: f64) {
+    pub fn draw(&mut self, ui: &mut egui::Ui, state: &mut PictureState, now: f64, frameless: bool) {
         let rect = ui.available_rect_before_wrap();
         let cfg = state.appearance.spectrum;
         let axes = Axes::new(rect, &cfg);
@@ -81,7 +81,7 @@ impl Regions {
         // Turning off the history layers hides that region and its control;
         // it does not discard the user's independent layout folds.
         let folded = [self.collapsed[0], self.collapsed[1] || !history];
-        let rail = if state.appearance.view.frameless {
+        let rail = if frameless {
             0.0
         } else {
             theme::tab_bar_height(theme::ui_scale(ui.ctx())).min(

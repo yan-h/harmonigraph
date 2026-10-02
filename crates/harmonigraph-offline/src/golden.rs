@@ -395,21 +395,6 @@ fn the_watercolour_wash_draws_the_frame_on_record() {
     check_take("spectrogram-watercolour-wash", shot, take);
 }
 
-/// The mosaic draws the frame on record, at the settings the page opens it at.
-///
-/// The wash's partner: nothing else committed here executes `scale_tone` and
-/// the mosaic's tile end to end, and at the fresh `Refraction` of -1 this is
-/// the centre-gather half of the dial, which no claim test runs at full
-/// strength.
-#[test]
-fn the_mosaic_draws_the_frame_on_record() {
-    let shot = Shot { size: TALL, range: whole_axis() };
-    let take = shot.dialled(|a| {
-        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Mosaic;
-    });
-    check_take("spectrogram-mosaic", shot, take);
-}
-
 /// Scales draw the frame on record, at the settings the page opens them at.
 ///
 /// The one texture with neither a tile nor a starfield: `fs_velvet_tone` into

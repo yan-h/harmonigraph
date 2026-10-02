@@ -2,7 +2,8 @@
 //! aggregation, which supplies those pitches every callback, is the Hub in
 //! `tuning`.
 use harmonigraph_core::configuration::{
-    ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
+    ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, PolicyEdit, ResolvedConfig,
+    TuningModes,
 };
 use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
 use harmonigraph_core::{LearnedTuning, Tempered, Tuning};
@@ -93,7 +94,9 @@ pub fn packet(edit: ConfigEdit) -> ConfigurationEdit {
     payload[4] = encode_option(edit.auto[1]);
     payload[5] = encode_option(edit.learning);
     if let Some(policy) = edit.policy {
-        payload[7..17].copy_from_slice(&policy.sanitize().words());
+        let (mask, values) = policy.words();
+        payload[6] = mask;
+        payload[7..17].copy_from_slice(&values);
     }
     ConfigurationEdit {
         values: edit.axes.map(|value| value.map(|v| v as f32 / 1_000_000.0)),
@@ -307,7 +310,10 @@ impl Owner {
                 ],
                 learning: decode_option(command.edit.payload[5]),
                 policy: (command.edit.payload[7] == 3).then(|| {
-                    PolicyConfig::from_words(command.edit.payload[7..17].try_into().unwrap())
+                    PolicyEdit::from_words(
+                        command.edit.payload[6],
+                        command.edit.payload[7..17].try_into().unwrap(),
+                    )
                 }),
             }),
         };
@@ -412,13 +418,15 @@ impl Owner {
         self.recording.block_frames = frames;
     }
 
-    /// `retuning`: some source has Retune on, so the lattice is the target
-    /// and Learn moves only the C offset there, besides the keyboard tuning.
+    /// A Retune-enabled source reserves the lattice axes only while the engine
+    /// actually retunes. Pass through learns the axes from unchanged input.
     ///
     /// Status bit 1 reports this evaluation alone rather than latching. The
     /// held state is rebuilt every callback, so the bit clears as soon as a
     /// departure or a Reset's cut makes it complete again.
     pub fn group_end(&mut self, retuning: bool) -> Option<ConfigurationEdit> {
+        let retuning = retuning
+            && self.maps.playback.engine != harmonigraph_core::lattice_map::TuningEngine::Off;
         self.snapshot.status &= !1;
         if self.snapshot.status & 2 != 0
             || self.maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap

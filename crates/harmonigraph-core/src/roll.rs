@@ -341,13 +341,22 @@ impl NoteRoll {
 
     /// A factual accepted release survives loss of the intervening trajectory.
     pub(crate) fn observed_release(&mut self, key: VoiceKey, lifetime: u64, at: Time) {
-        if let Some(note) = self.past.iter_mut().rev().find(|note| {
+        if let Some(index) = self.past.iter().rposition(|note| {
             note.key() == key
                 && note.lifetime == Some(lifetime)
                 && note.end.is_none()
                 && note.observed_until.is_some()
         }) {
-            note.end = Some(at.max(note.start));
+            let mut note = self.past.remove(index).unwrap();
+            let end = at.max(note.start);
+            note.end = Some(end);
+            // A recovered off can follow neighbors that ended after the gap.
+            // Restore the ordering used by trim/activity at this rare mutation,
+            // rather than making every display frame scan or sort the history.
+            let index = self.past.partition_point(|other| {
+                other.end.or(other.observed_until).is_none_or(|at| at <= end)
+            });
+            self.past.insert(index, note);
         }
     }
 

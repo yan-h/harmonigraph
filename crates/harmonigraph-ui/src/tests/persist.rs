@@ -984,8 +984,10 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "folded_sections",
         "appearance",
         "camera_presets",
+        "saved_looks",
         "fps_cap",
         "ui_scale",
+        "frameless",
         "skin_dials",
         "perf_pos",
         "show_perf",
@@ -1651,10 +1653,10 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     let mut state = fresh();
     state.picture.appearance.camera.yaw = 1.23;
     state.picture.appearance.view.atmosphere = AtmosphereSettings {
-        material_style: harmonigraph_scene::LatticeMaterial::Mosaic,
+        material_style: harmonigraph_scene::LatticeMaterial::Watercolor,
         material_amount: 0.63,
         material_settings: harmonigraph_scene::MaterialSettings {
-            scale_size: 1.7,
+            wash_size: 1.7,
             ..Default::default()
         },
         material_speed: 0.8,
@@ -1706,7 +1708,7 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
         AtmosphereSettings { breath_amount: 0.6, breath_speed: 1.5, ..Default::default() }
     );
     state.picture.appearance.view.atmosphere.material_amount = 7.0;
-    state.picture.appearance.view.atmosphere.material_settings.scale_size = f32::NAN;
+    state.picture.appearance.view.atmosphere.material_settings.wash_size = f32::NAN;
     state.picture.appearance.view.atmosphere.material_speed = -2.0;
     state.picture.appearance.view.atmosphere.texture_depth = f32::NAN;
     state.picture.appearance.view.atmosphere.breath_amount = 7.0;
@@ -1715,8 +1717,8 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
     assert_eq!(restored.view.atmosphere.material_amount, 1.0);
     assert_eq!(
-        restored.view.atmosphere.material_settings.scale_size,
-        AtmosphereSettings::default().material_settings.scale_size
+        restored.view.atmosphere.material_settings.wash_size,
+        AtmosphereSettings::default().material_settings.wash_size
     );
     assert_eq!(restored.view.atmosphere.material_speed, 0.0);
 }
@@ -1729,7 +1731,6 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
     assert_eq!(old.stars.star_halo_profile, StarHaloProfile::Medium);
     assert_eq!(old.stars, harmonigraph_scene::StarSettings::default());
     assert_eq!(old.pitch_softness, 12.0);
-    assert_eq!(old.stars.star_far_fill, 0.0);
 
     let partial: harmonigraph_scene::StarSettings = ron::from_str("(star_jitter:0.23)").unwrap();
     assert_eq!(
@@ -1749,7 +1750,6 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
             harmonigraph_scene::LatticeMaterial::Stars;
         state.picture.appearance.spectrum.atmosphere.stars.star_halo_profile = profile;
         state.picture.appearance.spectrum.atmosphere.stars.star_halo_resolution = 0.625;
-        state.picture.appearance.spectrum.atmosphere.stars.star_far_fill = 0.42;
         let saved = state.save_persist();
         let mut editor = fresh();
         assert!(editor.load_persist(&saved));
@@ -1766,8 +1766,6 @@ fn star_rendering_controls_default_old_saves_and_roundtrip() {
         assert_eq!(offline.spectrum.atmosphere.stars.star_halo_profile, profile);
         assert_eq!(offline.view.atmosphere.stars.star_halo_profile, profile);
         assert_eq!(offline.spectrum.atmosphere.stars.star_halo_resolution, 0.625);
-        assert_eq!(offline.spectrum.atmosphere.stars.star_far_fill, 0.42);
-        assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_far_fill, 0.42);
     }
 }
 
@@ -1783,7 +1781,6 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     state.picture.appearance.spectrum.atmosphere = SpectralAtmosphere {
         stars: harmonigraph_scene::StarSettings {
             star_jitter: 2.0,
-            star_far_fill: 2.0,
             star_halo_resolution: 0.1,
             ..Default::default()
         },
@@ -1801,7 +1798,6 @@ fn spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values() {
     let expected = SpectralAtmosphere {
         stars: harmonigraph_scene::StarSettings {
             star_jitter: 1.0,
-            star_far_fill: 1.0,
             star_halo_resolution: 0.25,
             ..Default::default()
         },
@@ -2206,13 +2202,13 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
         harmonigraph_scene::CloudStyle::VelvetScales;
     let lattice = &mut state.picture.appearance.view.atmosphere.material_settings;
     lattice.wash_fuzz = 0.23;
-    lattice.scale_variety = 0.81;
+    lattice.velvet_variety = 0.81;
     lattice.velvet_edge = 0.51;
     lattice.velvet_irregularity = 0.43;
     lattice.velvet_shape = 0.72;
     let spectral = &mut state.picture.appearance.spectrum.atmosphere.material_settings;
     spectral.wash_fuzz = 0.72;
-    spectral.scale_variety = 0.19;
+    spectral.velvet_variety = 0.19;
     spectral.velvet_edge = 0.18;
     spectral.velvet_irregularity = 0.93;
     spectral.velvet_shape = 0.29;
@@ -2228,4 +2224,22 @@ fn material_settings_are_independent_and_missing_nested_keys_default() {
     );
     let partial: MaterialSettings = ron::from_str("(wash_fuzz:0.23)").unwrap();
     assert_eq!(partial, MaterialSettings { wash_fuzz: 0.23, ..Default::default() });
+}
+
+/// Tab visibility belongs to the editor, so loading a look cannot move it and
+/// an older appearance key is ignored without a compatibility path.
+#[test]
+fn tab_visibility_is_saved_only_with_the_editor() {
+    let mut state = fresh();
+    state.workspace.interaction.frameless = true;
+    let saved = state.save_persist();
+    let mut restored = fresh();
+    assert!(restored.load_persist(&saved));
+    assert!(restored.workspace.interaction.frameless);
+    let appearance = ron::to_string(&state.picture.appearance).unwrap();
+    assert!(!appearance.contains("frameless"));
+    let old = appearance.replacen("view:(", "view:(frameless:true,", 1);
+    assert_ne!(old, appearance, "the old appearance key must be present");
+    let loaded: crate::AppearanceDocument = ron::from_str(&old).unwrap();
+    assert_eq!(loaded.view, state.picture.appearance.view);
 }

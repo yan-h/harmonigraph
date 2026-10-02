@@ -112,7 +112,6 @@ fn poisoned_view() -> ViewConfig {
         meantone_auto: base.meantone_auto,
         marvel: base.marvel,
         marvel_auto: base.marvel_auto,
-        frameless: base.frameless,
         render_scale: nan,
         spiral_bloom: nan,
         glow_reach: nan,
@@ -129,9 +128,8 @@ fn poisoned_view() -> ViewConfig {
                 velvet_edge: nan,
                 velvet_irregularity: nan,
                 velvet_shape: nan,
-                scale_size: nan,
-                scale_variety: nan,
-                scale_refract: nan,
+                velvet_square: nan,
+                velvet_tilt: nan,
                 wash_size: nan,
                 wash_fuzz: nan,
                 wash_lobe: nan,
@@ -213,6 +211,7 @@ impl Floats {
 fn scene_floats(scene: &Scene) -> Floats {
     let mut f = Floats::default();
     let Scene {
+        edge_softness_points,
         nodes,
         camera,
         node_radius,
@@ -248,6 +247,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         glow_timing,
         atmosphere,
     } = scene;
+    f.one("edge_softness_points", *edge_softness_points);
 
     for (i, node) in nodes.iter().enumerate() {
         let NodeInstance {
@@ -406,22 +406,21 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.stars.star_randomness", stars.star_randomness);
     f.one("atmosphere.stars.star_size_variation", stars.star_size_variation);
     f.one("atmosphere.stars.star_jitter", stars.star_jitter);
-    f.one("atmosphere.stars.star_spacing_far", stars.star_spacing_far);
-    f.one("atmosphere.stars.star_spacing_near", stars.star_spacing_near);
-    f.one("atmosphere.stars.star_spacing_curve", stars.star_spacing_curve);
-    f.one("atmosphere.stars.star_size_min", stars.star_size_min);
-    f.one("atmosphere.stars.star_size_max", stars.star_size_max);
+    f.one("atmosphere.stars.star_spacing_ratio_far", stars.star_spacing_ratio_far);
+    f.one("atmosphere.stars.star_spacing_ratio_near", stars.star_spacing_ratio_near);
+    f.one("atmosphere.stars.star_spacing_ratio_curve", stars.star_spacing_ratio_curve);
+    f.one("atmosphere.stars.star_size_far", stars.star_size_far);
+    f.one("atmosphere.stars.star_size_near", stars.star_size_near);
     f.one("atmosphere.stars.star_size_curve", stars.star_size_curve);
-    f.one("atmosphere.stars.star_speed_min", stars.star_speed_min);
-    f.one("atmosphere.stars.star_speed_max", stars.star_speed_max);
+    f.one("atmosphere.stars.star_speed_far", stars.star_speed_far);
+    f.one("atmosphere.stars.star_speed_near", stars.star_speed_near);
     f.one("atmosphere.stars.star_speed_curve", stars.star_speed_curve);
     f.one("atmosphere.stars.star_lifetime", stars.star_lifetime);
-    f.one("atmosphere.stars.star_glow", stars.star_glow);
-    f.one("atmosphere.stars.star_core_far", stars.star_core_far);
-    f.one("atmosphere.stars.star_core_near", stars.star_core_near);
-    f.one("atmosphere.stars.star_falloff", stars.star_falloff);
-    f.one("atmosphere.stars.star_far_fill", stars.star_far_fill);
-    f.one("atmosphere.stars.star_overlap_light", stars.star_overlap_light);
+    f.one("atmosphere.stars.star_twinkle_far", stars.star_twinkle_far);
+    f.one("atmosphere.stars.star_twinkle_near", stars.star_twinkle_near);
+    f.one("atmosphere.stars.star_solid_far", stars.star_solid_far);
+    f.one("atmosphere.stars.star_solid_near", stars.star_solid_near);
+    f.one("atmosphere.stars.star_glow_falloff", stars.star_glow_falloff);
     f.one("atmosphere.stars.star_halo_resolution", stars.star_halo_resolution);
     f.one("atmosphere.material_amount", *material_amount);
     f.one("atmosphere.material_shadow_pickup", *material_shadow_pickup);
@@ -433,9 +432,8 @@ fn scene_floats(scene: &Scene) -> Floats {
         velvet_edge,
         velvet_irregularity,
         velvet_shape,
-        scale_size,
-        scale_variety,
-        scale_refract,
+        velvet_square,
+        velvet_tilt,
         wash_size,
         wash_fuzz,
         wash_lobe,
@@ -448,9 +446,8 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.material_settings.velvet_edge", *velvet_edge);
     f.one("atmosphere.material_settings.velvet_irregularity", *velvet_irregularity);
     f.one("atmosphere.material_settings.velvet_shape", *velvet_shape);
-    f.one("atmosphere.material_settings.scale_size", *scale_size);
-    f.one("atmosphere.material_settings.scale_variety", *scale_variety);
-    f.one("atmosphere.material_settings.scale_refract", *scale_refract);
+    f.one("atmosphere.material_settings.velvet_square", *velvet_square);
+    f.one("atmosphere.material_settings.velvet_tilt", *velvet_tilt);
     f.one("atmosphere.material_settings.wash_size", *wash_size);
     f.one("atmosphere.material_settings.wash_fuzz", *wash_fuzz);
     f.one("atmosphere.material_settings.wash_lobe", *wash_lobe);

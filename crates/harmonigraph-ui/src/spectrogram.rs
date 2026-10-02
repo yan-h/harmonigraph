@@ -82,7 +82,7 @@ const LADDER_FLOOR_COLUMNS: f64 = 2.0;
 /// pane buys nothing, so the picture can hold half the slabs the depth axis has
 /// pixels. What that gives up depends on the Span, and the two ends differ in
 /// kind. At a close-up — a 12 s window cuts into 16 ms slabs — the slab is well
-/// under the analysis window (85 ms at the fresh Fast setting and 48 kHz), so
+/// under the analysis window (171 ms at the fresh Balanced setting and 48 kHz), so
 /// the stepping loses detail the FFT never had. At a three-minute Span the
 /// slab is 256 ms and the CAP is what sets the resolution: those slabs merge detail the FFT did
 /// resolve. That is what a long Span is for rather than a flaw in it — the
@@ -2704,13 +2704,13 @@ mod tests {
             |c: &mut SpectrumConfig| c.tilt += 1.0,
             |c: &mut SpectrumConfig| c.roll_seconds *= 1.01,
             |c: &mut SpectrumConfig| c.roll_fraction += 0.01,
-            |c: &mut SpectrumConfig| c.atmosphere.contour_strength = 0.0,
+            |c: &mut SpectrumConfig| c.atmosphere.contour_strength = 1.0,
             |c: &mut SpectrumConfig| c.atmosphere.pitch_softness = 250.0,
             |c: &mut SpectrumConfig| c.atmosphere.time_softness = 1800.0,
             |c: &mut SpectrumConfig| c.atmosphere.contours = 12.0,
             |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
             |c: &mut SpectrumConfig| c.atmosphere.cloud_depth = 0.9,
-            |c: &mut SpectrumConfig| c.atmosphere.material_settings.scale_refract = -0.8,
+            |c: &mut SpectrumConfig| c.atmosphere.material_settings.wash_refract = 0.8,
         ] {
             let mut moved = cfg;
             edit(&mut moved);
@@ -3896,7 +3896,9 @@ mod tests {
         /// this fixture picked. An empty `notes` leaves the noise alone.
         fn analysed_column(notes: &[f32]) -> Vec<BucketDb> {
             let sr = 48_000.0f32;
-            let mut an = harmonigraph_analysis::SpectrumAnalyzer::new(sr);
+            let mut an = harmonigraph_analysis::SpectrumAnalyzer::new(
+                harmonigraph_analysis::AnalyzerConfig { sample_rate: sr, ..Default::default() },
+            );
             let mut seed = 0x1234_5678u32;
             let mut noise = move || {
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);

@@ -1,7 +1,9 @@
 //! Shared star geometry, allocation and frame transport for colored light fields.
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 use crate::wgpu;
-use harmonigraph_scene::star_plan::{star_jitter_width, StarGather};
+#[cfg(doc)]
+use harmonigraph_scene::star_plan::star_profile;
+use harmonigraph_scene::star_plan::{star_falloff_bend, star_jitter_width, StarGather};
 
 /// How many depth slices the starfield walks, from the farthest (0) to the
 /// nearest. The shader's `STAR_SLICES`, held to this by
@@ -13,12 +15,14 @@ pub(crate) const STAR_SLICES: usize = harmonigraph_scene::star_plan::STAR_DEPTHS
 /// Without the reduction a session left running for hours would carry a drift
 /// of millions of star pixels into an f32, and the stars would start stepping
 /// by fractions of a pixel. It is wider than any pane is in the finest cells,
-/// so the repeat never shows: those are `STAR_SPACING_MIN`, 0.25 star pixels,
-/// which puts a 16:9 pane 3840 cells wide and a 16:1 pane 34,560.
+/// so the repeat never shows: those are `STAR_SPACING_MIN` times
+/// `STAR_SIZE_MIN`, 5/24 of a star pixel, which puts a 16:9 pane 4608 cells
+/// wide and a 16:1 pane 41,472.
 ///
 /// The price is the offset's own precision: an f32 near 65536 resolves a 256th
-/// of a cell, which is 0.03 star pixels in the fresh nearest cells and a
-/// quarter of a star pixel only in the biggest cell `Star spacing` allows.
+/// of a cell, which is 0.03 star pixels in the fresh nearest cells. A bigger
+/// cell resolves coarser in proportion, and takes as much longer to drift
+/// that far.
 pub(crate) const STAR_HASH_PERIOD: f64 = 65536.0;
 /// The period the life clock is reduced by, in lives: a power of two, so the
 /// shader's mask on the life index wraps with it and a star's life runs
@@ -51,22 +55,21 @@ struct StarSlice {
     /// This slice's drift, in its own cells, reduced modulo
     /// [`STAR_HASH_PERIOD`]: the stars sit at `cell + offset`.
     offset: Float2,
-    /// The cell one star is hashed into: `Star spacing`'s low end at the far
-    /// end over the square root of half the density, times the ratio of its
-    /// ends raised to `d^Spacing curve`.
+    /// The cell one star is hashed into: the plan's, its star size times its
+    /// `Star spacing`, unless the atlas raised it ([`star_layout`]).
     cell: f32,
     /// The stars' outer radius in star pixels before each star's own size
-    /// draw shrinks it: the plan's, held to what the slice's gather reads.
+    /// draw shrinks it: the plan's, half the depth's `Star size`.
     radius: f32,
-    /// The star's shape: where its Gaussian core falls to `e^-2`, as a share
-    /// of its radius; the glow's coverage at the centre; and its exponent.
-    core: f32,
-    glow: f32,
-    falloff: f32,
+    /// The star's shape ([`star_profile`]): its solid share of the radius,
+    /// `1 / (1 - solid)`, and the glow's [`star_falloff_bend`].
+    solid: f32,
+    ramp: f32,
+    bend: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
     /// many cells it holds across and down. See [`StarLayout`]. An undrawn
-    /// slice holds no cells.
+    /// slice omitted by the layer count holds no cells; a solo-hidden slice keeps them.
     base: i32,
     origin: Int2,
     grid: Int2,
@@ -75,10 +78,11 @@ struct StarSlice {
     /// slice's `Position variation`.
     width: f32,
     inner: f32,
-    /// A multiplier on every star's coverage.
-    gain: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
+    /// How far its stars fade between lives: the plan's. Below 1 a star
+    /// keeps its place across its lives.
+    twinkle: f32,
 }
 }
 
@@ -92,11 +96,6 @@ fn star_gather_code(gather: StarGather) -> u32 {
     }
 }
 
-/// The slice's depth, 0 for the farthest and 1 for the nearest.
-fn star_depth(k: usize) -> f32 {
-    k as f32 / (STAR_SLICES - 1) as f32
-}
-
 /// The shader's `STAR_PANE`: star pixels across the pane's height.
 pub(crate) const STAR_PANE: f32 = 540.0;
 /// The star atlas's texel, one cell's star as the shader's `star_bake` packs it.
@@ -106,9 +105,9 @@ pub(crate) const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgb
 /// Apply it to drawn device pixels, independent of display scale and star count.
 pub(crate) const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
 /// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
-/// fresh dials a 16:9 pane takes about 470 thousand and an 8:1 strip about 2
-/// million; only the finest `Star spacing`, or a still wider pane, asks for
-/// more (see [`star_layout`]).
+/// fresh dials a 16:9 pane takes about 1.2 million and an 8:1 strip about 5.4
+/// million; a pane wider than about 6.3:1, or a finer `Star spacing`, asks
+/// for more (see [`star_layout`]).
 const STAR_ATLAS_TEXELS: u64 = 1 << 22;
 /// The atlas's width, the shader's `STAR_ATLAS_WIDTH`: a power of two, so a
 /// cell's index splits into a texel with a mask and a shift.
@@ -124,9 +123,8 @@ const STAR_GRID_MARGIN: u32 = 1;
 /// dial that sizes cells reallocates at steps rather than every frame.
 const STAR_ATLAS_STEP: u32 = 64;
 
-/// Each slice's cell as the dials ask for it, in star pixels: `Star
-/// spacing`'s low end at the far end over the square root of half the
-/// density, times the ratio of its ends raised to `d^Spacing curve`.
+/// Each slice's cell as the dials ask for it, in star pixels: its star size
+/// times its `Star spacing`.
 pub(crate) fn star_cells(settings: harmonigraph_scene::StarSettings) -> [f32; STAR_SLICES] {
     settings.plan().depths.map(|depth| depth.cell)
 }
@@ -205,14 +203,14 @@ impl StarLayout {
 /// the finest `Star spacing`, where a far cell is a fraction of a pixel on any
 /// real pane — the finest cells are raised to the
 /// smallest floor that fits, so those slices hold fewer, sparser stars and
-/// every other slice is untouched.
+/// every other slice is untouched. Solo only changes composition: hidden
+/// layers keep their cells and colour history running at the full field's cost.
 pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f32) -> StarLayout {
     let wanted = star_cells(settings);
     let drawn = settings.plan().depths.map(|depth| depth.gather != StarGather::Off);
     let at = |floor| StarLayout::at(wanted, drawn, floor, aspect);
-    let whole = at(0.0);
-    if whole.fits() {
-        return whole;
+    if at(0.0).fits() {
+        return at(0.0);
     }
     let mut high = wanted.iter().copied().fold(f32::INFINITY, f32::min).max(1e-3);
     while !at(high).fits() {
@@ -246,13 +244,6 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
     (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
 }
 
-/// A slice's speed, as a multiple of [`star_px_per_second`]:
-/// `min + (max - min) d^curve` over `Star speed`'s two ends.
-pub(crate) fn star_speed(settings: harmonigraph_scene::StarSettings, k: usize) -> f32 {
-    let (far, near) = (settings.star_speed_min, settings.star_speed_max);
-    far + (near - far) * star_depth(k).powf(settings.star_speed_curve)
-}
-
 /// Every slice's numbers for this frame. Each depth moves as one sheet at its
 /// own speed.
 pub(crate) fn star_slices(
@@ -265,10 +256,16 @@ pub(crate) fn star_slices(
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
+    let solo = plan
+        .depths
+        .iter()
+        .enumerate()
+        .any(|(k, depth)| depth.gather != StarGather::Off && settings.star_solo[k]);
+    let (jitter, bend) = (settings.star_jitter, star_falloff_bend(settings.star_glow_falloff));
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
-        let speed = f64::from(star_speed(settings, k));
+        let speed = f64::from(depth.speed);
         let shift = |axis: f64| {
             (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
         };
@@ -282,16 +279,16 @@ pub(crate) fn star_slices(
             offset: Float2(offset),
             cell,
             radius: depth.radius,
-            core: depth.core,
-            glow: depth.glow,
-            falloff: depth.falloff,
+            solid: depth.solid,
+            ramp: 1.0 / (1.0 - depth.solid),
+            bend,
             base: layout.bases[k] as i32,
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
-            width: star_jitter_width(depth.jitter),
-            inner: StarGather::Core.bound(depth.jitter),
-            gain: depth.gain,
-            gather: star_gather_code(depth.gather),
+            width: star_jitter_width(jitter),
+            inner: StarGather::Core.bound(jitter),
+            gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(depth.gather) },
+            twinkle: depth.twinkle,
         }
     })
 }
@@ -304,13 +301,6 @@ pub(crate) fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
     let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
     edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
 }
-/// What every slice shares: `Overlap light`, where a 3x3 star's inner part
-/// starts fading, as a share of its reach, and `Distant gap fill`. The second
-/// lane is unused; each slice carries its own band and inner reach.
-pub(crate) fn star_geometry(settings: harmonigraph_scene::StarSettings) -> Float4 {
-    Float4([settings.star_overlap_light, 0.0, 0.7, settings.star_far_fill])
-}
-
 /// Per-depth halo sampling follows pane pixels and the sanitized resolution
 /// dial. The rounded texture shape is the whole allocation key: jitter, halo
 /// width, drift and color edits refill the same targets.
@@ -515,7 +505,6 @@ uniform_group! {
         star_size_variation: f32,
         star_far: Float4,
         star_near: Float4,
-        star_geometry: Float4,
         star_slices: [StarSlice; STAR_SLICES],
         star_halo_samples: [StarHaloSample; STAR_SLICES],
     }
@@ -545,7 +534,6 @@ impl StarUniforms {
                 0.0,
             ]),
             star_near: Float4([near[0] as f32, near[1] as f32, 0.0, 0.0]),
-            star_geometry: star_geometry(settings),
             star_slices: star_slices(settings, direction, now, layout),
             star_halo_samples: halos.samples(),
         }

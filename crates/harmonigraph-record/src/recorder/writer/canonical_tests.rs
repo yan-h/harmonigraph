@@ -37,7 +37,7 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
     let (mut recorder, mut capture) = testing::channel();
     let (publisher, mut publications) = publication::channel();
     recorder.publication = publisher;
-    capture.arm_audio();
+    capture.arm();
     assert!(recorder.is_armed());
     recorder.end_at_rewind.store(true, Ordering::Relaxed);
     let duration = 64.0 / 48_000.0;
@@ -49,7 +49,7 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
     recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
     assert_eq!(recorder.latches.captured.load(Ordering::Relaxed), 0);
     assert!(!recorder.observe_transport(5.0, false, duration));
-    assert!(recorder.latches.hit_rewind.load(Ordering::Relaxed));
+    assert_eq!(recorder.latches.end(), Some(End::Rewind));
     let note = accepted(NoteEvent::on(origin, SourceId(1), 0, 60, 0.8), 1);
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     assert!(recorder.publish_note(note, route).take.is_ok());
@@ -69,14 +69,10 @@ fn stopped_export_restore_keeps_the_unpublished_notes_original_route() {
 #[test]
 fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     let (mut recorder, mut capture) = testing::channel();
-    capture.arm_audio();
+    capture.arm();
     assert!(recorder.is_armed());
     let file = path("delayed");
-    let mut writer = testing::FileWriter::new(
-        &capture,
-        file.clone(),
-        Some(AudioSpec { sample_rate: 48000.0, channels: 2 }),
-    );
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
     let first = RecordAddress { epoch: 1, pass: 1 };
     let second = RecordAddress { epoch: 1, pass: 2 };
     let config = harmonigraph_core::configuration::ConfigReducer::default().resolved();
@@ -141,8 +137,8 @@ fn delayed_history_and_baseline_keep_original_pass_and_both_wav_tails() {
     assert!(!writer.failed());
     assert_eq!(
         writer.finished.as_ref(),
-        Some(&file),
-        "late voiced first pass is still the render target"
+        Some(&file.with_file_name("capture-2.take")),
+        "late MIDI in a retained pass must not replace the last recorded pass"
     );
     let take = harmonigraph_take::Take::read(&file).unwrap();
     assert_eq!(take.header.version, harmonigraph_take::FORMAT_VERSION);
@@ -170,7 +166,7 @@ fn real_publication_ring_loss_is_durable_after_the_last_callback() {
     capture.arm();
     recorder.is_armed();
     let file = path("full");
-    let mut writer = testing::FileWriter::new(&capture, file.clone(), None);
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
     let address = RecordAddress { epoch: 1, pass: 1 };
     let route = publication::Route { address: Some(address), time_offset: 0.0 };
     // One short of the ring: the last cell is reserved so the gap below has
@@ -224,11 +220,10 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
         capture.arm();
         recorder.is_armed();
         let file = path(if close_source { "pass-reuse" } else { "pass-full" });
-        let mut writer = testing::FileWriter::new(&capture, file.clone(), None);
+        let mut writer = testing::FileWriter::new(&capture, file.clone());
         recorder.observe_transport(10.0, true, 64.0 / 48_000.0);
-        for _ in 1..RECORD_PASSES {
-            recorder.observe_transport(0.0, true, 64.0 / 48_000.0);
-            recorder.observe_transport(10.0, true, 64.0 / 48_000.0);
+        for pass in 1..RECORD_PASSES {
+            recorder.observe_transport(10.0 - pass as f64, true, 64.0 / 48_000.0);
         }
         for pass in 1..=RECORD_PASSES as u32 {
             recorder.configuration_pass_complete(RecordAddress { epoch: 1, pass });
@@ -241,7 +236,7 @@ fn all_128_passes_need_source_closure_before_the_129th_file() {
         }
         // Both lanes are queued before the worker runs. It must consume the
         // available source closure before judging a 129th required file.
-        recorder.observe_transport(0.0, true, 64.0 / 48_000.0);
+        recorder.observe_transport(10.0 - RECORD_PASSES as f64, true, 64.0 / 48_000.0);
         writer.drain(&mut capture);
         assert_eq!(writer.failed(), !close_source);
         if close_source {
@@ -375,7 +370,10 @@ fn real_worker_materializes_pending_start_before_accounting_a_recording_failure(
             assert_eq!(*control.status.lock(), CONFIGURATION_FAILURE);
             assert!(!control.is_recording());
             assert!(control.last_take.lock().is_none());
-            assert_eq!(control.render_progress(), None);
+            assert!(control
+                .export_jobs()
+                .iter()
+                .all(|job| job.state != harmonigraph_take::render::ExportStatus::Running));
         }
         drop(recorder); // No rescue callback or producer operation follows.
         drop(control);
@@ -507,6 +505,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let (mut recorder, control) = channel();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
+    let render = control.render.clone();
     let last_take = control.last_take.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     control.start(48000.0, String::new());
@@ -536,6 +535,8 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     drop(control); // The next real worker poll observes Disconnected.
     fence.worker_after_stop.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_finished);
+    // Writer completion can leave export staging active in this directory.
+    render.shutdown();
     let file = worker_take(&directory);
     let take = harmonigraph_take::Take::read(&file).unwrap();
     assert!(
@@ -634,9 +635,10 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         let take = harmonigraph_take::Take::read(&file).unwrap();
         assert!(take.incomplete.is_none());
         assert_eq!(take.notes().count(), 2, "fixture must finish a nonempty prefix");
+        let selected = if case == "split" { Pass::path_for(&file, 2) } else { file };
         assert_eq!(
             control.status(),
-            newer.map_or_else(|| format!("recorded {}", file.display()), str::to_owned)
+            newer.map_or_else(|| format!("recorded {}", selected.display()), str::to_owned)
         );
         assert!(control.last_take().is_none(), "old completion handler is still parked");
         control.start(48000.0, String::new());
@@ -652,7 +654,7 @@ fn completed_recording_releases_its_status_before_accepting_another_start() {
         fence.worker_before_commands.enabled.store(true, Ordering::Release);
         fence.worker_after_finish.enabled.store(false, Ordering::Release);
         wait_for(&fence.worker_before_commands.entered);
-        assert_eq!(control.last_take(), Some(file));
+        assert_eq!(control.last_take(), Some(selected));
         assert_eq!(control.status(), armed, "old completion overwrote the new Start");
         // And the render really was queued behind the hold, not never launched.
         drop(queued);
@@ -675,6 +677,7 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     let (mut recorder, control) = channel();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
+    let render = control.render.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
@@ -711,6 +714,8 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     drop(recorder);
     fence.worker_after_empty.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_finished);
+    // Writer completion can leave export staging active in this directory.
+    render.shutdown();
     let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
     assert!(take.incomplete.is_none());
     assert_eq!(take.notes().count(), 2);
@@ -776,9 +781,14 @@ fn a_gap_with_no_file_open_marks_the_take_that_opens_after_it() {
     );
 
     let status = Mutex::new(String::new());
-    let opened =
-        Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
-            .unwrap();
+    let opened = Recording::create(
+        harmonigraph_take::Header::default(),
+        file.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .unwrap();
     let mut open = Some(opened);
     fanout.drain(&mut consumer, &mut open, &fence, &failure);
     let sealed = open.take().unwrap().finish().unwrap();
@@ -815,6 +825,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     let (mut recorder, control) = channel();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
+    let render = control.render.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
@@ -878,6 +889,8 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     drop(recorder);
     drop(control);
     wait_for(&fence.worker_finished);
+    // Writer completion can leave export staging active in this directory.
+    render.shutdown();
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -890,7 +903,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
 /// follows opens pass 1, marks it, and rolls straight over to pass 2 without
 /// leaving the loop: `drain_with_boundaries` calls the fanout from
 /// `before_new_pass`, ahead of `Recording::next_pass`. Pass 2 is where the music
-/// is, so pass 2 is what `Recording::take_path` seals and hands to the renderer,
+/// is, and pass 2 is what `Recording::take_path` seals and hands to the renderer,
 /// and pass 1 is not even retained by then.
 ///
 /// What the range proves is that the fixture reaches the case rather than one
@@ -947,9 +960,14 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     assert!(!pump(&mut open, &mut queued, &mut consumer, &mut fanout));
 
     let file = path("rollover-gap");
-    let opened =
-        Recording::create(harmonigraph_take::Header::default(), file.clone(), 1, None, &status)
-            .unwrap();
+    let opened = Recording::create(
+        harmonigraph_take::Header::default(),
+        file.clone(),
+        1,
+        FIXTURE_SPEC,
+        &status,
+    )
+    .unwrap();
     open = Some(opened);
     assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
     assert_eq!(
@@ -970,14 +988,13 @@ fn a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports() {
     entries.push(Entry::ProducerClosed(1)).expect("ring has room");
     entries.push(Entry::ConfigurationEpochComplete(1)).expect("ring has room");
     assert!(pump(&mut open, &mut queued, &mut consumer, &mut fanout));
-    assert!(open.as_ref().unwrap().current.voiced, "pass 2 is the one holding the music");
     assert!(open.as_ref().unwrap().retained.is_empty(), "and pass 1 has already been sealed");
 
     let sealed = finish_ready(&mut open, 1, &fence).expect("the take seals");
     assert_eq!(
         sealed.file_name().unwrap(),
         std::path::Path::new("capture-2.take"),
-        "the voiced later pass is what export selects"
+        "the last recorded pass is what export selects"
     );
     let take = harmonigraph_take::Take::read(&sealed).unwrap();
     let loss = take.incomplete.expect("the gap the earlier pass took is on the pass that exports");
@@ -1008,7 +1025,8 @@ fn a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked() {
     use harmonigraph_take::canonical::{GapReasonRecord, GapRecord};
     let file = path("two-gaps");
     let status = Mutex::new(String::new());
-    let mut open = Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+    let mut open =
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     let first = harmonigraph_take::IncompleteRecord {
         first_publication: 7,
         last_publication: 9,
@@ -1123,11 +1141,11 @@ fn carried_marker_failure_visits_retained_passes_and_keeps_the_first_error() {
     let file = path("carried-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
-    current.current = Pass::create(Default::default(), &file, 3, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
+    current.current = Pass::create(Default::default(), &file, 3, FIXTURE_SPEC, &status).unwrap();
     current.fail_marker_on_pass = Some(3);
     for pass in 1..3 {
-        let mut old = Pass::create(Default::default(), &file, pass, None, &status).unwrap();
+        let mut old = Pass::create(Default::default(), &file, pass, FIXTURE_SPEC, &status).unwrap();
         if pass == 1 {
             old.writer.make_read_only_for_test(&old.path).unwrap();
         }
@@ -1164,7 +1182,7 @@ fn rollover_marker_failure_keeps_the_old_owner_until_failure_accounting() {
     let file = path("rollover-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     current.mark_incomplete(Default::default()).unwrap();
     current.fail_marker_on_pass = Some(2);
     let mut open = Some(current);
@@ -1191,7 +1209,7 @@ fn failure_accounting_latches_its_marker_io_error() {
     let file = path("accounting-marker-failure");
     let status = Mutex::new(String::new());
     let mut current =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     current.fail_marker_on_pass = Some(1);
     let mut open = Some(current);
     let fence = RecordFence::default();
@@ -1211,7 +1229,7 @@ fn pump_flushes_buffered_records_in_current_and_retained_files() {
     let file = path("pump-batched-flush");
     let status = Mutex::new(String::new());
     let mut recording =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     recording.next_pass(&status).unwrap();
     assert_eq!(recording.retained.len(), 1, "the fixture must retain an unfinished prior file");
     for pass in std::iter::once(&mut recording.current).chain(&mut recording.retained) {
@@ -1266,7 +1284,7 @@ fn pump_flush_failure_is_accounted_before_stop() {
     let file = path("pump-flush-failure");
     let status = Mutex::new(String::new());
     let mut recording =
-        Recording::create(Default::default(), file.clone(), 1, None, &status).unwrap();
+        Recording::create(Default::default(), file.clone(), 1, FIXTURE_SPEC, &status).unwrap();
     recording.current.writer.make_read_only_for_test(&file).unwrap();
     let mut pump = Pump { open: Some(recording), ..Default::default() };
     let (mut producer, mut entries) = rtrb::RingBuffer::<Entry>::new(8);
@@ -1284,5 +1302,153 @@ fn pump_flush_failure_is_accounted_before_stop() {
     assert!(cause.contains("cannot flush"), "{cause}");
     assert!(cause.contains(&file.display().to_string()), "{cause}");
     assert!(cause.contains("Bad file descriptor"), "{cause}");
+    std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+}
+
+/// A stopped seek must survive parked observations, but an ordinary pause
+/// cannot insert a pass or move either block's samples relative to its notes.
+#[test]
+fn forward_seeks_split_real_audio_at_the_new_notes_origin() {
+    let duration = 64.0 / 48_000.0;
+    for (name, paused, second_origin) in [
+        ("playing-forward-seek", false, 10.0),
+        ("stopped-forward-seek", true, 10.0),
+        ("ordinary-pause", true, duration),
+    ] {
+        let file = path(name);
+        let (mut recorder, mut capture) = testing::channel();
+        capture.arm();
+        assert!(recorder.is_armed());
+        let mut writer = testing::FileWriter::new(&capture, file.clone());
+        assert!(recorder.observe_transport(0.0, true, duration));
+        let first = recorder.configuration_address().unwrap();
+        let route = publication::Route { address: Some(first), time_offset: 0.0 };
+        recorder
+            .publish_note(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 0.8).into(), route)
+            .expect_both();
+        recorder
+            .publish_note(NoteEvent::off(duration / 2.0, SourceId::DIRECT, 0, 60).into(), route)
+            .expect_both();
+        recorder.mark_audio_start(0.0);
+        recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
+        writer.drain(&mut capture);
+        if paused {
+            for _ in 0..3 {
+                assert!(!recorder.observe_transport(0.0, false, duration));
+            }
+            if second_origin == 10.0 {
+                for _ in 0..3 {
+                    assert!(!recorder.observe_transport(second_origin, false, duration));
+                }
+            }
+            writer.drain(&mut capture);
+            assert_eq!(writer.current_pass(), Some(1), "a parked seek opens no file");
+        }
+        assert!(recorder.observe_transport(second_origin, true, duration));
+        let second = recorder.configuration_address().unwrap();
+        let split = second_origin == 10.0;
+        assert_eq!(second.pass, if split { 2 } else { 1 });
+        let route = publication::Route { address: Some(second), time_offset: 0.0 };
+        recorder
+            .publish_note(NoteEvent::on(second_origin, SourceId::DIRECT, 0, 72, 0.8).into(), route)
+            .expect_both();
+        recorder
+            .publish_note(
+                NoteEvent::off(second_origin + duration / 2.0, SourceId::DIRECT, 0, 72).into(),
+                route,
+            )
+            .expect_both();
+        recorder.mark_audio_start(second_origin);
+        recorder.audio(&mut std::iter::repeat_n(0.75, 128), 128);
+        capture.stop();
+        assert!(!recorder.is_armed());
+        for pass in 1..=second.pass {
+            let address = RecordAddress { epoch: first.epoch, pass };
+            recorder.configuration_pass_complete(address);
+            recorder.source_pass_complete(address, 11.0);
+        }
+        recorder.configuration_epoch_complete(first.epoch);
+        recorder.source_epoch_complete(first.epoch, 11.0);
+        writer.stop();
+        writer.drain(&mut capture);
+        assert!(!writer.failed());
+        let last = Pass::path_for(&file, second.pass);
+        assert_eq!(writer.finished, Some(last.clone()));
+        let take = harmonigraph_take::Take::read(&last).unwrap();
+        assert!(take.incomplete.is_none());
+        let samples = |path: &std::path::Path| -> Vec<f32> {
+            let bytes = std::fs::read(path.with_extension("wav")).unwrap();
+            bytes[44..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect()
+        };
+        if split {
+            let first_take = harmonigraph_take::Take::read(&file).unwrap();
+            assert_eq!(first_take.header.audio_start, Some(0.0));
+            assert_eq!(first_take.notes().map(|n| n.t).collect::<Vec<_>>(), [0.0, duration / 2.0]);
+            assert_eq!(samples(&file), vec![0.25; 128]);
+            assert_eq!(take.header.audio_start, Some(second_origin));
+            assert_eq!(
+                take.notes().map(|n| n.t).collect::<Vec<_>>(),
+                [second_origin, second_origin + duration / 2.0]
+            );
+            assert_eq!(samples(&last), vec![0.75; 128]);
+        } else {
+            assert_eq!(take.header.audio_start, Some(0.0));
+            assert_eq!(
+                take.notes().map(|n| n.t).collect::<Vec<_>>(),
+                [0.0, duration / 2.0, duration, duration + duration / 2.0]
+            );
+            assert_eq!(samples(&last), [vec![0.25; 128], vec![0.75; 128]].concat());
+            assert!(!Pass::path_for(&file, 2).exists());
+        }
+        std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn an_audio_only_last_pass_renders_after_a_pass_with_midi() {
+    let file = path("audio-only-last-pass");
+    let (mut recorder, mut capture) = testing::channel();
+    capture.arm();
+    assert!(recorder.is_armed());
+    let mut writer = testing::FileWriter::new(&capture, file.clone());
+    let duration = 64.0 / 48_000.0;
+    assert!(recorder.observe_transport(10.0, true, duration));
+    let first = recorder.configuration_address().unwrap();
+    let route = publication::Route { address: Some(first), time_offset: 0.0 };
+    recorder
+        .publish_note(NoteEvent::on(10.0, SourceId::DIRECT, 0, 60, 0.8).into(), route)
+        .expect_both();
+    recorder
+        .publish_note(NoteEvent::off(10.0 + duration / 2.0, SourceId::DIRECT, 0, 60).into(), route)
+        .expect_both();
+    recorder.mark_audio_start(10.0);
+    recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
+    assert!(recorder.observe_transport(0.0, true, duration));
+    let second = recorder.configuration_address().unwrap();
+    assert_eq!(second.pass, 2);
+    recorder.mark_audio_start(0.0);
+    recorder.audio(&mut std::iter::repeat_n(0.75, 128), 128);
+    capture.stop();
+    assert!(!recorder.is_armed());
+    for address in [first, second] {
+        recorder.configuration_pass_complete(address);
+        recorder.source_pass_complete(address, 11.0);
+    }
+    recorder.configuration_epoch_complete(first.epoch);
+    recorder.source_epoch_complete(first.epoch, 11.0);
+    writer.stop();
+    writer.drain(&mut capture);
+    assert!(!writer.failed());
+    let last = Pass::path_for(&file, 2);
+    assert_eq!(writer.finished, Some(last.clone()));
+    let take = harmonigraph_take::Take::read(&last).unwrap();
+    assert!(take.incomplete.is_none());
+    assert_eq!(take.notes().count(), 0, "no held note accidentally makes this a MIDI pass");
+    assert_eq!(take.header.audio_start, Some(0.0));
+    let bytes = std::fs::read(last.with_extension("wav")).unwrap();
+    let samples: Vec<_> =
+        bytes[44..].chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect();
+    assert_eq!(samples, vec![0.75; 128]);
+    assert_eq!(harmonigraph_take::Take::read(&file).unwrap().notes().count(), 2);
     std::fs::remove_dir_all(file.parent().unwrap()).unwrap();
 }

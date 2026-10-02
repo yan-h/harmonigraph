@@ -588,18 +588,19 @@ impl NodeMotion {
         while index < edges.len() {
             let time = edges[index].at;
             self.advance(time - at, env);
-            // Bring each note ending here to its reading at the off while it is
-            // still held, so its slot keeps that one once the off removes it.
-            let mut ending = false;
+            // Capture the event-time reading before either a bend or an off
+            // removes a note from its old slot. The departing ink must not
+            // depend on whether a frame happened between expression and bend.
+            let mut departing = false;
             for edge in edges[index..].iter().take_while(|e| e.at == time) {
-                if let (None, Some(held), Some(&reading)) =
-                    (edge.value, self.held.get_mut(&edge.id), endings.get(&edge.id))
-                {
+                let reading =
+                    edge.value.map(|held| held.reading).or_else(|| endings.get(&edge.id).copied());
+                if let (Some(held), Some(reading)) = (self.held.get_mut(&edge.id), reading) {
                     held.reading = reading;
-                    ending = true;
+                    departing = true;
                 }
             }
-            if ending {
+            if departing {
                 self.read_slots(scene, tuning);
             }
             // Equal-time off/on edges form one gate update, so a replacement
@@ -1077,6 +1078,47 @@ mod tests {
         let (on_time, late) = (release(false), release(true));
         assert!(on_time > 0.5, "the on-time release is still fading: {on_time}");
         assert!((late - on_time).abs() < 1e-5, "late {late} against on time {on_time}");
+    }
+
+    #[test]
+    fn a_bend_leaves_the_same_expression_reading_at_any_frame_cadence() {
+        let view = ViewConfig {
+            fade_shape: 0.0,
+            intensity: crate::IntensitySettings {
+                pressure: crate::IntensitySource { opacity: Some(1.0), ..Default::default() },
+                opacity_rest: 0.0,
+                ..crate::IntensitySettings::unrouted()
+            },
+            ..view()
+        };
+        let run = |intermediate| {
+            let mut tracker = NoteTracker::new();
+            let mut motion = NodeMotion::default();
+            let onset = on(0.0, 60);
+            tracker.handle_event(onset);
+            draw(&mut motion, &mut tracker, &view, 0.0, false);
+            draw(&mut motion, &mut tracker, &view, 1.0, false);
+            tracker.handle_event(NoteEvent {
+                time: 1.05,
+                kind: harmonigraph_core::NoteEventKind::Expression {
+                    expression: harmonigraph_core::Expression::Pressure,
+                    value: 1.0,
+                },
+                ..onset
+            });
+            if intermediate {
+                draw(&mut motion, &mut tracker, &view, 1.075, false);
+            }
+            tracker.handle_event(NoteEvent {
+                time: 1.1,
+                kind: harmonigraph_core::NoteEventKind::Tuning { semitones: 2.0 },
+                ..onset
+            });
+            origin(&draw(&mut motion, &mut tracker, &view, 1.2, false)).activation
+        };
+        let (sparse, dense) = (run(false), run(true));
+        assert!(dense > 0.8, "the old slot is visibly fading: {dense}");
+        assert!((sparse - dense).abs() < 1e-5, "sparse {sparse}, dense {dense}");
     }
     /// Pressure routed to thickness swells the lit slot from rest and nothing
     /// else: its ink and light stay full, and once the note is gone the slot

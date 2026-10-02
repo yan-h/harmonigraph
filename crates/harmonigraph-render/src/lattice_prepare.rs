@@ -141,10 +141,10 @@ impl CallbackTrait for LatticeCallback {
         if let Some(stats) = &self.stats {
             use std::sync::atomic::Ordering::Relaxed;
             let prepare_ms = prepare_start.elapsed().as_secs_f32() * 1000.0;
-            stats.prepare_ms.store(prepare_ms.to_bits(), Relaxed);
             stats.poll_ms.store(poll_ms.to_bits(), Relaxed);
             stats.write_ms.store(write_ms.to_bits(), Relaxed);
             stats.scene_ms.store(scene_ms.to_bits(), Relaxed);
+            stats.prepare_ms.store(prepare_ms.to_bits(), Relaxed);
         }
 
         Vec::new()
@@ -485,6 +485,7 @@ impl LatticeCallback {
         // is what maps a fragment's place on a cross into a cell no cross
         // placed (`vs_plus`).
         let mut uniforms = self.uniforms;
+        uniforms.composite.edge_softness_pixels *= screen_descriptor.pixels_per_point;
         uniforms.ink_kernel = pane.ink_kernel.weights(self.glow_blend);
         // Whether this frame contributes any light to the statistics targets.
         uniforms.glow.lit = f32::from(*has_light);
@@ -966,23 +967,9 @@ impl LatticeCallback {
                 }
             }
         } else if let Some(out) = &self.stats {
-            // No pass was encoded, so no reading can land and the timer's
-            // cycle does not turn over. Say "nothing measured" rather than
-            // leaving the last real figure sitting there: `poll` returns None
-            // from Idle forever, and the overlay would keep re-averaging a
-            // number from whenever the lattice last drew.
-            //
-            // The distinction is why GPU_TIME_PENDING exists at all — a frozen
-            // reading and a live one are the same bits otherwise, and a pane
-            // that encodes no pass can sit here indefinitely rather than for a
-            // frame. A silent lattice already ships no NODE, every idle one
-            // being culled; what it takes to ship no edge either is a window
-            // holding no adjacent pair, which the extent bars do not reach
-            // (they stop at 1). So the state is currently out of a user's
-            // reach and stays guarded on purpose: it is one lattice-sizing
-            // change away, and the symptom would be a stale figure rather
-            // than a crash — the kind nobody reports.
-            out.gpu_ms.store(GPU_TIME_PENDING, std::sync::atomic::Ordering::Relaxed);
+            // No pass was encoded. Unlike an active timer waiting for its
+            // next readback, this pane has no GPU cost to keep displaying.
+            out.gpu_ms.store(GPU_TIME_INACTIVE, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

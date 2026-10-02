@@ -26,18 +26,9 @@ fn watercolor_tile_uv_for(r: vec2<f32>, period: f32, pitch_vertical: u32) -> vec
 // 2.1x and 0.9x octaves on fractional cells and draw a seam.
 //
 // WGSL's `%` truncates toward zero, so `-1 % 20` is `-1` and the second fold is
-// what lands a negative cell in the range. A period of 0 returns the cell
-// whole: no production pass asks for it, but it is the unwrapped walk the
-// tests hold the tile against.
-fn wrap_cell_for_tile(cell: vec2<i32>, period: i32) -> vec2<i32> {
-    if period <= 0 {
-        return cell;
-    }
-    return ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
-}
-
+// what lands a negative cell in the range.
 fn wrap_cell(cell: vec2<i32>, period: i32) -> vec2<i32> {
-    return wrap_cell_for_tile(cell, period);
+    return ((cell % vec2<i32>(period)) + vec2<i32>(period)) % vec2<i32>(period);
 }
 
 // The ring each octave walks, and the four numbers that decide whether walking
@@ -134,20 +125,15 @@ fn wash_noise(p: vec2<f32>, salt: u32, period: i32) -> f32 {
     let n11 = wash_hash(wrap_cell(i + vec2<i32>(1, 1), period), salt).x;
     return mix(mix(n00, n10, t.x), mix(n01, n11, t.x), t.y);
 }
-// Where this noise's second octave sits, and the one constant the TILE changes.
-//
-// `WASH_FBM_FINE` is an irrational-looking 2.07 exactly so the two octaves never
-// line up, and no tile period makes `2.07 * P` a whole number of the finer
-// lattice's cells — so a tiled walk runs it at exactly 2 instead, which doubles
-// the period with it and tiles for every `P` the coarse lattice already does.
-// A period of 0, the unwrapped walk that no production pass draws since #1100,
-// keeps 2.07 bit for bit.
-const WASH_FBM_FINE: f32 = 2.07;
-const WASH_FBM_FINE_TILED: f32 = 2.0;
+// Where this noise's second octave sits. Exactly 2, because the walk is only
+// ever drawn as a tile: an irrational-looking lacunarity would keep the two
+// octaves from lining up, but no period makes it a whole number of the finer
+// lattice's cells. 2 doubles the period with it and tiles for every `P` the
+// coarse lattice already does.
+const WASH_FBM_FINE: f32 = 2.0;
 fn wash_fbm(p: vec2<f32>, salt: u32, period: i32) -> f32 {
-    let lacunarity = select(WASH_FBM_FINE, WASH_FBM_FINE_TILED, period > 0);
     let coarse = wash_noise(p, salt, period);
-    let fine = wash_noise(p * lacunarity + vec2<f32>(13.1, -7.3), salt + 31u, period * 2);
+    let fine = wash_noise(p * WASH_FBM_FINE + vec2<f32>(13.1, -7.3), salt + 31u, period * 2);
     return (coarse + 0.5 * fine) / 1.5;
 }
 
@@ -398,231 +384,6 @@ fn wash_field(r: vec2<f32>, period: i32, fuzz: f32, lobe: f32) -> WashField {
     return out;
 }
 
-
-// One cell's dome, as four 10-bit fractions: where its centre sits inside the
-// cell, how wide it is, and how loudly it argues for its own territory.
-//
-// The first word is only good for three of them — the top two bits are too
-// coarse to draw anything from — so the fourth comes from a second avalanche
-// over the finished word rather than from bits the other three already spent.
-fn cloud_hash4(cell: vec2<i32>) -> vec4<f32> {
-    var n = (bitcast<u32>(cell.x) * 0x9e3779b9u) ^ (bitcast<u32>(cell.y) * 0x85ebca6bu);
-    n = (n ^ (n >> 16u)) * 0x7feb352du;
-    n = (n ^ (n >> 15u)) * 0x846ca68bu;
-    n = n ^ (n >> 16u);
-    var m = (n ^ 0xb5297a4du) * 0x68e31da4u;
-    m = m ^ (m >> 15u);
-    return vec4<f32>(
-        f32(n & 0x3ffu) / 1023.0,
-        f32((n >> 10u) & 0x3ffu) / 1023.0,
-        f32((n >> 20u) & 0x3ffu) / 1023.0,
-        f32(m & 0x3ffu) / 1023.0,
-    );
-}
-
-// How far a dome reaches past its own cell, how far its centre may wander
-// inside it, and the band `Size variation` draws each dome's own radius from.
-//
-// THESE FOUR ARE A PROOF, not four independent tastes, and the two inequalities
-// they have to satisfy are held by `the_dome_grid_covers_the_plane_and_the_ring_holds_it`.
-//
-// **Coverage.** A centre sits at its cell's middle give or take `JITTER/2`, so
-// the point hardest to reach is a lattice corner with all four cells touching it
-// pushed diagonally away: `(0.5 + JITTER/2) * sqrt(2)` from every one of them.
-// The SMALLEST radius a dome can draw has to clear that, or there is a pinhole
-// in the layer where no dome reaches — and a pinhole is not a dim spot, it is a
-// place where `to_centre` falls off a cliff from most of a radius to nothing,
-// which is the hard edge this whole construction exists not to draw.
-//
-// **Reach.** The union only visits the 3x3 ring, so a dome outside it must not
-// be able to touch this pixel. The nearest a cell two out can put its centre is
-// `2.5 - JITTER/2` from the pixel's own cell origin, and the pixel is at most 1
-// past that origin, so the LARGEST radius has to stay under `1.5 - JITTER/2`.
-//
-// Round 5's jitter of 0.75 satisfied NEITHER (it wanted a radius at once above
-// 1.237 and below 1.125, which is empty), and both failures were live: cells
-// were 22% empty then, so the pinholes were being drawn on purpose, and a dome
-// two cells out reaching in is a step on the cell grid every time `floor(r)`
-// moves. Dropping the jitter to 0.30 opens a band of [0.919, 1.350] and leaves
-// room for `Size variation` inside it.
-const DOME_RADIUS: f32 = 1.15;
-const DOME_JITTER: f32 = 0.30;
-const DOME_RADIUS_MIN: f32 = 0.95;
-const DOME_RADIUS_MAX: f32 = 1.32;
-// Hardness of the soft union. Low is putty, high is a crease; this is where a
-// pile of domes still has faces and does not yet have edges.
-const DOME_UNION: f32 = 9.0;
-// How many octaves of weight `Size variation` may give or take from one dome, and the
-// reason the dial is worth turning at all.
-//
-// **The radius band above is not what `Size variation` reads as.** What the eye calls
-// one scale here is the TERRITORY a dome wins from the soft union, and the grid
-// that sets the territory is one dome per cell however wide each dome is drawn.
-// Measured over an interior patch of the field, the shipped radius band moved
-// the 10th-to-90th-percentile territory from 1.22:1 at `Size variation` 0 to 1.51:1 at
-// `Size variation` 1 — a band already nearly uniform, opened by a quarter. That is the
-// whole of what the dial used to buy, and it is why it read as doing nothing.
-//
-// A weight gain moves the BISECTORS instead, which is the same measurement's
-// 4.2:1 at the constant below. It is outside the coverage proof entirely: the
-// union is a weighted MEAN, every weight stays positive, and no radius changes,
-// so neither inequality above is touched and a suppressed dome cannot open a
-// hole — it can only lose its cell to a neighbour that already reached across
-// it.
-//
-// The ceiling is smoothness, not coverage. The steepest single-pixel step in
-// the face field is 9.3 per cell here, BELOW the 9.8 the shipped dial already
-// drew at `Size variation` 1; at 7 octaves it is 15.4 and at 8 it is 21.3, which is a
-// swallowed dome's influence ending in a visible ring rather than fading.
-const DOME_VARIETY_GAIN: f32 = 5.0;
-// What turns a dome's analytic slope into the FACE the light is bent by.
-//
-// `h = q^1.5` gives `dh/dr = -3 * root * d / R`, whose steepest point is
-// `1.5 / R` — so on a global normalisation a SMALLER dome bends the light
-// FURTHER, which draws a little glob displacing a patch bigger than itself.
-// Multiplying by `R^2 / (1.5 * DOME_RADIUS^2)` instead leaves `-2 * root * d *
-// R / DOME_RADIUS^2`: a peak of `R / DOME_RADIUS`, so a glob carries the light
-// as far as it is wide, and a dome at the base radius bends exactly what it did
-// before `Size variation` existed.
-const DOME_FACE: f32 = 2.0 / (DOME_RADIUS * DOME_RADIUS);
-struct Pile {
-    // The face the scales here present to the light: each covering dome's own
-    // slope, normalised by `DOME_FACE` and blended by the union's weights.
-    face: vec2<f32>,
-    // Where the domes covering this point keep their CENTRES, as an offset from
-    // the point in cell units. Inside a dome one weight runs away with the
-    // union, so this is `centre - r` and `r + to_centre` is the CONSTANT centre —
-    // a flat facet. On a bisector the two weights are equal and it is their
-    // mean, so the reading turns over continuously where round 1's nearest-cell
-    // pick stepped. That is the whole difference between the two.
-    to_centre: vec2<f32>,
-};
-
-// One octave of domes: a soft union over the 3x3 ring, with the union's own
-// weights carrying each dome's normalised face out alongside the rest.
-//
-// EVERY cell has a dome. There used to be an `occupancy` draw that left 22% of
-// them empty, which is where the sky between the clouds came from; Yan wants the
-// texture everywhere, so the draw is gone and the hash word it spent went with
-// it — freed, and spent on the radius below.
-//
-// A dome the WEIGHT gain suppresses is not that draw coming back. An empty cell
-// left a hole, because a hole is what `occupancy` skipped the dome to make; a
-// suppressed dome still covers its own cell and still has a face, it has just
-// lost the argument about whose face this pixel reads. The union is continuous
-// across the whole plane either way.
-//
-// `period` is the tile's own, in THIS octave's cells, and 0 for the unwrapped
-// walk the tile test holds the bake against.
-// Only the hash's cell is folded by it; the centre below is built from the
-// unwrapped cell, so a dome at the tile's far edge still sits where it sits.
-fn dome_octave(r: vec2<f32>, period: i32, variety: f32) -> Pile {
-    let base = floor(r);
-    var weight = 0.0;
-    var face = vec2<f32>(0.0);
-    var to_centre = vec2<f32>(0.0);
-    for (var j = -1; j <= 1; j += 1) {
-        for (var i = -1; i <= 1; i += 1) {
-            let cell = vec2<i32>(base) + vec2<i32>(i, j);
-            let h4 = cloud_hash4(wrap_cell(cell, period));
-            let centre = base + vec2<f32>(f32(i), f32(j)) + 0.5
-                + (h4.xy - 0.5) * DOME_JITTER;
-            // Each dome's own width. `Size variation` opens the band from the single
-            // shared radius, never below `DOME_RADIUS_MIN`, so every step of the
-            // dial is still a proof that the plane is covered.
-            let radius = mix(
-                DOME_RADIUS,
-                mix(DOME_RADIUS_MIN, DOME_RADIUS_MAX, h4.z),
-                variety,
-            );
-            let d = (r - centre) / radius;
-            let q = 1.0 - dot(d, d);
-            if q <= 0.0 {
-                continue;
-            }
-            let root = sqrt(q);
-            let h = q * root;
-            // Each dome's own say in the union, log-symmetric about the shared
-            // weight so `Size variation` gives one dome a neighbour's cell exactly as
-            // often as it takes its own away. Behind a knob because an `exp2`
-            // per dome per pixel is real work for a gain that is exactly 1, and
-            // the branch is on a uniform, so no two lanes ever disagree about
-            // taking it.
-            var gain = 1.0;
-            if variety > 0.0 {
-                gain = exp2(DOME_VARIETY_GAIN * variety * (2.0 * h4.w - 1.0));
-            }
-            // `- 1.0` is what lets the gain exist. A dome ENTERS the ring at
-            // `q = 0`, where `exp(0)` is 1 rather than 0 — a step, tiny against
-            // a dominant dome's `exp(6.3)` and invisible while every dome
-            // weighs the same, but multiplied by a gain of 32 it is a fifth of
-            // the union arriving at once, which draws the hard ring this whole
-            // construction exists not to draw. Subtracting the pedestal lets a
-            // rim contribution fade to nothing however loud the dome is, and it
-            // retires the old step at `Size variation` 0 as well.
-            let w = gain * (exp(DOME_UNION * h) - 1.0);
-            weight += w;
-            face += w * (-(DOME_FACE * root * radius)) * d;
-            to_centre += w * (centre - r);
-        }
-    }
-    var out: Pile;
-    // Unreachable while the constants hold — see the proof on `DOME_RADIUS` —
-    // and kept as the divide's guard rather than as a case the picture has. It
-    // is what an uncovered point WOULD draw: a flat unbent face, and beside it a
-    // `to_centre` that has just fallen from most of a radius to nothing.
-    if weight <= 0.0 {
-        out.face = vec2<f32>(0.0);
-        out.to_centre = vec2<f32>(0.0);
-        return out;
-    }
-    out.face = face / weight;
-    out.to_centre = to_centre / weight;
-    return out;
-}
-
-// Two octaves, the finer one damped hard.
-//
-// Not a taste setting: a finer octave's SLOPE is larger than a coarser one's at
-// equal amplitude, by exactly the lacunarity, so an fbm that halves amplitude
-// per octave still hands the gradient to its finest octave — and the gradient is
-// what bends the light here. Carried at full strength the small scales are a
-// crinkled terrain, which is round 3's "more like water with light cast on it
-// than clouds" and Yan's "a bit too jagged" in one. Damped by the square of the
-// lacunarity, each octave contributes about equally to the slope, which is what
-// puts big faces carrying small ones into the same picture.
-const DOME_LACUNARITY: f32 = 2.1;
-const DOME_FINE_GAIN: f32 = 0.22;
-
-fn mosaic_field(r: vec2<f32>, period: i32, variety: f32) -> Pile {
-    let coarse = dome_octave(r, period, variety);
-    // The finer octave counts in its OWN cells, `DOME_LACUNARITY` of them to
-    // one coarse cell, so the tile closes on `DOME_LACUNARITY * period` of
-    // them. Rounded because 2.1 is not exact in binary and this has to be the
-    // whole number `the_tile_period_tiles_every_lattice` proves it is.
-    let fine = dome_octave(
-        r * DOME_LACUNARITY + vec2<f32>(17.3, 5.9),
-        i32(round(DOME_LACUNARITY * f32(period))),
-        variety,
-    );
-    var out: Pile;
-    let norm = 1.0 + DOME_FINE_GAIN;
-    // the finer octave's face arrives in ITS cell units, so it carries the
-    // lacunarity back out with it
-    out.face = (coarse.face + DOME_FINE_GAIN * DOME_LACUNARITY * fine.face) / norm;
-    // The facet is the COARSE octave's alone, and that is not an omission. A
-    // facet is flat because one dome's centre answers for its whole interior,
-    // so mixing a second octave in puts a finer mosaic inside every patch and
-    // takes the flatness back out. Worse, the fine octave's bisectors are
-    // 2.1 times closer together and its swing between centres turns over inside
-    // a pixel — a hard edge in miniature, everywhere, which is the one thing
-    // this construction exists to avoid. The crinkle it carries still reaches
-    // the picture through the SLOPE above, which is where it belongs: it is
-    // surface, not a scale.
-    out.to_centre = coarse.to_centre;
-    return out;
-}
-
 // Apply a zero-mean draw AFTER coloring, in linear light. One gain preserves
 // hue; symmetric headroom preserves expected RGB without clipping bright draws.
 // A finite view of a random field fluctuates around that mean. `ceiling` is
@@ -649,7 +410,16 @@ fn velvet_warp(p: vec2<f32>, irregularity: f32) -> vec2<f32> {
         0.40 * sin(p.x * 0.53 + sin(p.y * 0.31))) * (irregularity / 0.8);
 }
 struct VelvetBody { center: vec2<f32>, weight: f32 };
-fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>) -> VelvetBody {
+// The body's radius under a superellipse norm of exponent `p`. Divided through
+// by the larger axis, so that axis's term is exactly 1 and the other stays at
+// most 1.
+fn velvet_square_radius(v: vec2<f32>, p: f32) -> f32 {
+    let a = abs(v);
+    let m = max(max(a.x, a.y), 1e-6);
+    return m * pow(1.0 + pow(min(a.x, a.y) / m, p), 1.0 / p);
+}
+// `tilt` is the `Tilt` dial; `p` the superellipse exponent `Squareness` makes.
+fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>, tilt: f32, p: f32) -> VelvetBody {
     let a = velvet_hash(cell, 0u);
     let b = velvet_hash(cell, 1u);
     let center = vec2<f32>(cell) + 0.5 + (vec2<f32>(a, b) - 0.5) * dials.y;
@@ -661,12 +431,17 @@ fn velvet_body(q: vec2<f32>, cell: vec2<i32>, dials: vec4<f32>) -> VelvetBody {
     }
     let c = velvet_hash(cell, 2u);
     let d = velvet_hash(cell, 3u);
-    let angle = 0.2 + (c - 0.5) * 0.85;
+    let angle = (0.2 + (c - 0.5) * 0.85) * tilt;
     let ca = cos(angle); let sa = sin(angle);
     let size = 0.875 + 0.9 * dials.w * (d - 0.5);
     let rotated = vec2<f32>(delta.x * ca + delta.y * sa, -delta.x * sa + delta.y * ca) / size;
     let rx = rotated.x / mix(1.0, clamp(1.0 - 0.38 * rotated.y, 0.52, 1.3), dials.z);
-    let r = length(vec2<f32>(rx, rotated.y + dials.z * 0.17 * rx * rx));
+    let shaped = vec2<f32>(rx, rotated.y + dials.z * 0.17 * rx * rx);
+    // Branched so Squareness 0 pays for no powers and keeps the round scale's own `length`.
+    var r = length(shaped);
+    if p > 2.0 {
+        r = velvet_square_radius(shaped, p);
+    }
     let support = (1.0 - smoothstep(1.5, 1.9, abs(delta.x))) * (1.0 - smoothstep(1.5, 1.9, abs(delta.y)));
     let body = 1.0 - smoothstep(0.85 - dials.x, 0.85 + dials.x, r);
     let weight = (body + 0.025 * exp(-2.0 * r * r)) * exp(2.8 * (c - 0.5)) * support;
@@ -679,15 +454,18 @@ fn velvet_light(source: texture_2d<f32>, source_sampler: sampler, uv: vec2<f32>,
         + textureSampleLevel(source, source_sampler, uv + vec2<f32>(0.0, radius.y), 0.0)
         + textureSampleLevel(source, source_sampler, uv - vec2<f32>(0.0, radius.y), 0.0));
 }
-fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f32>, size: vec2<f32>, cell_size: f32, drift: vec2<f32>, dials: vec4<f32>) -> vec4<f32> {
+fn velvet_material(source: texture_2d<f32>, source_sampler: sampler, pt: vec2<f32>, size: vec2<f32>, cell_size: f32, drift: vec2<f32>, dials: vec4<f32>, form: vec2<f32>) -> vec4<f32> {
     let p = pt / cell_size + drift;
     let q = p + velvet_warp(p, dials.y);
     let base = vec2<i32>(floor(q));
+    // `Squareness` (form.x) as an exponent: 2 is the circle, and it rises
+    // exponentially to 12, a square with barely rounded corners.
+    let exponent = 2.0 * pow(6.0, form.x);
     var light = vec4<f32>(0.0);
     var weight = 0.0;
     for (var j = -2; j <= 2; j++) {
         for (var i = -2; i <= 2; i++) {
-            let body = velvet_body(q, base + vec2<i32>(i, j), dials);
+            let body = velvet_body(q, base + vec2<i32>(i, j), dials, form.y, exponent);
             if body.weight > 0.0 {
                 let uv = (body.center - drift) * cell_size / size;
                 light += body.weight * velvet_light(source, source_sampler, uv, vec2<f32>(0.14 * cell_size) / size);

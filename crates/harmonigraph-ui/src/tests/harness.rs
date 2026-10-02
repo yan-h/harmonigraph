@@ -254,8 +254,8 @@ pub(super) fn settings_pane_at_width(
 ) -> Vec<egui::epaint::ClippedShape> {
     let mut state = fresh();
     state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_ready = true;
-    state.workspace.interaction.take.render_progress = Some(FIXTURE_RENDER);
+    state.workspace.interaction.take.last_take = Some("music.take".into());
+    state.workspace.interaction.take.exports = vec![fixture_export()];
     state.picture.appearance.camera.projection = projection;
     // A saved angle, so the Angle row has the button a real session gives it.
     state.workspace.interaction.camera_presets.push(CameraPreset {
@@ -349,4 +349,16 @@ pub(super) const FIXTURE_RENDER: RenderProgress = RenderProgress { done: 120, to
 /// Whether the leaf holding `tab` is folded away.
 pub(super) fn collapsed(state: &SharedState, tab: panes::Tab) -> bool {
     !state.workspace.layout.visible(tab)
+}
+
+pub(super) fn fixture_export() -> harmonigraph_take::render::ExportJob {
+    harmonigraph_take::render::ExportJob {
+        id: 7,
+        take: "music.take".into(),
+        output: "music.mp4".into(),
+        size: Some([1280, 720]),
+        state: harmonigraph_take::render::ExportStatus::Running,
+        progress: FIXTURE_RENDER,
+        detail: String::new(),
+    }
 }

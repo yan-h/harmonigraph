@@ -40,9 +40,9 @@ pub struct Capture {
     /// the display would without standing a writer thread up.
     displayed: publication::Consumer,
     fence: Arc<RecordFence>,
+    latches: Arc<TakeLatches>,
     _records: rtrb::Consumer<Entry>,
     audio: rtrb::Consumer<f32>,
-    with_audio: Arc<AtomicBool>,
 }
 
 impl Capture {
@@ -106,11 +106,6 @@ impl Capture {
         });
         events
     }
-    pub fn arm_audio(&self) {
-        self.arm();
-        self.with_audio.store(true, Ordering::Relaxed);
-    }
-
     pub fn drain_audio(&mut self) -> Vec<f32> {
         let mut samples = Vec::new();
         while let Ok(sample) = self.audio.pop() {
@@ -141,18 +136,20 @@ impl FileWriter {
     pub fn current_pass(&self) -> Option<u32> {
         self.pump.open.as_ref().map(|o| o.current.number)
     }
-    pub fn new(capture: &Capture, path: std::path::PathBuf, spec: Option<AudioSpec>) -> Self {
+    /// Opens `path` and the WAV beside it, as every `Start` does.
+    pub fn new(capture: &Capture, path: std::path::PathBuf) -> Self {
         let status = Mutex::new(String::new());
         let open = Recording::create(
             harmonigraph_take::Header::default(),
             path,
             capture.fence.epoch(),
-            spec,
+            FIXTURE_SPEC,
             &status,
         )
         .unwrap();
+        assert!(open.current.audio.is_some(), "{}", status.lock());
         Self {
-            pump: Pump { open: Some(open), ..Default::default() },
+            pump: Pump { latches: capture.latches.clone(), open: Some(open), ..Default::default() },
             fence: capture.fence.clone(),
             status,
             finished: None,
@@ -164,8 +161,12 @@ impl FileWriter {
     ///
     /// [`drain`]: Self::drain
     pub fn stop(&mut self) {
-        let unlaunched =
-            RenderRequest { program: std::path::PathBuf::new(), appearance: None, size: [0, 0] };
+        let unlaunched = RenderRequest {
+            program: std::path::PathBuf::new(),
+            appearance: None,
+            size: Some([0, 0]),
+            notice: None,
+        };
         self.pump.pending_stop = Some((self.fence.epoch(), Box::new(unlaunched)));
     }
     pub fn drain(&mut self, capture: &mut Capture) {
@@ -191,11 +192,11 @@ pub fn channel() -> (Recorder, Capture) {
     let (publication, publications) = publication::channel();
     let (display, displayed) = publication::channel();
     let (audio, audio_consumer) = rtrb::RingBuffer::new(AUDIO_RING_CAPACITY);
-    let with_audio = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicU64::new(0));
     let rolling = Arc::new(AtomicBool::new(false));
     let end_at_rewind = Arc::new(AtomicBool::new(false));
     let fence = Arc::new(RecordFence::default());
+    let latches = Arc::new(TakeLatches::default());
     let recorder = Recorder {
         _writer_lifetime: None,
         publication,
@@ -207,7 +208,6 @@ pub fn channel() -> (Recorder, Capture) {
         closed_epoch: 0,
         producer,
         audio,
-        with_audio: with_audio.clone(),
         dropped,
         last_params: [f32::NAN; ParamKey::ALL.len()],
         lifecycle: State::Disarmed,
@@ -217,15 +217,15 @@ pub fn channel() -> (Recorder, Capture) {
         run: 0,
         run_live: false,
         end_at_rewind,
-        latches: Arc::new(TakeLatches::default()),
+        latches: latches.clone(),
     };
     let capture = Capture {
         fence,
+        latches,
         publications,
         displayed,
         _records: records,
         audio: audio_consumer,
-        with_audio,
     };
     (recorder, capture)
 }

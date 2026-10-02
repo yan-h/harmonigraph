@@ -54,25 +54,23 @@ fn a_take_with_a_hole_warns_before_the_command_line_is_judged() {
     let take = directory.join("gapped.take");
     take_with_a_gap(&take);
 
-    // `--layout` is the first thing after the warning loop that can refuse, so
-    // an unusable one stops the run without any of the rendering below it —
-    // and puts a second, LATER message on the same stderr to order against.
+    // A missing recorded audio file is harmless, but an invalid explicit
+    // output aspect warns after the take's own gap, before rendering starts.
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
         .arg(&take)
-        .arg("--layout")
-        .arg("definitely-not-a-preset")
+        .args(["--size", "160x120", "--out", "/dev/null/impossible.mp4"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!output.status.success(), "the unusable layout still refuses: {stderr}");
+    assert!(!output.status.success(), "the unusable output refuses: {stderr}");
 
     let first = stderr.lines().next().unwrap_or_default();
     assert!(first.starts_with("warning:"), "the take's own trouble comes first: {stderr}");
     assert!(first.contains("6..=8"), "and names the lost range: {stderr}");
     let complaint = stderr
         .lines()
-        .position(|line| line.contains("definitely-not-a-preset"))
-        .expect("the layout complaint reached stderr too");
+        .position(|line| line.contains("--size 160x120"))
+        .expect("the size warning reached stderr too");
     assert!(complaint > 0, "the command line is judged after the take is read: {stderr}");
     std::fs::remove_dir_all(directory).unwrap();
 }
@@ -92,7 +90,9 @@ fn retired_layout_interfaces_fail_visibly() {
         "(background:(0,0,0),margin:0.0,gap:0.0,panes:[(pane:Lattice,rect:(0.0,0.0,1.0,1.0))])",
     )
     .unwrap();
-    for name in ["lattice", "spectral", "spiral", custom.to_str().unwrap()] {
+    for name in
+        ["side-by-side", "stacked", "lattice", "spectral", "spiral", custom.to_str().unwrap()]
+    {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
             .arg(&take)
             .args(["--layout", name])
@@ -100,8 +100,7 @@ fn retired_layout_interfaces_fail_visibly() {
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success(), "{name} was accepted");
-        assert!(stderr.contains("unknown layout") && stderr.contains(name), "{stderr}");
-        assert!(stderr.contains("side-by-side or stacked"), "{stderr}");
+        assert!(stderr.contains("unknown option") && stderr.contains("--layout"), "{stderr}");
     }
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_harmonigraph-offline"))
         .arg("--dump-layout")

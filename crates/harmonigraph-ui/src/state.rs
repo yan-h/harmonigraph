@@ -8,8 +8,8 @@ use harmonigraph_perf::{PerfStats, ShellTimings};
 use harmonigraph_render::wgpu::TextureFormat;
 use harmonigraph_scene::{Camera, DrawnWindow};
 
+use crate::VisualRuntime;
 use crate::{panes, text, workspace};
-use crate::{RenderProgress, VisualRuntime};
 
 /// Scrollback for the debug console pane. Shells and panes log via
 /// [`Console::log`].
@@ -69,20 +69,22 @@ pub struct TakeState {
     /// Shell-supplied one-liner shown under the toggle: where the file is
     /// going, how many events, or what went wrong.
     pub status: String,
-    /// Whether a take has been recorded this session — the shell sets it so the
-    /// Video pane can offer "Re-render take".
-    pub last_ready: bool,
-    /// One-shot: set by the Video pane's "Re-render take" button, consumed by
-    /// the shell to render the last take with the CURRENT settings.
-    pub render_now: bool,
-    /// One-shot: set by the Video pane's "Cancel render" button, consumed by
-    /// the shell to stop the render in flight and delete the part of the video
-    /// it had written. The take itself is kept, so
-    /// [`render_now`](Self::render_now) can start over from it.
-    pub cancel_render: bool,
-    /// How far the video render running in the background has got, or `None`
-    /// when none is. Shell-set every frame, like [`status`](Self::status).
-    pub render_progress: Option<RenderProgress>,
+    pub last_take: Option<std::path::PathBuf>,
+    pub exports: Vec<harmonigraph_take::render::ExportJob>,
+    pub export_actions: Vec<ExportAction>,
+    pub export_paths: String,
+    /// Empty selects the current appearance; otherwise a named look.
+    pub export_look: Option<String>,
+    pub export_recorded: bool,
+    pub export_error: String,
+}
+
+/// Settings are captured at the button press, before the shell's next frame.
+pub enum ExportAction {
+    Queue { take: std::path::PathBuf, appearance: String, render: crate::RenderConfig },
+    Cancel(u64),
+    Retry(u64),
+    ClearFinished,
 }
 
 /// Shell aggregate. Drawing and runtime code borrow its domains independently.
@@ -103,6 +105,7 @@ pub struct PictureState {
 /// Viewport geometry and temporal graphics, separate from input history.
 pub struct SurfaceState {
     pub(crate) spectrogram: crate::spectrum::SpectrogramSurfaces,
+    pub(crate) note_names: std::collections::HashMap<usize, panes::spectral::names::Thinning>,
     /// The lattice node the pointer is over, if any.
     ///
     /// Shared state that one pane writes and one pane reads: the lattice
@@ -133,12 +136,13 @@ pub struct SurfaceState {
     /// of lag on a window that only moves with the camera is invisible; an
     /// answer that changes with the dock arrangement is not.
     ///
-    /// The DOCKED copy alone. The Video tab's preview is a second lattice at
+    /// The primary picture: the docked copy live, the layout's copy offline.
+    /// The Video tab's preview is a second lattice at
     /// a second aspect, and letting it publish would make these answers jump
     /// with a tab that is not the one being read — the same argument that
     /// keeps the preview out of the GPU timing slot.
     pub drawn: Option<DrawnWindow>,
-    /// What the docked lattice has published so far THIS frame, rotated into
+    /// What the primary lattice has published so far THIS frame, rotated into
     /// [`drawn`](Self::drawn) by `begin_frame`. The perf overlay's node count
     /// reads it directly, because that read happens after every pane has
     /// drawn and a diagnostic holding its last good reading is the one that
@@ -194,6 +198,7 @@ pub struct SurfaceState {
 /// Editor interaction and shell actions. Panes borrow this separately from
 /// the layout being traversed, so a reset request cannot replace a live dock.
 pub struct Interaction {
+    pub(crate) appearance_editor: crate::appearance_edit::AppearanceEditor,
     pub(crate) analyzer_regions: panes::spectral::collapse::Regions,
     /// The Spiral tab's framing (persisted; see [`panes::spiral::SpiralView`]).
     ///
@@ -250,6 +255,9 @@ pub struct Interaction {
     /// only thing that reads it, and the offline renderer never reaches
     /// there.
     pub ui_scale: f32,
+    /// Hide the editor's tab and fold bars for a continuous live picture.
+    /// Tab toggles them back; this preference is never recorded in a take.
+    pub frameless: bool,
     /// What the chrome's colours are made of (see
     /// [`harmonigraph_scene::skin::Skin::from_dials`]). Persisted. Here beside
     /// `ui_scale` for the same reason: it colors the panel, never the picture
@@ -374,17 +382,10 @@ impl Workspace {
 /// values, so a future offline READ of either is exactly what would break
 /// determinism.
 pub struct Instruments {
-    /// GPU time of the lattice's passes in milliseconds, as f32 bits, written
-    /// by the render callback and read by the performance overlay. Carries the
-    /// `GPU_TIME_UNSUPPORTED` / `GPU_TIME_PENDING` sentinels, which are NaN bit
-    /// patterns rather than zero — a lattice pass below the timer's resolution
-    /// is a real reading of 0.0 ms, so zero cannot mean "nothing" here. See the
-    /// seed in [`Instruments::default`], which is what stops a fresh editor
-    /// reporting a fabricated 0.0 before the first readback lands.
-    ///
-    /// Same shape the plugin already uses to publish its sample rate. Never
-    /// read by the offline renderer, which also never asks for the feature, so
-    /// it has no timer to begin with.
+    /// Lattice callback timings, as f32 bits, consumed once by the performance
+    /// overlay. The renderer's default distinguishes absent samples from real
+    /// zero-cost measurements. Never read by the offline renderer, which also
+    /// never asks for the GPU timestamp feature.
     pub(crate) lattice_stats: std::sync::Arc<harmonigraph_render::LatticeStats>,
     /// How many note segments the docked roll handed its paint callback last
     /// frame — the geometry `verts` does NOT see, four vertices at a time
@@ -421,19 +422,7 @@ pub struct Instruments {
 impl Default for Instruments {
     fn default() -> Self {
         Instruments {
-            lattice_stats: {
-                let stats = harmonigraph_render::LatticeStats::default();
-                // The sentinel that says "no reading has landed yet", which the
-                // overlay draws as `—` rather than as a zero. Set here rather
-                // than being `LatticeStats`'s own default: zero is a legitimate
-                // GPU time, so the distinction belongs to whoever is going to
-                // read it back.
-                stats.gpu_ms.store(
-                    harmonigraph_render::GPU_TIME_PENDING,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                std::sync::Arc::new(stats)
-            },
+            lattice_stats: std::sync::Arc::new(harmonigraph_render::LatticeStats::default()),
             roll_notes: std::sync::atomic::AtomicU32::new(0),
             font_atlas: Default::default(),
             lattice_atlas: Default::default(),
@@ -503,8 +492,10 @@ impl SharedState {
             folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
+            saved_looks: self.workspace.interaction.appearance_editor.saved.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
+            frameless: self.workspace.interaction.frameless,
             skin_dials: self.workspace.interaction.skin_dials,
             perf_pos: self.workspace.interaction.perf_pos,
             show_perf: self.workspace.interaction.show_perf,
@@ -559,11 +550,16 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
+        let mut saved_looks = persist.saved_looks;
+        saved_looks.sanitize();
+        self.workspace.interaction.appearance_editor =
+            crate::appearance_edit::AppearanceEditor::restore(saved_looks);
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
         }
         self.workspace.interaction.fps_cap = persist.fps_cap;
+        self.workspace.interaction.frameless = persist.frameless;
         // Clamped here rather than only where it is drawn, so the control
         // cannot read out a number the chrome is not at: `set_ui_scale`
         // would take a hand-edited 5.0 down to the top of the range while
@@ -651,10 +647,12 @@ pub(crate) struct UiPersist {
     pub(crate) folded_sections: std::collections::BTreeSet<String>,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
+    pub(crate) saved_looks: crate::appearance_edit::SavedLooks,
     /// A missing cap reads as uncapped.
     pub(crate) fps_cap: Option<f32>,
     /// Chrome defaults to the design size, shared with Interaction.
     pub(crate) ui_scale: f32,
+    pub(crate) frameless: bool,
     /// See [`Interaction::skin_dials`]; a blob without them opens at the
     /// default.
     pub(crate) skin_dials: harmonigraph_scene::skin::SkinDials,
@@ -678,8 +676,10 @@ impl Default for UiPersist {
             folded_sections: Default::default(),
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
+            saved_looks: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            frameless: false,
             skin_dials: Default::default(),
             perf_pos: None,
             show_perf: false,
@@ -703,6 +703,7 @@ impl SurfaceState {
     fn new(target_format: TextureFormat) -> Self {
         Self {
             spectrogram: Default::default(),
+            note_names: Default::default(),
             hovered: None,
             drawn: None,
             drawn_this_frame: None,
@@ -718,6 +719,7 @@ impl SurfaceState {
 impl Default for Interaction {
     fn default() -> Self {
         Self {
+            appearance_editor: Default::default(),
             analyzer_regions: Default::default(),
             spiral: Default::default(),
             camera_presets: Vec::new(),
@@ -726,6 +728,7 @@ impl Default for Interaction {
             folded_sections: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
+            frameless: false,
             skin_dials: Default::default(),
             perf_pos: None,
             show_perf: false,
@@ -848,6 +851,7 @@ impl PictureState {
         self.runtime.tracker.clear_roll();
         self.runtime.spectrum.clear_history();
         self.surfaces.glow_fade.clear();
+        self.surfaces.note_names.clear();
     }
     /// The causal tracker's rolling window, filling in as notes arrive.
     pub fn roll(&self) -> &harmonigraph_core::NoteRoll {

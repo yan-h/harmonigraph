@@ -178,10 +178,6 @@ pub fn render(
 
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.install_appearance(appearance);
-    // Nothing offline is interactive, and both would draw over the
-    // picture: no armed-mode pulse, no hover highlight.
-    state.runtime.learn_active = false;
-    state.surfaces.hovered = None;
     // The comma auto-detects are interactive too, in the sense that matters
     // here: they answer a tuning EDIT, and a replay has no editor. This only
     // governs LEAD-IN frames, before the take's first configuration record:
@@ -684,7 +680,7 @@ mod tests {
 
     fn settings() -> Settings {
         Settings {
-            layout: Layout::preset("side-by-side").unwrap(),
+            layout: Layout::split(harmonigraph_ui::LatticeSide::Left, 0.68),
             // Small and 256-aligned-friendly; the point is the pipeline,
             // not the resolution.
             size: [320, 200],
@@ -763,6 +759,26 @@ mod tests {
     }
 
     #[test]
+    fn recorded_learn_mode_does_not_paint_editor_chrome_in_export() {
+        let mut settings = settings();
+        settings.end = 0.1;
+        let fixture = |learning| {
+            let mut take = take();
+            take.events.clear();
+            take.params.clear();
+            take.configurations =
+                vec![harmonigraph_take::ConfigurationRecord { learning, ..Default::default() }];
+            take
+        };
+        let Some(plain) = render_take(fixture(false), &settings) else { return };
+        let learning = render_take(fixture(true), &settings).expect("the second export has a GPU");
+        assert_eq!(plain.len(), 1, "the fixture must replay and draw one actual frame");
+        let distinct: std::collections::HashSet<_> = plain[0].chunks_exact(4).collect();
+        assert!(distinct.len() > 32, "the clean picture must have actual rendered content");
+        assert_eq!(plain, learning, "recorded Learn mode changed the exported picture");
+    }
+
+    #[test]
     fn a_take_renders_the_expected_number_of_frames_and_they_are_not_blank() {
         let settings = settings();
         let Some(frames) = render_frames(&settings) else { return };
@@ -826,8 +842,8 @@ mod tests {
     ///
     /// Both halves are non-vacuous, and either could be silently absent. The
     /// wash has to be REACHED — the texture sits behind an enum whose fresh
-    /// value is the other one, so the frame is held against the same take drawn
-    /// with the scales — and the clock has to MOVE something, or this is the
+    /// value is another one, so the frame is held against the same take drawn
+    /// with `Texture mix` at 0 — and the clock has to MOVE something, or this is the
     /// test above with one more uniform in it. The second is held against the
     /// same run with the drift speed alone at 0 and NOT against another frame of
     /// the run itself: over a fixture with light in it the spectrogram scrolls,
@@ -855,11 +871,15 @@ mod tests {
     }
 
     fn drifting_texture_renders_twice_to_the_same_bytes(style: harmonigraph_scene::CloudStyle) {
-        let clouded = |wash: bool, speed: f32| {
+        let clouded = |textured: bool, speed: f32| {
             let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
             let a = &mut state.appearance.spectrum.atmosphere;
-            // Against the Mosaic's scales, whatever the fresh style is.
-            a.cloud_style = if wash { style } else { harmonigraph_scene::CloudStyle::Mosaic };
+            // Against the same picture with the texture mixed out, whatever the
+            // fresh style is.
+            a.cloud_style = style;
+            if !textured {
+                a.cloud_depth = 0.0;
+            }
             // A blur wide on both axes and spread into the dark, so the pane
             // is mostly lit (see the assert below); the fresh sharp field
             // leaves half of it on black.
@@ -870,7 +890,7 @@ mod tests {
             // stars take their own speed, and their nearest at its top is as
             // visible.
             a.cloud_speed = speed;
-            a.stars.star_speed_max = speed.min(harmonigraph_scene::STAR_SPEED_MAX);
+            a.stars.star_speed_near = speed.min(harmonigraph_scene::STAR_SPEED_MAX);
             let mut take = transient_take(0.0);
             take.header.appearance = Some(state.appearance.serialize());
             take
@@ -906,13 +926,13 @@ mod tests {
         };
         let Some(first) = run(&clouded(true, 8.0)) else { return };
         assert!(first == run(&clouded(true, 8.0)).expect("a second GPU run"), "{style:?} differs");
-        let scales = run(&clouded(false, 8.0)).expect("a third GPU run");
+        let bare = run(&clouded(false, 8.0)).expect("a third GPU run");
         let still = run(&clouded(true, 0.0)).expect("a fourth GPU run");
         let mid = first.len() / 2;
         // The pane has light in it, which is the assumption under BOTH asserts
         // below and the one that quietly stopped holding: a silent pane sits on
-        // the palette's floor for either texture, so a dark fixture makes them
-        // agree and makes a stirred frame identical to a still one. The old
+        // the palette's floor with or without the texture, so a dark fixture
+        // makes them agree and makes a stirred frame identical to a still one. The old
         // fixture was one sample of ±1 read a second past the end of its own
         // buffer — 97% digital silence, which both asserts passed over only
         // because the wash then painted it with a lift nothing held back.
@@ -923,7 +943,7 @@ mod tests {
             "the fixture draws a mostly black pane, so neither assert below is about \
              {style:?}: {lit} of {pane} pixels lit",
         );
-        assert!(first[mid] != scales[mid], "{style:?} drew the scales' frame {mid}");
+        assert!(first[mid] != bare[mid], "{style:?} drew the untextured frame {mid}");
         assert!(first[mid] != still[mid], "{style:?}'s clock moved nothing in frame {mid}");
     }
 

@@ -137,7 +137,7 @@ pub(super) fn system_pane(
             ["Accent hue", "Accent saturation"],
             |hue, amount| rgb(skin::accent_color(hue, amount)),
         );
-        crate::widgets::checkbox(ui, &mut appearance.view.frameless, "Hide tab bars (Tab)").on_hover_text(
+        crate::widgets::checkbox(ui, &mut interaction.frameless, "Hide tab bars (Tab)").on_hover_text(
             "Hide dock tab bars for a continuous picture. Press Tab to toggle while not editing text.",
         );
         button_row(ui, |ui| {

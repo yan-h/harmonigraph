@@ -3,7 +3,7 @@
 //! The Hub's schedule is the authority for display, take and future context;
 //! these fixtures also check the tuning expressions actually emitted to hosts.
 use super::*;
-use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit};
 use harmonigraph_core::{canonical::VoiceBaseline, LatticePos, Tuning};
 
 pub(super) fn configure(hub: &Device, tuning: Tuning) {
@@ -26,7 +26,7 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
 }
 
 fn configure_policy(hub: &Device, policy: PolicyConfig) {
-    submit(hub, ConfigEdit { policy: Some(policy), ..Default::default() });
+    submit(hub, ConfigEdit { policy: Some(PolicyEdit::all(policy)), ..Default::default() });
 }
 
 /// A transport carrying the host's seconds timeline at `seconds`.
@@ -753,7 +753,7 @@ fn a_take_lane_gap_owes_every_source_its_own_snapshot() {
         std::env::temp_dir().join(format!("harmonigraph-take-gap-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("gap.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     phrase.step(
         [
             vec![note(1, 0, 50, 0, true)],
@@ -825,7 +825,7 @@ fn a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice() {
         std::env::temp_dir().join(format!("harmonigraph-take-onset-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("onset.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     // Expression every callback, as a played note has: each is sequenced in
     // the callback a snapshot may be cut in, and scheduled D after it.
     for step in 0..4 {
@@ -913,7 +913,7 @@ fn a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity() {
         std::env::temp_dir().join(format!("harmonigraph-partial-frame-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("partial.take");
-    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone(), None);
+    let mut writer = harmonigraph_record::testing::FileWriter::new(&capture, path.clone());
     // Each Reset is a cut, and a cut owes every row a fresh snapshot on both
     // lanes. Well past SNAPSHOT_SLOTS, so the display is refusing long before
     // the end while the writer keeps up.

@@ -92,12 +92,16 @@
 //! Two costs worth stating rather than discovering:
 //!
 //! - **Down low the floor eats the fundamental.** An FFT bin is a constant
-//!   number of Hz, so at 65 Hz (C2) it is 151¢ wide and one Hann main lobe
+//!   number of Hz. At Balanced's 8192 samples and 48 kHz, a bin at 65 Hz (C2)
+//!   is 151¢ wide and one Hann main lobe
 //!   spans about 600¢ — wider than the whole median window, which then sits
 //!   INSIDE the lobe and subtracts most of it. The pitch class still lights,
 //!   from the 2nd harmonic up, and it lights the right node; what goes dark is
 //!   its lowest wedge. That is the same limit #350 names under "low
 //!   fundamentals blur", showing up here as a floor rather than as a smear.
+//!   Fast's 4096-sample bins are twice as wide, so this loss reaches higher
+//!   pitches. The boundary depends on sample rate and the signal's harmonics;
+//!   Fast deliberately keeps this limitation rather than changing the floor.
 //! - **Up high the floor rises between partials.** Harmonics crowd together in
 //!   log pitch — the 15th and 16th are 112¢ apart — so a 300¢ window holds
 //!   three of them and the median lands in a valley rather than under the
@@ -1594,6 +1598,20 @@ mod tests {
     fn analyzed_audio_crosses_the_gate_and_carries_its_hysteresis_fade() {
         use crate::{SpectrumTapers, SpectrumWindow};
         for (window, tapers, reading, strict, held) in [
+            (
+                SpectrumWindow::Fast,
+                SpectrumTapers::One,
+                SpectralReading::Fold,
+                0.001724211,
+                0.00089501316,
+            ),
+            (
+                SpectrumWindow::Fast,
+                SpectrumTapers::One,
+                SpectralReading::Spectrum,
+                0.0017096889,
+                0.0008874749,
+            ),
             (
                 SpectrumWindow::Balanced,
                 SpectrumTapers::One,

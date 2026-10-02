@@ -31,7 +31,6 @@ fn star_life() -> f32 { return settings.stars.star_life; }
 fn star_size_variation() -> f32 { return settings.stars.star_size_variation; }
 fn star_far() -> vec4<f32> { return settings.stars.star_far; }
 fn star_near() -> vec4<f32> { return settings.stars.star_near; }
-fn star_geometry() -> vec4<f32> { return settings.stars.star_geometry; }
 fn star_slice(k: u32) -> StarSlice { return settings.stars.star_slices[k]; }
 fn star_halo_sample(k: u32) -> StarHaloSample { return settings.stars.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }
@@ -61,7 +60,5 @@ fn fs_lattice_stars(in: TileVertex) -> @location(0) vec4<f32> {
     // Alpha rises past that only to contain a star brighter than its light.
     let brightest = max(max(result.r, result.g), result.b);
     result.a = max(brightest, min(result.a, 1.0) * raw.a);
-    // Distant gap fill can push past full brightness; scale, retaining hue.
-    result /= max(result.a, 1.0);
     return mix(raw, result, settings.depth);
 }

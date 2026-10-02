@@ -5,20 +5,17 @@ use harmonigraph_core::LatticePos;
 
 /// Which texture the atmosphere layer draws over the spectrogram.
 ///
-/// Distinct constructions: [`CloudStyle::Mosaic`] is a pile
-/// of soft domes joined by a soft union, and [`CloudStyle::Watercolor`] is a
-/// field of overlapping globs. Both displace the same scalar picture without
-/// altering its levels, then apply the shared Contours and palette controls.
+/// Distinct constructions: [`CloudStyle::Watercolor`] is a field of
+/// overlapping globs that displaces the scalar picture without altering its
+/// levels, then applies the shared Contours and palette controls.
 /// [`CloudStyle::VelvetScales`] instead averages each overlapping scallop's
 /// sampled light, with no raw source overlay at full material depth.
 ///
 /// **These name what Yan sees on the page, and the code under each keeps the
-/// name of its own CONSTRUCTION** — `scale_*` and `dome_*` for the mosaic's
-/// dome geometry, `wash_*` for the watercolour's laid-over globs. That split is
-/// not new and is not an oversight: the variant was `Water` over `scale_*`
-/// fields before it was `Mosaic` over them. A menu entry names a look and may
-/// be renamed whenever the look is better described; a field names the thing
-/// the arithmetic builds.
+/// name of its own CONSTRUCTION** — `wash_*` for the watercolour's laid-over
+/// globs, `velvet_*` for the scallops behind `Scales`. That split is not an
+/// oversight. A menu entry names a look and may be renamed whenever the look
+/// is better described; a field names the thing the arithmetic builds.
 ///
 /// Renaming either is allowed and neither is free, but do not read that as the
 /// two costing the same. They are not symmetric, and the cheap-looking one is
@@ -35,7 +32,6 @@ use harmonigraph_core::LatticePos;
 /// every `star_` setting belongs to it alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
-    Mosaic,
     Watercolor,
     Stars,
     VelvetScales,
@@ -58,10 +54,9 @@ pub enum StarHaloProfile {
     Low,
 }
 
-/// The band the cloud size dials run over — [`MaterialSettings::scale_size`],
-/// [`MaterialSettings::wash_size`] and [`MaterialSettings::velvet_size`], which
-/// mean the same thing about different textures and so are worth one pair of
-/// numbers rather than three.
+/// The band the cloud size dials run over — [`MaterialSettings::wash_size`]
+/// and [`MaterialSettings::velvet_size`], which mean the same thing about
+/// different textures and so are worth one pair of numbers rather than two.
 ///
 /// **Exported because the dial and the load-door clamp have to be the SAME
 /// range.** A bar that stops at one number over a clamp that stops at another
@@ -79,7 +74,8 @@ pub enum StarHaloProfile {
 /// finer raises the mean step between adjacent pixels until its own detail
 /// nears one pixel, and then that number stops moving: past there the dial is
 /// buying noise rather than a smaller texture. Over a 700-point pane — a
-/// 1080p export's — the mosaic's mean adjacent-pixel step runs 0.034 at 1x,
+/// 1080p export's — the faceted dome texture this was measured on (since
+/// retired) ran a mean adjacent-pixel step of 0.034 at 1x,
 /// 0.047 at 1/4, 0.058 at 1/8 and 0.062 at 1/16, and then FALLS to 0.061 at
 /// 0.05. 1/16 is where it turns over, which is about 1.6 points to a cell, so
 /// that is where the bar stops.
@@ -87,9 +83,9 @@ pub enum StarHaloProfile {
 /// Scales' `Cell size` (`velvet_size`) runs over the same band, but the floor
 /// was not measured on it, and its 1x is a coarser cell — about 6% of the
 /// pane's height — so on that pane the floor stops it at about 2.6 points to a
-/// cell rather than at the mosaic's turnover.
+/// cell rather than at the measured turnover.
 ///
-/// It is one floor over three textures and a pane whose height varies about
+/// It is one floor over two textures and a pane whose height varies about
 /// threefold, so it cannot be exactly right everywhere: the watercolour's
 /// globs are averaging toward a flat film by 1/8 already, and on a short
 /// editor pane the last of the travel aliases where on a tall portrait render
@@ -147,11 +143,6 @@ pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
 /// See [`CLOUD_DIRECTION_MIN`].
 pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
 
-/// Bounds shared by the [`MaterialSettings::scale_refract`] control and sanitizer.
-pub const SCALE_REFRACT_MIN: f32 = -1.0;
-/// See [`SCALE_REFRACT_MIN`].
-pub const SCALE_REFRACT_MAX: f32 = 1.0;
-
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
 /// bottom is its mirror, where the edge lightens instead.
@@ -165,48 +156,50 @@ pub const WASH_POOL_WIDTH_MIN: f32 = 0.05;
 /// See [`WASH_POOL_WIDTH_MIN`].
 pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 
-/// The top of [`StarSettings::star_glow`]: the glow as bright as the core at
-/// its centre.
-pub const STAR_GLOW_MAX: f32 = 1.0;
-/// Bounds of [`StarSettings::star_core_far`] and [`StarSettings::star_core_near`],
-/// as a share of the star's radius.
-pub const STAR_CORE_MIN: f32 = 0.05;
-/// See [`STAR_CORE_MIN`].
-pub const STAR_CORE_MAX: f32 = 1.0;
-/// Bounds of [`StarSettings::star_falloff`], the glow's exponent.
-pub const STAR_FALLOFF_MIN: f32 = 0.5;
-/// See [`STAR_FALLOFF_MIN`].
-pub const STAR_FALLOFF_MAX: f32 = 6.0;
+/// The top of [`StarSettings::star_solid_far`] and
+/// [`StarSettings::star_solid_near`], as a share of the star's radius: the
+/// glow keeps a tenth of the radius at least, so no star has a hard edge to
+/// alias as it drifts.
+pub const STAR_SOLID_MAX: f32 = 0.9;
+/// The fewest [`StarSettings::star_layers`]; the most is
+/// [`crate::star_plan::STAR_DEPTHS`].
+pub const STAR_LAYERS_MIN: u32 = 2;
 /// Bounds for the per-axis resolution of the Stars halo images.
 pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
 
 /// Bounds shared by the two ends of the `Star spacing` control
-/// ([`StarSettings::star_spacing_far`], [`StarSettings::star_spacing_near`])
-/// and their sanitizer, in star pixels.
-pub const STAR_SPACING_MIN: f32 = 0.25;
+/// ([`StarSettings::star_spacing_ratio_far`], [`StarSettings::star_spacing_ratio_near`])
+/// and their sanitizer, in multiples of the depth's star size.
+///
+/// The low end is the closest a star of any size can sit and still be read
+/// whole by the widest gather at full `Position variation`:
+/// [`crate::star_plan::StarGather::Three`]'s reach of 1.2 cells holds a
+/// radius of half the star's size in a cell of 5/12 of it. So `Star size` is
+/// always drawn as set, and no star is ever cut off at a cell edge.
+pub const STAR_SPACING_MIN: f32 = 5.0 / 12.0;
 /// See [`STAR_SPACING_MIN`].
-pub const STAR_SPACING_MAX: f32 = 64.0;
+pub const STAR_SPACING_MAX: f32 = 32.0;
 /// Bounds shared by the two ends of the `Star size` control
-/// ([`StarSettings::star_size_min`], [`StarSettings::star_size_max`])
+/// ([`StarSettings::star_size_far`], [`StarSettings::star_size_near`])
 /// and their sanitizer: a star's whole diameter, glow included, in star
 /// pixels.
 pub const STAR_SIZE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_MIN`].
 pub const STAR_SIZE_MAX: f32 = 64.0;
-/// How many times its stored `Star size` and `Star spacing` the lattice draws
-/// and shows them. The glow has no fine detail for stars to pick up, so its
+/// How many times its stored `Star size` the lattice draws and shows it, and
+/// so its spacing, which is a multiple of the size. The glow has no fine detail for stars to pick up, so its
 /// stars run bigger. Applied where the lattice draws and in its bars, never
 /// stored, so both panes share one [`StarSettings::default`] and a key a blob
 /// lacks takes the right fresh value in either.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
-/// Bounds shared by the two depth curves, [`StarSettings::star_spacing_curve`]
+/// Bounds shared by the two depth curves, [`StarSettings::star_spacing_ratio_curve`]
 /// and [`StarSettings::star_size_curve`], and their sanitizer.
 pub const STAR_DEPTH_CURVE_MIN: f32 = 0.5;
 /// See [`STAR_DEPTH_CURVE_MIN`].
 pub const STAR_DEPTH_CURVE_MAX: f32 = 4.0;
 /// Bounds shared by the two ends of the `Star speed` control
-/// ([`StarSettings::star_speed_min`], [`StarSettings::star_speed_max`])
+/// ([`StarSettings::star_speed_far`], [`StarSettings::star_speed_near`])
 /// and their sanitizer, as a share of the prototype's pace: at the top a depth
 /// crosses the pane's height in about nine seconds. The top was once 5, and
 /// everything past 1 was too fast to use while it crowded the useful range
@@ -258,30 +251,16 @@ pub struct MaterialSettings {
     pub velvet_irregularity: f32,
     /// Round bodies at zero, tapered overlapping scallops at one.
     pub velvet_shape: f32,
-    /// Size of one scale, as a multiplier on that size: how many of them cross
-    /// a cloud moves the other way, because the count is divided by this.
-    /// Runs over [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`].
-    pub scale_size: f32,
-    /// How much the scales differ in size from each other. 0 is one radius for
-    /// every glob in the field, which is the most regular texture there is; 1
-    /// draws each from the whole band the layer's coverage proof allows.
-    pub scale_variety: f32,
-    /// How far a scale carries the light behind it, and which way — the
-    /// refraction, and the whole reason the layer reads as a lens rather than
-    /// as something painted over the picture. 0 leaves the light where it is.
-    ///
-    /// ABOVE 0 the light is read where the scale's own face POINTS, in scale
-    /// widths, so the picture bends smoothly through the cloud. BELOW 0 it is
-    /// pulled toward the scale's CENTRE, and at -1 it is read there — one value
-    /// across the whole scale, so the picture comes apart into flat quantized
-    /// patches. That second half used to be its own `scale_facet` dial, a blend
-    /// between the two readings; the pair spanned a plane and the looks worth
-    /// having lie on this line through it, which is also exactly what the
-    /// watercolour's `wash_refract` has always meant by the word.
-    pub scale_refract: f32,
+    /// Round bodies at zero, squares with barely rounded corners at one. With
+    /// `velvet_tilt`, `velvet_irregularity` and `velvet_shape` at zero the
+    /// squares stand on the grid: the tiled look the deleted Mosaic drew.
+    pub velvet_square: f32,
+    /// How far each body turns off the pane's axes, as a share of S1's
+    /// random 0.2 ± 0.43 radian turn. Invisible on round bodies.
+    pub velvet_tilt: f32,
     /// How big one glob is, as a multiplier on that size: how many of them
     /// cross the cloud frame moves the other way, because the count is divided
-    /// by this. Larger is bigger, like `scale_size`, and over the same
+    /// by this. Larger is bigger, like `velvet_size`, and over the same
     /// [`CLOUD_SIZE_MIN`]..=[`CLOUD_SIZE_MAX`] band.
     pub wash_size: f32,
     /// One dial over everything that dissolves a glob's rim: how far it feathers
@@ -308,9 +287,8 @@ impl Default for MaterialSettings {
             velvet_edge: 0.34,
             velvet_irregularity: 0.8,
             velvet_shape: 1.0,
-            scale_size: 0.153_937_07,
-            scale_variety: 0.5,
-            scale_refract: -1.0,
+            velvet_square: 0.0,
+            velvet_tilt: 1.0,
             wash_size: 0.181_260_21,
             wash_fuzz: 1.0,
             wash_lobe: 1.0,
@@ -346,10 +324,8 @@ impl MaterialSettings {
         self.velvet_irregularity =
             clamp(self.velvet_irregularity, fresh.velvet_irregularity, 0.0, 1.0);
         self.velvet_shape = clamp(self.velvet_shape, fresh.velvet_shape, 0.0, 1.0);
-        self.scale_size = clamp(self.scale_size, fresh.scale_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
-        self.scale_variety = clamp(self.scale_variety, fresh.scale_variety, 0.0, 1.0);
-        self.scale_refract =
-            clamp(self.scale_refract, fresh.scale_refract, SCALE_REFRACT_MIN, SCALE_REFRACT_MAX);
+        self.velvet_square = clamp(self.velvet_square, fresh.velvet_square, 0.0, 1.0);
+        self.velvet_tilt = clamp(self.velvet_tilt, fresh.velvet_tilt, 0.0, 1.0);
         self.wash_size = clamp(self.wash_size, fresh.wash_size, CLOUD_SIZE_MIN, CLOUD_SIZE_MAX);
         self.wash_fuzz = clamp(self.wash_fuzz, fresh.wash_fuzz, 0.0, 1.0);
         self.wash_lobe = clamp(self.wash_lobe, fresh.wash_lobe, 0.0, 1.0);
@@ -445,7 +421,7 @@ pub struct SpectralAtmosphere {
     /// Drift speed, as a multiplier on a slow crossing like the lattice
     /// nebula's. The cloud FRAME it drifts in is fixed in the shader
     /// (`CLOUD_UNITS`): it used to be a dial, and it was a second copy of
-    /// `scale_size`/`wash_size` for the texture's size and of this one for its
+    /// `wash_size`/`velvet_size` for the texture's size and of this one for its
     /// travel.
     pub cloud_speed: f32,
     /// Constant visible texture drift direction in screen degrees: 0 points
@@ -465,8 +441,8 @@ pub struct SpectralAtmosphere {
     pub wash_pool_softness: f32,
     pub material_settings: MaterialSettings,
     /// Which texture the layer draws; [`CloudStyle`] says what each is. Each
-    /// reads its own settings and no other's: `scale_*` for `Mosaic`, `wash_*`
-    /// for `Watercolor` and `velvet_*` for `VelvetScales`, all in
+    /// reads its own settings and no other's: `wash_*` for `Watercolor` and
+    /// `velvet_*` for `VelvetScales`, both in
     /// [`Self::material_settings`], and [`Self::stars`] for `Stars`.
     pub cloud_style: CloudStyle,
     pub stars: StarSettings,
@@ -491,81 +467,83 @@ pub struct StarSettings {
     /// the original 0.6-cell jitter width at 1. More variation shortens how
     /// far each read holds a star whole ([`crate::star_plan::StarGather::bound`]).
     pub star_jitter: f32,
-    /// The farthest depth's star spacing in star pixels. A depth `d` from 0
-    /// (far) to 1 (near) spaces its stars at `far · (near / far)^(d^curve)`.
-    /// Every cell holds a star, so how many a depth has follows its spacing
-    /// alone. Runs over [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`] (the
-    /// lattice draws it [`LATTICE_STAR_SIZE_SCALE`] times over), never above
-    /// [`Self::star_spacing_near`].
-    pub star_spacing_far: f32,
-    /// The nearest depth's star spacing. See [`Self::star_spacing_far`].
-    pub star_spacing_near: f32,
+    /// How many depths the starfield draws, from
+    /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
+    /// farthest and the nearest, with the rest spaced evenly between, so every
+    /// far-to-near control spreads over just these
+    /// ([`crate::star_plan::star_layer_depths`]).
+    pub star_layers: u32,
+    /// The farthest depth's star spacing, as a multiple of its star size. A
+    /// depth `d` from 0 (far) to 1 (near) spaces its stars at
+    /// `far · (near / far)^(d^curve)` times its own [`Self::star_size_far`]
+    /// curve's size. Every cell holds a star, so at one value a depth's stars
+    /// cover the same share of the sky whatever their size. Runs over
+    /// [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`], whose low end is what
+    /// holds every star whole. Either end may be the larger, so the near
+    /// stars can be the denser ones.
+    pub star_spacing_ratio_far: f32,
+    /// The nearest depth's star spacing. See [`Self::star_spacing_ratio_far`].
+    pub star_spacing_ratio_near: f32,
     /// The exponent on depth in the spacing: 1 spreads it evenly over the
     /// depths, higher puts most depths in the fine dust. Runs over
     /// [`STAR_DEPTH_CURVE_MIN`]..=[`STAR_DEPTH_CURVE_MAX`].
-    pub star_spacing_curve: f32,
+    pub star_spacing_ratio_curve: f32,
     /// The farthest depth's star size: the whole star's diameter, glow
     /// included, in star pixels. A depth `d` spreads it like the spacing,
-    /// `min · (max / min)^(d^curve)`, and the size is a function of that value
-    /// alone, so one value on the control is one star size at every depth. A
-    /// depth whose stars would not fit the widest read its spacing allows is
-    /// drawn at the widest that fits, and the panel says so
-    /// ([`crate::star_plan::StarDepthPlan::clamped`]). Runs over
+    /// `far · (near / far)^(d^curve)`, and the size is a function of that value
+    /// alone, so one value on the control is one star size at every depth,
+    /// always drawn as set: the spacing is a multiple of it
+    /// ([`Self::star_spacing_ratio_far`]). Runs over
     /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`] (the lattice draws it
-    /// [`LATTICE_STAR_SIZE_SCALE`] times over), never above
-    /// [`Self::star_size_max`].
-    pub star_size_min: f32,
-    /// The nearest depth's star size. See [`Self::star_size_min`].
-    pub star_size_max: f32,
-    /// The exponent on depth in the size, as [`Self::star_spacing_curve`].
+    /// [`LATTICE_STAR_SIZE_SCALE`] times over). Either end may be the larger,
+    /// so the near stars can be the smaller ones.
+    pub star_size_far: f32,
+    /// The nearest depth's star size. See [`Self::star_size_far`].
+    pub star_size_near: f32,
+    /// The exponent on depth in the size, as [`Self::star_spacing_ratio_curve`].
     pub star_size_curve: f32,
-    /// The farthest depth's drift speed: the slowest stars. A depth `d` from 0
-    /// (far) to 1 (near) drifts at `min + (max - min) d^curve`, along the
+    /// The farthest depth's drift speed. A depth `d` from 0 (far) to 1 (near)
+    /// drifts at `far + (near - far) d^curve`, along the
     /// shared `Drift direction`; the stars never read `cloud_speed`, which is
     /// the other textures' pace. Runs over
-    /// [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`], never above
-    /// [`Self::star_speed_max`].
-    pub star_speed_min: f32,
-    /// The nearest depth's drift speed: the fastest stars. See
-    /// [`Self::star_speed_min`].
-    pub star_speed_max: f32,
+    /// [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`]. Either end may be the faster,
+    /// so the near stars can drift slower than the far ones.
+    pub star_speed_far: f32,
+    /// The nearest depth's drift speed. See
+    /// [`Self::star_speed_far`].
+    pub star_speed_near: f32,
     /// The exponent on depth in the parallax, between the two ends of
-    /// [`Self::star_speed_min`]. 1 steps the speeds evenly. Runs over
+    /// [`Self::star_speed_far`]. 1 steps the speeds evenly. Runs over
     /// [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
     pub star_speed_curve: f32,
     /// How long one star lives, in seconds, before its cell draws a new one,
-    /// alike at every depth. Each fades in and out over its life. Runs over
+    /// alike at every depth. Each fades in and out over its life, as far as
+    /// [`Self::star_twinkle_far`] says. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
-    /// The glow round each star's core, in the star's own colour: its
-    /// coverage at the centre, falling to nothing at the star's edge as
-    /// `(1 - t)^falloff`, `t` the distance over the star's radius. Runs to
-    /// [`STAR_GLOW_MAX`].
-    pub star_glow: f32,
-    /// How much of the farthest depth's stars is core: where the Gaussian
-    /// core falls to `e^-2`, as a share of the star's radius. A depth `d`
-    /// takes `far + (near - far) d^curve` on the `Star size` curve, so a dense
-    /// bed of filled far stars can sit behind near stars that are points in a
-    /// glow. Runs over [`STAR_CORE_MIN`]..=[`STAR_CORE_MAX`], either way
-    /// round.
-    pub star_core_far: f32,
-    /// The nearest depth's core share. See [`Self::star_core_far`].
-    pub star_core_near: f32,
-    /// The glow's exponent: low spreads it as a broad haze to the star's edge,
-    /// high draws it in as a tight bloom round the core. Runs over
-    /// [`STAR_FALLOFF_MIN`]..=[`STAR_FALLOFF_MAX`].
-    pub star_falloff: f32,
-    /// Coverage of the farthest three layers: 0 preserves their response,
-    /// 0.5 squares remaining background leakage, and 1 raises it to the fourth
-    /// power. Interpolates between those responses without adding stars.
-    pub star_far_fill: f32,
-    /// How stars that overlap within one depth combine past full coverage,
-    /// where their summed coverage tops one. Below that their light already
-    /// adds; past it 0 averages their colours, so a crowd is no brighter than
-    /// its mean star, and 1 adds the rest of their light too, eased into each
-    /// channel's headroom so it never passes full brightness: a crowd grows
-    /// brighter and paler as its channels fill. Runs over 0..=1.
-    pub star_overlap_light: f32,
+    /// How far the farthest depth's stars fade out as one life gives way to
+    /// the next, over 0..=1. At 1 each star fades to nothing and the next is
+    /// drawn somewhere new in its cell. Below 1 a cell's star keeps its place
+    /// across lives, dips only this far, and blends into the next life's
+    /// brightness and size, so at 0 a layer dense enough to cover the sky
+    /// never opens a hole. A depth `d` from 0 (far) to 1 (near) takes
+    /// `far + (near - far) d`.
+    pub star_twinkle_far: f32,
+    /// The nearest depth's twinkle. See [`Self::star_twinkle_far`].
+    pub star_twinkle_near: f32,
+    /// How much of the farthest depth's stars is solid: the share of the
+    /// star's radius at full coverage, the rest being glow that falls to
+    /// nothing at the star's edge ([`crate::star_plan::star_profile`]). A depth
+    /// `d` takes `far + (near - far) d^curve` on the `Star size` curve, so a
+    /// dense bed of solid far stars can sit behind near stars that are all
+    /// glow. Runs over `0..=`[`STAR_SOLID_MAX`], either way round.
+    pub star_solid_far: f32,
+    /// The nearest depth's solid share. See [`Self::star_solid_far`].
+    pub star_solid_near: f32,
+    /// How the glow falls from the solid edge to the star's edge, over 0..=1:
+    /// 0 stays bright almost to the edge, 0.5 falls evenly, 1 drops at once
+    /// and leaves a long faint tail ([`crate::star_plan::star_falloff_bend`]).
+    pub star_glow_falloff: f32,
     /// Halo image width and height relative to the pane's device pixels.
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
@@ -574,11 +552,14 @@ pub struct StarSettings {
     /// resolutions, for the far three depths' one shared image and the
     /// nearest two's halos. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
-    /// The dev-only star test bed: while it is `Some`, its overrides apply on
-    /// top of the plan these settings give. Never saved, so every load starts
-    /// at production.
+    /// Which depths are soloed: while any drawn depth is, only the soloed
+    /// ones are composited. Hidden layers keep baking and updating colour
+    /// history, so toggles preserve the look and cost the full field. A flag on a
+    /// depth `Star layers` leaves out counts for nothing, and the panel clears
+    /// them all when the layer count changes. A look aid,
+    /// never saved, so every load draws every layer and no export is soloed.
     #[serde(skip)]
-    pub test_bed: Option<crate::star_plan::StarTestBed>,
+    pub star_solo: [bool; crate::star_plan::STAR_DEPTHS],
 }
 impl Default for StarSettings {
     fn default() -> Self {
@@ -590,11 +571,13 @@ impl Default for StarSettings {
             // where it was 0.69..1.45.
             star_size_variation: 0.310_684_4,
             star_jitter: 0.5,
-            // The captured spacings at the captured Star density of 10, which
-            // divided them by sqrt(5) before the spacing alone set the cell.
-            star_spacing_far: 1.0355378,
-            star_spacing_near: 6.597476,
-            star_spacing_curve: 2.1178954,
+            star_layers: crate::star_plan::STAR_DEPTHS as u32,
+            // The captured spacings (1.036..6.597 star pixels, curve 2.118)
+            // over the sizes below, fitted within 1% at all five depths. The
+            // nearest sits at the floor, as close as its stars ever fit.
+            star_spacing_ratio_far: 0.624,
+            star_spacing_ratio_near: STAR_SPACING_MIN,
+            star_spacing_ratio_curve: 3.5,
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
@@ -606,34 +589,34 @@ impl Default for StarSettings {
             // coverage out to half a cell, as the old fringe on a wide core
             // did; at 0.7 the fresh Medium frame sits 5.6/255 from the old
             // one on average.
-            star_size_min: 1.66,
-            star_size_max: 15.8,
+            star_size_far: 1.66,
+            star_size_near: 15.8,
             star_size_curve: 2.3,
-            star_speed_min: 0.08931082,
-            star_speed_max: 0.16860056,
+            star_speed_far: 0.08931082,
+            star_speed_near: 0.16860056,
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
-            star_glow: 0.5,
-            star_core_far: 1.0,
-            star_core_near: 0.35,
-            star_falloff: 0.7,
-            star_far_fill: 0.0,
-            star_overlap_light: 0.0,
+            // Every star fades to nothing and is drawn anew, as before the dial.
+            star_twinkle_far: 1.0,
+            star_twinkle_near: 1.0,
+            // Fitted to the Gaussian-core-and-glow stars this replaced, at their
+            // fresh dials, over the star's area at every depth.
+            star_solid_far: 0.48,
+            star_solid_near: 0.0,
+            star_glow_falloff: 0.5,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
-            test_bed: None,
+            star_solo: [false; crate::star_plan::STAR_DEPTHS],
         }
     }
 }
 impl StarSettings {
-    /// These settings with every size and spacing `scale` times over: what
-    /// the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
+    /// These settings with every size `scale` times over, and so every
+    /// spacing: what the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
     pub fn scaled(self, scale: f32) -> Self {
         Self {
-            star_spacing_far: self.star_spacing_far * scale,
-            star_spacing_near: self.star_spacing_near * scale,
-            star_size_min: self.star_size_min * scale,
-            star_size_max: self.star_size_max * scale,
+            star_size_far: self.star_size_far * scale,
+            star_size_near: self.star_size_near * scale,
             ..self
         }
     }
@@ -650,35 +633,33 @@ impl StarSettings {
         self.star_size_variation =
             clamp(self.star_size_variation, fresh.star_size_variation, 0.0, 1.0);
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
-        // Each is one control with two handles, so its ends cannot cross on
-        // screen; a blob that holds them crossed is drawn, and kept, as the
-        // one pair.
-        let pair = |min: &mut f32,
-                    max: &mut f32,
+        self.star_layers =
+            self.star_layers.clamp(STAR_LAYERS_MIN, crate::star_plan::STAR_DEPTHS as u32);
+        // Each pair runs far to near and may run either way, so its ends are
+        // clamped apart and never reordered.
+        let pair = |far: &mut f32,
+                    near: &mut f32,
                     fresh: [f32; 2],
                     range: std::ops::RangeInclusive<f32>| {
             let (low, high) = range.into_inner();
-            *min = clamp(*min, fresh[0], low, high);
-            *max = clamp(*max, fresh[1], low, high);
-            if *min > *max {
-                std::mem::swap(min, max);
-            }
+            *far = clamp(*far, fresh[0], low, high);
+            *near = clamp(*near, fresh[1], low, high);
         };
         pair(
-            &mut self.star_spacing_far,
-            &mut self.star_spacing_near,
-            [fresh.star_spacing_far, fresh.star_spacing_near],
+            &mut self.star_spacing_ratio_far,
+            &mut self.star_spacing_ratio_near,
+            [fresh.star_spacing_ratio_far, fresh.star_spacing_ratio_near],
             STAR_SPACING_MIN..=STAR_SPACING_MAX,
         );
         pair(
-            &mut self.star_size_min,
-            &mut self.star_size_max,
-            [fresh.star_size_min, fresh.star_size_max],
+            &mut self.star_size_far,
+            &mut self.star_size_near,
+            [fresh.star_size_far, fresh.star_size_near],
             STAR_SIZE_MIN..=STAR_SIZE_MAX,
         );
-        self.star_spacing_curve = clamp(
-            self.star_spacing_curve,
-            fresh.star_spacing_curve,
+        self.star_spacing_ratio_curve = clamp(
+            self.star_spacing_ratio_curve,
+            fresh.star_spacing_ratio_curve,
             STAR_DEPTH_CURVE_MIN,
             STAR_DEPTH_CURVE_MAX,
         );
@@ -688,14 +669,12 @@ impl StarSettings {
             STAR_DEPTH_CURVE_MIN,
             STAR_DEPTH_CURVE_MAX,
         );
-        self.star_speed_min =
-            clamp(self.star_speed_min, fresh.star_speed_min, STAR_SPEED_MIN, STAR_SPEED_MAX);
-        self.star_speed_max =
-            clamp(self.star_speed_max, fresh.star_speed_max, STAR_SPEED_MIN, STAR_SPEED_MAX);
-        // The same one control with two handles as `Star size`.
-        if self.star_speed_min > self.star_speed_max {
-            std::mem::swap(&mut self.star_speed_min, &mut self.star_speed_max);
-        }
+        pair(
+            &mut self.star_speed_far,
+            &mut self.star_speed_near,
+            [fresh.star_speed_far, fresh.star_speed_near],
+            STAR_SPEED_MIN..=STAR_SPEED_MAX,
+        );
         self.star_speed_curve = clamp(
             self.star_speed_curve,
             fresh.star_speed_curve,
@@ -704,16 +683,16 @@ impl StarSettings {
         );
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
-        self.star_core_far =
-            clamp(self.star_core_far, fresh.star_core_far, STAR_CORE_MIN, STAR_CORE_MAX);
-        self.star_core_near =
-            clamp(self.star_core_near, fresh.star_core_near, STAR_CORE_MIN, STAR_CORE_MAX);
-        self.star_falloff =
-            clamp(self.star_falloff, fresh.star_falloff, STAR_FALLOFF_MIN, STAR_FALLOFF_MAX);
-        self.star_far_fill = clamp(self.star_far_fill, fresh.star_far_fill, 0.0, 1.0);
-        self.star_overlap_light =
-            clamp(self.star_overlap_light, fresh.star_overlap_light, 0.0, 1.0);
+        pair(
+            &mut self.star_twinkle_far,
+            &mut self.star_twinkle_near,
+            [fresh.star_twinkle_far, fresh.star_twinkle_near],
+            0.0..=1.0,
+        );
+        self.star_solid_far = clamp(self.star_solid_far, fresh.star_solid_far, 0.0, STAR_SOLID_MAX);
+        self.star_solid_near =
+            clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);
+        self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
         self.star_halo_resolution = clamp(
             self.star_halo_resolution,
             fresh.star_halo_resolution,
@@ -756,7 +735,7 @@ impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
             // The Stars look captured from the DAW on 2026-09-26: a sharp
-            // field with no time blur, and the Mosaic and Wash
+            // field with no time blur, and the Wash and Scales
             // controls below riding inert at their captured values.
             pitch_softness: 6.726_529_6,
             time_softness: 0.0,
@@ -764,9 +743,8 @@ impl Default for SpectralAtmosphere {
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
             blur_time_step: 1.0,
-            // Full strength is what the `Lava` style drew, and that style was
-            // the fresh one.
-            contour_strength: 1.0,
+            // A fresh texture starts smooth; terracing is an explicit choice.
+            contour_strength: 0.0,
             contours: 16.0,
             contour_softness: 0.492_202_6,
             cloud_depth: 1.0,
@@ -858,11 +836,6 @@ impl SpectralAtmosphere {
             // color response; only a texture with none of these is bypassed.
             cloud: self.cloud_depth > 0.0
                 && match self.cloud_style {
-                    CloudStyle::Mosaic => {
-                        self.material_settings.scale_refract != 0.0
-                            || self.color_pickup > 0.0
-                            || self.color_release > 0.0
-                    }
                     CloudStyle::Watercolor => {
                         self.material_settings.wash_refract != 0.0
                             || self.material_settings.wash_randomness > 0.0
@@ -886,7 +859,6 @@ pub enum LatticeMaterial {
     #[default]
     None = 0,
     Watercolor = 1,
-    Mosaic = 2,
     Stars = 3,
     VelvetScales = 4,
 }

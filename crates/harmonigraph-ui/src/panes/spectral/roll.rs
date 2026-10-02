@@ -31,12 +31,12 @@ use crate::PictureState;
 /// and a filled rectangle simply disappears; the floor is what keeps a played
 /// note visible at every zoom, at the cost of the widths below it reading
 /// alike.
-const MIN_RIBBON_PX: f32 = 1.5;
+const MIN_RIBBON_PT: f32 = 1.5;
 
-/// Shortest a note may draw along TIME, in DEVICE pixels — the floor that stops
-/// a brief note flickering as the roll scrolls.
+/// Shortest a note may draw along TIME, in logical points. The Retina
+/// reference below motivates the size; lower-density outputs retain its duration.
 ///
-/// The same shape of problem as [`MIN_RIBBON_PX`] on the other axis, with a
+/// The same shape of problem as [`MIN_RIBBON_PT`] on the other axis, with a
 /// sharper threshold, because this is the axis a note MOVES along. The shader
 /// antialiases with a one-pixel box filter (`inside` in roll.wgsl),
 /// which conserves a shape's total ink under any sub-pixel offset but not its
@@ -61,24 +61,10 @@ const MIN_RIBBON_PX: f32 = 1.5;
 /// scrolling. Under one pixel even the ink stops being conserved and it
 /// pulses in brightness AND in weight.
 ///
-/// In DEVICE pixels, unlike [`MIN_RIBBON_PX`]'s points, because that is what
-/// the argument is about — the filter is one physical pixel wide, so on a 2x
-/// display this is one point and on a 1x display two. A floor in points would
-/// be right on exactly one class of display.
-///
-/// The cost is a note drawn longer than it lasted, up to this, and at a long
-/// Span that is a real overstatement — two pixels of a ten-minute Span is four
-/// seconds. It is the trade [`MIN_RIBBON_PX`] already makes: past the point
-/// where a zoom can resolve one note from the next, what the roll owes the
-/// reader is that a note was played, not how long it was held.
-///
-/// A BENT segment pays a second time, in its shear: the box it is drawn in is
-/// longer than the drift it carries, so the drift spreads over the floored
-/// length and reads as a shallower bend. That is deliberate, and the
-/// alternative is much worse — see the shear in [`roll_instances_with_floor`], where the
-/// two are one product and holding the rate instead puts ink at pitches
-/// nothing sounded.
-const MIN_LENGTH_DEVICE_PX: f32 = 2.0;
+/// One logical point preserves the current Retina reference. Low-density
+/// outputs may antialias this more softly; resolution must not change duration.
+/// Padding extends the onset pitch into the past without rescaling real bends.
+const MIN_LENGTH_PT: f32 = 1.0;
 
 /// The dark surround standing outside a note: its selected kernel's whole
 /// reach in screen points and its pane-owned colour.
@@ -177,7 +163,9 @@ pub(super) fn lead(cfg: &crate::SpectrumConfig, axes: &Axes, split: f32) -> (f32
 /// its bottom is asking for.
 fn lead_alpha(note: &RollNote, now: f64, release: f32) -> f32 {
     let Some(end) = note.end else {
-        return 1.0;
+        // Loss of observation is not a factual release, but no longer proves
+        // the held extension. Remove it without inventing a note-off or fade.
+        return if note.is_live() { 1.0 } else { 0.0 };
     };
     if release <= 0.0 {
         return 0.0;
@@ -212,6 +200,7 @@ pub(super) struct RollDrawOptions {
 pub(crate) struct RollDrawProbe {
     pub(crate) surface: usize,
     pub(crate) pitch_len: f32,
+    pub(crate) pixels_per_point: f32,
     pub(crate) ribbon_floor_scale: f32,
     pub(crate) note_count: usize,
     pub(crate) first_half_pitch: Option<f32>,
@@ -236,7 +225,7 @@ pub(super) fn draw_roll(
     state: &PictureState,
     options: RollDrawOptions,
 ) {
-    let ppp = painter.ctx().pixels_per_point().max(1.0);
+    let ppp = painter.ctx().pixels_per_point().max(1e-3);
     let (notes, detached) = roll_instances_with_floor(
         axes,
         scale,
@@ -251,6 +240,7 @@ pub(super) fn draw_roll(
         probe.set(Some(RollDrawProbe {
             surface: options.surface,
             pitch_len: axes.pitch_len(),
+            pixels_per_point: ppp,
             ribbon_floor_scale: options.ribbon_floor_scale,
             note_count: notes.len() + detached.len(),
             first_half_pitch: notes.first().or(detached.first()).map(|note| note.half_extent[0]),
@@ -292,6 +282,7 @@ pub(super) fn draw_roll(
     let near = (options.split - lead_px / axes.depth_len().max(1.0)).max(0.0);
     let history_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, 1.0));
     let detached_region = egui::Rect::from_two_pos(axes.at(0.0, near), axes.at(1.0, options.split));
+    let axes_size = axes.rect.size();
     let dir = |v: egui::Vec2| [v.x, v.y];
     let axes = RollAxes { pitch_dir: dir(axes.dir_pitch()), depth_dir: dir(axes.dir_depth()) };
     let bloom = harmonigraph_render::bloom_strength(state.appearance.view.note_bloom_strength());
@@ -303,6 +294,7 @@ pub(super) fn draw_roll(
     let painter = painter.with_clip_rect(painter.clip_rect().intersect(history_region));
     painter.add(harmonigraph_render::roll_paint_callback_with_clipped_tail(
         history_region,
+        axes_size,
         instances,
         clipped_start,
         detached_region,
@@ -333,7 +325,7 @@ pub(super) fn note_instances(
     state: &PictureState,
     split: f32,
     now: f64,
-    // Physical pixels per point, which [`MIN_LENGTH_DEVICE_PX`] is quoted in.
+    // Physical pixels per point, used only for antialiasing reach.
     ppp: f32,
 ) -> Vec<RollInstance> {
     let (mut notes, detached) = roll_instances_with_floor(axes, scale, state, split, now, ppp, 1.0);
@@ -360,17 +352,13 @@ fn roll_instances_with_floor(
     let time = TimeAxis::new(state, split, now);
     let oldest = time.oldest();
 
-    // Every note in the roll is the same width, so this is decided once for
-    // the whole build rather than per segment. Floored rather than switched to
-    // a bare line: note width is in SEMITONES, so a wide zoom takes a ribbon
-    // under a pixel, where a rectangle fades out to nothing and the roll stops
-    // saying a note was played there.
-    let half_pitch = (cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len();
-    let min_ribbon_px = MIN_RIBBON_PX * ribbon_floor_scale.max(0.0);
-    let half_pitch = half_pitch.max(min_ribbon_px * 0.5);
-    // The other axis' floor, in points at this display's density — the one that
-    // stops a brief note pulsing as it scrolls. See [`MIN_LENGTH_DEVICE_PX`].
-    let min_half_depth = 0.5 * MIN_LENGTH_DEVICE_PX / ppp.max(1e-3);
+    // The base width follows pitch zoom; readability floors follow the
+    // composition's logical scale and apply AFTER the Thickness mapping.
+    let half_pitch =
+        ((cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len()).max(1e-6);
+    let min_half_pitch = MIN_RIBBON_PT * ribbon_floor_scale.max(0.0) * 0.5;
+    let width_floor = min_half_pitch / half_pitch;
+    let min_half_depth = 0.5 * MIN_LENGTH_PT * ribbon_floor_scale.max(0.0);
 
     // Build in START order. The tracker hands notes back finished-first and
     // then sounding, which is release order followed by key order — stable,
@@ -404,7 +392,8 @@ fn roll_instances_with_floor(
         intensity.thickness_max.max(1.0)
     } else {
         intensity.thickness_base.max(1.0)
-    };
+    }
+    .max(width_floor);
 
     // Cull to the visible window BEFORE sorting: the roll can remember
     // thousands of notes while only a handful are on screen, and sorting the
@@ -440,9 +429,6 @@ fn roll_instances_with_floor(
     // against. What every screen-space length here (the ink overhang) is
     // converted through.
     let per_point = time.seconds_per_point(axes);
-    // One POINT of depth back from the present moment, signed: what a length
-    // in points is multiplied by to move a box INTO THE PAST.
-    let into_past = time.depth_of_unclamped(now - per_point) - time.depth_of_unclamped(now);
     let ink_seconds = f64::from(ink_px) * per_point;
     let edge = oldest - ink_seconds;
     // Across pitch there is no margin to be had at the NOTE's level, and that
@@ -466,82 +452,19 @@ fn roll_instances_with_floor(
     // note count is the right first guess at how many instances this makes.
     let mut instances = Vec::with_capacity(notes.len());
     let mut detached = Vec::new();
+    let mut previous_end = std::collections::HashMap::new();
     for note in notes {
-        // The length floor is the NOTE's, not each segment's.
-        //
-        // A note's segments tile its own span end to end, so flooring them one
-        // by one makes consecutive boxes OVERLAP by nearly the whole floor —
-        // and an overlap is the later segment's rim painted over the earlier
-        // one's color, which draws a bent note as a ladder of rim rather than a
-        // ribbon. A note bent under per-note tuning is the ordinary case: the
-        // tuning lands a block after the note-on (`RollNote::SETTLE`), so the
-        // opening segment is milliseconds long and the floor is many times its
-        // length.
-        //
-        // Stretched about the note's own midpoint instead, the segments still
-        // tile: the floor decides how much of the depth axis the NOTE covers,
-        // and never how much of one segment another segment covers too. A note
-        // long enough to draw honestly is left alone, however brief its
-        // segments are — a segment shorter than a pixel inside a long ribbon is
-        // covered by its neighbours, which is the flicker the floor exists for.
-        let opens = time.depth_of_unclamped(note.start.max(edge));
-        let closes = time.depth_of_unclamped(note.stop(now).max(edge));
-        let mid = (opens + closes) * 0.5;
-        let span_px = ((closes - opens) * axes.depth_len()).abs();
-        // A note with no duration at all — pressed this frame — has nothing to
-        // scale up, so the floor reaches its one segment directly instead.
-        let zero_span = span_px <= 1e-6;
-        let stretch = if zero_span { 1.0 } else { (2.0 * min_half_depth / span_px).max(1.0) };
-        // What the note covers either side of its own midpoint once drawn, in
-        // points: the floor where it is too brief to have a length of its own,
-        // its own half span where it is long enough to draw honestly.
-        let half_true = 0.5 * span_px;
-        let half_drawn = half_true.max(min_half_depth);
-        // Where the note's own stop sits, in points into the past from `now`.
-        let stop_px = ((now - note.stop(now)) / per_point) as f32;
-        // The floor may lengthen a note into the past; it may not carry ink
-        // into the FUTURE, past the moment the picture calls now.
-        //
-        // A note still sounding is where that bites hardest, because its stop
-        // IS `now`, which is exactly where the now-line is drawn: a floor
-        // centered on it puts half of itself on the SPECTRUM's side of the
-        // join, under an opaque one-point hairline. On the 2x display the
-        // plugin is used on, the floor is one point and the line covers the
-        // whole of it, so a just-pressed note is invisible until it has
-        // scrolled clear — at a long Span still true a second later, and the
-        // floor exists precisely so that "a note was played" stays visible. At
-        // 1x the floor is two points against the same line and what survives is
-        // half a point of note color stranded on the far side of it, a dash
-        // detached from its own ribbon in the spectrum's territory. A render
-        // draws at that density whenever its frame is no wider than
-        // `default_scale`'s reference, or `--scale 1` is asked for.
-        //
-        // A CLAMP rather than a re-anchoring, and the difference is the whole
-        // of why this is one expression. The centering is right everywhere it
-        // does not cross the line, and a note's box is left on its own midpoint
-        // for as long as the floor fits behind `now` — so this binds by
-        // exactly the overshoot and by nothing else, and lets go continuously
-        // as the note scrolls clear.
-        //
-        // Measured from the note's own STOP rather than gated on whether the
-        // key is still down, and that is not a generalization for its own sake:
-        // a gate would spend the whole clamp in the single frame the key comes
-        // up, snapping a staccato note back across the line by half a floor and
-        // handing #239 straight back to every note short enough to need the
-        // floor at all. The stop moves continuously through the release, so
-        // this does too.
-        //
-        // What it costs is an onset reading up to one floor OLDER than it is —
-        // the same overstatement the floor already makes about a note's LENGTH,
-        // and the truer of the two statements either way: a note has not
-        // sounded into the future, and drawing it as though it had is what put
-        // ink on the spectrum's side of the boundary to begin with.
-        //
-        // The LEAD still crosses, and is measured from the clamped end: that is
-        // a distance a setting asks for, drawn as a tongue that fades out, and
-        // not a floor's rounding landing in the middle of the analyzer.
-        let shift = if stop_px >= 0.0 {
-            (half_drawn - half_true - stop_px).max(0.0) * into_past
+        let stop = note.stop(now);
+        let padding = (f64::from(2.0 * min_half_depth) * per_point - (stop - note.start)).max(0.0);
+        let drawn_start = note.start - padding;
+        let retrigger = previous_end
+            .get(&note.key())
+            .is_some_and(|&end: &f64| (note.start - end).abs() <= per_point);
+        previous_end.insert(note.key(), stop);
+        // A bounded V-shaped narrowing marks a touching re-strike without
+        // inventing a time gap. It affects the shared silhouette and shadow.
+        let notch = if retrigger {
+            (1.5 * f64::from(ribbon_floor_scale) * per_point).min((stop - note.start) * 0.25)
         } else {
             0.0
         };
@@ -562,27 +485,29 @@ fn roll_instances_with_floor(
                 let center = axes.at(t, split) - axes.dir_depth() * half;
                 // The lead reads the note as it ended.
                 let (_, last) = note.expressions()[note.expressions().len() - 1];
-                let look = Look::of(&intensity, note.velocity, last);
-                let grow = look.grow();
-                let (fade, taper) = read_through(look, grow);
-                detached.push(RollInstance {
-                    center: [center.x, center.y],
-                    half_extent: [half_pitch * grow, half],
-                    shear: 0.0,
-                    // The whole box is lead, so its opacity and configured tip
-                    // fade apply from the now-line to its analyzer-side tip.
-                    lead: lead_px,
-                    lead_fade: lead_fade_px,
-                    lead_alpha: standing,
-                    cap_reach: 0.0,
-                    core: note_color(state, pitch, 1.0).to_array(),
-                    outline: outline_color.to_array(),
-                    span: RollInstance::WHOLE,
-                    ramp: [0.0, 0.0],
-                    fade,
-                    taper_depth: [0.0; 4],
-                    taper,
-                });
+                let look = Look::of(&intensity, note.velocity, last).floored(width_floor);
+                if look.width > 0.0 {
+                    let grow = look.grow();
+                    let (fade, taper) = read_through(look, grow);
+                    detached.push(RollInstance {
+                        center: [center.x, center.y],
+                        half_extent: [half_pitch * grow, half],
+                        shear: 0.0,
+                        // The whole box is lead, so its opacity and configured tip
+                        // fade apply from the now-line to its analyzer-side tip.
+                        lead: lead_px,
+                        lead_fade: lead_fade_px,
+                        lead_alpha: standing,
+                        cap_reach: 0.0,
+                        core: note_color(state, pitch, 1.0).to_array(),
+                        outline: outline_color.to_array(),
+                        span: RollInstance::WHOLE,
+                        ramp: [0.0, 0.0],
+                        fade,
+                        taper_depth: [0.0; 4],
+                        taper,
+                    });
+                }
             }
         }
         // Peekable so the loop can tell which segment is the LAST, which is the
@@ -590,7 +515,18 @@ fn roll_instances_with_floor(
         // leading end is the far end of the last of them. The rest end on the
         // next bend, in the middle of the ribbon, where there is nothing in
         // front of them to lead into.
-        let mut segments = note.segments(now).peekable();
+        let first = note.segments(now).next().expect("a roll note has a segment");
+        let first_is_flat = first.0 .1 == first.1 .1;
+        // Merge padding with a flat first segment; a bend gets a separate flat
+        // pad so its actual endpoints and slope stay untouched.
+        let padding_segment = (padding > 0.0 && !first_is_flat)
+            .then_some(((drawn_start, first.0 .1), (note.start, first.0 .1)));
+        let mut segments = padding_segment
+            .into_iter()
+            .chain(note.segments(now).enumerate().map(|(i, ((t0, p0), end))| {
+                ((if i == 0 && first_is_flat { drawn_start } else { t0 }, p0), end)
+            }))
+            .peekable();
         while let Some(((t0, p0), (t1, p1))) = segments.next() {
             let last = segments.peek().is_none();
             // A segment wholly before the region is DROPPED, and the test has
@@ -606,19 +542,17 @@ fn roll_instances_with_floor(
             if t1 < edge {
                 continue;
             }
-            let (t0, t1) = (t0.max(edge), t1.max(edge));
+            let cropped_t0 = t0.max(edge);
+            let p0 = if cropped_t0 > t0 && t1 > t0 {
+                p0 + (p1 - p0) * ((cropped_t0 - t0) / (t1 - t0)) as f32
+            } else {
+                p0
+            };
+            let t0 = cropped_t0;
             // Unclamped: `edge` already bounds how far past the region these
             // can reach, and clamping is what squashed the leaving ribbon
             // against the far end rather than letting it slide out.
             let (d0, d1) = (time.depth_of_unclamped(t0), time.depth_of_unclamped(t1));
-            // The note's floor, carried to this segment: an affine map about
-            // the note's midpoint, so a brief note reads half the floor either
-            // side of the moment it was rather than being pushed off it in one
-            // direction, and the segments keep their proportions inside it.
-            // Then `shift`, which takes back however much of that centering
-            // would have landed past `now` — nothing, for a note far enough
-            // from the line to have the room. See it above.
-            let (d0, d1) = (mid + (d0 - mid) * stretch + shift, mid + (d1 - mid) * stretch + shift);
             let (a0, a1) = (scale.t_of(p0), scale.t_of(p1));
 
             // Whether this segment carries a lead at all — which is not the
@@ -686,8 +620,9 @@ fn roll_instances_with_floor(
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
             // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them. Only a body faded by its Opacity
-            // reading lets part of a neighboring shadow show through its color.
+            // then every body over them, and holds every outline out wherever
+            // any body covers, so no shadow shows through a body however its
+            // Opacity reading fades it.
             //
             // It has to be that way round rather than something gentler at the
             // seam. The outline is at its darkest where it meets its own note,
@@ -696,62 +631,13 @@ fn roll_instances_with_floor(
             // neighbour it reached into — repeats of one key butt together
             // along time, and the later one blanked the tail of the earlier.
             //
-            // What it does cost is the seam between two notes that TOUCH:
-            // same key, no gap, and the two bodies now meet directly in one
-            // color. A gap of a point or more still reads as two notes, the
-            // outline filling it.
-            //
-            // The reach is still the setting to be careful with at the wide
-            // end, and on the shortest notes: a tapped key floored to a point
-            // or two of length wears the full reach at both ends, so at the
-            // top of the Shadow bar it is a dot inside its own surround.
-            //
-            // Nothing else rides the outline — in particular, no band
-            // approximating the bloom. The bloom the notes carry is the
-            // lattice's own post-process, run over the notes themselves
-            // (`harmonigraph_render::roll`), and a band standing in for one
-            // would be a second thing to keep looking like it.
-
-            // Geometry in the pane's own two axes, which is all the shader is
-            // told: `Axes` maps those onto perpendicular screen axes, so
-            // nothing here names a screen side either.
-            //
-            // NOT snapped to whole pixels, which egui does to rects by default
-            // (TessellationOptions::round_rects_to_pixels) to keep static
-            // chrome crisp. These scroll: snapping holds a note still until it
-            // has drifted a whole pixel and then jumps it, so the roll advanced
-            // in steps while the spectrogram — a mesh, never snapped — slid
-            // smoothly underneath, and the notes read as jittering against it.
-            // A distance field has no pixel grid to snap to, so the sub-pixel
-            // placement is now simply what it does.
+            // The onset notch separates touching notes; otherwise bodies
+            // meet without either note's shadow darkening its neighbour.
             let center = axes.at((a0 + a1) * 0.5, (d0 + d1) * 0.5);
             let depth_px = (d1 - d0) * axes.depth_len();
-            // The stretch above is where the floor already landed, so this is
-            // the drawn length and not a second floor. Flooring here as well is
-            // what makes the boxes overlap.
-            let half_depth = if zero_span { min_half_depth } else { depth_px.abs() * 0.5 };
-            // How far the note's center line drifts along the pitch axis per
-            // point of depth: 0 for a held note, non-zero for a glide, which
-            // shears the box into the parallelogram the ribbon follows. Guarded
-            // because a segment can have no duration at all — a note pressed
-            // this frame is one — and a slope is meaningless there.
-            //
-            // Taken against the box as DRAWN. The shader reaches
-            // `|shear| * half_extent[1]` along pitch, so the shear and the
-            // length are one product: a shear left at the segment's true rate
-            // while the floor lengthens the box multiplies that reach by
-            // however much the floor won by, which is unbounded as the segment
-            // shortens — it would draw a diagonal streak, rim and all, through
-            // pitches nothing sounded. Against the drawn length, the reach is
-            // the segment's real drift whatever the floor did.
-            //
-            // What that costs is the shear itself: a note the floor stretched
-            // draws its drift spread over the stretched length, so it reads as
-            // a shallower bend than it was. That is the honest way round. A
-            // slope is a ratio of two things, and the floor has already
-            // overstated the denominator on purpose; overstating the numerator
-            // to match would put ink where no note was, and pitch is the axis
-            // this pane exists to be read precisely on.
+            let half_depth = depth_px.abs() * 0.5;
+            // Genuine bend segments keep their real times. Only the separate
+            // onset padding is flat, so no shear invents unsounded pitches.
             let slope =
                 if depth_px.abs() > 1e-6 { (a1 - a0) * axes.pitch_len() / depth_px } else { 0.0 };
             // Off the octave zoom entirely, tested against the ink this
@@ -808,7 +694,7 @@ fn roll_instances_with_floor(
             // of its final bend), so the one segment a lead can reach has no
             // shear to correct for. Written out because the correction belongs
             // to the shift rather than to that fact about the segments.
-            let attached_alpha = if note.end.is_none() { standing } else { 0.0 };
+            let attached_alpha = if note.is_live() { standing } else { 0.0 };
             let (center, half_depth, lead_px, lead_fade_px, attached_alpha, cap_px) = if leads {
                 let half = lead_px * 0.5;
                 (
@@ -839,15 +725,37 @@ fn roll_instances_with_floor(
                 taper: RollInstance::UNTAPERED,
             };
             // Where a moment of this segment lands along its box, as the
-            // shader's depth offset from the center: the same floor and shift
-            // the ends took, then the lead's half, which moved the center.
+            // shader's depth offset from the center. The lead's half is added
+            // because extending that box moved its center.
             let centre = (d0 + d1) * 0.5;
             let lead_half = if lead_px > 0.0 { lead_px * 0.5 } else { 0.0 };
             let offset = |at: f64| {
-                let d = mid + (time.depth_of_unclamped(at) - mid) * stretch + shift;
+                let d = time.depth_of_unclamped(at);
                 (d - centre) * axes.depth_len() + lead_half
             };
-            let points = intensity_points(note, &intensity, t0, t1);
+            let mut points = intensity_points(note, &intensity, t0, t1, width_floor);
+            if notch > 0.0 {
+                for at in [note.start - notch, note.start, note.start + notch] {
+                    if at > t0 && at < t1 {
+                        points.push((
+                            at,
+                            Look::of(&intensity, note.velocity, note.expressions_at(at))
+                                .floored(width_floor),
+                        ));
+                    }
+                }
+                points.sort_by(|a, b| a.0.total_cmp(&b.0));
+                for (at, look) in &mut points {
+                    // The notch is the deliberate local exception to the width
+                    // floor. Its minimum stays at the real onset even when a
+                    // very short note needs padding before that onset.
+                    look.width *=
+                        0.5 + 0.5 * ((*at - note.start).abs() / notch).clamp(0.0, 1.0) as f32;
+                }
+            }
+            if points.iter().all(|(_, look)| look.width == 0.0) {
+                continue;
+            }
             push_pieces(&mut instances, segment, &points, offset);
         }
     }
@@ -874,6 +782,13 @@ impl Look {
         Look { fade: reading.opacity, width: reading.thickness }
     }
 
+    fn floored(mut self, minimum: f32) -> Self {
+        if self.width > 0.0 {
+            self.width = self.width.max(minimum);
+        }
+        self
+    }
+
     /// How far a box has to grow across pitch to hold this width: never less
     /// than the Ribbon width, so a note that only thins keeps its box.
     fn grow(self) -> f32 {
@@ -893,6 +808,7 @@ fn intensity_points(
     intensity: &IntensitySettings,
     t0: f64,
     t1: f64,
+    width_floor: f32,
 ) -> Vec<(f64, Look)> {
     let look = |values| Look::of(intensity, note.velocity, values);
     let mut points = vec![(t0, look(note.expressions_at(t0)))];
@@ -900,6 +816,9 @@ fn intensity_points(
         note.expressions().iter().filter(|(t, _)| *t > t0 && *t < t1).map(|&(t, e)| (t, look(e))),
     );
     points.push((t1, look(note.expressions_at(t1))));
+    // Floor before reducing: tiny positive expression values can become a
+    // visible ribbon, so raw mapping error is not a bound on picture error.
+    let points = floor_widths(&points, width_floor);
     let mut keep = vec![false; points.len()];
     keep[0] = true;
     keep[points.len() - 1] = true;
@@ -907,8 +826,53 @@ fn intensity_points(
     // and the width's Thickness max.
     let tolerance =
         [1.0, intensity.thickness_max.max(1.0)].map(|range| INTENSITY_TOLERANCE * range);
-    simplify(&points, tolerance, &mut keep, 0, points.len() - 1);
+    // A zero/positive boundary and a step are exact decisions, even when the
+    // ordinary approximation tolerance could otherwise erase them.
+    for i in 1..points.len() {
+        if points[i].0 == points[i - 1].0
+            || (points[i].1.width == 0.0) != (points[i - 1].1.width == 0.0)
+        {
+            keep[i - 1] = true;
+            keep[i] = true;
+        }
+    }
+    let anchors: Vec<_> = keep.iter().enumerate().filter_map(|(i, &k)| k.then_some(i)).collect();
+    for pair in anchors.windows(2) {
+        simplify(&points, tolerance, &mut keep, pair[0], pair[1]);
+    }
     points.into_iter().zip(keep).filter_map(|(point, kept)| kept.then_some(point)).collect()
+}
+
+/// Apply the positive width floor to the piecewise curve, including its
+/// crossings. A zero interval remains absent; a ramp leaving zero steps to
+/// the floor instead of interpolating a new sub-floor hairline.
+fn floor_widths(points: &[(f64, Look)], minimum: f32) -> Vec<(f64, Look)> {
+    let mut out = Vec::with_capacity(points.len());
+    for pair in points.windows(2) {
+        let [(ta, a), (tb, b)] = [pair[0], pair[1]];
+        if tb <= ta {
+            out.extend([(ta, a.floored(minimum)), (tb, b.floored(minimum))]);
+            continue;
+        }
+        let positive = a.width > 0.0 || b.width > 0.0;
+        let floor = |mut look: Look| {
+            if positive {
+                look.width = look.width.max(minimum);
+            }
+            look
+        };
+        out.push((ta, floor(a)));
+        if (a.width < minimum && b.width > minimum) || (b.width < minimum && a.width > minimum) {
+            let t = (minimum - a.width) / (b.width - a.width);
+            out.push((
+                ta + (tb - ta) * f64::from(t),
+                Look { fade: a.fade + (b.fade - a.fade) * t, width: minimum },
+            ));
+        }
+        out.push((tb, floor(b)));
+    }
+    out.dedup();
+    out
 }
 
 /// Douglas–Peucker over `points[first..=last]`, marking in `keep` each point
@@ -1066,7 +1030,7 @@ mod tests {
 
     /// The display density these tests derive geometry at — a Retina screen,
     /// which is what the plugin is looked at on, and where
-    /// [`MIN_LENGTH_DEVICE_PX`] comes to one point.
+    /// [`MIN_LENGTH_PT`] comes to one point.
     const PPP: f32 = 2.0;
 
     /// The roll's geometry for `state`, derived exactly the way
@@ -1169,6 +1133,161 @@ mod tests {
         );
     }
 
+    #[test]
+    fn drawing_a_small_export_uses_its_real_density() {
+        let state = fresh();
+        let ctx = crate::tests::probe::themed_at(0.5);
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+        crate::tests::probe::frame_full(&ctx, egui::vec2(640.0, 360.0), |ui| {
+            draw_roll(
+                ui.painter(),
+                &axes,
+                &scale,
+                &state,
+                RollDrawOptions { split: 0.5, now: 1.0, surface: 0, ribbon_floor_scale: 1.0 },
+            );
+        });
+        assert_eq!(take_roll_draw_probe().unwrap().pixels_per_point, 0.5);
+    }
+
+    #[test]
+    fn positive_thickness_is_floored_after_mapping_and_zero_stays_absent() {
+        let p = |t, width| (t, Look { width, fade: 1.0 });
+        let curve = floor_widths(&[p(0.0, 0.0), p(1.0, 0.0), p(2.0, 2.0), p(3.0, 0.0)], 0.75);
+        assert_eq!(curve[0].1.width, 0.0);
+        assert!(
+            curve.windows(2).any(|w| w[0].0 == w[1].0 && w[0].1.width != w[1].1.width),
+            "zero transition must step"
+        );
+        for pair in curve.windows(2).filter(|w| w[1].0 > w[0].0) {
+            for part in [0.0, 0.01, 0.5, 0.99, 1.0] {
+                let width = pair[0].1.width + (pair[1].1.width - pair[0].1.width) * part;
+                assert!(width == 0.0 || width >= 0.75);
+            }
+        }
+        let mut state = fresh();
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.appearance.view.intensity.thickness_base = 0.0;
+        assert!(instances(&state, 2.0).is_empty());
+        state.appearance.view.intensity.thickness_base = 0.01;
+        let notes = instances(&state, 2.0);
+        assert!(
+            (2.0 * one(&notes).half_extent[0] * one(&notes).taper[0] - MIN_RIBBON_PT).abs() < 1e-3
+        );
+    }
+
+    #[test]
+    fn tiny_expression_excursions_keep_positive_and_absent_intervals() {
+        let mut state = fresh();
+        state.appearance.spectrum.roll_lead = 0.0;
+        state.appearance.view.intensity = IntensitySettings {
+            thickness_base: 0.0,
+            pressure: harmonigraph_scene::IntensitySource {
+                thickness: Some(1.0),
+                ..Default::default()
+            },
+            velocity: Default::default(),
+            ..Default::default()
+        };
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        for (time, value) in
+            [(1.0, 0.0), (2.0, 0.001), (3.0, 0.0), (4.0, 0.0), (5.0, 0.001), (6.0, 0.001)]
+        {
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Expression {
+                    expression: harmonigraph_core::Expression::Pressure,
+                    value,
+                },
+            });
+        }
+        state.runtime.tracker.handle_event(NoteEvent::off(6.0, SourceId::DIRECT, 0, 60));
+        let notes = instances(&state, 7.0);
+        assert!(
+            notes.iter().any(|n| n.taper.iter().any(|&w| w > 0.0)),
+            "positive sub-tolerance excursion vanished"
+        );
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let time = TimeAxis::new(&state, split, 7.0);
+        let sample_width = |at| {
+            let point = axes.at(0.5, time.depth_of_unclamped(at));
+            notes
+                .iter()
+                .filter_map(|n| {
+                    let depth =
+                        (point - egui::pos2(n.center[0], n.center[1])).dot(axes.dir_depth());
+                    if depth < n.span[0] || depth > n.span[1] {
+                        return None;
+                    }
+                    let t = if n.ramp[1] > n.ramp[0] {
+                        ((depth - n.ramp[0]) / (n.ramp[1] - n.ramp[0])).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    Some(2.0 * n.half_extent[0] * (n.taper[1] + (n.taper[2] - n.taper[1]) * t))
+                })
+                .fold(0.0, f32::max)
+        };
+        assert!(sample_width(2.0) >= MIN_RIBBON_PT - 1e-3);
+        assert_eq!(sample_width(3.5), 0.0, "zero interval filled in");
+        assert!(sample_width(5.5) >= MIN_RIBBON_PT - 1e-3);
+    }
+
+    #[test]
+    fn a_bend_at_the_last_sample_keeps_the_lead_flat() {
+        let mut state = fresh();
+        state.appearance.spectrum.roll_lead = 0.25;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        state.runtime.tracker.handle_event(NoteEvent {
+            source: SourceId::DIRECT,
+            time: 0.1,
+            channel: 0,
+            note: 60,
+            kind: NoteEventKind::Tuning { semitones: 2.0 },
+        });
+        let notes = instances(&state, 0.1);
+        assert!(notes.iter().any(|n| n.shear != 0.0), "fixture must contain a real bend");
+        let lead = notes.iter().find(|n| n.lead > 0.0).expect("a held lead");
+        assert_eq!(lead.shear, 0.0);
+    }
+
+    #[test]
+    fn a_short_touching_restrike_is_notched_at_its_real_onset() {
+        let mut state = fresh();
+        state.appearance.spectrum.roll_seconds = 600.0;
+        state.appearance.spectrum.roll_lead = 0.0;
+        for event in [
+            NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0),
+            NoteEvent::off(2.0, SourceId::DIRECT, 0, 60),
+            NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0),
+            NoteEvent::off(2.04, SourceId::DIRECT, 0, 60),
+        ] {
+            state.runtime.tracker.handle_event(event);
+        }
+        let axes = Axes::new(PANE, &state.appearance.spectrum);
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let time = TimeAxis::new(&state, split, 5.0);
+        let onset = axes.at(0.5, time.depth_of_unclamped(2.0));
+        let notes = instances(&state, 5.0);
+        assert!(notes.len() > 2, "fixture must reach a padded notch with pieces");
+        let mut narrow_at_onset = false;
+        for n in &notes[1..] {
+            let center = egui::pos2(n.center[0], n.center[1]);
+            let d = (onset - center).dot(axes.dir_depth());
+            for i in 1..=2 {
+                if (n.taper_depth[i] - d).abs() < 1e-3 && n.taper[i] <= 0.5001 {
+                    narrow_at_onset = true;
+                }
+            }
+        }
+        assert!(narrow_at_onset, "notch minimum moved into the padding");
+    }
+
     fn one(rects: &[RollInstance]) -> &RollInstance {
         assert_eq!(rects.len(), 1, "expected one note segment, got {}", rects.len());
         &rects[0]
@@ -1184,6 +1303,7 @@ mod tests {
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 54.0;
         state.appearance.spectrum.high_midi = 66.0;
+        state.appearance.spectrum.roll_thickness = 2.0;
         let tracker = &mut state.runtime.tracker;
         tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
         // Pressure up to full and back down, every 5 ms: a swell with one apex.
@@ -1383,7 +1503,7 @@ mod tests {
         let thick = ribbon_with_range(0.5, 12.0);
         let wide = one(&thick).half_extent[0];
         assert!(
-            wide > MIN_RIBBON_PX * 0.5,
+            wide > MIN_RIBBON_PT * 0.5,
             "a readable ribbon ({wide}) should be wider than the floor, or the \
              comparison below is vacuous",
         );
@@ -1391,7 +1511,7 @@ mod tests {
         let thin = ribbon_with_range(0.5, 600.0);
         assert_eq!(
             one(&thin).half_extent[0],
-            MIN_RIBBON_PX * 0.5,
+            MIN_RIBBON_PT * 0.5,
             "a hairline ribbon was not floored at the width it can be seen at",
         );
     }
@@ -1418,28 +1538,15 @@ mod tests {
                 .half_extent[0]
         };
 
-        assert!((at(1.0) - 0.5 * MIN_RIBBON_PX).abs() < 1e-3);
-        assert!((at(0.25) - 0.125 * MIN_RIBBON_PX).abs() < 1e-3);
-        assert!((at(2.0) - MIN_RIBBON_PX).abs() < 1e-3);
+        assert!((at(1.0) - 0.5 * MIN_RIBBON_PT).abs() < 1e-3);
+        assert!((at(0.25) - 0.125 * MIN_RIBBON_PT).abs() < 1e-3);
+        assert!((at(2.0) - MIN_RIBBON_PT).abs() < 1e-3);
         assert!(at(0.25) < at(1.0), "the preview kept the export-sized pitch floor");
         assert!(at(2.0) > at(1.0), "an enlarged preview capped the pitch floor");
     }
 
-    /// A note too brief to fill two device pixels is drawn at that length
-    /// anyway, centered on the moment it was — the floor that stops it
-    /// flickering as it scrolls. See [`MIN_LENGTH_DEVICE_PX`] for the
-    /// measurement behind the number.
-    ///
-    /// Both halves matter. Long enough, and the length is the note's own, to
-    /// the point — a floor that rounded every note up would be a roll that
-    /// cannot say how long anything was held. Short enough, and it is the
-    /// floor, and the note still sits on its own midpoint rather than being
-    /// pushed off it in one direction.
-    ///
-    /// The note here is FINISHED, which is what makes the midpoint the moment
-    /// it was. A note still sounding has its midpoint half a floor into the
-    /// analyzer instead, and is the one case the centering is wrong for — see
-    /// [`a_sounding_note_is_floored_into_the_past_alone`].
+    /// Short notes get flat onset padding into the past; long notes keep their
+    /// duration. The note's release time stays exact in both cases.
     #[test]
     fn a_brief_note_is_floored_at_the_length_it_can_scroll_without_flickering() {
         // A 10 s span across 300 points of depth, of which the roll takes its
@@ -1469,7 +1576,7 @@ mod tests {
             (note, (length / per_point) as f32)
         };
 
-        let floor = 0.5 * MIN_LENGTH_DEVICE_PX / PPP;
+        let floor = 0.5 * MIN_LENGTH_PT;
         let (brief, true_half) = tap(0.02);
         assert!(true_half * 0.5 < floor, "the brief note ({true_half} pt) is not under the floor");
         // Within float error rather than to the bit: the floor reaches a
@@ -1491,12 +1598,8 @@ mod tests {
             true_half * 0.5,
         );
 
-        // Centered on the note, not pushed off it: the floored box sits on the
-        // depth of the note's own mid-time, so it reaches half the floor either
-        // side of the moment it was rather than the whole floor in one
-        // direction. Depth runs away from the now-line, so the box's far end is
-        // `+ half_extent` and its near end `-`, and the moment the note happened
-        // is the midpoint between them.
+        // Padding leaves the release at its true time and extends only into
+        // the past, regardless of whether the key is still held.
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
@@ -1506,12 +1609,10 @@ mod tests {
         let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
         let time = super::super::axes::TimeAxis::new(&state, split, 5.0);
         let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
-        let want = axes.at(scale.t_of(60.0), time.depth_of_unclamped(2.01));
-        assert!(
-            (brief.center[0] - want.x).abs() < 0.01 && (brief.center[1] - want.y).abs() < 0.01,
-            "the floored note sits at {:?}, not on its own mid-time {want:?}",
-            brief.center,
-        );
+        let want = axes.at(scale.t_of(60.0), time.depth_of_unclamped(2.02));
+        let end =
+            egui::pos2(brief.center[0], brief.center[1]) - axes.dir_depth() * brief.half_extent[1];
+        assert!(end.distance(want) < 0.01, "padding moved the release: {end:?} vs {want:?}");
     }
 
     /// Where an instance's box lands along the DEPTH axis, in points from the
@@ -1565,7 +1666,7 @@ mod tests {
         // one, where a note is still under the floor a second after the press —
         // which is the case the floor is carrying on its own.
         for ppp in [1.0_f32, 2.0] {
-            let floor = MIN_LENGTH_DEVICE_PX / ppp;
+            let floor = MIN_LENGTH_PT;
             for (span, dt) in [(12.0_f32, 0.0_f64), (600.0, 0.0), (600.0, 1.0)] {
                 let (leading, trailing) = held(ppp, span, dt);
                 assert!(
@@ -1586,7 +1687,7 @@ mod tests {
         // and the length is the note's rather than the floor's.
         let (leading, trailing) = held(2.0, 12.0, 4.0);
         assert!(leading.abs() < 1e-3, "a held note starts {leading} pt off the now-line");
-        assert!(trailing > 4.0 * MIN_LENGTH_DEVICE_PX, "a 4 s note was floored: {trailing} pt");
+        assert!(trailing > 4.0 * MIN_LENGTH_PT, "a 4 s note was floored: {trailing} pt");
     }
 
     /// The clearance survives the key coming up: a note keeps its ink off the
@@ -1647,12 +1748,9 @@ mod tests {
         }
     }
 
-    /// The floor is in DEVICE pixels, so it is half as many points on a 2x
-    /// display as on a 1x one — the antialiasing ramp it is sized against is
-    /// one physical pixel wide, and a floor in points would be right on
-    /// exactly one class of display.
+    /// The minimum duration in the picture is independent of output density.
     #[test]
-    fn the_length_floor_follows_the_display_density() {
+    fn the_length_floor_is_in_logical_points() {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 10.0;
@@ -1666,11 +1764,9 @@ mod tests {
             let notes = note_instances(&axes, &scale, &state, split, 5.0, ppp);
             one(&notes).half_extent[1]
         };
-        // To float error rather than to the bit: the floor is reached by
-        // scaling the note's own span up to it, not by a `max` against it.
-        assert!((at(1.0) - 0.5 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3, "1x: two points, {}", at(1.0));
-        assert!((at(2.0) - 0.25 * MIN_LENGTH_DEVICE_PX).abs() < 1e-3, "2x: one point, {}", at(2.0),);
-        assert!(at(1.0) > at(2.0), "the floor did not follow the density at all");
+        for ppp in [0.5, 1.0, 1.5, 2.0, 6.0] {
+            assert!((at(ppp) - 0.5 * MIN_LENGTH_PT).abs() < 1e-3, "{ppp}x: {}", at(ppp));
+        }
     }
 
     /// A floored note's segments must not paint outside the pitch they covered.
@@ -1723,6 +1819,14 @@ mod tests {
             (drawn - 2.0 * min_half_depth_for(PPP)).abs() < 1e-3,
             "the note drew {drawn} points along depth rather than the floor it is too \
              brief for; nothing here is floored and the test is vacuous",
+        );
+        let bent = notes.iter().find(|n| n.shear != 0.0).expect("real bend");
+        let split = super::super::axes::spectrum_share(&state.appearance.spectrum);
+        let time = TimeAxis::new(&state, split, 5.0);
+        let true_length = (0.011 / time.seconds_per_point(&axes)) as f32;
+        assert!(
+            (bent.half_extent[1] * 2.0 - true_length).abs() < 1e-3,
+            "padding stretched the bend"
         );
         for note in &notes {
             let reach = note.shear.abs() * note.half_extent[1];
@@ -1792,6 +1896,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_bend_crossing_the_history_edge_keeps_its_pitch_and_expression() {
+        for orientation in SpectralOrientation::ALL {
+            let mut state = fresh();
+            state.appearance.spectrum.orientation = orientation;
+            state.appearance.spectrum.roll_seconds = 10.0;
+            state.appearance.spectrum.low_midi = 48.0;
+            state.appearance.spectrum.high_midi = 84.0;
+            state.appearance.view.shadow.spectral_geometry.width = 0.0;
+            state.appearance.view.intensity = IntensitySettings {
+                velocity: Default::default(),
+                gain: Default::default(),
+                pressure: harmonigraph_scene::IntensitySource {
+                    opacity: Some(1.0),
+                    thickness: Some(2.0),
+                },
+                opacity_rest: 0.0,
+                thickness_base: 1.0,
+                thickness_max: 3.0,
+                ..Default::default()
+            };
+            state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+            for (time, value) in [(4.0, 0.25), (8.0, 0.9)] {
+                state.runtime.tracker.handle_event(NoteEvent {
+                    source: SourceId::DIRECT,
+                    time,
+                    channel: 0,
+                    note: 60,
+                    kind: NoteEventKind::Expression {
+                        expression: harmonigraph_core::Expression::Pressure,
+                        value,
+                    },
+                });
+            }
+            state.runtime.tracker.handle_event(NoteEvent {
+                source: SourceId::DIRECT,
+                time: 10.0,
+                channel: 0,
+                note: 60,
+                kind: NoteEventKind::Tuning { semitones: 12.0 },
+            });
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(360.0, 400.0));
+            let axes = Axes::new(rect, &state.appearance.spectrum);
+            let scale = PitchScale { min_midi: 48.0, max_midi: 84.0, span: 36.0 };
+            let now = 15.0;
+            let (notes, _) = roll_instances_with_floor(&axes, &scale, &state, 0.5, now, PPP, 1.0);
+            let bent = notes
+                .iter()
+                .find(|note| note.shear != 0.0 && note.span[1] == f32::MAX)
+                .expect("a bend straddles the crop and retains its oldest expression piece");
+            assert!(
+                bent.half_extent[1] > 10.0 * min_half_depth_for(PPP),
+                "the length floor must not bind in this fixture"
+            );
+            let time = TimeAxis::new(&state, 0.5, now);
+            let target = axes.at(scale.t_of(69.0), time.depth_of_unclamped(7.5));
+            let center = egui::pos2(bent.center[0], bent.center[1]);
+            let along = (target - center).dot(axes.dir_depth());
+            let drawn = center + axes.dir_depth() * along + axes.dir_pitch() * (bent.shear * along);
+            assert!(drawn.distance(target) < 0.01,
+                "{orientation:?}: retained bend draws {drawn:?} instead of source pitch at {target:?}");
+            // The crop is after the first pressure step and before the second;
+            // neither the discarded note-on intensity nor its full bend survives.
+            assert!((bent.fade[1] - 0.25).abs() < 1e-5, "{bent:?}");
+            assert!((bent.taper[2] - 1.5 / 2.8).abs() < 1e-5, "{bent:?}");
+        }
+    }
+
     /// A bend that FINISHED before the region begins leaves nothing at the
     /// edge — the segment carrying it is dropped, not squashed onto the crop.
     ///
@@ -1844,23 +2016,10 @@ mod tests {
         );
     }
 
-    /// A note that stops exactly ON the edge still draws, at the floor.
-    ///
-    /// The segment cull is STRICTLY before the edge, and that strictness is the
-    /// whole of why it cannot empty a note: the note filter keeps every note
-    /// whose stop is at or past the edge, and a note's last segment ends on
-    /// that stop, so a cull at `<=` would drop the last segment of a note the
-    /// filter had just kept and take the note off the picture with nothing
-    /// saying why. The note that proves it is the one where the two meet —
-    /// released exactly at the crop, so its every segment ends at or before the
-    /// edge and its span inside the region is zero.
-    ///
-    /// What it draws is the length floor's business: a zero span is what
-    /// `zero_span` is for, and the note comes out at the minimum length rather
-    /// than as a hairline. The cull's job is only to leave it something to
-    /// floor.
+    /// Cropping the last sliver at the ink boundary must not grow it back
+    /// into the visible window with another application of the length floor.
     #[test]
-    fn a_note_that_stops_on_the_edge_still_draws() {
+    fn a_note_that_stops_on_the_edge_is_not_refloored() {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.low_midi = 48.0;
@@ -1880,19 +2039,11 @@ mod tests {
         state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(stop, SourceId::DIRECT, 0, 60));
         let ins = instances(&state, now);
-        let floored = one(&ins);
-        assert!(
-            (floored.half_extent[1] - min_half_depth_for(PPP)).abs() < 1e-3,
-            "the note on the crop drew {} points of length rather than the floor's {}",
-            floored.half_extent[1],
-            min_half_depth_for(PPP),
-        );
+        assert!(one(&ins).half_extent[1].abs() < 1e-3);
     }
 
-    /// [`note_instances`]' length floor in points, for a test that needs to
-    /// recognise a floored extent.
-    fn min_half_depth_for(ppp: f32) -> f32 {
-        0.5 * MIN_LENGTH_DEVICE_PX / ppp
+    fn min_half_depth_for(_ppp: f32) -> f32 {
+        0.5 * MIN_LENGTH_PT
     }
 
     /// How far past the now-line a segment's LEADING end reaches, in points —
@@ -2113,6 +2264,46 @@ mod tests {
                  the analyzer",
             );
         }
+    }
+
+    #[test]
+    fn an_observation_cut_removes_the_lead_without_releasing_the_note() {
+        use harmonigraph_core::canonical::{CanonicalEvent, GapReason, PublicationGap};
+        let mut state = fresh();
+        state.appearance.spectrum.orientation = SpectralOrientation::Left;
+        state.appearance.spectrum.roll_seconds = 10.0;
+        state.appearance.spectrum.low_midi = 48.0;
+        state.appearance.spectrum.high_midi = 84.0;
+        state.appearance.spectrum.roll_lead = 0.5;
+        state.appearance.spectrum.roll_lead_release = 0.25;
+        state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, 60, 1.0));
+        let (held, detached) = instance_groups(&state, 0.5);
+        assert!(held.iter().any(|note| note.lead > 0.0 && note.lead_alpha == 1.0));
+        assert!(detached.is_empty());
+        state
+            .runtime
+            .tracker
+            .handle_canonical(CanonicalEvent::Gap(PublicationGap {
+                source: Some(SourceId::DIRECT),
+                time: 1.0,
+                through: 1.0,
+                first: 1,
+                last: 1,
+                reason: GapReason::PublicationFull,
+            }))
+            .unwrap();
+        let note = state.roll().notes().next().unwrap();
+        assert_eq!(note.end, None);
+        assert_eq!(note.observed_until, Some(1.0));
+        assert!(!note.is_live());
+        for now in [1.0, 2.0] {
+            let (history, detached) = instance_groups(&state, now);
+            assert!(!history.is_empty(), "observation loss must retain observed history");
+            assert!(history.iter().all(|note| note.lead_alpha == 0.0), "{history:?}");
+            assert!(detached.is_empty(), "an observation cut invented a released extension");
+        }
+        let (history, detached) = instance_groups(&state, 20.0);
+        assert!(history.is_empty() && detached.is_empty(), "the cut's lead retained old history");
     }
 
     /// In between, a released note's lead FADES rather than going: it holds its
@@ -2575,7 +2766,7 @@ mod tests {
         };
         let from = 5.0;
         assert!(
-            one(&instances(&state, from)).half_extent[1] > MIN_LENGTH_DEVICE_PX / PPP,
+            one(&instances(&state, from)).half_extent[1] > MIN_LENGTH_PT / PPP,
             "the fixture sits on the length floor, where the note is pinned rather \
              than scrolling, and the crossover would read as a snap",
         );

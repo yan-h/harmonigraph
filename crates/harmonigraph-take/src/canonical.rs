@@ -397,6 +397,15 @@ impl CanonicalRecord {
             Self::Gap(g) => tracker.handle_canonical(CanonicalEvent::Gap((*g).into())),
         }
     }
+    /// Ordering only, after the parser has validated every payload in file
+    /// order. No voice reconstruction is needed to accept a sorted take.
+    pub(crate) fn check_order(&self, order: &mut CanonicalOrder) -> Result<bool, InvalidCanonical> {
+        match self {
+            Self::Delta(d) => order.note(SourceId(d.event.source), d.sequence),
+            Self::Baseline(b) => order.baseline(SourceId(b.source), b.id, b.output_cut),
+            Self::Note(_) | Self::Gap(_) => Ok(true),
+        }
+    }
     pub fn translate(&mut self, offset: f64) {
         match self {
             Self::Note(n) => n.t += offset,
@@ -422,12 +431,6 @@ impl CanonicalRecord {
             Self::Note(n) => Some(*n),
             Self::Delta(d) => Some(NoteDelta::from(*d).display_event().into()),
             _ => None,
-        }
-    }
-    pub fn voiced(&self) -> bool {
-        match self {
-            Self::Baseline(b) => b.shown && !b.voices.is_empty(),
-            _ => self.note().is_some_and(|n| matches!(n.kind, crate::NoteKind::On { .. })),
         }
     }
 }

@@ -91,6 +91,31 @@ pub struct Header {
     pub audio_start: Option<f64>,
 }
 
+impl Header {
+    /// Read only the header when queueing a look, without loading a take's events.
+    pub fn read(path: impl AsRef<std::path::Path>) -> Result<Self, ReadError> {
+        use std::io::Read;
+        let file = std::fs::File::open(path)?;
+        // Appearance documents are small; cap malformed input on this UI path.
+        for (index, line) in std::io::BufReader::new(file.take(8 * 1024 * 1024)).lines().enumerate()
+        {
+            let line = line?;
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            return match ron::from_str::<Record>(line)
+                .map_err(|e| ReadError::Parse(index + 1, e))?
+            {
+                Record::Header(header) if header.version == FORMAT_VERSION => Ok(header),
+                Record::Header(header) => Err(ReadError::Version(header.version)),
+                _ => Err(ReadError::MissingHeader),
+            };
+        }
+        Err(ReadError::MissingHeader)
+    }
+}
+
 impl Default for Header {
     fn default() -> Self {
         Header {
@@ -407,9 +432,9 @@ impl Take {
         // replaces it, and so on).
         let mut ordered: Vec<_> = take.events.drain(..).zip(event_lines).collect();
         ordered.sort_by(|(a, _), (b, _)| a.time().total_cmp(&b.time()));
-        let mut validation = harmonigraph_core::NoteTracker::new();
+        let mut validation = harmonigraph_core::canonical::CanonicalOrder::default();
         for (record, line) in ordered {
-            record.apply(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
+            record.check_order(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
             take.events.push(record);
         }
         take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -479,7 +504,11 @@ pub struct Writer {
 impl Writer {
     /// Create (or truncate) `path` and write the header.
     pub fn create(path: impl AsRef<std::path::Path>, header: &Header) -> std::io::Result<Writer> {
-        let file = std::fs::File::create(path)?;
+        Self::from_file(std::fs::File::create(path)?, header)
+    }
+
+    /// Initialize a caller-owned file, allowing exclusive creation at the recording boundary.
+    pub fn from_file(file: std::fs::File, header: &Header) -> std::io::Result<Writer> {
         let mut writer = Writer { out: std::io::BufWriter::new(file) };
         writer.write(&Record::Header(header.clone()))?;
         writer.flush()?;
@@ -825,6 +854,56 @@ mod tests {
     }
 
     #[test]
+    fn canonical_order_uses_stable_time_order_but_payload_errors_keep_file_precedence() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let serialize =
+            |event| ron::to_string(&Record::Canonical(CanonicalRecord::from_event(event))).unwrap();
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[]).unwrap();
+        let frame = serialize(CanonicalEvent::Baseline(&baseline));
+        let mut delta: NoteDelta = NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 0.8).into();
+        delta.sequence = 4;
+        let note = serialize(CanonicalEvent::Note(delta));
+        let mut later = delta;
+        later.sequence = 6;
+        later.event.time = 3.0;
+        let later = serialize(CanonicalEvent::Note(later));
+        let take = Take::parse(std::io::Cursor::new(format!(
+            "{header}\n{later}\n{note}\n{frame}\n{note}\n"
+        )))
+        .unwrap();
+        assert_eq!(take.events.len(), 4, "validation does not remove duplicate records");
+        assert!(matches!(take.events[0], CanonicalRecord::Delta(_)));
+        assert!(matches!(take.events[1], CanonicalRecord::Baseline(_)));
+        assert_eq!(take.events.last().unwrap().time(), 3.0);
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}\n"))),
+            Err(ReadError::InvalidCanonical(3))
+        ));
+
+        delta.event.time = 3.0;
+        let late_history = serialize(CanonicalEvent::Note(delta));
+        let invalid_order = format!("{header}\n{late_history}\n{frame}\n");
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(&invalid_order)),
+            Err(ReadError::InvalidCanonical(2))
+        ));
+        delta.event.kind = harmonigraph_core::NoteEventKind::On { velocity: 2.0 };
+        let malformed_duplicate = serialize(CanonicalEvent::Note(delta));
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!(
+                "{header}\n{note}\n{frame}\n{malformed_duplicate}\n"
+            ))),
+            Err(ReadError::InvalidCanonical(4))
+        ));
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!("{invalid_order}{malformed_duplicate}\n"))),
+            Err(ReadError::InvalidCanonical(4))
+        ));
+    }
+
+    #[test]
     fn invalid_complete_final_baseline_and_out_of_order_cut_are_refused() {
         use harmonigraph_core::canonical::*;
         use harmonigraph_core::{NoteEvent, SourceId};
@@ -1007,6 +1086,23 @@ impl WavWriter {
         sample_rate: f32,
         channels: u16,
     ) -> std::io::Result<WavWriter> {
+        Self::with_file(|| std::fs::File::create(path), sample_rate, channels)
+    }
+
+    /// Initialize a caller-owned file, allowing exclusive creation at the recording boundary.
+    pub fn from_file(
+        file: std::fs::File,
+        sample_rate: f32,
+        channels: u16,
+    ) -> std::io::Result<WavWriter> {
+        Self::with_file(|| Ok(file), sample_rate, channels)
+    }
+
+    fn with_file(
+        open: impl FnOnce() -> std::io::Result<std::fs::File>,
+        sample_rate: f32,
+        channels: u16,
+    ) -> std::io::Result<WavWriter> {
         let channels = channels.max(1);
         let rate = sample_rate.max(1.0) as u32;
         let invalid = || {
@@ -1018,8 +1114,7 @@ impl WavWriter {
         let block_align = channels.checked_mul(Self::BITS / 8).ok_or_else(invalid)?;
         let byte_rate = rate.checked_mul(u32::from(block_align)).ok_or_else(invalid)?;
         let max_frames = u64::from(u32::MAX - (Self::HEADER_BYTES - 8)) / u64::from(block_align);
-        let mut file = std::fs::File::create(path)?;
-
+        let mut file = open()?;
         let mut header = Vec::with_capacity(Self::HEADER_BYTES as usize);
         header.extend(b"RIFF");
         header.extend(0u32.to_le_bytes()); // patched by finish()

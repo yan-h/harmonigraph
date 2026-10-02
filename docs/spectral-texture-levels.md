@@ -1,6 +1,6 @@
 # Spectral texture levels
 
-Mosaic and Watercolor at 0% Random brightness displace the scalar spectrogram picture without adding exposure,
+Watercolor at 0% Random brightness displaces the scalar spectrogram picture without adding exposure,
 lighting or pigment.
 This is the A2/B2 choice from issue #1027:
 sample the displaced levels,
@@ -11,9 +11,7 @@ Interpolating levels before coloring retains the stepped look;
 interpolating finished colors would soften those steps and can mix colors outside the gradient's path.
 
 Pitch and time softness build the source picture using the density-weighted filter.
-Both textures read that same softened field.
-Mosaic keeps positive face refraction and negative gathering toward scale centers.
-Watercolor keeps its overlapping globs,
+Watercolor reads that same softened field and keeps its overlapping globs,
 lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
 Texture mix blends original and displaced levels before the shared Contours and palette lookup.

@@ -65,6 +65,9 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 &mut atmosphere.pitch_softness,
                 &mut atmosphere.time_softness,
             );
+            let contours_visible = atmosphere.cloud_style != harmonigraph_scene::CloudStyle::Stars
+                || atmosphere.cloud_depth < 1.0;
+            ui.add_enabled_ui(contours_visible, |ui| {
             block(ui, "Level contours");
             ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
                 .percent()
@@ -85,6 +88,7 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 .show(ui)
                 .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
             });
+            }).response.on_disabled_hover_text("Contours affect the underlying picture, which Stars hides at 100% Texture mix.");
             block(ui, "Texture");
             use harmonigraph_scene::CloudStyle;
             choice_row(
@@ -106,43 +110,37 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                              centre. Fine layer mix blends their levels before Contour levels and the palette",
                         ),
                         (CloudStyle::VelvetScales, "Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
-                        (
-                            CloudStyle::Mosaic,
-                            "Mosaic",
-                            "A pile of soft domes refracting the sound through their faces, \
-                             then colored by the shared Contour levels and palette controls",
-                        ),
                     ],
                 );
-            if atmosphere.cloud_style == CloudStyle::Stars {
-                super::super::material::stars_quality(ui, &mut atmosphere.stars);
-                super::super::material::stars_test_bed(ui, &mut atmosphere.stars, 1.0);
-            }
             ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                 .percent().show(ui).on_hover_text(
                     "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
                 );
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
+                // Stars put their look first: size and spacing matter more
+                // than how they drift, and the rendering profile comes last.
+                let stars = atmosphere.cloud_style == CloudStyle::Stars;
+                if stars {
+                    block(ui, "Appearance");
+                    super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
+                }
                 block(ui, "Motion");
-                if atmosphere.cloud_style == CloudStyle::Stars {
+                if stars {
                     super::super::material::stars_motion(ui, &mut atmosphere.stars);
                 }
-                let speed = (atmosphere.cloud_style != CloudStyle::Stars)
-                    .then_some(&mut atmosphere.cloud_speed);
+                let speed = (!stars).then_some(&mut atmosphere.cloud_speed);
                 crate::widgets::drift(ui, &mut atmosphere.cloud_direction, speed);
-                block(ui, "Appearance");
                 // Each style has its own controls: nothing a wash carries means
-                // anything to a refracting scale, and a page listing both would be mostly
+                // anything to a scallop, and a page listing both would be mostly
                 // controls that do nothing wherever it stands.
-                if atmosphere.cloud_style == CloudStyle::Stars {
-                    super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
-                } else if atmosphere.cloud_style == CloudStyle::Watercolor {
-                    super::super::material::watercolor(ui, &mut atmosphere.material_settings);
-                    super::super::material::edge_pooling(ui, atmosphere);
-                } else if atmosphere.cloud_style == CloudStyle::VelvetScales {
-                    super::super::material::velvet(ui, &mut atmosphere.material_settings);
-                } else {
-                    super::super::material::mosaic(ui, &mut atmosphere.material_settings);
+                if !stars {
+                    block(ui, "Appearance");
+                    if atmosphere.cloud_style == CloudStyle::Watercolor {
+                        super::super::material::watercolor(ui, &mut atmosphere.material_settings);
+                        super::super::material::edge_pooling(ui, atmosphere);
+                    } else {
+                        super::super::material::velvet(ui, &mut atmosphere.material_settings);
+                    }
                 }
                 block(ui, "Color response");
                 crate::widgets::response(
@@ -153,6 +151,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     ["Color pickup", "Color release"],
                     1.0,
                 );
+                if stars {
+                    block(ui, "Rendering");
+                    super::super::material::stars_quality(ui, &mut atmosphere.stars);
+                }
             });
         },
     );
@@ -344,11 +346,11 @@ pub(crate) fn view_section(
                 .on_hover_text("How far up the level axis the backdrop reaches before it has faded out: 100% is the ceiling.");
             ValueBar::new(&mut cfg.backdrop_gap, crate::config::BACKDROP_GAP_RANGE, "Stripe spacing")
                 .integer()
-                .unit(1.0, " px")
-                .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} px") })
+                .unit(1.0, " pt")
+                .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} pt") })
                 .show(ui)
                 .on_hover_text(
-                    "Dark pixels between the backdrop's stripes. The dark gaps are what let even a fill as dark as the background \
+                    "Logical points between the backdrop’s one-point stripes. The dark gaps are what let even a fill as dark as the background \
                          show as a break in the stripes; wider spacing is calmer but can miss a partial one pixel wide. \
                          0 is a smooth gradient: softer, but a fill as bright as the glow at its own height blends into it.",
                 );
@@ -396,7 +398,7 @@ pub(crate) fn analysis_section(
             }
         }
         let windows = [
-            (SpectrumWindow::Fast, "Fast", "snappy response, coarse bass pitch"),
+            (SpectrumWindow::Fast, "Fast", "snappy response, coarse pitch especially in the bass; low audio-ring fundamentals can disappear while their harmonics remain"),
             (SpectrumWindow::Balanced, "Balanced", "between fast response and sharp bass pitch"),
             (SpectrumWindow::Precise, "Precise", "sharp bass pitch, slower response"),
         ];

@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected instances. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, level contours, Mosaic, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
+| Analyzer | **Spectrogram**: pitch/time softness, level contours, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -221,6 +221,8 @@ Reset layout returns the space held by pane and region folds together.
 These folds are saved with the editor layout and do not change the Video preview or exported composition.
 Frameless mode hides their controls;
 press Tab to show them again.
+Hide tab bars is saved with the editor workspace and never in an appearance or take.
+Tab takes priority over focus traversal except while editing text.
 
 ## Shared settings and dependencies
 
@@ -235,10 +237,19 @@ press Tab to show them again.
 | Octave layout | MIDI ring, audio ring and melody/bass marks. The layer stack controls their widths and visibility. |
 | Note fade | MIDI slices, marks and labels, plus audio-ring visibility. Background glow has its own response. |
 | Motion and starting pose | MIDI slices and marks ease smoothly from the selected starting offset and scale. |
-| Audio level colors | Shared palette; lattice rings substitute gray at Idle ring brightness for its quiet endpoint. |
+| Audio level colors | Shared palette; lattice rings substitute gray at Silent slice brightness for its quiet endpoint. |
 | Glow pattern, material and breathing | Require nonzero Background glow reach and gain. Pattern varies the glow; material reshapes the result. Each effect retains its own settings when bypassed. |
 | Lattice resolution, Spectrogram time step | Rendering quality/cost in the editor, preview and exports. Video output dimensions are separate. |
-| Editor frame limit, interface scale | Editor only; exports run at 60 fps. |
+| Editor frame limit, interface scale, Hide tab bars | Editor only; exports run at 60 fps. |
+
+Fresh projects use **Balanced** frequency resolution (8192 samples); saved Fast selections remain Fast.
+Fast trades pitch precision for response time,
+and its wider bins can lose low audio-ring fundamental wedges while their harmonics still light the pitch class.
+The cutoff depends on sample rate and the material.
+Fresh **Contour strength** is 0%, so textures start smooth.
+**Silent slice brightness** lives in Note layers and colours silent MIDI octave slices on sounding or fading nodes,
+plus the audio ring’s quiet endpoint.
+Idle lattice positions use the separate label/cross brightness.
 
 With the audio ring set to **Octave levels**,
 **Pitch tolerance** sets how far neighboring frequencies can light a slice;

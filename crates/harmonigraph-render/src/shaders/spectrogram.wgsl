@@ -275,29 +275,23 @@ struct Cloud {
     // this struct, which is why these are appended rather than interleaved.
     drift: vec2<f32>,
     cloud_depth: f32,
-    scale_size: f32,
-    scale_variety: f32,
-    scale_refract: f32,
-    // Which texture the layer draws: 0 the refracting scales above (Mosaic), 1
-    // the watercolour wash below, 2 the starfield after them, 3 Scales. Nothing is shared
-    // between them but the blurred light, the palette, the clock and
-    // `cloud_depth`.
+    // Which texture the layer draws: 1 the watercolour wash below, 2 the
+    // starfield after it, 3 Scales; 0 is unused. Nothing is shared between them
+    // but the blurred light, the palette, the clock and `cloud_depth`.
     cloud_style: u32,
     wash_size: f32,
     wash_fuzz: f32,
     wash_lobe: f32,
     wash_refract: f32,
     wash_layers: f32,
-    // The tile's period in cells, above zero whenever a mosaic or wash is
-    // drawn. The cell a hash is taken at is folded onto the square period
-    // described beside `wrap_cell`, `fs_cloud_tile` bakes one period of it, and
-    // the two paths below read that texture instead of walking the ring per
-    // pixel. The
-    // wash rotates that read; the mosaic keeps the square tile's original axes.
+    // The tile's period in cells, above zero whenever a wash is drawn. The cell
+    // a hash is taken at is folded onto the square period described beside
+    // `wrap_cell`, `fs_cloud_tile` bakes one period of it, and the wash reads
+    // that texture, rotated, instead of walking the ring per pixel.
     tile_cells: u32,
     // 1 when pitch is the pane's Y axis, 0 when it is X. The wash's 3-4-5
     // rotation is defined in (time, pitch), so its basis follows this
-    // orientation. The unrotated mosaic does not read it.
+    // orientation.
     pitch_vertical: u32,
     // The starfield's `Brightness variation`, and its life clock in lives, already
     // reduced by `STAR_LIFE_PERIOD` (`star_life` in atmosphere.rs). Read by
@@ -308,12 +302,8 @@ struct Cloud {
     star_size_variation: f32,
     star_pad0: u32,
     star_pad1: u32,
-    star_pad2: u32,
     star_far: vec4<f32>,
     star_near: vec4<f32>,
-    // Overlap light, unused, the core's fade-start fraction and far fill, computed
-    // once per frame by star_geometry in stars.rs. Each slice carries its own width and core.
-    star_geometry: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
@@ -329,7 +319,8 @@ struct Cloud {
     previous_slices: array<StarSlice, 5>,
     star_halo_samples: array<StarHaloSample, 5>,
     velvet: vec4<f32>,
-    velvet_size: vec4<f32>,
+    // Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
+    velvet_form: vec4<f32>,
     // The wash's `Edge pooling` (signed), its width in front-glob radii, and
     // the exponent its `Softness` makes of the fade; w is padding.
     wash_pigment: vec4<f32>,
@@ -345,16 +336,15 @@ struct Cloud {
 @group(1) @binding(4) var cloud_tone: texture_2d<f32>;
 /// One period of the cell walk's OUTPUT, as `fs_cloud_tile` baked it, and bound
 /// on the same terms as `cloud_tone` above — the pass that renders into these
-/// two binds a stand-in here. The mosaic uses only the first (its `face` and
-/// `to_centre`); the wash fills both (see `WashField`).
+/// two binds a stand-in here. The wash fills both (see `WashField`).
 @group(1) @binding(5) var cloud_tile_a: texture_2d<f32>;
 @group(1) @binding(6) var cloud_tile_b: texture_2d<f32>;
 /// The wash's distances out from the front glob's arc, coarse then fine, read
 /// only while `Edge pooling` is not zero.
 @group(1) @binding(13) var cloud_tile_c: texture_2d<f32>;
-/// The tile's own sampler, and the only REPEATING one here: the mosaic divides
-/// its cell coordinate by the period, while the wash first turns it into the
-/// rotated basis; either texture coordinate wraps. `cloud_sampler` clamps,
+/// The tile's own sampler, and the only REPEATING one here: the wash turns its
+/// cell coordinate into the rotated basis and divides by the period, and that
+/// texture coordinate wraps. `cloud_sampler` clamps,
 /// which every other read wants —
 /// a refracted lookup that ran off the pane must hold its edge rather than
 /// return the light from the far side of the picture.
@@ -472,94 +462,24 @@ fn density_color(raw_level: f32) -> vec4<f32> {
     return vec4<f32>(palette_color(style_level(raw_level)), 1.0);
 }
 
-// A refracting scale TEXTURE (prototype).
-//
-// It was clouds over sky until Yan saw one: *"I feel like in the current
-// prototype there are gaps in cloud cover even at 100%. I don't want this. I
-// want the texture everywhere, and the cloud cover slider to be gone."* — and,
-// on a reference sheet of watercolour cumulus: *"I want a consistent texture at
-// the macro level, but different lobe sizes at the micro level"*, *"I want the
-// texture, not the exact shape of how clouds behave in real life. No macro level
-// variation from bottom of spectrogram to the top."*
-//
-// So there is no cloud SHAPE here any more and no sky between: one continuous
-// field of globs over the whole pane, statistically the same everywhere, and the
-// variation Yan wants is in the globs' own sizes rather than in where they
-// gather. The drifting billow that used to carve cloud bodies out of it is gone
-// along with everything that only existed to serve it — the threshold, the
-// per-pixel `density`, the bright rim on a cloud's leading edge, and the whole
-// perlin chain underneath. What is left is the domes, which were always the
-// thing being looked at.
-//
-// Round 1 of #888 read the light at the nearest DOME'S CENTRE instead of under
-// the pixel, so every scale showed the spectrogram sampled from somewhere else
-// and the picture came apart into bent facets. That is the one thing Yan has
-// asked for twice — *"it actually looked like the scales were refracting the
-// light"* — and rounds 2 through 6 removed it, each for a locally good reason.
-// Round 5's notes call it a defect in as many words: "the light was read at the
-// NEAREST scale's centre; that steps the reading across the bisector between
-// two scales — a straight edge through a cloud", and replaced it with an
-// average over the covering scales. The SEAM was the bug. The DISPLACEMENT was
-// the feature. They went out together, and everything after was paint laid over
-// the picture rather than a lens in front of it.
-//
-// So the displaced lookup is back, and the cell pick is not. The relief is a
-// pile of soft round domes joined by a soft union, and the light is bent by its
-// SLOPE. A nearest-cell pick steps across a bisector; a slope turns
-// continuously, so the picture bends where it used to break and there is no
-// boundary left anywhere to draw. That is the whole of "keep the refraction,
-// just make it softer" — the softness is a property of the construction rather
-// than a blur applied to a hard thing afterwards.
-//
-// The geometry now displaces levels only; Contours and the palette are
-// shared with the source picture. No material exposure or shading remains.
-//
-// Two things that are NOT round 1:
-//
-// **The union is a union, not a sum.** Adding two overlapping domes makes one
-// taller smooth mound and cancels the slopes exactly where the near dome's face
-// should be — no faces, and the faces are the scales. `exp(k*h)` weights keep
-// both, and the same weights carry each dome's own slope, so one pass gives the
-// face and everything else keyed on it together.
-//
-// **The slope is normalised before it bends anything.** A dome's slope goes as
-// one over its radius, so a raw slope would make `Cell size` silently a second
-// refraction knob — halve the scale and the picture bends twice as far.
-// `DOME_FACE` takes that out, and takes out the same effect WITHIN one field now
-// that `Size variation` gives each glob its own radius.
-//
 // Cloud space is the pane's, aspect-corrected and independent of DPI, and it is
 // FIXED: ten cloud units across the pane's height, which is what the shipped
 // `Cloud size` of 0.5x drew before the dial was retired.
 //
-// It was a dial, and it was a second copy of `Cell size` and `Patch size`. The
-// texture's size on the pane came out as a PRODUCT — `cloud_scale * scale_size`
-// reached the dome grid and nothing read either on its own — so the two dials
+// It was a dial, and it was a second copy of each texture's own size dial. The
+// texture's size on the pane came out as a PRODUCT — `cloud_scale * wash_size`
+// reached the glob grid and nothing read either on its own — so the two dials
 // named one number between them, and the picture could not tell which of them
 // had set it. What `Cloud size` did own was the drift, since `drift` is measured
 // in cloud units and a larger unit carries the texture further per second; but
 // that is `Drift speed` again, one multiplication later. Three dials, two
 // observables. Pinning the frame here leaves each texture one size dial that
 // means its own size, and leaves the drift to the dial named after it.
-//
-// These qualities are on DIALS rather than decided here, because describing
-// which of them Yan wants has failed in words repeatedly: the NEGATIVE half of
-// `Refraction` carries the lookup from this round's continuous slope onto round
-// 1's flat per-glob patch, and `Size variation` is how much the globs differ in
-// size.
 const CLOUD_UNITS: f32 = 10.0;
 // The tiled WASH is turned by the exact 3-4-5 rotation: cosine 4/5, sine 3/5,
 // or 36.87 degrees. Its square walk is baked in its own coordinates and this
 // rotation is applied only when it is read, so every octave still closes on
-// the ordinary square period and no resampling stretch is introduced. Mosaic
-// deliberately keeps the square tile's original axes: turning its scale pile
-// changed the look rather than merely hiding its repetition.
-
-// How many dome cells cross one cloud unit at `Cell size` 1x. Carries the
-// retired `Cloud size` default: the shipped picture was 6 cells per unit over a
-// frame half this one's, and `6 / 2.2` at the old `Cell size` default is what
-// puts the same scales on the pane with the dial reading a plain 1x.
-const SCALE_CELLS: f32 = 6.0 / 2.2;
+// the ordinary square period and no resampling stretch is introduced.
 
 // Watercolor texture coordinates in the rotated basis. `semantic` is `(time, pitch)`
 // whichever way the pane is oriented; multiplying by R^-1 turns the world
@@ -578,72 +498,22 @@ fn rotate_watercolor_tile_vector(v: vec2<f32>) -> vec2<f32> {
     return rotate_watercolor_tile_vector_for(v, cloud.pitch_vertical);
 }
 
-fn cloud_domes(r: vec2<f32>, period: i32) -> Pile {
-    return mosaic_field(r, period, cloud.scale_variety);
-}
-
 // `close_light` already holds the decoded, softened scalar material.
-// Both textures read the SAME softened scalar picture. Geometry only
-// selects the lookup: no gain, lighting, paper, pigment or independent wide tap.
+// The wash reads that softened scalar picture. Geometry only selects
+// the lookup: no gain, lighting, paper, pigment or independent wide tap.
 fn cloud_light(pt: vec2<f32>) -> f32 {
     return textureSampleLevel(close_light, cloud_sampler, pt / cloud.size, 0.0).r;
 }
 
-// The mosaic's displaced level, before Contours and the palette.
-fn scale_tone(pt: vec2<f32>) -> f32 {
-    let q = (pt - cloud.size * 0.5) / cloud.size.y * CLOUD_UNITS + cloud.drift;
-
-    // The scales. `scale_size` DIVIDES how many of them cross one cloud unit,
-    // so the knob reads as a size rather than as a frequency.
-    let scale_units = SCALE_CELLS / cloud.scale_size;
-    let scale_points = cloud.size.y / CLOUD_UNITS / scale_units;
-    let r = q * scale_units;
-    // One tap into the period of the ring `fs_cloud_tile` already walked. The
-    // whole of the walk's output is the two vectors below, so the tile is one
-    // `Rgba16Float` read and the rest of this function — the refraction — is
-    // what runs per pixel. There is deliberately no live-walk arm here: even
-    // never taken, it cost this full-resolution shader 16 to 21% (#1100).
-    let tile = textureSampleLevel(cloud_tile_a, tile_sampler, r / f32(cloud.tile_cells), 0.0);
-    var pile: Pile;
-    pile.face = tile.xy;
-    pile.to_centre = tile.zw;
-
-    // THE REFRACTION. `DOME_FACE` has already put the offset in scale widths
-    // whatever the scale size is, and in each glob's OWN width whatever
-    // `Size variation` has made of it.
-    let face = pile.face;
-    let bend = max(cloud.scale_refract, 0.0) * scale_points;
-    // The dial's NEGATIVE half swings the reading off the face the scale
-    // PRESENTS and onto the scale's own CENTRE, which is round 1's reading: one
-    // value for the whole scale, so the picture comes apart into flat quantized
-    // patches instead of bending through them. `to_centre` is in cells and
-    // `scale_points` is how many pane points a cell is, so at -1
-    // `pile.to_centre * scale_points` lands exactly on the dome's centre — the
-    // same arithmetic round 1 spelled out as `centre_pt` — and between 0 and -1
-    // the reading is pulled a share of the way there, which is what the wash
-    // below has always called its own refraction.
-    //
-    // One signed dial where there were two, `Refraction` and a `Facet` that
-    // blended between the two readings. They were kept apart so one could be
-    // dialled down to look at the other while the layer was being built, and
-    // together they spanned a plane of which the blends in the middle — part
-    // face, part centre — were neither look. Only one side is ever nonzero, so
-    // the other term adds an exact zero and the positive half draws what
-    // `Refraction` alone always drew, bit for bit.
-    let gather = max(-cloud.scale_refract, 0.0) * scale_points;
-    let lookup = -face * bend + pile.to_centre * gather;
-    return cloud_light(pt + lookup);
-}
-
-// The second texture, beside the scales above and sharing nothing with them but
-// the blurred light, the palette and the drift clock. It is what Yan asked for
+// The watercolour wash, sharing nothing with the other textures but the blurred
+// light, the palette and the drift clock. It is what Yan asked for
 // first, on a sheet of watercolour cumulus: *"this watercolor clouds example is
 // roughly what I want - with additional movement and refraction, and different
 // colors of course"*, *"I want the entire field to look like a field of
 // different sized cloud globs, with some variation"*, *"I want the texture, not
-// the exact shape of how clouds behave in real life"*. So again one continuous
-// isotropic field with no sky, no up and no gaps — but a WATERCOLOUR one, where
-// the shape comes from overlapping globs rather than a soft union of domes.
+// the exact shape of how clouds behave in real life"*. So one continuous
+// isotropic field with no sky, no up and no gaps — a WATERCOLOUR one, where
+// the shape comes from overlapping globs.
 //
 // Prototyped in numpy over a real recording across two contact sheets; Yan's
 // pick was *"I like J1, J2 and J5 the most"*, which are one construction at
@@ -756,7 +626,8 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
     let r = wash_cell_at(pt);
 
     // One or two taps into the period of the two ring walks `fs_cloud_tile`
-    // already walked; no live arm, for the reason `scale_tone` gives.
+    // already walked. There is deliberately no live-walk arm here: even never
+    // taken, it cost this full-resolution shader 16 to 21% (#1100).
     let field = wash_tile_field(r);
     var level = wash_level(field.coarse, pane_per_cell, pt);
     if cloud.wash_layers > 0.0 {
@@ -774,10 +645,7 @@ fn cloud_tone_at(pt: vec2<f32>) -> f32 {
     if cloud.cloud_style == 3u {
         return textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).r;
     }
-    if cloud.cloud_style == 1u {
-        return wash_cloud_tone(pt);
-    }
-    return scale_tone(pt);
+    return wash_cloud_tone(pt);
 }
 
 // The cloud's tone reduced to a target of its own, one texel per cloud sample
@@ -791,20 +659,19 @@ fn fs_cloud_tone(in: VertexOut) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_velvet_tone(in: VertexOut) -> @location(0) vec4<f32> {
-    let cell = cloud.size.y * (24.0 / 405.0) * cloud.velvet_size.x;
+    let cell = cloud.size.y * (24.0 / 405.0) * cloud.velvet_form.x;
     let drift = (cloud.drift - vec2<f32>(0.0, 0.6)) * cloud.size.y / (10.0 * cell);
     let level = velvet_material(close_light, cloud_sampler, vec2<f32>(in.slab, in.t) * cloud.size,
-        cloud.size, cell, drift, cloud.velvet).r;
+        cloud.size, cell, drift, cloud.velvet, cloud.velvet_form.yz).r;
     return vec4<f32>(level, 0.0, 0.0, 1.0);
 }
 
 // ====================== ONE PERIOD OF THE CELL WALK ========================
 //
-// The tile, baked whenever a cloud is drawn and read by both paths above. It has
-// no pane, no drift and no light in it: it is one square period of whichever
-// walk the style selects. The Watercolor read turns that whole field by 36.87
-// degrees; the Mosaic read leaves it square. That is why a resize, a drift or
-// a note never touches it and `Cell size` reaches it only
+// The tile, baked whenever a wash is drawn and read by both paths above. It has
+// no pane, no drift and no light in it: it is one square period of the wash's
+// walk, which the read turns by 36.87 degrees. That is why a resize, a drift or
+// a note never touches it and `Patch size` reaches it only
 // through how many texels the renderer spends on a cell.
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
@@ -833,34 +700,21 @@ struct TileBake {
 @fragment
 fn fs_cloud_tile(in: TileVertex) -> TileBake {
     let period = i32(cloud.tile_cells);
-    // The wash's texel centre lands in the square semantic coordinates that
-    // the inverse `watercolor_tile_uv` rotation reads back. The mosaic instead
-    // uses the original physical X/Y square so its bake matches `r / period`.
+    // The texel centre lands in the square semantic coordinates that the
+    // inverse `watercolor_tile_uv` rotation reads back.
     let period_f = f32(cloud.tile_cells);
     let time = in.fraction.x * period_f;
     let pitch = in.fraction.y * period_f;
     let wash_cell =
         select(vec2<f32>(pitch, time), vec2<f32>(time, pitch), cloud.pitch_vertical == 1u);
-    let mosaic_cell = in.fraction * period_f;
+    // Seven channels of glob geometry and brightness and two of distance
+    // out from the front glob's arc, the fine octave whatever `Fine layer mix` says, so turning that
+    // dial up is a mix and never a rebake.
+    let field = wash_field(wash_cell, period, cloud.wash_fuzz, cloud.wash_lobe);
     var out: TileBake;
-    out.a = vec4<f32>(0.0);
-    out.b = vec4<f32>(0.0);
-    out.c = vec4<f32>(0.0);
-    if cloud.cloud_style == 1u {
-        // Seven channels of glob geometry and brightness and two of distance
-        // out from the front glob's arc, the fine octave whatever `Fine layer mix` says, so turning that
-        // dial up is a mix and never a rebake.
-        let field = wash_field(wash_cell, period, cloud.wash_fuzz, cloud.wash_lobe);
-        out.a = vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0);
-        out.b = vec4<f32>(field.fine.offset, field.fine.brightness, field.cover);
-        out.c = vec4<f32>(field.coarse.gap, field.fine.gap, 0.0, 0.0);
-    } else {
-        // The mosaic's whole walk is these two vectors, so its second target is
-        // never read. It is still allocated and still written, which is what
-        // keeps a change of style a rebake rather than a reallocation.
-        let pile = cloud_domes(mosaic_cell, period);
-        out.a = vec4<f32>(pile.face, pile.to_centre);
-    }
+    out.a = vec4<f32>(field.coarse.offset, field.coarse.brightness, 0.0);
+    out.b = vec4<f32>(field.fine.offset, field.fine.brightness, field.cover);
+    out.c = vec4<f32>(field.coarse.gap, field.fine.gap, 0.0, 0.0);
     return out;
 }
 
@@ -881,22 +735,21 @@ fn star_memory(k: u32, cell: vec2<i32>) -> vec4<f32> {
     let s = cloud.star_slices[k];
     let salt = 1000u + 3u * k;
     let hashed = cell & vec2<i32>(STAR_HASH_PERIOD - 1);
-    let stagger = star_hash(hashed, salt + 2u).x;
-    let life = u32(floor(cloud.star_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
-    let key = salt + ((life + 1u) << 16u);
-    let a = star_hash(hashed, key);
-    let centre = 0.5 + s.width * (a.xy - 0.5);
-    let at = (vec2<f32>(cell) + centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
+    let d = star_draw(s, hashed, salt);
+    let at = (vec2<f32>(cell) + d.centre + s.offset) * s.cell * (cloud.size.y / STAR_PANE) + cloud.size * 0.5;
     let level = star_level_at(at);
-    let rank_draw = star_hash(hashed, key + 1u).x;
-    let rank = pow(rank_draw, 1.0 + 6.0 * cloud.star_randomness) * (2.0 + 6.0 * cloud.star_randomness);
-    let current = vec4<f32>(linear_from_gamma_rgb(star_paint(level, rank)), level);
+    var paint = star_paint(level, star_rank(d.own.x));
+    if d.blend > 0.0 { paint = mix(paint, star_paint(level, star_rank(d.other.x)), d.blend); }
+    let current = vec4<f32>(linear_from_gamma_rgb(paint), level);
     if cloud.memory_valid == 0u { return current; }
-    let old_life = u32(floor(cloud.previous_life + stagger)) & (STAR_LIFE_PERIOD - 1u);
+    let old_life = u32(floor(cloud.previous_life + d.stagger)) & (STAR_LIFE_PERIOD - 1u);
     let previous = cloud.previous_slices[k];
     // Signed nearest periodic cell difference carries identity across drift's wrap.
     let local = ((cell - previous.origin + STAR_HASH_PERIOD / 2) & vec2<i32>(STAR_HASH_PERIOD - 1)) - STAR_HASH_PERIOD / 2;
-    if old_life != life || any(local < vec2<i32>(0)) || any(local >= previous.grid) { return current; }
+    // A star that keeps its place is one star through all its lives, so its
+    // colour carries across them; any other is new each life.
+    let new_star = !d.held && old_life != d.life;
+    if new_star || any(local < vec2<i32>(0)) || any(local >= previous.grid) { return current; }
     let index = previous.base + local.y * previous.grid.x + local.x;
     return remembered(current, textureLoad(color_memory, atlas_texel(index), 0));
 }
@@ -1129,7 +982,6 @@ fn star_life() -> f32 { return cloud.star_life; }
 fn star_size_variation() -> f32 { return cloud.star_size_variation; }
 fn star_far() -> vec4<f32> { return cloud.star_far; }
 fn star_near() -> vec4<f32> { return cloud.star_near; }
-fn star_geometry() -> vec4<f32> { return cloud.star_geometry; }
 fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
 fn star_halo_sample(k: u32) -> StarHaloSample { return cloud.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }

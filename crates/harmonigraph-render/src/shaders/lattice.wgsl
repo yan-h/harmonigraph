@@ -13,6 +13,9 @@ struct CompositeParams {
     render_scale: f32,
     bloom_strength: f32,
     background: vec4<f32>,
+    edge_softness_pixels: f32,
+    padding: f32,
+    padding2: vec2<f32>,
 };
 
 struct CameraParams {
@@ -72,21 +75,6 @@ struct TextureParams {
     padding: vec2<f32>,
 };
 
-struct MaterialParams {
-    @align(16) amount: f32,
-    scale: f32,
-    drift: vec2<f32>,
-    style: u32,
-    fuzz: f32,
-    lobe: f32,
-    variety: f32,
-    refract: f32,
-    layers: f32,
-    randomness: f32,
-    padding: f32,
-    velvet: vec4<f32>,
-};
-
 struct PickupParams {
     @align(16) intensity: f32,
     width: f32,
@@ -124,7 +112,6 @@ struct Uniforms {
     spectral: SpectralParams,
     glow: GlowParams,
     texture: TextureParams,
-    material: MaterialParams,
     pickup: PickupParams,
     geometry_shadow: ShadowParams,
     marker_shadow: ShadowParams,
@@ -826,35 +813,11 @@ fn aa_inside(edge: f32, x: f32, w: f32) -> f32 {
 // Half-width of the soft band, in SCREEN pixels on each side of an edge
 // (the one knob for how soft shape edges feel; softness stays
 // screen-constant at every zoom). ~4px total on a Retina surface.
-// aa_width() converts to render pixels via the render scale, so the
-// super/sub-sampling view setting changes resolved detail without
-// changing how soft edges look.
-const AA_SOFTNESS_PX: f32 = 2.0;
-
-// Soft-band width in the units of a coordinate whose per-FRAGMENT derivative is
-// `coord_fwidth`, on a surface drawn at `surface_scale` of the target's pixels
-// (`VsOut::shadow_at`'s w).
-//
-// Two candidates, and the LARGER is the band: the softness knob converted to
-// this surface's fragments, and one fragment of it. A surface at the target's
-// own resolution takes the first anywhere the Render scale bar reaches —
-// `AA_SOFTNESS_PX` times a scale of 0.5 is exactly a fragment, and the bar
-// stops there — and the floor is what answers for a surface drawn coarser than
-// the pane, plus the sliver of `RENDER_SCALE_RANGE` below the bar, where a
-// band finer than a fragment is no antialiasing either.
-//
-// That surface is a cell of the shadow atlas, whose fragment is a texel `σ / 3`
-// render pixels wide (`shadow::pack`). Scaling the knob is what keeps the
-// band a SCREEN width there rather than the Shadow bar times a constant: the
-// node's size and the pane's DPI cancel out of an unscaled band, leaving every
-// edge in the cell cut at 0.185 × Shadow of the node's uv — wider than the gaps
-// between its rings past a Shadow of 0.27, so the atlas would hold a smeared
-// annulus rather than a picture of the node and every shadow it cast would be a
-// blur of that smear. The floor is what stops the correction going wrong the
-// other way, a cell antialiased at a width finer than the texels it has to draw
-// in being no antialiasing at all.
+// Artistic softness is in logical points, scaled for the composed preview.
+// The uploaded width is in device pixels. Shadow atlas cells apply their own
+// raster scale, and every target retains at least one fragment of antialiasing.
 fn aa_width(coord_fwidth: f32, surface_scale: f32) -> f32 {
-    let knob = AA_SOFTNESS_PX * max(u.composite.render_scale, 0.01) * clamp(surface_scale, 0.0, 1.0);
+    let knob = u.composite.edge_softness_pixels * max(u.composite.render_scale, 0.01) * clamp(surface_scale, 0.0, 1.0);
     return max(coord_fwidth, 1e-4) * max(knob, 1.0);
 }
 

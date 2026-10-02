@@ -180,16 +180,12 @@ fn material_shadow_pickup_darkens_light_without_adding_coverage() {
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.material_speed = 0.0;
     scene.atmosphere.material_settings.wash_size = 2.0;
-    scene.atmosphere.material_settings.scale_size = 2.0;
     scene.atmosphere.material_settings.wash_refract = 1.0;
     for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
         scene.shadow = one_shadow(0.8, 0.7, kernel);
-        for material in [
-            LatticeMaterial::Watercolor,
-            LatticeMaterial::Mosaic,
-            LatticeMaterial::VelvetScales,
-            LatticeMaterial::Stars,
-        ] {
+        for material in
+            [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
+        {
             scene.atmosphere.material_style = material;
             scene.atmosphere.material_shadow_pickup = 0.0;
             let before = glow(&mut shooter, &scene);
@@ -501,7 +497,6 @@ fn watercolor_motion_and_silence_use_the_production_light() {
     scene.atmosphere.breath_amount = 0.0;
     scene.atmosphere.material_amount = 0.0;
     scene.atmosphere.material_settings.wash_size = 2.0;
-    scene.atmosphere.material_settings.scale_size = 1.0;
     scene.atmosphere.material_speed = 1.0;
     scene.glow_timing =
         Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
@@ -604,64 +599,6 @@ fn materials_drift_stays_continuous_across_axis_wraps() {
 }
 
 #[test]
-fn mosaic_displaces_note_light_and_switches_geometry_without_carrying_old_tiles() {
-    use harmonigraph_scene::LatticeMaterial::{Mosaic, Watercolor};
-    let Some(mut shooter) = Shooter::new(SIZE) else { return };
-    let mut scene = scene(&[1.0, 1.0], 0.75, true);
-    scene.atmosphere.material_style = Mosaic;
-    scene.atmosphere.breath_amount = 0.0;
-    scene.atmosphere.material_amount = 0.0;
-    scene.atmosphere.material_settings.wash_size = 1.0;
-    scene.atmosphere.material_settings.scale_size = 1.0;
-    scene.atmosphere.material_speed = 1.0;
-    scene.glow_timing =
-        Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
-    let baseline = glow(&mut shooter, &scene);
-    scene.atmosphere.material_amount = 1.0;
-    let mosaic = glow(&mut shooter, &scene);
-    let changed = baseline
-        .chunks_exact(4)
-        .zip(mosaic.chunks_exact(4))
-        .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
-        .count();
-    assert!(changed > 500, "fixture must reach Mosaic displacement: {changed} pixels");
-    assert!(mosaic.chunks_exact(4).any(|p| p[3] > 30));
-    for pixel in mosaic.chunks_exact(4) {
-        assert!(pixel[..3].iter().all(|c| *c <= pixel[3] + 1), "premultiplied light");
-        assert!(pixel.iter().all(|c| *c <= 154), "fixed gain ceiling");
-    }
-    scene.atmosphere.material_style = Watercolor;
-    shooter.shot_again(&scene);
-    let wash = read_glow(&shooter);
-    assert_ne!(mosaic, wash, "same-sized tiles must switch geometry");
-    assert_eq!(wash, glow(&mut shooter, &scene), "switched wash matches a fresh pane");
-    scene.atmosphere.material_style = Mosaic;
-    shooter.shot_again(&scene);
-    assert_eq!(mosaic, read_glow(&shooter), "switching back must rebake Mosaic");
-    scene.glow_timing.as_mut().unwrap().now = 8.0;
-    shooter.shot_again(&scene);
-    assert_ne!(mosaic, read_glow(&shooter), "held notes show material motion");
-    scene.atmosphere.material_speed = 0.0;
-    shooter.shot_again(&scene);
-    assert_eq!(mosaic, read_glow(&shooter), "zero speed freezes the facets");
-    scene.atmosphere.material_amount = 0.0;
-    shooter.shot_again(&scene);
-    assert_eq!(baseline, read_glow(&shooter), "zero depth restores smooth light");
-    scene.atmosphere.material_amount = 1.0;
-    scene.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::None;
-    shooter.shot_again(&scene);
-    assert_eq!(baseline, read_glow(&shooter), "disabled texture restores smooth light");
-    scene.atmosphere.material_style = Mosaic;
-    shooter.shot_again(&scene);
-    assert_eq!(mosaic, read_glow(&shooter));
-    for node in &mut scene.nodes {
-        node.glow.level = 0.0;
-    }
-    shooter.shot_again(&scene);
-    assert!(read_glow(&shooter).iter().all(|b| *b == 0), "silence clears displaced light");
-}
-
-#[test]
 fn textures_feed_materials_before_sampling() {
     use harmonigraph_scene::LatticeMaterial;
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
@@ -671,12 +608,9 @@ fn textures_feed_materials_before_sampling() {
             .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
             .count()
     };
-    for material in [
-        LatticeMaterial::Watercolor,
-        LatticeMaterial::Mosaic,
-        LatticeMaterial::VelvetScales,
-        LatticeMaterial::Stars,
-    ] {
+    for material in
+        [LatticeMaterial::Watercolor, LatticeMaterial::VelvetScales, LatticeMaterial::Stars]
+    {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
         scene.atmosphere.breath_amount = 0.0;
         scene.atmosphere.texture_depth = 0.85;
@@ -685,7 +619,6 @@ fn textures_feed_materials_before_sampling() {
             Some(harmonigraph_scene::GlowTiming { now: 0.0, attack: 0.0, release: 0.0 });
         let texture_only = glow(&mut shooter, &scene);
         scene.atmosphere.material_settings.wash_size = 1.0;
-        scene.atmosphere.material_settings.scale_size = 1.0;
         scene.atmosphere.material_style = material;
         let combined = glow(&mut shooter, &scene);
         // Read the actual material input, proving order rather than just two visible effects.
@@ -787,7 +720,6 @@ fn stage_clocks_and_bypasses_are_independent_on_a_carried_pane() {
         (0.4, LatticeMaterial::None, 0.6),
         (0.4, LatticeMaterial::Watercolor, 0.0),
         (0.4, LatticeMaterial::Watercolor, 0.6),
-        (0.4, LatticeMaterial::Mosaic, 0.6),
     ] {
         scene.atmosphere.texture_depth = contrast;
         scene.atmosphere.material_style = material;
@@ -815,7 +747,6 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
     base.atmosphere.material_speed = 0.0;
     base.atmosphere.material_settings = MaterialSettings {
         wash_size: 2.0,
-        scale_size: 2.0,
         wash_fuzz: 0.5,
         wash_lobe: 0.5,
         wash_refract: 1.0,
@@ -840,9 +771,6 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
         (LatticeMaterial::Watercolor, "refraction", false, |s| s.wash_refract = 0.0),
         (LatticeMaterial::Watercolor, "fine layer", false, |s| s.wash_layers = 0.0),
         (LatticeMaterial::Watercolor, "random brightness", false, |s| s.wash_randomness = 1.0),
-        (LatticeMaterial::Mosaic, "variety", true, |s| s.scale_variety = 1.0),
-        (LatticeMaterial::Mosaic, "outward refraction", false, |s| s.scale_refract = 1.0),
-        (LatticeMaterial::Mosaic, "zero refraction", false, |s| s.scale_refract = 0.0),
     ] {
         let mut scene = scene(&[1.0, 1.0], 0.75, true);
         scene.atmosphere = base.atmosphere;
@@ -874,21 +802,36 @@ fn material_controls_change_light_and_only_geometry_controls_rebake() {
             "{style:?}/{label}: carried and fresh panes agree"
         );
     }
-    // The inactive style must neither change the picture nor rebake the tile.
-    for style in [LatticeMaterial::Watercolor, LatticeMaterial::Mosaic] {
-        base.atmosphere.material_style = style;
-        let before = glow(&mut shooter, &base);
-        let before_tile = tile(&shooter);
-        if style == LatticeMaterial::Watercolor {
-            base.atmosphere.material_settings.scale_variety = 0.0;
-        } else {
-            base.atmosphere.material_settings.wash_fuzz = 0.0;
-            base.atmosphere.material_settings.wash_lobe = 0.0;
-        }
-        shooter.shot_again(&base);
-        assert_eq!(before, read_glow(&shooter));
-        assert_eq!(before_tile, tile(&shooter));
+    // Scales bake no tile, so their dials only need to reach the light. Scale
+    // shape 0, or its scallop taper hides much of the corner; Tilt is turned
+    // over the squares, since a round body has no rotation to show.
+    let mut scene = scene(&[1.0, 1.0], 0.75, true);
+    scene.atmosphere = base.atmosphere;
+    scene.atmosphere.material_style = LatticeMaterial::VelvetScales;
+    scene.atmosphere.material_settings.velvet_shape = 0.0;
+    for (label, turn) in [
+        ("squareness", (|s: &mut MaterialSettings| s.velvet_square = 1.0) as Turn),
+        ("tilt", |s| s.velvet_tilt = 0.0),
+    ] {
+        let before = glow(&mut shooter, &scene);
+        turn(&mut scene.atmosphere.material_settings);
+        shooter.shot_again(&scene);
+        let after = read_glow(&shooter);
+        let changed = before
+            .chunks_exact(4)
+            .zip(after.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
+            .count();
+        assert!(changed > 100, "Scales/{label}: fixture must reach the effect ({changed} pixels)");
     }
+    // The inactive style must neither change the picture nor rebake the tile.
+    base.atmosphere.material_style = LatticeMaterial::Watercolor;
+    let before = glow(&mut shooter, &base);
+    let before_tile = tile(&shooter);
+    base.atmosphere.material_settings.velvet_variety = 0.0;
+    shooter.shot_again(&base);
+    assert_eq!(before, read_glow(&shooter));
+    assert_eq!(before_tile, tile(&shooter));
 }
 
 fn linear(gamma: f64) -> f64 {
@@ -1303,7 +1246,7 @@ fn stars_carried_material_and_profile_transitions_match_fresh_panes() {
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Medium, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Low, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::Uniform, 1.0),
-        (LatticeMaterial::Mosaic, 1.0, StarHaloProfile::Uniform, 1.0),
+        (LatticeMaterial::Watercolor, 1.0, StarHaloProfile::Uniform, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),
         (LatticeMaterial::Stars, 0.0, StarHaloProfile::P3, 1.0),
         (LatticeMaterial::Stars, 1.0, StarHaloProfile::P3, 1.0),

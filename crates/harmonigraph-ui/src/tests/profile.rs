@@ -397,7 +397,7 @@ fn profile_settings_panes() {
     // The Video pane's record button and progress bar only exist with a take
     // backend behind them.
     state.workspace.interaction.take.supported = true;
-    state.workspace.interaction.take.last_ready = true;
+    state.workspace.interaction.take.last_take = Some("music.take".into());
     let ctx = super::probe::themed();
 
     println!("\n-- one settings pane at 300 points wide, ms per frame --");

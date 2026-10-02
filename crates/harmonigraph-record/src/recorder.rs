@@ -3,10 +3,10 @@
 //! Keeping both endpoint structs here lets the writer construct their private
 //! state without exposing fields or adding a second wiring API.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 
-use harmonigraph_core::notes::{NoteEventKind, SourceId};
+use harmonigraph_core::notes::NoteEventKind;
 use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 
@@ -100,8 +100,8 @@ pub enum Entry {
     /// Sent once per pass, before any audio, so the header can say where
     /// the WAV sits relative to the notes.
     AudioStart(f64),
-    /// The transport jumped backwards: a loop wrapped, or the playhead
-    /// was dragged. Everything after this belongs to a different pass
+    /// The transport jumped: a loop wrapped, or the playhead was dragged.
+    /// Everything after this belongs to a different pass
     /// through the song, so the writer starts a new file rather than
     /// interleaving two performances at the same song positions.
     NewPass,
@@ -140,29 +140,16 @@ fn home_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
 }
 
-/// The two halves of [`RenderTrigger::AtBar`]: the bar the GUI asked the take
-/// to end at, and the latch the audio thread sets once the transport played
-/// through it.
-///
-/// One struct rather than two atomics because they are one setting, and every
-/// construction site of the [`Recorder`]/[`Control`] pair would otherwise carry
-/// both and be able to carry one.
-///
-/// `bar` is `f64` bits in an `AtomicU64`, which is what makes this writable
-/// from a GUI frame and readable from the audio thread without a lock. **Off is
-/// NaN, not zero**: zero is a bar, and a bar can only be crossed from below, so
-/// a zeroed "off" would be indistinguishable from the one value that is
-/// silently unreachable.
-///
-/// [`RenderTrigger::AtBar`]: harmonigraph_take::RenderTrigger::AtBar
+/// The stop bar requested by the GUI. Completion belongs to the take's
+/// single end-reason latch, just like a rewind or forward seek.
+/// NaN represents off so bar zero remains a valid target.
 struct StopAtBar {
     bar: AtomicU64,
-    hit: AtomicBool,
 }
 
 impl Default for StopAtBar {
     fn default() -> Self {
-        StopAtBar { bar: AtomicU64::new(f64::NAN.to_bits()), hit: AtomicBool::new(false) }
+        StopAtBar { bar: AtomicU64::new(f64::NAN.to_bits()) }
     }
 }
 
@@ -190,7 +177,7 @@ impl StopAtBar {
 /// arming edge ([`Recorder::update_armed`]) and the GUI clears them when it
 /// sends `Start` ([`Control::start`]) — because either can go first, and a take
 /// that armed before its command landed would otherwise read as already under
-/// way. What is not on purpose is two hand-written copies of the same four
+/// way. What is not on purpose is two hand-written copies of the same reset
 /// stores, which is how one of them comes to be missing a latch the other
 /// gained (#895).
 #[derive(Default)]
@@ -203,28 +190,36 @@ struct TakeLatches {
     /// Transport-stop countdown (`Control::has_rolled`). Whether an owed split
     /// has a pass to split from is the lifecycle's own `Waiting` state.
     rolled: AtomicBool,
-    /// Published for the GUI: the transport went backwards and the take is done
-    /// — the GUI reads this, stops, and renders the one pass.
-    hit_rewind: AtomicBool,
-    /// The bar the GUI wants the take to end at, and the latch saying it did.
+    /// One exclusive lifecycle completion, published for automatic Stop.
+    /// Zero means still open; the other values are `End`.
+    end: AtomicU8,
+    /// The bar the GUI wants the take to end at.
     /// See [`StopAtBar`] and [`Recorder::observe_bar`].
     stop_at_bar: StopAtBar,
 }
 
 impl TakeLatches {
-    /// Clear what the previous take left behind, so neither end latch can end
+    fn end(&self) -> Option<End> {
+        match self.end.load(Ordering::Relaxed) {
+            1 => Some(End::Rewind),
+            2 => Some(End::Bar),
+            3 => Some(End::ForwardSeek),
+            _ => None,
+        }
+    }
+
+    /// Clear what the previous take left behind, so its end reason cannot end
     /// this one before the transport even rolls — nor its note count, which
     /// would read as this take being under way.
     ///
     /// The stop BAR itself is not here: it is the GUI's setting for the take
     /// about to run, written every frame, and clearing it would disarm the
-    /// trigger at the moment it is needed. Only the latch saying the bar was
-    /// crossed belongs to the finished take.
+    /// trigger at the moment it is needed. The completion reason belongs to
+    /// the finished take.
     fn clear(&self) {
         self.captured.store(0, Ordering::Relaxed);
         self.rolled.store(false, Ordering::Relaxed);
-        self.hit_rewind.store(false, Ordering::Relaxed);
-        self.stop_at_bar.hit.store(false, Ordering::Relaxed);
+        self.end.store(0, Ordering::Relaxed);
     }
 }
 
@@ -252,11 +247,6 @@ pub struct Recorder {
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, recorded beside every take's notes.
     audio: rtrb::Producer<f32>,
-    /// Whether an armed take reads the selected audio. Always true behind the
-    /// writer thread's [`channel`]: every take records audio. Only the
-    /// in-memory `testing` channel arms without it, for the fixtures whose
-    /// `FileWriter` opens no WAV.
-    with_audio: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// Last value written per parameter, so only changes are recorded.
     /// Reset to NaN on arm so the first block of a take always writes a
@@ -473,10 +463,9 @@ impl Recorder {
         self.run
     }
 
+    /// Every armed take records audio, until the take has failed.
     pub fn wants_audio(&self) -> bool {
-        self.lifecycle.armed()
-            && self.with_audio.load(Ordering::Relaxed)
-            && !self.fence.failed.load(Ordering::Acquire)
+        self.lifecycle.armed() && !self.fence.failed.load(Ordering::Acquire)
     }
 
     /// Declare where the audio about to be written sits in take time.
@@ -541,6 +530,12 @@ impl Recorder {
     /// A tiny manual scrub in that interval is indistinguishable from export:
     /// it records one block and can qualify a subsequent rewind as the take's
     /// end. Repeated accepted tiny scrubs record one block each.
+    ///
+    /// A forward gap beyond 50 ms from the accepted audio's end starts a new
+    /// pass under manual/AtBar recording. One-file triggers finish the existing
+    /// prefix instead and report the cutoff with the automatic render. Parked
+    /// observations preserve that audio end, so seek-and-resume has the same
+    /// behavior as seeking during playback.
     ///
     /// Any stopped backward movement is a rewind, including the restore of a
     /// single accepted export block. Playing hosts retain the
@@ -624,10 +619,7 @@ impl Recorder {
         self.lifecycle = next.state;
         self.history = next.history;
         if let Action::Complete(end) = next.action {
-            match end {
-                End::Rewind => self.latches.hit_rewind.store(true, Ordering::Relaxed),
-                End::Bar => self.latches.stop_at_bar.hit.store(true, Ordering::Relaxed),
-            }
+            self.latches.end.store(end as u8, Ordering::Relaxed);
             self.rolling.store(false, Ordering::Relaxed);
         }
         next.action
@@ -719,7 +711,7 @@ pub struct Control {
     /// One line for the UI, owned by whichever side last had news.
     status: Arc<Mutex<String>>,
     /// Path of the take most recently finished this session — the target for
-    /// [`render_now`](Self::render_now).
+    /// [`queue_export`](Self::queue_export).
     last_take: Arc<Mutex<Option<std::path::PathBuf>>>,
     recording: Arc<AtomicBool>,
     /// Set by the audio thread; the GUI's only honest view of whether
@@ -773,7 +765,7 @@ impl Control {
     /// Whether the audio thread saw the transport go backwards and ended the
     /// take — the GUI's cue to stop recording and render the one pass.
     pub fn hit_rewind(&self) -> bool {
-        self.latches.hit_rewind.load(Ordering::Relaxed)
+        self.latches.end() == Some(End::Rewind)
     }
 
     /// The bar to end the take at, or `None` for every trigger but
@@ -787,7 +779,13 @@ impl Control {
     /// Whether the audio thread played the take through its stop bar and ended
     /// it there — the GUI's cue to stop recording and render.
     pub fn hit_stop_bar(&self) -> bool {
-        self.latches.stop_at_bar.hit.load(Ordering::Relaxed)
+        self.latches.end() == Some(End::Bar)
+    }
+
+    /// An audio-owned completion remains authoritative even if the GUI's
+    /// trigger changes before it observes the completed prefix.
+    pub fn has_ended(&self) -> bool {
+        self.latches.end().is_some()
     }
 
     /// Whether the audio thread last saw the transport moving.
@@ -809,38 +807,30 @@ impl Control {
         self.last_take.lock().clone()
     }
 
-    /// Render the last finished take now, in the background, with `request`
-    /// (which carries the current look and output size).
-    pub fn render_now(&self, request: RenderRequest) {
-        match self.last_take() {
-            Some(path) => spawn_render(
-                request,
-                path,
-                self.status.clone(),
-                self.progress.clone(),
-                self.render.clone(),
-            ),
-            None => *self.status.lock() = "no take recorded yet to render".into(),
-        }
+    /// Append an independent export with settings already captured by the caller.
+    pub fn queue_export(&self, path: std::path::PathBuf, request: RenderRequest) {
+        spawn_render(
+            request,
+            path,
+            self.status.clone(),
+            self.progress.clone(),
+            self.render.clone(),
+        );
     }
-
-    /// How far the render running in the background has got, or `None` when
-    /// none is. Read every GUI frame; see [`Progress`].
-    pub fn render_progress(&self) -> Option<harmonigraph_take::RenderProgress> {
-        self.progress.read()
+    pub fn export_jobs(&self) -> Vec<harmonigraph_take::render::ExportJob> {
+        self.render.snapshots(&self.progress)
     }
-
-    /// Stop the render running in the background and throw away the part of
-    /// the video it had written.
-    ///
-    /// The deletion is the render thread's own — see
-    /// [`RenderControl::cancel`]. A video an EARLIER render finished is not
-    /// touched: only the run in flight has anything half-written, and the
-    /// finished one is a file that came out whole.
-    pub fn cancel_render(&self) {
-        if self.render.cancel() {
-            *self.status.lock() = "render cancelled — the part-written video goes with it".into();
-        }
+    pub fn cancel_export(&self, id: u64) {
+        self.render.cancel_job(id);
+    }
+    pub fn retry_export(&self, id: u64) {
+        self.render.retry(id, self.status.clone(), self.progress.clone());
+    }
+    pub fn clear_finished_exports(&self) {
+        self.render.clear_finished();
+    }
+    pub fn shutdown_exports(&self) {
+        self.render.shutdown();
     }
 
     /// Begin a take. `appearance` is the appearance document that decides how the
@@ -877,7 +867,7 @@ impl Control {
             .unwrap_or(0);
         let base =
             dir.join(format!("take-{}.{}", stamp_for(epoch_secs), harmonigraph_take::EXTENSION));
-        let path = disambiguate(base);
+        let path = base;
         let header = header_for(sample_rate, appearance);
 
         self.dropped.store(0, Ordering::Relaxed);
@@ -1004,23 +994,6 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year = if month <= 2 { y + 1 } else { y };
     (year, month, day)
-}
-
-/// If `base` (or its `.wav` companion) already sits on disk — two takes
-/// started within the same UTC second — append `_1`, `_2`, ... until a name
-/// neither file uses, rather than let the second take silently truncate the
-/// first's. Distinct from the writer's `Pass::path_for` suffix `-N`, which numbers later
-/// PASSES of one take rather than takes that collided on a name.
-fn disambiguate(base: std::path::PathBuf) -> std::path::PathBuf {
-    let taken = |path: &std::path::Path| path.exists() || path.with_extension("wav").exists();
-    if !taken(&base) {
-        return base;
-    }
-    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("take").to_owned();
-    (1..)
-        .map(|n| base.with_file_name(format!("{stem}_{n}.{}", harmonigraph_take::EXTENSION)))
-        .find(|candidate| !taken(candidate))
-        .expect("an unbounded counter always finds a free name")
 }
 
 /// Where takes go. `LATTICE_TAKE_DIR` overrides; the default is a fixed,

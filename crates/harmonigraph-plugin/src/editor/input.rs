@@ -82,7 +82,7 @@ impl LiveInput {
         self.audio_consumer.drain(|block, samples| {
             let position = (block.epoch, block.first_frame);
             if self.audio_position != Some(position) {
-                runtime.spectrum.restart_source(block.format.channels, block.format.sample_rate);
+                runtime.spectrum.restart_source();
                 self.audio_origin =
                     block.origin + block.first_frame as f64 / f64::from(block.format.sample_rate);
             }

@@ -99,7 +99,8 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // section's Fade rather than at the instant the level crosses. Both are in
     // the hover text for the same reason — a bar that looks inert on the node
     // you are watching is a bar that reads as broken.
-    crate::widgets::threshold(ui, &mut view.spectral_ring_gate, &mut view.spectral_ring_hysteresis);
+    crate::widgets::threshold(ui, &mut view.spectral_ring_gate, &mut view.spectral_ring_hysteresis)
+        .on_hover_text("MIDI notes always show their rings. For other nodes, the loudest wedge opens the ring at this threshold; hysteresis sets the closing threshold. Ring visibility follows Note fade.");
     crate::widgets::response(
         ui,
         &mut view.spectral_ring_attack,
@@ -107,7 +108,7 @@ pub(super) fn audio_ring(ui: &mut egui::Ui, view: &mut ViewConfig) {
         SPECTRAL_BALLISTICS_MAX,
         ["Ring attack", "Ring release"],
         1000.0,
-    );
+    ).on_hover_text("Ring attack and release smooth the ring levels after the Analyzer’s Live attack and release.");
     // The FOLD's kernel, and so inert under Spectrum rather than merely
     // without audio: the spectrum reading shows a whole window of pitch per
     // wedge, and a kernel there would blur the one axis the window exists to
@@ -185,6 +186,16 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
         .on_hover_text(
             "Space between concentric layers and between octave sectors, as a percentage of the node radius. \
                      0% joins both layers and sectors.",
+        );
+    // L*, shared with the gradient brightness scale. Black is a colour here;
+    // layer width, rather than brightness, controls whether a ring exists.
+    ValueBar::new(&mut view.lattice_ground, 0.0..=100.0, "Silent slice brightness")
+        .unit(1.0, "%")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "Brightness of silent MIDI octave slices in sounding or fading nodes, and the audio ring's quiet endpoint. \
+             0% is black, 100% is white. Idle lattice positions have their own label/cross brightness.",
         );
 }
 

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
 use crate::canonical::VoiceBaseline;
-use crate::canonical::{CanonicalEvent, InvalidCanonical, SourceBaseline};
+use crate::canonical::{CanonicalEvent, CanonicalOrder, InvalidCanonical, SourceBaseline};
 use crate::history::NoteHistory;
 use crate::roll::NoteRoll;
 use crate::tuning::PitchClass;
@@ -605,7 +605,7 @@ pub struct NoteTracker {
     released: Vec<Voice>,
     history: NoteHistory,
     roll: NoteRoll,
-    canonical: BTreeMap<SourceId, CanonicalCursor>,
+    canonical: CanonicalOrder,
     hidden_sources: BTreeSet<SourceId>,
     certainty: Certainty,
 }
@@ -673,13 +673,6 @@ impl Certainty {
     }
 }
 
-#[derive(Default)]
-struct CanonicalCursor {
-    output: u64,
-    baseline: u64,
-    state_cut: u64,
-}
-
 impl NoteTracker {
     pub fn new() -> Self {
         Self::default()
@@ -709,17 +702,8 @@ impl NoteTracker {
                 let original_onset = delta.event.time;
                 delta.event.time += offset;
                 delta.validate()?;
-                if delta.sequence != 0 {
-                    let cursor = self.canonical.entry(delta.event.source).or_default();
-                    if delta.sequence <= cursor.output {
-                        return Ok(false);
-                    }
-                    // Available history must precede its baseline. A baseline
-                    // is not permission to silently discard late history.
-                    if delta.sequence <= cursor.state_cut {
-                        return Err(InvalidCanonical);
-                    }
-                    cursor.output = delta.sequence;
+                if !self.canonical.note(delta.event.source, delta.sequence)? {
+                    return Ok(false);
                 }
                 let key = delta.event.key();
                 if matches!(delta.event.kind, NoteEventKind::Off) && delta.lifetime != 0 {
@@ -792,12 +776,8 @@ impl NoteTracker {
         let mut mapped = *frame;
         mapped.translate(offset);
         mapped.validate()?;
-        if self.canonical.get(&frame.source).is_some_and(|cursor| frame.id <= cursor.baseline) {
+        if !self.canonical.baseline(frame.source, frame.id, frame.output_cut)? {
             return Ok(false);
-        }
-        if self.canonical.get(&frame.source).is_some_and(|cursor| cursor.output > frame.output_cut)
-        {
-            return Err(InvalidCanonical);
         }
         let voices = frame.voices();
         if frame.shown {
@@ -863,9 +843,6 @@ impl NoteTracker {
             voice.set_pitch(row.pitch());
             voice.expressions = row.expressions;
         }
-        let cursor = self.canonical.entry(frame.source).or_default();
-        cursor.baseline = frame.id;
-        cursor.state_cut = frame.output_cut;
         self.certainty.restore(frame.source);
 
         Ok(true)
@@ -892,7 +869,7 @@ impl NoteTracker {
         match &self.certainty {
             Certainty::AllBut(doubted) => !doubted.is_empty(),
             Certainty::NoneBut(restored) => {
-                restored.is_empty() || self.canonical.keys().any(|s| !restored.contains(s))
+                restored.is_empty() || self.canonical.sources().any(|s| !restored.contains(&s))
             }
         }
     }
