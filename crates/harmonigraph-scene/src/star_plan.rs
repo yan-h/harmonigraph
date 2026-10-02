@@ -113,11 +113,9 @@ pub struct StarDepthPlan {
     pub radius: f32,
     /// What the dials ask for.
     pub wanted: f32,
-    /// The star's shape ([`star_profile`]): its solid share between
-    /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`],
-    /// and [`StarSettings::star_glow_falloff`].
+    /// The star's solid share ([`star_profile`]), between
+    /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`].
     pub solid: f32,
-    pub falloff: f32,
     /// Which of [`StarPlan::halo_tiers`] a [`StarGather::Three`] halo is
     /// drawn at.
     pub tier: usize,
@@ -196,7 +194,6 @@ impl StarSettings {
                     let (far, near) = (self.star_solid_far, self.star_solid_near);
                     far + (near - far) * depth(k, size)
                 },
-                falloff: self.star_glow_falloff,
                 tier,
             }
         });

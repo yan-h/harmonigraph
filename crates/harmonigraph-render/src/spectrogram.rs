@@ -1864,7 +1864,7 @@ mod tests {
     /// them, and of texels in every reduced star image too, so resampling is
     /// not read as a move. No one profile is whole at 8 pixels everywhere
     /// (Medium's nearest halo at 45% would move 3.6 texels), so the field is
-    /// drawn twice: Medium with every depth small enough to read 2x2, for its
+    /// drawn twice: Medium with no depth big enough to read 3x3, for its
     /// far 50% and near 75% images (4 and 6 texels), and Uniform at 50%, for
     /// the 3x3 halos (4). A longer step instead moves fading stars past the
     /// threshold. Lives are long and the step short, so a star's fade moves a

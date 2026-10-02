@@ -255,7 +255,7 @@ pub(crate) fn star_slices(
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
-    let jitter = settings.star_jitter;
+    let (jitter, bend) = (settings.star_jitter, star_falloff_bend(settings.star_glow_falloff));
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
@@ -275,7 +275,7 @@ pub(crate) fn star_slices(
             radius: depth.radius,
             solid: depth.solid,
             ramp: 1.0 / (1.0 - depth.solid),
-            bend: star_falloff_bend(depth.falloff),
+            bend,
             base: layout.bases[k] as i32,
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
