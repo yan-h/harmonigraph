@@ -4,24 +4,23 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AnimationOrder {
-    #[default]
-    Simultaneous,
     Circular,
+    #[default]
     Bidirectional,
     RandomStagger,
 }
 impl AnimationOrder {
     /// Every order, for the settings picker and the sweeps that compare them.
     /// Guarded exhaustively so the settings picker cannot miss a new variant.
-    pub const ALL: [Self; 4] = {
+    pub const ALL: [Self; 3] = {
         const fn covered(order: AnimationOrder) {
             use AnimationOrder::*;
             match order {
-                Simultaneous | Circular | Bidirectional | RandomStagger => (),
+                Circular | Bidirectional | RandomStagger => (),
             }
         }
-        covered(AnimationOrder::Simultaneous);
-        [Self::Simultaneous, Self::Circular, Self::Bidirectional, Self::RandomStagger]
+        covered(AnimationOrder::Bidirectional);
+        [Self::Circular, Self::Bidirectional, Self::RandomStagger]
     };
 }
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
@@ -43,7 +42,7 @@ impl Default for NoteAnimationConfig {
 }
 impl NoteAnimationConfig {
     pub fn staggers(self) -> bool {
-        self.order != AnimationOrder::Simultaneous && self.stagger_spread > 0.0
+        self.stagger_spread > 0.0
     }
     /// The finite, bounded pose the renderer is handed, for the shells that
     /// never cross the persist door — `derive_scene` copies this config into
@@ -88,7 +87,6 @@ impl NoteAnimationConfig {
         let mut ranks = [0.0f32; 11];
         for (i, rank) in ranks.iter_mut().enumerate().take(span) {
             *rank = match self.order {
-                AnimationOrder::Simultaneous => 0.0,
                 // Slice zero is the lowest displayed pitch and `i` walks
                 // upward, so this starts at the low/high seam and sweeps low
                 // to high.

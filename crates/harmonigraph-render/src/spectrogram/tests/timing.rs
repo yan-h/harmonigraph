@@ -29,7 +29,7 @@
 //! also mean these durations are not end-to-end DAW frame times.
 //!
 //! `PROBE_SPAN_SEMITONES` (default 96) is how much of the spectrum the pane
-//! shows, and `PROBE_PITCH_SOFTNESS`, `PROBE_TIME_SOFTNESS` and `PROBE_SPREAD`
+//! shows, and `PROBE_PITCH_SOFTNESS` and `PROBE_TIME_SOFTNESS`
 //! replace the light field's own dials in every case that draws one — which is
 //! what replays a SAVED pane's settings instead of the fresh ones. They
 //! override a case's `turn`, so a control that works by turning a softness to
@@ -188,7 +188,6 @@ fn cloud_costs_by_style_and_dial() {
     let blur_time_step = dial("PROBE_BLUR_TIME_STEP");
     let pitch_softness = dial("PROBE_PITCH_SOFTNESS");
     let time_softness = dial("PROBE_TIME_SOFTNESS");
-    let spread = dial("PROBE_SPREAD");
     crate::shader_assets::initialize();
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
@@ -369,9 +368,6 @@ fn cloud_costs_by_style_and_dial() {
                 }
                 if let Some(time_softness) = time_softness {
                     settings.time_softness = time_softness;
-                }
-                if let Some(spread) = spread {
-                    settings.spread = spread;
                 }
                 SpectrogramAtmosphere {
                     settings,

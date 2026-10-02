@@ -348,7 +348,6 @@ impl MaterialSettings {
 pub struct SpectralAtmosphere {
     pub pitch_softness: f32,
     pub time_softness: f32,
-    pub spread: f32,
     /// How coarse the blurred light field's TIME axis may be, in slabs per
     /// source texel, 0 for off. A PERFORMANCE dial, and the one that spends
     /// time resolution.
@@ -736,11 +735,10 @@ impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
             // The Stars look captured from the DAW on 2026-09-26: a sharp
-            // field with no time blur or spread, and the Wash and Scales
+            // field with no time blur, and the Wash and Scales
             // controls below riding inert at their captured values.
             pitch_softness: 6.726_529_6,
             time_softness: 0.0,
-            spread: 0.0,
             // One texel a slab: Yan judged it live at a 600 s Span (2026-09-20),
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
@@ -782,7 +780,6 @@ impl SpectralAtmosphere {
         );
         self.time_softness =
             clamp(self.time_softness, fresh.time_softness, TIME_SOFTNESS_MIN, TIME_SOFTNESS_MAX);
-        self.spread = clamp(self.spread, fresh.spread, 0.0, 1.0);
         // Snapped to halves for the reason [`BLUR_TIME_STEP_MAX`] gives: five
         // resolutions to compare, not a continuum to hunt through.
         self.blur_time_step =
@@ -855,15 +852,6 @@ impl SpectralAtmosphere {
     }
 }
 
-/// A pattern applied to combined note light before material displacement.
-/// `None` reaches the shader as zero pattern depth.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum LatticeTexture {
-    #[default]
-    Clouds,
-    None,
-}
-
 /// A material sampling the textured glow; None bypasses the material pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
@@ -875,13 +863,13 @@ pub enum LatticeMaterial {
     VelvetScales = 4,
 }
 
-/// Pickup width and edge softness, in node radii. Independent of ordinary shadows.
-pub const SHADOW_PICKUP_SIZE_MAX: f32 = 8.0;
+/// Pigment's outer reach from a ring segment, in node radii.
+/// Covers the former maximum half-width plus feather distance.
+pub const PIGMENT_REACH_MAX: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
-    pub texture: LatticeTexture,
     /// Replaces the retired combined `material` key, which serde ignores.
     pub material_style: LatticeMaterial,
     pub material_amount: f32,
@@ -889,10 +877,9 @@ pub struct AtmosphereSettings {
     pub material_shadow_pickup: f32,
     /// Pitch-colored pigment from lit segments, sampled by the material.
     pub material_color_pickup: f32,
-    /// Full width of the pigment band, in node radii.
-    pub material_shadow_width: f32,
-    /// Feather distance beyond each band edge, in node radii.
-    pub material_shadow_softness: f32,
+    /// Pigment reach from a ring segment, in node radii; zero disables pickup.
+    /// The fixed band/feather ratio preserves the captured 1.5-wide, 2.0-soft profile.
+    pub pigment_reach: f32,
     pub material_settings: MaterialSettings,
     pub stars: StarSettings,
     pub material_speed: f32,
@@ -907,13 +894,11 @@ pub struct AtmosphereSettings {
 impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
-            texture: LatticeTexture::Clouds,
             material_style: LatticeMaterial::None,
             material_amount: 1.0,
             material_shadow_pickup: 0.0,
             material_color_pickup: 0.0,
-            material_shadow_width: 1.5,
-            material_shadow_softness: 2.0,
+            pigment_reach: 2.75,
             material_settings: MaterialSettings::default(),
             stars: StarSettings::default(),
             material_speed: MATERIAL_SPEED_DEFAULT,
@@ -928,6 +913,16 @@ impl Default for AtmosphereSettings {
 }
 
 impl AtmosphereSettings {
+    /// Fixed profile at the captured proportions. Divide before multiplying so
+    /// the default reach reproduces width 1.5 and softness 2.0 exactly.
+    pub fn pigment_width(self) -> f32 {
+        (self.pigment_reach / 2.75) * 1.5
+    }
+
+    pub fn pigment_softness(self) -> f32 {
+        (self.pigment_reach / 2.75) * 2.0
+    }
+
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
         let clamp = |value: f32, fallback: f32, low, high| {
@@ -942,18 +937,7 @@ impl AtmosphereSettings {
             clamp(self.material_color_pickup, fresh.material_color_pickup, 0.0, 1.0);
         self.material_shadow_pickup =
             clamp(self.material_shadow_pickup, fresh.material_shadow_pickup, 0.0, 1.0);
-        self.material_shadow_width = clamp(
-            self.material_shadow_width,
-            fresh.material_shadow_width,
-            0.0,
-            SHADOW_PICKUP_SIZE_MAX,
-        );
-        self.material_shadow_softness = clamp(
-            self.material_shadow_softness,
-            fresh.material_shadow_softness,
-            0.0,
-            SHADOW_PICKUP_SIZE_MAX,
-        );
+        self.pigment_reach = clamp(self.pigment_reach, fresh.pigment_reach, 0.0, PIGMENT_REACH_MAX);
         self.material_settings = self.material_settings.sanitized();
         self.stars = self.stars.sanitized();
         self.material_speed =

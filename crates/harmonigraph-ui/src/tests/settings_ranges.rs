@@ -66,7 +66,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         }
     }
     poison!(a.view.atmosphere; texture_depth, texture_scale, texture_speed, material_amount, material_speed, material_direction,
-        material_shadow_pickup, material_color_pickup, material_shadow_width, material_shadow_softness,
+        material_shadow_pickup, material_color_pickup, pigment_reach,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -97,7 +97,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // reach them. #933's contract is that a size the bar can offer is a size
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, blur_time_step, contour_strength, contours, contour_softness,
             cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, wash_pool, wash_pool_width,
             wash_pool_softness
     );
@@ -272,8 +272,8 @@ fn scenarios() -> Vec<Scenario> {
             // Mapped source weights are exercised in the enabled scenario.
             panes::Tab::Mappings => 2 + 3,
             // The picture, then the background glow and breathing (10) with its texture
-            // switched off, then two Gaussian shadow groups of three bars each.
-            panes::Tab::LatticeSettings => 15 + 1 + 10 + 6,
+            // at zero contrast (3), then two Gaussian shadow groups of three bars each.
+            panes::Tab::LatticeSettings => 15 + 1 + 10 + 3 + 6,
             // The analyzer's view and axes (5) and analysis (3) with the
             // spectrogram and ribbons switched off, the Spiral's bloom, two
             // shadow groups.
@@ -289,21 +289,21 @@ fn scenarios() -> Vec<Scenario> {
         // spread in each of a page's two groups).
         let visits = match pane {
             panes::Tab::Mappings => visits + 8,
-            panes::Tab::LatticeSettings => visits + 3 + 6,
-            // ...the spectrogram's twenty (the wash's nine among them), the
+            panes::Tab::LatticeSettings => visits + 6,
+            // ...the spectrogram's nineteen (the wash's nine among them), the
             // ribbons' five, and the backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 20 + 5 + 2,
+            panes::Tab::AnalyzerSettings => visits + 19 + 5 + 2,
             _ => visits,
         };
         cases.push(Scenario { pane, visits, enabled: true, ..base });
     }
     // Lattice materials share the spectrogram geometry bars, plus amount, speed,
-    // direction and four independent pigment controls.
+    // direction and three pigment controls.
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 3,
         ..base
     });
     for profile in [
@@ -326,7 +326,7 @@ fn scenarios() -> Vec<Scenario> {
                 + 6
                 + 2
                 + 16
-                + 4
+                + 3
                 + usize::from(profile == harmonigraph_scene::StarHaloProfile::Uniform),
             ..base
         });
@@ -337,14 +337,14 @@ fn scenarios() -> Vec<Scenario> {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::VelvetScales,
         enabled: true,
-        visits: 13 + 20 + 5 + 2 + 2 - 9 + 7,
+        visits: 13 + 19 + 5 + 2 + 2 - 9 + 7,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::VelvetScales,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 7 + 4,
+        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 7 + 3,
         ..base
     });
     // Stars replace the wash's bars and shared Drift speed. Only the Uniform
@@ -361,7 +361,7 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile,
             expanded: true,
             enabled: true,
-            visits: 13 + 20 + 5 + 2 + 2 - 9 - 1 + bars,
+            visits: 13 + 19 + 5 + 2 + 2 - 9 - 1 + bars,
             ..base
         });
     }
@@ -418,11 +418,9 @@ fn check(edge: Edge) {
         a.spectrum.atmosphere.cloud_style = scenario.style;
         a.spectrum.atmosphere.stars.star_halo_profile = scenario.halo_profile;
         a.view.atmosphere.stars.star_halo_profile = scenario.halo_profile;
-        a.view.atmosphere.texture = if scenario.enabled {
-            harmonigraph_scene::LatticeTexture::Clouds
-        } else {
-            harmonigraph_scene::LatticeTexture::None
-        };
+        if !scenario.enabled {
+            a.view.atmosphere.texture_depth = 0.0;
+        }
         a.view.atmosphere.material_style = scenario.material;
         for style in a.view.shadow.groups_mut() {
             style.kernel =

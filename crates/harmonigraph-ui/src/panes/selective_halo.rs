@@ -243,8 +243,7 @@ mod tests {
         view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
         view.atmosphere.material_amount = 1.0;
         view.atmosphere.material_color_pickup = 1.0;
-        view.atmosphere.material_shadow_width = 8.0;
-        view.atmosphere.material_shadow_softness = 8.0;
+        view.atmosphere.pigment_reach = 12.0;
         for key in [64, 68] {
             state.runtime.tracker.handle_event(NoteEvent::on(0.0, SourceId::DIRECT, 0, key, 1.0));
         }

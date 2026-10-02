@@ -1,8 +1,8 @@
 //! Independent texture and material stages in the lattice's background glow.
 
 use harmonigraph_scene::{
-    AtmosphereSettings, LatticeMaterial, LatticeTexture, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN,
-    NEBULA_SPEED_MAX, NEBULA_SPEED_MIN, SHADOW_PICKUP_SIZE_MAX,
+    AtmosphereSettings, LatticeMaterial, NEBULA_SCALE_MAX, NEBULA_SCALE_MIN, NEBULA_SPEED_MAX,
+    NEBULA_SPEED_MIN, PIGMENT_REACH_MAX,
 };
 
 pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewConfig) {
@@ -19,11 +19,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             );
         }
         ui.add_enabled_ui(glow_enabled, |ui| {
-        choice_row(ui, "Pattern", &mut settings.texture, &[
-            (LatticeTexture::None, "None", "Smooth note light; keeps the pattern settings"),
-            (LatticeTexture::Clouds, "Clouds", "Softly drifting clouds in the note light"),
-        ]);
-        if settings.texture != LatticeTexture::None {
             ValueBar::new(&mut settings.texture_depth, 0.0..=1.0, "Pattern contrast")
                 .percent().show(ui).on_hover_text("Pattern contrast before the material shapes the light. 0% restores smooth halos; material settings remain active.");
             ValueBar::new(&mut settings.texture_scale, NEBULA_SCALE_MIN..=NEBULA_SCALE_MAX, "Pattern size")
@@ -33,11 +28,9 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 .on_hover_text("Larger values make broader patterns. The material can reshape this pattern.");
             multiplier(ui, &mut settings.texture_speed, "Pattern speed", NEBULA_SPEED_MIN..=NEBULA_SPEED_MAX)
                 .on_hover_text("Pattern motion before the material. 0 freezes this motion; notes and the material can still change the picture.");
-        }
         crate::widgets::button_row(ui, |ui| {
-            if ui.button("Reset pattern").on_hover_text("Reset only the pattern choice, contrast, size and speed.").clicked() {
+            if ui.button("Reset pattern").on_hover_text("Reset only the pattern contrast, size and speed.").clicked() {
                 let fresh = AtmosphereSettings::default();
-                settings.texture = fresh.texture;
                 settings.texture_depth = fresh.texture_depth;
                 settings.texture_scale = fresh.texture_scale;
                 settings.texture_speed = fresh.texture_speed;
@@ -66,10 +59,8 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 .percent().show(ui).on_hover_text("Dark pigment behind unlit ring segments, picked up by the material. Fades as each segment lights up. Actual ring and label shadows keep their own settings.");
             ValueBar::new(&mut settings.material_color_pickup, 0.0..=1.0, "Color pickup")
                 .percent().show(ui).on_hover_text("Pitch-colored pigment behind lit ring segments, picked up by the material. Follows each segment’s activation and Bloom brightness. Spreads by distance around the segment, including its ends. 0% disables colored pickup.");
-            ValueBar::new(&mut settings.material_shadow_width, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup width")
-                .percent().show(ui).on_hover_text("Full width of the pigment source band, as a percentage of the node radius. Up to 800% for broad washes. 0% disables pickup; actual shadow width is unchanged.");
-            ValueBar::new(&mut settings.material_shadow_softness, 0.0..=SHADOW_PICKUP_SIZE_MAX, "Pickup softness")
-                .percent().show(ui).on_hover_text("Soft fade by distance around each segment, including its rounded ends, as a percentage of the node radius. Up to 800% for very diffuse pigment. Does not alter the actual shadow.");
+            ValueBar::new(&mut settings.pigment_reach, 0.0..=PIGMENT_REACH_MAX, "Pigment reach")
+                .percent().show(ui).on_hover_text("Distance pigment reaches from each ring segment, as a percentage of the node radius. Grows the source band and its soft feather together. 0% disables dark and colored pickup; actual shadows are unchanged.");
             // Stars put their look first: size and spacing matter more than
             // how they drift, and the rendering profile comes last.
             let stars = settings.material_style == LatticeMaterial::Stars;
@@ -106,8 +97,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                 settings.material_amount = fresh.material_amount;
                 settings.material_shadow_pickup = fresh.material_shadow_pickup;
                 settings.material_color_pickup = fresh.material_color_pickup;
-                settings.material_shadow_width = fresh.material_shadow_width;
-                settings.material_shadow_softness = fresh.material_shadow_softness;
+                settings.pigment_reach = fresh.pigment_reach;
                 settings.material_settings = fresh.material_settings;
                 settings.stars = fresh.stars;
                 settings.material_speed = fresh.material_speed;

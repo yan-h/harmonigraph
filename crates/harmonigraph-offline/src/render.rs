@@ -885,7 +885,6 @@ mod tests {
             // leaves half of it on black.
             a.pitch_softness = 35.0;
             a.time_softness = 120.0;
-            a.spread = 0.25;
             // Fast enough that a second of render carries the field a visible
             // way: at 1x the whole run is a fraction of one glob. The
             // stars take their own speed, and their nearest at its top is as
@@ -962,7 +961,7 @@ mod tests {
         assert_eq!(first.len(), 6);
         assert_eq!(first[1], first[5], "no independent background motion in silence");
         let mut appearance = AppearanceDocument::default();
-        appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+        appearance.view.atmosphere.texture_depth = 0.0;
         silent.header.appearance = Some(appearance.serialize());
         let off = render_take(silent, &settings).expect("the same GPU is available");
         assert_eq!(first, off, "atmosphere must not create light without notes");

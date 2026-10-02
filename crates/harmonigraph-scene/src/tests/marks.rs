@@ -368,13 +368,20 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
 /// would read as a second thing happening.
 #[test]
 fn a_lone_notes_mark_fades_out_with_it() {
-    for order in AnimationOrder::ALL {
+    for (order, spread) in AnimationOrder::ALL
+        .into_iter()
+        .flat_map(|o| [0.0, NoteAnimationConfig::default().stagger_spread].map(|s| (o, s)))
+    {
         let mut motion = NodeMotion::default();
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(1.0, 60));
         let view = ViewConfig {
-            note_animation: NoteAnimationConfig { order, ..NoteAnimationConfig::default() },
+            note_animation: NoteAnimationConfig {
+                order,
+                stagger_spread: spread,
+                ..NoteAnimationConfig::default()
+            },
             ..delayed_view(0.0)
         };
         let frame = attack_frame();
@@ -389,7 +396,7 @@ fn a_lone_notes_mark_fades_out_with_it() {
             let (melody, bass, octave) = at(now);
             assert_eq!(melody, bass, "{order:?}: both marks at {now}");
             assert_eq!(melody, octave, "{order:?}: mark and sector at {now}");
-            if order == AnimationOrder::Simultaneous && step == 5 {
+            if spread == 0.0 && step == 5 {
                 assert!((melody - 0.5).abs() < 1e-5, "half gone: {melody}");
             }
         }

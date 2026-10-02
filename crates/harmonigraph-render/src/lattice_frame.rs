@@ -163,7 +163,7 @@ impl LatticeCallback {
         let pickup_enabled = lights
             && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
             && atmosphere.material_amount > 0.0
-            && atmosphere.material_shadow_width > 0.0;
+            && atmosphere.pigment_reach > 0.0;
         let paints = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || (lights && g.glow[0] > 0.0)
@@ -513,11 +513,7 @@ impl LatticeCallback {
                     bytemuck::Zeroable::zeroed()
                 },
                 texture: TextureParams {
-                    depth: if atmosphere.texture != harmonigraph_scene::LatticeTexture::None {
-                        atmosphere.texture_depth
-                    } else {
-                        0.0
-                    },
+                    depth: atmosphere.texture_depth,
                     scale: atmosphere.texture_scale,
                     drift: Float2([
                         (texture_time * 0.071).sin() as f32 * 0.9,
@@ -528,8 +524,8 @@ impl LatticeCallback {
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },
-                    width: atmosphere.material_shadow_width,
-                    softness: atmosphere.material_shadow_softness,
+                    width: atmosphere.pigment_width(),
+                    softness: atmosphere.pigment_softness(),
                     color: if pickup_enabled { atmosphere.material_color_pickup } else { 0.0 },
                 },
                 // Every shadow still casts with the glow disabled. Markers
