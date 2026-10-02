@@ -1888,7 +1888,7 @@ mod tests {
         s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
         s.cloud_depth = 1.0;
         (s.pitch_softness, s.time_softness) = (0.0, 0.0);
-        (s.stars.star_speed_min, s.stars.star_speed_max, s.cloud_direction) = (SPEED, SPEED, 0.0);
+        (s.stars.star_speed_far, s.stars.star_speed_near, s.cloud_direction) = (SPEED, SPEED, 0.0);
         s.stars.star_lifetime = 20.0;
         // Equal sizes: the smallest stars' cores resample unevenly in the
         // reduced halo images under a whole-pixel shift, which is not drift.

@@ -961,23 +961,23 @@ fn memory_key(
                 star_randomness,
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
+                star_layers,            // which slices hold stars at all
                 star_spacing_far,
                 star_spacing_near,
                 star_spacing_curve,
-                star_size_min: _,        // star sizes do not change a star's colour
-                star_size_max: _,        // star sizes do not change a star's colour
+                star_size_far: _,        // star sizes do not change a star's colour
+                star_size_near: _,       // star sizes do not change a star's colour
                 star_size_curve: _,      // star sizes do not change a star's colour
-                star_speed_min: _,       // carried by absolute cell and per-cell life
-                star_speed_max: _,       // carried by absolute cell and per-cell life
+                star_speed_far: _,       // carried by absolute cell and per-cell life
+                star_speed_near: _,      // carried by absolute cell and per-cell life
                 star_speed_curve: _,     // carried by absolute cell and per-cell life
                 star_lifetime: _,        // carried by absolute cell and per-cell life
                 star_halo_resolution: _, // sampling does not change material identity
                 star_halo_profile: _,    // sampling does not change material identity
-                star_glow: _, // response/coverage changes do not change material identity
-                star_core_far: _, // response/coverage changes do not change material identity
-                star_core_near: _, // response/coverage changes do not change material identity
-                star_falloff: _, // response/coverage changes do not change material identity
-                test_bed: _,  // its cells and bands are appended where the cells are
+                star_solid_far: _, // response/coverage changes do not change material identity
+                star_solid_near: _, // response/coverage changes do not change material identity
+                star_glow_falloff: _, // response/coverage changes do not change material identity
+                test_bed: _,       // its cells and bands are appended where the cells are
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1015,6 +1015,7 @@ fn memory_key(
             star_spacing_near,
             star_spacing_curve,
             star_randomness,
+            star_layers as f32,
         ]),
         CloudStyle::VelvetScales => values.extend([
             3.0,
@@ -1871,13 +1872,13 @@ mod tests {
     fn one_star_size_is_one_star_at_every_depth() {
         use harmonigraph_scene::star_plan::StarGather;
         let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
-        (settings.stars.star_size_min, settings.stars.star_size_max) = (0.5, 0.5);
+        (settings.stars.star_size_far, settings.stars.star_size_near) = (0.5, 0.5);
         let fine = slices(settings, 0.0);
         assert!(fine[0].cell < fine[STAR_SLICES - 1].cell / 4.0, "spacing must vary");
         for slice in &fine {
             assert_eq!(slice.radius, 0.25);
         }
-        (settings.stars.star_size_min, settings.stars.star_size_max) = (64.0, 64.0);
+        (settings.stars.star_size_far, settings.stars.star_size_near) = (64.0, 64.0);
         for slice in slices(settings, 0.0) {
             let jitter = settings.stars.star_jitter;
             assert_eq!(slice.radius, StarGather::Three.bound(jitter) * slice.cell);
@@ -2001,7 +2002,8 @@ mod tests {
     #[test]
     fn halos_follow_the_drawn_plan_at_the_lattice_scale() {
         use harmonigraph_scene::star_plan::StarGather;
-        let stored = harmonigraph_scene::StarSettings { star_size_max: 20.0, ..Default::default() };
+        let stored =
+            harmonigraph_scene::StarSettings { star_size_near: 20.0, ..Default::default() };
         let lattice = stored.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
         let three = lattice.plan().depths.map(|depth| depth.gather == StarGather::Three);
         assert_ne!(three, lattice.sanitized().plan().depths.map(|d| d.gather == StarGather::Three));
@@ -2039,7 +2041,7 @@ mod tests {
                     let settings = harmonigraph_scene::StarSettings {
                         star_jitter: dial,
                         star_halo_profile: profile,
-                        star_size_max: size,
+                        star_size_near: size,
                         ..Default::default()
                     };
                     for depth in settings.plan().depths {
@@ -2211,8 +2213,8 @@ mod tests {
         // stated against, whatever the fresh far speed is.
         let fresh = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_speed_min: 0.15,
-                star_speed_max: 1.0,
+                star_speed_far: 0.15,
+                star_speed_near: 1.0,
                 ..Default::default()
             },
             cloud_direction: 0.0,
@@ -2232,7 +2234,7 @@ mod tests {
         assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
         let together = travelled(
             harmonigraph_scene::SpectralAtmosphere {
-                stars: harmonigraph_scene::StarSettings { star_speed_min: 1.0, ..fresh.stars },
+                stars: harmonigraph_scene::StarSettings { star_speed_far: 1.0, ..fresh.stars },
                 ..fresh
             },
             10.0,

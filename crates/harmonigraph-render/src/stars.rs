@@ -1,7 +1,9 @@
 //! Shared star geometry, allocation and frame transport for colored light fields.
 use crate::uniforms::{uniform_group, Float2, Float4, Int2};
 use crate::wgpu;
-use harmonigraph_scene::star_plan::{star_jitter_width, StarGather};
+#[cfg(doc)]
+use harmonigraph_scene::star_plan::star_profile;
+use harmonigraph_scene::star_plan::{star_falloff_bend, star_jitter_width, StarGather};
 
 /// How many depth slices the starfield walks, from the farthest (0) to the
 /// nearest. The shader's `STAR_SLICES`, held to this by
@@ -58,11 +60,11 @@ struct StarSlice {
     /// The stars' outer radius in star pixels before each star's own size
     /// draw shrinks it: the plan's, held to what the slice's gather reads.
     radius: f32,
-    /// The star's shape: where its Gaussian core falls to `e^-2`, as a share
-    /// of its radius; the glow's coverage at the centre; and its exponent.
-    core: f32,
-    glow: f32,
-    falloff: f32,
+    /// The star's shape ([`star_profile`]): its solid share of the radius,
+    /// `1 / (1 - solid)`, and the glow's [`star_falloff_bend`].
+    solid: f32,
+    ramp: f32,
+    bend: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
     /// many cells it holds across and down. See [`StarLayout`]. An undrawn
@@ -90,11 +92,6 @@ fn star_gather_code(gather: StarGather) -> u32 {
         StarGather::Two => 2,
         StarGather::Three => 3,
     }
-}
-
-/// The slice's depth, 0 for the farthest and 1 for the nearest.
-fn star_depth(k: usize) -> f32 {
-    k as f32 / (STAR_SLICES - 1) as f32
 }
 
 /// The shader's `STAR_PANE`: star pixels across the pane's height.
@@ -246,13 +243,6 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
     (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
 }
 
-/// A slice's speed, as a multiple of [`star_px_per_second`]:
-/// `min + (max - min) d^curve` over `Star speed`'s two ends.
-pub(crate) fn star_speed(settings: harmonigraph_scene::StarSettings, k: usize) -> f32 {
-    let (far, near) = (settings.star_speed_min, settings.star_speed_max);
-    far + (near - far) * star_depth(k).powf(settings.star_speed_curve)
-}
-
 /// Every slice's numbers for this frame. Each depth moves as one sheet at its
 /// own speed.
 pub(crate) fn star_slices(
@@ -268,7 +258,7 @@ pub(crate) fn star_slices(
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
-        let speed = f64::from(star_speed(settings, k));
+        let speed = f64::from(depth.speed);
         let shift = |axis: f64| {
             (axis * travel * speed / f64::from(cell)).rem_euclid(STAR_HASH_PERIOD) as f32
         };
@@ -282,9 +272,9 @@ pub(crate) fn star_slices(
             offset: Float2(offset),
             cell,
             radius: depth.radius,
-            core: depth.core,
-            glow: depth.glow,
-            falloff: depth.falloff,
+            solid: depth.solid,
+            ramp: 1.0 / (1.0 - depth.solid),
+            bend: star_falloff_bend(depth.falloff),
             base: layout.bases[k] as i32,
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),

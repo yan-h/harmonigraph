@@ -11,12 +11,12 @@ struct StarSlice {
     offset: vec2<f32>,
     cell: f32,
     // The stars' outer radius in star pixels before each star's size draw, and
-    // their shape: where the core falls to e^-2 as a share of the radius, the
-    // glow at the centre, and its exponent.
+    // their shape: the solid share of the radius, 1 / (1 - solid), and the
+    // glow's bend.
     radius: f32,
-    core: f32,
-    glow: f32,
-    falloff: f32,
+    solid: f32,
+    ramp: f32,
+    bend: f32,
     // The atlas texel, counted along its rows, this slice's first cell is
     // baked into; the cell that is; and how many it holds across and down.
     base: i32,
@@ -156,17 +156,15 @@ fn fs_star_bake(in: TileVertex) -> @location(0) vec4<u32> {
     return vec4<u32>(0u);
 }
 
-// One star's coverage at `t`, its distance over its own outer radius: a
-// Gaussian core that falls to e^-2 at `core` and a glow of `glow` at the
-// centre falling as (1 - t)^falloff, together capped at one and eased to
-// nothing over the last quarter, so the star ends at its radius whatever its
-// shape.
+// One star's coverage at `t`, its distance over its own outer radius: full
+// out to `solid`, then the glow, eased out of the solid edge and into the
+// star's edge and bent by `bend`, so the star ends at its radius whatever its
+// shape. `harmonigraph_scene::star_plan::star_profile` is the same curve.
 fn star_profile(s: StarSlice, t: f32) -> f32 {
     if t >= 1.0 { return 0.0; }
-    let q = t / s.core;
-    var v = exp(-2.0 * q * q);
-    if s.glow > 0.0 { v += s.glow * pow(1.0 - t, s.falloff); }
-    return min(v, 1.0) * (1.0 - smoothstep(0.75, 1.0, t));
+    let u = saturate((t - s.solid) * s.ramp);
+    let x = u * u * (3.0 - 2.0 * u);
+    return (1.0 - x) / (1.0 + s.bend * x);
 }
 
 // A 3x3 star's premultiplied palette color and coverage, in two parts. The

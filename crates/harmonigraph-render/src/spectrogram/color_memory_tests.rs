@@ -72,8 +72,8 @@ fn fixture(style: CloudStyle) -> SpectrogramCallback {
     a.settings.cloud_direction = 37.0;
     a.settings.stars.star_lifetime = 0.5;
     // Explicit motion ensures every slice crosses a cell regardless of look defaults.
-    a.settings.stars.star_speed_min = 0.2;
-    a.settings.stars.star_speed_max = 1.0;
+    a.settings.stars.star_speed_far = 0.2;
+    a.settings.stars.star_speed_near = 1.0;
     a.settings.stars.star_speed_curve = 1.0;
     // Start away from zero to exercise initialization at an export's crop.
     a.now = 100.0;
@@ -231,8 +231,8 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let old_size = memory(&resources).size;
         let a = cb.atmosphere.as_mut().unwrap();
         match case {
-            "speed-min" => a.settings.stars.star_speed_min += 0.01,
-            "speed-max" => a.settings.stars.star_speed_max += 0.01,
+            "speed-min" => a.settings.stars.star_speed_far += 0.01,
+            "speed-max" => a.settings.stars.star_speed_near += 0.01,
             "speed-curve" => a.settings.stars.star_speed_curve += 0.01,
             "direction" => a.settings.cloud_direction += 0.1,
             "lifetime" => a.settings.stars.star_lifetime += 0.001,
@@ -313,8 +313,8 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
     for budgeted in [false, true] {
         let mut cb = fixture(CloudStyle::Stars);
         let a = cb.atmosphere.as_mut().unwrap();
-        a.settings.stars.star_speed_min = 0.0;
-        a.settings.stars.star_speed_max = 0.0;
+        a.settings.stars.star_speed_far = 0.0;
+        a.settings.stars.star_speed_near = 0.0;
         if budgeted {
             a.settings.stars.star_spacing_far = harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
         }
@@ -376,6 +376,42 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
             "changed star identity retained stale color"
         );
     }
+}
+
+/// Dropping a layer changes which stars exist, so history resets. Equal far and
+/// near spacing gives every slot the same cell, so the cells in the key cannot
+/// see the change and only `Star layers` can.
+#[test]
+fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    (a.settings.stars.star_speed_far, a.settings.stars.star_speed_near) = (0.0, 0.0);
+    a.settings.stars.star_spacing_near = a.settings.stars.star_spacing_far;
+    let aspect = cb.rect.width() / cb.rect.height();
+    let old_cells = star_layout(a.settings.stars, aspect).cells;
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let old_texture = memory(&resources).views[0].texture().clone();
+    assert!(
+        pixels(&device, &queue, memory(&resources)).iter().filter(|p| p[3] > 0.1).count() > 1000
+    );
+    let a = cb.atmosphere.as_mut().unwrap();
+    a.settings.stars.star_layers = 4;
+    assert_eq!(old_cells, star_layout(a.settings.stars, aspect).cells, "cells alone would see it");
+    cb.grid.fill(0);
+    a.now += 1.0 / 60.0;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let current = memory(&resources);
+    assert_eq!(current.views[0].texture(), &old_texture, "reset through allocation");
+    let mut fresh = CallbackResources::default();
+    prepare_once(&device, &queue, &mut fresh, &cb);
+    // History is laid out like the atlas, a texel a cell, and a dropped layer
+    // needs fewer rows; the kept allocation's rows past them hold no cell.
+    let (kept, fresh) = (pixels(&device, &queue, current), pixels(&device, &queue, memory(&fresh)));
+    assert!(kept.len() > fresh.len(), "fixture did not drop a layer's cells");
+    assert!(kept[..fresh.len()] == fresh[..], "a dropped layer's stars kept their color");
 }
 
 /// Moving star centers changes the sampled material. Reset that history even
@@ -490,7 +526,7 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
         // A changed source at the identical clock, and an unrelated style dial,
         // must neither advance nor invalidate the active material's history.
         cb.grid.fill(0);
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_glow += 0.1;
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_glow_falloff += 0.1;
         prepare_once(&device, &queue, &mut resources, &cb);
         assert_eq!(pixels(&device, &queue, memory(&resources))[5000], held);
         // Palette interpretation changes are immediate even on a paused frame.

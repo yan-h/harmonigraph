@@ -85,20 +85,27 @@ pub(super) fn stars(
 ) {
     use crate::widgets::Depth;
     use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_FALLOFF_MAX,
-        STAR_FALLOFF_MIN, STAR_GLOW_MAX, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
+        STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
         STAR_SPACING_MIN,
     };
+    let mut layers = atmosphere.star_layers as f32;
+    let top = harmonigraph_scene::star_plan::STAR_DEPTHS as f32;
+    ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
+        );
+    atmosphere.star_layers = layers as u32;
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_size_min,
-        &mut atmosphere.star_size_max,
+        &mut atmosphere.star_size_far,
+        &mut atmosphere.star_size_near,
         &mut atmosphere.star_size_curve,
         STAR_SIZE_MIN..=STAR_SIZE_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Size(size_scale),
     );
-    held_to_fit(ui, *atmosphere, size_scale);
     crate::widgets::depth(
         ui,
         &mut atmosphere.star_spacing_far,
@@ -107,6 +114,12 @@ pub(super) fn stars(
         STAR_SPACING_MIN..=STAR_SPACING_MAX,
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Spacing(size_scale),
+    );
+    crate::widgets::star_profile(
+        ui,
+        &mut atmosphere.star_solid_far,
+        &mut atmosphere.star_solid_near,
+        &mut atmosphere.star_glow_falloff,
     );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
@@ -126,40 +139,29 @@ pub(super) fn stars(
         .on_hover_text(
             "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. More variation leaves less room for big stars, so a depth may be drawn smaller to fit. Brightness and size have their own bars, Brightness variation and Size variation.",
         );
-    ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "A soft glow around every star's core in the star's own color, fading out at the star's edge. This is its strength at the center; 0% draws bare cores, 100% a glow as bright as the core.",
-        );
-    for (core, label, end) in [
-        (&mut atmosphere.star_core_far, "Core, far", "farthest"),
-        (&mut atmosphere.star_core_near, "Core, near", "nearest"),
-    ] {
-        ValueBar::new(core, STAR_CORE_MIN..=STAR_CORE_MAX, label).percent().show(ui).on_hover_text(
-            format!("How much of each of the {end} depth's stars is its bright core, as a share of the star's radius; the glow fills the rest. Depths between follow the Star size curve. Low values draw pinpoints in a wide glow; 100% spreads the core to the star's edge, a dense bed of soft stars."),
-        );
-    }
-    ValueBar::new(&mut atmosphere.star_falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff")
-        .show(ui)
-        .on_hover_text(
-            "How quickly the glow fades toward the star's edge. Low values spread it as a broad haze reaching the edge; high values draw it in as a tight bloom around the core.",
-        );
+    held_to_fit(ui, *atmosphere, size_scale);
 }
 
-/// A muted line under `Star size` while any depth's stars are drawn smaller
-/// than the dials ask, to fit the widest read their spacing allows. It reads
-/// the plan the pane draws, at its `size_scale`, without the dev test bed.
+/// A muted line while any depth's stars are drawn smaller than the dials ask,
+/// to fit the widest read their spacing allows. It reads the plan the pane
+/// draws, at its `size_scale`, without the dev test bed. It sits below every
+/// control that changes it, so its appearing never moves a bar being dragged.
 fn held_to_fit(ui: &mut egui::Ui, stars: harmonigraph_scene::StarSettings, size_scale: f32) {
     let plan =
         harmonigraph_scene::StarSettings { test_bed: None, ..stars.scaled(size_scale) }.plan();
-    let held: Vec<_> =
-        plan.depths.iter().enumerate().filter(|(_, depth)| depth.clamped()).collect();
+    // Numbered as layers, far to near, so the names match `Star layers`.
+    let held: Vec<_> = plan
+        .depths
+        .iter()
+        .filter(|depth| depth.gather != harmonigraph_scene::star_plan::StarGather::Off)
+        .enumerate()
+        .filter(|(_, depth)| depth.clamped())
+        .collect();
     let Some(widest) = held.iter().map(|(_, depth)| 2.0 * depth.radius).reduce(f32::max) else {
         return;
     };
     let names = held.iter().map(|(k, _)| (k + 1).to_string()).collect::<Vec<_>>().join(", ");
-    let (depths, their) = if held.len() == 1 { ("Depth", "its") } else { ("Depths", "their") };
+    let (depths, their) = if held.len() == 1 { ("Layer", "its") } else { ("Layers", "their") };
     crate::widgets::weak(
         ui,
         format!("{depths} {names} drawn smaller to fit {their} spacing, at most {widest:.1} px."),
@@ -210,9 +212,7 @@ pub(super) fn stars_test_bed(
         STAR_IMAGE_RESOLUTION_MAX, STAR_IMAGE_RESOLUTION_MIN, STAR_PLAN_SCALE_MAX,
         STAR_PLAN_SCALE_MIN,
     };
-    use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_FALLOFF_MAX, STAR_FALLOFF_MIN, STAR_GLOW_MAX,
-    };
+    use harmonigraph_scene::STAR_SOLID_MAX;
     let window = |gather: StarGather| match gather {
         StarGather::Off => "Off",
         StarGather::Core => "1×1",
@@ -299,12 +299,10 @@ pub(super) fn stars_test_bed(
                         .on_hover_text("Multiplies every star's coverage at this depth.");
                     override_bar(ui, &mut depth.jitter, drawn.jitter, 0.0..=1.0, "Position variation", Unit::Percent)
                         .on_hover_text("Position variation for this depth alone. More variation leaves less room in each read, so stars may be drawn smaller or need a wider read.");
-                    override_bar(ui, &mut depth.core, drawn.core, STAR_CORE_MIN..=STAR_CORE_MAX, "Core", Unit::Percent)
-                        .on_hover_text("Core for this depth alone: the share of the star's radius that is its bright core.");
-                    override_bar(ui, &mut depth.glow, drawn.glow, 0.0..=STAR_GLOW_MAX, "Glow", Unit::Percent)
-                        .on_hover_text("Glow for this depth alone: its strength at the star's center.");
-                    override_bar(ui, &mut depth.falloff, drawn.falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff", Unit::Plain)
-                        .on_hover_text("Glow falloff for this depth alone: low spreads the glow as a broad haze, high draws it in as a tight bloom.");
+                    override_bar(ui, &mut depth.solid, drawn.solid, 0.0..=STAR_SOLID_MAX, "Solid share", Unit::Percent)
+                        .on_hover_text("Solid share for this depth alone: the share of the star's radius at full coverage; the rest is glow.");
+                    override_bar(ui, &mut depth.falloff, drawn.falloff, 0.0..=1.0, "Glow falloff", Unit::Percent)
+                        .on_hover_text("Glow falloff for this depth alone: low stays bright almost to the edge, 50% falls evenly, high drops at once into a long faint tail.");
                     ui.add_enabled_ui(drawn.gather == StarGather::Three, |ui| {
                         follow_row(ui, &mut depth.tier, None, |ui| {
                             let mut tier = drawn.tier;
@@ -327,7 +325,6 @@ pub(super) fn stars_test_bed(
 enum Unit {
     Percent,
     Times,
-    Plain,
 }
 
 /// One test bed row with a follow control ahead of it: `row` draws the row
@@ -369,7 +366,6 @@ fn unit_bar<'a>(
     match unit {
         Unit::Percent => bar.percent(),
         Unit::Times => bar.unit(1.0, "\u{d7}"),
-        Unit::Plain => bar,
     }
 }
 
@@ -412,8 +408,8 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
     };
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_speed_min,
-        &mut atmosphere.star_speed_max,
+        &mut atmosphere.star_speed_far,
+        &mut atmosphere.star_speed_near,
         &mut atmosphere.star_speed_curve,
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
         STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
