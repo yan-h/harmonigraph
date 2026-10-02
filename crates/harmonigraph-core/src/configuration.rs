@@ -153,6 +153,14 @@ pub enum ConfigMutation {
     },
 }
 
+/// One comma's current verdict. Auto observes effective axes; an explicit
+/// release observes raw axes so earlier comma switches cannot undo it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Auto((i32, i32, i32)),
+    Released((i32, i32, i32)),
+}
+
 /// Pure comma resolver, used by the CLAP audio owner and synchronously by the
 /// standalone/legacy display adapter. Each comma judges the axes after earlier
 /// commas derive them, before its own derivation. Only those inputs key its verdict.
@@ -162,8 +170,7 @@ pub enum ConfigMutation {
 pub struct ConfigReducer {
     raw: Tuning,
     modes: TuningModes,
-    judged: [Option<(i32, i32, i32)>; Comma::COUNT],
-    released: [Option<(i32, i32, i32)>; Comma::COUNT],
+    judged: [Option<Verdict>; Comma::COUNT],
     resolved: ResolvedConfig,
 }
 
@@ -179,7 +186,6 @@ impl ConfigReducer {
             raw,
             modes,
             judged: [None; Comma::COUNT],
-            released: [None; Comma::COUNT],
             resolved: ResolvedConfig {
                 revision: 0,
                 tuning: raw,
@@ -197,20 +203,18 @@ impl ConfigReducer {
     pub fn resolved(&self) -> ResolvedConfig {
         self.resolved
     }
-    pub fn judged(&self) -> [Option<(i32, i32, i32)>; Comma::COUNT] {
+    pub fn judged(&self) -> [Option<Verdict>; Comma::COUNT] {
         self.judged
     }
 
     /// Ask the next display observation to judge this comma again.
     pub fn recheck(&mut self, comma: Comma) {
         self.judged[comma.index()] = None;
-        self.released[comma.index()] = None;
     }
 
     /// A new display or restored appearance has no verdict about its tuning yet.
     pub fn recheck_all(&mut self) {
         self.judged = [None; Comma::COUNT];
-        self.released = [None; Comma::COUNT];
     }
 
     /// Synchronous display adapter only. CLAP must submit explicit commands;
@@ -245,7 +249,6 @@ impl ConfigReducer {
                 self.raw = raw;
                 self.modes = modes;
                 self.judged = [None; Comma::COUNT];
-                self.released = [None; Comma::COUNT];
             }
             ConfigMutation::Edit(edit) => {
                 if let Some(policy) = edit.policy {
@@ -267,7 +270,8 @@ impl ConfigReducer {
                     let i = comma.index();
                     if let Some(on) = edit.tempered[i] {
                         self.modes.tempered = self.modes.tempered.with(comma, on);
-                        self.released[i] = (!on).then(|| judged_axes(comma, self.raw));
+                        self.judged[i] =
+                            (!on).then(|| Verdict::Released(judged_axes(comma, self.raw)));
                     }
                     if let Some(on) = edit.auto[i] {
                         self.modes.auto[i] = on;
@@ -275,7 +279,6 @@ impl ConfigReducer {
                         // asks to recheck.
                         if on {
                             self.judged[i] = None;
-                            self.released[i] = None;
                         }
                     }
                 }
@@ -313,26 +316,24 @@ impl ConfigReducer {
         for comma in Comma::ALL {
             let i = comma.index();
             let axes = judged_axes(comma, tuning);
-            if self.modes.tempered.has(comma)
-                || self.released[i] != Some(judged_axes(comma, self.raw))
-            {
-                self.released[i] = None;
+            let held = !self.modes.tempered.has(comma)
+                && self.judged[i] == Some(Verdict::Released(judged_axes(comma, self.raw)));
+            if !held {
+                if self.modes.auto[i]
+                    && !self.modes.tempered.has(comma)
+                    && self.judged[i] != Some(Verdict::Auto(axes))
+                {
+                    self.modes.tempered = self.modes.tempered.with(
+                        comma,
+                        comma.is_tempered(
+                            tuning.three_cents(),
+                            tuning.five_cents(),
+                            tuning.seven_cents(),
+                        ),
+                    );
+                }
+                self.judged[i] = Some(Verdict::Auto(axes));
             }
-            if self.released[i].is_none()
-                && self.modes.auto[i]
-                && !self.modes.tempered.has(comma)
-                && self.judged[i] != Some(axes)
-            {
-                self.modes.tempered = self.modes.tempered.with(
-                    comma,
-                    comma.is_tempered(
-                        tuning.three_cents(),
-                        tuning.five_cents(),
-                        tuning.seven_cents(),
-                    ),
-                );
-            }
-            self.judged[i] = Some(axes);
             if self.modes.tempered.has(comma) {
                 tuning.temper(comma);
             }
@@ -405,10 +406,16 @@ mod tests {
             tempered: [None, Some(false)],
             ..Default::default()
         }));
-        let judged = reducer.judged();
-        reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(2, microcents(387.0))));
-        assert_eq!(reducer.judged()[1], judged[1], "Meantone still derives the same third");
         assert!(!reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
+        reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(2, microcents(387.0))));
+        assert!(
+            reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma),
+            "a raw-axis edit ends the release and rejudges even while Meantone derives the same third"
+        );
+        reducer.apply(ConfigMutation::Edit(ConfigEdit {
+            tempered: [None, Some(false)],
+            ..Default::default()
+        }));
         reducer.apply(ConfigMutation::Edit(ConfigEdit {
             auto: [None, Some(true)],
             ..Default::default()
