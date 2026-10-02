@@ -180,7 +180,7 @@ impl VisualRuntime {
         if let Some(policy) = edit.policy {
             // Adopt the policy with the next observed axes/modes, so this
             // edit cannot consume an Auto recheck using a stale parameter view.
-            self.adaptive_policy = policy.sanitize();
+            policy.apply_to(&mut self.adaptive_policy);
         }
         for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
             if let Some(value) = value {
@@ -257,7 +257,10 @@ impl VisualRuntime {
                         appearance,
                         params,
                         harmonigraph_core::configuration::ConfigEdit {
-                            policy: Some(policy),
+                            policy: Some(harmonigraph_core::configuration::PolicyEdit::changed(
+                                self.adaptive_policy,
+                                policy,
+                            )),
                             ..Default::default()
                         },
                     );

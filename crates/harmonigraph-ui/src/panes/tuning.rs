@@ -16,7 +16,7 @@ use super::{section, subsection};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
-use harmonigraph_core::configuration::ConfigEdit;
+use harmonigraph_core::configuration::{ConfigEdit, PolicyEdit};
 use harmonigraph_core::tuning;
 
 #[cfg(test)]
@@ -458,6 +458,7 @@ pub(super) fn tuning_pane(
 fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn ParamBackend) {
     let mut p = state.runtime.adaptive_policy;
     let before = p;
+    let mut derive_keyboard = false;
     subsection(ui, "Keyboard", |ui| {
         for (value, label) in p.keyboard.iter_mut().zip(["Fifth", "Third", "Seventh"]) {
             *value =
@@ -465,7 +466,7 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
                     as i32;
         }
         if ui.button("Derive from fifth").on_hover_text("Set the input keyboard's third and seventh from its fifth.").clicked() {
-            p.keyboard = tuning::fifth_generated(p.keyboard[0]);
+            derive_keyboard = true;
         }
         let [third, seventh] = tuning::fifth_generated_steps(p.keyboard[0]).map(fifths);
         crate::widgets::weak(ui, format!("From the fifth: third is {third}, seventh is {seventh}."));
@@ -476,11 +477,15 @@ fn keyboard_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
          pitch cost outweighs harmonic benefit. Learn sets the keyboard from the \
          fifth it hears.",
     );
-    if p != before {
+    let mut policy = PolicyEdit::changed(before, p);
+    if derive_keyboard {
+        policy = policy.derive_keyboard();
+    }
+    if !policy.is_empty() {
         state.runtime.edit_tuning(
             &mut state.appearance,
             params,
-            ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+            ConfigEdit { policy: Some(policy), ..Default::default() },
         );
     }
 }
@@ -570,7 +575,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
             state.runtime.edit_tuning(
                 &mut state.appearance,
                 params,
-                ConfigEdit { policy: Some(p.sanitize()), ..Default::default() },
+                ConfigEdit { policy: Some(PolicyEdit::changed(before, p)), ..Default::default() },
             );
         }
     });

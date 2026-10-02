@@ -540,7 +540,13 @@ fn switching_the_detect_on_asks_it_about_the_tuning_already_there() {
     state.picture.runtime.edit_tuning(
         &mut state.picture.appearance,
         &params,
-        harmonigraph_core::configuration::ConfigEdit { policy: Some(policy), ..Default::default() },
+        harmonigraph_core::configuration::ConfigEdit {
+            policy: Some(harmonigraph_core::configuration::PolicyEdit::changed(
+                state.picture.runtime.adaptive_policy,
+                policy,
+            )),
+            ..Default::default()
+        },
     );
     begin_frame(&mut state.picture, &params, 3.0);
     assert!(state.picture.appearance.view.meantone, "switching the detect on left 12-TET unjudged");

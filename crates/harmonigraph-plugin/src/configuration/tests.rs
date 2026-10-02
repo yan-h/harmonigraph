@@ -2020,6 +2020,89 @@ fn canonical_publication_slots_and_loss_are_allocation_free() {
 }
 
 #[test]
+fn queued_policy_edits_preserve_disjoint_fields_from_the_same_observation() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    let observed = view(mailbox.visible().0, false).resolved.policy;
+    let first = PolicyConfig {
+        radius: 5,
+        reset_stop: true,
+        pitch_flexibility: 37,
+        half_life_ms: 1200,
+        keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
+        ..observed
+    };
+    let second = PolicyConfig {
+        axes: 3,
+        reset_loop: true,
+        register: 850,
+        tolerance: 1_000_000,
+        silence_ms: 4500,
+        keyboard: [observed.keyboard[0], 380_000_000, 980_000_000],
+        ..observed
+    };
+    for policy in [first, second] {
+        mailbox
+            .submit(packet(ConfigEdit {
+                policy: Some(PolicyEdit::changed(observed, policy)),
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    device.run(0, vec![], false);
+    assert_eq!(
+        view(mailbox.visible().0, false).resolved.policy,
+        PolicyConfig {
+            radius: first.radius,
+            reset_stop: first.reset_stop,
+            pitch_flexibility: first.pitch_flexibility,
+            half_life_ms: first.half_life_ms,
+            keyboard: [first.keyboard[0], second.keyboard[1], second.keyboard[2]],
+            ..second
+        }
+    );
+}
+
+#[test]
+fn keyboard_derivation_uses_the_adopted_fifth_in_one_transaction() {
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    let observed = view(mailbox.visible().0, false).resolved.policy;
+    let changed = PolicyConfig {
+        pitch_flexibility: 37,
+        keyboard: [695_000_000, observed.keyboard[1], observed.keyboard[2]],
+        ..observed
+    };
+    for policy in [
+        PolicyEdit::changed(observed, changed),
+        PolicyEdit::changed(observed, observed).derive_keyboard(),
+    ] {
+        mailbox.submit(packet(ConfigEdit { policy: Some(policy), ..Default::default() })).unwrap();
+    }
+    device.run(0, vec![], false);
+    let adopted = view(mailbox.visible().0, false).resolved;
+    assert_eq!(adopted.policy.keyboard, harmonigraph_core::tuning::fifth_generated(695_000_000));
+    assert_eq!(adopted.policy.pitch_flexibility, 37);
+
+    let changed = PolicyConfig { keyboard: [697_000_000, 0, 0], ..adopted.policy };
+    mailbox
+        .submit(packet(ConfigEdit {
+            policy: Some(PolicyEdit::changed(adopted.policy, changed).derive_keyboard()),
+            ..Default::default()
+        }))
+        .unwrap();
+    device.run(64, vec![], false);
+    let derived = view(mailbox.visible().0, false).resolved;
+    assert_eq!(derived.policy.keyboard, harmonigraph_core::tuning::fifth_generated(697_000_000));
+    assert_eq!(derived.policy.pitch_flexibility, 37);
+    assert_eq!(derived.revision, adopted.revision + 1);
+}
+
+#[test]
 fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
