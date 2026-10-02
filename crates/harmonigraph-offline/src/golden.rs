@@ -332,7 +332,7 @@ fn check_take(name: &str, shot: Shot, take: Take) {
     let mut audio = probe_audio();
     let mut replay = Replay::new(take);
     let mut last = Vec::new();
-    let appearance = crate::render::appearance_for(replay.take(), None);
+    let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
     match render(&mut replay, Some(&mut audio), &settings, appearance, |bytes| {
         // The gate wants the LAST frame: keep this one and hand the previous
         // one back to be drawn into again.
@@ -585,7 +585,7 @@ fn frame_ms(size: [u32; 2], drawn: Drawn) -> Option<(f64, u64)> {
     let mut first: Option<std::time::Instant> = None;
     let mut last = None;
     let mut frames = 0u64;
-    let appearance = crate::render::appearance_for(replay.take(), None);
+    let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
     match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
         seen += 1;
         if seen <= WARMUP {
@@ -674,7 +674,7 @@ fn spectral_shadow_frame_ms(
     let mut first: Option<std::time::Instant> = None;
     let mut last = None;
     let mut frames = 0u64;
-    let appearance = crate::render::appearance_for(replay.take(), None);
+    let appearance = crate::render::appearance_for(replay.take(), None).unwrap();
     match render(&mut replay, Some(&mut audio), &settings, appearance, |frame| {
         seen += 1;
         if seen <= WARMUP {
