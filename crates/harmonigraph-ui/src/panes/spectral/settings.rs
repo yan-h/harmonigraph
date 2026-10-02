@@ -351,11 +351,11 @@ pub(crate) fn view_section(
                 .on_hover_text("How far up the level axis the backdrop reaches before it has faded out: 100% is the ceiling.");
             ValueBar::new(&mut cfg.backdrop_gap, crate::config::BACKDROP_GAP_RANGE, "Stripe spacing")
                 .integer()
-                .unit(1.0, " px")
-                .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} px") })
+                .unit(1.0, " pt")
+                .display(|gap| if gap < 0.5 { "Gradient".into() } else { format!("{gap:.0} pt") })
                 .show(ui)
                 .on_hover_text(
-                    "Dark pixels between the backdrop's stripes. The dark gaps are what let even a fill as dark as the background \
+                    "Logical points between the backdrop’s one-point stripes. The dark gaps are what let even a fill as dark as the background \
                          show as a break in the stripes; wider spacing is calmer but can miss a partial one pixel wide. \
                          0 is a smooth gradient: softer, but a fill as bright as the glow at its own height blends into it.",
                 );

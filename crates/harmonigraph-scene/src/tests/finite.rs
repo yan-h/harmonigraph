@@ -213,6 +213,7 @@ impl Floats {
 fn scene_floats(scene: &Scene) -> Floats {
     let mut f = Floats::default();
     let Scene {
+        edge_softness_points,
         nodes,
         camera,
         node_radius,
@@ -248,6 +249,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         glow_timing,
         atmosphere,
     } = scene;
+    f.one("edge_softness_points", *edge_softness_points);
 
     for (i, node) in nodes.iter().enumerate() {
         let NodeInstance {

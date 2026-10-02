@@ -746,6 +746,8 @@ pub struct PlusInstance {
 
 /// Everything the renderer needs for one frame.
 pub struct Scene {
+    /// Artistic edge half-band in logical points; the renderer keeps a one-pixel AA floor.
+    pub edge_softness_points: f32,
     pub nodes: Vec<NodeInstance>,
     pub camera: Camera,
     /// Base node radius in world units.

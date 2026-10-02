@@ -7,7 +7,7 @@
 //   fs_bright     scene -> half res, soft-knee luminance threshold
 //   fs_bright_coverage  premultiplied mark -> half res, threshold before coverage
 //   fs_blit       plain copy (half -> quarter downsample)
-//   fs_blur_h/v   separable 9-tap Gaussian over the quarter-res texture
+//   fs_blur_h/v   pane-relative separable blur over the quarter-res texture
 //   fs_composite  scene + bloom * strength, premultiplied over the pane
 //   fs_bloom_add  bloom * strength alone, over a picture already in the pass
 //   fs_glow_over  the lattice's node glow, at the bottom of the scene pass
@@ -34,6 +34,9 @@ struct CompositeParams {
     render_scale: f32,
     bloom_strength: f32,
     background: vec4<f32>,
+    edge_softness_pixels: f32,
+    padding: f32,
+    padding2: vec2<f32>,
 };
 @group(0) @binding(3) var<uniform> bu: CompositeParams;
 // The strength on its own, for a caller with no scene uniforms to take the
@@ -52,6 +55,10 @@ struct AddUniforms {
 @group(0) @binding(5) var ink_tex: texture_2d<f32>;
 // Ordered local-notation transmittance, with foreground ink coverage restored.
 @group(0) @binding(6) var local_shadow_tex: texture_2d<f32>;
+
+// Owning pane scale in quarter-target texels. Independent of cropped render
+// regions, screen clipping and supersampling. Only the blur pipelines bind it.
+@group(1) @binding(0) var<uniform> bloom_scale: vec4<f32>;
 
 struct BlitOut {
     @builtin(position) pos: vec4<f32>,
@@ -140,15 +147,41 @@ fn fs_bright_split(in: BlitOut) -> @location(0) vec4<f32> {
 const BLUR_W0: f32 = 0.227027;
 const BLUR_W: vec4<f32> = vec4<f32>(0.1945946, 0.1216216, 0.054054, 0.016216);
 
+// Preserve the current nine-tap profile at a 1080-pixel shorter pane edge.
+// At other sizes integrate every texel under its scaled profile instead of
+// spacing nine samples farther apart, which would echo thin bright shapes.
+fn bloom_weight(distance: f32) -> f32 {
+    let weights = array<f32, 5>(BLUR_W0, BLUR_W.x, BLUR_W.y, BLUR_W.z, BLUR_W.w);
+    if distance > 4.0 { return 0.0; }
+    let low = u32(floor(distance));
+    return mix(weights[low], weights[min(low + 1u, 4u)], fract(distance));
+}
 fn blur(uv: vec2<f32>, dir: vec2<f32>) -> vec4<f32> {
-    let texel = dir / vec2<f32>(textureDimensions(scene_tex));
-    var acc = textureSample(scene_tex, scene_samp, uv) * BLUR_W0;
-    for (var i = 1; i <= 4; i++) {
-        let offset = texel * f32(i);
-        acc += textureSample(scene_tex, scene_samp, uv + offset) * BLUR_W[i - 1];
-        acc += textureSample(scene_tex, scene_samp, uv - offset) * BLUR_W[i - 1];
+    let size = vec2<f32>(textureDimensions(scene_tex));
+    let scale = dot(bloom_scale.xy, dir);
+    let texel = dir / size;
+    var acc = textureSampleLevel(scene_tex, scene_samp, uv, 0.0) * BLUR_W0;
+    var total = BLUR_W0;
+    if scale <= 1.0 {
+        // Sub-texel taps shrink the halo continuously in small previews.
+        for (var i = 1u; i <= 4u; i++) {
+            let weight = BLUR_W[i - 1u];
+            let offset = texel * f32(i) * scale;
+            acc += (textureSampleLevel(scene_tex, scene_samp, uv + offset, 0.0)
+                + textureSampleLevel(scene_tex, scene_samp, uv - offset, 0.0)) * weight;
+            total += 2.0 * weight;
+        }
+        return acc / total;
     }
-    return acc;
+    let radius = i32(ceil(4.0 * scale));
+    for (var i = 1; i <= radius; i++) {
+        let weight = bloom_weight(f32(i) / scale);
+        let offset = texel * f32(i);
+        acc += (textureSampleLevel(scene_tex, scene_samp, uv + offset, 0.0)
+            + textureSampleLevel(scene_tex, scene_samp, uv - offset, 0.0)) * weight;
+        total += 2.0 * weight;
+    }
+    return acc / total;
 }
 
 @fragment

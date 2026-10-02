@@ -28,6 +28,7 @@ pub(super) fn draw_profile(
     visible: &[(f32, f32, f32)],
     budget: f32,
     split: f32,
+    point_scale: f32,
 ) {
     if visible.len() < 2 {
         return;
@@ -54,7 +55,8 @@ pub(super) fn draw_profile(
         let edge: Vec<_> = samples.iter().map(|&(t, d, _)| (t, d)).collect();
         painter.add(backdrop_mesh(
             &edge,
-            cfg.backdrop_gap.max(0.0) as usize + 1,
+            cfg.backdrop_gap.max(0.0),
+            point_scale.max(1e-6) / axes.pitch_len().max(1e-6),
             cfg.backdrop_height * budget,
             theme::picture_ruling().gamma_multiply(cfg.backdrop_strength),
             |t, d| axes.at(t, sd(d)),
@@ -120,12 +122,12 @@ fn grid_mesh(rows: usize, bands: usize) -> Mesh {
 /// rises through `top` it is cut at the crossing rather than clamped, since a
 /// clamped vertex would lay the backdrop over the flank below it.
 ///
-/// A stripe spans one column of the pitch axis, from halfway to the previous
-/// sample to halfway to the next — the columns the samples stand for, which
-/// are a device pixel each, so a stripe is one pixel wide.
+/// Stripe width and gaps are logical points. Intersect every measured edge
+/// segment with the lit intervals so fractional DPI cannot move the profile.
 fn backdrop_mesh(
     edge: &[(f32, f32)],
-    spacing: usize,
+    gap: f32,
+    stripe_width: f32,
     top: f32,
     ink: Color32,
     at: impl Fn(f32, f32) -> egui::Pos2,
@@ -155,23 +157,29 @@ fn backdrop_mesh(
         mesh.add_triangle(base, base + 1, base + 2);
         mesh.add_triangle(base, base + 2, base + 3);
     };
-    if spacing <= 1 {
+    if gap <= 0.0 {
         for pair in edge.windows(2) {
             piece(pair[0], pair[1]);
         }
         return mesh;
     }
-    let last = edge.len() - 1;
-    // Halfway along the segment from sample `i` to its neighbour `j`.
-    let mid = |i: usize, j: usize| {
-        let (a, b) = (edge[i], edge[j]);
-        (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1))
-    };
-    for i in (0..=last).step_by(spacing) {
-        let before = if i > 0 { mid(i - 1, i) } else { edge[i] };
-        let after = if i < last { mid(i, i + 1) } else { edge[i] };
-        piece(before, edge[i]);
-        piece(edge[i], after);
+    let period = stripe_width * (gap + 1.0);
+    for pair in edge.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if b.0 <= a.0 {
+            continue;
+        }
+        let at = |x: f32| (x, a.1 + (b.1 - a.1) * ((x - a.0) / (b.0 - a.0)));
+        let first = (a.0 / period).floor() as i32;
+        let last = (b.0 / period).floor() as i32;
+        for stripe in first..=last {
+            let start = stripe as f32 * period;
+            let low = a.0.max(start);
+            let high = b.0.min(start + stripe_width);
+            if high > low {
+                piece(at(low), at(high));
+            }
+        }
     }
     mesh
 }

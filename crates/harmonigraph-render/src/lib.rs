@@ -1544,6 +1544,9 @@ struct OffscreenShared<'a> {
 /// the threshold runs at a half, which is what makes it measure the picture
 /// rather than a smear of it.
 struct BloomChain {
+    scale_buffer: wgpu::Buffer,
+    scale_bind_group: wgpu::BindGroup,
+    screen_size: [u32; 2],
     /// The descriptor format shared by all three bloom targets.
     #[cfg(test)]
     format: wgpu::TextureFormat,
@@ -1575,6 +1578,36 @@ struct BloomPipelines<'a> {
 }
 
 impl BloomChain {
+    fn scale_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bloom_scale_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(16),
+                },
+                count: None,
+            }],
+        })
+    }
+
+    fn scales(screen: [u32; 2], owner_pixels: egui::Vec2) -> [f32; 4] {
+        let radius = owner_pixels.min_elem().max(1.0) / 1080.0;
+        let axis = |n: u32| radius * (n.div_ceil(4).max(1) * 4) as f32 / n.max(1) as f32;
+        [axis(screen[0]), axis(screen[1]), 0.0, 0.0]
+    }
+
+    fn set_owner_size(&self, queue: &wgpu::Queue, owner_pixels: egui::Vec2) {
+        queue.write_buffer(
+            &self.scale_buffer,
+            0,
+            bytemuck::cast_slice(&Self::scales(self.screen_size, owner_pixels)),
+        );
+    }
+
     /// Build the chain over `source`, at fractions of `screen_size` device
     /// pixels.
     ///
@@ -1627,7 +1660,27 @@ impl BloomChain {
                 ],
             })
         };
+        use wgpu::util::DeviceExt;
+        let scale_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("bloom_scale"),
+            contents: bytemuck::cast_slice(&Self::scales(
+                screen_size,
+                egui::vec2(screen_size[0] as f32, screen_size[1] as f32),
+            )),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let scale_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bloom_scale_binding"),
+            layout: &Self::scale_layout(device),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: scale_buffer.as_entire_binding(),
+            }],
+        });
         BloomChain {
+            scale_buffer,
+            scale_bind_group,
+            screen_size,
             #[cfg(test)]
             format,
             bright_bind_group: filter_bg(format!("{label}_bright_bind_group"), source),
@@ -1686,6 +1739,9 @@ impl BloomChain {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bind_group, &[]);
+            if index >= 2 {
+                pass.set_bind_group(1, &self.scale_bind_group, &[]);
+            }
             pass.draw(0..4, 0..1);
         }
     }
@@ -2547,9 +2603,15 @@ fn create_post_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     blend: Option<wgpu::BlendState>,
 ) -> wgpu::RenderPipeline {
+    let bloom_layout =
+        matches!(entry_point, "fs_blur_h" | "fs_blur_v").then(|| BloomChain::scale_layout(device));
+    let mut layouts = vec![Some(bind_group_layout)];
+    if let Some(layout) = &bloom_layout {
+        layouts.push(Some(layout));
+    }
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("post_pipeline_layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &layouts,
         ..Default::default()
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

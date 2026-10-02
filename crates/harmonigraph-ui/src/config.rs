@@ -375,8 +375,8 @@ pub struct SpectrumConfig {
     /// Where the backdrop has faded to nothing, as a fraction of the level
     /// axis from the floor (0) to the ceiling (1).
     pub backdrop_height: f32,
-    /// Dark pixel columns between one lit stripe and the next; whole numbers
-    /// only. 0 lights every column, a smooth wash; see [`BACKDROP_GAP_RANGE`].
+    /// Logical points between one-point lit stripes; whole numbers
+    /// only. 0 is a smooth wash; see [`BACKDROP_GAP_RANGE`].
     pub backdrop_gap: f32,
     /// Spectral light and note halos, independent of the lattice's atmosphere.
     pub atmosphere: harmonigraph_scene::SpectralAtmosphere,
@@ -858,7 +858,7 @@ pub(crate) const ROLL_THICKNESS_RANGE: std::ops::RangeInclusive<f32> = 0.2..=2.0
 /// The Backdrop height bar's range: a sliver above the floor up to the ceiling.
 pub(crate) const BACKDROP_HEIGHT_RANGE: std::ops::RangeInclusive<f32> = 0.05..=1.0;
 
-/// The Stripe spacing bar's range, in dark pixel columns between stripes.
+/// The Stripe spacing bar's range, in logical points between stripes.
 ///
 /// The backdrop is a neutral light laid in the empty space above the analyzer
 /// curve. It stops exactly at the curve, so the fill reads as a shape cut out

@@ -457,6 +457,7 @@ pub fn draw_pane(
                 state.surfaces.background,
                 None,
                 None,
+                1.0,
             );
             state.surfaces.drawn_this_frame = Some(window);
         }

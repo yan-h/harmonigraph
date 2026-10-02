@@ -1098,7 +1098,10 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
     let scene = |level: f32, depth: f32| {
         let mut scene = on_ground(SHADOW, depth);
         scene.shadow.lattice_geometry.kernel = Gaussian;
-        scene.nodes[0].melody_slots = if level > 0.0 { MIDDLE_C } else { 0 };
+        // Keep the caster bounds identical: changing the slot bit changes
+        // atlas sampling even while its mark is invisible. This test isolates
+        // mask leakage from that separate rasterization difference.
+        scene.nodes[0].melody_slots = MIDDLE_C;
         scene.nodes[0].melody_level = level;
         scene
     };

@@ -525,6 +525,7 @@ impl CallbackTrait for GlowCallback {
             ..
         } = resources;
         let pane = pane.as_mut().expect("built above when missing");
+        pane.chain.set_owner_size(queue, self.rect.size() * ppp);
 
         if self.dots.len() > pane.capacity {
             pane.capacity = self.dots.len().next_power_of_two();
@@ -751,10 +752,10 @@ mod tests {
         let (dark, _) = draw(&device, &queue, vec![centered_dot()], 0.0);
         let (lit, _) = draw(&device, &queue, vec![centered_dot()], 1.5);
 
-        // The mark's edge is at 12 points from the centre; 20 points out is
+        // The mark's edge is at 12 points from the centre; 14 points out is
         // inside the halo's reach and well outside the mark.
-        assert_eq!(red(&dark, 148, 128), 0.0, "a strength of 0 lit the frame anyway");
-        assert!(red(&lit, 148, 128) > 8.0, "no light beside the mark: {}", red(&lit, 148, 128));
+        assert_eq!(red(&dark, 142, 128), 0.0, "a strength of 0 lit the frame anyway");
+        assert!(red(&lit, 142, 128) > 8.0, "no light beside the mark: {}", red(&lit, 142, 128));
         assert!(
             red(&lit, 128, 128) > 8.0,
             "no light on the mark's own place: {}",
@@ -766,7 +767,7 @@ mod tests {
         // Light, not a shape: the halo may never take alpha away from what is
         // under it, and over an opaque frame that means the alpha channel is
         // untouched everywhere.
-        for (x, y) in [(128u32, 128u32), (148, 128), (250, 10)] {
+        for (x, y) in [(128u32, 128u32), (142, 128), (250, 10)] {
             assert_eq!(
                 pixel(&lit, x, y)[3],
                 255,

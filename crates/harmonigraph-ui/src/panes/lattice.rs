@@ -89,7 +89,8 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     let background = state.surfaces.background;
     ui.painter().rect_filled(rect, 0.0, state.background_ink());
     let stats = Some(state.instruments.lattice_stats.clone());
-    let window = draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats);
+    let window =
+        draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats, 1.0);
     state.surfaces.drawn_this_frame = Some(window);
 }
 
@@ -159,6 +160,7 @@ pub(crate) fn draw_lattice(
     background: glam::Vec4,
     response: Option<&egui::Response>,
     stats: Option<std::sync::Arc<harmonigraph_render::LatticeStats>>,
+    point_scale: f32,
 ) -> harmonigraph_scene::DrawnWindow {
     // The lattice this pane shows, which is a different window from the one
     // the pane beside it shows and from the one the names are chosen out of —
@@ -173,6 +175,7 @@ pub(crate) fn draw_lattice(
     let hovered = response.and(state.surfaces.hovered);
     let mut scene =
         compose_scene(state, &window, rect.width() / rect.height().max(1.0), hovered, surface, now);
+    scene.edge_softness_points *= point_scale;
     // The ground this pass is composited over. Only the shell knows it -- the
     // fill the docked pane just painted here, the render layout's own
     // background offline -- so it is carried in by the caller rather than
@@ -1338,13 +1341,23 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         let without = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None, 1.0);
         })
         .shapes
         .len();
         let with = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+            draw_lattice(
+                ui,
+                rect,
+                &mut state,
+                0.0,
+                0,
+                glam::Vec4::ZERO,
+                Some(&response),
+                None,
+                1.0,
+            );
         })
         .shapes
         .len();
@@ -1367,7 +1380,7 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 300.0));
 
         let _ = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None);
+            draw_lattice(ui, rect, &mut state, 0.0, 1, glam::Vec4::ZERO, None, None, 1.0);
         });
         assert_eq!(state.surfaces.drawn_this_frame, None, "the preview published a window");
 
@@ -1398,7 +1411,7 @@ mod tests {
         // No response: nothing picks, so the docked pane's last hover must
         // survive a preview frame drawn in between.
         let _ = frame_full(&ctx, screen, |ui| {
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None);
+            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, None, None, 1.0);
         });
         assert_eq!(
             state.surfaces.hovered,
@@ -1410,7 +1423,17 @@ mod tests {
         // reads "not hovering, not dragging", which clears it.
         let _ = frame_full(&ctx, screen, |ui| {
             let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::hover());
-            draw_lattice(ui, rect, &mut state, 0.0, 0, glam::Vec4::ZERO, Some(&response), None);
+            draw_lattice(
+                ui,
+                rect,
+                &mut state,
+                0.0,
+                0,
+                glam::Vec4::ZERO,
+                Some(&response),
+                None,
+                1.0,
+            );
         });
         assert_eq!(
             state.surfaces.hovered, None,

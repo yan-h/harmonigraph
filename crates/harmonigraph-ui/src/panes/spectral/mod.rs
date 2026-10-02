@@ -428,7 +428,15 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split);
+            atmosphere::draw_profile(
+                &painter,
+                &axes,
+                &cfg,
+                &visible,
+                budget,
+                split,
+                ribbon_floor_scale,
+            );
         }
     }
 
@@ -583,8 +591,22 @@ pub(crate) fn spectral_pane(
     // as the axis labels, and so over the same pictures: a name that could be
     // buried by a loud slab — or by the ribbon it is naming — names nothing.
     if show_history {
-        let note_names = names::plan(state, &axes, &scale, split, now, text.names, &mut namer);
+        let mut thinning = state.surfaces.note_names.remove(&surface).unwrap_or_default();
+        let note_names = names::plan(
+            &painter,
+            state,
+            &axes,
+            &scale,
+            split,
+            now,
+            text.names,
+            &mut namer,
+            &mut thinning,
+        );
+        state.surfaces.note_names.insert(surface, thinning);
         names::draw(&painter, &note_names, text.names.label, &mut labels);
+    } else {
+        state.surfaces.note_names.remove(&surface);
     }
     // Flushed before the divider: a batch is drawn where it is flushed, and
     // the divider belongs over the plots, not under the names.

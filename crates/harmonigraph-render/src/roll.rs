@@ -261,6 +261,7 @@ pub struct RollAxes {
 #[allow(clippy::too_many_arguments)]
 pub fn roll_paint_callback_with_clipped_tail(
     rect: egui::Rect,
+    pane_size: egui::Vec2,
     instances: Vec<RollInstance>,
     clipped_start: usize,
     tail_rect: egui::Rect,
@@ -275,6 +276,7 @@ pub fn roll_paint_callback_with_clipped_tail(
         rect,
         RollCallback {
             rect,
+            pane_size,
             instances,
             clipped_tail: Some((clipped_start as u32, tail_rect)),
             axes,
@@ -294,6 +296,7 @@ struct RollCallback {
     /// viewport; `prepare` is handed nothing, and needs it to size the bloom
     /// chain, so it rides here too.
     rect: egui::Rect,
+    pane_size: egui::Vec2,
     instances: Vec<RollInstance>,
     /// A trailing range whose sharp ink is clipped more tightly than `rect`.
     /// Kept in the same callback so every outline still precedes every body.
@@ -1133,6 +1136,7 @@ impl CallbackTrait for RollCallback {
         if let Some(notes_uniforms) = bloom_pass {
             let bloom =
                 pane.bloom.get_or_insert_with(|| RollBloom::new(device, &shared, roll_size));
+            bloom.bloom.set_owner_size(queue, self.pane_size * screen_descriptor.pixels_per_point);
             queue.write_buffer(&bloom.notes_uniform, 0, bytemuck::bytes_of(&notes_uniforms));
             queue.write_buffer(
                 &bloom.strength_buffer,
@@ -1468,6 +1472,7 @@ mod tests {
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let cb = RollCallback {
             rect,
+            pane_size: rect.size(),
             instances,
             clipped_tail: None,
             axes,
@@ -1542,6 +1547,7 @@ mod tests {
             queue,
             RollCallback {
                 rect,
+                pane_size: rect.size(),
                 instances,
                 clipped_tail: Some((clipped_start, rect)),
                 axes: TOP,
@@ -1571,6 +1577,7 @@ mod tests {
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let cb = RollCallback {
             rect,
+            pane_size: rect.size(),
             instances,
             clipped_tail: None,
             axes: TOP,
@@ -1888,6 +1895,7 @@ mod tests {
             assert_eq!(uniform[3], 0.0, "{shadow:?} uploaded a nonzero reach");
             let cb = RollCallback {
                 rect,
+                pane_size: rect.size(),
                 instances: vec![centered_note()],
                 clipped_tail: None,
                 axes: TOP,
@@ -1965,6 +1973,7 @@ mod tests {
                 };
                 let cb = RollCallback {
                     rect,
+                    pane_size: rect.size(),
                     instances: vec![note],
                     clipped_tail: None,
                     axes: TOP,
@@ -2623,12 +2632,109 @@ mod tests {
         assert_eq!(draw(contour), draw(harmonigraph_scene::ShadowStyle { spread: 1.0, ..contour }));
     }
 
+    fn bloom_frame(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        ppp: f32,
+        rect: egui::Rect,
+        bloom: f32,
+    ) -> Vec<u8> {
+        let size = [(256.0 * ppp) as u32; 2];
+        let cb = RollCallback {
+            rect,
+            pane_size: egui::vec2(1080.0, 1080.0),
+            instances: vec![RollInstance {
+                half_extent: [8.0, 32.0],
+                core: [128, 128, 128, 255],
+                outline: [0; 4],
+                ..centered_note()
+            }],
+            clipped_tail: None,
+            axes: TOP,
+            shadow: harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() },
+            bloom,
+            target_format: FORMAT,
+            pane_id: 0,
+            shadow_surface_id: 0,
+            pass_nr: 0,
+        };
+        let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
+        let mut resources = CallbackResources::default();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let buffers = cb.prepare(device, queue, &screen, &mut encoder, &mut resources);
+        queue.submit(buffers.into_iter().chain([encoder.finish()]));
+        let texture = render_to_texture(device, queue, size, FORMAT, wgpu::Color::BLACK, |pass| {
+            cb.paint(
+                egui::PaintCallbackInfo {
+                    viewport: rect,
+                    clip_rect: rect,
+                    pixels_per_point: ppp,
+                    screen_size_px: size,
+                },
+                pass,
+                &resources,
+            );
+        });
+        readback(device, queue, &texture, size)
+    }
+
+    #[test]
+    fn bloom_width_follows_resolution() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(256.0, 256.0));
+        let sigma = |ppp: f32| {
+            let plain = bloom_frame(&device, &queue, ppp, rect, 0.0);
+            let lit = bloom_frame(&device, &queue, ppp, rect, 1.0);
+            let width = (256.0 * ppp) as usize;
+            let y = (128.0 * ppp) as usize;
+            let (mass, moment) = (0..width).fold((0.0, 0.0), |(mass, moment), x| {
+                let i = (y * width + x) * 4;
+                let weight = f64::from(lit[i].saturating_sub(plain[i]));
+                let offset = x as f64 + 0.5 - 128.0 * f64::from(ppp);
+                (mass + weight, moment + weight * offset * offset)
+            });
+            assert!(mass > 100.0, "fixture needs measurable bloom: {mass}");
+            (moment / mass).sqrt() / f64::from(ppp)
+        };
+        let reference = sigma(1.0);
+        assert!(reference > 4.0, "fixture must reach the blur: {reference}");
+        for ppp in [0.5, 1.5, 2.0] {
+            let measured = sigma(ppp);
+            assert!(
+                (measured / reference - 1.0).abs() < 0.15,
+                "{ppp}ppp bloom widths: {reference}, {measured}"
+            );
+        }
+    }
+
+    #[test]
+    fn bloom_width_uses_the_owning_pane() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let whole = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(256.0, 256.0));
+        let cropped = egui::Rect::from_min_max(egui::pos2(0.0, 64.0), egui::pos2(256.0, 192.0));
+        let a = bloom_frame(&device, &queue, 1.0, whole, 1.0);
+        let b = bloom_frame(&device, &queue, 1.0, cropped, 1.0);
+        let mut measurable = false;
+        for y in 112..144 {
+            for x in 104..152 {
+                let i = (y * 256 + x) * 4;
+                measurable |= x > 138 && a[i] > 4;
+                assert!(a[i].abs_diff(b[i]) <= 1, "({x},{y}): {} vs {}", a[i], b[i]);
+            }
+        }
+        assert!(measurable, "comparison must contain halo outside the ribbon");
+    }
+
     /// The bloom adds light around a note and to the note itself, and adds it
     /// as LIGHT: nothing it touches is occluded, and a strength of 0 leaves the
     /// frame byte for byte the frame with no bloom in it at all.
     ///
     /// The halo is the lattice's, off the same chain — `fs_bright`'s threshold
-    /// and knee, the same 9-tap kernel at a quarter of the picture's size — so
+    /// and knee, the same pane-scaled profile on the quarter-size texture — so
     /// what this owes is that the roll runs it, not what a Gaussian does. Both
     /// halves are the point: light that did not reach past the note would be a
     /// tint, and light that did not brighten the note's own body would be a
@@ -2650,10 +2756,10 @@ mod tests {
         let plain = draw_bloomed(&device, &queue, vec![note], TOP, 0.0, wgpu::Color::BLACK);
         let lit = draw_bloomed(&device, &queue, vec![note], TOP, 1.5, wgpu::Color::BLACK);
 
-        // The note's edge is at x = 140; 10 points past it is inside the
+        // The note's edge is at x = 140; 2 points past it is inside the
         // halo's reach and well outside the note.
-        assert_eq!(at(&plain, 150, 128), 0.0, "the unbloomed frame is not black beside the note");
-        assert!(at(&lit, 150, 128) > 8.0, "no light beside the note: {}", at(&lit, 150, 128),);
+        assert_eq!(at(&plain, 142, 128), 0.0, "the unbloomed frame is not black beside the note");
+        assert!(at(&lit, 142, 128) > 8.0, "no light beside the note: {}", at(&lit, 142, 128),);
         assert!(
             at(&lit, 128, 128) > at(&plain, 128, 128) + 8.0,
             "the note's own body was not brightened: {} against {}",
@@ -2663,7 +2769,7 @@ mod tests {
         // Light, not a shape: the halo may never take alpha away from what is
         // under it, and over an opaque frame that means the alpha channel is
         // untouched everywhere.
-        for (x, y) in [(128u32, 128u32), (150, 128), (200, 40)] {
+        for (x, y) in [(128u32, 128u32), (142, 128), (200, 40)] {
             assert_eq!(
                 pixel(&lit, x, y)[3],
                 255,
@@ -2759,6 +2865,7 @@ mod tests {
     fn bloomed_callback(rect: egui::Rect, pane_id: u64) -> RollCallback {
         RollCallback {
             rect,
+            pane_size: rect.size(),
             instances: vec![centered_note()],
             clipped_tail: None,
             axes: TOP,
@@ -3124,6 +3231,35 @@ mod tests {
     }
 
     /// [`centered_note`] tapering from half its width at its top end (y 68)
+    #[test]
+    fn zero_thickness_has_no_body_shadow_or_bloom() {
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        let absent = RollInstance { taper: [0.0; 4], ..centered_note() };
+        for kernel in
+            [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+        {
+            let style = harmonigraph_scene::ShadowStyle {
+                kernel,
+                width: 8.0,
+                depth: 4.0,
+                ..Default::default()
+            };
+            let baseline = draw_shadowed(&device, &queue, vec![], style, bg_color());
+            let empty = draw_shadowed(&device, &queue, vec![absent], style, bg_color());
+            assert_eq!(empty, baseline, "{kernel:?}: invisible width left ink");
+            assert_ne!(
+                draw_shadowed(&device, &queue, vec![centered_note()], style, bg_color()),
+                baseline
+            );
+        }
+        assert_eq!(
+            draw_bloomed(&device, &queue, vec![absent], TOP, 2.0, bg_color()),
+            draw_bloomed(&device, &queue, vec![], TOP, 2.0, bg_color())
+        );
+    }
+
     /// to all of it at its bottom (y 188), in a straight line.
     fn tapered_note() -> RollInstance {
         RollInstance {

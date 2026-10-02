@@ -651,8 +651,9 @@ mod tests {
     fn default_scale_keeps_the_ui_the_same_relative_size() {
         let points_across = |size: [u32; 2]| size[0] as f32 / default_scale(size);
         assert!((points_across([1920, 1080]) - points_across([3840, 2160])).abs() < 1.0);
-        // Small outputs don't go below 1:1, which would render sub-pixel text.
-        assert_eq!(default_scale([640, 360]), 1.0);
+        for width in [320, 640, 1280, 1920, 3840, 7680] {
+            assert!((points_across([width, width * 9 / 16]) - 1280.0).abs() < 0.01);
+        }
     }
 
     fn frame(aspect_w: u32, aspect_h: u32) -> harmonigraph_ui::RenderFrame {

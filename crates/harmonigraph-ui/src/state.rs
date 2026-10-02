@@ -105,6 +105,7 @@ pub struct PictureState {
 /// Viewport geometry and temporal graphics, separate from input history.
 pub struct SurfaceState {
     pub(crate) spectrogram: crate::spectrum::SpectrogramSurfaces,
+    pub(crate) note_names: std::collections::HashMap<usize, panes::spectral::names::Thinning>,
     /// The lattice node the pointer is over, if any.
     ///
     /// Shared state that one pane writes and one pane reads: the lattice
@@ -702,6 +703,7 @@ impl SurfaceState {
     fn new(target_format: TextureFormat) -> Self {
         Self {
             spectrogram: Default::default(),
+            note_names: Default::default(),
             hovered: None,
             drawn: None,
             drawn_this_frame: None,
@@ -849,6 +851,7 @@ impl PictureState {
         self.runtime.tracker.clear_roll();
         self.runtime.spectrum.clear_history();
         self.surfaces.glow_fade.clear();
+        self.surfaces.note_names.clear();
     }
     /// The causal tracker's rolling window, filling in as notes arrive.
     pub fn roll(&self) -> &harmonigraph_core::NoteRoll {
