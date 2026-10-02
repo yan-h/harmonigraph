@@ -85,8 +85,7 @@ pub(super) fn stars(
 ) {
     use crate::widgets::Depth;
     use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_FALLOFF_MAX,
-        STAR_FALLOFF_MIN, STAR_GLOW_MAX, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
+        STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
         STAR_SPACING_MIN,
     };
     crate::widgets::depth(
@@ -107,6 +106,12 @@ pub(super) fn stars(
         STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Spacing(size_scale),
     );
+    crate::widgets::star_profile(
+        ui,
+        &mut atmosphere.star_solid_far,
+        &mut atmosphere.star_solid_near,
+        &mut atmosphere.star_glow_falloff,
+    );
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
         .show(ui)
@@ -124,25 +129,6 @@ pub(super) fn stars(
         .show(ui)
         .on_hover_text(
             "How irregularly stars are placed. 0% puts them at regular centers; 50% is half jitter; 100% is the original placement variation. More variation leaves less room for big stars, so a depth may be drawn smaller to fit. Brightness and size have their own bars, Brightness variation and Size variation.",
-        );
-    ValueBar::new(&mut atmosphere.star_glow, 0.0..=STAR_GLOW_MAX, "Glow")
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "A soft glow around every star's core in the star's own color, fading out at the star's edge. This is its strength at the center; 0% draws bare cores, 100% a glow as bright as the core.",
-        );
-    for (core, label, end) in [
-        (&mut atmosphere.star_core_far, "Core, far", "farthest"),
-        (&mut atmosphere.star_core_near, "Core, near", "nearest"),
-    ] {
-        ValueBar::new(core, STAR_CORE_MIN..=STAR_CORE_MAX, label).percent().show(ui).on_hover_text(
-            format!("How much of each of the {end} depth's stars is its bright core, as a share of the star's radius; the glow fills the rest. Depths between follow the Star size curve. Low values draw pinpoints in a wide glow; 100% spreads the core to the star's edge, a dense bed of soft stars."),
-        );
-    }
-    ValueBar::new(&mut atmosphere.star_falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff")
-        .show(ui)
-        .on_hover_text(
-            "How quickly the glow fades toward the star's edge. Low values spread it as a broad haze reaching the edge; high values draw it in as a tight bloom around the core.",
         );
     held_to_fit(ui, *atmosphere, size_scale);
 }
@@ -211,9 +197,7 @@ pub(super) fn stars_test_bed(
         STAR_IMAGE_RESOLUTION_MAX, STAR_IMAGE_RESOLUTION_MIN, STAR_PLAN_SCALE_MAX,
         STAR_PLAN_SCALE_MIN,
     };
-    use harmonigraph_scene::{
-        STAR_CORE_MAX, STAR_CORE_MIN, STAR_FALLOFF_MAX, STAR_FALLOFF_MIN, STAR_GLOW_MAX,
-    };
+    use harmonigraph_scene::STAR_SOLID_MAX;
     let window = |gather: StarGather| match gather {
         StarGather::Off => "Off",
         StarGather::Core => "1×1",
@@ -300,12 +284,10 @@ pub(super) fn stars_test_bed(
                         .on_hover_text("Multiplies every star's coverage at this depth.");
                     override_bar(ui, &mut depth.jitter, drawn.jitter, 0.0..=1.0, "Position variation", Unit::Percent)
                         .on_hover_text("Position variation for this depth alone. More variation leaves less room in each read, so stars may be drawn smaller or need a wider read.");
-                    override_bar(ui, &mut depth.core, drawn.core, STAR_CORE_MIN..=STAR_CORE_MAX, "Core", Unit::Percent)
-                        .on_hover_text("Core for this depth alone: the share of the star's radius that is its bright core.");
-                    override_bar(ui, &mut depth.glow, drawn.glow, 0.0..=STAR_GLOW_MAX, "Glow", Unit::Percent)
-                        .on_hover_text("Glow for this depth alone: its strength at the star's center.");
-                    override_bar(ui, &mut depth.falloff, drawn.falloff, STAR_FALLOFF_MIN..=STAR_FALLOFF_MAX, "Glow falloff", Unit::Plain)
-                        .on_hover_text("Glow falloff for this depth alone: low spreads the glow as a broad haze, high draws it in as a tight bloom.");
+                    override_bar(ui, &mut depth.solid, drawn.solid, 0.0..=STAR_SOLID_MAX, "Solid", Unit::Percent)
+                        .on_hover_text("Solid for this depth alone: the share of the star's radius at full coverage; the rest is glow.");
+                    override_bar(ui, &mut depth.falloff, drawn.falloff, 0.0..=1.0, "Glow falloff", Unit::Percent)
+                        .on_hover_text("Glow falloff for this depth alone: low stays bright almost to the edge, 50% falls evenly, high drops at once into a long faint tail.");
                     ui.add_enabled_ui(drawn.gather == StarGather::Three, |ui| {
                         follow_row(ui, &mut depth.tier, None, |ui| {
                             let mut tier = drawn.tier;
@@ -328,7 +310,6 @@ pub(super) fn stars_test_bed(
 enum Unit {
     Percent,
     Times,
-    Plain,
 }
 
 /// One test bed row with a follow control ahead of it: `row` draws the row
@@ -370,7 +351,6 @@ fn unit_bar<'a>(
     match unit {
         Unit::Percent => bar.percent(),
         Unit::Times => bar.unit(1.0, "\u{d7}"),
-        Unit::Plain => bar,
     }
 }
 

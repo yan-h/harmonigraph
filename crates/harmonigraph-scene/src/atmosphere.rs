@@ -156,18 +156,11 @@ pub const WASH_POOL_WIDTH_MIN: f32 = 0.05;
 /// See [`WASH_POOL_WIDTH_MIN`].
 pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 
-/// The top of [`StarSettings::star_glow`]: the glow as bright as the core at
-/// its centre.
-pub const STAR_GLOW_MAX: f32 = 1.0;
-/// Bounds of [`StarSettings::star_core_far`] and [`StarSettings::star_core_near`],
-/// as a share of the star's radius.
-pub const STAR_CORE_MIN: f32 = 0.05;
-/// See [`STAR_CORE_MIN`].
-pub const STAR_CORE_MAX: f32 = 1.0;
-/// Bounds of [`StarSettings::star_falloff`], the glow's exponent.
-pub const STAR_FALLOFF_MIN: f32 = 0.5;
-/// See [`STAR_FALLOFF_MIN`].
-pub const STAR_FALLOFF_MAX: f32 = 6.0;
+/// The top of [`StarSettings::star_solid_far`] and
+/// [`StarSettings::star_solid_near`], as a share of the star's radius: the
+/// glow keeps a tenth of the radius at least, so no star has a hard edge to
+/// alias as it drifts.
+pub const STAR_SOLID_MAX: f32 = 0.9;
 /// Bounds for the per-axis resolution of the Stars halo images.
 pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
@@ -512,24 +505,19 @@ pub struct StarSettings {
     /// alike at every depth. Each fades in and out over its life. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
-    /// The glow round each star's core, in the star's own colour: its
-    /// coverage at the centre, falling to nothing at the star's edge as
-    /// `(1 - t)^falloff`, `t` the distance over the star's radius. Runs to
-    /// [`STAR_GLOW_MAX`].
-    pub star_glow: f32,
-    /// How much of the farthest depth's stars is core: where the Gaussian
-    /// core falls to `e^-2`, as a share of the star's radius. A depth `d`
-    /// takes `far + (near - far) d^curve` on the `Star size` curve, so a dense
-    /// bed of filled far stars can sit behind near stars that are points in a
-    /// glow. Runs over [`STAR_CORE_MIN`]..=[`STAR_CORE_MAX`], either way
-    /// round.
-    pub star_core_far: f32,
-    /// The nearest depth's core share. See [`Self::star_core_far`].
-    pub star_core_near: f32,
-    /// The glow's exponent: low spreads it as a broad haze to the star's edge,
-    /// high draws it in as a tight bloom round the core. Runs over
-    /// [`STAR_FALLOFF_MIN`]..=[`STAR_FALLOFF_MAX`].
-    pub star_falloff: f32,
+    /// How much of the farthest depth's stars is solid: the share of the
+    /// star's radius at full coverage, the rest being glow that falls to
+    /// nothing at the star's edge ([`crate::star_plan::star_profile`]). A depth
+    /// `d` takes `far + (near - far) d^curve` on the `Star size` curve, so a
+    /// dense bed of solid far stars can sit behind near stars that are all
+    /// glow. Runs over `0..=`[`STAR_SOLID_MAX`], either way round.
+    pub star_solid_far: f32,
+    /// The nearest depth's solid share. See [`Self::star_solid_far`].
+    pub star_solid_near: f32,
+    /// How the glow falls from the solid edge to the star's edge, over 0..=1:
+    /// 0 stays bright almost to the edge, 0.5 falls evenly, 1 drops at once
+    /// and leaves a long faint tail ([`crate::star_plan::star_falloff_bend`]).
+    pub star_glow_falloff: f32,
     /// Halo image width and height relative to the pane's device pixels.
     /// Lower values soften the halo sampling without moving stars or changing
     /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
@@ -577,10 +565,11 @@ impl Default for StarSettings {
             star_speed_near: 0.16860056,
             star_speed_curve: 3.179647,
             star_lifetime: 2.9719827,
-            star_glow: 0.5,
-            star_core_far: 1.0,
-            star_core_near: 0.35,
-            star_falloff: 0.7,
+            // Fitted to the Gaussian-core-and-glow stars this replaced, at their
+            // fresh dials, over the star's area at every depth.
+            star_solid_far: 0.48,
+            star_solid_near: 0.0,
+            star_glow_falloff: 0.5,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
             test_bed: None,
@@ -660,13 +649,10 @@ impl StarSettings {
         );
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        self.star_glow = clamp(self.star_glow, fresh.star_glow, 0.0, STAR_GLOW_MAX);
-        self.star_core_far =
-            clamp(self.star_core_far, fresh.star_core_far, STAR_CORE_MIN, STAR_CORE_MAX);
-        self.star_core_near =
-            clamp(self.star_core_near, fresh.star_core_near, STAR_CORE_MIN, STAR_CORE_MAX);
-        self.star_falloff =
-            clamp(self.star_falloff, fresh.star_falloff, STAR_FALLOFF_MIN, STAR_FALLOFF_MAX);
+        self.star_solid_far = clamp(self.star_solid_far, fresh.star_solid_far, 0.0, STAR_SOLID_MAX);
+        self.star_solid_near =
+            clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);
+        self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
         self.star_halo_resolution = clamp(
             self.star_halo_resolution,
             fresh.star_halo_resolution,

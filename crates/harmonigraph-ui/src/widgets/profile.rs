@@ -126,6 +126,56 @@ pub(crate) fn depth(
     });
 }
 
+/// One star from its centre (left) to its edge (right): how much of it is
+/// solid at the farthest and the nearest depth, and how its glow falls off.
+/// The far star is drawn dim and the near one in the accent; each corner
+/// handle sets that depth's solid share, and the handle halfway down the near
+/// glow sets the shared falloff.
+pub(crate) fn star_profile(
+    ui: &mut Ui,
+    solid_far: &mut f32,
+    solid_near: &mut f32,
+    falloff: &mut f32,
+) {
+    use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile};
+    use harmonigraph_scene::STAR_SOLID_MAX;
+    let plot = Plot::with_fields(ui, "Star profile · centre → edge", 3);
+    for (solid, key) in [(&mut *solid_far, "Far solid edge"), (&mut *solid_near, "Near solid edge")]
+    {
+        let (_, next) = plot.handle(ui, key, *solid, 1.0);
+        if let Some(p) = next {
+            *solid = p.x.min(STAR_SOLID_MAX);
+        }
+    }
+    // Halfway along the near glow, where the curve stands at `0.5 / (1 + bend
+    // / 2)`; its height there gives the bend back, and the bend the falloff.
+    let mid = |solid: f32| solid + 0.5 * (1.0 - solid);
+    let at = |solid: f32, falloff: f32| star_profile(mid(solid), solid, star_falloff_bend(falloff));
+    let (_, next) = plot.handle(ui, "Glow falloff", mid(*solid_near), at(*solid_near, *falloff));
+    if let Some(p) = next {
+        let y = p.y.clamp(0.01, 0.99);
+        *falloff = (((1.0 - y) / y).ln() / 16f32.ln() + 1.0) * 0.5;
+        *falloff = falloff.clamp(0.0, 1.0);
+    }
+    plot.fields(ui, |ui| {
+        value_bar(ui, solid_far, 0.0..=STAR_SOLID_MAX, ["Solid, far", "Far"], 100.0, "%");
+        value_bar(ui, solid_near, 0.0..=STAR_SOLID_MAX, ["Solid, near", "Near"], 100.0, "%");
+        value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow"], 100.0, "%");
+    });
+    plot.response.clone().on_hover_text(
+        "One star's coverage from its centre (left) to its edge (right), set by Star size: the farthest depth's dim, the nearest's in colour, and the depths between follow the Star size curve. Solid is the share of the radius at full coverage; the rest is glow. Glow falloff at 0% stays bright almost to the edge, at 50% falls evenly, and at 100% drops at once into a long faint tail.",
+    );
+    let bend = star_falloff_bend(*falloff);
+    for (solid, color) in
+        [(*solid_far, super::value::curve_color()), (*solid_near, theme::accent())]
+    {
+        curve(&plot, ui, |t| (t, star_profile(t, solid, bend)), color);
+    }
+    plot.dot(ui, *solid_far, 1.0);
+    plot.dot(ui, *solid_near, 1.0);
+    plot.dot(ui, mid(*solid_near), at(*solid_near, *falloff));
+}
+
 pub(crate) fn shadow(
     ui: &mut Ui,
     style: &mut harmonigraph_scene::ShadowStyle,

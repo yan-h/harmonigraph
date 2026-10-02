@@ -68,7 +68,7 @@ mod threshold;
 mod timing;
 pub(crate) use direction::{cabinet, drift, softness};
 pub(crate) use pickers::{contours, skin_color, spectrum_edge};
-pub(crate) use profile::{depth, shadow, Depth};
+pub(crate) use profile::{depth, shadow, star_profile, Depth};
 pub(crate) use threshold::threshold;
 pub(crate) use timing::{fade, response};
 
