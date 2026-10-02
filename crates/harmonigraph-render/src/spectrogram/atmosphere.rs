@@ -977,7 +977,6 @@ fn memory_key(
                 star_core_far: _, // response/coverage changes do not change material identity
                 star_core_near: _, // response/coverage changes do not change material identity
                 star_falloff: _, // response/coverage changes do not change material identity
-                test_bed: _,  // its cells and bands are appended where the cells are
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1952,48 +1951,6 @@ mod tests {
         assert_eq!(layout.layers, [[0, 0], [0, 0], [0, 0], [0, 0], [0, 1]]);
     }
 
-    /// The star test bed's plan decides what is allocated and baked: an Off
-    /// depth holds no atlas cells, only 3x3 depths own halo images, each at
-    /// its tier's size, and each slice carries its gather to the shader.
-    #[test]
-    fn a_test_bed_plan_allocates_and_bakes_only_what_it_draws() {
-        use harmonigraph_scene::star_plan::{StarGather, StarTestBed};
-        let production = harmonigraph_scene::StarSettings::default();
-        let mut bed = StarTestBed::default();
-        let gathers = [
-            StarGather::Off,
-            StarGather::Two,
-            StarGather::Three,
-            StarGather::Core,
-            StarGather::Three,
-        ];
-        for ((depth, gather), tier) in bed.depths.iter_mut().zip(gathers).zip([0, 0, 2, 0, 0]) {
-            depth.gather = Some(gather);
-            depth.tier = Some(tier);
-        }
-        bed.halo_tiers = [Some(0.5), Some(0.3), Some(0.25)];
-        bed.far = Some(1.0);
-        bed.near = Some(1.0);
-        let stars = harmonigraph_scene::StarSettings { test_bed: Some(bed), ..production };
-
-        let halos = super::star_halo_layout([161, 121], stars);
-        assert_eq!(halos.active, [false, false, true, false, true]);
-        assert_eq!(
-            halos.groups.map(|g| (g.size, g.layers)),
-            [([41, 31], 1), ([81, 61], 1), ([1, 1], 0)]
-        );
-        assert!(!crate::stars::star_far_reduced(stars));
-        assert_eq!(super::star_near_size([161, 121], stars), None);
-
-        let layout = star_layout(stars, 16.0 / 9.0);
-        let every = star_layout(production, 16.0 / 9.0);
-        assert_eq!(layout.grids[0], [0, 0]);
-        assert_eq!(layout.grids[1..], every.grids[1..]);
-        assert_eq!(layout.texels, every.texels - u64::from(every.grids[0][0] * every.grids[0][1]));
-        let slices = star_slices(stars, 0.0, 0.0, &layout);
-        assert_eq!(slices.map(|s| s.gather), [0, 2, 3, 1, 3]);
-    }
-
     /// The halo images are allocated for exactly the depths the plan draws
     /// 3x3, even where the settings are the lattice's, scaled past the range
     /// a stored value can hold: Star size 20 shows as 100 there, which at
@@ -2189,9 +2146,7 @@ mod tests {
         let layout = star_layout(fine.stars, 16.0 / 9.0);
         let floor = layout.cells[0];
         assert!(floor > wanted[0], "{layout:?}");
-        assert!(
-            !super::StarLayout::at(wanted, [true; STAR_SLICES], floor * 0.99, 16.0 / 9.0).fits()
-        );
+        assert!(!super::StarLayout::at(wanted, floor * 0.99, 16.0 / 9.0).fits());
         for (got, want) in layout.cells.iter().zip(wanted) {
             assert_eq!(*got, want.max(floor));
         }

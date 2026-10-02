@@ -1861,75 +1861,91 @@ mod tests {
     /// over a flat level so a star's colour does not change with where
     /// it is, on a 540-point pane so a star pixel is a device pixel — and the
     /// clock steps by the time the drift takes to cover a whole number of
-    /// them, and of texels in every reduced star image too (Medium's far 50%
-    /// and near 75%: 8 pixels is 4 and 6, and the nearest halo held at 50%
-    /// rather than Medium's 45%, which would move 3.6 texels), so resampling
-    /// is not read as a move. A longer step instead moves fading stars past
-    /// the threshold. The 50% is the dev test bed's halo override, the only
-    /// lever on one tier; without the test bed this needs its own. Lives are long and the step short, so a star's fade moves a
+    /// them, and of texels in every reduced star image too, so resampling is
+    /// not read as a move. No one profile is whole at 8 pixels everywhere
+    /// (Medium's nearest halo at 45% would move 3.6 texels), so the field is
+    /// drawn twice: Medium with every depth small enough to read 2x2, for its
+    /// far 50% and near 75% images (4 and 6 texels), and Uniform at 50%, for
+    /// the 3x3 halos (4). A longer step instead moves fading stars past the
+    /// threshold. Lives are long and the step short, so a star's fade moves a
     /// couple of levels at most, and a life that turns over is at zero at both
     /// ends of the turn. An ignored offset leaves the field where it was, and
     /// a flipped one moves it the other way: either fails the first assert.
     #[test]
     fn the_starfield_moves_by_the_drift() {
+        use harmonigraph_scene::{star_plan::StarGather, StarHaloProfile};
         const PANE: u32 = 540;
         const SHIFT: usize = 8;
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
-        let mut cb = refracted_fixture();
-        cb.rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
-        relay_quad(&mut cb, 12);
-        cb.read.rows = PANE;
-        cb.grid.fill(150);
-        let atmosphere = cb.atmosphere.as_mut().unwrap();
-        atmosphere.region = cb.rect;
-        atmosphere.now = 3.0;
-        let s = &mut atmosphere.settings;
-        s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-        s.cloud_depth = 1.0;
-        (s.pitch_softness, s.time_softness) = (0.0, 0.0);
-        (s.stars.star_speed_min, s.stars.star_speed_max, s.cloud_direction) = (SPEED, SPEED, 0.0);
-        s.stars.star_lifetime = 20.0;
-        // Equal sizes: the smallest stars' cores resample unevenly in the
-        // reduced halo images under a whole-pixel shift, which is not drift.
-        s.stars.star_size_variation = 0.0;
-        let mut whole_texels = harmonigraph_scene::star_plan::StarTestBed::default();
-        whole_texels.halo_tiers[1] = Some(0.5);
-        s.stars.test_bed = Some(whole_texels);
-        let mut resources = CallbackResources::default();
-        let before = frame_with(&device, &queue, &mut resources, &cb);
-        cb.atmosphere.as_mut().unwrap().now +=
-            SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_px_per_second());
-        let after = frame_with(&device, &queue, &mut resources, &cb);
+        for (profile, size_max, three) in [
+            (StarHaloProfile::Medium, 6.0, false),
+            (
+                StarHaloProfile::Uniform,
+                harmonigraph_scene::StarSettings::default().star_size_max,
+                true,
+            ),
+        ] {
+            let mut cb = refracted_fixture();
+            cb.rect =
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
+            relay_quad(&mut cb, 12);
+            cb.read.rows = PANE;
+            cb.grid.fill(150);
+            let atmosphere = cb.atmosphere.as_mut().unwrap();
+            atmosphere.region = cb.rect;
+            atmosphere.now = 3.0;
+            let s = &mut atmosphere.settings;
+            s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
+            s.cloud_depth = 1.0;
+            (s.pitch_softness, s.time_softness) = (0.0, 0.0);
+            (s.stars.star_speed_min, s.stars.star_speed_max, s.cloud_direction) =
+                (SPEED, SPEED, 0.0);
+            s.stars.star_lifetime = 20.0;
+            // Equal sizes: the smallest stars' cores resample unevenly in the
+            // reduced halo images under a whole-pixel shift, which is not drift.
+            s.stars.star_size_variation = 0.0;
+            (s.stars.star_halo_profile, s.stars.star_halo_resolution) = (profile, 0.5);
+            s.stars.star_size_max = size_max;
+            let gathers = s.stars.plan().depths.map(|depth| depth.gather);
+            assert_eq!(gathers.contains(&StarGather::Three), three, "{profile:?}: {gathers:?}");
+            let mut resources = CallbackResources::default();
+            let before = frame_with(&device, &queue, &mut resources, &cb);
+            cb.atmosphere.as_mut().unwrap().now +=
+                SHIFT as f64 / (f64::from(SPEED) * atmosphere::star_px_per_second());
+            let after = frame_with(&device, &queue, &mut resources, &cb);
 
-        // Clear of the edges, where the light the stars read need not be flat.
-        let (margin, side) = (40usize, PANE as usize);
-        let px = |frame: &[u8], x: usize, y: usize| {
-            let at = (y * side + x) * 4;
-            [frame[at], frame[at + 1], frame[at + 2]]
-        };
-        let apart = |a: [u8; 3], b: [u8; 3]| (0..3).any(|c| a[c].abs_diff(b[c]) > 8);
-        let interior = || {
-            (margin..side - margin)
-                .flat_map(move |y| (margin + SHIFT..side - margin).map(move |x| (x, y)))
-        };
-        let total = interior().count();
-        let floor = cb.shades.lut[0];
-        let lit = interior()
-            .filter(|&(x, y)| apart(px(&before, x, y), [floor[0], floor[1], floor[2]]))
-            .count();
-        assert!(lit * 5 > total, "too few stars to see a move: {lit} of {total} pixels lit");
-        let moved =
-            interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x - SHIFT, y))).count();
-        assert!(
-            moved * 200 < total,
-            "the field is not the earlier one moved {SHIFT} px: {moved} of {total} differ"
-        );
-        let still = interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x, y))).count();
-        assert!(
-            still * 10 > total,
-            "the field did not move: only {still} of {total} pixels changed"
-        );
+            // Clear of the edges, where the light the stars read need not be flat.
+            let (margin, side) = (40usize, PANE as usize);
+            let px = |frame: &[u8], x: usize, y: usize| {
+                let at = (y * side + x) * 4;
+                [frame[at], frame[at + 1], frame[at + 2]]
+            };
+            let apart = |a: [u8; 3], b: [u8; 3]| (0..3).any(|c| a[c].abs_diff(b[c]) > 8);
+            let interior = || {
+                (margin..side - margin)
+                    .flat_map(move |y| (margin + SHIFT..side - margin).map(move |x| (x, y)))
+            };
+            let total = interior().count();
+            let floor = cb.shades.lut[0];
+            let lit = interior()
+                .filter(|&(x, y)| apart(px(&before, x, y), [floor[0], floor[1], floor[2]]))
+                .count();
+            assert!(lit * 5 > total, "{profile:?}: too few stars to see a move: {lit} of {total}");
+            let moved = interior()
+                .filter(|&(x, y)| apart(px(&after, x, y), px(&before, x - SHIFT, y)))
+                .count();
+            assert!(
+                moved * 200 < total,
+                "{profile:?}: the field is not the earlier one moved {SHIFT} px: {moved} of {total} differ"
+            );
+            let still =
+                interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x, y))).count();
+            assert!(
+                still * 10 > total,
+                "{profile:?}: the field did not move: only {still} of {total} pixels changed"
+            );
+        }
     }
 
     fn cloud_fixture() -> SpectrogramCallback {

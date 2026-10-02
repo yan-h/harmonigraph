@@ -65,8 +65,7 @@ struct StarSlice {
     falloff: f32,
     /// Where this slice sits in the star atlas: the texel its first cell
     /// takes, counted along the rows, the cell that first one is, and how
-    /// many cells it holds across and down. See [`StarLayout`]. An undrawn
-    /// slice holds no cells.
+    /// many cells it holds across and down. See [`StarLayout`].
     base: i32,
     origin: Int2,
     grid: Int2,
@@ -75,17 +74,16 @@ struct StarSlice {
     /// slice's `Position variation`.
     width: f32,
     inner: f32,
-    /// A multiplier on every star's coverage.
-    gain: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
+    /// The rest of the slice's 16-byte stride is padding.
+    pad: u32,
 }
 }
 
 /// The shader's code for a gather, which `star_layers` and the bake read.
 fn star_gather_code(gather: StarGather) -> u32 {
     match gather {
-        StarGather::Off => 0,
         StarGather::Core => 1,
         StarGather::Two => 2,
         StarGather::Three => 3,
@@ -144,7 +142,7 @@ pub(crate) struct StarLayout {
     /// Each slice's cell in star pixels: the dials' own, unless the atlas
     /// could not hold the finest of them.
     pub(crate) cells: [f32; STAR_SLICES],
-    /// Cells across and down in each slice, none for an undrawn one, and the
+    /// Cells across and down in each slice, and the
     /// atlas texel its first cell is, counted along the rows.
     pub(crate) grids: [[u32; 2]; STAR_SLICES],
     pub(crate) bases: [u32; STAR_SLICES],
@@ -155,26 +153,14 @@ pub(crate) struct StarLayout {
 }
 
 impl StarLayout {
-    pub(crate) fn at(
-        cells: [f32; STAR_SLICES],
-        drawn: [bool; STAR_SLICES],
-        floor: f32,
-        aspect: f32,
-    ) -> Self {
+    pub(crate) fn at(cells: [f32; STAR_SLICES], floor: f32, aspect: f32) -> Self {
         let cells = cells.map(|cell| cell.max(floor));
         let pane = [STAR_PANE * aspect, STAR_PANE];
         // Retain the padded atlas bounds needed by the halo
-        // pass's 3x3 walk around each pixel's nominal cell. An undrawn slice
-        // bakes nothing.
+        // pass's 3x3 walk around each pixel's nominal cell.
         let grids = std::array::from_fn(|k| {
             pane.map(|span| {
-                let cells =
-                    ((span / cells[k]).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN);
-                if drawn[k] {
-                    cells
-                } else {
-                    0
-                }
+                ((span / cells[k]).ceil() as u32).saturating_add(4 + 2 * STAR_GRID_MARGIN)
             })
         });
         // Each slice's cells row after row, straight after the last slice's,
@@ -208,8 +194,7 @@ impl StarLayout {
 /// every other slice is untouched.
 pub(crate) fn star_layout(settings: harmonigraph_scene::StarSettings, aspect: f32) -> StarLayout {
     let wanted = star_cells(settings);
-    let drawn = settings.plan().depths.map(|depth| depth.gather != StarGather::Off);
-    let at = |floor| StarLayout::at(wanted, drawn, floor, aspect);
+    let at = |floor| StarLayout::at(wanted, floor, aspect);
     let whole = at(0.0);
     if whole.fits() {
         return whole;
@@ -265,6 +250,7 @@ pub(crate) fn star_slices(
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
     let plan = settings.plan();
+    let jitter = settings.star_jitter;
     std::array::from_fn(|k| {
         let depth = plan.depths[k];
         let cell = layout.cells[k];
@@ -288,10 +274,10 @@ pub(crate) fn star_slices(
             base: layout.bases[k] as i32,
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
-            width: star_jitter_width(depth.jitter),
-            inner: StarGather::Core.bound(depth.jitter),
-            gain: depth.gain,
+            width: star_jitter_width(jitter),
+            inner: StarGather::Core.bound(jitter),
             gather: star_gather_code(depth.gather),
+            pad: 0,
         }
     })
 }

@@ -61,7 +61,6 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         ]);
         if settings.material_style == LatticeMaterial::Stars {
             super::material::stars_quality(ui, &mut settings.stars);
-            super::material::stars_test_bed(ui, &mut settings.stars, harmonigraph_scene::LATTICE_STAR_SIZE_SCALE);
         }
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")

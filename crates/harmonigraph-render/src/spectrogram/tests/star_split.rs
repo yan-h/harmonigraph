@@ -367,12 +367,11 @@ fn uniform_halos_preserve_the_original_array_lookup() {
     let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
     let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
     stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
-    // Every depth 3x3, so every depth owns a layer of the one Uniform array.
-    let mut bed = harmonigraph_scene::star_plan::StarTestBed::default();
-    for depth in &mut bed.depths {
-        depth.gather = Some(harmonigraph_scene::star_plan::StarGather::Three);
-    }
-    stars.test_bed = Some(bed);
+    // Stars too big for 2x2 at every depth, so every depth owns a layer of
+    // the one Uniform array.
+    (stars.star_size_min, stars.star_size_max) = (64.0, 64.0);
+    let three = harmonigraph_scene::star_plan::StarGather::Three;
+    assert!(stars.plan().depths.iter().all(|depth| depth.gather == three));
     for resolution in [0.25, 0.5, 1.0] {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = resolution;
         let mut frames = Vec::new();

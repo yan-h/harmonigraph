@@ -26,10 +26,10 @@ struct StarSlice {
     // own cell wherever its centre is drawn, in cells.
     width: f32,
     inner: f32,
-    gain: f32,
-    // 0 not drawn, 1 the whole star from its own cell, 2 the whole star from a
+    // 1 the whole star from its own cell, 2 the whole star from a
     // 2x2 read, 3 its inner part plus the rest from a 3x3 halo image.
     gather: u32,
+    pad: u32,
 };
 struct StarUniforms {
     origin: vec2<f32>,
@@ -126,8 +126,7 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // reach past what its depth's read holds.
     let radius = s.radius * exp(-2.4 * star_size_variation() * c.y);
     // It fades in over the start of its life and out over the end.
-    var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through)
-        * s.gain;
+    var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
     if paint.a != 1.0 { fade *= paint.a; }
     return vec4<u32>(

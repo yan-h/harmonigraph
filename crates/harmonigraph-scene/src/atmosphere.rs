@@ -538,11 +538,6 @@ pub struct StarSettings {
     /// resolutions, for the far three depths' one shared image and the
     /// nearest two's halos. Saves without a profile use Medium.
     pub star_halo_profile: StarHaloProfile,
-    /// The dev-only star test bed: while it is `Some`, its overrides apply on
-    /// top of the plan these settings give. Never saved, so every load starts
-    /// at production.
-    #[serde(skip)]
-    pub test_bed: Option<crate::star_plan::StarTestBed>,
 }
 impl Default for StarSettings {
     fn default() -> Self {
@@ -583,7 +578,6 @@ impl Default for StarSettings {
             star_falloff: 0.7,
             star_halo_resolution: 0.5,
             star_halo_profile: StarHaloProfile::default(),
-            test_bed: None,
         }
     }
 }
