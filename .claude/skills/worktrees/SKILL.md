@@ -64,8 +64,10 @@ claude session <name> (pid <n> start <date>)
 claude agent <name> (pid <n> start <date>)
 ```
 
-The second is Remote Control's, for a worktree `claude remote-control --spawn worktree` creates, and its pid is the daemon's rather than the session's.
-The daemon outlives every session it spawns, so the reclaim script ignores that pid and reads such a lock as live while any process has its cwd inside the worktree.
+The harness drops ` start <date>` when it cannot read the start time, and the script accepts both.
+The Agent tool's `isolation: "worktree"` writes the `agent` shape as `agent-a<hex>` with its parent session's pid, which the script reads like a session's.
+Remote Control writes it as `bridge-<id>` for a worktree `claude remote-control --spawn worktree` creates, and that pid is the daemon's, which outlives every session it spawns.
+For `bridge-` alone, the script ignores the pid's liveness and reads the lock as live while any process has its cwd inside the worktree, or while `lsof` cannot show it the daemon's cwd.
 
 A reason that matches neither belongs to nobody, and all of them are right to leave it alone rather than guess at whose it is.
 That makes a hand-written lock the one lock here that NOTHING can release:

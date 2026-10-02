@@ -98,9 +98,9 @@
 #     what says, is stale and does not protect anything. Every other reading
 #     of a live pid counts as live; `.claude/tests/reclaim-locks.sh` is the
 #     gate on that, because getting it wrong deletes a directory
-#   - it is not locked by a live AGENT — the `claude agent` lock that Remote
-#     Control's `--spawn worktree` writes names the long-lived daemon's pid,
-#     so liveness there is read from process cwds instead; see the lock check
+#   - it is not locked by a live REMOTE CONTROL session — its `claude agent
+#     bridge-<id>` lock names the long-lived daemon's pid, so liveness there
+#     is read from process cwds instead; see the lock check
 #   - nothing near its top level was touched in the last MIN_IDLE_MINUTES
 #
 # A worktree's cache is PRUNED (tier 1) on the same ownership, session and
@@ -430,35 +430,38 @@ detach_delete() {
   return 0
 }
 
-# Every process cwd on the machine, one physical path per line, read once per
-# run and only when a `claude agent` lock asks (see usable). CWDS_OK is the
-# positive control: this script's own cwd has to be in the list, because an
-# lsof that cannot see the cwd of the process that ran it cannot be trusted to
-# see a session's, and an empty list would read every agent lock as stale.
-PROC_CWDS=""
-CWDS_TRIED=0
-CWDS_OK=0
-
-load_cwds() {
-  [ "$CWDS_TRIED" = 1 ] && return 0
-  CWDS_TRIED=1
-  command -v lsof >/dev/null 2>&1 || return 0
-  # -Fn prints `n<path>` per cwd; -n -P -w skip DNS, port names and warnings.
-  PROC_CWDS=$(lsof -nP -w -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
-  grep -Fxq "$(pwd -P)" <<<"$PROC_CWDS" && CWDS_OK=1
-  return 0
-}
+# Every process's cwd on the machine, read once per run and only when a
+# Remote Control lock asks (see usable): `p<pid>` and `n<path>` lines, the
+# paths physical. -n -P -w skip DNS, port names and warnings; -b keeps lsof
+# from blocking on a stale network mount at session start.
+LSOF_OUT=""
+LSOF_TRIED=0
 
 # 0 when some process has its cwd at or below $1, 1 when none does, 2 when the
 # cwds could not be read — which the caller treats as held.
+#
+# $2 is the positive control: a pid lsof must list before its silence about
+# the worktree means anything. The lock's daemon while it is alive, since it is
+# outside this script's own process tree, which is the one thing a sandboxed
+# hand-run still sees; this script itself once the daemon has gone. An empty
+# list, or one that misses the control, would read every lock as stale.
 cwd_inside() {
-  load_cwds
-  [ "$CWDS_OK" = 1 ] || return 2
+  if [ "$LSOF_TRIED" = 0 ]; then
+    LSOF_TRIED=1
+    command -v lsof >/dev/null 2>&1 &&
+      LSOF_OUT=$(lsof -nP -w -b -d cwd -Fpn 2>/dev/null)
+  fi
+  ctl=$2
+  ps -p "$ctl" >/dev/null 2>&1 || ctl=$$
   real=$(cd "$1" 2>/dev/null && pwd -P) || return 2
+  # The control needs a PATH under its pid, not just the pid: a listing whose
+  # `n` lines went missing would otherwise pass it and find nothing inside.
   # ENVIRON rather than -v, which would read backslashes in the path as escapes.
-  P=$real awk 'BEGIN { p = ENVIRON["P"] }
-    $0 == p || index($0, p "/") == 1 { found = 1; exit }
-    END { exit !found }' <<<"$PROC_CWDS"
+  P=$real C=$ctl awk 'BEGIN { p = ENVIRON["P"]; c = "p" ENVIRON["C"] }
+    /^p/ { cur = $0 }
+    /^n/ { n = substr($0, 2); if (cur == c) ctl = 1
+           if (n == p || index(n, p "/") == 1) found = 1 }
+    END { if (!ctl) exit 2; exit !found }' <<<"$LSOF_OUT"
 }
 
 # The cache a skipped worktree goes on holding, for the dry run's closing tally.
@@ -496,54 +499,63 @@ usable() {
       return 1 ;;
   esac
 
-  # A lock naming a live pid means a session still owns this worktree. A lock we
-  # cannot attribute to a pid is left alone rather than guessed at.
+  # A lock naming a live pid means a session still owns this worktree, unless
+  # that pid is one whose liveness says nothing about the session (below). A
+  # lock we cannot attribute to a pid is left alone rather than guessed at.
   #
-  # Attributable means written by the harness, in one of its own two formats,
-  # and the whole string has to match — a bare `pid <n>` anywhere in the reason
-  # is not enough. Prose naming a number is what a PERSON writes, and a
-  # person's lock is the one this script must never answer for: CLAUDE.md tells
-  # sessions a hand-written lock stands until a human clears it, so reading a
-  # pid out of its prose and finding it dead would delete the worktree that
-  # promise covers.
+  # Attributable means written by the harness, in its own format, and the whole
+  # string has to match — a bare `pid <n>` anywhere in the reason is not enough.
+  # The harness writes `claude session|agent <name> (pid <n> start <date>)`,
+  # dropping ` start <date>` when it cannot read the process start time; this
+  # is the harness's own pattern. Prose naming a number is what a PERSON
+  # writes, and a person's lock is the one this script must never answer for:
+  # CLAUDE.md tells sessions a hand-written lock stands until a human clears it,
+  # so reading a pid out of its prose and finding it dead would delete the
+  # worktree that promise covers.
   if [ "$locked" = 1 ]; then
-    # `claude agent <name> (pid <n> start <date>)` is what Remote Control writes
-    # for a worktree it spawns (`claude remote-control --spawn worktree`), and
-    # its pid is the DAEMON's, not the session's. The daemon outlives every
-    # session it spawns, so that pid is alive for as long as the phone bridge
-    # is up — reading it the way the session branch below does made each of
-    # these locks permanent. One held 8.2G (7.3G of it target/debug) on a disk
-    # at 95%, its HEAD the head sha of merged #1354, with nothing running in it
-    # (2026-10-02).
-    #
-    # So the pid is ignored and the question is asked of the worktree itself:
-    # does any process have its cwd there? A session, the cargo build it
-    # started, and a terminal someone left open in it all do, which is why
-    # this asks every process and not only `claude`. It errs live wherever it
-    # cannot read — lsof missing, or failing to see even this script's own cwd.
-    #
-    # What it cannot see is a session that holds no process between turns. A
-    # cwd-less agent worktree is still only pruned after PRUNE_IDLE_MINUTES of
-    # no build and removed after MIN_IDLE_MINUTES of no writes, resolved work
-    # and a clean tree, so the most a wrong "stale" here costs is a debug
-    # rebuild or the release build of a branch whose PR is already decided.
-    if [ -n "$(printf '%s' "$reason" | \
-      sed -n '/^ *claude agent .* (pid [0-9][0-9]* start .*)$/p')" ]; then
-      cwd_inside "$path"
-      case $? in
-        0) note_held "$name" "$path" "agent lock, and a process is running in it"
-           return 1 ;;
-        1) note "stale lock $name: agent lock, and no process has its cwd inside"
-           return 0 ;;
-        *) note_held "$name" "$path" "agent lock, and process cwds are unreadable"
-           return 1 ;;
-      esac
-    fi
-    pid=$(printf '%s' "$reason" | \
-      sed -n 's/^ *claude session .* (pid \([0-9][0-9]*\) start .*)$/\1/p')
-    if [ -z "$pid" ]; then
+    lock=$(printf '%s' "$reason" | sed -nE \
+      's/^ *claude (agent bridge-|agent |session ).+ \(pid ([0-9]+)( start .+)?\)$/\1|\2/p')
+    if [ -z "$lock" ]; then
       note "skip $name: locked by a reason this script did not write"
       return 1
+    fi
+    pid=${lock##*|}
+
+    # `claude agent bridge-<id>` is Remote Control's lock, for a worktree
+    # `claude remote-control --spawn worktree` creates, and its pid is the
+    # DAEMON's, not the session's. The daemon outlives every session it spawns,
+    # so that pid is alive for as long as the phone bridge is up — read like
+    # any other pid it made each of these locks permanent. One held 8.2G (7.3G
+    # of it target/debug) on a disk at 95%, its HEAD the head sha of merged
+    # #1354, with nothing running in it (2026-10-02).
+    #
+    # So the question is asked of the worktree itself: does any process have
+    # its cwd there? The daemon runs each session as a child process in the
+    # worktree and keeps it for the session's life, and the cargo build it
+    # starts and a terminal left open in it count too, which is why this asks
+    # every process and not only `claude`.
+    #
+    # Only the `bridge-` name means this. The Agent tool's `isolation:
+    # "worktree"` writes the same `claude agent` shape, as `agent-a<hex>`, with
+    # the PARENT session's pid — and the subagent runs inside that process, so
+    # its worktree holds no cwd between commands. For that lock the pid is the
+    # signal, and it takes the session path below.
+    #
+    # A wrong "stale" here still passes the idle, resolved and clean gates, but
+    # resolved includes a worktree still sitting on main's own commit, so a
+    # session that had made no commit could lose its worktree. That needs its
+    # child process gone while the session lives on, which the daemon does not
+    # do; anything this cannot read reads live.
+    if [ "${lock%|*}" = "agent bridge-" ]; then
+      cwd_inside "$path" "$pid"
+      case $? in
+        0) note_held "$name" "$path" "Remote Control lock, and a process is running in it"
+           return 1 ;;
+        1) note "stale lock $name: Remote Control lock, and no process has its cwd inside"
+           return 0 ;;
+        *) note "skip $name: Remote Control lock, and lsof cannot show process cwds"
+           return 1 ;;
+      esac
     fi
     if ps -p "$pid" >/dev/null 2>&1; then
       # The pid being alive does NOT make the lock live. Every local session

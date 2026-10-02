@@ -222,23 +222,26 @@ check_handmade_lock() {
   fi
 }
 
-# Remote Control's `--spawn worktree` locks with `claude agent <name> (pid <n>
-# start <date>)`, and the pid is the daemon's: alive for as long as the phone
-# bridge is up, whether or not anything still runs in the worktree. So the ps
-# shim below answers ALIVE in every mode, and the lock's liveness has to come
-# from process cwds instead — the lsof shim is what varies:
+# Remote Control's `--spawn worktree` locks with `claude agent bridge-<id> (pid
+# <n> start <date>)`, and the pid is the daemon's: alive for as long as the
+# phone bridge is up, whether or not anything still runs in the worktree. So
+# the ps shim below answers ALIVE in every case, and the lock's liveness has to
+# come from process cwds instead — the lsof shim is what varies:
 #
-#   inside  a process sits in a subdirectory of the worktree    -> held
-#   none    only a sibling sharing its name as a prefix does    -> stale
+#   inside  a process sits at the worktree's root              -> held
+#   none    only a sibling sharing its name as a prefix does   -> stale
 #           (the boundary a bare prefix match gets wrong)
-#   blind   lsof prints nothing, not even the script's own cwd  -> held
+#   blind   lsof lists other processes but not the daemon      -> held
+#           (a sandbox that sees only part of the process table)
 #
-# The stale case asserts "would remove", not just "stale lock": the idle and
+# The stale cases assert "would remove", not just "stale lock": the idle and
 # resolved gates come after, and only reaching the removal line proves a live
-# daemon pid did not stop it first.
+# daemon pid did not stop it first. The last case is the same `claude agent`
+# shape from the Agent tool, whose pid is its parent session's and IS the
+# signal: no cwd inside, and still held.
 check_agent_lock() {
-  mode=$1; desc=$2; want=$3
-  work="$TMP/agent-$mode"
+  mode=$1; desc=$2; reason=$3; want=$4
+  work="$TMP/agent$((++case_n))"
   main="$work/main"
   mkdir -p "$main" "$work/bin"
 
@@ -258,26 +261,18 @@ check_agent_lock() {
     git config user.email t@t; git config user.name t
     git commit -q --allow-empty -m base || exit 1
     git worktree add -q -b w1 .claude/worktrees/w1 HEAD 2>/dev/null || exit 1
-    git worktree lock --reason \
-      "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
-      .claude/worktrees/w1 2>/dev/null || exit 1
-    mkdir -p .claude/worktrees/w1/crates || exit 1
+    git worktree lock --reason "$reason" .claude/worktrees/w1 2>/dev/null || exit 1
   ) || { echo "✗ $desc: could not build the fixture" >&2; failures=$((failures + 1)); return; }
 
+  # `-Fpn` output: a `p<pid>` line, then that process's `n<cwd>`. Pid 4242 is
+  # the lock's daemon, which the script needs to see before believing the rest.
   wt=$(cd "$main/.claude/worktrees/w1" && pwd -P)
   case "$mode" in
-    inside) extra="n$wt/crates" ;;
-    none)   extra="n${wt}x" ;;
-    blind)  extra="" ;;
+    inside) listing="p4242\nn/\np7\nn$wt" ;;
+    none)   listing="p4242\nn/\np7\nn${wt}x" ;;
+    blind)  listing="p7\nn/elsewhere" ;;
   esac
-  # `pwd -P` is evaluated when the shim RUNS, so it reports the script's own
-  # cwd — the positive control the script checks for.
-  if [ "$mode" = blind ]; then
-    printf '#!/usr/bin/env bash\nexit 1\n' > "$work/bin/lsof"
-  else
-    printf '#!/usr/bin/env bash\nprintf "p1\\nn%%s\\np2\\n%%s\\n" "$(pwd -P)" "%s"\n' \
-      "$extra" > "$work/bin/lsof"
-  fi
+  printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$listing" > "$work/bin/lsof"
   chmod +x "$work/bin/lsof"
 
   find "$main/.claude/worktrees" -depth -exec touch -t 200001010000 {} \; 2>/dev/null
@@ -789,12 +784,21 @@ check "an unrecognised holder's lock is live" \
 
 check_codex_ownership
 check_handmade_lock
-check_agent_lock inside "an agent lock with a process inside is live" \
-  "skip w1: agent lock, and a process is running in it"
-check_agent_lock none "an agent lock with nothing inside is stale" \
+check_agent_lock inside "a Remote Control lock with a process inside is live" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "skip w1: Remote Control lock, and a process is running in it"
+check_agent_lock none "a Remote Control lock with nothing inside is stale" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
   "would remove .*w1"
-check_agent_lock blind "an agent lock is live when cwds are unreadable" \
-  "skip w1: agent lock, and process cwds are unreadable"
+check_agent_lock none "a harness lock without a start time is still read" \
+  "claude agent bridge-cse_01Test (pid 4242)" \
+  "would remove .*w1"
+check_agent_lock blind "a Remote Control lock is live when lsof cannot see its daemon" \
+  "claude agent bridge-cse_01Test (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "skip w1: Remote Control lock, and lsof cannot show process cwds"
+check_agent_lock none "an Agent tool lock is read by its parent session's pid" \
+  "claude agent agent-a0123456789abcdef (pid 4242 start Thu Oct  1 09:00:00 2026)" \
+  "skip w1: locked by live pid 4242"
 check_containment
 check_orphan_report
 check_submodule_removal
