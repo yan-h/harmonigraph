@@ -15,7 +15,7 @@ struct Locals {
     float _feather_pad;
     metal::float2 pitch_dir;
     metal::float2 depth_dir;
-    metal::float2 _axis_pad;
+    metal::float2 holdout_origin;
     metal::float4 shadow;
     metal::float2 shadow_atlas_size;
     float shadow_falloff;
@@ -84,7 +84,7 @@ vertex vs_noteOutput vs_note(
 , uint who [[instance_id]]
 , constant Locals& locals [[buffer(0)]]
 , const device vb_15_type* vb_15_in [[buffer(15)]]
-, constant _mslBufferSizes& _buffer_sizes [[buffer(2)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(1)]]
 ) {
     metal::float2 center = {};
     metal::float2 half_extent = {};

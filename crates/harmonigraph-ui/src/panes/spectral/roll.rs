@@ -686,8 +686,9 @@ fn roll_instances_with_floor(
             // Wrapping the ENDS costs the notes around it nothing, and that is
             // a fact about the ORDER they are drawn in rather than about the
             // outline: `harmonigraph_render::roll` lays every outline down and
-            // then every body over them. Only a body faded by its Opacity
-            // reading lets part of a neighboring shadow show through its color.
+            // then every body over them, and holds every outline out wherever
+            // any body covers, so no shadow shows through a body however its
+            // Opacity reading fades it.
             //
             // It has to be that way round rather than something gentler at the
             // seam. The outline is at its darkest where it meets its own note,
