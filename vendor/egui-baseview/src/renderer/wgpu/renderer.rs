@@ -330,7 +330,7 @@ pub struct Renderer {
     msaa_samples: u32,
     /// GPU time of callback preparation and egui composition.
     gpu_timer: Option<DrawGpuTimer>,
-    last_gpu_ms: f32,
+    last_gpu_ms: Option<f32>,
     /// How long the last frame blocked acquiring the surface.
     last_acquire_ms: f32,
     /// Texture and buffer uploads, which is also where paint callbacks
@@ -411,7 +411,7 @@ impl Renderer {
             msaa_texture_view: None,
             msaa_samples,
             gpu_timer,
-            last_gpu_ms: 0.0,
+            last_gpu_ms: None,
             last_acquire_ms: 0.0,
             last_upload_ms: 0.0,
             last_ubuf_ms: 0.0,
@@ -429,10 +429,10 @@ impl Renderer {
     }
 
     /// Milliseconds the GPU spent from callback preparation through egui's
-    /// composite, a few frames ago, or 0 where the device cannot measure it.
+    /// composite, consumed once; None while pending or unavailable.
     /// The lattice's own timer is a narrower, overlapping attribution.
-    pub fn last_gpu_ms(&self) -> f32 {
-        self.last_gpu_ms
+    pub fn take_gpu_ms(&mut self) -> Option<f32> {
+        self.last_gpu_ms.take()
     }
 
     /// Milliseconds the last frame spent blocked in `get_current_texture`.
@@ -624,7 +624,7 @@ impl Renderer {
         // result published.
         if let Some(timer) = self.gpu_timer.as_mut() {
             if let Some(ms) = timer.poll(&self.render_state.device) {
-                self.last_gpu_ms = ms;
+                self.last_gpu_ms = Some(ms);
             }
         }
 

@@ -134,7 +134,7 @@ pub struct Queue<'a> {
     frame_interval: &'a mut Option<f64>,
     display_max_fps: Option<f64>,
     tess_ms: f32,
-    draw_gpu_ms: f32,
+    draw_gpu_ms: Option<f32>,
     acquire_ms: f32,
     tick_ms: f32,
     render_ms: f32,
@@ -156,7 +156,7 @@ impl<'a> Queue<'a> {
         frame_interval: &'a mut Option<f64>,
         display_max_fps: Option<f64>,
         tess_ms: f32,
-        draw_gpu_ms: f32,
+        draw_gpu_ms: Option<f32>,
         acquire_ms: f32,
         tick_ms: f32,
         render_ms: f32,
@@ -254,13 +254,13 @@ impl<'a> Queue<'a> {
 
     /// Milliseconds the GPU spent from callback preparation through egui's
     /// composite a few frames ago,
-    /// or 0 where the device can't measure it.
+    /// consumed once; None while readback is pending or unavailable.
     ///
     /// The lattice's 3D time is included here and also shown separately in
     /// the overlay. Queue uploads and callback-owned command buffers are
     /// outside this bracket.
-    pub fn draw_gpu_ms(&self) -> f32 {
-        self.draw_gpu_ms
+    pub fn take_draw_gpu_ms(&mut self) -> Option<f32> {
+        self.draw_gpu_ms.take()
     }
 
     /// Milliseconds the PREVIOUS frame spent tessellating egui's shapes.
@@ -380,7 +380,7 @@ where
     tess_ms: f32,
     /// Likewise for GPU drawing, which lags further still — the timestamps
     /// have to come back from the GPU.
-    draw_gpu_ms: f32,
+    draw_gpu_ms: Option<f32>,
     /// Likewise for the surface wait.
     acquire_ms: f32,
     /// The whole previous callback, end to end.
@@ -473,7 +473,7 @@ where
             // render, upload, ubuf, texture, encode, submit, then the two
             // geometry counts.
             0.0,
-            0.0,
+            None,
             0.0,
             0.0,
             0.0,
@@ -537,7 +537,7 @@ where
             retry_after: None,
             key_capture,
             tess_ms: 0.0,
-            draw_gpu_ms: 0.0,
+            draw_gpu_ms: None,
             acquire_ms: 0.0,
             tick_ms: 0.0,
             render_ms: 0.0,
@@ -732,6 +732,25 @@ fn after_render(presented: bool, refused: u32, now: Instant) -> (u32, Option<Ins
 mod wants_render_tests {
     use super::*;
 
+    #[test]
+    fn draw_gpu_queue_consumes_each_completion_once() {
+        let mut color = Rgba::BLACK;
+        let mut close = false;
+        let mut size = PhySize { width: 1, height: 1 };
+        let mut capture = KeyCapture::default();
+        let mut interval = None;
+        let mut completed = Vec::new();
+        for sample in [Some(2.0), None, None, None, None, Some(10.0), None] {
+            let mut queue = Queue::new(
+                &mut color, &mut close, &mut size, &mut capture, &mut interval,
+                None, 0.0, sample, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0,
+            );
+            completed.extend(queue.take_draw_gpu_ms());
+            assert_eq!(queue.take_draw_gpu_ms(), None);
+        }
+        assert_eq!(completed, [2.0, 10.0]);
+    }
+
     /// The shape the plugin's UI actually asks for while anything is moving:
     /// `request_repaint()`, which is a repaint delay of zero, and a deadline
     /// already behind us. Under it a visible window paints every tick.
@@ -874,7 +893,7 @@ where
             &mut frame_interval,
             window.display_max_fps(),
             self.tess_ms,
-            self.draw_gpu_ms,
+            self.draw_gpu_ms.take(),
             self.acquire_ms,
             self.tick_ms,
             self.render_ms,
@@ -985,7 +1004,7 @@ where
             (self.refused_presents, self.retry_after) =
                 after_render(presented, self.refused_presents, now);
             self.tess_ms = self.renderer.last_tess_ms();
-            self.draw_gpu_ms = self.renderer.last_gpu_ms();
+            self.draw_gpu_ms = self.renderer.take_gpu_ms();
             self.acquire_ms = self.renderer.last_acquire_ms();
             self.upload_ms = self.renderer.last_upload_ms();
             self.ubuf_ms = self.renderer.last_ubuf_ms();
