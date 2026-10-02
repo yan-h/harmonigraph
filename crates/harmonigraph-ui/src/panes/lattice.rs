@@ -489,7 +489,7 @@ fn label_ink(view: &harmonigraph_scene::ViewConfig, lit: f32) -> egui::Color32 {
     // takes EVERY label on the pane with it rather than the one node it arrived
     // on — the mix carries it whatever the two ends hold.
     let lit = if lit.is_finite() { lit.clamp(0.0, 1.0) } else { 0.0 };
-    let resting = view.marker_ink_lightness();
+    let resting = view.marker_ink;
     let l_star = resting + (100.0 - resting) * lit;
     super::scene_color(harmonigraph_scene::grey_of_lightness(l_star), 1.0)
 }

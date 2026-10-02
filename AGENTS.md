@@ -155,7 +155,7 @@ say what breaks in the PR body and make the change.
 and never, on its own, a review finding.
 
 What it does not license is a SILENT break.
-The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, and the `derive_scene` clamps it deliberately leaves to the picture).
+The value on screen must still be the value the file holds, so a change of range or units carries whatever clamp or repair keeps the two agreeing (`ViewConfig::sanitize`, also applied at the scene entry).
 
 The tree carries **no compat shims at all**, and that is the invariant to hold:
 no `legacy_*` fields, migration passes or serde aliases for deleted variants.

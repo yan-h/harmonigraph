@@ -44,18 +44,8 @@ impl NoteAnimationConfig {
     pub fn staggers(self) -> bool {
         self.stagger_spread > 0.0
     }
-    /// The finite, bounded pose the renderer is handed, for the shells that
-    /// never cross the persist door — `derive_scene` copies this config into
-    /// the scene whole, so a NaN in it is a node the shader places nowhere.
-    ///
-    /// The fallback is the FRESH value rather than each range's low bound,
-    /// which is the departure the rest of the picture's repairs do not make
-    /// and is the same one [`GlowCurve::sanitized`] makes. These values are a
-    /// POSE rather than a size: `radial_start`'s range is signed and its
-    /// neutral is 0, so a low bound here would be one extreme
-    /// of an animation rather than the least of one. Fresh is also the answer
-    /// [`ViewConfig::sanitize`] gives each of them, so the door and the
-    /// picture cannot disagree about what a broken pose looks like.
+    /// Repair the pose at view normalization. Nonfinite values use the fresh
+    /// pose: the signed offset's low bound would be an extreme, not neutral.
     pub fn sanitized(mut self) -> Self {
         let fresh = NoteAnimationConfig::default();
         self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread).clamp(0.0, 0.9);

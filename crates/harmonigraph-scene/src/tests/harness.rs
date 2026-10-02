@@ -13,6 +13,10 @@ pub(super) fn scene_of(
 ) -> Scene {
     let mut scene =
         derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None);
+    // The post-passes use the same normalized view as production composition.
+    let mut normalized = view.clone();
+    normalized.sanitize();
+    let view = &normalized;
     NodeMotion::default().step(
         &mut scene,
         tracker,

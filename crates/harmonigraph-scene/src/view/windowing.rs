@@ -166,10 +166,8 @@ impl ViewConfig {
         } else {
             0.0
         });
-        let halo = (rim + finite_or(self.glow_reach, 0.0).clamp(0.0, GLOW_REACH_MAX)).max(0.1)
-            * NODE_RADIUS_FACTOR
-            * 1.8;
-        let atmosphere = self.atmosphere.sanitized();
+        let halo = (rim + self.glow_reach).max(0.1) * NODE_RADIUS_FACTOR * 1.8;
+        let atmosphere = self.atmosphere;
         if atmosphere.material_style == crate::LatticeMaterial::None
             || atmosphere.material_amount <= 0.0
             || atmosphere.pigment_reach <= 0.0

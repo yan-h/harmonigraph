@@ -148,9 +148,6 @@ const FADE_MAX: f32 = 1.0;
 fn horizon(duration: f32, mark_delay: f32) -> f64 {
     f64::from(duration.max(0.0)) * 2.0 + f64::from(mark_delay) + 0.001
 }
-fn mark_delay(view: &ViewConfig) -> f32 {
-    crate::view::finite_or(view.mark_delay, 0.0).clamp(0.0, crate::MARK_DELAY_MAX)
-}
 
 fn approach(level: f32, target: f32, dt: f64, env: &Envelope) -> f32 {
     if level == target {
@@ -281,7 +278,7 @@ impl NodeMotion {
         env: &Envelope,
         now: f64,
     ) -> Vec<PitchClass> {
-        let floor = now - horizon(env.fade_time, mark_delay(view));
+        let floor = now - horizon(env.fade_time, view.mark_delay);
         let mut classes: Vec<_> = tracker.voices().map(|voice| voice.pitch_class).collect();
         for note in tracker.roll().notes().filter(|note| note.end.is_none_or(|at| at >= floor)) {
             for ((at, pitch), (end, next)) in note.segments(now) {
@@ -347,8 +344,8 @@ impl NodeMotion {
                 }
             }
             readings.apply(motion);
-            motion.melody.target(melody, mark_delay(view));
-            motion.bass.target(bass, mark_delay(view));
+            motion.melody.target(melody, view.mark_delay);
+            motion.bass.target(bass, view.mark_delay);
             let gate = motion.targets.iter().any(|&v| v > 0.0);
             let audio =
                 scene.spectral.ring_draws() && fade.level(&scene.octave_layout, node.cents) > 0.0;
@@ -416,8 +413,8 @@ impl NodeMotion {
                 motion.delay = [0.0; 11];
                 motion.level_wait = [0.0; 11];
                 motion.levels = motion.targets;
-                motion.melody.advance(f64::from(duration + mark_delay(view)), env, &[0.0; 11]);
-                motion.bass.advance(f64::from(duration + mark_delay(view)), env, &[0.0; 11]);
+                motion.melody.advance(f64::from(duration + view.mark_delay), env, &[0.0; 11]);
+                motion.bass.advance(f64::from(duration + view.mark_delay), env, &[0.0; 11]);
             }
         }
     }
@@ -461,14 +458,14 @@ impl NodeMotion {
         if !now.is_finite() {
             return;
         }
-        let horizon = horizon(env.fade_time, mark_delay(view));
+        let horizon = horizon(env.fade_time, view.mark_delay);
         // A hidden surface cannot benefit from replaying minutes of settled
         // history. Seed current state and replay only the visible horizon.
         if self.at.is_some_and(|at| now < at || now - at > horizon) {
             *self = Self::default();
         }
         let floor = now - horizon;
-        let intensity = view.intensity.sanitized();
+        let intensity = view.intensity;
         // A note that ended before every horizon a host can set can never
         // count as late again, whatever the settings do next, so its cursor
         // has nothing left to guard. Skipping it bounds this scan by the last
@@ -682,7 +679,7 @@ impl NodeMotion {
         scene.pluses = crate::derive::derive_pluses(
             view,
             &scene.nodes,
-            crate::grey_of_lightness(view.marker_ink_lightness()),
+            crate::grey_of_lightness(view.marker_ink),
         );
     }
 }

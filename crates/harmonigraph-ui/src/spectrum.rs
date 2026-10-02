@@ -550,7 +550,6 @@ impl AudioSpectrum {
     /// hide anything the carry-forward path gets wrong.
     pub(crate) fn folded(&mut self, now: f64, width: f32) -> Option<&SpectrumBuckets> {
         self.display(now)?;
-        let width = crate::panes::spectral_fold::Fold::clamped_width(width);
         let key = (self.display_revision, width.to_bits());
         if self.frame_fold.as_ref().is_none_or(|(revision, bits, _)| (*revision, *bits) != key) {
             self.frame_fold = Some((

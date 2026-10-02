@@ -522,7 +522,7 @@ fn ring_at_level(gpu: &mut Shooter, level: u8, spacing: harmonigraph_scene::LutS
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
-    scene.octave_gap = view.octave_gap_width();
+    scene.octave_gap = view.ring_gap;
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
     (paint.inner, paint.outer) = rings.audio;
     paint.folded = true;

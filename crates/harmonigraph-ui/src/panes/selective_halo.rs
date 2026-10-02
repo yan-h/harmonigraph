@@ -63,10 +63,7 @@ pub(super) fn owners(
             let centered = pos - center;
             let world =
                 Vec3::new(centered.fives as f32, centered.threes as f32, centered.sevens as f32);
-            let scale = (if view.sevens_size.is_finite() { view.sevens_size } else { 0.15 })
-                .clamp(0.15, 1.0)
-                .powi(centered.sevens.abs())
-                .max(0.05);
+            let scale = view.sevens_size.powi(centered.sevens.abs()).max(0.05);
             let r = radius * scale;
             let mut lo = Vec2::splat(f32::INFINITY);
             let mut hi = Vec2::splat(f32::NEG_INFINITY);

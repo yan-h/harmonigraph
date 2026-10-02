@@ -7,11 +7,8 @@
 //! through — and the site that acquires one next is covered by an assertion
 //! over the scene rather than by a test somebody remembers to add beside it.
 //!
-//! The door ([`ViewConfig::sanitize`]) repairs a loaded blob, so nothing
-//! arriving through the DAW reaches these sites broken. What this is for is
-//! the shells that never cross it: the offline layout, take replay and the
-//! harness each build a view in code, and there the failure is a blank or
-//! garbled frame with nothing on screen saying why.
+//! Production loads normalize their view. This intentionally bypasses loading
+//! to hold scene entry to the same repair when handed damaged values.
 
 use super::harness::*;
 use crate::*;
@@ -501,52 +498,34 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         "`derive_scene` filled the glow timing, so the walk's empty arm is no longer honest",
     );
 
-    // Each site's chosen fallback, pinned — the VALUE, and no more than that.
-    // Several of these fallbacks are the fresh value as well (all three poses,
-    // and `render_scale`), so the line cannot tell a repair from a field the
-    // poison never reached, and none of them is offered as evidence that it
-    // did. What says the poison arrives is that this test was written and run
-    // against the unrepaired tree first, where it failed naming every site
-    // below and 147 nodes besides.
-    let step = crate::NODE_RADIUS_FACTOR;
-    let shadow = scene.shadow;
-    // The pose falls back to the fresh one (`NoteAnimationConfig::sanitized`).
-    let fresh = NoteAnimationConfig::default();
-    for (site, got, want) in [
-        ("node_radius", scene.node_radius, step),
-        ("marker_unit", scene.marker_unit, step * 1.8),
-        ("nodes[off the home sheet].scale", off_sheet, 0.15),
-        ("glow_reach", scene.glow_reach, 0.0),
-        ("glow_strength", scene.glow_strength, 0.0),
-        ("glow_wash", scene.glow_wash, 0.0),
-        ("glow_blend", scene.glow_blend, 0.0),
-        ("glow_accumulation", scene.glow_accumulation, 0.0),
-        ("render_scale", scene.render_scale, 1.0),
-        ("bloom_strength", scene.bloom_strength, crate::ViewConfig::default().note_bloom),
-        ("shadow.lattice_geometry.width", shadow.lattice_geometry.width, 0.0),
-        ("shadow.lattice_geometry.depth", shadow.lattice_geometry.depth, 0.0),
-        ("shadow.lattice_geometry.falloff", shadow.lattice_geometry.falloff, SHADOW_FALLOFF_MIN),
-        ("shadow.spectral_text.falloff", shadow.spectral_text.falloff, SHADOW_FALLOFF_MIN),
-        (
-            "note_animation.starting_scale",
-            scene.note_animation.starting_scale(),
-            fresh.starting_scale(),
-        ),
-        ("note_animation.radial_start", scene.note_animation.radial_start, fresh.radial_start),
-    ] {
-        assert_eq!(got, want, "{site} came out {got}, not the fallback this pass chose");
-    }
+    let mut normalized = poisoned_view();
+    normalized.sanitize();
+    // The requested window is independent of the view's repaired dials.
+    let mut expected = derive_scene(
+        &sounding(),
+        &Tuning::default(),
+        &normalized,
+        &poisoned_view().reach(),
+        &plain_frame(),
+        Camera::default(),
+        None,
+    );
+    NodeMotion::default().step(
+        &mut expected,
+        &sounding(),
+        &Tuning::default(),
+        &normalized,
+        &normalized.envelope(&plain_frame()),
+        &RingFade::default(),
+        0.0,
+    );
+    assert_eq!(scene_floats(&scene).0, scene_floats(&expected).0);
+    assert_eq!(off_sheet, normalized.sevens_size);
 
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the scene at: {}", names.join(", "));
 
-    // ...and the same sweep over a picture that still has MARKERS in it, which
-    // the pass above cannot have. A NaN arm reads as 0 through `size`, so
-    // `derive_pluses` ships an empty field and the walk's `pluses` loop runs zero times —
-    // leaving a marker's position, colour and strength unmeasured by the one
-    // test that claims the whole scene. One real arm is what it takes to
-    // get a marker drawn at all; everything the marker's own geometry and ink
-    // are derived from stays poisoned around it.
+    // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
     let scene = scene_of(&sounding(), &Tuning::default(), &drawable, &plain_frame(), 0.0);
     assert!(!scene.pluses.is_empty(), "a real arm still shipped no marker field");
