@@ -105,7 +105,7 @@ pub use spectral_shadow::spectral_shadow_prepare_callback;
 /// BEHIND a name at a pixel.
 ///
 /// One thing follows from the pass it lands in, and it is visible: the
-/// offscreen target is sized at `Scene::render_scale`, so text drawn into it
+/// offscreen target is sized at `ViewConfig::render_scale`, so text drawn into it
 /// is rasterized at that size and resampled by the composite. At 1 that is
 /// nothing; at 0.5 a name is as soft as the lattice under it, where it used
 /// to stay native-resolution whatever the picture did.

@@ -208,11 +208,11 @@ impl Floats {
 fn scene_floats(scene: &Scene) -> Floats {
     let mut f = Floats::default();
     let Scene {
+        view,
         edge_softness_points,
         nodes,
         camera,
         node_radius,
-        note_animation,
         outer_inner,
         outer_outer,
         rings_outer,
@@ -225,25 +225,29 @@ fn scene_floats(scene: &Scene) -> Floats {
         plus_half_width,
         plus_taper_start,
         background,
-        mark_thickness,
         pitch_lut,
         pitch_lut_spacing,
         darkest_pitch,
         brightest_pitch,
+        marker_unit,
+        glow_rows: _,
+        glow_timing,
+    } = scene;
+    let ViewConfig {
+        note_animation,
         render_scale,
-        bloom_strength,
+        note_bloom: bloom_strength,
         glow_reach,
         glow_strength,
         glow_curve,
         shadow,
         glow_wash,
-        marker_unit,
         glow_blend,
         glow_accumulation,
-        glow_rows: _,
-        glow_timing,
+        mark_thickness,
         atmosphere,
-    } = scene;
+        ..
+    } = view;
     f.one("edge_softness_points", *edge_softness_points);
 
     for (i, node) in nodes.iter().enumerate() {
@@ -519,6 +523,7 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         &RingFade::default(),
         0.0,
     );
+    assert_eq!(scene.view, expected.view);
     assert_eq!(scene_floats(&scene).0, scene_floats(&expected).0);
     assert_eq!(off_sheet, normalized.sevens_size);
 

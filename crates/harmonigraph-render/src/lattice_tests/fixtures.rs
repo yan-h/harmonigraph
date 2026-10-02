@@ -169,6 +169,37 @@ pub(super) fn parity_scene() -> Scene {
     ];
     let glow_rows = nodes.len() as u32;
     Scene {
+        view: harmonigraph_scene::ViewConfig {
+            note_animation: harmonigraph_scene::NoteAnimationConfig::default(),
+            mark_thickness: 0.09,
+            render_scale: 1.0,
+            // Parity with the direct-to-egui-pass reference requires bloom off.
+            note_bloom: 0.0,
+            // And the node glow with it: it is a pass of its own into a target of
+            // its own, composited into the scene pass, which the
+            // single-attachment reference path has no pass to composite into.
+            glow_reach: 0.0,
+            glow_strength: 1.0,
+            glow_curve: harmonigraph_scene::GlowCurve::default(),
+            // BOTH groups alike, so a test that says nothing about the groups reads
+            // one shadow across the picture — the shape it had before the groups
+            // existed — under the renderer every reading here is calibrated
+            // against.
+            shadow: one_shadow(0.16, 0.85, harmonigraph_scene::ShadowKernel::Gaussian),
+            // The share a lit slice's own ink takes of the light: the whole of it,
+            // as idle ink always takes, rather than the fresh value (about 0.4), so
+            // a test that says nothing about it reads one field over lit and idle
+            // ink alike.
+            glow_wash: 1.0,
+            glow_blend: 0.5,
+            glow_accumulation: 0.0,
+            // These fixtures measure the smooth glow. Texture has its own GPU probe.
+            atmosphere: harmonigraph_scene::AtmosphereSettings {
+                texture_depth: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         edge_softness_points: 1.0,
         nodes,
         camera: harmonigraph_scene::Camera::default(),
@@ -180,8 +211,6 @@ pub(super) fn parity_scene() -> Scene {
             harmonigraph_scene::ViewConfig::default().lattice_ground,
         ),
         node_radius: 0.34,
-        note_animation: harmonigraph_scene::NoteAnimationConfig::default(),
-        mark_thickness: 0.09,
         outer_inner: 0.545,
         outer_outer: 0.795,
         // The band is the outermost ring here, as it is on a fresh node, so it
@@ -223,39 +252,13 @@ pub(super) fn parity_scene() -> Scene {
         pitch_lut_spacing: harmonigraph_scene::LutSpacing::EVEN,
         darkest_pitch: 24.0,
         brightest_pitch: 108.0,
-        render_scale: 1.0,
-        // Parity with the direct-to-egui-pass reference requires bloom off.
-        bloom_strength: 0.0,
-        // And the node glow with it: it is a pass of its own into a target of
-        // its own, composited into the scene pass, which the
-        // single-attachment reference path has no pass to composite into.
-        glow_reach: 0.0,
-        glow_strength: 1.0,
-        glow_curve: harmonigraph_scene::GlowCurve::default(),
-        // BOTH groups alike, so a test that says nothing about the groups reads
-        // one shadow across the picture — the shape it had before the groups
-        // existed — under the renderer every reading here is calibrated
-        // against.
-        shadow: one_shadow(0.16, 0.85, harmonigraph_scene::ShadowKernel::Gaussian),
-        // The share a lit slice's own ink takes of the light: the whole of it,
-        // as idle ink always takes, rather than the fresh value (about 0.4), so
-        // a test that says nothing about it reads one field over lit and idle
-        // ink alike.
-        glow_wash: 1.0,
         // `node_radius` above through the uv rule both fields are in
         // (`marker_world`), so the span and the arms below read as the quad uv
         // every glow bar is dialled in.
         marker_unit: 0.34 * 1.8,
-        glow_blend: 0.5,
-        glow_accumulation: 0.0,
         // A row per node, which is what the nodes above are built with.
         glow_rows,
         glow_timing: None,
-        // These fixtures measure the smooth glow. Texture has its own GPU probe.
-        atmosphere: harmonigraph_scene::AtmosphereSettings {
-            texture_depth: 0.0,
-            ..Default::default()
-        },
     }
 }
 
@@ -836,7 +839,7 @@ pub(super) fn layered_node(melody: u32, ring: f32, band: bool, shadow: f32) -> S
     scene.background = glam::Vec4::ONE;
     scene.node_radius = 1.4;
     scene.octave_gap = PROBE_GAP;
-    scene.mark_thickness = rings.mark_thickness;
+    scene.view.mark_thickness = rings.mark_thickness;
     // The audio ring drawn off an all-zero grid: the ramp's floor across the
     // whole annulus, which is ink at a known radius and all this asks of it.
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
@@ -849,7 +852,7 @@ pub(super) fn layered_node(melody: u32, ring: f32, band: bool, shadow: f32) -> S
     // leaves it where it is.
     scene.rings_outer = if band { rings.band.1 } else { rings.audio.1 };
     scene.mark_inner = scene.rings_outer + rings.gap;
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.width = shadow;
     }
     scene.nodes[0].audio_ring = ring;
@@ -913,12 +916,12 @@ pub(super) fn shadowed_markers(depth: f32, shadow: f32, taper_start: f32) -> Sce
     // A reach several times the markers' own distance and the Strength at its
     // ceiling, so the falloff still has light out at 2.6 world units for every
     // marker to hold off.
-    scene.glow_reach = 4.0;
-    scene.glow_strength = 2.0;
-    for style in scene.shadow.groups_mut() {
+    scene.view.glow_reach = 4.0;
+    scene.view.glow_strength = 2.0;
+    for style in scene.view.shadow.groups_mut() {
         style.width = shadow;
     }
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.depth = depth;
     }
     scene.plus_taper_start = taper_start;
@@ -1004,12 +1007,12 @@ pub(super) fn lit_node_and_a_name(reach: f32, shadow: f32, depth: f32) -> Scene 
         pitch: 0.0,
         ..Default::default()
     };
-    scene.glow_reach = reach;
-    scene.glow_strength = 1.5;
-    for style in scene.shadow.groups_mut() {
+    scene.view.glow_reach = reach;
+    scene.view.glow_strength = 1.5;
+    for style in scene.view.shadow.groups_mut() {
         style.width = shadow;
     }
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.depth = depth;
     }
     // The markers away: a cross casts a shadow of its own into the frame the

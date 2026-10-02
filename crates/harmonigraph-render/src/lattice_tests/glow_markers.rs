@@ -5,7 +5,7 @@ use super::fixtures::*;
 use crate::*;
 
 fn with_shadow_kernel(mut scene: Scene, kernel: harmonigraph_scene::ShadowKernel) -> Scene {
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.kernel = kernel;
     }
     scene
@@ -355,7 +355,7 @@ fn a_markers_shadow_does_not_show_through_its_tapered_arm() {
                 marker.color,
                 marker.strength,
             )];
-            scene.glow_reach = 0.0;
+            scene.view.glow_reach = 0.0;
             scene
         };
         let bare = shooter.shot(&{
@@ -597,8 +597,8 @@ fn a_resting_marker_wears_the_wash_it_stands_in() {
             pitch: 0.0,
             ..Default::default()
         };
-        scene.glow_reach = reach;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = reach;
+        scene.view.glow_strength = 1.5;
         if marker {
             scene.pluses = vec![standalone_marker(
                 &mut scene.nodes,

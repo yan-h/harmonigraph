@@ -8,7 +8,7 @@ const CELL_BYTES: usize = std::mem::size_of::<shadow::ShadowBox>();
 
 fn callback(nodes: usize, labels: usize, atlas: bool, pane: u64) -> LatticeCallback {
     let mut scene = parity_scene();
-    scene.glow_strength = 0.0;
+    scene.view.glow_strength = 0.0;
     scene.pluses.clear();
     let seed = scene.nodes[0];
     scene.nodes = (0..nodes)

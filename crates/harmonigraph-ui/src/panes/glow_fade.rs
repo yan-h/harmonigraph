@@ -148,8 +148,8 @@ struct Lit {
 /// is dropped instead, so the frame the Reach bar comes back off 0 starts a fresh attack.
 pub(crate) fn apply(scene: &mut Scene, state: &mut PictureState, surface: usize, now: f64) {
     // The renderer's own test for whether the light draws at all, asked of the
-    // scene's clamped copies so the two cannot disagree about the boundary.
-    if scene.glow_reach <= 0.0 || scene.glow_strength <= 0.0 {
+    // scene's normalized view so the two cannot disagree about the boundary.
+    if scene.view.glow_reach <= 0.0 || scene.view.glow_strength <= 0.0 {
         state.surfaces.glow_fade.remove(&surface);
         return;
     }
@@ -471,7 +471,7 @@ mod tests {
         let mut scene = scene_at(&state, 0.0);
         let before = node_at(&scene, LatticePos::ORIGIN).glow;
         state.appearance.view.glow_reach = 0.0;
-        scene.glow_reach = 0.0;
+        scene.view.glow_reach = 0.0;
         apply(&mut scene, &mut state, 0, 0.0);
         assert_eq!(node_at(&scene, LatticePos::ORIGIN).glow, before);
         assert!(state.surfaces.glow_fade.is_empty(), "a light that is off kept state");
@@ -499,7 +499,7 @@ mod tests {
         assert_ne!(last.incarnation, 0);
 
         let mut off = scene_at(&state, 0.0);
-        off.glow_reach = 0.0;
+        off.view.glow_reach = 0.0;
         apply(&mut off, &mut state, 0, 0.0);
         let mut on = scene_at(&state, 0.0);
         apply(&mut on, &mut state, 0, 0.0);

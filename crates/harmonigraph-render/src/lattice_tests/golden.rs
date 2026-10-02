@@ -85,8 +85,8 @@ fn a_node_in_its_own_shadow() -> Scene {
     scene.background = glam::Vec4::new(0.30, 0.31, 0.36, 1.0);
     // A halo over the whole frame, so the ground outside the node carries a
     // gradient rather than one flat value.
-    scene.glow_reach = 4.0;
-    scene.glow_strength = 2.0;
+    scene.view.glow_reach = 4.0;
+    scene.view.glow_strength = 2.0;
     scene
 }
 
@@ -274,7 +274,7 @@ pub(super) fn the_live_view() -> Scene {
 /// still, that being the contract this family arrived under.
 pub(super) fn the_live_view_on_the_distance_row() -> Scene {
     let mut scene = the_live_view();
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.kernel = harmonigraph_scene::ShadowKernel::Distance;
     }
     scene
@@ -286,7 +286,7 @@ fn the_live_view_goldens_exercise_both_shadow_kernels() {
         (the_live_view(), harmonigraph_scene::ShadowKernel::Gaussian),
         (the_live_view_on_the_distance_row(), harmonigraph_scene::ShadowKernel::Distance),
     ] {
-        for style in scene.shadow.groups() {
+        for style in scene.view.shadow.groups() {
             assert_eq!(style.kernel, kernel);
         }
     }
@@ -300,7 +300,7 @@ fn the_live_view_goldens_exercise_both_shadow_kernels() {
 /// measured.
 fn the_live_view_at_the_top_of_the_distance_row() -> Scene {
     let mut scene = the_live_view_on_the_distance_row();
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
     }
     scene
@@ -460,7 +460,7 @@ fn a_name_on_a_nodes_band() -> Shot {
 /// what the build actually draws, and the PR that fixes it re-baselines here.
 fn a_name_at_render_scale_2() -> Shot {
     let mut shot = a_name_on_a_nodes_band();
-    shot.scene.render_scale = 2.0;
+    shot.scene.view.render_scale = 2.0;
     shot
 }
 

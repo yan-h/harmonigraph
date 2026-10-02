@@ -132,7 +132,6 @@ pub fn derive_scene_with_extra(
         nodes,
         camera,
         node_radius: NODE_RADIUS_FACTOR,
-        note_animation: view.note_animation,
         outer_inner: rings.band.0,
         outer_outer: rings.band.1,
         rings_outer: rings.outer,
@@ -146,30 +145,20 @@ pub fn derive_scene_with_extra(
         pluses: Vec::new(),
         plus_half_width: derive_plus_half_width(view),
         plus_taper_start: derive_plus_taper_start(view),
-        mark_thickness: rings.mark_thickness,
         background: crate::skin::picture_color(),
         pitch_lut: pitch_ramp_lut(view.pitch_gradient),
         pitch_lut_spacing: crate::LutSpacing::of(view.pitch_gradient),
         darkest_pitch: frame.darkest_pitch,
         brightest_pitch: frame.brightest_pitch,
-        render_scale: view.render_scale,
-        bloom_strength: view.note_bloom,
-        glow_reach: view.glow_reach,
-        glow_strength: view.glow_strength,
-        glow_curve: view.glow_curve,
-        shadow: view.shadow,
-        glow_wash: view.glow_wash,
         // The shader divides each marker's world radius by this fixed unit
         // to recover the arm its bar was dialled at.
         marker_unit: marker_world(1.0),
-        glow_blend: view.glow_blend,
-        glow_accumulation: view.glow_accumulation,
         // A row per node, so a scene nothing has carried still reads one strip
         // row per node — the shell's pass hands out rows of its own and raises
         // this to their high-water mark.
         glow_rows: nodes_len,
         glow_timing: None,
-        atmosphere: view.atmosphere,
+        view: normalized,
     }
 }
 

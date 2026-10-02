@@ -11,9 +11,9 @@ fn scene(kernel: ShadowKernel, depth: f32) -> Scene {
     scene.camera.distance = 6.0;
     scene.nodes[0].octaves.fill(1.0);
     scene.pitch_lut.fill(glam::vec4(0.9, 0.8, 0.7, 1.0));
-    scene.glow_strength = 4.0;
-    scene.shadow.lattice_geometry.depth = 0.0;
-    scene.shadow.lattice_text =
+    scene.view.glow_strength = 4.0;
+    scene.view.shadow.lattice_geometry.depth = 0.0;
+    scene.view.shadow.lattice_text =
         ShadowStyle { kernel, width: 0.7, depth, falloff: 0.0, spread: 0.0 };
     scene
 }
@@ -24,7 +24,7 @@ fn notation_shadows_darken_saturated_light_without_changing_remote_pixels() {
     for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
         for marker in [false, true] {
             let mut scene = scene(kernel, 1.0);
-            scene.bloom_strength = 1.0;
+            scene.view.note_bloom = 1.0;
             let at = name_on_the_band(&scene);
             if marker {
                 scene.pluses.push(one_marker(0, at, 0.35, glam::Vec4::ONE, 1.0));
@@ -56,7 +56,7 @@ fn notation_shadows_darken_saturated_light_without_changing_remote_pixels() {
                 NAME_SIZE * 0.5 + pad
             };
             let deep = shooter.shot_with(&scene, labels(&scene));
-            scene.shadow.lattice_text.depth = 0.0;
+            scene.view.shadow.lattice_text.depth = 0.0;
             let bare = shooter.shot_with(&scene, labels(&scene));
             let (mut saturated, mut remote) = (0, 0);
             for (i, (a, b)) in bare.chunks_exact(4).zip(deep.chunks_exact(4)).enumerate() {
@@ -85,13 +85,13 @@ fn text_depth_scales_a_fixed_profile_on_the_pane_fill() {
     for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
         let mut scene = scene(kernel, 0.0);
         scene.background = glam::vec4(0.8, 0.8, 0.8, 1.0);
-        scene.glow_reach = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
         // Put the label on bare ground well outside the node, so this test
         // actually reads the host pane fill rather than the node's ink.
         let at = glam::vec3(-1.5, 1.5, 0.0);
         let mut shot = |depth| {
-            scene.shadow.lattice_text.depth = depth;
+            scene.view.shadow.lattice_text.depth = depth;
             shooter.shot_with(&scene, name_at(&scene, SIZE, at))
         };
         let bare = shot(0.0);
@@ -120,8 +120,8 @@ fn foreground_ink_restores_local_shadow_transmittance() {
     for kernel in [ShadowKernel::Gaussian, ShadowKernel::Distance] {
         for bloom in [0.0, 1.0] {
             let mut scene = scene(kernel, 1.0);
-            scene.glow_strength = 0.0;
-            scene.bloom_strength = bloom;
+            scene.view.glow_strength = 0.0;
+            scene.view.note_bloom = bloom;
             let mut near = scene.nodes[0];
             near.world_pos.z = 1.0;
             // The nearer owner supplies only a glyph, so its node cannot
@@ -147,12 +147,12 @@ fn foreground_ink_restores_local_shadow_transmittance() {
             };
             // Identify opaque glyph pixels without bloom saturation disguising
             // partially covered reconstruction edges as white.
-            scene.bloom_strength = 0.0;
-            scene.shadow.lattice_text.depth = 0.0;
+            scene.view.note_bloom = 0.0;
+            scene.view.shadow.lattice_text.depth = 0.0;
             let opaque = shooter.shot_with(&scene, labels(&scene, true));
-            scene.bloom_strength = bloom;
+            scene.view.note_bloom = bloom;
             let mut shot = |depth, cover| {
-                scene.shadow.lattice_text.depth = depth;
+                scene.view.shadow.lattice_text.depth = depth;
                 shooter.shot_with(&scene, labels(&scene, cover))
             };
             let deep = shot(1.0, true);
@@ -206,10 +206,10 @@ fn gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink() {
     stem_sdf.key = 2;
     for group in 0..3 {
         let mut scene = scene(ShadowKernel::Gaussian, 0.0);
-        scene.glow_strength = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.glow_strength = 0.0;
+        scene.view.note_bloom = 0.0;
         scene.background = glam::vec4(0.8, 0.8, 0.8, 1.0);
-        scene.shadow.lattice_geometry.width = 0.7;
+        scene.view.shadow.lattice_geometry.width = 0.7;
         let at = glam::vec3(-1.5, 1.5, 0.0);
         if group == 2 {
             scene.plus_taper_start = 0.25;
@@ -230,9 +230,9 @@ fn gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink() {
         };
         fn style(scene: &mut Scene, group: usize) -> &mut ShadowStyle {
             if group == 0 {
-                &mut scene.shadow.lattice_geometry
+                &mut scene.view.shadow.lattice_geometry
             } else {
-                &mut scene.shadow.lattice_text
+                &mut scene.view.shadow.lattice_text
             }
         }
         let ink = shooter.shot_with(&scene, labels(&scene));

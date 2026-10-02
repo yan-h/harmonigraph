@@ -24,9 +24,9 @@ fn history(shooter: &Shooter) -> &InkStrip {
 fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = single_marked_node(0, 0);
-    scene.glow_reach = 0.8;
-    scene.glow_strength = 1.5;
-    scene.bloom_strength = 1.0;
+    scene.view.glow_reach = 0.8;
+    scene.view.glow_strength = 1.5;
+    scene.view.note_bloom = 1.0;
     scene.pitch_lut = [glam::Vec4::new(1.0, 0.1, 0.0, 1.0); harmonigraph_scene::PITCH_LUT_N];
     scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
     scene.nodes[0].activation = 1.0;
@@ -69,21 +69,21 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     assert_eq!(bytes(&ink), 524_288);
 
     // Changing strength while enabled must keep the same allocation.
-    scene.bloom_strength = 0.5;
+    scene.view.note_bloom = 0.5;
     shooter.shot_again(&scene);
     assert_eq!(target(&shooter).bloom.as_ref().unwrap().nodes_view, initial_bloom);
     assert_eq!(target(&shooter).bloom.as_ref().unwrap().ink_view, initial_bloom_ink);
-    scene.bloom_strength = 0.0;
+    scene.view.note_bloom = 0.0;
     let plain = shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none());
     assert!(total_light(&plain) > 64 && total_light(&plain) < total_light(&bloomed));
     assert_eq!(plain, shooter.shot_again(&scene), "steady off frame");
     for _ in 0..3 {
-        scene.bloom_strength = 1.0;
+        scene.view.note_bloom = 1.0;
         assert_eq!(bloomed, shooter.shot_again(&scene), "on recovers identical pixels");
         assert_ne!(target(&shooter).bloom.as_ref().unwrap().nodes_view, initial_bloom);
         assert_ne!(target(&shooter).bloom.as_ref().unwrap().ink_view, initial_bloom_ink);
-        scene.bloom_strength = 0.0;
+        scene.view.note_bloom = 0.0;
         assert_eq!(plain, shooter.shot_again(&scene), "off recovers identical pixels");
         let held = target(&shooter);
         assert!(held.bloom.is_none());
@@ -96,8 +96,8 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     // including when the same frame turns bloom back on.
     shooter.size = [256, 260];
     for scale in [1.0, 2.0] {
-        scene.render_scale = scale;
-        scene.bloom_strength = 1.0;
+        scene.view.render_scale = scale;
+        scene.view.note_bloom = 1.0;
         let resized = shooter.shot_again(&scene);
         assert!(total_light(&resized) > total_light(&plain) / 2);
         assert_eq!(history(&shooter).raw_views, raw);
@@ -121,10 +121,10 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     assert_eq!(reused, fresh, "a reused row is a fresh owner's ink");
     // Glow-off drops its history under the existing feature contract; on
     // with current ink reseeds and draws exactly the fresh frame.
-    scene.glow_reach = 0.0;
+    scene.view.glow_reach = 0.0;
     shooter.shot_again(&scene);
     assert!(target(&shooter).glow.is_none());
-    scene.glow_reach = 0.8;
+    scene.view.glow_reach = 0.8;
     assert_eq!(fresh, shooter.shot_again(&scene));
     // Silence while enabled retains the same bloom allocation for the next
     // note. Empty geometry gates allocation, not retention.
@@ -141,19 +141,19 @@ fn bloom_toggles_preserve_release_history_and_only_replace_bloom() {
     scene.pluses.clear();
     // Switching off while empty still retires the allocation, and switching
     // back on waits for a scene to draw before allocating again.
-    scene.bloom_strength = 0.0;
+    scene.view.note_bloom = 0.0;
     shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none());
-    scene.bloom_strength = 1.0;
+    scene.view.note_bloom = 1.0;
     shooter.shot_again(&scene);
     assert!(target(&shooter).bloom.is_none(), "no allocation before a scene can write it");
 }
 
 fn history_scene() -> Scene {
     let mut scene = single_marked_node(0, 0);
-    scene.glow_reach = 0.8;
-    scene.glow_strength = 1.5;
-    scene.bloom_strength = 0.0;
+    scene.view.glow_reach = 0.8;
+    scene.view.glow_strength = 1.5;
+    scene.view.note_bloom = 0.0;
     scene.glow_rows = 64;
     scene.pitch_lut.fill(glam::Vec4::new(1.0, 0.0, 0.0, 1.0));
     scene.nodes[0].octaves.fill(1.0);
@@ -208,7 +208,7 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
     {
         shooter.pane = 10;
         shooter.size = size;
-        scene.render_scale = scale;
+        scene.view.render_scale = scale;
         let creations = super::INK_STRIP_CREATIONS.get();
         let resized = shooter.shot_again(&scene);
         let offscreen = target(&shooter);
@@ -237,7 +237,7 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         // it release. No CPU reconstruction and no resize in this pane.
         shooter.pane = 100 + i as u64;
         let mut control = history_scene();
-        control.render_scale = scale;
+        control.view.render_scale = scale;
         shooter.shot_again(&control);
         release(&mut control);
         assert_eq!(resized, shooter.shot_again(&control));
@@ -268,7 +268,7 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     scene.node_radius = 0.6;
     // Reordering here measures row identity, independently of the Gaussian
     // shadow atlas repacking when the caster order changes.
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.depth = 0.0;
     }
     scene.nodes[0].world_pos.x = -1.2;
@@ -406,7 +406,7 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
     let color = target(&shooter).color_view.clone();
     let parity = history(&shooter).parity;
     let nodes = std::mem::take(&mut scene.nodes);
-    scene.glow_reach = 0.0;
+    scene.view.glow_reach = 0.0;
     shooter.size = [256, 260];
     let creations = super::INK_STRIP_CREATIONS.get();
     for _ in 0..2 {
@@ -437,7 +437,7 @@ fn glow_off_discards_history_when_target_maintenance_runs() {
         .ink_history
         .is_none());
     scene.pluses.clear();
-    scene.glow_reach = 0.8;
+    scene.view.glow_reach = 0.8;
     let reset = shooter.shot_again(&scene);
     assert_eq!(super::INK_STRIP_CREATIONS.get(), creations + 1);
     assert_ne!(history(&shooter).raw_views, raw);
