@@ -155,7 +155,7 @@ pub struct FrameCosts {
     /// GPU elapsed time from callback preparation through egui composition.
     pub draw_gpu_ms: f32,
     /// GPU time for the lattice's passes: the 3D scene and its bloom chain.
-    /// Carries the `GPU_TIME_UNSUPPORTED` / `PENDING` sentinels.
+    /// Carries the `GPU_TIME_UNSUPPORTED` / `PENDING` / `INACTIVE` sentinels.
     pub lattice_gpu_ms: f32,
     /// Blocked acquiring the surface — the vsync wait, which is not work.
     pub acquire_ms: f32,
@@ -629,19 +629,31 @@ impl FrameCosts {
         roll_notes: u32,
         spectrogram_fallbacks: (u32, u32),
     ) -> FrameCosts {
-        let ms = |bits: &std::sync::atomic::AtomicU32| {
-            f32::from_bits(bits.load(std::sync::atomic::Ordering::Relaxed))
-        };
+        use std::sync::atomic::Ordering::Relaxed;
+        // The callback runs after the UI: these are the preceding rendered
+        // frame's costs. Consuming its prepare reading distinguishes a real
+        // zero-cost callback from a frame that never ran one, without using
+        // the current pane visibility to label the previous frame's work.
+        let prepare_ms = f32::from_bits(lattice.prepare_ms.swap(f32::NAN.to_bits(), Relaxed));
+        let ms = |bits: &std::sync::atomic::AtomicU32| f32::from_bits(bits.swap(0, Relaxed));
+        let (poll_ms, write_ms, scene_ms) =
+            (ms(&lattice.poll_ms), ms(&lattice.write_ms), ms(&lattice.scene_ms));
+        let gpu = lattice.gpu_ms.swap(harmonigraph_render::GPU_TIME_PENDING, Relaxed);
+        let ran = prepare_ms.is_finite();
         FrameCosts {
             shell_ms: shell.shell_ms,
             cpu_ms,
             tess_ms: shell.tess_ms,
             draw_gpu_ms: shell.draw_gpu_ms,
-            lattice_gpu_ms: ms(&lattice.gpu_ms),
-            prepare_ms: ms(&lattice.prepare_ms),
-            poll_ms: ms(&lattice.poll_ms),
-            write_ms: ms(&lattice.write_ms),
-            scene_ms: ms(&lattice.scene_ms),
+            lattice_gpu_ms: f32::from_bits(if ran {
+                gpu
+            } else {
+                harmonigraph_render::GPU_TIME_INACTIVE
+            }),
+            prepare_ms: if ran { prepare_ms } else { 0.0 },
+            poll_ms: if ran { poll_ms } else { 0.0 },
+            write_ms: if ran { write_ms } else { 0.0 },
+            scene_ms: if ran { scene_ms } else { 0.0 },
             acquire_ms: shell.acquire_ms,
             tick_ms: shell.tick_ms,
             render_ms: shell.render_ms,
@@ -690,16 +702,18 @@ impl PerfStats {
         if dt > 0.0 {
             self.windows[Stage::Frame as usize].record(dt * 1000.0);
         }
-        // Three states, not two: a real reading, "the device can't", and
-        // "none has landed yet". Collapsing the last two into one "n/a" makes
-        // a wiring bug and an unsupported GPU look identical, which is
-        // exactly the question the row exists to answer.
+        // An active timer can go several frames without a completion. Keep
+        // its mean through those gaps, but clear it when lattice work stops.
         match costs.lattice_gpu_ms.to_bits() {
             harmonigraph_render::GPU_TIME_UNSUPPORTED => self.gpu_supported = false,
-            // Still waiting for the first readback; leave the row saying so.
-            harmonigraph_render::GPU_TIME_PENDING => {}
-            // Anything else is a real reading, INCLUDING 0.0.
+            harmonigraph_render::GPU_TIME_PENDING => self.gpu_supported = true,
+            harmonigraph_render::GPU_TIME_INACTIVE => {
+                self.have_gpu = false;
+                self.windows[Stage::Gpu as usize] = Window::default();
+            }
+            // A newly completed measurement, INCLUDING 0.0.
             _ => {
+                self.gpu_supported = true;
                 self.have_gpu = true;
                 self.windows[Stage::Gpu as usize].record(costs.lattice_gpu_ms);
             }
@@ -852,6 +866,78 @@ fn rss_bytes() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lattice_samples_are_consumed_across_idle_and_resume() {
+        use harmonigraph_render::{LatticeStats, GPU_TIME_INACTIVE, GPU_TIME_PENDING};
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let stats = LatticeStats::default();
+        let assemble = || FrameCosts::assemble(ShellTimings::default(), 0.0, &stats, 0, (0, 0));
+        let publish_cpu = |prepare: f32| {
+            stats.poll_ms.store(1.0f32.to_bits(), Relaxed);
+            stats.write_ms.store(2.0f32.to_bits(), Relaxed);
+            stats.scene_ms.store(3.0f32.to_bits(), Relaxed);
+            stats.prepare_ms.store(prepare.to_bits(), Relaxed);
+        };
+        let mut perf = PerfStats::default();
+        let initial = assemble();
+        assert_eq!(initial.lattice_gpu_ms.to_bits(), GPU_TIME_INACTIVE);
+        assert_eq!(initial.prepare_ms, 0.0);
+        perf.record(initial, 0.0, Workload::default());
+        assert!(!perf.have_gpu);
+
+        publish_cpu(4.0);
+        stats.gpu_ms.store(2.0f32.to_bits(), Relaxed);
+        let first = assemble();
+        assert_eq!(
+            (first.prepare_ms, first.poll_ms, first.write_ms, first.scene_ms),
+            (4.0, 1.0, 2.0, 3.0)
+        );
+        perf.record(first, 0.01, Workload::default());
+        for frame in 2..10 {
+            // Zero is still a real callback. Only the GPU readback is absent.
+            publish_cpu(0.0);
+            let costs = assemble();
+            assert_eq!(costs.lattice_gpu_ms.to_bits(), GPU_TIME_PENDING);
+            perf.record(costs, f64::from(frame) * 0.01, Workload::default());
+        }
+        assert_eq!(perf.windows[Stage::Gpu as usize].n, 1);
+        publish_cpu(4.0);
+        stats.gpu_ms.store(10.0f32.to_bits(), Relaxed);
+        perf.record(assemble(), 0.25, Workload::default());
+        assert_eq!(mean(&perf, Stage::Gpu), 6.0, "each completion has equal weight");
+
+        // No callback followed the previous UI frame (for example, folded).
+        let absent = assemble();
+        assert_eq!(
+            (absent.prepare_ms, absent.poll_ms, absent.write_ms, absent.scene_ms),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!(absent.lattice_gpu_ms.to_bits(), GPU_TIME_INACTIVE);
+        perf.record(absent, 0.26, Workload::default());
+        assert!(!perf.have_gpu);
+        assert_eq!((mean(&perf, Stage::Gpu), peak(&perf, Stage::Gpu)), (0.0, 0.0));
+
+        // An empty callback still does CPU work, but encodes no GPU pass.
+        publish_cpu(3.0);
+        stats.gpu_ms.store(GPU_TIME_INACTIVE, Relaxed);
+        let empty = assemble();
+        assert_eq!(empty.prepare_ms, 3.0);
+        perf.record(empty, 0.27, Workload::default());
+        assert!(!perf.have_gpu);
+
+        publish_cpu(0.0);
+        let resumed = assemble();
+        assert_eq!(resumed.lattice_gpu_ms.to_bits(), GPU_TIME_PENDING);
+        perf.record(resumed, 0.28, Workload::default());
+        assert!(!perf.have_gpu, "resuming cannot display the previous active interval");
+        publish_cpu(0.0);
+        stats.gpu_ms.store(0.0f32.to_bits(), Relaxed);
+        perf.record(assemble(), 0.5, Workload::default());
+        assert!(perf.have_gpu, "a zero-valued completion is a real sample");
+        assert_eq!(mean(&perf, Stage::Gpu), 0.0);
+    }
 
     /// The two numbers a stage's row currently prints, which is what most of
     /// the assertions below are about.

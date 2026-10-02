@@ -574,12 +574,12 @@ fn record_controls(
                 (
                     crate::RenderTrigger::OnTransportStop,
                     "Transport stop",
-                    "Finish recording and render when the host transport stops or jumps backward after recording has begun.",
+                    "Finish recording and render when the host transport stops or jumps after recording has begun.",
                 ),
                 (
                     crate::RenderTrigger::AtLoopEnd,
                     "Loop end",
-                    "Record one loop, then render when playback wraps to its start. Enable looping in the host; without a wrap, recording continues until you turn Record take off.",
+                    "Record one loop, then render when playback wraps to its start. A forward seek also ends the take before the jump. Without a wrap or seek, recording continues until you turn Record take off.",
                 ),
                 (
                     crate::RenderTrigger::AtBar,

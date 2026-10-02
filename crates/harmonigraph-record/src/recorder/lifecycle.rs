@@ -40,6 +40,9 @@ impl State {
 pub(super) struct History {
     pub position: Option<(f64, f64)>,
     pub bar: Option<f64>,
+    /// Contiguous end of the blocks accepted into this pass. Parked host
+    /// observations do not move the audio that has already been appended.
+    pub recorded_end: Option<f64>,
 }
 
 /// A value snapshot of the GUI's policy; the shared atomics stay in Recorder.
@@ -57,9 +60,11 @@ pub(super) enum Observation {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub(super) enum End {
-    Rewind,
-    Bar,
+    Rewind = 1,
+    Bar = 2,
+    ForwardSeek = 3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +163,18 @@ pub(super) fn transition(
                 None => playing,
             };
             if rolling {
+                // Host observation history includes parked scrubs. Audio does
+                // not: compare to the accepted prefix, including after a pause.
+                // Match playback's 50 ms jitter allowance, without accumulating
+                // an arbitrary missing interval in an otherwise successful WAV.
+                if history.recorded_end.is_some_and(|end| position > end + 0.05) {
+                    if policy.end_at_rewind {
+                        next.state = State::Complete;
+                        next.action = Action::Complete(End::ForwardSeek);
+                        return next;
+                    }
+                    deferred = Deferred::Split;
+                }
                 // A policy change to a one-file trigger cancels an old debt,
                 // even if resumption is forward rather than another rewind.
                 next.action = if deferred == Deferred::Split && !policy.end_at_rewind {
@@ -166,6 +183,13 @@ pub(super) fn transition(
                     Action::Record
                 };
                 next.state = State::Recording { motion, deferred: Deferred::None };
+                let audio_origin = if next.action == Action::SplitAndRecord {
+                    position
+                } else {
+                    history.recorded_end.unwrap_or(position)
+                };
+                next.history.recorded_end =
+                    (duration.is_finite() && duration >= 0.0).then_some(audio_origin + duration);
             } else if recording {
                 next.state = State::Recording { motion, deferred };
             }

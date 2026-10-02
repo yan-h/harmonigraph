@@ -3,7 +3,7 @@
 //! Keeping both endpoint structs here lets the writer construct their private
 //! state without exposing fields or adding a second wiring API.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 
 use harmonigraph_core::notes::{NoteEventKind, SourceId};
@@ -100,8 +100,8 @@ pub enum Entry {
     /// Sent once per pass, before any audio, so the header can say where
     /// the WAV sits relative to the notes.
     AudioStart(f64),
-    /// The transport jumped backwards: a loop wrapped, or the playhead
-    /// was dragged. Everything after this belongs to a different pass
+    /// The transport jumped: a loop wrapped, or the playhead was dragged.
+    /// Everything after this belongs to a different pass
     /// through the song, so the writer starts a new file rather than
     /// interleaving two performances at the same song positions.
     NewPass,
@@ -140,29 +140,16 @@ fn home_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
 }
 
-/// The two halves of [`RenderTrigger::AtBar`]: the bar the GUI asked the take
-/// to end at, and the latch the audio thread sets once the transport played
-/// through it.
-///
-/// One struct rather than two atomics because they are one setting, and every
-/// construction site of the [`Recorder`]/[`Control`] pair would otherwise carry
-/// both and be able to carry one.
-///
-/// `bar` is `f64` bits in an `AtomicU64`, which is what makes this writable
-/// from a GUI frame and readable from the audio thread without a lock. **Off is
-/// NaN, not zero**: zero is a bar, and a bar can only be crossed from below, so
-/// a zeroed "off" would be indistinguishable from the one value that is
-/// silently unreachable.
-///
-/// [`RenderTrigger::AtBar`]: harmonigraph_take::RenderTrigger::AtBar
+/// The stop bar requested by the GUI. Completion belongs to the take's
+/// single end-reason latch, just like a rewind or forward seek.
+/// NaN represents off so bar zero remains a valid target.
 struct StopAtBar {
     bar: AtomicU64,
-    hit: AtomicBool,
 }
 
 impl Default for StopAtBar {
     fn default() -> Self {
-        StopAtBar { bar: AtomicU64::new(f64::NAN.to_bits()), hit: AtomicBool::new(false) }
+        StopAtBar { bar: AtomicU64::new(f64::NAN.to_bits()) }
     }
 }
 
@@ -190,7 +177,7 @@ impl StopAtBar {
 /// arming edge ([`Recorder::update_armed`]) and the GUI clears them when it
 /// sends `Start` ([`Control::start`]) — because either can go first, and a take
 /// that armed before its command landed would otherwise read as already under
-/// way. What is not on purpose is two hand-written copies of the same four
+/// way. What is not on purpose is two hand-written copies of the same reset
 /// stores, which is how one of them comes to be missing a latch the other
 /// gained (#895).
 #[derive(Default)]
@@ -203,28 +190,36 @@ struct TakeLatches {
     /// Transport-stop countdown (`Control::has_rolled`). Whether an owed split
     /// has a pass to split from is the lifecycle's own `Waiting` state.
     rolled: AtomicBool,
-    /// Published for the GUI: the transport went backwards and the take is done
-    /// — the GUI reads this, stops, and renders the one pass.
-    hit_rewind: AtomicBool,
-    /// The bar the GUI wants the take to end at, and the latch saying it did.
+    /// One exclusive lifecycle completion, published for automatic Stop.
+    /// Zero means still open; the other values are `End`.
+    end: AtomicU8,
+    /// The bar the GUI wants the take to end at.
     /// See [`StopAtBar`] and [`Recorder::observe_bar`].
     stop_at_bar: StopAtBar,
 }
 
 impl TakeLatches {
-    /// Clear what the previous take left behind, so neither end latch can end
+    fn end(&self) -> Option<End> {
+        match self.end.load(Ordering::Relaxed) {
+            1 => Some(End::Rewind),
+            2 => Some(End::Bar),
+            3 => Some(End::ForwardSeek),
+            _ => None,
+        }
+    }
+
+    /// Clear what the previous take left behind, so its end reason cannot end
     /// this one before the transport even rolls — nor its note count, which
     /// would read as this take being under way.
     ///
     /// The stop BAR itself is not here: it is the GUI's setting for the take
     /// about to run, written every frame, and clearing it would disarm the
-    /// trigger at the moment it is needed. Only the latch saying the bar was
-    /// crossed belongs to the finished take.
+    /// trigger at the moment it is needed. The completion reason belongs to
+    /// the finished take.
     fn clear(&self) {
         self.captured.store(0, Ordering::Relaxed);
         self.rolled.store(false, Ordering::Relaxed);
-        self.hit_rewind.store(false, Ordering::Relaxed);
-        self.stop_at_bar.hit.store(false, Ordering::Relaxed);
+        self.end.store(0, Ordering::Relaxed);
     }
 }
 
@@ -536,6 +531,12 @@ impl Recorder {
     /// it records one block and can qualify a subsequent rewind as the take's
     /// end. Repeated accepted tiny scrubs record one block each.
     ///
+    /// A forward gap beyond 50 ms from the accepted audio's end starts a new
+    /// pass under manual/AtBar recording. One-file triggers finish the existing
+    /// prefix instead and report the cutoff with the automatic render. Parked
+    /// observations preserve that audio end, so seek-and-resume has the same
+    /// behavior as seeking during playback.
+    ///
     /// Any stopped backward movement is a rewind, including the restore of a
     /// single accepted export block. Playing hosts retain the
     /// 50 ms backward jitter allowance used for loop detection.
@@ -618,10 +619,7 @@ impl Recorder {
         self.lifecycle = next.state;
         self.history = next.history;
         if let Action::Complete(end) = next.action {
-            match end {
-                End::Rewind => self.latches.hit_rewind.store(true, Ordering::Relaxed),
-                End::Bar => self.latches.stop_at_bar.hit.store(true, Ordering::Relaxed),
-            }
+            self.latches.end.store(end as u8, Ordering::Relaxed);
             self.rolling.store(false, Ordering::Relaxed);
         }
         next.action
@@ -767,7 +765,7 @@ impl Control {
     /// Whether the audio thread saw the transport go backwards and ended the
     /// take — the GUI's cue to stop recording and render the one pass.
     pub fn hit_rewind(&self) -> bool {
-        self.latches.hit_rewind.load(Ordering::Relaxed)
+        self.latches.end() == Some(End::Rewind)
     }
 
     /// The bar to end the take at, or `None` for every trigger but
@@ -781,7 +779,13 @@ impl Control {
     /// Whether the audio thread played the take through its stop bar and ended
     /// it there — the GUI's cue to stop recording and render.
     pub fn hit_stop_bar(&self) -> bool {
-        self.latches.stop_at_bar.hit.load(Ordering::Relaxed)
+        self.latches.end() == Some(End::Bar)
+    }
+
+    /// An audio-owned completion remains authoritative even if the GUI's
+    /// trigger changes before it observes the completed prefix.
+    pub fn has_ended(&self) -> bool {
+        self.latches.end().is_some()
     }
 
     /// Whether the audio thread last saw the transport moving.

@@ -725,9 +725,8 @@ fn one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it() 
 }
 
 #[test]
-fn destroyed_configuration_owners_settle_without_reset_or_another_callback() {
+fn destroying_pending_or_faulted_configuration_owners_does_not_panic() {
     let _scope = crate::test_scope::enter();
-    let mut retained = Vec::new();
     for commands in [false, true] {
         let mut device = Device::new();
         if commands {
@@ -757,10 +756,7 @@ fn destroyed_configuration_owners_settle_without_reset_or_another_callback() {
             assert_eq!(device.mailbox().visible().0.status & 2, 2);
         }
         drop(device);
-        let counts = (0usize, 0usize, 0usize);
-        retained.push(counts);
     }
-    assert_eq!(retained, [(0,0,0), (0,0,0)], "actual destruction settles both states without Reset, a rescue callback, or another instance's main-thread service");
 }
 
 #[derive(Default)]
@@ -1107,7 +1103,7 @@ fn a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it() {
         vec![note(10, 60, 0, CLAP_EVENT_NOTE_ON)],
         false,
         None,
-        Some(transport(9.0, 0)),
+        Some(transport(10.0 - 64.0 / 48000.0, 0)),
     );
     writer.drain(&mut capture);
     let mut events: Vec<_> =

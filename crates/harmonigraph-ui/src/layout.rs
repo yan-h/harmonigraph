@@ -199,7 +199,7 @@ impl Layout {
     /// The live dock deliberately does NOT get these: Frameless mode exists so
     /// adjacent panes record as one seamless surface.
     pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
-        let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::hairline());
+        let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_ruling());
         for line in self.dividers(placements) {
             painter.line_segment(line, stroke);
         }
@@ -351,6 +351,47 @@ mod tests {
             };
             assert!(near < far, "{side:?}: the lattice should be the pane on that edge");
         }
+    }
+
+    #[test]
+    fn exported_dividers_use_the_same_picture_ink_under_every_editor_skin() {
+        use harmonigraph_scene::skin::{self, SkinDials};
+        let saved = skin::active_skin_key();
+        let layout = Layout::preset("side-by-side").unwrap();
+        let placements = layout.resolve(FRAME);
+        let ctx = crate::tests::probe::themed();
+        let mut strokes = Vec::new();
+        let mut chrome = Vec::new();
+        for dials in [
+            SkinDials { lightness: 0.08, tint_hue: 65.0, tint: 1.0, ..Default::default() },
+            SkinDials { lightness: 0.16, tint_hue: 190.0, tint: 1.0, ..Default::default() },
+        ] {
+            crate::theme::set_skin(&ctx, dials);
+            chrome.push(crate::theme::hairline());
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, FRAME)),
+                    ..Default::default()
+                },
+                |ui| layout.paint_dividers(ui.painter(), &placements),
+            );
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, stroke } => Some((*points, *stroke)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(lines.len(), layout.dividers(&placements).len());
+            assert!(!lines.is_empty(), "the fixture must paint a real boundary");
+            assert!(lines.iter().all(|(_, stroke)| *stroke
+                == egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_ruling())));
+            strokes.push(lines);
+        }
+        skin::set_active_skin(saved);
+        assert_ne!(chrome[0], chrome[1], "the fixture must change the leaking chrome role");
+        assert_eq!(strokes[0], strokes[1], "the shared preview/export seam follows the skin");
     }
 
     /// Nothing to delineate: one pane has no neighbour, and panes that don't

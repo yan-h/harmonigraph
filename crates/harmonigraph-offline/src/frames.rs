@@ -895,10 +895,9 @@ mod tests {
             // to nothing rather than picking a reading that says "none" — and
             // the octave band closes in over the space it leaves, which is the
             // MIDI picture the stack draws.
-            let fresh_width = harmonigraph_scene::ViewConfig::default().spectral_ring_width;
             state.appearance.view.spectral_ring_width = match shot {
                 Shot::Midi => 0.0,
-                _ => fresh_width,
+                _ => 0.1,
             };
             state.appearance.view.spectral_reading = match shot {
                 Shot::Fold | Shot::Midi | Shot::Gate(_) => {
@@ -906,6 +905,7 @@ mod tests {
                 }
                 Shot::Spectrum(_) => harmonigraph_scene::SpectralReading::Spectrum,
             };
+            assert_eq!(state.appearance.view.spectral_ring_draws(), !matches!(shot, Shot::Midi));
             // From the fresh camera each time: the pane pans the view's center
             // with the camera, so a zoom applied on top of the last one would
             // compound.

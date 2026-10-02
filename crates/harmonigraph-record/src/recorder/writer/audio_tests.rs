@@ -86,6 +86,7 @@ impl Worker {
             program,
             appearance: None,
             size: [16, 16],
+            notice: None,
         });
         assert_no_alloc(|| self.close(1));
         // A failure may already be accounted before Stop. Wait for this
@@ -239,4 +240,93 @@ fn wav_finalization_failure_is_accounted_without_producer_disconnect() {
     let mut worker = Worker::start("finalize", true, true);
     worker.stop_with_render();
     worker.assert_failed("WAV finalization failure");
+}
+
+/// A one-file trigger ends the contiguous prefix at a seek and explains that
+/// cutoff without poisoning recording ownership or hiding renderer warnings.
+#[test]
+fn a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take() {
+    use std::os::unix::fs::PermissionsExt;
+    for (paused, stop_before_seek) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut worker = Worker::queued(&format!("seek-notice-{paused}-{stop_before_seek}"));
+        let control = worker.control.as_ref().unwrap();
+        control.set_end_at_rewind(true);
+        let program = worker.directory.join("renderer");
+        // spawn_render passes take, --out, output, --size, dimensions.
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nprintf 'video' > \"$3\"\nprintf 'warning: fixture warning\\n' >&2\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let request = || RenderRequest {
+            program: program.clone(),
+            appearance: None,
+            size: [16, 16],
+            notice: None,
+        };
+        let recorder = worker.recorder.as_mut().unwrap();
+        let duration = 64.0 / 48_000.0;
+        assert_no_alloc(|| {
+            assert!(recorder.is_armed());
+            assert!(recorder.observe_transport(0.0, true, duration));
+            recorder.mark_audio_start(0.0);
+            recorder.audio(&mut std::iter::repeat_n(0.25, 128), 128);
+            if paused {
+                assert!(!recorder.observe_transport(0.0, false, duration));
+                assert!(!recorder.observe_transport(10.0, false, duration));
+                assert!(!recorder.observe_transport(10.0, false, duration));
+            }
+            // This callback was admitted before the GUI Stop. It owns its
+            // transport observation even if the intent changes meanwhile.
+            assert!(recorder.is_armed());
+        });
+        if stop_before_seek {
+            assert!(!control.has_ended(), "Stop has no completion reason to snapshot yet");
+            control.stop(request());
+        }
+        assert_no_alloc(|| {
+            assert!(!recorder.observe_transport(10.0, true, duration));
+            assert!(recorder.configuration_address().is_none());
+        });
+        assert!(control.has_ended());
+        assert_eq!(control.latches.end(), Some(End::ForwardSeek));
+        if !stop_before_seek {
+            control.stop(request());
+        }
+        assert_no_alloc(|| worker.close(1));
+        worker.fence.worker_before_commands.enabled.store(false, Ordering::Release);
+        wait_for("successful seek render", || {
+            worker.control.as_ref().unwrap().status().starts_with("rendered ")
+        });
+        let control = worker.control.as_ref().unwrap();
+        let status = control.status();
+        assert!(status.contains("take ended before a forward transport seek"), "{status}");
+        assert!(status.contains("warning: fixture warning"), "{status}");
+        assert!(!worker.fence.failed.load(Ordering::Acquire));
+        let take_path = control.last_take().unwrap();
+        let take = harmonigraph_take::Take::read(&take_path).unwrap();
+        assert!(take.incomplete.is_none());
+        assert_eq!(take.header.audio_start, Some(0.0));
+        assert_eq!(wav_samples(&take_path.with_extension("wav")), vec![0.25; 128]);
+        assert!(!Pass::path_for(&take_path, 2).exists());
+        // Successful completion releases the ordinary Start gate. A gesture
+        // must not leave a permanent failure requiring the plugin to reload.
+        control.start(48_000.0, String::new());
+        assert!(control.is_recording(), "{}", control.status());
+        assert!(!control.has_ended());
+        let recorder = worker.recorder.as_mut().unwrap();
+        assert!(recorder.is_armed());
+        let next = recorder.configuration_address().unwrap();
+        control.stop(unlaunchable_render(&worker.directory));
+        assert_no_alloc(|| {
+            assert!(!recorder.is_armed());
+            recorder.configuration_pass_complete(next);
+            recorder.source_pass_complete(next, 12.0);
+            recorder.configuration_epoch_complete(next.epoch);
+            recorder.source_epoch_complete(next.epoch, 12.0);
+        });
+        wait_for("second take finalized", || !worker.fence.finishing.load(Ordering::Acquire));
+        assert!(!worker.fence.failed.load(Ordering::Acquire));
+    }
 }

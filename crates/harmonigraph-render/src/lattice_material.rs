@@ -359,6 +359,10 @@ impl Source {
             color_attachments: &[attachment(output)],
             ..Default::default()
         });
+        // Clear the previous light before skipping transparent material work.
+        if !has_light {
+            return;
+        }
         if self.velvet {
             pass.set_pipeline(&pipelines.velvet);
             pass.set_bind_group(0, &self.bind_group, &[]);

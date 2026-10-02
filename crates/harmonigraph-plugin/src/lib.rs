@@ -935,12 +935,12 @@ impl ClapPlugin for Harmonigraph {
     }
     fn clap_performance_end(
         &mut self,
-        callback: nice_plug::wrapper::clap::performance::Callback,
+        _callback: nice_plug::wrapper::clap::performance::Callback,
         _summary: nice_plug::wrapper::clap::performance::Summary,
     ) {
         let observation = self.presentation_seconds;
         if let Some(owner) = self.configuration.as_mut() {
-            self.aggregation.as_mut().unwrap().end(callback, owner, &mut self.take);
+            self.aggregation.as_mut().unwrap().end(owner, &mut self.take);
             owner.finish_recording_publication(&mut self.take, observation);
         }
     }

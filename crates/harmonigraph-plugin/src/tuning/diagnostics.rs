@@ -166,6 +166,20 @@ impl Shared {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn test_publications(&self) -> (u64, Option<u64>) {
+        // Observe the existing seqlocks after a real callback, with no writer
+        // in flight. A published snapshot must also be readable.
+        let tune = self.tune.sequence.load(Ordering::SeqCst);
+        assert_eq!(self.tune.read().is_some(), tune != 0);
+        let hub = self.hub.as_ref().map(|hub| {
+            let sequence = hub.sequence.load(Ordering::SeqCst);
+            assert_eq!(hub.read().is_some(), sequence != 0);
+            sequence
+        });
+        (tune, hub)
+    }
+
     pub(super) fn log(&self, shared: &setup::Shared) {
         let mut logged = self.logged.lock().unwrap();
         let now = Instant::now();

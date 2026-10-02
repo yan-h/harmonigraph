@@ -174,6 +174,19 @@ Audio-only takes and takes whose notes are still waiting for publication finish 
 The frame-counted *Transport stop* also accepts recorded transport progress without waiting for a note.
 Playing hosts retain a 50 ms backward jitter allowance for loop detection.
 
+A forward jump more than 50 ms beyond the recorded audio's expected end also breaks continuity,
+including a seek made while stopped before playback resumes.
+Under *Manually* or *At bar*,
+the next recorded block starts a new pass with its own WAV anchor.
+The latest recorded pass renders,
+including a pass containing audio without MIDI;
+earlier passes remain on disk.
+Under *Transport stop* or *Loop end*,
+the take finishes before the jump and the automatic render's status says “take ended before a forward transport seek”.
+You can immediately record another take.
+That notice belongs to the automatic render;
+an explicit later re-render from disk does not repeat it.
+
 #### Rendering automatically when the take ends
 
 A finished take always renders:
@@ -200,9 +213,9 @@ it does not need to draw every video frame to preserve those proportions.
 | setting | what ends the take |
 |---|---|
 | Manually | you switch Record take off — predictable, and it works however the transport behaves |
-| Transport stop | the transport stops after something was recorded, or goes backwards — whichever is first; recording disarms at the same moment |
-| Loop end | one arranger-loop pass, ending the moment the loop wraps. Needs looping ON; with looping off it waits for a disarm |
-| At bar | the transport plays through the bar set beside it, ending there. A rewind splits rather than ends, so the pass that renders is the last run through the range |
+| Transport stop | the transport stops after something was recorded, goes backwards, or seeks forward beyond the recorded audio — whichever is first; recording disarms at the same moment |
+| Loop end | one arranger-loop pass, ending when the loop wraps or a forward seek breaks audio continuity. With looping off and no seek, it waits for a disarm |
+| At bar | the transport plays through the bar set beside it, ending there. A rewind or forward seek splits rather than ends, so the latest recorded pass renders |
 
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.

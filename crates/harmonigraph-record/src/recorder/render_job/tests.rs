@@ -114,7 +114,7 @@ fn a_second_request_kills_the_render_in_flight() {
     let progress = Arc::new(Progress::default());
     let start = || {
         spawn_render(
-            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16] },
+            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16], notice: None },
             take.clone(),
             status.clone(),
             progress.clone(),
@@ -182,7 +182,12 @@ fn cancelling_a_render_kills_it_and_deletes_what_it_had_written() {
     let status = Arc::new(Mutex::new(String::new()));
     let progress = Arc::new(Progress::default());
     spawn_render(
-        RenderRequest { program: fake.clone(), appearance: Some("(dummy)".into()), size: [16, 16] },
+        RenderRequest {
+            program: fake.clone(),
+            appearance: Some("(dummy)".into()),
+            size: [16, 16],
+            notice: None,
+        },
         take.clone(),
         status.clone(),
         progress.clone(),
@@ -252,7 +257,7 @@ fn a_render_of_another_take_waits_rather_than_replacing_this_one() {
     let progress = Arc::new(Progress::default());
     let start = |take: std::path::PathBuf| {
         spawn_render(
-            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16] },
+            RenderRequest { program: fake.clone(), appearance: None, size: [16, 16], notice: None },
             take,
             status.clone(),
             progress.clone(),
@@ -395,13 +400,13 @@ fn a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on() {
     );
 
     let status =
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), tail.warning.as_deref());
+        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, tail.warning.as_deref());
     assert!(status.contains("rendered /takes/take-1.mp4"), "{status}");
     assert!(status.contains("note history 6..=8 is missing"), "{status}");
     // A clean render says nothing extra, or every export would read as one
     // that went wrong.
     assert_eq!(
-        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None),
+        rendered_status(std::path::Path::new("/takes/take-1.mp4"), None, None),
         "rendered /takes/take-1.mp4",
     );
 }

@@ -743,17 +743,15 @@ fn learn_leaves_marvel_unchanged_without_a_seventh() {
     assert!(!state.picture.appearance.view.meantone, "the just third still releases meantone");
 }
 
-/// One comma's mode switch is not a tuning edit, so it must not re-open
-/// another comma's verdict. Meantone DERIVES the third the septimal identity
-/// reads, so releasing it moves that third — and a marvel the user has just
-/// switched off would come straight back, which is the "press it twice" bug
-/// wearing the other comma's clothes.
+/// Both explicit releases must survive the same observation. Meantone derives
+/// the third the septimal identity reads, so releasing it changes Marvel's key;
+/// the simultaneous Marvel release judges that new key instead of re-engaging.
 #[test]
 fn releasing_meantone_does_not_re_engage_a_switched_off_marvel() {
     let mut state = unlocked();
     // A third a tenth of a cent off four fifths: inside the tolerance, so
     // meantone engages — and far enough that the raw third and the derived
-    // one are different numbers, which is what the verdict must not read.
+    // one are different numbers, so releasing meantone changes Marvel's key.
     let params = TuningBackend::new(700.0, 400.1).with_seven(1000.0);
     begin_frame(&mut state.picture, &params, 0.0);
     assert!(
@@ -866,6 +864,23 @@ fn the_window_the_lattice_drew_reaches_the_panes_that_describe_it() {
         drawn.count(),
         state.picture.appearance.view.reach().count(),
     );
+
+    // Export has no pointer/chrome, but its spectral pane still describes
+    // the camera's picture. A zoomed-out window must not fall back to reach.
+    let mut state = fresh();
+    state.picture.appearance.camera.projection = harmonigraph_scene::Projection::Perspective;
+    state.picture.appearance.camera.distance = harmonigraph_scene::Camera::MAX_DISTANCE;
+    let backend = RecordingBackend::default();
+    begin_frame(&mut state.picture, &backend, 0.0);
+    let expected =
+        state.picture.appearance.view.scrolled(&state.picture.appearance.camera, 16.0 / 9.0);
+    assert_ne!(expected, state.picture.appearance.view.reach());
+    super::probe::painted_full(egui::vec2(640.0, 360.0), |ui| {
+        crate::draw_pane(ui, Pane::Lattice, &mut state.picture, 0.0, 0);
+    });
+    assert_eq!(state.picture.surfaces.drawn_this_frame, Some(expected));
+    begin_frame(&mut state.picture, &backend, 1.0 / 60.0);
+    assert_eq!(state.picture.shown(), expected, "export discarded the camera window");
 }
 
 /// The lattice pane stands on a ground it paints itself, and paints the same

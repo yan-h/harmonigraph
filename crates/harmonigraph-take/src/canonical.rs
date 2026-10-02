@@ -424,12 +424,6 @@ impl CanonicalRecord {
             _ => None,
         }
     }
-    pub fn voiced(&self) -> bool {
-        match self {
-            Self::Baseline(b) => b.shown && !b.voices.is_empty(),
-            _ => self.note().is_some_and(|n| matches!(n.kind, crate::NoteKind::On { .. })),
-        }
-    }
 }
 
 /// An incomplete recording is different from a malformed trailing line. It

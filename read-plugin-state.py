@@ -72,7 +72,7 @@ def candidate_bytes(data: bytes):
     """Every decompression of `data` that might contain the state JSON,
     plus `data` itself in case it was never compressed."""
     yield data
-    seen = set()
+    view = memoryview(data)
     for i in range(len(data) - 2):
         # Raw deflate (Bitwig's own sections) and zlib-wrapped, both cheap
         # to attempt and both observed in the wild.
@@ -80,29 +80,25 @@ def candidate_bytes(data: bytes):
             if wbits == 15 and data[i] != 0x78:
                 continue
             try:
-                out = zlib.decompressobj(wbits).decompress(data[i:])
-            except Exception:
+                out = zlib.decompressobj(wbits).decompress(view[i:])
+            except zlib.error:
                 continue
-            if len(out) > 200 and STATE_START in out and out[:32] not in seen:
-                seen.add(out[:32])
+            if STATE_START in out:
                 yield out
 
 
 def json_blobs(buf: bytes):
-    """Every brace-balanced nice-plug state object in `buf`."""
-    for m in re.finditer(re.escape(STATE_START), buf):
-        depth, start = 0, m.start()
-        for j in range(start, len(buf)):
-            if buf[j] == 0x7B:
-                depth += 1
-            elif buf[j] == 0x7D:
-                depth -= 1
-                if depth == 0:
-                    try:
-                        yield json.loads(buf[start : j + 1])
-                    except Exception:
-                        pass
-                    break
+    """Every nice-plug state object, including braces inside quoted values."""
+    # Binary container bytes outside JSON need not be UTF-8. Surrogate escapes
+    # retain them without changing valid UTF-8 strings inside a state object.
+    text = buf.decode("utf-8", errors="surrogateescape")
+    decoder = json.JSONDecoder()
+    for match in re.finditer(re.escape(STATE_START.decode()), text):
+        try:
+            value, _ = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError:
+            continue
+        yield value
 
 
 def find_states(path: pathlib.Path):
