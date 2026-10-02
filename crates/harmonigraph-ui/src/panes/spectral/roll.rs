@@ -96,8 +96,8 @@ const MIN_LENGTH_PT: f32 = 1.0;
 /// Off comes back zero-reach AND transparent, never one or the other: the reach
 /// is what the far-edge cull keeps a leaving note alive for, so an outline that
 /// will not paint must not be paid for either.
-fn outline(style: harmonigraph_scene::ShadowStyle) -> (f32, Color32) {
-    let reach = harmonigraph_render::spectral_shadow_reach(style);
+fn outline(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> (f32, Color32) {
+    let reach = harmonigraph_render::spectral_shadow_reach(style, point_scale);
     (reach, if style.casts() { Color32::BLACK } else { Color32::TRANSPARENT })
 }
 
@@ -192,7 +192,7 @@ pub(super) struct RollDrawOptions {
     pub(super) split: f32,
     pub(super) now: f64,
     pub(super) surface: usize,
-    pub(super) ribbon_floor_scale: f32,
+    pub(super) point_scale: f32,
 }
 
 #[cfg(test)]
@@ -201,7 +201,7 @@ pub(crate) struct RollDrawProbe {
     pub(crate) surface: usize,
     pub(crate) pitch_len: f32,
     pub(crate) pixels_per_point: f32,
-    pub(crate) ribbon_floor_scale: f32,
+    pub(crate) point_scale: f32,
     pub(crate) note_count: usize,
     pub(crate) first_half_pitch: Option<f32>,
 }
@@ -233,7 +233,7 @@ pub(super) fn draw_roll(
         options.split,
         options.now,
         ppp,
-        options.ribbon_floor_scale,
+        options.point_scale,
     );
     #[cfg(test)]
     ROLL_DRAW_PROBE.with(|probe| {
@@ -241,7 +241,7 @@ pub(super) fn draw_roll(
             surface: options.surface,
             pitch_len: axes.pitch_len(),
             pixels_per_point: ppp,
-            ribbon_floor_scale: options.ribbon_floor_scale,
+            point_scale: options.point_scale,
             note_count: notes.len() + detached.len(),
             first_half_pitch: notes.first().or(detached.first()).map(|note| note.half_extent[0]),
         }));
@@ -304,6 +304,7 @@ pub(super) fn draw_roll(
         state.surfaces.target_format,
         harmonigraph_render::PaneIds { pane, pass_nr: painter.ctx().cumulative_pass_nr() },
         shadow_surface,
+        options.point_scale,
     ));
 }
 
@@ -345,7 +346,7 @@ fn roll_instances_with_floor(
     split: f32,
     now: f64,
     ppp: f32,
-    ribbon_floor_scale: f32,
+    point_scale: f32,
 ) -> (Vec<RollInstance>, Vec<RollInstance>) {
     let cfg = &state.appearance.spectrum;
     // Shared time<->depth mapping: a `now`-anchored scrolling window.
@@ -356,9 +357,9 @@ fn roll_instances_with_floor(
     // composition's logical scale and apply AFTER the Thickness mapping.
     let half_pitch =
         ((cfg.roll_thickness * 0.5 / scale.span).max(0.0) * axes.pitch_len()).max(1e-6);
-    let min_half_pitch = MIN_RIBBON_PT * ribbon_floor_scale.max(0.0) * 0.5;
+    let min_half_pitch = MIN_RIBBON_PT * point_scale.max(0.0) * 0.5;
     let width_floor = min_half_pitch / half_pitch;
-    let min_half_depth = 0.5 * MIN_LENGTH_PT * ribbon_floor_scale.max(0.0);
+    let min_half_depth = 0.5 * MIN_LENGTH_PT * point_scale.max(0.0);
 
     // Build in START order. The tracker hands notes back finished-first and
     // then sounding, which is release order followed by key order — stable,
@@ -371,7 +372,8 @@ fn roll_instances_with_floor(
     // The whole look of a note, decided once for the roll rather than per
     // note: the outline standing outside it. The note itself is a solid
     // rectangle of its own color and has nothing else to decide.
-    let (outline_px, outline_color) = outline(state.appearance.view.shadow.spectral_geometry);
+    let (outline_px, outline_color) =
+        outline(state.appearance.view.shadow.spectral_geometry, point_scale);
     // ...and how far a SOUNDING note carries past the now-line, which is
     // decided once for the same reason. See [`lead`]. How much of that a
     // particular note still has is [`lead_alpha`]'s, and is per note: it is a
@@ -464,7 +466,7 @@ fn roll_instances_with_floor(
         // A bounded V-shaped narrowing marks a touching re-strike without
         // inventing a time gap. It affects the shared silhouette and shadow.
         let notch = if retrigger {
-            (1.5 * f64::from(ribbon_floor_scale) * per_point).min((stop - note.start) * 0.25)
+            (1.5 * f64::from(point_scale) * per_point).min((stop - note.start) * 0.25)
         } else {
             0.0
         };
@@ -990,10 +992,10 @@ fn note_instances_with_floor(
     split: f32,
     now: f64,
     ppp: f32,
-    ribbon_floor_scale: f32,
+    point_scale: f32,
 ) -> Vec<RollInstance> {
     let (mut notes, detached) =
-        roll_instances_with_floor(axes, scale, state, split, now, ppp, ribbon_floor_scale);
+        roll_instances_with_floor(axes, scale, state, split, now, ppp, point_scale);
     notes.extend(detached);
     notes
 }
@@ -1071,12 +1073,15 @@ mod tests {
         ribbon_with_style(
             harmonigraph_scene::ShadowStyle {
                 width: outline
-                    / harmonigraph_render::spectral_shadow_reach(harmonigraph_scene::ShadowStyle {
-                        width: 1.0,
-                        depth: 1.0,
-                        kernel: harmonigraph_scene::ShadowKernel::Distance,
-                        ..Default::default()
-                    }),
+                    / harmonigraph_render::spectral_shadow_reach(
+                        harmonigraph_scene::ShadowStyle {
+                            width: 1.0,
+                            depth: 1.0,
+                            kernel: harmonigraph_scene::ShadowKernel::Distance,
+                            ..Default::default()
+                        },
+                        1.0,
+                    ),
                 depth: 1.0,
                 kernel: harmonigraph_scene::ShadowKernel::Distance,
                 ..Default::default()
@@ -1145,7 +1150,7 @@ mod tests {
                 &axes,
                 &scale,
                 &state,
-                RollDrawOptions { split: 0.5, now: 1.0, surface: 0, ribbon_floor_scale: 1.0 },
+                RollDrawOptions { split: 0.5, now: 1.0, surface: 0, point_scale: 1.0 },
             );
         });
         assert_eq!(take_roll_draw_probe().unwrap().pixels_per_point, 0.5);
@@ -1454,7 +1459,7 @@ mod tests {
         let off = ribbon(0.0);
         assert_eq!(one(&off).outline[3], 0, "an outline of no width left a color behind");
         let shut = harmonigraph_scene::ShadowStyle { width: 0.0, ..Default::default() };
-        assert_eq!(outline(shut).0, 0.0, "an outline of no width still made room for one");
+        assert_eq!(outline(shut, 1.0).0, 0.0, "an outline of no width still made room for one");
     }
 
     /// A zero-depth shadow is off everywhere upstream of the atlas too: the
@@ -2030,7 +2035,7 @@ mod tests {
         let now = 14.3;
         let time =
             super::super::axes::TimeAxis::new(&state, super::super::axes::spectrum_share(cfg), now);
-        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
+        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
         let ink_px = min_half_depth_for(PPP) + outline_px + 0.5 / PPP;
         // Put the note's stop exactly on the live ink boundary, by the cull's
         // own arithmetic: solving for `now` from the stop instead lands it an
@@ -2252,7 +2257,7 @@ mod tests {
             // the line through the screen while the pane placed the note along
             // its own axis — the two orders of arithmetic part at the last bit.
             let tip = past_the_line(&note, &axes, split);
-            let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
+            let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
             let (drawn, over) = if note.lead > 0.0 {
                 (note.cap_reach > 0.0, tip - note.lead + note.cap_reach + 0.5 / PPP)
             } else {
@@ -2437,7 +2442,7 @@ mod tests {
 
         // Growing with the room, and never shrinking — the cap comes out of the
         // note's own end rather than being faded in over it.
-        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
+        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
         let mut previous = 0.0f32;
         let mut full_at = None;
         let mut elapsed = 0.0f64;
@@ -2523,7 +2528,7 @@ mod tests {
             }
         }
         let last = at(with);
-        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry);
+        let (outline_px, _) = outline(state.appearance.view.shadow.spectral_geometry, 1.0);
         assert!(
             last.cap_reach >= outline_px - 1e-4,
             "the lead was given up at {without}s with its cap at {} of {outline_px} — the \

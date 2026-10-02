@@ -181,11 +181,9 @@ pub(crate) fn spectral_pane(
     // Which live copy of the pane this is (see `crate::draw_pane`): two live
     // spectrograms in a frame need their own grid.
     surface: usize,
-    // Scale for the point-sized pitch visibility floor when this pane is part
-    // of a composed preview. The configured semitone width needs no scale;
-    // its hairline fallback is the only width that is not relative to the
-    // pane's pitch axis.
-    ribbon_floor_scale: f32,
+    // Scale point-sized ribbon floors and shadows with the composed preview.
+    // The configured semitone width already follows the pane's pitch axis.
+    point_scale: f32,
     navigation: Navigation,
 ) {
     use harmonigraph_core::spectrum::{BINS_PER_SEMITONE, SPECTRUM_MIN_MIDI};
@@ -428,15 +426,7 @@ pub(crate) fn spectral_pane(
                 })
                 .collect();
 
-            atmosphere::draw_profile(
-                &painter,
-                &axes,
-                &cfg,
-                &visible,
-                budget,
-                split,
-                ribbon_floor_scale,
-            );
+            atmosphere::draw_profile(&painter, &axes, &cfg, &visible, budget, split, point_scale);
         }
     }
 
@@ -488,7 +478,7 @@ pub(crate) fn spectral_pane(
             &axes,
             &scale,
             state,
-            roll::RollDrawOptions { split, now, surface, ribbon_floor_scale },
+            roll::RollDrawOptions { split, now, surface, point_scale },
         );
     }
 
@@ -618,6 +608,7 @@ pub(crate) fn spectral_pane(
         names_slide(&cfg),
         Some(state.appearance.view.shadow.spectral_text),
         Some(crate::text::spectral_shadow_surface(surface)),
+        point_scale,
     );
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
         rect,

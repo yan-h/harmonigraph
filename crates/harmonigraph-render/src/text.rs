@@ -216,10 +216,12 @@ pub fn text_paint_callback(
     target_format: wgpu::TextureFormat,
     ids: PaneIds,
     shadow_surface_id: Option<u64>,
+    point_scale: f32,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
         TextCallback {
+            point_scale,
             glyphs,
             layer_ends,
             shadow,
@@ -235,6 +237,7 @@ pub fn text_paint_callback(
 }
 
 struct TextCallback {
+    point_scale: f32,
     glyphs: Vec<GlyphInstance>,
     layer_ends: Vec<u32>,
     shadow: Option<harmonigraph_scene::ShadowStyle>,
@@ -1452,7 +1455,7 @@ impl CallbackTrait for TextCallback {
             // filling the vector every frame for nobody.
             let sigma = style
                 .filter(|style| style.casts())
-                .map_or(0.0, crate::shadow::spectral_sigma_points);
+                .map_or(0.0, |style| crate::shadow::spectral_sigma_points(style, self.point_scale));
             let falloff =
                 style.map_or(harmonigraph_scene::ShadowStyle::default().falloff, |s| s.falloff);
             let casters: Vec<crate::shadow::Caster> = self
@@ -1663,6 +1666,7 @@ pub(crate) mod tests {
             },
         ] {
             let cb = TextCallback {
+                point_scale: 1.0,
                 layer_ends: Vec::new(),
                 glyphs: vec![glyph()],
                 shadow: Some(style),
@@ -1817,6 +1821,7 @@ pub(crate) mod tests {
         let shared = uploaded.texture.expect("the fixture uploads a texture");
 
         let cb = TextCallback {
+            point_scale: 1.0,
             layer_ends: Vec::new(),
             glyphs: vec![glyph()],
             shadow: None,
@@ -1959,9 +1964,10 @@ pub(crate) mod tests {
         sheet: FontAtlas,
         slide: SlideAxis,
     ) -> Vec<u8> {
-        draw_from_scaled(device, queue, glyph, shadow, sheet, slide, 1.0).0
+        draw_from_scaled(device, queue, glyph, shadow, sheet, slide, 1.0, 1.0).0
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_from_scaled(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1970,10 +1976,12 @@ pub(crate) mod tests {
         sheet: FontAtlas,
         slide: SlideAxis,
         ppp: f32,
+        point_scale: f32,
     ) -> (Vec<u8>, [u32; 2]) {
         let physical_width = (SIZE[0] as f32 * ppp).round() as u32;
         let size = [physical_width.div_ceil(64) * 64, (SIZE[1] as f32 * ppp).round() as u32];
         let cb = TextCallback {
+            point_scale,
             layer_ends: Vec::new(),
             glyphs: vec![glyph],
             shadow,
@@ -2029,6 +2037,7 @@ pub(crate) mod tests {
             [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
         {
             let mut cb = TextCallback {
+                point_scale: 1.0,
                 glyphs: vec![
                     glyph(),
                     GlyphInstance {
@@ -2153,6 +2162,7 @@ pub(crate) mod tests {
                         atlas(),
                         SlideAxis::default(),
                         ppp,
+                        1.0,
                     );
                     // The glyph starts at x=24. This is over nine points out,
                     // beyond the old distance support (8 pt) and Gaussian (6 pt).
@@ -2167,6 +2177,45 @@ pub(crate) mod tests {
                         );
                         assert_eq!(&pixel[1..3], [0, 0], "the shadow's own hue");
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn enlarged_preview_text_shadows_extend_beyond_maximum_dial_reach() {
+        use harmonigraph_scene::{ShadowKernel, ShadowStyle, SPECTRAL_SHADOW_MAX};
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
+            let style = ShadowStyle {
+                width: SPECTRAL_SHADOW_MAX,
+                spread: 0.2,
+                depth: 1.0,
+                kernel,
+                ..Default::default()
+            };
+            let frames = [1.0, 2.0].map(|point_scale| {
+                draw_from_scaled(
+                    &device,
+                    &queue,
+                    glyph(),
+                    Some(style),
+                    atlas(),
+                    SlideAxis::default(),
+                    1.0,
+                    point_scale,
+                )
+            });
+            // The glyph starts at x=24: x=1 lies outside either unscaled
+            // kernel, including Gaussian spread, but inside the enlarged one.
+            for (i, (frame, size)) in frames.iter().enumerate() {
+                let at = ((28 * size[0] + 1) * 4) as usize;
+                if i == 0 {
+                    assert_eq!(&frame[at..at + 4], [0; 4], "{kernel:?}");
+                } else {
+                    assert!(frame[at + 3] > 2, "enlarged {kernel:?} shadow was capped");
                 }
             }
         }
@@ -2193,6 +2242,7 @@ pub(crate) mod tests {
             return;
         };
         let cb = TextCallback {
+            point_scale: 1.0,
             layer_ends: Vec::new(),
             // The letter where `glyph` puts it, the mark 16 points to its left.
             glyphs: vec![glyph(), GlyphInstance { rect: [8.0, 24.0, 8.0, 8.0], ..mark() }],
@@ -2275,6 +2325,7 @@ pub(crate) mod tests {
             }
         }
         let cb = TextCallback {
+            point_scale: 1.0,
             layer_ends: Vec::new(),
             glyphs: [(4.3, 0.0, 0.0), (24.3, 12.0, 12.0), (44.3, 24.0, 40.0)]
                 .iter()
@@ -2357,6 +2408,7 @@ pub(crate) mod tests {
             return;
         };
         let at = |pane_id: u64, pass_nr: u64| TextCallback {
+            point_scale: 1.0,
             layer_ends: Vec::new(),
             glyphs: vec![glyph()],
             shadow: None,
@@ -2451,6 +2503,7 @@ pub(crate) mod tests {
         // The standalone harness requires a font sheet even for mark-only batches.
         let fallback_font = atlas();
         let at = |x: f32, pane_id: u64, atlas: Option<FontAtlas>| TextCallback {
+            point_scale: 1.0,
             layer_ends: Vec::new(),
             glyphs: vec![GlyphInstance { rect: [x, 24.0, 8.0, 8.0], atlas: sheet, ..glyph() }],
             shadow: None,
@@ -2537,6 +2590,7 @@ pub(crate) mod tests {
             &mut resources,
             [
                 TextCallback {
+                    point_scale: 1.0,
                     layer_ends: Vec::new(),
                     glyphs: vec![reaching],
                     shadow: None,
@@ -2588,6 +2642,7 @@ pub(crate) mod tests {
                     atlas(),
                     SlideAxis::default(),
                     ppp,
+                    1.0,
                 );
                 let at = |x: f32, y: f32| {
                     let x = (x * ppp).floor() as u32;
@@ -2628,6 +2683,7 @@ pub(crate) mod tests {
                 Some(style),
                 atlas(),
                 SlideAxis::default(),
+                1.0,
                 1.0,
             )
             .0

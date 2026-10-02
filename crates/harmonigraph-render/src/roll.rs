@@ -271,10 +271,12 @@ pub fn roll_paint_callback_with_clipped_tail(
     target_format: wgpu::TextureFormat,
     ids: crate::PaneIds,
     shadow_surface_id: u64,
+    point_scale: f32,
 ) -> egui::PaintCallback {
     egui_wgpu::Callback::new_paint_callback(
         rect,
         RollCallback {
+            point_scale,
             rect,
             pane_size,
             instances,
@@ -292,6 +294,7 @@ pub fn roll_paint_callback_with_clipped_tail(
 
 /// Per-frame, per-pane draw data, built on the UI thread.
 struct RollCallback {
+    point_scale: f32,
     /// The roll's region in points. `paint` is handed this as the callback's
     /// viewport; `prepare` is handed nothing, and needs it to size the bloom
     /// chain, so it rides here too.
@@ -332,14 +335,15 @@ struct RollUniforms {
 }
 }
 
-fn shadow_uniform(style: harmonigraph_scene::ShadowStyle) -> [f32; 4] {
+fn shadow_uniform(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> [f32; 4] {
     let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-    let sigma = if style.casts() { crate::shadow::spectral_sigma_points(style) } else { 0.0 };
+    let sigma =
+        if style.casts() { crate::shadow::spectral_sigma_points(style, point_scale) } else { 0.0 };
     [
         sigma,
         style.depth,
         if style.kernel.is_distance() { crate::shadow::DISTANCE_KIND } else { 0.0 },
-        crate::shadow::spectral_shadow_reach(style),
+        crate::shadow::spectral_shadow_reach(style, point_scale),
     ]
 }
 
@@ -988,7 +992,7 @@ impl CallbackTrait for RollCallback {
             callback_resources.get_mut().expect("inserted above when missing");
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
         let style = self.shadow.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
-        let shadow = shadow_uniform(style);
+        let shadow = shadow_uniform(style, self.point_scale);
         let sigma = shadow[0];
         let casters: Vec<crate::shadow::Caster> = self
             .instances
@@ -1471,6 +1475,7 @@ mod tests {
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let cb = RollCallback {
+            point_scale: 1.0,
             rect,
             pane_size: rect.size(),
             instances,
@@ -1495,7 +1500,7 @@ mod tests {
             kernel: harmonigraph_scene::ShadowKernel::Distance,
             ..Default::default()
         };
-        let reach = crate::shadow::spectral_shadow_reach(style);
+        let reach = crate::shadow::spectral_shadow_reach(style, 1.0);
         assert!((reach - HARNESS_REACH).abs() < 1e-5, "the harness outline reaches {reach}");
         style
     }
@@ -1546,6 +1551,7 @@ mod tests {
             device,
             queue,
             RollCallback {
+                point_scale: 1.0,
                 rect,
                 pane_size: rect.size(),
                 instances,
@@ -1572,10 +1578,12 @@ mod tests {
         instances: Vec<RollInstance>,
         shadow: harmonigraph_scene::ShadowStyle,
         clear: wgpu::Color,
+        point_scale: f32,
     ) -> Vec<u8> {
         let rect =
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(SIZE[0] as f32, SIZE[1] as f32));
         let cb = RollCallback {
+            point_scale,
             rect,
             pane_size: rect.size(),
             instances,
@@ -1890,10 +1898,11 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let uniform = shadow_uniform(shadow);
+            let uniform = shadow_uniform(shadow, 1.0);
             assert_eq!(uniform[0], 0.0, "{shadow:?} uploaded a nonzero sigma");
             assert_eq!(uniform[3], 0.0, "{shadow:?} uploaded a nonzero reach");
             let cb = RollCallback {
+                point_scale: 1.0,
                 rect,
                 pane_size: rect.size(),
                 instances: vec![centered_note()],
@@ -1926,6 +1935,35 @@ mod tests {
     }
 
     #[test]
+    fn enlarged_preview_roll_shadows_extend_beyond_maximum_dial_reach() {
+        use harmonigraph_scene::{ShadowKernel, ShadowStyle, SPECTRAL_SHADOW_MAX};
+        let Some((device, queue)) = headless_device() else {
+            return;
+        };
+        for kernel in [ShadowKernel::Distance, ShadowKernel::Gaussian] {
+            let style = ShadowStyle {
+                width: SPECTRAL_SHADOW_MAX,
+                spread: 0.2,
+                depth: 1.0,
+                kernel,
+                ..Default::default()
+            };
+            let frames = [1.0, 2.0].map(|point_scale| {
+                let mut note = centered_note();
+                note.center = [32.0, 32.0];
+                note.half_extent = [5.0, 12.0];
+                note.cap_reach = crate::spectral_shadow_reach(style, point_scale);
+                draw_shadowed(&device, &queue, vec![note], style, wgpu::Color::WHITE, point_scale)
+            });
+            // The caster starts at x=27. This sample is beyond the dial's
+            // maximum support and spread, but the 2x preview must reach it.
+            let at = ((32 * SIZE[0] + 3) * 4) as usize;
+            assert_eq!(&frames[0][at..at + 3], [255; 3], "{kernel:?}");
+            assert!(frames[1][at] < 253, "enlarged {kernel:?} shadow was capped");
+        }
+    }
+
+    #[test]
     fn both_roll_geometry_kernels_hold_at_editor_and_export_scales() {
         let Some((device, queue)) = headless_device() else {
             return;
@@ -1954,7 +1992,7 @@ mod tests {
                     kernel,
                     ..Default::default()
                 };
-                let reach = crate::shadow::spectral_shadow_reach(shadow);
+                let reach = crate::shadow::spectral_shadow_reach(shadow, 1.0);
                 let note = RollInstance {
                     center: [32.0, 32.0],
                     half_extent: [5.0, 12.0],
@@ -1972,6 +2010,7 @@ mod tests {
                     taper: RollInstance::UNTAPERED,
                 };
                 let cb = RollCallback {
+                    point_scale: 1.0,
                     rect,
                     pane_size: rect.size(),
                     instances: vec![note],
@@ -2542,8 +2581,8 @@ mod tests {
                     half_extent: [5.0, 10.0 + 0.5 * growth],
                     ..centered_note()
                 };
-                let base = draw_shadowed(&device, &queue, vec![note], plain, bg_color());
-                let cast = draw_shadowed(&device, &queue, vec![note], shadow, bg_color());
+                let base = draw_shadowed(&device, &queue, vec![note], plain, bg_color(), 1.0);
+                let cast = draw_shadowed(&device, &queue, vec![note], shadow, bg_color(), 1.0);
                 base.chunks_exact(4)
                     .zip(cast.chunks_exact(4))
                     .map(|(a, b)| f64::from(a[2].saturating_sub(b[2])))
@@ -2581,8 +2620,10 @@ mod tests {
             kernel: harmonigraph_scene::ShadowKernel::Gaussian,
             ..Default::default()
         };
-        assert!(style.gaussian_spread_points(crate::shadow::spectral_sigma_points(style)) > 1.0);
-        let reach = crate::shadow::spectral_shadow_reach(style);
+        assert!(
+            style.gaussian_spread_points(crate::shadow::spectral_sigma_points(style, 1.0)) > 1.0
+        );
+        let reach = crate::shadow::spectral_shadow_reach(style, 1.0);
         // The note's own stretch is y 108..188 either way; the led box carries
         // a spent 40-point lead in front of it, out to y = 68.
         let led = RollInstance { cap_reach: reach, ..led_note(40.0, 0.0, 0.0) };
@@ -2590,7 +2631,7 @@ mod tests {
             RollInstance { center: [128.0, 148.0], half_extent: [12.0, 40.0], ..centered_note() };
         // All the darkening in front of the note's own end, on blue.
         let darkness = |note: RollInstance| {
-            let frame = draw_shadowed(&device, &queue, vec![note], style, bg_color());
+            let frame = draw_shadowed(&device, &queue, vec![note], style, bg_color(), 1.0);
             (40..108)
                 .flat_map(|y| (0..SIZE[0]).map(move |x| (x, y)))
                 .map(|(x, y)| f32::from(BG[2].saturating_sub(pixel(&frame, x, y)[2])))
@@ -2616,7 +2657,7 @@ mod tests {
             ..Default::default()
         };
         let note = RollInstance { core: [255; 4], ..centered_note() };
-        let draw = |style| draw_shadowed(&device, &queue, vec![note], style, bg_color());
+        let draw = |style| draw_shadowed(&device, &queue, vec![note], style, bg_color(), 1.0);
         let base = draw(style);
         let grown = draw(harmonigraph_scene::ShadowStyle { spread: 0.5, ..style });
         assert_eq!(pixel(&base, 128, 128), pixel(&grown, 128, 128), "visible core moved");
@@ -2641,6 +2682,7 @@ mod tests {
     ) -> Vec<u8> {
         let size = [(256.0 * ppp) as u32; 2];
         let cb = RollCallback {
+            point_scale: 1.0,
             rect,
             pane_size: egui::vec2(1080.0, 1080.0),
             instances: vec![RollInstance {
@@ -2864,6 +2906,7 @@ mod tests {
     /// A roll callback over `rect`, drawing one note with the bloom on.
     fn bloomed_callback(rect: egui::Rect, pane_id: u64) -> RollCallback {
         RollCallback {
+            point_scale: 1.0,
             rect,
             pane_size: rect.size(),
             instances: vec![centered_note()],
@@ -3246,11 +3289,11 @@ mod tests {
                 depth: 4.0,
                 ..Default::default()
             };
-            let baseline = draw_shadowed(&device, &queue, vec![], style, bg_color());
-            let empty = draw_shadowed(&device, &queue, vec![absent], style, bg_color());
+            let baseline = draw_shadowed(&device, &queue, vec![], style, bg_color(), 1.0);
+            let empty = draw_shadowed(&device, &queue, vec![absent], style, bg_color(), 1.0);
             assert_eq!(empty, baseline, "{kernel:?}: invisible width left ink");
             assert_ne!(
-                draw_shadowed(&device, &queue, vec![centered_note()], style, bg_color()),
+                draw_shadowed(&device, &queue, vec![centered_note()], style, bg_color(), 1.0),
                 baseline
             );
         }
