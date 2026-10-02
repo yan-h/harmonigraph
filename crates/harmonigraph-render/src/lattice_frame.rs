@@ -39,12 +39,10 @@ impl LatticeCallback {
         let texture_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
         let velvet = atmosphere.material_style == harmonigraph_scene::LatticeMaterial::VelvetScales;
-        let material_scale = if velvet {
-            atmosphere.material_settings.velvet_size
-        } else {
-            atmosphere.material_settings.wash_size
-        };
-        let cells = if velvet { 405.0 / 240.0 } else { 5.25 };
+        let (material_scale, cells) = lattice_material::size_and_cells(
+            atmosphere.material_style,
+            &atmosphere.material_settings,
+        );
         // Watercolor rotates by (cos, sin) = (4/5, 3/5) before sampling
         // its 40-cell tile. A screen-axis wrap must span five tile periods
         // so that the rotated jump is still a whole-number tile repeat.
@@ -426,8 +424,14 @@ impl LatticeCallback {
             instances,
             glow_owners,
             glow_timing: scene.glow_timing,
-            material_stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
-            material_direction: atmosphere.material_direction,
+            material: lattice_material::Material {
+                style: atmosphere.material_style,
+                amount: atmosphere.material_amount,
+                drift: material_drift,
+                settings: atmosphere.material_settings,
+                stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
+                direction: atmosphere.material_direction,
+            },
             glow_blend: scene.glow_blend,
             glyphs,
             casters,
@@ -518,27 +522,6 @@ impl LatticeCallback {
                     ]),
                     target_size: Float2([1.0; 2]),
                     padding: Float2([0.0; 2]),
-                },
-                material: MaterialParams {
-                    amount: atmosphere.material_amount,
-                    scale: material_scale,
-                    drift: Float2(material_drift),
-                    style: atmosphere.material_style as u32,
-                    fuzz: atmosphere.material_settings.wash_fuzz,
-                    lobe: atmosphere.material_settings.wash_lobe,
-                    refract: atmosphere.material_settings.wash_refract,
-                    layers: atmosphere.material_settings.wash_layers,
-                    randomness: atmosphere.material_settings.wash_randomness,
-                    velvet: Float4([
-                        atmosphere.material_settings.velvet_edge,
-                        atmosphere.material_settings.velvet_irregularity,
-                        atmosphere.material_settings.velvet_shape,
-                        atmosphere.material_settings.velvet_variety,
-                    ]),
-                    velvet_form: Float2([
-                        atmosphere.material_settings.velvet_square,
-                        atmosphere.material_settings.velvet_tilt,
-                    ]),
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },

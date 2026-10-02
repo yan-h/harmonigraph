@@ -72,21 +72,6 @@ struct TextureParams {
     padding: vec2<f32>,
 };
 
-struct MaterialParams {
-    @align(16) amount: f32,
-    scale: f32,
-    drift: vec2<f32>,
-    style: u32,
-    fuzz: f32,
-    lobe: f32,
-    refract: f32,
-    layers: f32,
-    randomness: f32,
-    // Scales' `Squareness` and `Tilt`; only the material pass reads them.
-    velvet_form: vec2<f32>,
-    velvet: vec4<f32>,
-};
-
 struct PickupParams {
     @align(16) intensity: f32,
     width: f32,
@@ -124,7 +109,6 @@ struct Uniforms {
     spectral: SpectralParams,
     glow: GlowParams,
     texture: TextureParams,
-    material: MaterialParams,
     pickup: PickupParams,
     geometry_shadow: ShadowParams,
     marker_shadow: ShadowParams,
