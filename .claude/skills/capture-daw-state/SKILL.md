@@ -16,10 +16,13 @@ The exact values are recoverable:
 ./read-plugin-state.py --appearance project.bwproject > appearance.ron
 ```
 
-The UI state (`layout` and `folded_sections`, camera, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
+The UI state (`layout` and `folded_sections`, static camera geometry, ViewConfig) is saved as the editor shows it, window open or not (`UiState`, `crates/harmonigraph-plugin/src/editor/persist.rs`).
+Camera movement belongs to the five `camera-*` host parameters;
+the camera snapshot in `ui-state` can lag automation while the editor is closed.
+The script overlays those saved host parameters in every output, splitting absolute pan into the lattice center and camera target just as the live editor does.
 A project saved with the window open by a build from before #1301 holds the values of the last window close instead, and nothing warns;
 if the numbers look stale, ask Yan to save it again from a current build.
-Host-automatable params (tuning, fade, color range) were never affected —
+Host-automatable params (tuning, fade, color range, camera movement) were never affected —
 they live in the param system, which is why such a project can show fresh params next to a stale or missing `ui-state`.
 
 ## Where the projects live
@@ -58,7 +61,8 @@ defaults.
 Plugin state sits in a raw-DEFLATE section (wbits=-15, no zlib header) as nice-plug's plain JSON `{"version","params","fields"}`, and `fields["ui-state"]` is the RON from `SharedState::save_persist`.
 The version-7 editor save nests camera, view, spectrum and the whole video configuration under `appearance`;
 the Spiral's framing is a top-level editor key beside it.
-`--appearance` extracts that document for `harmonigraph-offline --appearance FILE`, requiring exactly one editor appearance in the project.
+`--appearance` extracts that document and applies the saved host camera parameters for `harmonigraph-offline --appearance FILE`, requiring exactly one editor appearance in the project.
+Takes with recorded camera channels override the corresponding movement in a replacement appearance during replay.
 The take carries that appearance independently of the editor layout and its folds.
 nice-plug can also zstd the JSON.
 The script's own header documents this too.
