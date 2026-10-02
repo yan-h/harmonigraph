@@ -29,6 +29,7 @@ use crate::{AppearanceDocument, CameraPreset};
 use harmonigraph_scene::Camera;
 use harmonigraph_scene::Projection;
 use harmonigraph_scene::SevensLabel;
+use harmonigraph_scene::SEVENS_SIZE_RANGE;
 
 /// Room for a short camera-preset name. Asked for flat, with no clamp against
 /// the pane: `TextEdit` already takes `desired_width.at_most(available_width)`,
@@ -257,7 +258,7 @@ pub(super) fn sevens(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
 
     let has_depth = appearance.view.max_sevens != appearance.view.min_sevens;
     ui.add_enabled_ui(has_depth, |ui| {
-            ValueBar::new(&mut appearance.view.sevens_size, 0.15..=1.0, "Size per depth step")
+            ValueBar::new(&mut appearance.view.sevens_size, SEVENS_SIZE_RANGE, "Size per depth step")
             .unit(1.0, "×")
                 .show(ui)
                 .on_hover_text(

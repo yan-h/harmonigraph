@@ -7,6 +7,7 @@ use harmonigraph_scene::{
     PITCH_CEIL, PITCH_FLOOR, SPECTRAL_BALLISTICS_MAX, SPECTRAL_RANGE_MAX, SPECTRAL_RANGE_MIN,
     SPECTRAL_WIDTH_MAX, SPECTRAL_WIDTH_MIN,
 };
+use harmonigraph_scene::{LATTICE_GROUND_RANGE, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE};
 
 // The Lattice page's independently folded note controls ([`super::pages`]).
 
@@ -189,7 +190,7 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
         );
     // L*, shared with the gradient brightness scale. Black is a colour here;
     // layer width, rather than brightness, controls whether a ring exists.
-    ValueBar::new(&mut view.lattice_ground, 0.0..=100.0, "Silent slice brightness")
+    ValueBar::new(&mut view.lattice_ground, LATTICE_GROUND_RANGE, "Silent slice brightness")
         .unit(1.0, "%")
         .integer()
         .show(ui)
@@ -249,11 +250,11 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
             (order, label, hint)
         });
     choice_row(ui, "Slice order", &mut view.note_animation.order, &orders);
-    ValueBar::new(&mut view.note_animation.stagger_spread, 0.0..=0.9, "Stagger spread")
+    ValueBar::new(&mut view.note_animation.stagger_spread, STAGGER_SPREAD_RANGE, "Stagger spread")
                 .unit(100.0, "%")
                 .show(ui)
                 .on_hover_text("Time between the first and last slice starts, as a percentage of Note fade. Every slice still animates for the whole Note fade, so the arrival and the release each last that much longer -- and a note released before it finishes departs without order. Zero starts every slice together.");
-    ValueBar::new(&mut view.note_animation.radial_start, -1.0..=1.0, "Starting offset & scale")
+    ValueBar::new(&mut view.note_animation.radial_start, RADIAL_START_RANGE, "Starting offset & scale")
             .unit(100.0, "%").show(ui)
             .on_hover_text("Starting offset and scale of each MIDI slice and mark. -100% grows from a point at the node center; 0% starts at rest; +100% starts twice as far out and at twice its final size. Scale follows offset so slice and gap proportions stay consistent.");
 }

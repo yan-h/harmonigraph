@@ -13,7 +13,9 @@ mod glow_curve;
 mod ring_stack;
 mod windowing;
 
-pub use animation::{AnimationOrder, NoteAnimationConfig};
+pub use animation::{
+    AnimationOrder, NoteAnimationConfig, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE,
+};
 pub use drawn_window::DrawnWindow;
 pub use frame_params::FrameParams;
 pub use glow_curve::GlowCurve;
@@ -91,6 +93,33 @@ const MAX_CENTER: i32 = 1 << 30;
 /// [`DrawnWindow::fit_to_node_budget`] still bounds the work, but it is a
 /// backstop here rather than the thing that holds the picture together.
 pub const SEVENS_LAYER_LIMIT: i32 = 4;
+
+/// Shared bar and load range for [`ViewConfig::lattice_ground`].
+pub const LATTICE_GROUND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+/// Shared bar and load range for [`ViewConfig::marker_ink`].
+pub const MARKER_INK_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+/// Shared bar and load range for [`ViewConfig::sevens_size`].
+pub const SEVENS_SIZE_RANGE: std::ops::RangeInclusive<f32> = 0.15..=1.0;
+
+/// Shared bar and load range for [`ViewConfig::render_scale`].
+pub const LATTICE_RENDER_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+
+/// Shared bar and load range for [`ViewConfig::note_bloom`].
+pub const NOTE_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+
+/// Shared bar and load range for [`ViewConfig::spiral_bloom`].
+pub const SPIRAL_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+
+/// Shared bar and load range for [`ViewConfig::glow_wash`].
+pub const GLOW_WASH_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
+/// Shared bar and load range for [`ViewConfig::glow_blend`].
+pub const GLOW_BLEND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
+/// Shared bar and load range for [`ViewConfig::glow_accumulation`].
+pub const GLOW_ACCUMULATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
@@ -1172,7 +1201,8 @@ impl ViewConfig {
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
 
         // Each off-sheet step multiplies geometry by this value.
-        self.sevens_size = finite_or(self.sevens_size, fresh.sevens_size).clamp(0.15, 1.0);
+        self.sevens_size = finite_or(self.sevens_size, fresh.sevens_size)
+            .clamp(*SEVENS_SIZE_RANGE.start(), *SEVENS_SIZE_RANGE.end());
 
         // The mark delay, against that same hole: it is added to a timestamp
         // and the sum divided by the attack, so a non-finite one poisons the
@@ -1255,13 +1285,14 @@ impl ViewConfig {
         // NaN gradient and the whole ring goes to whatever the clamp in
         // `oklab_srgb` lands on. Both rings read the repaired number, which is
         // what keeps the bar's readout and the grey on screen the same value.
-        self.lattice_ground =
-            finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
+        self.lattice_ground = finite_or(self.lattice_ground, fresh.lattice_ground)
+            .clamp(*LATTICE_GROUND_RANGE.start(), *LATTICE_GROUND_RANGE.end());
         // The markers' own grey, on the same axis and repaired for the same
         // reason: it is solved for a neutral by the same Newton solve, and it
         // reaches no gradient, so a broken one costs the resting field and
         // nothing else.
-        self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink).clamp(0.0, 100.0);
+        self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink)
+            .clamp(*MARKER_INK_RANGE.start(), *MARKER_INK_RANGE.end());
         // The node glow's pair, each repaired to its fresh value and clamped
         // to its bar. Deliberately fresh rather than 0 for the Reach (#1327):
         // a corrupt Reach opens with the fresh glow like every other repaired
@@ -1285,10 +1316,12 @@ impl ViewConfig {
         self.shadow = self.shadow.clamped();
         // The SHARES — of the light a lit slice stands in, of the light's own
         // peak, of a whole turn — so their range is the unit interval.
-        self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
-        self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
-        self.glow_accumulation =
-            finite_or(self.glow_accumulation, fresh.glow_accumulation).clamp(0.0, 1.0);
+        self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash)
+            .clamp(*GLOW_WASH_RANGE.start(), *GLOW_WASH_RANGE.end());
+        self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend)
+            .clamp(*GLOW_BLEND_RANGE.start(), *GLOW_BLEND_RANGE.end());
+        self.glow_accumulation = finite_or(self.glow_accumulation, fresh.glow_accumulation)
+            .clamp(*GLOW_ACCUMULATION_RANGE.start(), *GLOW_ACCUMULATION_RANGE.end());
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
@@ -1300,9 +1333,12 @@ impl ViewConfig {
         // These post-process controls are stored beside the view. Renderer
         // clamps remain wider defensive boundaries for callers that do not
         // load an AppearanceDocument through this sanitizer.
-        self.render_scale = finite_or(self.render_scale, fresh.render_scale).clamp(0.5, 2.0);
-        self.note_bloom = finite_or(self.note_bloom, fresh.note_bloom).clamp(0.0, 2.0);
-        self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom).clamp(0.0, 2.0);
+        self.render_scale = finite_or(self.render_scale, fresh.render_scale)
+            .clamp(*LATTICE_RENDER_SCALE_RANGE.start(), *LATTICE_RENDER_SCALE_RANGE.end());
+        self.note_bloom = finite_or(self.note_bloom, fresh.note_bloom)
+            .clamp(*NOTE_BLOOM_RANGE.start(), *NOTE_BLOOM_RANGE.end());
+        self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom)
+            .clamp(*SPIRAL_BLOOM_RANGE.start(), *SPIRAL_BLOOM_RANGE.end());
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade

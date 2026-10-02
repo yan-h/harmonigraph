@@ -5,6 +5,7 @@ use super::section;
 use crate::widgets::{button_row, choice_row, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::skin::{self, SkinDials};
+use harmonigraph_scene::LATTICE_RENDER_SCALE_RANGE;
 
 fn rgb([r, g, b]: [u8; 3]) -> egui::Color32 {
     egui::Color32::from_rgb(r, g, b)
@@ -28,7 +29,7 @@ pub(super) fn system_pane(
     // "higher supersamples" it read as a quality knob that did nothing.
     section(ui, "Performance", |ui| {
         super::block(ui, "Editor and exports");
-        ValueBar::new(&mut appearance.view.render_scale, 0.5..=2.0, "Lattice resolution")
+        ValueBar::new(&mut appearance.view.render_scale, LATTICE_RENDER_SCALE_RANGE, "Lattice resolution")
             .percent()
             .show(ui)
             .on_hover_text(
