@@ -103,6 +103,12 @@ pub(crate) fn compose_scene(
     surface: usize,
     now: f64,
 ) -> harmonigraph_scene::Scene {
+    #[cfg(debug_assertions)]
+    {
+        let mut normalized = state.appearance.view.clone();
+        normalized.sanitize();
+        debug_assert_eq!(state.appearance.view, normalized, "unsanitized view reached the picture");
+    }
     let extra = super::selective_halo::owners(state, window, aspect, surface, now);
     let mut scene = derive_scene_with_extra(
         &state.runtime.tracker,

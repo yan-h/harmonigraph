@@ -134,6 +134,11 @@ fn loaded(edge: Edge) -> SharedState {
     let serialized = saved.save_persist();
     let mut state = fresh();
     assert!(state.load_persist(&serialized));
+    // Plugin and standalone editor shells share this load door. Check the
+    // complete view invariant, including fields that have no value bar.
+    let mut normalized = state.picture.appearance.view.clone();
+    normalized.sanitize();
+    assert_eq!(state.picture.appearance.view, normalized);
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
