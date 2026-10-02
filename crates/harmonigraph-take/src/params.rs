@@ -39,6 +39,12 @@ pub enum ParamKey {
     DarkestPitch,
     /// Pitch shown brightest on the gradient.
     BrightestPitch,
+    // Camera movement only; projection and appearance remain editor settings.
+    CameraYaw,
+    CameraPitch,
+    CameraDistance,
+    CameraPanX,
+    CameraPanY,
 }
 
 /// Range for the tuning of each prime harmonic, in cents around just
@@ -52,19 +58,42 @@ impl ParamKey {
     /// so the list cannot fall behind the enum — the same guard
     /// `SpectralOrientation::ALL` in `harmonigraph-ui` uses, for the same
     /// reason.
-    pub const ALL: [ParamKey; 8] = {
+    pub const ALL: [ParamKey; 13] = {
         use ParamKey::*;
         // Exhaustive, and the compiler checks it. The arm is `()` because
         // what is wanted is the coverage error, not the value.
         const fn covered(key: ParamKey) {
             match key {
                 COffset | Three | Five | Seven | Tolerance | Fade | DarkestPitch
-                | BrightestPitch => (),
+                | BrightestPitch | CameraYaw | CameraPitch | CameraDistance | CameraPanX
+                | CameraPanY => (),
             }
         }
         covered(COffset);
-        [COffset, Three, Five, Seven, Tolerance, Fade, DarkestPitch, BrightestPitch]
+        [
+            COffset,
+            Three,
+            Five,
+            Seven,
+            Tolerance,
+            Fade,
+            DarkestPitch,
+            BrightestPitch,
+            CameraYaw,
+            CameraPitch,
+            CameraDistance,
+            CameraPanX,
+            CameraPanY,
+        ]
     };
+
+    pub const CAMERA: [ParamKey; 5] = [
+        Self::CameraYaw,
+        Self::CameraPitch,
+        Self::CameraDistance,
+        Self::CameraPanX,
+        Self::CameraPanY,
+    ];
 
     /// The structural tuning parameters (Tuning section of the UI).
     pub const TUNING: [ParamKey; 5] =
@@ -76,6 +105,12 @@ impl ParamKey {
 
     pub fn label(self) -> &'static str {
         match self {
+            ParamKey::CameraYaw => "Horizontal angle",
+            ParamKey::CameraPitch => "Vertical angle",
+            ParamKey::CameraDistance => "Camera distance",
+            ParamKey::CameraPanX => "Camera pan X",
+            ParamKey::CameraPanY => "Camera pan Y",
+
             ParamKey::COffset => "C pitch offset",
             ParamKey::Three => "Perfect fifth",
             ParamKey::Five => "Major third",
@@ -93,6 +128,12 @@ impl ParamKey {
     /// spelled-out units, the narrow in-plugin UI gets symbols.
     pub fn host_name(self) -> &'static str {
         match self {
+            ParamKey::CameraYaw => "Camera Yaw (rad)",
+            ParamKey::CameraPitch => "Camera Pitch (rad)",
+            ParamKey::CameraDistance => "Camera Distance",
+            ParamKey::CameraPanX => "Camera Pan X (cells)",
+            ParamKey::CameraPanY => "Camera Pan Y (cells)",
+
             ParamKey::COffset => "C Pitch Offset (cents)",
             ParamKey::Three => "Perfect Fifth (cents)",
             ParamKey::Five => "Major Third (cents)",
@@ -112,6 +153,12 @@ impl ParamKey {
     /// `pitch-class-fade` id.
     pub fn id(self) -> &'static str {
         match self {
+            ParamKey::CameraYaw => "camera-yaw",
+            ParamKey::CameraPitch => "camera-pitch",
+            ParamKey::CameraDistance => "camera-distance",
+            ParamKey::CameraPanX => "camera-pan-x",
+            ParamKey::CameraPanY => "camera-pan-y",
+
             ParamKey::COffset => "tuning-c-offset",
             ParamKey::Three => "tuning-three",
             ParamKey::Five => "tuning-five",
@@ -135,6 +182,12 @@ impl ParamKey {
     /// deliberately override (the standalone harness demos a just lattice).
     pub fn default_value(self) -> f32 {
         match self {
+            ParamKey::CameraYaw => 0.4,
+            ParamKey::CameraPitch => 0.3,
+            ParamKey::CameraDistance => 12.0,
+            ParamKey::CameraPanX => 1.0,
+            ParamKey::CameraPanY => 0.0,
+
             ParamKey::COffset => 0.0,
             ParamKey::Three => tuning::THREE_12TET,
             ParamKey::Five => tuning::FIVE_12TET,
@@ -158,6 +211,12 @@ impl ParamKey {
 
     pub fn range(self) -> RangeInclusive<f32> {
         match self {
+            ParamKey::CameraYaw => -std::f32::consts::PI..=std::f32::consts::PI,
+            ParamKey::CameraPitch => -1.5..=1.5,
+            ParamKey::CameraDistance => 2.0..=24.0,
+            ParamKey::CameraPanX => -128.0..=128.0,
+            ParamKey::CameraPanY => -128.0..=128.0,
+
             ParamKey::COffset => -600.0..=600.0,
             ParamKey::Three => {
                 tuning::THREE_JUST - MAX_TUNING_OFFSET..=tuning::THREE_JUST + MAX_TUNING_OFFSET
@@ -204,6 +263,12 @@ impl ParamKey {
     /// Host automation and takes continue to store cents, seconds and MIDI pitch.
     pub fn unit(self) -> (f32, &'static str, usize) {
         match self {
+            ParamKey::CameraYaw => (180.0 / std::f32::consts::PI, "°", 1),
+            ParamKey::CameraPitch => (180.0 / std::f32::consts::PI, "°", 1),
+            ParamKey::CameraDistance => (1.0, "", 2),
+            ParamKey::CameraPanX => (1.0, " cells", 2),
+            ParamKey::CameraPanY => (1.0, " cells", 2),
+
             ParamKey::Fade => (1000.0, " ms", 0),
             ParamKey::Tolerance => (1.0, "¢", 3),
             ParamKey::COffset | ParamKey::Three | ParamKey::Five | ParamKey::Seven => (1.0, "¢", 2),

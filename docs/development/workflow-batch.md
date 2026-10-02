@@ -27,7 +27,8 @@ Open PRs #1353, #1321 and #1322 do not implement this batch;
 ## Progress
 
 Initial skills read: worktrees, pr-hygiene, persistence-contract, build-handover.
-GPU timing implementation is in progress;
+The two correctness fixes and appearance history/library are committed.
+Camera automation is implemented and verified before starting the export queue.
 Rust checks require sandbox escalation for sccache.
 No Bitwig integration has been qualified.
 
@@ -61,3 +62,23 @@ All 28 take tests passed after fixing the validation-order regression caught by 
 Obsolete partial-initialization failure branches were removed;
 optional audio ownership remains necessary for finalization.
 PR #1397 is open as draft and not merged.
+
+## Appearance and camera evidence
+
+Undo/redo is commit `68b5d863` and A/B plus saved looks is `35a676ca`.
+Six appearance tests and 51 persistence tests pass.
+The continuous drag test drives the real slider;
+commands are deferred until numeric focus loss commits its final value.
+Each A/B slot owns a separate transient history.
+Undo buttons operate locally;
+Cmd/Ctrl-Z remains the host's shortcut because the native shell forwards it to the DAW.
+
+Five camera parameters own yaw, pitch, distance and absolute lattice X/Y pan.
+Cabinet uses pan and distance;
+yaw/pitch remain available for returning to other projections, while Cabinet shear stays static.
+The real CLAP harness verifies two-axis gestures, saved host parameter restoration,
+recording with no editor at mid-song, and fresh camera baselines after a loop wrap.
+Offline tests verify recorded movement overrides a replacement appearance at differing frame cadences.
+Old takes without camera channels retain their selected appearance camera.
+Camera capture is block-rate: the last event within one audio callback is stamped at that block's origin.
+These tests do not establish Bitwig lane writing, touch/latch behavior or host gesture UX.

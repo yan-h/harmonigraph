@@ -54,6 +54,12 @@ pub trait ParamBackend {
         None
     }
 
+    /// A movement channel owned by this backend. None leaves that channel
+    /// in the appearance snapshot (standalone or a take without camera records).
+    fn camera_value(&self, _key: ParamKey) -> Option<f32> {
+        None
+    }
+
     fn get(&self, key: ParamKey) -> f32;
     fn set(&self, key: ParamKey, value: f32);
     /// Which live audio input the shell is analyzing, or `None` when the shell

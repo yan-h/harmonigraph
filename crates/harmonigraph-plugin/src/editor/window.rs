@@ -169,6 +169,7 @@ impl Editor for LatticeEditor {
 
         let mut graphics = graphics_config();
         graphics.shared_context = Some(self.gpu_context.clone());
+        let closing_context = context.clone();
         let window = EguiWindow::open_parented(
             &ParentWindowHandleAdapter(parent),
             EguiWindowSettings::new()
@@ -219,6 +220,7 @@ impl Editor for LatticeEditor {
             egui_state: self.egui_state.clone(),
             shared: self.shared.clone(),
             params: self.params.clone(),
+            context: closing_context,
             window,
         })
     }
@@ -273,6 +275,7 @@ struct LatticeEditorHandle {
     egui_state: Arc<EguiState>,
     shared: Arc<Mutex<EditorShared>>,
     params: Arc<HarmonigraphParams>,
+    context: Arc<dyn GuiContext>,
     window: WindowHandle,
 }
 
@@ -290,7 +293,18 @@ impl Drop for LatticeEditorHandle {
         // the background analyzer off it for the whole of this — see
         // [`crate::background`] on why that ordering is load-bearing rather
         // than incidental.
-        self.params.ui_state.store_close(&mut self.shared.lock().ui);
+        let mut shared = self.shared.lock();
+        let setter = nice_plug::prelude::ParamSetter::new(self.context.as_ref());
+        for (key, active) in harmonigraph_ui::params::ParamKey::ALL
+            .into_iter()
+            .zip(shared.gesture.replace([false; harmonigraph_ui::params::ParamKey::ALL.len()]))
+        {
+            if active {
+                setter.end_set_parameter(self.params.param_for(key));
+            }
+        }
+        self.params.ui_state.store_close(&mut shared.ui);
+        drop(shared);
         self.egui_state.set_open(false);
         self.window.close();
     }

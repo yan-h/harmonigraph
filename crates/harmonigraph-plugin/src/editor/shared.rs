@@ -23,8 +23,8 @@ pub struct EditorShared {
     pub(crate) ui: SharedState,
     /// When the previous GUI update ran; used to detect event-loop stalls.
     last_frame: Option<Instant>,
-    /// Param key currently inside a begin_set/end_set automation gesture.
-    pub(super) gesture: std::cell::Cell<Option<harmonigraph_ui::params::ParamKey>>,
+    /// Active begin_set/end_set automation gestures, including simultaneous camera axes.
+    pub(super) gesture: std::cell::Cell<[bool; harmonigraph_ui::params::ParamKey::ALL.len()]>,
     /// Take recording, driven from the Video pane's toggle.
     ///
     /// `pub(crate)` for the same reason [`ui`](Self::ui) is: the background
@@ -62,7 +62,7 @@ impl EditorShared {
             },
             ui: SharedState::new(ASSUMED_SURFACE_FORMAT),
             last_frame: None,
-            gesture: std::cell::Cell::new(None),
+            gesture: std::cell::Cell::new([false; harmonigraph_ui::params::ParamKey::ALL.len()]),
             take,
             take_rolling: false,
             take_last_count: 0,
