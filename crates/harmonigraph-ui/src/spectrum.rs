@@ -139,7 +139,7 @@ impl Default for AudioSpectrum {
             frame_fold: None,
             #[cfg(test)]
             fold_measurements: 0,
-            analyzer: harmonigraph_analysis::ChannelBank::new(48_000.0, 1),
+            analyzer: harmonigraph_analysis::ChannelBank::new(Default::default(), 1),
             display: [0.0; harmonigraph_core::spectrum::SPECTRUM_BINS],
             frames_seen: 0,
             next_hop: 0,
@@ -271,8 +271,8 @@ impl AudioSpectrum {
 
     /// Start a new retained source run after loss, reset or a format change.
     /// Keep historical columns, but never combine samples across the boundary.
-    pub fn restart_source(&mut self, channels: usize, sample_rate: f32) {
-        self.analyzer.restart(sample_rate, channels);
+    pub fn restart_source(&mut self) {
+        self.analyzer.restart();
         self.frames_seen = 0;
         self.next_hop = 0;
         self.anchor = None;
@@ -345,13 +345,17 @@ impl AudioSpectrum {
         source_origin: Option<f64>,
         consume: impl FnOnce(&mut dyn FnMut(&[f32])) -> Result<(), E>,
     ) -> Result<(), E> {
-        // Any of the four empties the analyzers' rings, so nothing comes out
+        // Any configuration change empties the analyzers' rings, so nothing comes out
         // until they have refilled. The hop grid keeps its phase across that gap
         // rather than restarting on it.
-        self.analyzer.set_channels(channels);
-        self.analyzer.set_fft_size(config.window.samples());
-        self.analyzer.set_tapers(config.tapers.count());
-        self.analyzer.set_sample_rate(sample_rate);
+        self.analyzer.configure(
+            harmonigraph_analysis::AnalyzerConfig {
+                sample_rate,
+                fft_size: config.window.samples(),
+                tapers: config.tapers.count(),
+            },
+            channels,
+        );
         self.last_samples = Some(now);
 
         // FRAMES throughout: `samples` is interleaved, and a hop is an amount of
