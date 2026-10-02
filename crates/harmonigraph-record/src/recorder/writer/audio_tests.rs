@@ -157,12 +157,16 @@ impl Drop for Worker {
         self.fence.worker_before_commands.enabled.store(false, Ordering::Release);
         self.fence.worker_after_empty.enabled.store(false, Ordering::Release);
         self.recorder.take();
+        let render = self.control.as_ref().map(|control| control.render.clone());
         self.control.take();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !self.fence.worker_finished.load(Ordering::Acquire)
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        if let Some(render) = render {
+            render.shutdown();
         }
         let _ = std::fs::remove_dir_all(&self.directory);
     }

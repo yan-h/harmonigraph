@@ -505,6 +505,7 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     let (mut recorder, control) = channel();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
+    let render = control.render.clone();
     let last_take = control.last_take.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     control.start(48000.0, String::new());
@@ -534,6 +535,8 @@ fn real_worker_disconnect_finishes_the_stop_after_its_last_source_closure() {
     drop(control); // The next real worker poll observes Disconnected.
     fence.worker_after_stop.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_finished);
+    // Writer completion can leave export staging active in this directory.
+    render.shutdown();
     let file = worker_take(&directory);
     let take = harmonigraph_take::Take::read(&file).unwrap();
     assert!(
@@ -674,6 +677,7 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     let (mut recorder, control) = channel();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
+    let render = control.render.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
@@ -710,6 +714,8 @@ fn retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped() 
     drop(recorder);
     fence.worker_after_empty.enabled.store(false, Ordering::Release);
     wait_for(&fence.worker_finished);
+    // Writer completion can leave export staging active in this directory.
+    render.shutdown();
     let take = harmonigraph_take::Take::read(worker_take(&directory)).unwrap();
     assert!(take.incomplete.is_none());
     assert_eq!(take.notes().count(), 2);
@@ -819,6 +825,7 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     let (mut recorder, control) = channel();
     *control.fence.test_directory.lock() = Some(directory.clone());
     let fence = control.fence.clone();
+    let render = control.render.clone();
     let _resume_on_panic = WorkerPause(fence.clone());
     fence.worker_after_empty.enabled.store(true, Ordering::Release);
     wait_for(&fence.worker_after_empty.entered);
@@ -882,6 +889,8 @@ fn a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take() {
     drop(recorder);
     drop(control);
     wait_for(&fence.worker_finished);
+    // Writer completion can leave export staging active in this directory.
+    render.shutdown();
     std::fs::remove_dir_all(directory).unwrap();
 }
 
