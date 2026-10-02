@@ -95,8 +95,8 @@ fn star_hash(cell: vec2<i32>, salt: u32) -> vec4<f32> {
 // near cell can be hundreds of pixels wide, too wide for a half float's
 // thousandth of one to hold still. z: the colour, ten bits a channel, which
 // is finer than any target this draws into. w: the inverse of the star's
-// outer radius in star pixels and life fade times source opacity as two half
-// floats. The reciprocal is baked once per
+// outer radius in star pixels and its life fade as two half floats. A source
+// gives a star whole or not at all. The reciprocal is baked once per
 // star rather than divided out at every pixel in reach. It is never zero,
 // so w is zero exactly where there is no star.
 fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> {
@@ -126,9 +126,8 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
     // reach past what its depth's read holds.
     let radius = s.radius * exp(-2.4 * star_size_variation() * c.y);
     // It fades in over the start of its life and out over the end.
-    var fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
+    let fade = smoothstep(0.0, STAR_FADE, through) * smoothstep(0.0, STAR_FADE, 1.0 - through);
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
-    if paint.a != 1.0 { fade *= paint.a; }
     return vec4<u32>(
         bitcast<u32>(centre.x),
         bitcast<u32>(centre.y),

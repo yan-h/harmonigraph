@@ -808,8 +808,7 @@ struct LatticeCallback {
     glow_owners: Vec<u64>,
     glow_timing: Option<harmonigraph_scene::GlowTiming>,
     glow_blend: f32,
-    material_stars: harmonigraph_scene::StarSettings,
-    material_direction: f32,
+    material: lattice_material::Material,
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
