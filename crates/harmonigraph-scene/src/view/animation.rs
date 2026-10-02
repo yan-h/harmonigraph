@@ -23,6 +23,12 @@ impl AnimationOrder {
         [Self::Circular, Self::Bidirectional, Self::RandomStagger]
     };
 }
+/// Shared bar and load range for [`NoteAnimationConfig::stagger_spread`].
+pub const STAGGER_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.9;
+
+/// Shared bar and load range for [`NoteAnimationConfig::radial_start`].
+pub const RADIAL_START_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
+
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -48,8 +54,10 @@ impl NoteAnimationConfig {
     /// pose: the signed offset's low bound would be an extreme, not neutral.
     pub fn sanitized(mut self) -> Self {
         let fresh = NoteAnimationConfig::default();
-        self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread).clamp(0.0, 0.9);
-        self.radial_start = finite_or(self.radial_start, fresh.radial_start).clamp(-1.0, 1.0);
+        self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread)
+            .clamp(*STAGGER_SPREAD_RANGE.start(), *STAGGER_SPREAD_RANGE.end());
+        self.radial_start = finite_or(self.radial_start, fresh.radial_start)
+            .clamp(*RADIAL_START_RANGE.start(), *RADIAL_START_RANGE.end());
         self
     }
     /// Fixed delays of complete displayed sectors; shared by live/export and

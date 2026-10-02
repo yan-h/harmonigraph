@@ -40,6 +40,7 @@
 use super::{edge_bar, section};
 use crate::widgets::ValueBar;
 use crate::AppearanceDocument;
+use harmonigraph_scene::MARKER_INK_RANGE;
 use harmonigraph_scene::{ViewConfig, PLUS_SIZE_MAX};
 
 /// The resting picture, last on the page: the lattice's own structure, under
@@ -47,15 +48,19 @@ use harmonigraph_scene::{ViewConfig, PLUS_SIZE_MAX};
 pub(super) fn plus_pane(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Idle lattice", |ui| {
         // Black is a visible ink choice, not off; Cross length hides the marks.
-        ValueBar::new(&mut appearance.view.marker_ink, 0.0..=100.0, "Idle label/cross brightness")
-            .unit(1.0, "%")
-            // Whole L* points, matching the gradients' brightness scale.
-            .integer()
-            .show(ui)
-            .on_hover_text(
-                "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
+        ValueBar::new(
+            &mut appearance.view.marker_ink,
+            MARKER_INK_RANGE,
+            "Idle label/cross brightness",
+        )
+        .unit(1.0, "%")
+        // Whole L* points, matching the gradients' brightness scale.
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "Brightness of idle note labels and crosses: 0% is black, 100% is white. \
                      Raise it to keep the resting lattice easy to navigate.",
-            );
+        );
         // Stored in the same quad UV a node's ring radii are dialled in, so this
         // pair and the Layers bar's Inner handle are positions on ONE axis. The
         // Layers bar shows no numbers, so whether a cross fits inside the middle
