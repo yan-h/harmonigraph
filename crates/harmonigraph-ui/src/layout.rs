@@ -196,8 +196,8 @@ impl Layout {
     /// by the Video panel's preview, after the panes themselves, so both
     /// compose the identical picture.
     ///
-    /// The live dock deliberately does NOT get these: Frameless mode exists so
-    /// adjacent panes record as one seamless surface.
+    /// The live dock deliberately does NOT get these: its editor-only Frameless
+    /// mode can show adjacent panes as one continuous live picture.
     pub fn paint_dividers(&self, painter: &egui::Painter, placements: &[(Pane, egui::Rect)]) {
         let stroke = egui::Stroke::new(DIVIDER_WIDTH, crate::theme::picture_ruling());
         for line in self.dividers(placements) {

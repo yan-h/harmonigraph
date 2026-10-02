@@ -11,9 +11,8 @@ use harmonigraph_core::spectrum::{
 };
 
 /// The window length in samples an analyzer starts at before its caller sets
-/// one (~0.17 s at 48 kHz) — the UI's Balanced setting. The product's fresh
-/// window is Fast, 4096 samples, which the UI sets through
-/// [`SpectrumAnalyzer::set_fft_size`]; that call trades response time against
+/// one (~0.17 s at 48 kHz) — the UI's fresh Balanced setting. The UI changes
+/// it through [`SpectrumAnalyzer::set_fft_size`], trading response time against
 /// bass precision at runtime. At the axis floor (20 Hz) one FFT bin spans
 /// several semitones, so the lowest octave reads coarse; that is inherent to
 /// the window length, not a bug.
@@ -716,7 +715,7 @@ impl ChannelBank {
 /// every bucket of every column, forever. Lengthening the window does not touch
 /// that; it trades time resolution for frequency resolution and leaves the
 /// variance where it is. Averaging columns barely touches it either, because at
-/// an 8 ms hop through even the fresh 85 ms window consecutive columns are
+/// an 8 ms hop through even the shortest 85 ms window consecutive columns are
 /// over 90% the same audio, so there is almost nothing independent to average until the filter is
 /// longer than the window.
 ///

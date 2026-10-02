@@ -979,7 +979,7 @@ fn memory_key(
                 star_solid_far: _,      // response/coverage changes do not change material identity
                 star_solid_near: _,     // response/coverage changes do not change material identity
                 star_glow_falloff: _,   // response/coverage changes do not change material identity
-                star_solo: _,           // read through the plan's drawn slices below
+                star_solo: _,           // composition only; hidden slices keep their history
             },
         material_settings:
             harmonigraph_scene::MaterialSettings {
@@ -1013,10 +1013,9 @@ fn memory_key(
     match cloud_style {
         CloudStyle::Stars => {
             values.extend([2.0, star_randomness]);
-            // Which slices hold stars at all, from `Star layers` and soloing
-            // alike: each layer count draws its own set, and a solo flag on a
-            // depth the layers leave out decides nothing, so neither is keyed
-            // itself. Where the layers sit reaches the key as the cells.
+            // Each layer count draws its own set. Solo only hides composition
+            // and leaves these slices running. Where the layers sit reaches
+            // the key as the cells.
             values.extend(s.stars.plan().depths.map(|depth| {
                 u32::from(depth.gather != harmonigraph_scene::star_plan::StarGather::Off) as f32
             }));
@@ -1985,8 +1984,8 @@ mod tests {
     }
 
     /// Solo shows a layer as the whole field draws it. On a pane wide enough
-    /// that the atlas floors the finest cells, leaving the other layers
-    /// unbaked must not lift that floor off the soloed one.
+    /// that the atlas floors the finest cells, hiding the other layers
+    /// leaves the whole layout and each layer's cells in place.
     #[test]
     fn soloing_keeps_the_cells_the_whole_field_draws() {
         use harmonigraph_scene::star_plan::STAR_DEPTHS;
@@ -1997,7 +1996,28 @@ mod tests {
             let mut star_solo = [false; STAR_DEPTHS];
             star_solo[k] = true;
             let solo = harmonigraph_scene::StarSettings { star_solo, ..every };
-            assert_eq!(star_layout(solo, 8.0).cells, full.cells, "solo {k}");
+            assert_eq!(star_layout(solo, 8.0), full, "solo {k}");
+        }
+    }
+
+    /// Solo changes only composition; hidden slices still bake and keep memory.
+    /// A flag on a depth omitted by Star layers solos nothing.
+    #[test]
+    fn soloing_draws_only_the_soloed_layers() {
+        let fresh = harmonigraph_scene::StarSettings::default();
+        let solo = [false, true, false, true, false];
+        for layers in [3, 5] {
+            let full = harmonigraph_scene::StarSettings { star_layers: layers, ..fresh };
+            let selected = harmonigraph_scene::StarSettings { star_solo: solo, ..full };
+            let layout = star_layout(full, 16.0 / 9.0);
+            let slices = star_slices(selected, 37.0, 5.0, &layout);
+            let baseline = star_slices(full, 37.0, 5.0, &layout);
+            for (k, (got, mut expected)) in slices.into_iter().zip(baseline).enumerate() {
+                if layers == 5 && !solo[k] {
+                    expected.gather = 0;
+                }
+                assert_eq!(got, expected, "layers {layers}, depth {k}");
+            }
         }
     }
 

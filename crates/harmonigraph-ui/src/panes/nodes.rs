@@ -186,6 +186,16 @@ pub(super) fn layers(ui: &mut egui::Ui, view: &mut ViewConfig) {
             "Space between concentric layers and between octave sectors, as a percentage of the node radius. \
                      0% joins both layers and sectors.",
         );
+    // L*, shared with the gradient brightness scale. Black is a colour here;
+    // layer width, rather than brightness, controls whether a ring exists.
+    ValueBar::new(&mut view.lattice_ground, 0.0..=100.0, "Silent slice brightness")
+        .unit(1.0, "%")
+        .integer()
+        .show(ui)
+        .on_hover_text(
+            "Brightness of silent MIDI octave slices in sounding or fading nodes, and the audio ring's quiet endpoint. \
+             0% is black, 100% is white. Idle lattice positions have their own label/cross brightness.",
+        );
 }
 
 /// Shared visibility timing followed by the MIDI slices' motion and ordering.

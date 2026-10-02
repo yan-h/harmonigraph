@@ -270,32 +270,21 @@ pub fn root_ui(
     // whatever the last frame that had one reported.
     state.picture.instruments.roll_notes.store(0, std::sync::atomic::Ordering::Relaxed);
 
-    // Frameless mode hides every tab bar (the Lattice and Spectral panes
-    // meet with no chrome between them — clean for captures). The pane
-    // separators keep their regular width, so the spacing between windows
-    // matches framed mode. No tab bar also means no way to click back to
-    // the System tab (which holds the checkbox) if it's hidden, so Tab
-    // works from anywhere. It toggles rather than only restoring, so the
-    // chrome comes and goes on one key while a take is set up — the
-    // checkbox is then just where the feature is documented.
-    //
-    // Tab is egui's focus-walk key, and this takes it: nothing here is
-    // driven from the keyboard, and the one place typing Tab means
-    // something else — a text field mid-edit — keeps it. Cancelling the
-    // focus move egui already queued from the same press is part of the
-    // toggle, or a capture grows a focus ring around whatever control the
-    // walk landed on.
+    // Hide chrome for a continuous live picture. Tab stays available even
+    // when hidden bars leave no route to System settings or a folded pane.
+    // It takes precedence over keyboard focus traversal outside text edits;
+    // cancelling the queued focus move keeps the toggle from moving focus too.
     if !ui.ctx().text_edit_focused()
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
     {
-        state.picture.appearance.view.frameless = !state.picture.appearance.view.frameless;
+        state.workspace.interaction.frameless = !state.workspace.interaction.frameless;
         ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
     let before_camera = state.picture.appearance.camera_movement();
     let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
-    let frameless = state.picture.appearance.view.frameless;
+    let frameless = workspace.interaction.frameless;
     if let Some(change) = workspace::show(
         ui,
         &mut workspace.layout,
