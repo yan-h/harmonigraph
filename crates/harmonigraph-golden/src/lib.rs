@@ -189,11 +189,17 @@ fn write_png(path: &Path, size: [u32; 2], rgba: &[u8]) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("golden directory");
     }
-    let file = std::fs::File::create(path).expect("create png");
+    // Written beside the target and renamed over it, so a reader in another
+    // process sees the old frame or the new one, never a truncated file (#1361).
+    let tmp = path.with_extension(format!("png.{}.tmp", std::process::id()));
+    let file = std::fs::File::create(&tmp).expect("create png");
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().expect("png header").write_image_data(rgba).expect("png data");
+    let mut writer = encoder.write_header().expect("png header");
+    writer.write_image_data(rgba).expect("png data");
+    writer.finish().expect("png finish");
+    std::fs::rename(&tmp, path).expect("rename png into place");
 }
 
 fn read_png(path: &Path) -> Option<(Vec<u8>, [u32; 2])> {
