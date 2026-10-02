@@ -2474,8 +2474,9 @@ mod tests {
         // blur wide on both axes with half of it from the wide kernel, so the
         // wide filter passes run; the same under few hard-edged terraces, so
         // they read as terraces; and everything off. Not the fresh dials: a
-        // fresh `Wide blur mix` of 0 skips the wide passes, and on this
-        // smooth field the fresh terraces are within 2/255 of no terraces.
+        // fresh `Wide blur mix` of 0 skips the wide passes, and contours
+        // start off. Sixteen soft terraces on this smooth field would differ
+        // by less than 2/255, so the terrace fixture uses few hard levels.
         let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
         let apart = |a: &[u8], b: &[u8]| {
             let total: u32 = a.iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
