@@ -252,11 +252,6 @@ pub struct Recorder {
     producer: rtrb::Producer<Entry>,
     /// Interleaved input samples, recorded beside every take's notes.
     audio: rtrb::Producer<f32>,
-    /// Whether an armed take reads the selected audio. Always true behind the
-    /// writer thread's [`channel`]: every take records audio. Only the
-    /// in-memory `testing` channel arms without it, for the fixtures whose
-    /// `FileWriter` opens no WAV.
-    with_audio: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     /// Last value written per parameter, so only changes are recorded.
     /// Reset to NaN on arm so the first block of a take always writes a
@@ -473,10 +468,9 @@ impl Recorder {
         self.run
     }
 
+    /// Every armed take records audio, until the take has failed.
     pub fn wants_audio(&self) -> bool {
-        self.lifecycle.armed()
-            && self.with_audio.load(Ordering::Relaxed)
-            && !self.fence.failed.load(Ordering::Acquire)
+        self.lifecycle.armed() && !self.fence.failed.load(Ordering::Acquire)
     }
 
     /// Declare where the audio about to be written sits in take time.
