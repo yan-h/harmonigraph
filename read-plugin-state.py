@@ -12,13 +12,15 @@ bug against real state rather than a guess.
 
 WHEN THE NUMBERS LOOK STALE
 ---------------------------
-The UI state (layout, camera, spiral framing, ViewConfig) is saved as the
+The UI state (layout, static camera geometry, spiral framing, ViewConfig) is saved as the
 editor shows it, open window or not (`UiState` in
 crates/harmonigraph-plugin/src/editor/persist.rs). Builds before issue #1301
 wrote it only when the editor window CLOSED, so a project such a build saved
 with the window open holds whatever was there before: open it in a current
 build, save, and re-run. (Host-automatable params — tuning, fade, color
-range — were never affected; those live in the param system.)
+range — were never affected; those live in the param system.) Camera movement
+now also belongs to host params. The camera in the UI blob can lag automation
+while the window is closed; all outputs below overlay those saved host values.
 
 WHERE THE BYTES ACTUALLY ARE
 ----------------------------
@@ -39,6 +41,7 @@ nice-plug's optional zstd compression is not enabled in this build.
 
 import argparse
 import json
+import math
 import pathlib
 import re
 import subprocess
@@ -165,6 +168,44 @@ def block(ui: str, name: str) -> "str | None":
     return None
 
 
+def captured_appearance(state: dict) -> "str | None":
+    """Join the editor's static appearance to its host-owned camera movement."""
+    body = block(state.get("fields", {}).get("ui-state", ""), "appearance")
+    if body is None:
+        return None
+    params = state.get("params", {})
+    movement = {
+        key: float(params[f"camera-{key}"]["f32"])
+        for key in ("yaw", "pitch", "distance", "pan-x", "pan-y")
+        if f"camera-{key}" in params
+    }
+    if not movement:
+        return body
+    if not all(math.isfinite(value) for value in movement.values()):
+        sys.exit("Cannot capture non-finite host camera parameters.")
+    fields = dict(split_ron(body))
+    camera = dict(split_ron(block(f"({body})", "camera") or ""))
+    view = dict(split_ron(block(f"({body})", "view") or ""))
+    for key in ("yaw", "pitch", "distance"):
+        if key in movement:
+            camera[key] = repr(movement[key])
+    # Match AppearanceDocument::set_camera_movement: absolute pan is an
+    # integer lattice center plus a residual target, with ties away from zero.
+    target = camera.get("target", "(0.0,0.0,0.0)")[1:-1].split(",")
+    for index, (key, center) in enumerate((("pan-x", "center_fives"),
+                                         ("pan-y", "center_threes"))):
+        if key in movement:
+            value = movement[key]
+            whole = int(math.copysign(math.floor(abs(value) + 0.5), value))
+            view[center] = str(whole)
+            target[index] = repr(value - whole)
+    target[2] = "0.0"
+    camera["target"] = f'({",".join(target)})'
+    for name, values in (("camera", camera), ("view", view)):
+        fields[name] = "(" + ",".join(f"{key}:{value}" for key, value in values.items()) + ")"
+    return ",".join(f"{key}:{value}" for key, value in fields.items())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("project", nargs="?", help="a .bwproject (default: newest)")
@@ -190,8 +231,7 @@ def main() -> None:
     if args.appearance:
         appearances = [
             body for st in states
-            if (ui := st.get("fields", {}).get("ui-state"))
-            and (body := block(ui, "appearance")) is not None
+            if (body := captured_appearance(st)) is not None
         ]
         if len(appearances) != 1:
             sys.exit(f"Expected one editor appearance, found {len(appearances)}; "
@@ -205,7 +245,7 @@ def main() -> None:
         bodies = [
             (n, body)
             for n, st in enumerate(states, 1)
-            if (ui := st.get("fields", {}).get("ui-state")) and (appearance := block(ui, "appearance"))
+            if (appearance := captured_appearance(st)) is not None
             and (body := block(f"({appearance})", "view"))
         ]
         if not bodies:
@@ -234,7 +274,7 @@ def main() -> None:
             else:
                 print("\n(no ui-state field — the editor was never open before a save)")
             continue
-        appearance = block(ui, "appearance")
+        appearance = captured_appearance(st)
         if appearance is None:
             print("\n(no appearance document — older editor format is unsupported)")
             continue

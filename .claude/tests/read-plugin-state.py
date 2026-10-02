@@ -3,6 +3,8 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 import zlib
@@ -24,6 +26,40 @@ def state(name):
 
 
 class StateExtraction(unittest.TestCase):
+    def test_capture_uses_host_camera_after_closed_editor_automation(self):
+        appearance = ('(camera:(target:(0.25,-0.25,1.0),yaw:0.4,pitch:0.3,'
+                      'distance:12.0,projection:Cabinet,cabinet_scale:0.6),'
+                      'view:(center_fives:9,center_threes:8),spectrum:(enabled:true))')
+        saved = {"version": "0.5.0", "params": {
+            f"camera-{key}": {"f32": value} for key, value in
+            [("yaw", 1.0), ("pitch", -0.5), ("distance", 6.0),
+             ("pan-x", 2.5), ("pan-y", -3.5)]
+        }, "fields": {"ui-state": json.dumps(f'(version:7,appearance:{appearance})')}}
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "camera.bwproject"
+            project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
+            def capture(*args):
+                return subprocess.check_output(
+                    [sys.executable, extractor.__file__, *args, str(project)], text=True
+                )
+            captured = capture("--appearance")
+            camera = dict(extractor.split_ron(extractor.block(captured, "camera")))
+            self.assertEqual(float(camera["distance"]), 6.0)
+            self.assertEqual(float(camera["yaw"]), 1.0)
+            self.assertEqual(float(camera["pitch"]), -0.5)
+            self.assertEqual(camera["target"], "(-0.5,0.5,0.0)")
+            self.assertEqual(camera["projection"], "Cabinet")
+            self.assertEqual(camera["cabinet_scale"], "0.6")
+            self.assertEqual(extractor.block(captured, "spectrum"), "enabled:true")
+            rust = capture("--rust")
+            self.assertIn("center_fives: 3,", rust)
+            self.assertIn("center_threes: -4,", rust)
+            self.assertIn("distance: 6.0", capture())
+            # A state without host camera channels still owns its snapshot.
+            saved["params"] = {}
+            project.write_bytes(b"BtWg\0" + json.dumps(saved).encode())
+            self.assertEqual(capture("--appearance").strip(), appearance)
+
     def test_distinct_compressed_instances_share_a_prefix(self):
         states = [state("first"), state("second")]
         encoded = [json.dumps(s, separators=(",", ":")).encode() for s in states]
