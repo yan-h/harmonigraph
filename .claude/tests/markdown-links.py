@@ -104,11 +104,14 @@ Setext title
         files["README.md"] += "[missing]: docs/gone.md\n"
         self.assertEqual(len(self.check(files)), 1)
 
-    def test_inline_code_paths_must_be_tracked_unless_historical_patterns_or_archived(self):
+    def test_inline_code_paths_must_be_tracked_unless_linked_patterns_or_archived(self):
         files = {
-            "README.md": """`crates/a/src/lib.rs:12` and `crates/a/src/` and `./crates/a/src/lib.rs#L3`
+            "README.md": """`crates/a/src/lib.rs:12:5`, `crates/a/src/`, `crates/a/src/lib.rs#L3` and `crates/a/src/lib.rs#notes`
 `crates/a/src/gone.rs`
-`crates/a/src/gone.rs` was deleted in #715, `crates/a/old.rs` by 06d3f0a8
+`./crates/a/src/gone.rs`
+`crates/a/src/gone.rs` was deleted in #715
+[`crates/a/src/gone.rs`](https://example.invalid/blob/06d3f0a8/crates/a/src/gone.rs) was deleted in #715
+[see `crates/a/old.rs`](https://example.invalid/old) and `crates/a/src/lib.rs`
 `crates/*/src`, `crates/<crate>/lib.rs`, `crates/harmonigraph-`, `lib.rs`, `src/gone.rs`
 ```sh
 cat crates/a/src/fenced.rs
@@ -118,7 +121,8 @@ cat crates/a/src/fenced.rs
             "docs/evidence/old.md": "`crates/a/src/archived.rs`\n",
         }
         errors = self.check(files)
-        self.assertEqual(errors, ["README.md:2: inline code names a missing tracked path: 'crates/a/src/gone.rs'"])
+        self.assertEqual([e.split(": inline code")[0] for e in errors],
+                         ["README.md:2", "README.md:3", "README.md:4"], errors)
 
     def test_cli_rejects_present_untracked_targets_and_ignores_vendor_and_symlink_sources(self):
         with tempfile.TemporaryDirectory(prefix="markdown-links-") as tmp:

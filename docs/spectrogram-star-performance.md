@@ -52,7 +52,7 @@ four neighbors cannot reproduce it simply by dropping five reads.
 
 A Stars **Far fill** slider (#1259), later renamed Distant gap fill, reduced background leakage through the farthest three layers without adding stars or texture reads.
 It defaulted to 0% and was removed in #1356, so the fresh picture never used it.
-It strengthens partial tails and lifetime fades but cannot fill a pixel with zero star contribution.
+It strengthened partial tails and lifetime fades but could not fill a pixel with zero star contribution.
 The [bounded prototype report](https://github.com/yan-h/harmonigraph/tree/e90cca23/docs/evidence/spectrogram-stars/crack-fill-2026-09-28) records the appearance and cost comparison.
 The [slider validation](evidence/spectrogram-stars/far-fill-2026-09-28/README.md) records production parity and measured overhead.
 

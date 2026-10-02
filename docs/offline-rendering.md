@@ -347,13 +347,14 @@ Internal pixel fixtures and scratch look prototypes still compose a single pane 
 ## What is and isn't captured
 
 **Captured:** every note event with its own sub-frame timestamp (so a 60 fps render is not quantized to 60 fps —
-envelopes start where they actually started), per-note tuning and MPE bends, all thirteen automatable parameters over time, and the view/camera/spectrum settings.
+envelopes start where they actually started), per-note tuning and MPE bends, the thirteen parameters a take records over time (tuning, Fade, the pitch color range and the camera), and the view/camera/spectrum settings.
 
 **Captured alongside the notes:** the selected analysis input as 32-bit float, aligned to them.
 
 **Camera movement is captured through its five host parameters** (yaw, pitch, distance and the two pan axes).
 Dragging or navigating the lattice, and choosing a camera preset, writes those parameters, so a take records the move like any other automation and the export replays it.
-A take with no camera parameter changes keeps the camera of its captured appearance.
+Every take records the camera at its start;
+a take made before #1397, which has no camera channels, keeps the camera of the appearance it is rendered with.
 
 **Not captured:** anything else you click mid-piece.
 

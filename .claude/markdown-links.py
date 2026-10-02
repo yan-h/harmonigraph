@@ -6,7 +6,7 @@ Inline links/images and single-line reference definitions must name a tracked
 file or directory. Fragments on Markdown files must name a heading (GitHub's
 lowercase, punctuation-stripped IDs with duplicate suffixes). Other file types
 are checked for existence only. Web URLs and absolute paths are not checked.
-Fenced/indented code, inline code examples and HTML comments are ignored.
+Links inside fenced/indented code, inline code and HTML comments are ignored.
 This is a repository link gate, not a full Markdown renderer: raw HTML links
 and custom HTML anchors are outside its scope. Stage new documents and assets
 with git add before running it, just like semantic-breaks.py.
@@ -16,8 +16,8 @@ must name a tracked file or directory too, because a moved or deleted file
 leaves exactly that behind and the audits kept finding it by hand. Only paths
 under a tracked top-level directory are checked; patterns, placeholders,
 gitignored paths and docs/evidence (a frozen archive) are skipped, and so is a
-path on a line citing an issue, PR or commit, which is how a document says the
-file is gone on purpose ("deleted in #715").
+code span that is a link's label: the link is what is checked, so a file that is
+gone on purpose is cited as a link to a commit where it existed.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ INLINE = re.compile(r"(?<!\\)!?\[((?:\\.|[^\[\]\\]|\[[^\]]*\])*)\]\(\s*")
 REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*", re.M)
 ESCAPE = re.compile(r"\\([" + re.escape(string.punctuation) + r"])")
 CODE_SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
-HISTORY = re.compile(r"#\d+|\b[0-9a-f]{7,40}\b")
 
 
 def blank(text: str) -> str:
@@ -130,12 +129,15 @@ def anchors(text: str) -> set[str]:
 
 
 def code_paths(text: str, tops: set[str]):
-    """Repository paths named in inline code, skipping lines that cite history."""
+    """Repository paths named in inline code that is not a link's label."""
     for n, line in enumerate(text.splitlines(), 1):
-        if HISTORY.search(line):
-            continue
+        labels = [label.span(1) for label in INLINE.finditer(line)]
         for match in CODE_SPAN.finditer(line):
-            path = re.sub(r"(?::[\d-]+|#L[\dL-]+)$", "", match[1].strip().removeprefix("./")).rstrip("/")
+            if any(start <= match.start() and match.end() <= end for start, end in labels):
+                continue
+            # Drop a fragment (`#L3`, `#heading`) and any `:line`, `:line:col` or `:a-b`.
+            path = re.sub(r"(?::\d+(?:-\d+)?)+$", "", match[1].strip().split("#")[0])
+            path = path.removeprefix("./").rstrip("/")
             if (path.split("/")[0] in tops and "/" in path
                     and not re.search(r"[\s*?<>{}\[\]$]|\.\.\.|-$", path)):
                 yield n, path
@@ -146,7 +148,8 @@ def check(root: Path, tracked: set[str], ignored=lambda path: False) -> list[str
                      and not p.startswith("vendor/") and not (root / p).is_symlink())
     heading_ids: dict[str, set[str]] = {}
     failures = []
-    tops = {p.split("/")[0] for p in tracked if "/" in p}
+    dirs = {"/".join(parts[:n]) for parts in (p.split("/") for p in tracked) for n in range(1, len(parts))}
+    tops = {d for d in dirs if "/" not in d}
     for source in sources:
         if not (root / source).is_file():
             failures.append(f"{source}: tracked Markdown source is missing")
@@ -158,7 +161,7 @@ def check(root: Path, tracked: set[str], ignored=lambda path: False) -> list[str
             parsed = urlsplit(url)
             target = posixpath.normpath(posixpath.join(posixpath.dirname(source), unquote(parsed.path))) if parsed.path else source
             path = root / target
-            is_tracked = target == "." or target in tracked or any(p.startswith(target.rstrip("/") + "/") for p in tracked)
+            is_tracked = target == "." or target in tracked or target.rstrip("/") in dirs
             if not is_tracked or not path.exists():
                 failures.append(f"{source}:{line}: missing tracked target: {url!r} ({target})")
             elif parsed.fragment and target.endswith(".md"):
@@ -169,9 +172,9 @@ def check(root: Path, tracked: set[str], ignored=lambda path: False) -> list[str
         if source.startswith("docs/evidence/"):
             continue
         for line, path in code_paths(text, tops):
-            present = path in tracked or any(p.startswith(path + "/") for p in tracked)
-            if not present and not ignored(path):
-                failures.append(f"{source}:{line}: inline code names a missing tracked path: {path!r}")
+            if path not in tracked and path not in dirs and not ignored(path):
+                failures.append(f"{source}:{line}: inline code names a missing tracked path: {path!r}"
+                                " (if it is gone on purpose, link it to a commit where it existed)")
     return failures
 
 

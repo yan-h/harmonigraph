@@ -1,7 +1,7 @@
 # Bounded offline WAV input
 
 Two of the three consumers measured here no longer exist.
-PR #903 deleted the offline audio aligner — `crates/harmonigraph-offline/src/align.rs`, `align_replacement`, `midi_onsets` and `Align::Auto` — so every sentence below about alignment, onset envelopes and correlation arrays is a record of a consumer that is gone, not a description of the code.
+PR #903 deleted the offline audio aligner — [`crates/harmonigraph-offline/src/align.rs`](https://github.com/yan-h/harmonigraph/blob/f1a8c0ff/crates/harmonigraph-offline/src/align.rs), `align_replacement`, `midi_onsets` and `Align::Auto` — so every sentence below about alignment, onset envelopes and correlation arrays is a record of a consumer that is gone, not a description of the code.
 The manual `--align` override was retired under #1196;
 recorded audio now always uses its header timestamp (or zero when unstamped).
 Separate-WAV replacement (`--audio`) was retired under #972.

@@ -17,7 +17,7 @@ The archived source bundle preserves the original experiments after that removal
 
 ## Build and configure
 
-The `tuning-probe` feature and `tools/tuning-probe.py` were deleted in #715;
+The `tuning-probe` feature and [`tools/tuning-probe.py`](https://github.com/yan-h/harmonigraph/blob/8879d71d/tools/tuning-probe.py) were deleted in #715;
 the commands below no longer run and are kept only as the historical record of how the apparatus was exercised.
 
 ```
