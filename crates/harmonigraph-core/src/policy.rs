@@ -341,8 +341,8 @@ pub fn prepare(
     }
     // Grouped by node for `harmonic_distance`, which counts each node once.
     scratch.context.sort_unstable_by_key(|v| (key(v.node.unwrap()), v.pitch));
-    for v in &scratch.context {
-        local_nodes(config, v.node.unwrap(), |n| {
+    for voices in scratch.context.chunk_by(|a, b| a.node == b.node) {
+        local_nodes(config, voices[0].node.unwrap(), |n| {
             // Deduplicate each ball against the current sorted union. No heap
             // growth and no incomplete set is ever scored on exhaustion.
             if let Err(i) = scratch.candidates.binary_search_by_key(&key(n), |n| key(*n)) {
@@ -417,7 +417,7 @@ pub fn select_prepared(
     let target_cents = target as f64 / 1_000_000.0;
     let pressed = onset.pitch.wrapping_sub(i64::from(config.c_offset)).rem_euclid(OCTAVE);
     let mut best = None::<(f64, LatticePos, i64)>;
-    let mut admissible = None::<(f64, LatticePos, i64)>;
+    let mut has_keyboard_match = false;
     for &node in &scratch.candidates {
         let base = config.cents(node);
         let output = base + ((target_cents - base) / 1200.0 + 0.5).floor() * 1200.0;
@@ -426,21 +426,33 @@ pub fn select_prepared(
             continue;
         }
         let output = output as i64;
+        let off = (keyboard_class(config.policy.keyboard, node) - pressed).rem_euclid(OCTAVE);
+        let matches_keyboard = off.min(OCTAVE - off) <= KEYBOARD_TOLERANCE;
+        // A keyboard match excludes fallback nodes even when it cannot earn a
+        // snap. Select the pool before rejecting an unprofitable candidate.
+        if matches_keyboard && !has_keyboard_match {
+            has_keyboard_match = true;
+            best = None;
+        }
+        if has_keyboard_match && !matches_keyboard {
+            continue;
+        }
         // Score the actual emitted microcents, including at break-even points.
         let error = output.abs_diff(target);
-        let score = pitch_cost(config.policy.pitch_flexibility, error as f64 / 1_000_000.0)
-            - harmonic_benefit(config, node, output as f64 / 1_000_000.0, &scratch.context);
+        let cost = pitch_cost(config.policy.pitch_flexibility, error as f64 / 1_000_000.0);
+        // Harmonic benefit is at most one, and a snap must beat cost zero.
+        if cost >= 1.0 {
+            continue;
+        }
+        let score =
+            cost - harmonic_benefit(config, node, output as f64 / 1_000_000.0, &scratch.context);
         let beats =
             |b: (f64, LatticePos, i64)| score < b.0 || (score == b.0 && key(node) < key(b.1));
         if best.is_none_or(beats) {
             best = Some((score, node, output));
         }
-        let off = (keyboard_class(config.policy.keyboard, node) - pressed).rem_euclid(OCTAVE);
-        if off.min(OCTAVE - off) <= KEYBOARD_TOLERANCE && admissible.is_none_or(beats) {
-            admissible = Some((score, node, output));
-        }
     }
-    let Some(best) = admissible.or(best).filter(|b| b.0 < 0.0) else {
+    let Some(best) = best.filter(|b| b.0 < 0.0) else {
         return Ok(Decision {
             assignment: Assignment::NoCandidate { correction_microcents: reference },
         });

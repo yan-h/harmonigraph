@@ -146,7 +146,7 @@ fn a_bucket_rises_on_the_attack_and_falls_on_the_release() {
 /// Nothing else in the workspace constructs `Three` or `Five` — the button row
 /// names them and `count()` maps them, and every taper claim in
 /// `harmonigraph-analysis` is made against a bare `SpectrumAnalyzer`. So
-/// without this, deleting the `set_tapers` line in `feed_sample_chunks` leaves
+/// without this, omitting tapers from the configuration in `feed_sample_chunks` leaves
 /// the control inert with the whole suite green.
 ///
 /// WHAT the difference is stays in harmonigraph-analysis, where it is measured
@@ -251,6 +251,38 @@ fn a_live_column_is_stamped_at_the_middle_of_its_window() {
     );
     // The pane allows for this lag when extending fresh data to the now-line.
     assert!((spectrum.column_lag() - window * 0.5).abs() < 1e-9);
+}
+
+#[test]
+fn changing_the_estimator_preserves_history_and_the_source_hop_grid() {
+    let mut spectrum = AudioSpectrum::default();
+    let sample_rate = 48_000.0;
+    let origin = 5.0;
+    let config = SpectrumConfig::default();
+    let initial = 9007; // Filled, and deliberately between hop boundaries.
+    spectrum.push_source_samples(&vec![0.2; initial], 1, sample_rate, origin, &config);
+    let columns = spectrum.history().len();
+    assert!(columns > 0);
+    let last = spectrum.history().back().unwrap().time;
+
+    let config =
+        SpectrumConfig { window: SpectrumWindow::Fast, tapers: SpectrumTapers::Three, ..config };
+    let hop = (AudioSpectrum::FFT_INTERVAL * f64::from(sample_rate)).round() as usize;
+    let first_ready = (initial + config.window.samples()).div_ceil(hop) * hop;
+    spectrum.push_source_samples(
+        &vec![0.2; first_ready - initial - 1],
+        1,
+        sample_rate,
+        origin,
+        &config,
+    );
+    assert_eq!(spectrum.history().len(), columns);
+    assert_eq!(spectrum.history().back().unwrap().time, last);
+    spectrum.push_source_samples(&[0.2], 1, sample_rate, origin, &config);
+    assert_eq!(spectrum.history().len(), columns + 1);
+    let expected = origin + (first_ready - 1) as f64 / f64::from(sample_rate)
+        - config.window.samples() as f64 / (2.0 * f64::from(sample_rate));
+    assert!((spectrum.history().back().unwrap().time - expected).abs() < 1e-9);
 }
 
 /// The column grid is a function of the SAMPLES, not of when the shell happened

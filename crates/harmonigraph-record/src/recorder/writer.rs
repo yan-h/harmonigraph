@@ -3,6 +3,8 @@
 
 use super::*;
 use configuration::RECORD_PASSES;
+#[cfg(test)]
+use harmonigraph_core::SourceId;
 
 #[cfg(all(test, feature = "test-support"))]
 mod audio_tests;
@@ -451,7 +453,7 @@ struct CanonicalFanout {
     /// second gap has nothing to add that the first has not already said.
     unplaced: Option<harmonigraph_take::IncompleteRecord>,
     /// Non-RT deduplication only. These cuts authorize no musical reclamation.
-    cursors: std::collections::BTreeMap<SourceId, (u64, u64, u64)>,
+    order: harmonigraph_core::canonical::CanonicalOrder,
 }
 
 impl CanonicalFanout {
@@ -537,31 +539,22 @@ impl CanonicalFanout {
                     }
                 }
                 publication::Delivery::Event(event) => {
-                    match event {
-                        CanonicalEvent::Note(delta) if delta.sequence != 0 => {
-                            let cursor = self.cursors.entry(delta.event.source).or_default();
-                            if delta.sequence <= cursor.0 {
-                                return true;
-                            }
-                            if delta.sequence <= cursor.2 {
-                                fence.fail();
-                                return true;
-                            }
-                            cursor.0 = delta.sequence;
+                    let accepted = match event {
+                        CanonicalEvent::Note(delta) => {
+                            self.order.note(delta.event.source, delta.sequence)
                         }
                         CanonicalEvent::Baseline(frame) => {
-                            let cursor = self.cursors.entry(frame.source).or_default();
-                            if frame.id <= cursor.1 {
-                                return true;
-                            }
-                            if cursor.0 > frame.output_cut {
-                                fence.fail();
-                                return true;
-                            }
-                            cursor.1 = frame.id;
-                            cursor.2 = frame.output_cut;
+                            self.order.baseline(frame.source, frame.id, frame.output_cut)
                         }
-                        _ => {}
+                        CanonicalEvent::Gap(_) => Ok(true),
+                    };
+                    match accepted {
+                        Ok(false) => return true,
+                        Err(_) => {
+                            fence.fail();
+                            return true;
+                        }
+                        Ok(true) => {}
                     }
                     let mut record = harmonigraph_take::CanonicalRecord::from_event(event);
                     if let Some(address) = route.address.filter(|a| !failure.contains(a.epoch)) {
