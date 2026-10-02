@@ -261,7 +261,6 @@ metal::uint4 star_bake(
     metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> lut
 ) {
-    float fade = {};
     metal::uint3 tens = {};
     metal::int2 hashed = cell_1 & metal::int2(65535);
     float _e7 = star_life(cloud);
@@ -284,17 +283,12 @@ metal::uint4 star_bake(
     metal::float3 colour = _e63.xyz;
     float _e71 = star_size_variation(cloud);
     float radius = s.radius * metal::exp((-2.4 * _e71) * _e50.y);
-    fade = metal::smoothstep(0.0, STAR_FADE, through) * metal::smoothstep(0.0, STAR_FADE, 1.0 - through);
+    float fade = metal::smoothstep(0.0, STAR_FADE, through) * metal::smoothstep(0.0, STAR_FADE, 1.0 - through);
     tens = naga_f2u32(metal::rint(metal::clamp(colour, metal::float3(0.0), metal::float3(1.0)) * 1023.0));
-    if (_e63.w != 1.0) {
-        float _e101 = fade;
-        fade = _e101 * _e63.w;
-    }
-    uint _e109 = tens.x;
-    uint _e113 = tens.y;
-    uint _e118 = tens.z;
-    float _e122 = fade;
-    return metal::uint4(as_type<uint>(centre.x), as_type<uint>(centre.y), ((_e109 << 20u) | (_e113 << 10u)) | _e118, as_type<uint>(half2(metal::float2(1.0 / radius, _e122))));
+    uint _e102 = tens.x;
+    uint _e106 = tens.y;
+    uint _e111 = tens.z;
+    return metal::uint4(as_type<uint>(centre.x), as_type<uint>(centre.y), ((_e102 << 20u) | (_e106 << 10u)) | _e111, as_type<uint>(half2(metal::float2(1.0 / radius, fade))));
 }
 
 StarSlice star_slice(
