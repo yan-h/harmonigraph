@@ -489,7 +489,7 @@ mod tests {
         let mut expected = Vec::new();
         for (t, edit) in [
             (0.005, ConfigEdit { learning: Some(true), ..Default::default() }),
-            (0.013, ConfigEdit::unlock(harmonigraph_core::Comma::Syntonic, 390_000_000)),
+            (0.013, ConfigEdit::axis(2, 390_000_000)),
             (0.031, ConfigEdit::axis(1, 696_000_000)),
         ] {
             reducer.apply(ConfigMutation::Edit(edit));

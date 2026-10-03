@@ -720,65 +720,13 @@ pub struct ViewConfig {
     /// shadow treats the half-alpha contour as the end of the exact field, the
     /// same contour every other caster's distance cell holds.
     pub plus_taper: f32,
-    /// Meantone mode: lock the major-third tuning to four perfect fifths
-    /// (temper out the syntonic comma, 81/80). While on, the third-tuning
-    /// value is derived from the fifth (in `begin_frame`) and note names are
-    /// respelled without their comma marks.
-    ///
-    /// One of two comma switches, and the pattern for both: the flag is named
-    /// after the temperament that tempers its comma out, [`Self::marvel`] is
-    /// the same switch for 225/224, and [`ViewConfig::tempers`] is how the UI
-    /// reaches either by [`Comma`] rather than by name.
-    ///
-    /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
-    /// releasing it is an edit of the major third (or this switch, while the
-    /// auto-detect is off), or a learned chord while the auto-detect is on
-    /// and no source has Retune on.
+    /// Link the major third to four fifths and spell syntonic-comma equivalents
+    /// identically. New tuning entries and fully evidenced Learn results
+    /// recognize this relationship; switching off keeps the displayed interval.
     pub meantone: bool,
-    /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
-    /// params land within `TEMPER_TOLERANCE` of the meantone identity —
-    /// however they got there (a learned chord, the 12-TET preset, a drag
-    /// of either bar). The major third then snaps to four perfect fifths
-    /// and the comma marks go.
-    ///
-    /// No other drag releases it, deliberately: the lock has to survive
-    /// dragging the FIFTH, which moves the derived third out from under a
-    /// third param that is inert while the lock holds. So the releasing drag
-    /// is the one edit that can mean nothing else — pulling the major third
-    /// itself more than the tolerance away from the derived value. Learn is
-    /// the other release: while no source has Retune on, a learned chord
-    /// that evidences every axis the comma depends on sets the lock either
-    /// way, since a played third is not a dragged fifth.
-    ///
-    /// On by default: a project at 12-TET (400 = 4·700 − 2400) is meantone
-    /// whether or not anyone said so, and its E and E- name one pitch, so
-    /// the detect has something to say about most tunings without being
-    /// asked. Switching this off leaves the mode wherever it is and hands
-    /// the switch back.
-    pub meantone_auto: bool,
-    /// Marvel mode: lock the harmonic-seventh tuning to two fifths plus two
-    /// thirds (temper out the septimal kleisma, 225/224). The same switch as
-    /// [`Self::meantone`] one prime up — while on, the seventh-tuning value
-    /// is derived in `begin_frame` and the sevens sheet is respelled onto the
-    /// home sheet, where a harmonic seventh reads `A♯-2` (two fifths plus two
-    /// thirds) instead of `B♭↓`.
-    ///
-    /// The third it derives from is the one in USE, so with meantone on too
-    /// the pair composes into septimal meantone (a seventh of ten fifths) and
-    /// every name on the lattice comes out a plain letter.
+    /// Link the harmonic seventh to two fifths plus two thirds. Its name matches
+    /// the augmented sixth: A♯-2 from C, or plain A♯ with Meantone linked too.
     pub marvel: bool,
-    /// Auto-detect marvel: [`Self::meantone_auto`]'s twin, which no drag but
-    /// the seventh's own releases, for the same reason — the lock has to
-    /// survive dragging the fifth or the third, either of which moves the
-    /// derived seventh out from under a seventh param that is inert while
-    /// the lock holds.
-    ///
-    /// On by default, on the same grounds as the meantone detect: 12-TET
-    /// tempers 225/224 out as well (1000 = 2·700 + 2·400 − 1200), so a
-    /// project there has one pitch under `B♭↓` and `A♯` whether or not
-    /// anyone said "marvel", and the detect respelling the sevens sheet is
-    /// the tuning's own arithmetic showing up in the names.
-    pub marvel_auto: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -1086,38 +1034,6 @@ impl ViewConfig {
         match comma {
             Comma::Syntonic => self.meantone,
             Comma::SeptimalKleisma => self.marvel,
-        }
-    }
-
-    /// Whether one comma's auto-detect is running.
-    pub fn temper_auto(&self, comma: Comma) -> bool {
-        match comma {
-            Comma::Syntonic => self.meantone_auto,
-            Comma::SeptimalKleisma => self.marvel_auto,
-        }
-    }
-
-    /// The switch for one comma's tempering, to read or set. Together with
-    /// [`Self::temper_auto_mut`] this is what lets the tempering section be a
-    /// loop over [`Comma::ALL`] instead of a block per comma.
-    ///
-    /// A third comma is then additive rather than another special case, but
-    /// it is not free: the variant and its arms on [`Comma`], two fields and
-    /// four arms here, one in `LatticePos::respell`, one in the UI's
-    /// `judged_axes`, and one in its `derived_key` — which lives there
-    /// because a `ParamKey` is the UI's to name, not core's.
-    pub fn temper_mut(&mut self, comma: Comma) -> &mut bool {
-        match comma {
-            Comma::Syntonic => &mut self.meantone,
-            Comma::SeptimalKleisma => &mut self.marvel,
-        }
-    }
-
-    /// The auto-detect switch for one comma.
-    pub fn temper_auto_mut(&mut self, comma: Comma) -> &mut bool {
-        match comma {
-            Comma::Syntonic => &mut self.meantone_auto,
-            Comma::SeptimalKleisma => &mut self.marvel_auto,
         }
     }
 
@@ -1564,9 +1480,7 @@ impl Default for ViewConfig {
             // spelling locks open on the tuning's own equivalences rather than
             // showing duplicate comma spellings.
             meantone: true,
-            meantone_auto: true,
             marvel: true,
-            marvel_auto: true,
             render_scale: 1.0,
             // The lattice's bloom strength (`bloom_strength`, retired into
             // `note_bloom` by #1140), which the Spiral shared until it had its

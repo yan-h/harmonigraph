@@ -441,8 +441,6 @@ fn restored(device: &Device, fifth: f32) -> PluginState {
         serde_json::to_string(&MusicalSettings {
             meantone: false,
             marvel: false,
-            meantone_auto: false,
-            marvel_auto: false,
             learning: false,
             ..Default::default()
         })
@@ -500,6 +498,129 @@ fn active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adopt
 }
 
 #[test]
+fn interval_links_keep_their_value_on_release_and_recognize_new_entries() {
+    let _scope = crate::test_scope::enter();
+    for fifth in [696.58, *ParamKey::Three.range().start(), *ParamKey::Three.range().end()] {
+        let mut device = Device::new();
+        device.activate();
+        let mailbox = device.mailbox();
+        mailbox
+            .submit(packet(ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(fifth))))
+            .unwrap();
+        device.run(0, vec![], false);
+        let linked = view(mailbox.visible().0, false).resolved;
+        assert!(linked.modes.tempered.syntonic && linked.modes.tempered.septimal_kleisma);
+        assert!((linked.tuning.five_cents() - (4.0 * fifth - 2400.0)).abs() < 0.001);
+        for comma in harmonigraph_core::Comma::ALL.into_iter().rev() {
+            mailbox.submit(packet(ConfigEdit::temper(comma, false, linked.tuning))).unwrap();
+        }
+        assert!(mailbox.visible().1, "the switches are one pending audio adoption");
+        device.run(64, vec![], false);
+        let released = mailbox.visible().0;
+        assert_eq!(view(released, false).resolved.modes.tempered, Tempered::default());
+        for (key, cents) in [
+            (ParamKey::Five, linked.tuning.five_cents()),
+            (ParamKey::Seven, linked.tuning.seven_cents()),
+        ] {
+            assert!(
+                (crate::HarmonigraphParams::default()
+                    .param_for(key)
+                    .preview_plain(device.get(key) as f32)
+                    - cents)
+                    .abs()
+                    < 0.001
+            );
+            assert!((plain(&device.wrapper().get_state_object(), key) - cents).abs() < 0.001);
+        }
+        device.run(
+            128,
+            vec![
+                device.param(ParamKey::Five, released.raw[2], 0),
+                device.param(ParamKey::Seven, released.raw[3], 0),
+            ],
+            false,
+        );
+        assert_eq!(
+            view(mailbox.visible().0, false).resolved.modes.tempered,
+            Tempered::default(),
+            "host echoes are not new entries"
+        );
+        mailbox
+            .submit(packet(ConfigEdit::axis(
+                2,
+                harmonigraph_core::tuning::microcents(released.raw[2]),
+            )))
+            .unwrap();
+        device.run(192, vec![], false);
+        assert!(
+            view(mailbox.visible().0, false).resolved.modes.tempered.syntonic,
+            "a typed same-value entry recognizes meantone"
+        );
+        mailbox.submit(packet(ConfigEdit::axis(2, 390_000_000))).unwrap();
+        device.run(256, vec![], false);
+        let edited = view(mailbox.visible().0, false).resolved;
+        assert!(!edited.modes.tempered.syntonic);
+        assert_eq!(edited.tuning.five_cents(), 390.0);
+        assert!(edited.modes.tempered.septimal_kleisma);
+    }
+}
+
+#[test]
+fn releasing_an_interval_link_accounts_for_the_hosts_current_modulation() {
+    use harmonigraph_ui::params::ParamBackend;
+    let _scope = crate::test_scope::enter();
+    let mut device = Device::new();
+    device.activate();
+    let mailbox = device.mailbox();
+    device.run(
+        0,
+        vec![Input::Mod(clap_event_param_mod {
+            header: header::<clap_event_param_mod>(CLAP_EVENT_PARAM_MOD, 0),
+            param_id: device.id(ParamKey::Seven),
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            amount: 0.01,
+        })],
+        false,
+    );
+    mailbox
+        .submit(packet(ConfigEdit::temper(
+            harmonigraph_core::Comma::SeptimalKleisma,
+            true,
+            view(mailbox.visible().0, false).resolved.tuning,
+        )))
+        .unwrap();
+    device.run(64, vec![], false);
+    let snapshot = mailbox.visible().0;
+    let linked = view(snapshot, false).resolved.tuning;
+    let (context, _) = device.wrapper().test_gui_context("tuning-seven");
+    let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+    let params = device.wrapper().test_inspect_plugin(|plugin| plugin.params.clone());
+    let gesture = std::cell::Cell::new([false; ParamKey::ALL.len()]);
+    let backend = crate::PluginParamBackend {
+        params: &params,
+        setter: &setter,
+        configuration: Some((snapshot, false)),
+        gesture: &gesture,
+    };
+    assert_eq!(
+        backend.submit_tuning(ConfigEdit::temper(
+            harmonigraph_core::Comma::SeptimalKleisma,
+            false,
+            linked
+        )),
+        Some(true)
+    );
+    device.run(128, vec![], false);
+    let released = view(mailbox.visible().0, false).resolved;
+    assert!(!released.modes.tempered.septimal_kleisma);
+    assert!((released.tuning.seven_cents() - linked.seven_cents()).abs() < 0.001);
+}
+
+#[test]
 fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flush() {
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
@@ -515,10 +636,7 @@ fn queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flus
         "an edit adopted at the boundary of [500,564) is effective at the next one"
     );
     let first = mailbox
-        .submit(packet(ConfigEdit::unlock(
-            harmonigraph_core::Comma::Syntonic,
-            harmonigraph_core::tuning::microcents(390.0),
-        )))
+        .submit(packet(ConfigEdit::axis(2, harmonigraph_core::tuning::microcents(390.0))))
         .unwrap();
     let second = mailbox
         .submit(packet(ConfigEdit::axis(1, harmonigraph_core::tuning::microcents(700.0))))
@@ -832,8 +950,6 @@ fn accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption() {
             serde_json::to_string(&MusicalSettings {
                 meantone: false,
                 marvel: false,
-                meantone_auto: true,
-                marvel_auto: true,
                 learning: false,
                 ..Default::default()
             })

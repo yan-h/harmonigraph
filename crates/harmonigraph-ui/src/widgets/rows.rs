@@ -67,6 +67,15 @@ pub(crate) fn checkbox_box(ui: &mut Ui, checked: &mut bool) -> Response {
 /// settings stack (Fill, Note labels, ...). When adding a
 /// boolean control, default to a checkbox unless it's a mode that keeps
 /// acting after the click.
+pub(crate) fn toggle_switch_width(ui: &Ui, label: &str) -> f32 {
+    let text = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        TextStyle::Button.resolve(ui.style()),
+        theme::text(),
+    );
+    (SWITCH_SIZE.x + 6.0) * theme::ui_scale(ui.ctx()) + text.size().x
+}
+
 pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
@@ -83,7 +92,7 @@ pub fn toggle_switch(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     // worth of click.
     let (top, bottom) = super::cap_trim(ui, &galley);
     let caps = galley.size().y - top - bottom;
-    let desired = Vec2::new(switch.x + gap + galley.size().x, switch.y.max(caps));
+    let desired = Vec2::new(toggle_switch_width(ui, label), switch.y.max(caps));
     let (rect, row) = ui.allocate_exact_size(desired, Sense::hover());
     let target = rect.expand2(Vec2::new(0.0, ui.spacing().item_spacing.y / 2.0));
     let mut response = ui.interact(target, row.id.with("switch"), Sense::click());

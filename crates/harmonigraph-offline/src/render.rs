@@ -179,19 +179,6 @@ pub fn render(
 
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.install_appearance(appearance);
-    // The comma auto-detects are interactive too, in the sense that matters
-    // here: they answer a tuning EDIT, and a replay has no editor. This only
-    // governs LEAD-IN frames, before the take's first configuration record:
-    // from that record on, `Replay::advance_to` hands the recorded
-    // configuration to `observe_configuration`, which applies it verbatim
-    // every frame (#709). Before it, nothing is replayed and the reducer runs
-    // on these flags; left on, it would judge the take's tuning afresh — and
-    // a session that switched one off at a tuning that IS that temperament
-    // (12-TET, which is both of them) would open its export with it on,
-    // respelling names the recorded session did not show.
-    for comma in harmonigraph_core::Comma::ALL {
-        *state.appearance.view.temper_auto_mut(comma) = false;
-    }
     // "Spectrogram: Fit video" — the one setting only a render can answer,
     // since the render window is its length. Set once before the first frame,
     // so no cache keyed on the analyzer config sees it move.

@@ -64,7 +64,6 @@ pub struct ConfigurationRecord {
     pub revision: u64,
     pub axes: [i32; 5],
     pub tempered: [bool; 2],
-    pub auto: [bool; 2],
     pub learning: bool,
     pub policy: PolicyRecord,
 }
@@ -87,7 +86,6 @@ impl ConfigurationRecord {
                 config.tuning.tolerance,
             ],
             tempered: [config.modes.tempered.syntonic, config.modes.tempered.septimal_kleisma],
-            auto: config.modes.auto,
             learning: config.modes.learning,
             policy: p.into(),
         }
@@ -108,7 +106,6 @@ impl ConfigurationRecord {
                     syntonic: self.tempered[0],
                     septimal_kleisma: self.tempered[1],
                 },
-                auto: self.auto,
                 learning: self.learning,
             },
             policy: p.into(),

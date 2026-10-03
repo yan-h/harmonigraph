@@ -220,9 +220,6 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
     let mut reducer = ConfigReducer::default();
     let modes = TuningModes {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
-        // Auto detection would immediately overwrite the branch this scenario
-        // selected when the restored default tuning is judged.
-        auto: [false; 2],
         learning: false,
     };
     assert!(reducer.apply(ConfigMutation::Restore {
