@@ -1,0 +1,25 @@
+Waiting for shared audit lock
+Acquired shared audit lock 2026-10-03T17:25:22.880865+00:00
+   Compiling syn v2.0.119
+   Compiling objc2-core-foundation v0.3.2
+   Compiling objc2 v0.5.2
+   Compiling objc2-foundation v0.2.2
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling thiserror-impl v2.0.18
+   Compiling serde v1.0.228
+   Compiling bytemuck v1.25.1
+   Compiling zerocopy-derive v0.8.54
+   Compiling thiserror v2.0.18
+   Compiling smallvec v1.15.2
+   Compiling objc2-foundation v0.3.2
+   Compiling parking_lot_core v0.9.12
+   Compiling zerocopy v0.8.54
+   Compiling parking_lot v0.12.5
+   Compiling objc2-core-graphics v0.3.2
+   Compiling objc2-core-video v0.3.2
+   Compiling kurbo v0.13.1
+   Compiling font-types v0.11.3
+   Compiling wgpu-types v29.0.4
+   Compiling half v2.7.1
+   Compiling naga v29.0.4

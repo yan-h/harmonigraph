@@ -1,0 +1,299 @@
+[
+  {
+    "id": "A1",
+    "question": "Audio/MIDI callback bounded work, allocations and payload lifetime",
+    "investigator": "audio_tuning",
+    "status": "partial",
+    "scope": "plugin tuning/hub.rs collect; tune.rs epoch adoption; session.rs reset and SPSC rows",
+    "evidence": [
+      "investigations/audio-tuning.md"
+    ],
+    "conclusion": "Accepted-event budget excludes rejected epochs; per-row entry snapshots are a small source-reasoned bound",
+    "confidence": "Two source traces and independent refutation; finite probe pending",
+    "uncertainty": "No native dropout frequency or sustained concurrent drain measured; proposed fix not implemented",
+    "next_action": "Execute finite queue control; implement with bounded replenishment/queued-tail and peer-progress coverage in a later change"
+  },
+  {
+    "id": "A2",
+    "question": "Analyzer reconfiguration and sample/channel transitions",
+    "investigator": "audio_tuning",
+    "status": "deeply examined",
+    "scope": "analysis/src/lib.rs Analyzer/ChannelBank; ui/src/spectrum.rs reconfigure; plugin/editor/input.rs",
+    "evidence": [
+      "investigations/audio-tuning.md"
+    ],
+    "conclusion": "Existing size/count/rate ownership and discontinuity resource retention are precise; no new cache justified",
+    "confidence": "Source dependencies, boundary-reaching fixtures, passing release suite",
+    "uncertainty": "No current Bitwig CPU timing; finite rate/window matrix only",
+    "next_action": "Retain current design; measure only a reported reconfiguration hitch"
+  },
+  {
+    "id": "A3",
+    "question": "Adaptive assignment and tuning changes \u00d7 held notes \u00d7 naming",
+    "investigator": "audio_tuning",
+    "status": "partial",
+    "scope": "tuning/state.rs frozen correction; core/notes.rs actual pitch; scene derive/motion; spectral/names.rs",
+    "evidence": [
+      "investigations/audio-tuning.md"
+    ],
+    "conclusion": "Frozen sound and current display intentionally have different owners; fallback fixture can be strengthened",
+    "confidence": "Source trace, independent musical calculation and simulator 13/13; Namer probe pending",
+    "uncertainty": "Combined held-note, keyboard, engine and host expression sequence unverified",
+    "next_action": "Execute direct Namer lookup probe; keep native gesture sequence as conditional validation"
+  },
+  {
+    "id": "S1",
+    "question": "UI edits \u00d7 host automation \u00d7 restored state",
+    "investigator": "state_scene",
+    "status": "deeply examined",
+    "scope": "plugin/editor/frame.rs and persist.rs; configuration_adapter.rs; background.rs; vendored CLAP restore route",
+    "evidence": [
+      "investigations/state-scene.md"
+    ],
+    "conclusion": "Restore adopts before input and camera remains host-owned; 20ms fallback limits editor-lock wait only",
+    "confidence": "Shipping-route trace independently challenged; real serializer fixtures pass",
+    "uncertainty": "Save fallback frequency and total host-save latency remain unknown",
+    "next_action": "Use H1 only if actual stale save is observed; do not add snapshot owner"
+  },
+  {
+    "id": "S2",
+    "question": "Scene derivation, normalized views, derived-state ownership",
+    "investigator": "state_scene",
+    "status": "deeply examined",
+    "scope": "scene/derive.rs normalized Scene.view; scene/color.rs LUT; ui/spectrum.rs Fold key; settings range ownership",
+    "evidence": [
+      "investigations/state-scene.md"
+    ],
+    "conclusion": "Recent normalization/range refactors remove duplicate work; current keys contain the inspected dependencies",
+    "confidence": "Source/history and release fixtures",
+    "uncertainty": "No universal proof for every future persisted field; #886 separate",
+    "next_action": "Retain current ownership; do not add schema framework or cache"
+  },
+  {
+    "id": "S3",
+    "question": "Hidden/closed UI, resizing and resource lifecycle",
+    "investigator": "state_scene",
+    "status": "deeply examined",
+    "scope": "ui/state.rs per-surface mirrors; plugin background.rs open/close; scene/motion.rs hidden replay; glow_fade.rs",
+    "evidence": [
+      "investigations/state-scene.md"
+    ],
+    "conclusion": "Shared input/history and separate surface motion/GPU state earn their lifetimes; hidden replay is bounded",
+    "confidence": "Producer/consumer trace and threshold-reaching release fixtures",
+    "uncertainty": "Native reopen/resize latency and long-lived process RSS unmeasured",
+    "next_action": "Retain owners; run H1 only in disposable host session"
+  },
+  {
+    "id": "R1",
+    "question": "Lattice rendering, labels and atlas resource lifetime",
+    "investigator": "render",
+    "status": "deeply examined",
+    "scope": "render lattice frame/pipeline and label atlas paths; text prepare/paint ordering",
+    "evidence": [
+      "investigations/render.md"
+    ],
+    "conclusion": "Shared sheets already exist; text and lattice update timing must remain different",
+    "confidence": "Independent challenge, resource identity and pixel-parity fixtures pass",
+    "uncertainty": "No universal atlas safety proof across untested device families",
+    "next_action": "Reject blanket atlas unification; preserve lifetime-specific tests"
+  },
+  {
+    "id": "R2",
+    "question": "Stars, spectrogram, shadows and glow work/caches",
+    "investigator": "render",
+    "status": "deeply examined",
+    "scope": "render spectrogram/atmosphere.rs; star_split.rs; color-memory and Solo layers",
+    "evidence": [
+      "investigations/render.md"
+    ],
+    "conclusion": "Uniform split crosses real size threshold; Solo hidden-layer work preserves accepted color history",
+    "confidence": "Threshold and >100-fading-texel fixtures inspected and passing on Metal",
+    "uncertainty": "This is behavior evidence, not a measured optimization opportunity",
+    "next_action": "Retain accepted mechanisms; see R4 for separate shadow/glow leaf"
+  },
+  {
+    "id": "R3",
+    "question": "Scene changes \u00d7 GPU resource invalidation",
+    "investigator": "render",
+    "status": "partial",
+    "scope": "render/spectrogram.rs allocation-shape gate; atmosphere::Targets aggregate owner",
+    "evidence": [
+      "investigations/render.md"
+    ],
+    "conclusion": "Halo-only shape changes can replace other transient resources; splitting adds rebinding obligations",
+    "confidence": "Source independently challenged; prepare probe pending",
+    "uncertainty": "Complete-frame effect and savings attributable to unchanged source are unknown",
+    "next_action": "Run narrow shape/identity probe; defer redesign absent relevant full-frame symptom"
+  },
+  {
+    "id": "T1",
+    "question": "Recording \u00d7 stop/seek/loop and canonical ordering",
+    "investigator": "coordinator",
+    "status": "deeply examined",
+    "scope": "record lifecycle, writer/pump, canonical/audio tests; plugin configuration recording",
+    "evidence": [
+      "investigations/recording-replay.md"
+    ],
+    "conclusion": "Producer/configuration/source closures protect distinct late-data frontiers and should remain separate",
+    "confidence": "128-pass fixture, real WAV tails, stop/seek/failure fixtures pass",
+    "uncertainty": "Native callback scheduling and real DAW loop behavior are unverified",
+    "next_action": "Reject closure collapse; retain shared real/test pump"
+  },
+  {
+    "id": "T2",
+    "question": "Live \u00d7 replay \u00d7 offline and appearance capture/export",
+    "investigator": "coordinator",
+    "status": "deeply examined",
+    "scope": "take parsing; offline replay/render; record render_job queue and publication",
+    "evidence": [
+      "investigations/recording-replay.md"
+    ],
+    "conclusion": "Captured appearance and canonical ordering have coherent owners; malformed selected appearance is rejected",
+    "confidence": "Real-writer parity, selected appearance and FIFO/collision release fixtures pass",
+    "uncertainty": "Parity excludes arbitrary pixels/audio envelopes/native host and current authentic v6 take",
+    "next_action": "Repair stale guide; native phrase validation remains conditional"
+  },
+  {
+    "id": "T3",
+    "question": "End-to-end encoding and readback performance",
+    "investigator": "coordinator",
+    "status": "partial",
+    "scope": "offline renderer frame loop, readback, encoder completion; controlled chord and converted historical workload",
+    "evidence": [
+      "logs/setup-attempts.jsonl",
+      "logs/measurements.jsonl",
+      "experiments/run_measurements.py"
+    ],
+    "conclusion": "Initial complete export samples exist; uncontrolled load prevents a performance recommendation",
+    "confidence": "Real FFmpeg complete samples; 138s interrupted repeat documents load instability",
+    "uncertainty": "No trustworthy spread/median or before-after benefit yet; historical corrected workload not yet exported",
+    "next_action": "Resume serialized measurements if external load subsides naturally; otherwise preserve explicit blocked timing scope"
+  },
+  {
+    "id": "D1",
+    "question": "Build/test/development material maintenance cost",
+    "investigator": "coordinator",
+    "status": "deeply examined",
+    "scope": "Cargo profiles/config; ci.sh; session-lifecycle; build tag and GUI cohort history",
+    "evidence": [
+      "investigations/development.md"
+    ],
+    "conclusion": "No new build architecture is justified; cache reuse requires matching Cargo feature selection",
+    "confidence": "Source/history and executed builds; known issues linked",
+    "uncertainty": "No controlled alternative-build comparison or CI queue measurement",
+    "next_action": "Retain worktree isolation/cache protocol; avoid feature-mismatched audit subsets"
+  },
+  {
+    "id": "C1",
+    "question": "Independent challenge of major proposals and clean claims",
+    "investigator": "render and state_scene",
+    "status": "deeply examined",
+    "scope": "A1/S1 independent challenge; R1\u2013R3 independent challenge; final recommendation review",
+    "evidence": [
+      "investigations/challenge.md"
+    ],
+    "conclusion": "Claims narrowed to actual mechanisms and fixture reach; no demonstrated host stall or free resource-split win",
+    "confidence": "Independent capable investigators; material disagreement preserved in DECISIONS",
+    "uncertainty": "Remaining performance recommendations depend on completed measurements",
+    "next_action": "Integrate outcomes and stop low-value redesign branches"
+  },
+  {
+    "id": "A4",
+    "question": "Finite-input numerical spectrum and history conservation",
+    "scope": "Analyzer calibration/interpolation/silence; ChannelBank pooling; Fold floor; history coarsening",
+    "investigator": "audio_tuning",
+    "evidence": [
+      "investigations/numerical-analysis.md",
+      "logs/workspace-tests.log"
+    ],
+    "conclusion": "Inspected arithmetic and fixtures coherent; retain accepted Fast/Fold tradeoffs",
+    "confidence": "Independent calculations, fixture reach, passing release suite",
+    "uncertainty": "Not exhaustive calibration across frequencies/rates or universal bit identity",
+    "status": "deeply examined",
+    "next_action": "Retain current model; expand only for an observed signal mismatch"
+  },
+  {
+    "id": "A5",
+    "question": "Recovery from malformed nonfinite audio",
+    "scope": "AudioSpectrum display smoothing versus sanitized history",
+    "investigator": "coordinator and audio_tuning",
+    "evidence": [
+      "experiments/nonfinite_probe.rs"
+    ],
+    "conclusion": "Single NaN may permanently poison display after clean replacement",
+    "confidence": "Source inference, reproduction pending",
+    "uncertainty": "Occurrence in real projects unknown; visual robustness only",
+    "status": "partial",
+    "next_action": "Execute isolated recovery assertion; no generic recovery framework"
+  },
+  {
+    "id": "A6",
+    "question": "Realtime payload ownership and actual CLAP allocation fixture reach",
+    "scope": "Configuration/restore payload adoption, retirement and teardown",
+    "investigator": "audio_tuning",
+    "evidence": [
+      "investigations/realtime-lifetime.md"
+    ],
+    "conclusion": "Configuration/restore lifetimes retain valid independent owners; unnecessary full ProcessStatus publication can be narrowed to tail length",
+    "confidence": "Current source and fixture reach independently traced; allocation instrumentation not executed",
+    "uncertainty": "Native status query pending; debug-only allocation guards and host deadlines unverified",
+    "status": "deeply examined",
+    "next_action": "Run tiny native layout query; implement scalar tail publication with exported-tail behavior fixture if authorized"
+  },
+  {
+    "id": "R4",
+    "question": "Shadow and glow sampling at real shape/scale boundaries",
+    "scope": "CPU settings to shader support; pane scale, kernels and parity fixtures",
+    "investigator": "render",
+    "evidence": [
+      "investigations/shadows-glows.md"
+    ],
+    "conclusion": "Existing shadow/glow structure and support-scaled bounds earn their place; no new rework justified",
+    "confidence": "CPU-to-shader trace; kernel, depth, cross/golden and enlarged-preview fixture reach; central Metal suite passed",
+    "uncertainty": "Selected one-byte parity does not cover documented dense-overlap precision stress #878",
+    "status": "deeply examined",
+    "next_action": "Retain current design and recorded precision tradeoff; no new benchmark campaign"
+  },
+  {
+    "id": "T4",
+    "question": "Frame cadence and trimmed export semantics",
+    "scope": "Offline prepare_frame; Replay; LiveClockMapper; NodeMotion and color memory",
+    "investigator": "state_scene",
+    "evidence": [
+      "investigations/temporal-cadence.md"
+    ],
+    "conclusion": "Events and sample-time history have contracts; arbitrary pixels do not; --start intentionally starts audio history cold",
+    "confidence": "Source plus cadence/late-start/constant-target fixture reach and passing release suite",
+    "uncertainty": "Changing-target envelopes and cold trimmed frames are not byte-identical full-render slices",
+    "status": "deeply examined",
+    "next_action": "Do nothing absent undesirable behavior; narrow full/trim comparison if reported"
+  },
+  {
+    "id": "H1",
+    "question": "Native Bitwig integration and latency",
+    "scope": "Loaded plugin, save/reopen, held tuning edits, transport and resize",
+    "investigator": "coordinator",
+    "evidence": [
+      "HOST-VALIDATION.md"
+    ],
+    "conclusion": "Deliberately not executed in active user session",
+    "confidence": "Boundary explicitly recorded",
+    "uncertainty": "No claim of native host correctness or deadlines",
+    "status": "blocked",
+    "next_action": "Run selected procedures in a later disposable project when owner is ready"
+  },
+  {
+    "id": "D2",
+    "question": "Other platforms, hosts and device families",
+    "scope": "Linux lifecycle publication; other CLAP hosts/GPU families",
+    "investigator": "coordinator",
+    "evidence": [
+      "investigations/development.md"
+    ],
+    "conclusion": "Known Linux manifest issue linked; no new cross-platform claims",
+    "confidence": "Known issue #1425; this run is native macOS/Metal only",
+    "uncertainty": "Other platforms and device families not examined",
+    "status": "unexamined",
+    "next_action": "Only expand with supported platform workload; do not duplicate #1425"
+  }
+]

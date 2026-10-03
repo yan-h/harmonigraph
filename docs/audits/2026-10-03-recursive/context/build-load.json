@@ -1,0 +1,25 @@
+{
+  "utc": "2026-10-03T17:05:52.527960+00:00",
+  "processes": [
+    "30116     1 106.4  3.8    35:57 /Users/yan/Library/Application Support/Steam/steamapps/common/DiceVaders/DiceVaders.app/Contents/MacOS/DiceVaders",
+    "37904 37903  58.5  1.1    03:44 /Users/yan/.rustup/toolchains/1.92-aarch64-apple-darwin/bin/rustc",
+    "  623     1  37.5  0.4 21:36:56 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+    " 7844  7840  13.6  0.5 16:13:09 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Audio Engine ARM64-NEON.app/Contents/MacOS/BitwigAudioEngine-ARM64-NEON",
+    "38098 10318  10.3  0.1    00:02 /opt/homebrew/Cellar/python@3.13/3.13.1/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python",
+    "38091 38090  10.0  0.8    00:18 /Users/yan/.rustup/toolchains/1.92-aarch64-apple-darwin/bin/rustc",
+    "10317 10275   7.4  5.2 09:00:03 /Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/154.0.8037.93/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+    "37997 37996   6.9  0.5    02:35 /Users/yan/.rustup/toolchains/1.92-aarch64-apple-darwin/bin/rustc",
+    "23953  7844   6.3  0.7 01:56:28 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON",
+    "  595     1   3.7  0.0 21:36:56 /System/Library/CoreServices/launchservicesd",
+    " 1303     1   3.7  0.2 21:36:09 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor",
+    "  803     1   2.3  0.1 21:36:47 /usr/sbin/coreaudiod",
+    "  627     1   1.6  0.2 21:36:55 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow",
+    "27455 27392   1.6  0.5    51:16 /Users/yan/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/Frameworks/Steam Helper.app/Contents/MacOS/Steam Helper",
+    "  567     1   1.3  0.0 21:36:56 /System/Library/CoreServices/powerd.bundle/powerd",
+    "  831     1   1.3  0.0 21:36:42 /usr/libexec/sysmond",
+    "  751     1   1.2  0.0 21:36:53 /System/Library/DriverExtensions/com.apple.AppleUserHIDDrivers.dext/com.apple.AppleUserHIDDrivers",
+    "10318 10275   1.1  0.9 09:00:02 /Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+    " 1298     1   0.9  0.4 21:36:09 /Users/yan/Applications/iTerm.app/Contents/MacOS/iTerm2",
+    "23957  7844   0.8  0.1 01:56:27 /Applications/Bitwig Studio.app/Contents/MacOS/Bitwig Plug-in Host ARM64-NEON.app/Contents/MacOS/BitwigPluginHost-ARM64-NEON"
+  ]
+}

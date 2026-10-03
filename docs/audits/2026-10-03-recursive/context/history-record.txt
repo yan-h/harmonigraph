@@ -1,0 +1,70 @@
+# History map: origin/main, last 250: 250 changes, 21 touching the files mapped
+# limited to: crates/harmonigraph-record/
+
+## Hotspots (changes, of them with a fix-like subject, lines now)
+   13    2   1007  crates/harmonigraph-record/src/recorder.rs
+   13    2   1215  crates/harmonigraph-record/src/recorder/writer.rs
+   11    1   1454  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+   11    0    231  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    9    2    602  crates/harmonigraph-record/src/recorder/render_job.rs
+    9    1   1374  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    7    2    447  crates/harmonigraph-record/src/recorder/render_job/tests.rs
+    6    1    336  crates/harmonigraph-record/src/recorder/writer/audio_tests.rs
+    2    0     84  crates/harmonigraph-record/src/lib.rs
+    2    0     91  crates/harmonigraph-record/src/configuration.rs
+    2    0    494  crates/harmonigraph-record/src/publication.rs
+    2    0     39  crates/harmonigraph-record/Cargo.toml
+    1    0    202  crates/harmonigraph-record/src/recorder/lifecycle.rs
+    1    0    339  crates/harmonigraph-record/src/recorder/lifecycle/tests.rs
+
+## Change coupling across directories (changes together)
+   12  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer.rs
+   10  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    9  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    9  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    8  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    8  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    8  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    7  crates/harmonigraph-record/src/recorder/render_job.rs  +  crates/harmonigraph-record/src/recorder/render_job/tests.rs
+    5  crates/harmonigraph-record/src/recorder/render_job.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    4  crates/harmonigraph-record/src/recorder/render_job.rs  +  crates/harmonigraph-record/src/recorder/writer/audio_tests.rs
+    4  crates/harmonigraph-record/src/recorder/render_job.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    4  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/audio_tests.rs
+    4  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/render_job.rs
+    4  crates/harmonigraph-record/src/recorder/render_job/tests.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    3  crates/harmonigraph-record/src/recorder/render_job/tests.rs  +  crates/harmonigraph-record/src/recorder/writer.rs
+    3  crates/harmonigraph-record/src/recorder/render_job/tests.rs  +  crates/harmonigraph-record/src/recorder/writer/audio_tests.rs
+    3  crates/harmonigraph-record/src/recorder/render_job/tests.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    3  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/render_job/tests.rs
+    3  crates/harmonigraph-record/src/recorder/render_job.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    3  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/audio_tests.rs
+    2  crates/harmonigraph-record/src/recorder/render_job/tests.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    2  crates/harmonigraph-record/src/lib.rs  +  crates/harmonigraph-record/src/recorder/writer.rs
+    2  crates/harmonigraph-record/src/lib.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    2  crates/harmonigraph-record/src/lib.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    2  crates/harmonigraph-record/src/lib.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+
+## Widest changes (files touched; read the ones that change one concept)
+   10  401d3ca4ae  Improve recording, rendering, and runtime from the project audit (#1389)
+    9  134821ce7c  Remove VST3 and the owner-less recording route; banner means "right now"; Hub channel bends publish (#1223)
+    7  b6121726f4  Tuning fault notice, baseline shown rename (take v6), Stop always renders (#1341)
+    6  b1fd2ee8c8  Record: every take has audio, fixtures included (#1342) (#1385)
+    6  9e0c9c2d5d  Add appearance history, camera automation and queued exports; fix timing and recording collisions
+    5  ff24b1b2e6  Batch take-file flushing at the writer pump boundary (#1211)
+    5  65d66a0014  Preserve planned export frames and use the paired renderer (#1061)
+    5  636bf56c3a  Split the take writer's Open into Recording and Pass (#1005)
+    5  425d4af300  Apply approved learning, export, and appearance audit decisions (#1402)
+    4  819c1e3252  Clear finishing status when recording completes (#1263)
+    4  75416066e0  Remove unused unaddressed recorder configuration path (#1068)
+    4  3926d4ee31  Open every take pass with what is already sounding (#1129) (#1155)
+    4  1d6633fd0d  Save the open editor's state; editor-shell and take/export drift cleanup (#1331)
+    3  d53ef048ed  Retire Playhead export and fixed-window runtime (#988)
+    3  02b6738e06  Finish stopped recordings at inactive CLAP boundaries (#1232)
+    2  8f26f69c8e  Simplify internal mark, marker, tuning, and progress contracts
+    2  3dc379adb6  Fix stale tuning edits and simplify analysis and canonical validation
+    2  1d606be54f  Join recorder fixture exports before directory cleanup (#1405)
+    1  e42718f5b9  Capture per-note pressure, gain and timbre (intensity step 1) (#1128)
+    1  6a4d80a5e4  Retire public single-pane and custom export layouts (#990)
+    1  014f6481fe  Cut CI and test cost: gate the Gaussian sweep, drop a stale gate and dead probes, table-drive persistence retirements (#1222)
+
+Fix-like subjects are a rough signal: read each commit before citing it.

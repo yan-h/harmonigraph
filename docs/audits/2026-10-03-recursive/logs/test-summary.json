@@ -1,0 +1,8 @@
+{
+  "suite_summaries": 16,
+  "passed": 1910,
+  "failed": 0,
+  "ignored": 27,
+  "all_results_ok": true,
+  "notes": "Workspace release suite; Metal and FFmpeg required; no golden blessing. Not native host validation."
+}

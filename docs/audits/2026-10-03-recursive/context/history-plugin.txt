@@ -1,0 +1,85 @@
+# History map: origin/main, last 250: 250 changes, 38 touching the files mapped
+# limited to: crates/harmonigraph-plugin/
+
+## Hotspots (changes, of them with a fix-like subject, lines now)
+   16    3   2539  crates/harmonigraph-plugin/src/configuration/tests.rs
+   15    2   1884  crates/harmonigraph-plugin/src/lib.rs
+   15    1   1373  crates/harmonigraph-plugin/src/tuning/hub.rs
+   12    1   1857  crates/harmonigraph-plugin/src/tuning/tests.rs
+    9    1    326  crates/harmonigraph-plugin/src/editor/shared.rs
+    8    3    465  crates/harmonigraph-plugin/src/editor/frame.rs
+    8    1    964  crates/harmonigraph-plugin/src/background.rs
+    6    1    314  crates/harmonigraph-plugin/src/editor/window.rs
+    5    1    961  crates/harmonigraph-plugin/src/tuning/musical_tests.rs
+    4    0    757  crates/harmonigraph-plugin/src/tuning/tune.rs
+    4    1    453  crates/harmonigraph-plugin/src/configuration.rs
+    4    2    571  crates/harmonigraph-plugin/src/editor/input.rs
+    4    2     36  crates/harmonigraph-plugin/src/editor.rs
+    4    0    320  crates/harmonigraph-plugin/src/tuning/state.rs
+    4    0    384  crates/harmonigraph-plugin/src/configuration/recording.rs
+    3    0    249  crates/harmonigraph-plugin/src/editor/persist.rs
+    3    1    249  crates/harmonigraph-plugin/src/editor/startup_probe.rs
+    2    0    292  crates/harmonigraph-plugin/src/tuning/control_tests.rs
+    2    0    316  crates/harmonigraph-plugin/src/tuning/setup.rs
+    2    0    134  crates/harmonigraph-plugin/src/tuning/confirmed_tests.rs
+    2    0    332  crates/harmonigraph-plugin/src/tuning/session.rs
+    2    0     58  crates/harmonigraph-plugin/Cargo.toml
+    2    0    185  crates/harmonigraph-plugin/src/tuning/event.rs
+    2    1    457  crates/harmonigraph-plugin/src/lattice_maps.rs
+    1    0    100  crates/harmonigraph-plugin/src/tuning/instances.rs
+
+## Change coupling across directories (changes together)
+    9  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/tuning/hub.rs
+    8  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/lib.rs
+    6  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/editor/shared.rs
+    6  crates/harmonigraph-plugin/src/background.rs  +  crates/harmonigraph-plugin/src/editor/shared.rs
+    6  crates/harmonigraph-plugin/src/lib.rs  +  crates/harmonigraph-plugin/src/tuning/hub.rs
+    5  crates/harmonigraph-plugin/src/editor/shared.rs  +  crates/harmonigraph-plugin/src/lib.rs
+    4  crates/harmonigraph-plugin/src/configuration.rs  +  crates/harmonigraph-plugin/src/configuration/tests.rs
+    4  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/tuning/musical_tests.rs
+    4  crates/harmonigraph-plugin/src/editor/shared.rs  +  crates/harmonigraph-plugin/src/tuning/hub.rs
+    4  crates/harmonigraph-plugin/src/editor/frame.rs  +  crates/harmonigraph-plugin/src/lib.rs
+    4  crates/harmonigraph-plugin/src/background.rs  +  crates/harmonigraph-plugin/src/configuration/tests.rs
+    4  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/tuning/tests.rs
+    4  crates/harmonigraph-plugin/src/lib.rs  +  crates/harmonigraph-plugin/src/tuning/tests.rs
+    4  crates/harmonigraph-plugin/src/configuration/recording.rs  +  crates/harmonigraph-plugin/src/tuning/hub.rs
+    3  crates/harmonigraph-plugin/src/editor/window.rs  +  crates/harmonigraph-plugin/src/lib.rs
+    3  crates/harmonigraph-plugin/src/background.rs  +  crates/harmonigraph-plugin/src/tuning/hub.rs
+    3  crates/harmonigraph-plugin/src/background.rs  +  crates/harmonigraph-plugin/src/editor/frame.rs
+    3  crates/harmonigraph-plugin/src/background.rs  +  crates/harmonigraph-plugin/src/editor/persist.rs
+    3  crates/harmonigraph-plugin/src/background.rs  +  crates/harmonigraph-plugin/src/editor/window.rs
+    3  crates/harmonigraph-plugin/src/editor.rs  +  crates/harmonigraph-plugin/src/editor/frame.rs
+    3  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/tuning/state.rs
+    3  crates/harmonigraph-plugin/src/configuration/recording.rs  +  crates/harmonigraph-plugin/src/lib.rs
+    2  crates/harmonigraph-plugin/src/configuration.rs  +  crates/harmonigraph-plugin/src/tuning/musical_tests.rs
+    2  crates/harmonigraph-plugin/src/lib.rs  +  crates/harmonigraph-plugin/src/tuning/musical_tests.rs
+    2  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/editor/input.rs
+
+## Widest changes (files touched; read the ones that change one concept)
+    9  c3d5f8d4ac  Split the editor's one file into seven modules by responsibility (#995 item 11) (#1019)
+    9  134821ce7c  Remove VST3 and the owner-less recording route; banner means "right now"; Hub channel bends publish (#1223)
+    8  53c1273e70  Learn's incomplete-state notice clears with the state; tuning drift cleanup (#1328)
+    8  401d3ca4ae  Improve recording, rendering, and runtime from the project audit (#1389)
+    7  1d6633fd0d  Save the open editor's state; editor-shell and take/export drift cleanup (#1331)
+    6  02b6738e06  Finish stopped recordings at inactive CLAP boundaries (#1232)
+    5  f1122e63d4  Build one complete confirmed-pitch snapshot per callback (#1208)
+    5  eff95080c1  Use track names and compact voice dots for tuning sources (#1426)
+    5  e42718f5b9  Capture per-note pressure, gain and timbre (intensity step 1) (#1128)
+    5  9e0c9c2d5d  Add appearance history, camera automation and queued exports; fix timing and recording collisions
+    5  839883d2ff  Apply a host restore to an open editor window on its next frame (#1338)
+    5  505529af2f  Stamp build identity in leaf binaries (#1209)
+    5  17ec7a9a4d  Align Tune and Hub initial expression ordering (#1072)
+    4  f6287aa438  Make lattice offsets readable with fixed additive extension lanes (#1052)
+    4  c26b18363f  Simplify temperament controls and recognize tuning edits (#1427)
+    4  b6121726f4  Tuning fault notice, baseline shown rename (take v6), Stop always renders (#1341)
+    4  425d4af300  Apply approved learning, export, and appearance audit decisions (#1402)
+    4  3dc379adb6  Fix stale tuning edits and simplify analysis and canonical validation
+    4  3926d4ee31  Open every take pass with what is already sounding (#1129) (#1155)
+    4  1487ba7794  Audit merges #1139–#1226: a Tune run after the Hub no longer breaks recording, dividers drag while a tab borrows folded width (#1228)
+    3  b1fd2ee8c8  Record: every take has audio, fixtures included (#1342) (#1385)
+    3  65d66a0014  Preserve planned export frames and use the paired renderer (#1061)
+    3  61894d47a6  Simplify map view and document ownership (#1060)
+    3  5bd476e7aa  Finish stopped takes at joined CLAP retirement (#1226)
+    3  4dd394e1f8  Replace arbitrary docking with fixed foldable pane layouts (#1056)
+
+Fix-like subjects are a rough signal: read each commit before citing it.

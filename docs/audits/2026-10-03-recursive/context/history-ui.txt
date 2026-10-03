@@ -1,0 +1,85 @@
+# History map: origin/main, last 250: 250 changes, 167 touching the files mapped
+# limited to: crates/harmonigraph-ui/
+
+## Hotspots (changes, of them with a fix-like subject, lines now)
+   70    4    809  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+   59    6   2222  crates/harmonigraph-ui/src/tests/persist.rs
+   55    1    555  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+   38    5   1819  crates/harmonigraph-ui/src/tests/settings.rs
+   25    4    537  crates/harmonigraph-ui/src/lib.rs
+   25    3   3235  crates/harmonigraph-ui/src/panes/spectral/tests.rs
+   24    5    859  crates/harmonigraph-ui/src/state.rs
+   24    1   1601  crates/harmonigraph-ui/src/panes/lattice.rs
+   24    1    118  crates/harmonigraph-ui/src/panes/lattice_atmosphere.rs
+   23    0    260  crates/harmonigraph-ui/src/panes/material.rs
+   21    1    260  crates/harmonigraph-ui/src/panes/nodes.rs
+   21    2    789  crates/harmonigraph-ui/src/panes/mod.rs
+   20    1    209  crates/harmonigraph-ui/src/panes/lighting.rs
+   19    3   1078  crates/harmonigraph-ui/src/panes/tuning.rs
+   19    1   2792  crates/harmonigraph-ui/src/panes/spectral/roll.rs
+   18    4   4084  crates/harmonigraph-ui/src/spectrogram.rs
+   18    1   1025  crates/harmonigraph-ui/src/tests/fold.rs
+   16    2   1441  crates/harmonigraph-ui/src/panes/render.rs
+   16    2    968  crates/harmonigraph-ui/src/config.rs
+   14    0     82  crates/harmonigraph-ui/src/widgets/mod.rs
+   14    1    172  crates/harmonigraph-ui/src/panes/color.rs
+   14    1    436  crates/harmonigraph-ui/src/tests/scale.rs
+   12    2    665  crates/harmonigraph-ui/src/panes/spectral/mod.rs
+   11    0    609  crates/harmonigraph-ui/src/widgets/rows.rs
+   11    0    156  crates/harmonigraph-ui/src/panes/system.rs
+
+## Change coupling across directories (changes together)
+   32  crates/harmonigraph-ui/src/panes/spectral/settings.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+   19  crates/harmonigraph-ui/src/panes/spectral/settings.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+   16  crates/harmonigraph-ui/src/panes/material.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+   11  crates/harmonigraph-ui/src/panes/lattice_atmosphere.rs  +  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+   11  crates/harmonigraph-ui/src/panes/lattice_atmosphere.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+   11  crates/harmonigraph-ui/src/panes/lattice_atmosphere.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+   11  crates/harmonigraph-ui/src/panes/material.rs  +  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+   10  crates/harmonigraph-ui/src/panes/spectral/tests.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    9  crates/harmonigraph-ui/src/panes/nodes.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    9  crates/harmonigraph-ui/src/panes/spectral/settings.rs  +  crates/harmonigraph-ui/src/tests/settings.rs
+    9  crates/harmonigraph-ui/src/panes/spectral/tests.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    8  crates/harmonigraph-ui/src/state.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    8  crates/harmonigraph-ui/src/panes/lighting.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    7  crates/harmonigraph-ui/src/panes/lattice.rs  +  crates/harmonigraph-ui/src/panes/spectral/roll.rs
+    7  crates/harmonigraph-ui/src/panes/nodes.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    7  crates/harmonigraph-ui/src/panes/material.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    7  crates/harmonigraph-ui/src/lib.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    7  crates/harmonigraph-ui/src/panes/spectral/roll.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    6  crates/harmonigraph-ui/src/tests/settings_ranges.rs  +  crates/harmonigraph-ui/src/widgets/profile.rs
+    6  crates/harmonigraph-ui/src/lib.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    6  crates/harmonigraph-ui/src/panes/lighting.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    6  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+    6  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    6  crates/harmonigraph-ui/src/panes/spectral/roll.rs  +  crates/harmonigraph-ui/src/tests/settings.rs
+    6  crates/harmonigraph-ui/src/panes/spectral/tests.rs  +  crates/harmonigraph-ui/src/tests/settings.rs
+
+## Widest changes (files touched; read the ones that change one concept)
+   30  a8f67ec506  Flatten Display into one tab strip that overflows gradually; collapsible sections (#1083)
+   22  fb8383715f  Combine related settings with compact diagrams and sliders (#1278)
+   22  a9c568435a  Spectrogram bed takes the gradient's floor; spectral drift cleanup (#1334)
+   21  4dd394e1f8  Replace arbitrary docking with fixed foldable pane layouts (#1056)
+   20  1d6633fd0d  Save the open editor's state; editor-shell and take/export drift cleanup (#1331)
+   19  f0835c707a  Reorganize settings by view, analysis, and rendering scope
+   19  bb2c801ad0  Group the Lattice and Analyzer settings into sections with named blocks (#1138)
+   18  c7e6f16e88  Clarify settings navigation, labels and dependencies (#1275)
+   17  d53ef048ed  Retire Playhead export and fixed-window runtime (#988)
+   17  09ec8bc6bf  Preserve Solo colour and apply the selected appearance decisions (#1399)
+   16  047e0c4622  Name a soft note at its unfaded envelope; lattice drift cleanup (#1333)
+   15  d711b3c30c  Settings fixes: curve readout, Mono, Dusk preset, background glow, cross width, release stagger (#1141)
+   15  049ff50f32  Settings: small-caps section headings, text trimmed to its capitals, 9pt group gaps (#1089)
+   14  9e0c9c2d5d  Add appearance history, camera automation and queued exports; fix timing and recording collisions
+   14  4037dff41a  Unify collapse controls and keep narrow option lists tidy (#1078)
+   13  fd1877deeb  Apply pane-relative sizing and stable ribbon labels (#1404)
+   13  39deb9a35b  Skin picker, with the picture's colors split out of the skin (#1088)
+   12  dc61feae5e  Share the multi-handle bars' drag, thumb and name code; SpectrumBar knocks out text (#1217)
+   12  46bcc6241f  Replace the skin picker with five colour dials (#1139)
+   12  425d4af300  Apply approved learning, export, and appearance audit decisions (#1402)
+   11  ab38a4c989  Settings chrome: left-side fold chevrons, pane folds go double, tighter spacing (#1086)
+   11  526514e764  Simplify lattice display and motion settings (#1047)
+   11  5136cdd588  Keep note bloom global and remove intensity mappings (#1166)
+   11  0665a5e8a5  Share one Bloom base, measure note intensity from rest, and reshape slices and ribbons by thickness (#1140)
+   10  cd7d89f8ef  Fold analysis settings into Analyzer (#1045)
+
+Fix-like subjects are a rough signal: read each commit before citing it.

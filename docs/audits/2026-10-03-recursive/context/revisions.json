@@ -1,0 +1,11 @@
+{
+  "audited_revision": "ad1c6e6b9474dd80098703ae15cac241bba0eb41",
+  "refreshed_main": "77c453a421734c838177139c3fed3f1ca5b15006",
+  "unmodified_workspace_release_tests": {
+    "passed": 1910,
+    "failed": 0,
+    "ignored": 27
+  },
+  "native_host_interaction": false,
+  "production_changes_intended": false
+}

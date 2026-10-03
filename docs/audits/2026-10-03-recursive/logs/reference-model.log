@@ -1,0 +1,21 @@
+✔ agreed musical examples use declared fixture settings and actual context (907.388958ms)
+✔ 101 major-third cycles keep moving after displacement exceeds an octave (5691.439542ms)
+✔ transpose complete performances by an octave without changing lattice choices (704.42475ms)
+✔ repeated voices refresh memory; octave duplicates and comma shifts remain distinct (0.593583ms)
+✔ release recency does not weaken on time alone, while configured silence resets (3.076708ms)
+✔ a note struck or released long before the newest weighs less, and waiting changes no weight (59.857459ms)
+✔ octave copies of a note add no vote (0.852417ms)
+✔ striking the note struck last again is holding it (15.151792ms)
+✔ player bends and later decisions never modify onset context or frozen correction (21.850458ms)
+✔ hard eligibility and allowed axes constrain every candidate before pitch scoring (1.332ms)
+✔ transport settings clear context without changing a held voice correction on a loop (48.402333ms)
+✔ continuous input parser accepts fine pitches and reports invalid programs (15.664667ms)
+✔ unsnapped attacks preserve full drift and interrupt a repeated node (0.593ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9431.225667

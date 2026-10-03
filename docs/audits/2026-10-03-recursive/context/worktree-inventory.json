@@ -1,0 +1,52 @@
+[
+  {
+    "path": "/Users/yan/projects/harmonigraph",
+    "status": "?? demo-screenshot.png\n",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/.codex/worktrees/2f4d/harmonigraph",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/.codex/worktrees/cc03/harmonigraph",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/.codex/worktrees/issue-sweep-6006/harmonigraph",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/.codex/worktrees/merge-1353/harmonigraph",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph",
+    "status": "?? docs/audits/2026-10-03-recursive/\n",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/projects/harmonigraph/.claude/worktrees/inline-temperaments",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/projects/harmonigraph/.claude/worktrees/roll-density",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/projects/harmonigraph/.claude/worktrees/shadow-blur-preview",
+    "status": "",
+    "error": ""
+  },
+  {
+    "path": "/Users/yan/projects/harmonigraph/.claude/worktrees/tuning-instance-names",
+    "status": "",
+    "error": ""
+  }
+]
