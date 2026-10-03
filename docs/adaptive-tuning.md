@@ -192,8 +192,8 @@ D_samples = multiplier × advertised_max_frames
 
 and that number is fixed for the whole activation.
 Each Tune persists its own multiplier as an ordinary plugin parameter and reports the resulting latency from it at activation, before any Hub pairing exists.
-The Hub's **Tuning → Instances → Tuning delay** controls offer **Apply to all tuners** as a convenience.
-Per-instance overrides live in **Instance details**, and each Tune that changes requests its own reactivation.
+The Hub's **Tuning → Tuning sources → Tuning delay** controls offer **Apply to all tuners** as a convenience.
+Per-instance overrides live in **Source details**, and each Tune that changes requests its own reactivation.
 The Hub's own input uses a fixed one-buffer delay.
 
 The editor shows the multiplier, the sample count and the milliseconds together —
@@ -329,18 +329,18 @@ Hidden sources keep updating, and Show restores their retained notes and history
 visibility also travels with the take's canonical baselines for offline replay.
 This does not select individual instruments out of the mixed audio spectrum.
 
-The central instance list in **Tuning → Instances** shows a tiny strip of dots beneath each name, one per sounding voice.
+The tuning source list in **Tuning → Tuning sources** shows a tiny strip of dots beneath each name, one per sounding voice.
 When more voices are held than fit across the name cell, the last dot becomes an ellipsis;
 hover the name or dots for the exact count.
 The strip stays the same height even at zero voices and never reserves space beside the name.
 The dots track notes held at the Tune's output, rather than cumulative output events;
 instrument release tails are not counted.
-A highlighted name flags a status to inspect in its tooltip or **Instance details**.
+A highlighted name flags a status to inspect in its tooltip or **Source details**.
 Names follow the containing track when the host supplies CLAP track information, including track renames.
 A custom name overrides the track name;
 clear it to follow the track again.
 Without a track name or override, the row uses **Tune N** or **Harmonigraph input**.
-Its **Instance details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
+Its **Source details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
 Custom names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
 Retune defaults on for a Tune and off for Harmonigraph's own input.
 The **Retune** and **Show** column-header checkboxes independently control all currently loaded instances, including the Hub input.
@@ -674,7 +674,7 @@ use **Show** independently to include or exclude its notes from the picture.
 If notes are sounding uncorrected —
 and the status does not say there is no Harmonigraph in the process or no free row —
 raise the multiplier and play again.
-The Hub's **Tuning → Instances → Tuning delay** controls can apply one multiplier to every Tune at once;
+The Hub's **Tuning → Tuning sources → Tuning delay** controls can apply one multiplier to every Tune at once;
 each one then requests its own reactivation.
 4. In the Hub's **Tuning** pane, choose the tuning axes and policy-v3 controls for the session.
 Locked 12-TET produces zero adaptive correction;

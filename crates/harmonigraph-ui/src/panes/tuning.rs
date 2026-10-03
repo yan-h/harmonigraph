@@ -579,7 +579,7 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
 fn instance_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     let instances = params.tuning_instances();
     if !instances.is_empty() {
-        section(ui, "Instances", |ui| instance_controls(ui, params, &instances));
+        section(ui, "Tuning sources", |ui| instance_controls(ui, params, &instances));
     }
 }
 
@@ -630,7 +630,7 @@ fn instance_controls(
             crate::widgets::checkbox_indeterminate(ui, &mut all, label, mixed)
         };
         if response
-            .on_hover_text(if retune { "Retune all instances" } else { "Show all instances" })
+            .on_hover_text(if retune { "Retune all sources" } else { "Show all sources" })
             .clicked()
         {
             let value = enabled != instances.len();
@@ -708,7 +708,7 @@ fn instance_controls(
         }
     } else {
         egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
-            crate::widgets::weak(ui, "Instance");
+            crate::widgets::weak(ui, "Source");
             bulk_control(ui, "Retune", true);
             bulk_control(ui, "Show", false);
             ui.end_row();
@@ -722,7 +722,7 @@ fn instance_controls(
     ui.data_mut(|data| data.insert_temp(selection, selected));
     if let Some(row) = instances.iter().find(|row| row.id == selected) {
         ui.push_id(row.id, |ui| {
-            subsection(ui, "Instance details", |ui| {
+            subsection(ui, "Source details", |ui| {
                 let mut name = row.name.clone();
                 if ui
                     .add(
@@ -809,7 +809,7 @@ fn instance_controls(
             ui.data_mut(|data| data.insert_temp(id, delay));
             crate::widgets::weak(
                 ui,
-                "Each tuner reports its own latency. Individual overrides are in Instance details.",
+                "Each tuner reports its own latency. Individual overrides are in Source details.",
             );
             crate::widgets::weak(ui, "Harmonigraph's own input stays at one buffer.");
         });

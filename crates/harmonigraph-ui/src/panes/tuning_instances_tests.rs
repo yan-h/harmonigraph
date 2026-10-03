@@ -136,7 +136,7 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                 .shapes
                 .iter()
                 .find_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "Instance details" => {
+                    egui::Shape::Text(text) if text.galley.text() == "Source details" => {
                         Some(text.pos + egui::vec2(4.0, 4.0))
                     }
                     _ => None,
