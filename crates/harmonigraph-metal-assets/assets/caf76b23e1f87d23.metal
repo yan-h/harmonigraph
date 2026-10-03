@@ -14,6 +14,8 @@ struct VertexOut {
     metal::float4 lead;
     metal::float4 taper_depth;
     metal::float4 taper;
+    metal::float2 tremolo;
+    char _pad9[8];
     metal::float4 core;
     metal::float4 outline;
     metal::float2 at;
@@ -252,30 +254,7 @@ float lead_coverage(
     return metal::mix(_e35, 1.0, note);
 }
 
-float along(
-    VertexOut in_9,
-    metal::float2 ends
-) {
-    float run = in_9.ramp.y - in_9.ramp.x;
-    float t_1 = (metal::abs(run) > 0.000001) ? metal::clamp((in_9.local.y - in_9.ramp.x) / run, 0.0, 1.0) : 0.0;
-    return metal::mix(ends.x, ends.y, t_1);
-}
-
-metal::float4 core_color(
-    VertexOut in_10
-) {
-    float _e3 = taper_at(in_10, in_10.local.y);
-    if (_e3 <= 0.0) {
-        return metal::float4(0.0);
-    }
-    float _e9 = box_distance(in_10);
-    float _e11 = inside(in_10, _e9, 0.0);
-    float _e13 = lead_coverage(in_10);
-    float _e16 = along(in_10, in_10.fade);
-    return ((in_10.core * _e11) * _e13) * _e16;
-}
-
-struct fs_core_gammaInput {
+struct fs_body_holdoutInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -283,6 +262,7 @@ struct fs_core_gammaInput {
     metal::float4 lead [[user(loc4), flat]];
     metal::float4 taper_depth [[user(loc5), flat]];
     metal::float4 taper [[user(loc6), flat]];
+    metal::float2 tremolo [[user(loc7), flat]];
     metal::float4 core [[user(loc8), flat]];
     metal::float4 outline [[user(loc9), flat]];
     metal::float2 at [[user(loc10), center_perspective]];
@@ -291,14 +271,20 @@ struct fs_core_gammaInput {
     metal::float2 ramp [[user(loc13), flat]];
     metal::float2 fade [[user(loc14), flat]];
 };
-struct fs_core_gammaOutput {
+struct fs_body_holdoutOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_core_gammaOutput fs_core_gamma(
-  fs_core_gammaInput varyings [[stage_in]]
+fragment fs_body_holdoutOutput fs_body_holdout(
+  fs_body_holdoutInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
-    metal::float4 _e1 = core_color(in);
-    return fs_core_gammaOutput { _e1 };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
+    float _e3 = taper_at(in, in.local.y);
+    if (_e3 <= 0.0) {
+        return fs_body_holdoutOutput { metal::float4(0.0) };
+    }
+    float _e8 = box_distance(in);
+    float _e10 = inside(in, _e8, 0.0);
+    float _e11 = lead_coverage(in);
+    return fs_body_holdoutOutput { metal::float4(_e10 * _e11, 0.0, 0.0, 1.0) };
 }

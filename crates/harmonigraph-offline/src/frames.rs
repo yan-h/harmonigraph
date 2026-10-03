@@ -424,6 +424,119 @@ mod tests {
         }
     }
 
+    #[test]
+    fn roll_density_retains_pixel_gaps_and_a_continuous_textured_body() {
+        use harmonigraph_core::{NoteEvent, NoteEventKind, SourceId};
+        use harmonigraph_ui::{Pane, SpectralOrientation};
+        for ppp in [1.0, 2.0] {
+            let size = [(960.0 * ppp) as u32, (320.0 * ppp) as u32];
+            let Some(mut sheet) = ProbeSheet::new(size, ppp) else { return };
+            sheet.placements = single_pane(Pane::Spectral).resolve(egui::vec2(960.0, 320.0));
+            for span in [4.0, 20.0, 80.0] {
+                let mut state = PictureState::new(FORMAT);
+                state.set_background((24, 25, 29));
+                let cfg = &mut state.appearance.spectrum;
+                cfg.orientation = SpectralOrientation::Left;
+                cfg.show_roll = true;
+                cfg.show_spectrogram = false;
+                cfg.roll_fraction = 1.0;
+                cfg.roll_seconds = span;
+                cfg.roll_lead = 0.0;
+                cfg.low_midi = 55.0;
+                cfg.high_midi = 79.0;
+                cfg.roll_thickness = 0.45;
+                cfg.note_names = false;
+                // Three performances ending at the same time: long notes with
+                // tiny rests, tiny taps, and a much faster repeated-note run.
+                for (note, period, duration) in
+                    [(60, 0.12, 0.119), (64, 0.12, 0.006), (68, 0.025, 0.012)]
+                {
+                    let count = (12.0 / period) as usize;
+                    for i in 0..count {
+                        let start = 1.0 + i as f64 * period;
+                        state.runtime.tracker.handle_event(NoteEvent::on(
+                            start,
+                            SourceId::DIRECT,
+                            0,
+                            note,
+                            1.0,
+                        ));
+                        // Onset tuning must not leave a short line below the
+                        // first padded note of the dense run.
+                        if note == 68 {
+                            state.runtime.tracker.handle_event(NoteEvent {
+                                source: SourceId::DIRECT,
+                                time: start,
+                                channel: 0,
+                                note,
+                                kind: NoteEventKind::Tuning { semitones: 0.3 },
+                            });
+                        }
+                        state.runtime.tracker.handle_event(NoteEvent::off(
+                            start + duration,
+                            SourceId::DIRECT,
+                            0,
+                            note,
+                        ));
+                    }
+                }
+                // A sustained note is the plain-fill reference.
+                state.runtime.tracker.handle_event(NoteEvent::on(
+                    1.0,
+                    SourceId::DIRECT,
+                    0,
+                    71,
+                    1.0,
+                ));
+                state.runtime.tracker.handle_event(NoteEvent::off(13.0, SourceId::DIRECT, 0, 71));
+                let bytes = sheet.frame(&mut state, 13.2);
+                if std::env::var_os("HARMONIGRAPH_ROLL_EVIDENCE").is_some() {
+                    sheet.save(&bytes, &format!("roll-density-{span}-{ppp}x"));
+                }
+                let range = |note: u8| {
+                    let tuning = if note == 68 { 0.3 } else { 0.0 };
+                    let y =
+                        ((320.0 - (f32::from(note - 55) + tuning) * 320.0 / 24.0) * ppp) as usize;
+                    // Leave room for the bloom to fall off at either end.
+                    let from = (20.0f32.max(0.2 / span * 960.0 + 12.0) * ppp) as usize;
+                    let to = (900.0f32.min(12.2 / span * 960.0 - 12.0) * ppp) as usize;
+                    let values: Vec<_> = (from..to)
+                        .map(|x| {
+                            let i = (y * size[0] as usize + x) * 4;
+                            // Bloom can saturate one channel while the inset
+                            // mark remains visible in the other two.
+                            (bytes[i..i + 3].iter().map(|&v| u16::from(v)).sum::<u16>() / 3) as u8
+                        })
+                        .collect();
+                    (*values.iter().min().unwrap(), *values.iter().max().unwrap())
+                };
+                let (plain_min, plain_max) = range(71);
+                assert!(
+                    plain_min >= plain_max.saturating_sub(2),
+                    "sustain acquired texture at {span}s/{ppp}x: {plain_min}/{plain_max}"
+                );
+                if span <= 20.0 {
+                    let (gap, body) = range(60);
+                    assert!(
+                        f32::from(gap) < f32::from(body) * 0.4,
+                        "tiny rests lost their visible cuts at {span}s/{ppp}x: {gap}/{body}"
+                    );
+                }
+                if span >= 20.0 {
+                    let (dark, light) = range(68);
+                    assert!(
+                        f32::from(dark) > f32::from(light) * 0.3,
+                        "tremolo marks erased the dense fill at {span}s/{ppp}x: {dark}/{light}"
+                    );
+                    assert!(
+                        light.saturating_sub(dark) >= 60,
+                        "dense ribbon lost its texture at {span}s/{ppp}x: {dark}/{light}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Which of the ring's readings a shot is of: none of them (the MIDI
     /// picture alone), the raw spectrum at a given Range, the fold, or the fold
     /// at a stated Gate — how loud a node's loudest wedge must read for that

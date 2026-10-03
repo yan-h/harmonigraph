@@ -14,6 +14,8 @@ struct VertexOut {
     metal::float4 lead;
     metal::float4 taper_depth;
     metal::float4 taper;
+    metal::float2 tremolo;
+    char _pad9[8];
     metal::float4 core;
     metal::float4 outline;
     metal::float2 at;
@@ -252,7 +254,67 @@ float lead_coverage(
     return metal::mix(_e35, 1.0, note);
 }
 
-struct fs_body_holdoutInput {
+float along(
+    VertexOut in_9,
+    metal::float2 ends
+) {
+    float run = in_9.ramp.y - in_9.ramp.x;
+    float t_1 = (metal::abs(run) > 0.000001) ? metal::clamp((in_9.local.y - in_9.ramp.x) / run, 0.0, 1.0) : 0.0;
+    return metal::mix(ends.x, ends.y, t_1);
+}
+
+float tremolo_tone(
+    VertexOut in_10
+) {
+    bool local_3 = {};
+    float scale = in_10.tremolo.y;
+    if (!((scale <= 0.0))) {
+        local_3 = in_10.local.y < (-(in_10.half_extent.y) + in_10.lead.x);
+    } else {
+        local_3 = true;
+    }
+    bool _e18 = local_3;
+    if (_e18) {
+        return 1.0;
+    }
+    float x = (in_10.local.x - (in_10.shear * in_10.local.y)) / scale;
+    float _e32 = taper_at(in_10, in_10.local.y);
+    float half_width = (in_10.half_extent.x * _e32) / scale;
+    float reach = metal::min(4.0, half_width * 0.6666667);
+    float diagonal = (in_10.tremolo.x - (in_10.local.y / scale)) - (0.7 * x);
+    float stroke_distance = (metal::fract((diagonal / 6.0) + 0.5) - 0.5) * 6.0;
+    float distance = metal::max(metal::abs(x) - reach, (metal::abs(stroke_distance) / 1.220656) - 0.75);
+    float _e67 = inside(in_10, distance * scale, 0.0);
+    float inset = metal::clamp((half_width - metal::abs(x)) / metal::max(half_width * 0.5, 0.000001), 0.0, 1.0);
+    return 1.0 - ((0.75 * _e67) * inset);
+}
+
+metal::float4 core_color(
+    VertexOut in_11
+) {
+    float _e3 = taper_at(in_11, in_11.local.y);
+    if (_e3 <= 0.0) {
+        return metal::float4(0.0);
+    }
+    float _e10 = tremolo_tone(in_11);
+    metal::float4 color = metal::float4(in_11.core.xyz * _e10, in_11.core.w);
+    float _e15 = box_distance(in_11);
+    float _e17 = inside(in_11, _e15, 0.0);
+    float _e19 = lead_coverage(in_11);
+    float _e22 = along(in_11, in_11.fade);
+    return ((color * _e17) * _e19) * _e22;
+}
+
+metal::float3 linear_from_gamma_rgb(
+    metal::float3 srgb
+) {
+    metal::bool3 cutoff = srgb < metal::float3(0.04045);
+    metal::float3 lower = srgb / metal::float3(12.92);
+    metal::float3 higher = metal::pow((srgb + metal::float3(0.055)) / metal::float3(1.055), metal::float3(2.4));
+    return metal::select(higher, lower, cutoff);
+}
+
+struct fs_core_linearInput {
     metal::float2 local [[user(loc0), center_perspective]];
     metal::float2 half_extent [[user(loc1), flat]];
     float shear [[user(loc2), flat]];
@@ -260,6 +322,7 @@ struct fs_body_holdoutInput {
     metal::float4 lead [[user(loc4), flat]];
     metal::float4 taper_depth [[user(loc5), flat]];
     metal::float4 taper [[user(loc6), flat]];
+    metal::float2 tremolo [[user(loc7), flat]];
     metal::float4 core [[user(loc8), flat]];
     metal::float4 outline [[user(loc9), flat]];
     metal::float2 at [[user(loc10), center_perspective]];
@@ -268,20 +331,15 @@ struct fs_body_holdoutInput {
     metal::float2 ramp [[user(loc13), flat]];
     metal::float2 fade [[user(loc14), flat]];
 };
-struct fs_body_holdoutOutput {
+struct fs_core_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_body_holdoutOutput fs_body_holdout(
-  fs_body_holdoutInput varyings [[stage_in]]
+fragment fs_core_linearOutput fs_core_linear(
+  fs_core_linearInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
-    float _e3 = taper_at(in, in.local.y);
-    if (_e3 <= 0.0) {
-        return fs_body_holdoutOutput { metal::float4(0.0) };
-    }
-    float _e8 = box_distance(in);
-    float _e10 = inside(in, _e8, 0.0);
-    float _e11 = lead_coverage(in);
-    return fs_body_holdoutOutput { metal::float4(_e10 * _e11, 0.0, 0.0, 1.0) };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
+    metal::float4 _e1 = core_color(in);
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_core_linearOutput { metal::float4(_e3, _e1.w) };
 }
