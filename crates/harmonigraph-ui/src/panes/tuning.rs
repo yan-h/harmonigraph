@@ -11,12 +11,14 @@
 
 use super::learn_pulse;
 use super::param_bar;
+use super::spectral::roll::note_color;
 use super::{section, subsection};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
 use harmonigraph_core::configuration::{ConfigEdit, PolicyEdit};
 use harmonigraph_core::tuning;
+use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[path = "tuning_instances_tests.rs"]
@@ -323,7 +325,7 @@ pub(super) fn tuning_pane(
     if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
         adaptive_controls(ui, state, params);
     }
-    instance_section(ui, params);
+    instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
     if !configuration_notice && state.runtime.configuration_pending {
         crate::widgets::weak(ui, "Tuning change pending audio adoption");
@@ -465,81 +467,206 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     });
 }
 
-fn instance_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
+fn instance_section(ui: &mut egui::Ui, state: &PictureState, params: &dyn ParamBackend) {
     let instances = params.tuning_instances();
     if !instances.is_empty() {
-        section(ui, "Instances", |ui| instance_controls(ui, params, &instances));
+        section(ui, "Tuning sources", |ui| instance_controls(ui, state, params, &instances));
+    }
+}
+
+/// UI-only levels, keyed by MIDI channel/key rather than pitch or packed-list
+/// position, so bends and another voice ending cannot restart a dot's fade.
+#[derive(Clone, Default)]
+struct SourceDots {
+    at: Option<f64>,
+    dots: BTreeMap<u16, VoiceDot>,
+}
+
+#[derive(Clone, Copy)]
+struct VoiceDot {
+    pitch: f32,
+    level: f32,
+}
+
+impl SourceDots {
+    fn step(
+        &mut self,
+        voices: &[crate::params::TuningVoice],
+        now: f64,
+        env: &harmonigraph_core::Envelope,
+    ) -> bool {
+        let dt = self.at.map_or(0.0, |at| (now - at).max(0.0));
+        self.at = Some(now);
+        for voice in voices {
+            self.dots
+                .entry(voice.key)
+                .or_insert(VoiceDot { pitch: voice.pitch, level: 0.0 })
+                .pitch = voice.pitch;
+        }
+        let mut animating = false;
+        self.dots.retain(|key, dot| {
+            let held = voices.iter().any(|voice| voice.key == *key);
+            dot.level = env.carried(dot.level, dt, held);
+            animating |= dot.level != if held { 1.0 } else { 0.0 };
+            held || dot.level > 0.0
+        });
+        animating
+    }
+}
+
+/// A single, fixed-height strip; overflowing voices replace its last dot with an ellipsis.
+fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], state: &PictureState) {
+    let scale = theme::ui_scale(ui.ctx());
+    let inner = rect.shrink2(egui::vec2(4.0 * scale, 0.0));
+    let pitch = 5.0 * scale;
+    let capacity = (inner.width().max(0.0) / pitch).floor();
+    if capacity == 0.0 {
+        return;
+    }
+    // Capacity follows animated width, not voice count. Otherwise pruning a
+    // zero-width tail can promote a fully bright hidden voice in one frame.
+    let total = voices.iter().map(|dot| dot.level).sum::<f32>();
+    let overflow_level = (total - capacity).clamp(0.0, 1.0);
+    let mut remaining = capacity - overflow_level;
+    let visible: Vec<_> = voices
+        .iter()
+        .filter_map(|dot| {
+            let level = dot.level.min(remaining);
+            remaining -= level;
+            (level > 0.0).then_some(VoiceDot { level, ..*dot })
+        })
+        .collect();
+    // Center the painted group, easing the wider ellipsis in with its opacity.
+    let last_radius = (1.25 + 1.05 * overflow_level) * scale;
+    let first_radius = if capacity == 1.0 { last_radius } else { 1.25 * scale };
+    let width = (visible.iter().map(|dot| dot.level).sum::<f32>() + overflow_level) * pitch;
+    let mut x = rect.center().x - (width + last_radius - first_radius) * 0.5;
+    for dot in visible {
+        let width = dot.level * pitch;
+        ui.painter().circle_filled(
+            egui::pos2(x + width * 0.5, rect.center().y),
+            1.25 * scale,
+            note_color(state, dot.pitch, dot.level),
+        );
+        x += width;
+    }
+    if overflow_level > 0.0 {
+        let center = egui::pos2(x + overflow_level * pitch * 0.5, rect.center().y);
+        for offset in [-1.7, 0.0, 1.7] {
+            ui.painter().circle_filled(
+                center + egui::vec2(offset * scale, 0.0),
+                0.6 * scale,
+                ui.visuals().weak_text_color().gamma_multiply(overflow_level),
+            );
+        }
     }
 }
 
 fn instance_controls(
     ui: &mut egui::Ui,
+    state: &PictureState,
     params: &dyn ParamBackend,
     instances: &[crate::params::TuningInstance],
 ) {
     use crate::params::InstanceEdit;
-    ui.horizontal_wrapped(|ui| {
-        // Wrap whole controls; a label split into the last few points of a row
-        // can still leave its checkbox icon outside the column.
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-        for (label, retune) in [("Retune all", true), ("Show all", false)] {
-            let enabled =
-                instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
-            let mut all = enabled == instances.len();
-            let mixed = enabled != 0 && !all;
-            if ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed)).clicked() {
-                let value = enabled != instances.len();
-                for row in instances {
-                    params.edit_tuning_instance(
-                        row.id,
-                        if retune {
-                            InstanceEdit::Retune(value)
-                        } else {
-                            InstanceEdit::Show(value)
-                        },
-                    );
-                }
+    let scale = theme::ui_scale(ui.ctx());
+    let compact = ui.available_width() < 220.0 * scale;
+    let bulk_control = |ui: &mut egui::Ui, label: &str, retune: bool| {
+        let enabled =
+            instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
+        let mut all = enabled == instances.len();
+        let mixed = enabled != 0 && !all;
+        let response = if compact {
+            // A direct widget can wrap as a whole in the stacked layout.
+            ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed))
+        } else {
+            crate::widgets::checkbox_indeterminate(ui, &mut all, label, mixed)
+        };
+        if response
+            .on_hover_text(if retune { "Retune all sources" } else { "Show all sources" })
+            .clicked()
+        {
+            let value = enabled != instances.len();
+            for row in instances {
+                params.edit_tuning_instance(
+                    row.id,
+                    if retune { InstanceEdit::Retune(value) } else { InstanceEdit::Show(value) },
+                );
             }
         }
-    });
+    };
     let selection = ui.id().with("tuning-instance-selection");
     let mut selected = ui.data(|data| data.get_temp::<u64>(selection)).unwrap_or(instances[0].id);
     if !instances.iter().any(|row| row.id == selected) {
         selected = instances[0].id;
     }
-    let compact = ui.available_width() < 160.0 * theme::ui_scale(ui.ctx());
-    let name_width =
-        if compact { ui.available_width() } else { (ui.available_width() - 120.0).max(45.0) };
+    let name_width = if compact {
+        ui.available_width()
+    } else {
+        (ui.available_width() - 140.0 * scale).max(60.0 * scale)
+    };
+    let animation_id = selection.with("voice-dots");
+    let mut sources = ui
+        .data(|data| data.get_temp::<BTreeMap<u64, SourceDots>>(animation_id))
+        .unwrap_or_default();
+    sources.retain(|id, _| instances.iter().any(|row| row.id == *id));
+    let now = ui.input(|input| input.time);
+    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    for row in instances {
+        if sources.entry(row.id).or_default().step(&row.voices, now, &env) {
+            ui.ctx().request_repaint();
+        }
+    }
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
-        ui.vertical(|ui| {
-            ui.set_width(name_width);
-            let name = if row.name.is_empty() {
-                if row.is_hub {
-                    "Harmonigraph input".to_owned()
-                } else {
-                    format!("Tune {}", row.id)
-                }
-            } else {
-                row.name.clone()
-            };
-            if ui.add(egui::Button::selectable(selected == row.id, name).truncate()).clicked() {
-                selected = row.id;
-            }
-            let status = if row.misses != 0 {
-                format!("{} held · {} missed", row.held, row.misses)
-            } else {
-                format!("{} held · {} out", row.held, row.notes_out)
-            };
-            crate::widgets::label(ui, egui::RichText::new(status).small())
-                .on_hover_text(&row.status);
-            if row.status != "No faults" {
-                crate::widgets::label(
-                    ui,
-                    egui::RichText::new("Check status").small().color(theme::armed()),
-                )
-                .on_hover_text(&row.status);
-            }
+        let name = egui::RichText::new(&row.display_name);
+        let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
+        let galley = egui::WidgetText::from(name).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (name_width - 2.0 * ui.spacing().button_padding.x).max(0.0),
+            egui::TextStyle::Button,
+        );
+        let ink = if galley.mesh_bounds.is_finite() {
+            galley.mesh_bounds
+        } else {
+            egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
+        };
+        // Visible geometry: 3px top + text ink + 2px gap + 2.5px dots + 3px bottom.
+        let response = ui.add_sized(
+            [name_width, ink.height() + 10.5 * scale],
+            egui::Button::selectable(selected == row.id, ()).small(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                selected == row.id,
+                &row.display_name,
+            )
         });
+        if response.clicked() {
+            selected = row.id;
+        }
+        let ink_top = response.rect.top() + 3.0 * scale;
+        let text_pos =
+            egui::pos2(response.rect.center().x - galley.size().x * 0.5, ink_top - ink.top());
+        ui.painter().galley(
+            text_pos,
+            galley,
+            ui.style().interact_selectable(&response, selected == row.id).text_color(),
+        );
+        let dots = egui::Rect::from_min_size(
+            egui::pos2(response.rect.left(), ink_top + ink.height() + 1.25 * scale),
+            egui::vec2(response.rect.width(), 4.0 * scale),
+        );
+        let voices: Vec<_> = sources[&row.id].dots.values().copied().collect();
+        instance_voice_dots(ui, dots, &voices, state);
+        let held = row.voices.len();
+        response.on_hover_text(format!(
+            "{held} sounding {}\n{}",
+            if held == 1 { "voice" } else { "voices" },
+            row.status,
+        ));
     };
     let flags = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let mut retune = row.retune;
@@ -558,6 +685,11 @@ fn instance_controls(
         }
     };
     if compact {
+        ui.horizontal_wrapped(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            bulk_control(ui, "Retune all", true);
+            bulk_control(ui, "Show all", false);
+        });
         for row in instances {
             ui.push_id(row.id, |ui| {
                 identity(ui, row);
@@ -565,29 +697,37 @@ fn instance_controls(
             });
         }
     } else {
-        egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
-            crate::widgets::weak(ui, "Instance");
-            crate::widgets::weak(ui, "Retune");
-            crate::widgets::weak(ui, "Show");
-            ui.end_row();
-            for row in instances {
-                ui.push_id(row.id, |ui| identity(ui, row));
-                flags(ui, row);
+        egui::Grid::new("tuning-instances")
+            .num_columns(3)
+            .min_row_height(0.0)
+            .spacing(ui.spacing().item_spacing)
+            .show(ui, |ui| {
+                crate::widgets::weak(ui, "Source");
+                bulk_control(ui, "Retune", true);
+                bulk_control(ui, "Show", false);
                 ui.end_row();
-            }
-        });
+                for row in instances {
+                    ui.push_id(row.id, |ui| identity(ui, row));
+                    flags(ui, row);
+                    ui.end_row();
+                }
+            });
     }
-    ui.data_mut(|data| data.insert_temp(selection, selected));
+    ui.data_mut(|data| {
+        data.insert_temp(selection, selected);
+        data.insert_temp(animation_id, sources);
+    });
     if let Some(row) = instances.iter().find(|row| row.id == selected) {
         ui.push_id(row.id, |ui| {
-            subsection(ui, "Instance details", |ui| {
+            subsection(ui, "Source details", |ui| {
                 let mut name = row.name.clone();
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut name)
-                            .hint_text("Instance name")
+                            .hint_text(&row.display_name)
                             .desired_width(ui.available_width()),
                     )
+                    .on_hover_text("Custom name; leave empty to follow the track name")
                     .changed()
                 {
                     params.edit_tuning_instance(row.id, InstanceEdit::Name(name));
@@ -666,7 +806,7 @@ fn instance_controls(
             ui.data_mut(|data| data.insert_temp(id, delay));
             crate::widgets::weak(
                 ui,
-                "Each tuner reports its own latency. Individual overrides are in Instance details.",
+                "Each tuner reports its own latency. Individual overrides are in Source details.",
             );
             crate::widgets::weak(ui, "Harmonigraph's own input stays at one buffer.");
         });

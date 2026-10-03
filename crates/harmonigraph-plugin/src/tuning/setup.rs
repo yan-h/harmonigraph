@@ -60,7 +60,12 @@ pub struct Shared {
     retune: AtomicU64,
     pub show: AtomicBool,
     pub name: Mutex<String>,
+    track_name: Mutex<String>,
     pub held: AtomicU64,
+    /// Cosmetic voices: channel * 128 + key in the upper word, f32 MIDI pitch
+    /// bits in the lower word; MAX is empty. Identity and pitch are atomic
+    /// together. Readers can span callbacks without blocking the audio owner.
+    pub voices: [AtomicU64; super::HELD_PER_SOURCE],
     pub notes_in: AtomicU64,
     pub notes_out: AtomicU64,
     pub last_input: AtomicI64,
@@ -101,7 +106,9 @@ impl Shared {
             retune: AtomicU64::new(u64::from(!hub)),
             show: AtomicBool::new(true),
             name: Mutex::new(String::new()),
+            track_name: Mutex::new(String::new()),
             held: AtomicU64::new(0),
+            voices: std::array::from_fn(|_| AtomicU64::new(u64::MAX)),
             notes_in: AtomicU64::new(0),
             notes_out: AtomicU64::new(0),
             last_input: AtomicI64::new(i64::MIN),
@@ -155,6 +162,10 @@ impl Shared {
         let name = self.name.lock().unwrap();
         if !name.is_empty() {
             return name.clone();
+        }
+        let track_name = self.track_name.lock().unwrap();
+        if !track_name.is_empty() {
+            return track_name.clone();
         }
         if self.hub {
             "Harmonigraph input".to_owned()
@@ -237,6 +248,9 @@ impl Prepared for Restore {
 }
 
 impl Setup for Adapter {
+    fn track_name_changed(&self, name: Option<&str>) {
+        *self.0.track_name.lock().unwrap() = name.unwrap_or_default().to_owned();
+    }
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str> {
         let settings = match state.fields.get("tuning-instance") {
             Some(json) => serde_json::from_str(json).map_err(|error| {

@@ -188,3 +188,105 @@ fn instance_settings_restore_independently_and_default_missing_fields() {
     setup::Adapter(restored.clone(), None).prepare(&state).unwrap().commit();
     assert_eq!(restored.retuning() & 1, 0, "the Hub's own input starts with Retune off");
 }
+
+#[test]
+fn track_names_follow_the_host_until_overridden() {
+    let _scope = crate::test_scope::enter();
+    for tuner in [false, true] {
+        for compat in [false, true] {
+            let device = Device::with_host(
+                tuner,
+                Host {
+                    track_info: true,
+                    track_info_compat: compat,
+                    track_name: std::sync::Mutex::new(Some("Bäss".to_owned())),
+                    ..Default::default()
+                },
+            );
+            let snapshot = || instances::snapshots().into_iter().next().unwrap();
+            let row = snapshot();
+            assert_eq!(row.display_name, "Bäss", "init reads the host before any editor opens");
+            assert!(row.name.is_empty(), "automatic names are not saved overrides");
+            let extension = unsafe {
+                &*((*device.plugin).get_extension.unwrap()(
+                    device.plugin,
+                    if compat { CLAP_EXT_TRACK_INFO_COMPAT } else { CLAP_EXT_TRACK_INFO }.as_ptr(),
+                )
+                .cast::<clap_plugin_track_info>())
+            };
+            let rename = |name: Option<&str>| {
+                *device._stats.track_name.lock().unwrap() = name.map(str::to_owned);
+                unsafe {
+                    extension.changed.unwrap()(device.plugin);
+                }
+            };
+            rename(Some("Lead"));
+            assert_eq!(snapshot().display_name, "Lead");
+            instances::edit(row.id, harmonigraph_ui::params::InstanceEdit::Name("Solo".to_owned()));
+            rename(Some("Keys"));
+            assert_eq!(snapshot().display_name, "Solo");
+            instances::edit(row.id, harmonigraph_ui::params::InstanceEdit::Name(String::new()));
+            assert_eq!(snapshot().display_name, "Keys");
+            let fallback =
+                if tuner { format!("Tune {}", row.id) } else { "Harmonigraph input".to_owned() };
+            rename(None);
+            assert_eq!(
+                snapshot().display_name,
+                fallback,
+                "unavailable metadata clears the old track name"
+            );
+            rename(Some(""));
+            assert_eq!(snapshot().display_name, fallback);
+        }
+        let _device = Device::new(tuner);
+        let row = instances::snapshots().remove(0);
+        assert_eq!(
+            row.display_name,
+            if tuner { format!("Tune {}", row.id) } else { "Harmonigraph input".to_owned() }
+        );
+    }
+}
+
+#[test]
+fn live_note_count_clears_when_the_host_stops_callbacks() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.step(vec![note(1, 0, 60, 0, true)]);
+    pair.idle();
+    let count = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().voices.len();
+    assert_eq!(count(), 1, "the note has reached the output");
+    pair.tune.deactivate();
+    assert_eq!(count(), 0, "the display clears without another process callback");
+}
+
+#[test]
+fn source_dot_pitches_follow_emitted_tuning_bend_and_releases_even_when_hidden() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.tune.shared().set_show(false);
+    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
+    pair.idle();
+    let voices = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().voices;
+    let pitches = || voices().iter().map(|voice| voice.pitch).collect::<Vec<_>>();
+    let keys = || voices().iter().map(|voice| voice.key).collect::<Vec<_>>();
+    assert_eq!(keys(), vec![60, 64]);
+    let expected: Vec<_> = [60, 64]
+        .into_iter()
+        .map(|key| {
+            inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, key).unwrap().pitch_microcents) as f32
+                / 100_000_000.0
+        })
+        .collect();
+    assert_eq!(pitches(), expected, "dots include the correction emitted with each attack");
+    pair.step(vec![expression(2, 0.5, 0), raw_midi([0xe0, 0, 96], 1)]);
+    pair.idle();
+    let bent = pitches();
+    assert_eq!(keys(), vec![60, 64], "bends preserve dot identities");
+    assert!((bent[0] - expected[0] - 1.0).abs() < 0.0001);
+    assert!((bent[1] - expected[1] - 1.5).abs() < 0.0001);
+    pair.step(vec![note(1, 0, 60, 0, false)]);
+    pair.idle();
+    assert_eq!(pitches(), vec![bent[1]]);
+    pair.tune.deactivate();
+    assert!(pitches().is_empty());
+}

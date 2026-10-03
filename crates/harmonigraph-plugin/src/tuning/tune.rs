@@ -50,6 +50,8 @@ struct Voice {
     channel: u8,
     key: u8,
     correction: i64,
+    /// Per-note tuning actually accepted by the host, in microcents.
+    tuning: i64,
 }
 
 /// How this Tune reaches the Hub. A paired Tune owns one row's ring pair; the
@@ -80,6 +82,7 @@ pub struct Tune {
     /// first output position the next callback offers.
     cut: Queue<Event, CUT_EVENTS>,
     held: [Option<Voice>; HELD_PER_SOURCE],
+    channel_pitch: [harmonigraph_core::policy::channel::ChannelPitch; 16],
     /// Per channel, which of [`PEDALS`] is currently down.
     pedals: [u8; 16],
     status: u32,
@@ -124,6 +127,7 @@ impl Tune {
             line: Queue::default(),
             cut: Queue::default(),
             held: [None; HELD_PER_SOURCE],
+            channel_pitch: [Default::default(); 16],
             pedals: [0; 16],
             status: 0,
             cursor: 0,
@@ -294,6 +298,9 @@ impl Tune {
     /// of the voices this ends.
     pub fn stop(&mut self) {
         self.take_cut(session::session().cut());
+        // The host may stop callbacks here, so end() cannot publish this count.
+        self.shared.held.store(0, Ordering::Relaxed);
+        self.publish_voices();
     }
 
     pub fn begin(&mut self, callback: api::Callback) {
@@ -593,14 +600,19 @@ impl Tune {
         // rather than the note. Losing both would be the one thing this design
         // exists to stop, and re-emitting the note to recover the pair would
         // sound it twice.
+        let mut accepted_tuning = None;
         if let Some(tuning) = tuning {
             if tuning.emittable() && output.push(tuning.input(), time) {
                 self.emitted += 1;
+                accepted_tuning = Some(tuning);
             } else {
                 self.status |= session::DROPPED;
             }
         }
         self.track(event, correction);
+        if let Some(tuning) = accepted_tuning {
+            Self::track_voice(&mut self.held, tuning, correction);
+        }
         true
     }
 
@@ -614,6 +626,7 @@ impl Tune {
         }
         if let Event::Midi { port: 0, data, .. } = event {
             let channel = data[0] & 15;
+            self.channel_pitch[usize::from(channel)].apply(data);
             if data[0] & 0xf0 == 0xb0 {
                 if let Some(bit) = PEDALS.iter().position(|cc| *cc == data[1]) {
                     let mask = 1 << bit;
@@ -640,11 +653,20 @@ impl Tune {
                 .position(|held| held.is_some_and(|v| v.channel == channel && v.key == key))
                 .or_else(|| held.iter().position(Option::is_none));
             if let Some(cell) = cell {
-                held[cell] = Some(Voice { id, channel, key, correction });
+                held[cell] = Some(Voice { id, channel, key, correction, tuning: 0 });
             } else {
                 return false;
             }
             return true;
+        }
+        if let Event::Expression { kind: 2, value, .. } = event {
+            for voice in held
+                .iter_mut()
+                .flatten()
+                .filter(|voice| event.matches(voice.id, voice.channel, voice.key))
+            {
+                voice.tuning = (value * 100_000_000.0).round() as i64;
+            }
         }
         if event.release() {
             if let Some(cell) = held.iter_mut().find(|cell| {
@@ -666,6 +688,24 @@ impl Tune {
         true
     }
 
+    fn publish_voices(&self) {
+        for (voice, slot) in self.held.iter().zip(&self.shared.voices) {
+            slot.store(
+                voice.map_or(u64::MAX, |voice| {
+                    let microcents = (i64::from(voice.key) * 100_000_000)
+                        .saturating_add(voice.tuning)
+                        .saturating_add(
+                            self.channel_pitch[usize::from(voice.channel)].microcents(),
+                        );
+                    let pitch = microcents as f32 / 100_000_000.0;
+                    let key = u64::from(voice.channel) * 128 + u64::from(voice.key);
+                    (key << 32) | u64::from(pitch.to_bits())
+                }),
+                Ordering::Relaxed,
+            );
+        }
+    }
+
     /// Finish this callback and report whether its diagnostics were published.
     pub fn end(&mut self) -> bool {
         if let Link::Row(attached) = &self.link {
@@ -673,6 +713,7 @@ impl Tune {
         }
         if let Some(callback) = self.callback.take() {
             self.shared.held.store(self.held() as u64, Ordering::Relaxed);
+            self.publish_voices();
             self.shared.notes_in.store(self.notes_in, Ordering::Relaxed);
             self.shared.notes_out.store(self.notes_out, Ordering::Relaxed);
             self.shared.status.store(self.status, Ordering::Release);

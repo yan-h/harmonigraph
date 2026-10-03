@@ -80,6 +80,9 @@ mod configuration_adapter;
 mod input_adapter;
 #[path = "performance_adapter.rs"]
 mod performance_adapter;
+#[path = "track_info_adapter.rs"]
+mod track_info_adapter;
+use clap_sys::ext::track_info::{clap_plugin_track_info, CLAP_EXT_TRACK_INFO, CLAP_EXT_TRACK_INFO_COMPAT};
 use super::performance;
 use std::any::Any;
 use std::borrow::Borrow;
@@ -221,6 +224,7 @@ pub struct Wrapper<P: ClapPlugin> {
     clap_plugin_latency: clap_plugin_latency,
     host_latency: AtomicRefCell<Option<ClapPtr<clap_host_latency>>>,
 
+    clap_plugin_track_info: clap_plugin_track_info,
     clap_plugin_note_ports: clap_plugin_note_ports,
 
     clap_plugin_params: clap_plugin_params,
@@ -772,6 +776,9 @@ impl<P: ClapPlugin> Wrapper<P> {
             },
             host_latency: AtomicRefCell::new(None),
 
+            clap_plugin_track_info: clap_plugin_track_info {
+                changed: Some(Self::ext_track_info_changed),
+            },
             clap_plugin_note_ports: clap_plugin_note_ports {
                 count: Some(Self::ext_note_ports_count),
                 get: Some(Self::ext_note_ports_get),
@@ -2090,6 +2097,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             );
         }
 
+        wrapper.refresh_track_name();
         !P::CLAP_PERFORMANCE || wrapper.plugin.lock().clap_main_init()
     }
 
@@ -2630,6 +2638,10 @@ impl<P: ClapPlugin> Wrapper<P> {
             && (P::MIDI_INPUT >= MidiConfig::Basic || P::MIDI_OUTPUT >= MidiConfig::Basic)
         {
             &wrapper.clap_plugin_note_ports as *const _ as *const c_void
+        } else if (id == CLAP_EXT_TRACK_INFO || id == CLAP_EXT_TRACK_INFO_COMPAT)
+            && wrapper.setup.is_some()
+        {
+            &wrapper.clap_plugin_track_info as *const _ as *const c_void
         } else if id == CLAP_EXT_PARAMS {
             &wrapper.clap_plugin_params as *const _ as *const c_void
         } else if id == CLAP_EXT_REMOTE_CONTROLS {

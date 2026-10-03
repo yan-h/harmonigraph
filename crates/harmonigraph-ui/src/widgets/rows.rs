@@ -29,13 +29,23 @@ const CHECKBOX_CHECK: f32 = 9.0;
 /// bookkeeping. A checkbox in a `Grid` beside full-height controls takes its
 /// row's height from them as before.
 pub fn checkbox(ui: &mut Ui, checked: &mut bool, label: impl Into<egui::WidgetText>) -> Response {
+    checkbox_indeterminate(ui, checked, label, false)
+}
+
+/// The same checkbox with a mixed state for a group of independent switches.
+pub(crate) fn checkbox_indeterminate(
+    ui: &mut Ui,
+    checked: &mut bool,
+    label: impl Into<egui::WidgetText>,
+    mixed: bool,
+) -> Response {
     let scale = theme::ui_scale(ui.ctx());
     ui.scope(|ui| {
         let spacing = ui.spacing_mut();
         spacing.interact_size.y = 0.0;
         spacing.icon_width = CHECKBOX_BOX * scale;
         spacing.icon_width_inner = CHECKBOX_CHECK * scale;
-        ui.checkbox(checked, label)
+        ui.add(egui::Checkbox::new(checked, label).indeterminate(mixed))
     })
     .inner
 }

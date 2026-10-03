@@ -192,8 +192,8 @@ D_samples = multiplier × advertised_max_frames
 
 and that number is fixed for the whole activation.
 Each Tune persists its own multiplier as an ordinary plugin parameter and reports the resulting latency from it at activation, before any Hub pairing exists.
-The Hub's **Tuning → Instances → Tuning delay** controls offer **Apply to all tuners** as a convenience.
-Per-instance overrides live in **Instance details**, and each Tune that changes requests its own reactivation.
+The Hub's **Tuning → Tuning sources → Tuning delay** controls offer **Apply to all tuners** as a convenience.
+Per-instance overrides live in **Source details**, and each Tune that changes requests its own reactivation.
 The Hub's own input uses a fixed one-buffer delay.
 
 The editor shows the multiplier, the sample count and the milliseconds together —
@@ -329,11 +329,29 @@ Hidden sources keep updating, and Show restores their retained notes and history
 visibility also travels with the take's canonical baselines for offline replay.
 This does not select individual instruments out of the mixed audio spectrum.
 
-The central instance list in **Tuning → Adaptive tuning** shows held notes, output counts and status.
-Its **Instance details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
-Names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
+The tuning source list in **Tuning → Tuning sources** shows a tiny centered strip of dots beneath each name, one per sounding or fading voice.
+The name and dots share one selectable button.
+Table rows use the same gap as the sliders.
+Each dot uses the same pitch gradient as the note display, including per-note tuning and channel bend, even when Show is off.
+Dots use the lattice's Fade duration and shape, easing their brightness and horizontal spacing instead of blinking on and off.
+Their animation follows source snapshots independently of Show;
+pitch bends update color without restarting a fade, and repeated keys reverse smoothly from their current brightness.
+At the default UI scale, the button leaves 3 pixels above the lettering, 2 pixels between the lettering and dots, and 3 pixels below the dots.
+When more sounding or fading voices appear than fit across the name cell, the last dot becomes an ellipsis;
+hover the name or dots for the exact currently sounding count, excluding visual fade tails.
+The strip stays the same height even at zero voices and never reserves space beside the name.
+The dots track notes held at the Tune's output, rather than cumulative output events;
+instrument release tails are not counted.
+A highlighted name flags a status to inspect in its tooltip or **Source details**.
+Names follow the containing track when the host supplies CLAP track information, including track renames.
+A custom name overrides the track name;
+clear it to follow the track again.
+Without a track name or override, the row uses **Tune N** or **Harmonigraph input**.
+Its **Source details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
+Custom names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
 Retune defaults on for a Tune and off for Harmonigraph's own input.
-**Retune all** and **Show all** independently control all currently loaded instances, including the Hub input.
+The **Retune** and **Show** column-header checkboxes independently control all currently loaded instances, including the Hub input.
+In narrow columns, the stacked layout labels these controls **Retune all** and **Show all**.
 A mixed checkbox enables everyone on its next click;
 an enabled checkbox disables everyone, and individual rows remain adjustable afterward.
 New instances start from their own saved settings or defaults.
@@ -666,7 +684,7 @@ use **Show** independently to include or exclude its notes from the picture.
 If notes are sounding uncorrected —
 and the status does not say there is no Harmonigraph in the process or no free row —
 raise the multiplier and play again.
-The Hub's **Tuning → Instances → Tuning delay** controls can apply one multiplier to every Tune at once;
+The Hub's **Tuning → Tuning sources → Tuning delay** controls can apply one multiplier to every Tune at once;
 each one then requests its own reactivation.
 4. In the Hub's **Tuning** pane, choose the tuning axes and policy-v3 controls for the session.
 Locked 12-TET produces zero adaptive correction;

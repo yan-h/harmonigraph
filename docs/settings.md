@@ -11,7 +11,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 
 | Tab | What you will find |
 | --- | --- |
-| Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected instances. |
+| Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
 | Analyzer | **Spectrogram**: pitch/time softness, level contours, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
@@ -262,7 +262,7 @@ These are three independent tolerances.
 Tuning separates lattice pitch/temperaments,
 note matching,
 output **Note retuning**,
-and connected **Instances**.
+and connected **Tuning sources**.
 **Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies.
 **Tuning** puts the **Meantone** switch beside **Major third** and **Marvel** beside **Harmonic seventh**.
 A linked interval shows its calculated value with a ↔ indicator;
@@ -290,7 +290,7 @@ which holds audition setup, offsets, assignments and map management.
 While auditioning,
 the active-mode notice and **Return to arrangement** stay beside **Saved map**,
 even when **Map editing** is closed.
-**Instances** appears only when connected instances are available.
+**Tuning sources** appears only when connected tuning sources are available.
 Host map-offset parameters explicitly name whole generator steps rather than tuning intervals.
 
 Video keeps **Finish recording** and **Stop at bar** with Record take.
