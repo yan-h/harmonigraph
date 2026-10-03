@@ -2564,8 +2564,8 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     // The same floor the scene draw takes, so a cell holds the ink that draw
     // paints rather than a hair more of it.
     let coverage = select(ink.alpha, 0.0, ink.alpha < INK_FLOOR);
-    // The blur averages red and takes the maximum of green over the same
-    // support. Keep both tied to the visible source, including during release.
+    // The blur averages red and takes a smoothly weighted maximum of green.
+    // Keep both tied to the visible source, including during release.
     return vec4<f32>(coverage, coverage, 0.0, 0.0);
 }
 

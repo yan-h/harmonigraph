@@ -203,9 +203,9 @@ fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
 }
 
 // A node cell already contains each slice's fading opacity. The blur carries
-// its local maximum alongside the weighted coverage, so gain cannot hold a
-// disappearing slice's shadow at full strength. The maximum is local to the
-// same blur support: a held slice elsewhere on the node cannot pin this fade.
+// a smoothly weighted local maximum alongside the coverage, so gain cannot
+// hold a disappearing slice's shadow at full strength. The ceiling decays
+// over the same blur support rather than giving every tap full authority.
 fn node_shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
     let profile = shadow_profile(who, points);
     return min(profile.x, profile.y);

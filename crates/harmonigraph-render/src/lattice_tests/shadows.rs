@@ -2481,3 +2481,54 @@ fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
         }
     }
 }
+
+/// A held slice must not raise a fading neighbor's shadow ceiling where its
+/// own blur contributes almost nothing. This reaches staggered slice motion,
+/// rather than fading every layer of a node together.
+#[test]
+fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    shooter.clear = over_ground();
+    for kernel in [Distance, Gaussian] {
+        for level in [0.75, 0.25, 0.05] {
+            let mut scene = on_ground(0.6, 1.0);
+            scene.view.shadow.lattice_geometry.kernel = kernel;
+            scene.view.shadow.lattice_geometry.spread = 0.8;
+            scene.view.note_animation.radial_start = 0.0;
+            scene.spectral.outer = 0.0;
+            scene.nodes[0].audio_ring = 0.0;
+            scene.nodes[0].melody_level = 0.0;
+            scene.nodes[0].bass_level = 0.0;
+            scene.nodes[0].slice_progress.fill(0.0);
+            scene.nodes[0].slice_progress[0] = level;
+            let fading = shooter.shot(&scene);
+            scene.nodes[0].slice_progress[0] = 0.0;
+            scene.nodes[0].slice_progress[2] = 1.0;
+            let held = shooter.shot(&scene);
+            scene.nodes[0].slice_progress[0] = level;
+            let combined = shooter.shot(&scene);
+            scene.view.shadow.lattice_geometry.depth = 0.0;
+            let bare = shooter.shot(&scene);
+            let mut reached = 0;
+            let mut excess = 0;
+            for (i, pixel) in bare.chunks_exact(4).enumerate() {
+                if pixel[..3] != [204, 204, 204] || held[i * 4] < 203 {
+                    continue;
+                }
+                let i = i * 4;
+                reached += usize::from(fading[i] < 200);
+                // Where the held slice casts at most one code of shadow,
+                // it cannot amplify the fading slice beyond RGBA8 rounding.
+                // Visible overlapping shadows may combine nonlinearly.
+                excess = excess
+                    .max(i32::from(fading[i]) + i32::from(held[i]) - i32::from(combined[i]) - 204);
+            }
+            assert!(reached > 40, "{kernel:?}/{level}: only {reached} fading shadow pixels");
+            assert!(
+                excess <= 4,
+                "{kernel:?}/{level}: neighboring ink amplified the shadow by {excess}"
+            );
+        }
+    }
+}

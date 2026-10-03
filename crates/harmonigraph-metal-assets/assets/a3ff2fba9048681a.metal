@@ -49,8 +49,8 @@ metal::float2 blur(
         if (metal::all(loop_bound == uint2(0u))) { break; }
         loop_bound -= uint2(loop_bound.y == 0u, 1u);
         if (!loop_init) {
-            int _e90 = i;
-            i = as_type<int>(as_type<uint>(_e90) + as_type<uint>(1));
+            int _e91 = i;
+            i = as_type<int>(as_type<uint>(_e91) + as_type<uint>(1));
         }
         loop_init = false;
         int _e22 = i;
@@ -93,31 +93,29 @@ metal::float2 blur(
             metal::float2 source = _e79.xy;
             float _e81 = sum;
             sum = _e81 + (w * source.x);
-            if (w > 0.0) {
-                float _e87 = ceiling;
-                ceiling = metal::max(_e87, source.y);
-            }
+            float _e85 = ceiling;
+            ceiling = metal::max(_e85, (source.y * w) / 0.988891);
         }
     }
-    float _e93 = sum;
-    float _e94 = weight;
-    float _e96 = ceiling;
-    return metal::float2(_e93 / _e94, _e96);
+    float _e94 = sum;
+    float _e95 = weight;
+    float _e97 = ceiling;
+    return metal::float2(_e94 / _e95, _e97);
 }
 
-struct fs_blur_yInput {
+struct fs_blur_xInput {
     metal::float4 bounds [[user(loc0), flat]];
     float sigma [[user(loc1), flat]];
 };
-struct fs_blur_yOutput {
+struct fs_blur_xOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_blur_yOutput fs_blur_y(
-  fs_blur_yInput varyings [[stage_in]]
+fragment fs_blur_xOutput fs_blur_x(
+  fs_blur_xInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 , metal::texture2d<float, metal::access::sample> src [[texture(0)]]
 ) {
     const CellOut in = { position, varyings.bounds, varyings.sigma };
-    metal::float2 _e4 = blur(in, metal::int2(0, 1), src);
-    return fs_blur_yOutput { metal::float4(_e4, 0.0, 1.0) };
+    metal::float2 _e4 = blur(in, metal::int2(1, 0), src);
+    return fs_blur_xOutput { metal::float4(_e4, 0.0, 1.0) };
 }

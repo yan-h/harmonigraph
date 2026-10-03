@@ -155,9 +155,10 @@ fn blur(in: CellOut, axis: vec2<i32>) -> vec2<f32> {
         }
         let source = textureLoad(src, tap, 0).rg;
         sum = sum + w * source.r;
-        // A zero-weight edge tap is outside the kernel's support and must
-        // not keep a neighbouring slice's opacity alive in this shadow.
-        if w > 0.0 { ceiling = max(ceiling, source.g); }
+        // The ceiling follows the same smooth support as the blur. An
+        // unweighted maximum lets distant held ink pin a fading slice's
+        // shadow and leaves a hard edge at the rectangular support boundary.
+        ceiling = max(ceiling, source.g * w / (1.0 - PEDESTAL));
     }
     return vec2<f32>(sum / weight, ceiling);
 }
