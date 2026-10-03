@@ -583,6 +583,33 @@ fn instance_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
     }
 }
 
+/// A single, fixed-height strip; overflowing voices replace its last dot with an ellipsis.
+fn instance_voice_dots(ui: &mut egui::Ui, width: f32, held: u64) -> egui::Response {
+    let scale = theme::ui_scale(ui.ctx());
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, 4.0 * scale), egui::Sense::hover());
+    let inner = rect.shrink2(egui::vec2(4.0 * scale, 0.0));
+    let pitch = 5.0 * scale;
+    let capacity = (inner.width().max(0.0) / pitch).floor() as u64;
+    let overflow = held > capacity;
+    let dots = held.min(capacity).saturating_sub(u64::from(overflow));
+    let center =
+        |slot: u64| egui::pos2(inner.left() + (slot as f32 + 0.5) * pitch, rect.center().y);
+    for slot in 0..dots {
+        ui.painter().circle_filled(center(slot), 1.25 * scale, theme::accent());
+    }
+    if overflow && capacity != 0 {
+        for offset in [-1.7, 0.0, 1.7] {
+            ui.painter().circle_filled(
+                center(capacity - 1) + egui::vec2(offset * scale, 0.0),
+                0.6 * scale,
+                theme::accent(),
+            );
+        }
+    }
+    response
+}
+
 fn instance_controls(
     ui: &mut egui::Ui,
     params: &dyn ParamBackend,
@@ -627,33 +654,27 @@ fn instance_controls(
     };
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         ui.allocate_ui_with_layout(
-            egui::vec2(name_width, ui.spacing().interact_size.y),
-            egui::Layout::right_to_left(egui::Align::Center),
+            egui::vec2(name_width, ui.spacing().interact_size.y + 5.0 * scale),
+            egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                // Reserve room for the count so its digits cannot move the name.
-                let count_width = 24.0 * theme::ui_scale(ui.ctx());
-                ui.allocate_ui_with_layout(
-                    egui::vec2(count_width, ui.spacing().interact_size.y),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_width(count_width);
-                        crate::widgets::label(ui, row.held.to_string())
-                            .on_hover_text("Currently sounding notes");
-                    },
-                );
+                ui.spacing_mut().item_spacing.y = scale;
                 let name = egui::RichText::new(&row.display_name);
                 let name =
                     if row.status != "No faults" { name.color(theme::armed()) } else { name };
-                if ui
-                    .add_sized(
-                        [ui.available_width(), ui.spacing().interact_size.y],
-                        egui::Button::selectable(selected == row.id, name).truncate(),
-                    )
-                    .on_hover_text(&row.status)
-                    .clicked()
-                {
+                let response = ui.add_sized(
+                    [name_width, ui.spacing().interact_size.y],
+                    egui::Button::selectable(selected == row.id, name).truncate(),
+                );
+                if response.clicked() {
                     selected = row.id;
                 }
+                let dots = instance_voice_dots(ui, name_width, row.held);
+                response.union(dots).on_hover_text(format!(
+                    "{} sounding {}\n{}",
+                    row.held,
+                    if row.held == 1 { "voice" } else { "voices" },
+                    row.status,
+                ));
             },
         );
     };

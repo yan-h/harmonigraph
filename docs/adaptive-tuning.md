@@ -329,8 +329,11 @@ Hidden sources keep updating, and Show restores their retained notes and history
 visibility also travels with the take's canonical baselines for offline replay.
 This does not select individual instruments out of the mixed audio spectrum.
 
-The central instance list in **Tuning → Instances** shows each name with a single live note count on the same row.
-The count tracks notes held at the Tune's output, rather than cumulative output events;
+The central instance list in **Tuning → Instances** shows a tiny strip of dots beneath each name, one per sounding voice.
+When more voices are held than fit across the name cell, the last dot becomes an ellipsis;
+hover the name or dots for the exact count.
+The strip stays the same height even at zero voices and never reserves space beside the name.
+The dots track notes held at the Tune's output, rather than cumulative output events;
 instrument release tails are not counted.
 A highlighted name flags a status to inspect in its tooltip or **Instance details**.
 Names follow the containing track when the host supplies CLAP track information, including track renames.

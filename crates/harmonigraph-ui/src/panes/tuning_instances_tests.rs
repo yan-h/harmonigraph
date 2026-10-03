@@ -289,7 +289,7 @@ fn an_individual_show_flag_remains_reachable_in_a_narrow_column() {
 }
 
 #[test]
-fn instance_note_counts_share_the_name_row() {
+fn instance_voice_dots_fit_below_names_without_moving_them() {
     for width in [120.0, 300.0] {
         let params = Instances::new();
         let ctx = themed();
@@ -317,14 +317,33 @@ fn instance_note_counts_share_the_name_row() {
                 })
                 .unwrap_or_else(|| panic!("missing {label} at {width}px"))
         };
+        let dots: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) => Some(circle),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots.len(), 6, "the three rows have one, two and three voices");
         for row in params.0.borrow().iter() {
             let name = text_bounds(&row.display_name);
-            let count = text_bounds(&row.held.to_string());
-            assert!(
-                (name.center().y - count.center().y).abs() < 2.0,
-                "the live count stays beside the name"
+            let below: Vec<_> = dots
+                .iter()
+                .filter(|dot| dot.center.y > name.bottom() && dot.center.y < name.bottom() + 10.0)
+                .collect();
+            assert_eq!(
+                below.len() as u64,
+                row.held,
+                "dots sit tightly beneath {}",
+                row.display_name
             );
         }
+        assert!(
+            !output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text().parse::<u64>().is_ok())),
+            "no count occupies name space"
+        );
         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(" held") || text.galley.text().contains(" out"))));
         let positions: Vec<_> = params
             .0
@@ -347,6 +366,53 @@ fn instance_note_counts_share_the_name_row() {
                     })
                     .expect("the instance name remains visible");
                 assert_eq!(after, *before, "{name} moved at {width}px with {held} notes");
+            }
+        }
+    }
+}
+
+#[test]
+fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
+    use crate::tests::probe::themed_scaled;
+    for scale in [0.75, 1.0, 1.5] {
+        let ctx = themed_scaled(scale);
+        let size = egui::vec2(200.0 * scale, 100.0 * scale);
+        let mut strip = egui::Rect::NOTHING;
+        for held in [0, 3, 64] {
+            let output = events_into(
+                &ctx,
+                size,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                vec![],
+                |ui| {
+                    strip = instance_voice_dots(ui, 60.0 * scale, held).rect;
+                },
+            );
+            assert_eq!(strip.size(), egui::vec2(60.0 * scale, 4.0 * scale));
+            let circles: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Circle(circle) => Some(circle),
+                    _ => None,
+                })
+                .collect();
+            for circle in &circles {
+                assert!(
+                    strip.contains_rect(egui::Rect::from_center_size(
+                        circle.center,
+                        egui::Vec2::splat(2.0 * circle.radius)
+                    )),
+                    "dots must stay within the strip"
+                );
+            }
+            if held < 64 {
+                assert_eq!(circles.len() as u64, held);
+            } else {
+                assert!(circles.len() < 64, "the fixture must reach overflow");
+                let small: Vec<_> = circles.iter().filter(|circle| circle.radius < scale).collect();
+                assert_eq!(small.len(), 3, "overflow is an ellipsis");
+                assert!(small.iter().all(|circle| circle.center.y == strip.center().y));
             }
         }
     }
