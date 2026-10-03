@@ -295,6 +295,10 @@ pub struct Hub {
     status: u32,
     /// Which row the next collection starts from.
     rotation: usize,
+    // Instance-owned: first access to a dropping thread-local can allocate
+    // destructor storage inside an allocation-guarded test callback.
+    #[cfg(test)]
+    after_snapshot: Option<Box<dyn FnOnce() + Send>>,
     decisions: u64,
     published: u64,
 }
@@ -322,6 +326,8 @@ impl Hub {
             opened: None,
             status: 0,
             rotation: 0,
+            #[cfg(test)]
+            after_snapshot: None,
             decisions: 0,
             published: 0,
         })
@@ -636,11 +642,9 @@ impl Hub {
             // replenishing rejected captures. New arrivals wait one callback.
             let available = end.captures.slots();
             #[cfg(test)]
-            tests::AFTER_SNAPSHOT.with_borrow_mut(|hook| {
-                if let Some(hook) = hook.take() {
-                    hook();
-                }
-            });
+            if let Some(hook) = self.after_snapshot.take() {
+                hook();
+            }
             for _ in 0..available {
                 if self.batch.len() == BATCH_EVENTS {
                     break;
@@ -1390,10 +1394,6 @@ mod tests {
     use super::*;
     use crate::tuning::{CAPTURE_RING, REPLY_RING};
 
-    thread_local! {
-        pub(super) static AFTER_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-    }
-
     fn capture(epoch: u64, serial: u64) -> session::Capture {
         session::Capture {
             retune: 1,
@@ -1426,9 +1426,7 @@ mod tests {
         hub.ends = Some(ends);
         // Inject through the real producer after the first row's availability
         // snapshot. An unbounded discard loop would consume this fourth entry.
-        AFTER_SNAPSHOT.with_borrow_mut(|hook| {
-            *hook = Some(Box::new(move || tx.push(capture(1, 20)).unwrap()));
-        });
+        hub.after_snapshot = Some(Box::new(move || tx.push(capture(1, 20)).unwrap()));
         hub.collect();
         assert_eq!(hub.batch.len(), 1);
         assert_eq!((hub.batch[0].source, hub.batch[0].serial), (1, 10));
