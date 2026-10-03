@@ -530,5 +530,6 @@ pub mod lattice_maps;
 
 mod appearance;
 mod appearance_edit;
+pub use appearance_edit::APPEARANCE_SHORTCUTS;
 mod camera_movement;
 pub use appearance::AppearanceDocument;

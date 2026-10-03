@@ -70,8 +70,10 @@ Six appearance tests and 51 persistence tests pass.
 The continuous drag test drives the real slider;
 commands are deferred until numeric focus loss commits its final value.
 Each A/B slot owns a separate transient history.
-Undo buttons operate locally;
-Cmd/Ctrl-Z remains the host's shortcut because the native shell forwards it to the DAW.
+Appearance undo uses Cmd/Ctrl-Z, with Cmd/Ctrl-Shift-Z for redo (also Ctrl-Y on Windows/Linux).
+The native shell reserves these shortcuts while the plugin has keyboard focus;
+text fields keep their own undo history, and other DAW shortcuts still pass through.
+The appearance toolbar contains A/B without separate Undo/Redo buttons.
 
 Five camera parameters own yaw, pitch, distance and absolute lattice X/Y pan.
 Cabinet uses pan and distance;

@@ -57,7 +57,7 @@ pub(crate) fn translate_virtual_key(key: &keyboard_types::Key) -> Option<egui::K
         K::PageUp => Key::PageUp,
         K::PageDown => Key::PageDown,
 
-        K::Character(s) => match s.chars().next()? {
+        K::Character(s) => match s.chars().next()?.to_ascii_lowercase() {
             ' ' => Key::Space,
             '0' => Key::Num0,
             '1' => Key::Num1,

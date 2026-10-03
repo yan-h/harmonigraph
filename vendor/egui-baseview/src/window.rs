@@ -325,6 +325,30 @@ pub enum KeyCapture {
     CaptureKeys(Vec<keyboard_types::Key>),
     /// All keys except the given ones will be captured from the host.
     IgnoreKeys(Vec<keyboard_types::Key>),
+    /// Reserve these shortcuts even without widget focus. Other keys are
+    /// captured only when egui wants keyboard input, as with CaptureAll.
+    CaptureShortcuts(Vec<egui::KeyboardShortcut>),
+}
+
+impl KeyCapture {
+    fn status(&self, event: &keyboard_types::KeyboardEvent, wants_keyboard: bool) -> EventStatus {
+        let captured = match self {
+            Self::IgnoreAll => false,
+            Self::CaptureAll => wants_keyboard,
+            Self::CaptureKeys(keys) => wants_keyboard && keys.contains(&event.key),
+            Self::IgnoreKeys(keys) => wants_keyboard && !keys.contains(&event.key),
+            Self::CaptureShortcuts(shortcuts) => {
+                wants_keyboard
+                    || shortcuts.iter().any(|shortcut| {
+                        crate::translate::translate_virtual_key(&event.key)
+                            == Some(shortcut.logical_key)
+                            && crate::translate::translate_modifiers(event.modifiers)
+                                .matches_exact(shortcut.modifiers)
+                    })
+            }
+        };
+        if captured { EventStatus::Captured } else { EventStatus::Ignored }
+    }
 }
 
 /// Handles an egui-baseview application
@@ -1073,8 +1097,6 @@ where
 
     #[allow(unused_variables)]
     fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
-        let mut return_status = EventStatus::Captured;
-
         // Parent/embedded windows do not always gain keyboard focus
         // Automatically on click. Request focus explicitly before forwarding the event.
         if matches!(
@@ -1218,21 +1240,6 @@ where
                             .push(egui::Event::Text(written.clone()));
                     }
                 }
-
-                match &self.key_capture {
-                    KeyCapture::CaptureAll => {}
-                    KeyCapture::IgnoreAll => return_status = EventStatus::Ignored,
-                    KeyCapture::CaptureKeys(keys) => {
-                        if !keys.contains(&event.key) {
-                            return_status = EventStatus::Ignored
-                        }
-                    }
-                    KeyCapture::IgnoreKeys(keys) => {
-                        if keys.contains(&event.key) {
-                            return_status = EventStatus::Ignored
-                        }
-                    }
-                }
             }
             baseview::Event::Window(event) => match event {
                 baseview::WindowEvent::Resized(window_info) => {
@@ -1303,17 +1310,11 @@ where
             },
         }
 
-        // For keyboard events, also check if egui actually wants keyboard input
-        // This allows DAW shortcuts (spacebar, etc.) to pass through when no text field is focused
+        // Reserve app shortcuts before returning to the host. Other keys
+        // (spacebar, etc.) pass through unless a widget wants keyboard input.
         match &event {
-            baseview::Event::Keyboard(_) => {
-                if return_status == EventStatus::Captured
-                    && !self.egui_ctx.egui_wants_keyboard_input()
-                {
-                    EventStatus::Ignored
-                } else {
-                    return_status
-                }
+            baseview::Event::Keyboard(event) => {
+                self.key_capture.status(event, self.egui_ctx.egui_wants_keyboard_input())
             }
             baseview::Event::Mouse(_) => {
                 if self.egui_ctx.egui_is_using_pointer() || self.egui_ctx.egui_wants_pointer_input()
@@ -1356,4 +1357,44 @@ fn calculate_screen_rect(physical_size: PhySize, points_per_pixel: f32) -> Rect 
         physical_size.height as f32 * points_per_pixel,
     );
     Rect::from_min_size(Pos2::new(0f32, 0f32), vec2(logical_size.0, logical_size.1))
+}
+
+#[cfg(test)]
+mod key_capture_tests {
+    use super::*;
+
+    #[test]
+    fn reserved_shortcuts_are_not_forwarded_to_the_host_without_widget_focus() {
+        use keyboard_types::{Key, KeyState, KeyboardEvent, Modifiers as M};
+        let command = if cfg!(target_os = "macos") { M::META } else { M::CONTROL };
+        let capture = KeyCapture::CaptureShortcuts(vec![
+            egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z),
+            egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+                egui::Key::Z,
+            ),
+            egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y),
+        ]);
+        for (key, modifiers, expected) in [
+            ("z", command, EventStatus::Captured),
+            ("Z", command | M::SHIFT, EventStatus::Captured),
+            ("y", M::CONTROL, EventStatus::Captured),
+            ("z", M::empty(), EventStatus::Ignored),
+            ("z", command | M::ALT, EventStatus::Ignored),
+            (" ", M::empty(), EventStatus::Ignored),
+            ("s", command, EventStatus::Ignored),
+        ] {
+            for state in [KeyState::Down, KeyState::Up] {
+                let event = KeyboardEvent {
+                    key: Key::Character(key.into()),
+                    modifiers,
+                    state,
+                    ..Default::default()
+                };
+                assert_eq!(capture.status(&event, false), expected, "{event:?}");
+                assert_eq!(capture.status(&event, true), EventStatus::Captured);
+                assert_eq!(KeyCapture::IgnoreAll.status(&event, true), EventStatus::Ignored);
+            }
+        }
+    }
 }

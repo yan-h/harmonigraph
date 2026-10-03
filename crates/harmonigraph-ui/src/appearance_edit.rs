@@ -4,6 +4,18 @@
 use crate::{AppearanceDocument, SpectrumConfig};
 use harmonigraph_scene::{Camera, ViewConfig};
 
+/// Appearance shortcuts also reserved by the native shell, so the same key
+/// cannot edit plugin history and the host's history at once.
+pub const APPEARANCE_SHORTCUTS: &[egui::KeyboardShortcut] = &[
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z),
+    egui::KeyboardShortcut::new(
+        egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+        egui::Key::Z,
+    ),
+    #[cfg(not(target_os = "macos"))]
+    egui::KeyboardShortcut::new(egui::Modifiers::CTRL, egui::Key::Y),
+];
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Look {
@@ -128,8 +140,6 @@ impl History {
 }
 
 enum Command {
-    Undo,
-    Redo,
     Switch,
     Recall(String),
     Save,
@@ -191,11 +201,36 @@ impl AppearanceEditor {
                 && ctx.dragged_id().is_some()
                 && ctx.input(|i| i.pointer.primary_down()),
         );
+        // Text edits own their history, including when there is nothing left
+        // to undo in the field. Handle appearance only after the body commits.
+        if crate::kept_focus(ctx) && !ctx.text_edit_focused() {
+            let mut handled = false;
+            ctx.input_mut(|input| {
+                input.events.retain(|event| {
+                    let egui::Event::Key { key, modifiers, pressed: true, .. } = event else {
+                        return true;
+                    };
+                    if !APPEARANCE_SHORTCUTS.iter().any(|shortcut| {
+                        *key == shortcut.logical_key && modifiers.matches_exact(shortcut.modifiers)
+                    }) {
+                        return true;
+                    }
+                    handled = true;
+                    if *key == egui::Key::Z && !modifiers.shift {
+                        self.history.undo(appearance);
+                    } else {
+                        self.history.redo(appearance);
+                    }
+                    false
+                });
+            });
+            if handled {
+                ctx.request_repaint();
+            }
+        }
         if let Some(command) = self.command.take() {
             self.history.finish(appearance);
             match command {
-                Command::Undo => self.history.undo(appearance),
-                Command::Redo => self.history.redo(appearance),
                 Command::Switch => self.switch(appearance),
                 Command::Recall(name) => self.recall(&name, appearance),
                 Command::Save => self.save(appearance),
@@ -206,18 +241,16 @@ impl AppearanceEditor {
 
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(!self.history.undo.is_empty() || self.history.pending.is_some(), egui::Button::new("Undo")).clicked() {
-                self.command = Some(Command::Undo);
-                    }
-            if ui.add_enabled(!self.history.redo.is_empty(), egui::Button::new("Redo")).clicked() {
-                self.command = Some(Command::Redo);
-                    }
             for (is_b, label) in [(false, "A"), (true, "B")] {
-                if ui.selectable_label(self.saved.active_b == is_b, label).clicked() && self.saved.active_b != is_b {
+                if ui.selectable_label(self.saved.active_b == is_b, label).clicked()
+                    && self.saved.active_b != is_b
+                {
                     self.command = Some(Command::Switch);
                 }
             }
-        }).response.on_hover_text("Undo/Redo affects appearance. Keyboard undo, camera movement, tuning and automatable controls use the host's undo. Output and editor layout are separate.");
+        })
+        .response
+        .on_hover_text("A/B compares appearances. Each slot keeps its own undo history.");
         egui::CollapsingHeader::new("Looks").show(ui, |ui| {
             ui.label("Looks keep appearance; camera movement, tuning and output stay as they are.");
             egui::ComboBox::from_id_salt("saved-look")
@@ -260,6 +293,88 @@ impl AppearanceEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shortcut_event(shortcut: egui::KeyboardShortcut) -> egui::Event {
+        egui::Event::Key {
+            key: shortcut.logical_key,
+            physical_key: None,
+            modifiers: shortcut.modifiers,
+            pressed: true,
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn shortcuts_undo_redo_and_leave_other_keys_alone() {
+        let ctx = crate::tests::probe::themed();
+        let mut appearance = AppearanceDocument::default();
+        let mut editor = AppearanceEditor::default();
+        let original = Look::capture(&appearance);
+        appearance.spectrum.attack = 0.2;
+        editor.history.observe(original.clone(), &appearance, false);
+        let changed = Look::capture(&appearance);
+        for redo in &APPEARANCE_SHORTCUTS[1..] {
+            for (shortcut, expected) in [(APPEARANCE_SHORTCUTS[0], &original), (*redo, &changed)] {
+                let _ = ctx.run_ui(
+                    egui::RawInput { events: vec![shortcut_event(shortcut)], ..Default::default() },
+                    |ui| {
+                        editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                        assert_eq!(&Look::capture(&appearance), expected);
+                        assert!(
+                            ui.input(|i| i.events.is_empty()),
+                            "handled shortcuts are consumed"
+                        );
+                    },
+                );
+            }
+        }
+        for shortcut in [
+            egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Z),
+            egui::KeyboardShortcut::new(
+                egui::Modifiers::COMMAND.plus(egui::Modifiers::ALT),
+                egui::Key::Z,
+            ),
+        ] {
+            let _ = ctx.run_ui(
+                egui::RawInput { events: vec![shortcut_event(shortcut)], ..Default::default() },
+                |ui| {
+                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                    assert_eq!(Look::capture(&appearance), changed);
+                    assert!(!ui.input(|i| i.events.is_empty()));
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn text_field_undo_does_not_change_appearance_even_with_empty_text_history() {
+        let ctx = crate::tests::probe::themed();
+        let mut appearance = AppearanceDocument::default();
+        let mut editor = AppearanceEditor::default();
+        let original = Look::capture(&appearance);
+        appearance.spectrum.attack = 0.2;
+        editor.history.observe(original, &appearance, false);
+        let mut text = String::new();
+        let mut time = 0.0;
+        let mut frame = |events| {
+            time += 1.0;
+            let _ = ctx.run_ui(
+                egui::RawInput { time: Some(time), events, ..Default::default() },
+                |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut text)).request_focus();
+                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                    assert_eq!(appearance.spectrum.attack, 0.2);
+                    assert_eq!(editor.history.undo.len(), 1);
+                },
+            );
+            text.clone()
+        };
+        frame(vec![]);
+        assert_eq!(frame(vec![egui::Event::Text("Bright".into())]), "Bright");
+        frame(vec![]);
+        assert_eq!(frame(vec![shortcut_event(APPEARANCE_SHORTCUTS[0])]), "");
+        assert_eq!(frame(vec![shortcut_event(APPEARANCE_SHORTCUTS[0])]), "");
+    }
 
     #[test]
     fn slider_drag_is_one_action_and_redo_is_invalidated_by_an_edit() {
@@ -384,18 +499,23 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_command_runs_after_the_body_commits_its_edit() {
+    fn keyboard_undo_runs_after_the_body_commits_its_edit() {
         let ctx = crate::tests::probe::themed();
         let mut appearance = AppearanceDocument::default();
         let mut editor = AppearanceEditor::default();
         let original = appearance.spectrum.attack;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let before = Look::capture(&appearance);
-            editor.command = Some(Command::Undo);
-            // ValueBar commits a typed value on losing focus, after toolbar drawing.
-            appearance.spectrum.attack = 0.2;
-            editor.end_frame(before, &mut appearance, ui.ctx());
-        });
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![shortcut_event(APPEARANCE_SHORTCUTS[0])],
+                ..Default::default()
+            },
+            |ui| {
+                let before = Look::capture(&appearance);
+                // ValueBar commits a typed value on losing focus, after toolbar drawing.
+                appearance.spectrum.attack = 0.2;
+                editor.end_frame(before, &mut appearance, ui.ctx());
+            },
+        );
         assert_eq!(appearance.spectrum.attack, original);
         editor.history.redo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, 0.2);
