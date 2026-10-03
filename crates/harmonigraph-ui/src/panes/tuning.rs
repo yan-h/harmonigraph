@@ -618,7 +618,7 @@ fn instance_controls(
     if !instances.iter().any(|row| row.id == selected) {
         selected = instances[0].id;
     }
-    let compact = ui.available_width() < 160.0 * theme::ui_scale(ui.ctx());
+    let compact = ui.available_width() < 200.0 * theme::ui_scale(ui.ctx());
     let name_width =
         if compact { ui.available_width() } else { (ui.available_width() - 120.0).max(45.0) };
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
@@ -626,8 +626,17 @@ fn instance_controls(
             egui::vec2(name_width, ui.spacing().interact_size.y),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                crate::widgets::label(ui, row.held.to_string())
-                    .on_hover_text("Currently sounding notes");
+                // Reserve room for the count so its digits cannot move the name.
+                let count_width = 24.0 * theme::ui_scale(ui.ctx());
+                ui.allocate_ui_with_layout(
+                    egui::vec2(count_width, ui.spacing().interact_size.y),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.set_min_width(count_width);
+                        crate::widgets::label(ui, row.held.to_string())
+                            .on_hover_text("Currently sounding notes");
+                    },
+                );
                 let name = egui::RichText::new(&row.display_name);
                 let name =
                     if row.status != "No faults" { name.color(theme::armed()) } else { name };

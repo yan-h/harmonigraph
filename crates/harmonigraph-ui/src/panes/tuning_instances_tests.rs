@@ -311,5 +311,28 @@ fn instance_note_counts_share_the_name_row() {
             );
         }
         assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(" held") || text.galley.text().contains(" out"))));
+        let positions: Vec<_> = params
+            .0
+            .borrow()
+            .iter()
+            .map(|row| (row.display_name.clone(), text_bounds(&row.display_name).min))
+            .collect();
+        for held in [0, 9, 10, 64, 1] {
+            for row in params.0.borrow_mut().iter_mut() {
+                row.held = held;
+            }
+            let output = frame();
+            for (name, before) in &positions {
+                let after = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == name => Some(text.pos),
+                        _ => None,
+                    })
+                    .expect("the instance name remains visible");
+                assert_eq!(after, *before, "{name} moved at {width}px with {held} notes");
+            }
+        }
     }
 }
