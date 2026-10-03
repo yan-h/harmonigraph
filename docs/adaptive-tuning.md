@@ -331,6 +331,8 @@ This does not select individual instruments out of the mixed audio spectrum.
 
 The tuning source list in **Tuning → Tuning sources** shows a tiny centered strip of dots beneath each name, one per sounding voice.
 The name and dots share one selectable button.
+Each dot uses the same pitch gradient as the note display, including per-note tuning and channel bend, even when Show is off.
+At the default UI scale, the button leaves 3 pixels above the lettering, 2 pixels between the lettering and dots, and 3 pixels below the dots.
 When more voices are held than fit across the name cell, the last dot becomes an ellipsis;
 hover the name or dots for the exact count.
 The strip stays the same height even at zero voices and never reserves space beside the name.

@@ -62,6 +62,10 @@ pub struct Shared {
     pub name: Mutex<String>,
     track_name: Mutex<String>,
     pub held: AtomicU64,
+    /// Cosmetic output pitches, in microcents; MIN is an empty voice slot.
+    /// Each pitch and its occupancy share one atomic word. Readers may span
+    /// callbacks, but never block the audio owner or observe a torn pitch.
+    pub pitches: [AtomicI64; super::HELD_PER_SOURCE],
     pub notes_in: AtomicU64,
     pub notes_out: AtomicU64,
     pub last_input: AtomicI64,
@@ -104,6 +108,7 @@ impl Shared {
             name: Mutex::new(String::new()),
             track_name: Mutex::new(String::new()),
             held: AtomicU64::new(0),
+            pitches: std::array::from_fn(|_| AtomicI64::new(i64::MIN)),
             notes_in: AtomicU64::new(0),
             notes_out: AtomicU64::new(0),
             last_input: AtomicI64::new(i64::MIN),

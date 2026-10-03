@@ -54,7 +54,14 @@ pub fn snapshots() -> Vec<TuningInstance> {
                 is_hub: shared.is_hub(),
                 retune: shared.retuning() & 1 != 0,
                 show: shared.show.load(Ordering::Acquire),
-                held: shared.held.load(Ordering::Relaxed),
+                pitches: shared
+                    .pitches
+                    .iter()
+                    .filter_map(|pitch| {
+                        let pitch = pitch.load(Ordering::Relaxed);
+                        (pitch != i64::MIN).then_some(pitch as f32 / 100_000_000.0)
+                    })
+                    .collect(),
                 notes_in: shared.notes_in.load(Ordering::Relaxed),
                 notes_out: shared.notes_out.load(Ordering::Relaxed),
                 misses,

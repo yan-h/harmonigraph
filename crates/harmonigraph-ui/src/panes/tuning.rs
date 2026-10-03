@@ -12,6 +12,7 @@
 
 use super::learn_pulse;
 use super::param_bar;
+use super::spectral::roll::note_color;
 use super::{section, subsection};
 use crate::params::{ParamBackend, ParamKey};
 use crate::widgets::{button_row, ValueBar};
@@ -439,7 +440,7 @@ pub(super) fn tuning_pane(
     if mode == harmonigraph_core::lattice_map::TuningEngine::Adaptive {
         adaptive_controls(ui, state, params);
     }
-    instance_section(ui, params);
+    instance_section(ui, state, params);
     // Keep transient status after every control so it cannot move a held slider.
     if !configuration_notice && state.runtime.configuration_pending {
         crate::widgets::weak(ui, "Tuning change pending audio adoption");
@@ -576,16 +577,17 @@ fn adaptive_controls(ui: &mut egui::Ui, state: &mut PictureState, params: &dyn P
     });
 }
 
-fn instance_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
+fn instance_section(ui: &mut egui::Ui, state: &PictureState, params: &dyn ParamBackend) {
     let instances = params.tuning_instances();
     if !instances.is_empty() {
-        section(ui, "Tuning sources", |ui| instance_controls(ui, params, &instances));
+        section(ui, "Tuning sources", |ui| instance_controls(ui, state, params, &instances));
     }
 }
 
 /// A single, fixed-height strip; overflowing voices replace its last dot with an ellipsis.
-fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, held: u64) {
+fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, pitches: &[f32], state: &PictureState) {
     let scale = theme::ui_scale(ui.ctx());
+    let held = pitches.len() as u64;
     let inner = rect.shrink2(egui::vec2(4.0 * scale, 0.0));
     let pitch = 5.0 * scale;
     let capacity = (inner.width().max(0.0) / pitch).floor() as u64;
@@ -598,14 +600,18 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, held: u64) {
     let first_x = rect.center().x - (span + last_radius - first_radius) * 0.5;
     let center = |slot: u64| egui::pos2(first_x + slot as f32 * pitch, rect.center().y);
     for slot in 0..dots {
-        ui.painter().circle_filled(center(slot), 1.25 * scale, theme::accent());
+        ui.painter().circle_filled(
+            center(slot),
+            1.25 * scale,
+            note_color(state, pitches[slot as usize], 1.0),
+        );
     }
     if overflow && capacity != 0 {
         for offset in [-1.7, 0.0, 1.7] {
             ui.painter().circle_filled(
                 center(capacity - 1) + egui::vec2(offset * scale, 0.0),
                 0.6 * scale,
-                theme::accent(),
+                ui.visuals().weak_text_color(),
             );
         }
     }
@@ -613,6 +619,7 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, held: u64) {
 
 fn instance_controls(
     ui: &mut egui::Ui,
+    state: &PictureState,
     params: &dyn ParamBackend,
     instances: &[crate::params::TuningInstance],
 ) {
@@ -654,9 +661,23 @@ fn instance_controls(
         (ui.available_width() - 140.0 * scale).max(60.0 * scale)
     };
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
+        let name = egui::RichText::new(&row.display_name);
+        let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
+        let galley = egui::WidgetText::from(name).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (name_width - 2.0 * ui.spacing().button_padding.x).max(0.0),
+            egui::TextStyle::Button,
+        );
+        let ink = if galley.mesh_bounds.is_finite() {
+            galley.mesh_bounds
+        } else {
+            egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
+        };
+        // Visible geometry: 3px top + text ink + 2px gap + 2.5px dots + 3px bottom.
         let response = ui.add_sized(
-            [name_width, ui.spacing().interact_size.y + 5.0 * scale],
-            egui::Button::selectable(selected == row.id, ""),
+            [name_width, ink.height() + 10.5 * scale],
+            egui::Button::selectable(selected == row.id, ()).small(),
         );
         response.widget_info(|| {
             egui::WidgetInfo::selected(
@@ -669,21 +690,7 @@ fn instance_controls(
         if response.clicked() {
             selected = row.id;
         }
-        let name = egui::RichText::new(&row.display_name);
-        let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
-        let galley = egui::WidgetText::from(name).into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            (response.rect.width() - 2.0 * ui.spacing().button_padding.x).max(0.0),
-            egui::TextStyle::Button,
-        );
-        // Center the visible text and dots together, with one pixel of ink-to-dot gap.
-        let ink = if galley.mesh_bounds.is_finite() {
-            galley.mesh_bounds
-        } else {
-            egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
-        };
-        let ink_top = response.rect.center().y - (ink.height() + 3.5 * scale) * 0.5;
+        let ink_top = response.rect.top() + 3.0 * scale;
         let text_pos =
             egui::pos2(response.rect.center().x - galley.size().x * 0.5, ink_top - ink.top());
         ui.painter().galley(
@@ -692,14 +699,14 @@ fn instance_controls(
             ui.style().interact_selectable(&response, selected == row.id).text_color(),
         );
         let dots = egui::Rect::from_min_size(
-            egui::pos2(response.rect.left(), ink_top + ink.height() + 0.25 * scale),
+            egui::pos2(response.rect.left(), ink_top + ink.height() + 1.25 * scale),
             egui::vec2(response.rect.width(), 4.0 * scale),
         );
-        instance_voice_dots(ui, dots, row.held);
+        instance_voice_dots(ui, dots, &row.pitches, state);
+        let held = row.pitches.len();
         response.on_hover_text(format!(
-            "{} sounding {}\n{}",
-            row.held,
-            if row.held == 1 { "voice" } else { "voices" },
+            "{held} sounding {}\n{}",
+            if held == 1 { "voice" } else { "voices" },
             row.status,
         ));
     };

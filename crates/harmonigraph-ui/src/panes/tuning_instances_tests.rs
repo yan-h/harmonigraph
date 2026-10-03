@@ -1,6 +1,6 @@
 use super::*;
 use crate::params::{InstanceEdit, TuningInstance};
-use crate::tests::probe::{events_into, press, themed};
+use crate::tests::probe::{events_into, fresh_picture, press, themed};
 use std::cell::RefCell;
 
 struct Instances(RefCell<Vec<TuningInstance>>);
@@ -17,7 +17,7 @@ impl Instances {
                     is_hub: id == 0,
                     retune: id == 0,
                     show: id == 1,
-                    held: id + 1,
+                    pitches: (0..=id).map(|n| 48.0 + n as f32 * 12.0).collect(),
                     notes_in: 34,
                     notes_out: 34,
                     misses: 0,
@@ -54,6 +54,7 @@ impl ParamBackend for Instances {
 fn mixed_global_controls_enable_every_instance_then_disable_independently() {
     for width in [88.0, 104.0, 300.0] {
         let params = Instances::new();
+        let state = fresh_picture();
         let ctx = themed();
         let size = egui::vec2(width, 800.0);
         let frame = |events| {
@@ -62,7 +63,7 @@ fn mixed_global_controls_enable_every_instance_then_disable_independently() {
                 size,
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                 events,
-                |ui| instance_section(ui, &params),
+                |ui| instance_section(ui, &state, &params),
             )
         };
         frame(vec![]);
@@ -112,6 +113,7 @@ fn mixed_global_controls_enable_every_instance_then_disable_independently() {
 fn live_instance_controls_fit_a_narrow_settings_column() {
     for selected in [0, 1] {
         let params = Instances::new();
+        let state = fresh_picture();
         params.0.borrow_mut().rotate_left(selected);
         for width in [88.0, 104.0, 120.0, 160.0, 240.0, 300.0, 420.0] {
             let ctx = themed();
@@ -125,7 +127,7 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                     egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                     events,
                     |ui| {
-                        instance_section(ui, &params);
+                        instance_section(ui, &state, &params);
                         used = ui.min_rect().width();
                     },
                 )
@@ -248,6 +250,7 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
 fn an_individual_show_flag_remains_reachable_in_a_narrow_column() {
     for width in [88.0, 104.0, 120.0] {
         let params = Instances::new();
+        let state = fresh_picture();
         let ctx = themed();
         let size = egui::vec2(width, 900.0);
         let frame = |events| {
@@ -256,7 +259,7 @@ fn an_individual_show_flag_remains_reachable_in_a_narrow_column() {
                 size,
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                 events,
-                |ui| instance_section(ui, &params),
+                |ui| instance_section(ui, &state, &params),
             )
         };
         frame(vec![]);
@@ -292,6 +295,7 @@ fn an_individual_show_flag_remains_reachable_in_a_narrow_column() {
 fn instance_voice_dots_fit_below_names_without_moving_them() {
     for width in [120.0, 300.0] {
         let params = Instances::new();
+        let state = fresh_picture();
         let ctx = themed();
         let size = egui::vec2(width, 800.0);
         let frame = || {
@@ -300,7 +304,7 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
                 size,
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                 vec![],
-                |ui| instance_section(ui, &params),
+                |ui| instance_section(ui, &state, &params),
             )
         };
         frame();
@@ -341,16 +345,17 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
                 .iter()
                 .filter(|dot| dot.center.y > ink_bottom && dot.center.y < ink_bottom + 10.0)
                 .collect();
-            for dot in &below {
+            for (dot, pitch) in below.iter().zip(&row.pitches) {
+                assert_eq!(dot.fill, note_color(&state, *pitch, 1.0));
                 assert!(
-                    (dot.center.y - dot.radius - ink_bottom - 1.0).abs() < 0.1,
-                    "the visible gap below {} must be one pixel",
+                    (dot.center.y - dot.radius - ink_bottom - 2.0).abs() < 0.1,
+                    "the visible gap below {} must be two pixels",
                     row.display_name
                 );
             }
             assert_eq!(
                 below.len() as u64,
-                row.held,
+                row.pitches.len() as u64,
                 "dots sit tightly beneath {}",
                 row.display_name
             );
@@ -369,7 +374,7 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
             .collect();
         for held in [0, 9, 10, 64, 1] {
             for row in params.0.borrow_mut().iter_mut() {
-                row.held = held;
+                row.pitches = (0..held).map(|n| 48.0 + n as f32).collect();
             }
             let output = frame();
             for (name, before) in &positions {
@@ -392,6 +397,7 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
     use crate::tests::probe::themed_scaled;
     for scale in [0.75, 1.0, 1.5] {
         let ctx = themed_scaled(scale);
+        let state = fresh_picture();
         let size = egui::vec2(200.0 * scale, 100.0 * scale);
         let mut strip = egui::Rect::NOTHING;
         for held in [0, 3, 64] {
@@ -407,7 +413,7 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
                             egui::Sense::hover(),
                         )
                         .0;
-                    instance_voice_dots(ui, strip, held);
+                    instance_voice_dots(ui, strip, &vec![60.0; held as usize], &state);
                 },
             );
             assert_eq!(strip.size(), egui::vec2(60.0 * scale, 4.0 * scale));
@@ -458,6 +464,7 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
 fn clicking_the_voice_dots_selects_the_source_button() {
     for width in [120.0, 300.0] {
         let params = Instances::new();
+        let state = fresh_picture();
         let ctx = themed();
         let size = egui::vec2(width, 800.0);
         let selected = std::cell::Cell::new(0);
@@ -468,7 +475,7 @@ fn clicking_the_voice_dots_selects_the_source_button() {
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                 events,
                 |ui| {
-                    instance_controls(ui, &params, &params.tuning_instances());
+                    instance_controls(ui, &state, &params, &params.tuning_instances());
                     selected.set(
                         ui.data(|data| {
                             data.get_temp::<u64>(ui.id().with("tuning-instance-selection"))
@@ -496,11 +503,63 @@ fn clicking_the_voice_dots_selects_the_source_button() {
         frame(vec![press(at, false)]);
         assert_eq!(selected.get(), 1, "clicking a dot selects Bass at {width}px");
         let output = frame(vec![]);
-        assert!(
-            output.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Rect(rect) if rect.rect.contains(at)
-                && (rect.rect.height() - (ctx.global_style().spacing.interact_size.y + 5.0)).abs() < 0.1)),
-            "the selected button background includes its dots"
+        let ink = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Bass" => {
+                    Some(text.galley.mesh_bounds.translate(text.pos.to_vec2()))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let button = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.rect.contains(at) && rect.rect.height() < 40.0 => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("the selected button background includes its dots");
+        assert!((ink.top() - button.top() - 3.0).abs() < 0.1, "3px above the lettering");
+        assert!((button.bottom() - (at.y + 1.25) - 3.0).abs() < 0.1, "3px below the dots");
+    }
+}
+
+#[test]
+fn voice_dots_follow_the_current_pitch_palette() {
+    let ctx = themed();
+    let mut state = fresh_picture();
+    let pitches = [36.0, 60.0, 84.0];
+    let size = egui::vec2(160.0, 40.0);
+    for (low, high) in [(24.0, 96.0), (48.0, 72.0)] {
+        state.runtime.frame_params.darkest_pitch = low;
+        state.runtime.frame_params.brightest_pitch = high;
+        let output = events_into(
+            &ctx,
+            size,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+            vec![],
+            |ui| {
+                instance_voice_dots(
+                    ui,
+                    egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 4.0)),
+                    &pitches,
+                    &state,
+                );
+            },
         );
+        let colors: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) => Some(circle.fill),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors, pitches.map(|pitch| note_color(&state, pitch, 1.0)));
+        assert_ne!(colors[0], colors[2], "different pitches must have different colors");
     }
 }

@@ -253,8 +253,37 @@ fn live_note_count_clears_when_the_host_stops_callbacks() {
     let mut pair = Pair::new();
     pair.step(vec![note(1, 0, 60, 0, true)]);
     pair.idle();
-    let count = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().held;
+    let count =
+        || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().pitches.len();
     assert_eq!(count(), 1, "the note has reached the output");
     pair.tune.deactivate();
     assert_eq!(count(), 0, "the display clears without another process callback");
+}
+
+#[test]
+fn source_dot_pitches_follow_emitted_tuning_bend_and_releases_even_when_hidden() {
+    let _scope = crate::test_scope::enter();
+    let mut pair = Pair::new();
+    pair.tune.shared().set_show(false);
+    pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
+    pair.idle();
+    let pitches = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().pitches;
+    let expected: Vec<_> = [60, 64]
+        .into_iter()
+        .map(|key| {
+            inspect_hub(&pair.hub, |hub| hub.test_voice(0, 0, key).unwrap().pitch_microcents) as f32
+                / 100_000_000.0
+        })
+        .collect();
+    assert_eq!(pitches(), expected, "dots include the correction emitted with each attack");
+    pair.step(vec![expression(2, 0.5, 0), raw_midi([0xe0, 0, 96], 1)]);
+    pair.idle();
+    let bent = pitches();
+    assert!((bent[0] - expected[0] - 1.0).abs() < 0.0001);
+    assert!((bent[1] - expected[1] - 1.5).abs() < 0.0001);
+    pair.step(vec![note(1, 0, 60, 0, false)]);
+    pair.idle();
+    assert_eq!(pitches(), vec![bent[1]]);
+    pair.tune.deactivate();
+    assert!(pitches().is_empty());
 }

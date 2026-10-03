@@ -92,7 +92,8 @@ pub struct TuningInstance {
     pub is_hub: bool,
     pub retune: bool,
     pub show: bool,
-    pub held: u64,
+    /// Sounding pitches in MIDI note units, including tuning and channel bend.
+    pub pitches: Vec<f32>,
     pub notes_in: u64,
     pub notes_out: u64,
     pub misses: u64,
