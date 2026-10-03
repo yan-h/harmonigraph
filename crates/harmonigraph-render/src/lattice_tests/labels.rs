@@ -82,7 +82,7 @@ fn a_nearer_node_covers_the_label_of_the_node_behind() {
     let mut scene = one_node_behind_another();
     // This probe isolates ordinary ink compositing. Soft node occlusion is
     // tested separately with a live geometry shadow field.
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.width = 0.0;
         style.depth = 0.0;
     }
@@ -520,9 +520,9 @@ fn a_label_adds_no_light_through_the_bloom() {
         // A fresh fixture per frame: `Scene` is not `Clone`, and the only
         // thing that varies is the strength the composite reads.
         let mut scene = one_node_behind_another();
-        scene.bloom_strength = bloom;
+        scene.view.note_bloom = bloom;
         // Isolate emission: local shadows intentionally attenuate finished bloom.
-        scene.shadow.lattice_text.depth = 0.0;
+        scene.view.shadow.lattice_text.depth = 0.0;
         let cb = LatticeCallback::from_scene(
             &scene,
             LatticeLabels {
@@ -718,7 +718,7 @@ fn a_name_wears_the_wash_it_stands_in() {
     let mut lit = lit_node_and_a_name(1.6, FRESH_SHADOW, 0.0);
     // The name stands at the outer end of the reach, so the explicit tail
     // keeps enough light under it for this test to distinguish washed ink.
-    lit.glow_curve = harmonigraph_scene::GlowCurve { shape: -2.0 };
+    lit.view.glow_curve = harmonigraph_scene::GlowCurve { shape: -2.0 };
     let worn = shooter.shot_with(&lit, one_name(&lit, SIZE));
     let lifted =
         name.iter().filter(|&&i| brightness(&worn[i..i + 3]) > brightness(&off[i..i + 3])).count();
@@ -994,7 +994,7 @@ fn a_names_shadow_takes_the_same_share_off_ink_as_off_ground() {
     // Half depth leaves both receivers bright enough to measure their share.
     let mut scene = inked_on_grey(SHADOW, 0.5);
     // Measure the name alone against a dark-but-readable ink receiver.
-    scene.shadow.lattice_geometry.depth = 0.0;
+    scene.view.shadow.lattice_geometry.depth = 0.0;
     scene.lattice_ground = glam::vec4(0.2, 0.2, 0.2, 1.0);
     // In close, and AIMED at the band's outer edge, so the stroke stands in
     // the middle of the pane with the band's ink to one side and the ground to
@@ -1380,7 +1380,7 @@ fn a_names_shadow_is_the_same_width_in_points_at_render_scale_2() {
     shooter.clear = over_grey_clear();
     let mut footprint = |scale: f32| -> (std::collections::BTreeSet<usize>, f32) {
         let mut scene = inked_on_grey(SHADOW, 1.0);
-        scene.render_scale = scale;
+        scene.view.render_scale = scale;
         let at = on_screen(&scene, SIZE, NAME_AT);
         let bare = shooter.shot(&scene);
         let named = shooter.shot_with(&scene, one_name(&scene, SIZE));
@@ -1495,11 +1495,11 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
             node.melody_level = 0.0;
             node.bass_level = 0.0;
         }
-        scene.shadow = one_shadow(1.0, 0.18, kernel);
-        scene.shadow.lattice_text.width = 0.0;
-        scene.shadow.lattice_text.depth = 0.0;
-        scene.glow_reach = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.shadow = one_shadow(1.0, 0.18, kernel);
+        scene.view.shadow.lattice_text.width = 0.0;
+        scene.view.shadow.lattice_text.depth = 0.0;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
         let center = on_screen(&scene, SCENE_SIZE, scene.nodes[0].world_pos);
         let rect = [center.x - 4.0, center.y - 6.0, 64.0, 12.0];
         let glyph = GlyphInstance { rect, sdf_rect: rect, ..crate::text::tests::glyph() };
@@ -1583,7 +1583,7 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
         // And through the label-free bloom attachment: a deeper shadow hides
         // more of the rear name and never less.
         for bloom in [0.0, 1.0] {
-            scene.bloom_strength = bloom;
+            scene.view.note_bloom = bloom;
             let faint = shot(&scene, Some(1), true, 0.18);
             let deep = shot(&scene, Some(1), true, 0.8);
             let pairs = || faint.chunks_exact(4).zip(deep.chunks_exact(4));
@@ -1598,7 +1598,7 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
                 "{kernel:?}, bloom={bloom}: a deeper shadow left rear text brighter"
             );
         }
-        scene.bloom_strength = 0.0;
+        scene.view.note_bloom = 0.0;
         let front_old = shot(&scene, Some(0), false, 1.0);
         let front = shot(&scene, Some(0), true, 1.0);
         let solid: Vec<_> = (0..front.len())

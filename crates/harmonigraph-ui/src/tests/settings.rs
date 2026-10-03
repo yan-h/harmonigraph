@@ -537,12 +537,19 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                 let mappings = if pane == panes::Tab::Mappings { fresh_mappings() } else { 0 };
                 let mut short = 0;
                 let mut weights = 0;
+                let mut links = Vec::new();
                 for bar in &widths {
                     if (bar - width).abs() < 1.0 {
                         continue;
                     }
                     if (bar - track).abs() < 1.0 {
                         short += 1;
+                        continue;
+                    }
+                    // At this sweep's wide width both temperament switches sit
+                    // inline. At the smaller widths they wrap under full bars.
+                    if pane == panes::Tab::Tuning && width == 400.0 {
+                        links.push(*bar);
                         continue;
                     }
                     weights += 1;
@@ -554,6 +561,11 @@ fn every_bar_fills_its_settings_column_or_diagram_value_column() {
                          column, not the spectrum track's {track}pt, and not a weight bar \
                          {first}pt short of the column like the others (all of {widths:?})"
                     );
+                }
+                if pane == panes::Tab::Tuning && width == 400.0 {
+                    assert_eq!(links.len(), 2, "one shortened bar per link");
+                    assert!((links[0] - links[1]).abs() < 1.0, "interval columns align");
+                    assert!(links[0] > width / 2.0 && links[0] < width);
                 }
                 let want = if pane == panes::Tab::Mappings { 2 } else { 0 };
                 assert_eq!(
@@ -902,7 +914,7 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // under the Display pane's headers is layout, not this test's business.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
-        ("a settings bar", Grab::Bar("Wide blur mix")),
+        ("a settings bar", Grab::Bar("Contour strength")),
     ] {
         for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
             let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
@@ -925,13 +937,13 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
 /// outside the window ends that way every time.
 #[test]
 fn the_console_names_a_drag_the_wheel_had_to_end() {
-    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Wide blur mix"), Lose::Nothing);
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Contour strength"), Lose::Nothing);
     assert!(
         logged.iter().any(|line| line.starts_with("wheel: a drag on")),
         "the wheel ended a stranded drag without saying so: {logged:?}",
     );
     for quiet in [Lose::Pointer, Lose::Focus] {
-        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Wide blur mix"), quiet);
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Contour strength"), quiet);
         assert!(
             !logged.iter().any(|line| line.starts_with("wheel:")),
             "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
@@ -963,6 +975,8 @@ enum Grab {
 /// told along the way.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
+    // Contours must affect the picture for their bar to accept a drag.
+    state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
@@ -1071,10 +1085,12 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
+    // Contours must affect the picture for their bar to accept a drag.
+    state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that Mix is actually on screen below the view,
+    // Tall enough that Contour strength is actually on screen below the view,
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -1098,18 +1114,19 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // state read below is the one the frames wrote.
     let ctx = h.ctx.clone();
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Mix: a plain 0..=1 bar , so where the
+    // Contour strength: a plain 0..=1 bar, so where the
     // pointer is says what the value should be, and the far end of the range is
     // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
-    let name = bar_named(&out, "Wide blur mix").expect("the Mix bar is drawn on the Analyzer page");
+    let name =
+        bar_named(&out, "Contour strength").expect("the Contour bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.picture.appearance.spectrum.atmosphere.spread;
+    let before = state.picture.appearance.spectrum.atmosphere.contour_strength;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
     frame(&mut state, vec![press(on_the_bar, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
-    assert!(ctx.dragged_id().is_some(), "the press on the Mix bar started no drag");
-    let inside = state.picture.appearance.spectrum.atmosphere.spread;
+    assert!(ctx.dragged_id().is_some(), "the press on the Contour bar started no drag");
+    let inside = state.picture.appearance.spectrum.atmosphere.contour_strength;
     assert!(inside != before, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
@@ -1120,7 +1137,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.picture.appearance.spectrum.atmosphere.spread, 1.0,
+        state.picture.appearance.spectrum.atmosphere.contour_strength, 1.0,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 
@@ -1148,39 +1165,28 @@ fn the_video_pane_scrolls_instead_of_squeezing_its_preview() {
     assert!(moved < -8.0, "the Video pane did not scroll to the wheel (content moved {moved})");
 }
 
-/// The Commas section reads as a table: one row per comma, and the same two
-/// columns in the same order down every row — the temperament switch and its
-/// auto-detect.
-///
-/// Positions rather than presence, because a table whose cells do not line up
-/// is exactly the failure a "does it draw the word Marvel" test would pass.
-/// The Auto column is located by its heading: its switches are bare (the
-/// heading is their label), so there is no text in the cells to find.
+/// Links sit beside the intervals they control; no separate Auto table remains.
 #[test]
-fn the_commas_section_lays_its_rows_out_as_a_table() {
+fn temperament_switches_sit_beside_their_intervals() {
     let shapes = settings_pane_at_width(panes::Tab::Tuning, 423.0, PROJECTIONS[0]);
-    let find = |needle: &str| {
-        shapes.iter().find_map(|cs| match &cs.shape {
-            egui::Shape::Text(t) if t.galley.text() == needle => Some(t.pos),
-            _ => None,
-        })
+    let at = |needle: &str| {
+        shapes
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) if t.galley.text().contains(needle) => Some(t.pos),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing {needle}"))
     };
-    let at =
-        |needle: &str| find(needle).unwrap_or_else(|| panic!("the Tuning pane drew no {needle:?}"));
-    let (meantone, marvel) = (at("Meantone"), at("Marvel"));
-    let (temper_head, auto_head) = (at("Temper"), at("Auto"));
-
-    // Rows: the commas run down the table in `Comma::ALL` order.
-    assert!(marvel.y > meantone.y, "the rows are out of order");
-    // Columns: the two rows' switches share a left edge, and Auto is right of
-    // the names rather than under them.
-    assert!((meantone.x - marvel.x).abs() < 1.0, "the name column is ragged");
-    assert!(meantone.x < auto_head.x, "the name column is not leftmost");
-    // Headings sit above the first row, one over each column.
-    for head in [temper_head, auto_head] {
-        assert!(head.y < meantone.y, "a heading is not above the rows");
+    for (interval, mode) in [("Major third", "Meantone"), ("Harmonic seventh", "Marvel")] {
+        let (bar, switch) = (at(interval), at(mode));
+        assert!(
+            (bar.y - switch.y).abs() < 5.0,
+            "{mode} must share its interval row: bar={bar:?}, switch={switch:?}"
+        );
+        assert!(switch.x > bar.x);
     }
-    assert!(temper_head.x < auto_head.x);
+    assert!(!shapes.iter().any(|cs| matches!(&cs.shape, egui::Shape::Text(t) if t.galley.text() == "Auto" || t.galley.text() == "TEMPERAMENTS")));
 }
 
 /// A policy bar sends one configuration command on every changed drag frame,
@@ -1441,110 +1447,22 @@ fn nothing_is_drawn_under_a_settings_pane_scroll_bar() {
     }
 }
 
-/// The Tuning pane's comma table keeps its cells clear of the bar that scrolls
-/// them sideways.
-///
-/// The other half of [`theme::reserve_scroll_gutter`], and the half no pane
-/// margin can cover: this area scrolls HORIZONTALLY, so its bar runs under the
-/// table rather than down a side, and a row of cells has no gutter along its
-/// bottom for one to float in. Unreserved, the lane lands inside the bottom
-/// row.
-///
-/// Its own test because the table only overflows in a column dragged narrower
-/// than the table (see `comma_controls`), and at every width that fits the
-/// table there is no sideways bar for the sweep above to find. The column is
-/// sized off the table's own headings rather than quoted, so a change of type
-/// or padding cannot quietly give the table room to fit.
-///
-/// The pointer is parked on the Temper heading — inside the area, so the bar is
-/// awake and in the shapes at all, and on a plain label rather than a switch,
-/// whose hover would put a second copy of a row's name on screen to be found
-/// instead of the cell.
+/// A narrow pane keeps each link visible below its own interval.
 #[test]
-fn the_comma_tables_sideways_bar_runs_under_its_cells() {
-    let heading_rect = |out: &egui::FullOutput, name: &str| {
-        out.shapes.iter().find_map(|cs| match &cs.shape {
-            egui::Shape::Text(text) if text.galley.text() == name => {
-                Some(cs.shape.visual_bounding_rect())
-            }
-            _ => None,
-        })
+fn temperament_switches_wrap_under_their_intervals() {
+    let shapes = settings_pane_at_width(panes::Tab::Tuning, 230.0, PROJECTIONS[0]);
+    let find = |needle: &str| {
+        shapes
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Text(t) if t.galley.text().contains(needle) => Some(t.pos),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing {needle}"))
     };
-    // The table spans at least its two headings, so a whole settings section
-    // narrower than that span — pane margins included — cannot fit it.
-    let table = {
-        let out = tab_body(&mut fresh(), panes::Tab::Tuning, 400.0, PANE_HEIGHT);
-        let (temper, auto) = (heading_rect(&out, "Temper"), heading_rect(&out, "Auto"));
-        let (temper, auto) = temper.zip(auto).expect("the Tuning pane drew no comma headings");
-        auto.right() - temper.left()
-    };
-    let mut state = fresh();
-    state.workspace.layout = workspace::Layout::solo(panes::Tab::Tuning);
-    // Narrower than the two columns need, and tall enough that the pane does
-    // not also scroll — one bar in the picture is one bar to find.
-    let rails = 2.0 * (crate::theme::tab_bar_height(1.0) + 3.0);
-    let mut h = DockHarness::at(egui::vec2(table * 0.9 + rails, 900.0));
-    h.settle(&mut state);
-    let screen = state.workspace.layout_runtime.rects[workspace::Section::Settings as usize];
-    let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Where the table is has to be read off a frame before the pointer can be
-    // put in it: the Commas section sits wherever the sections above it end.
-    let out = frame(&mut state, vec![]);
-    let heading = heading_rect(&out, "Temper").expect("the Tuning pane drew no Temper heading");
-    let mut out = frame(&mut state, vec![egui::Event::PointerMoved(heading.center())]);
-    for _ in 0..20 {
-        out = frame(&mut state, vec![]);
-    }
-
-    let bar = f32::from(crate::theme::dock_pane_margin(1.0));
-    let pane = |cs: &egui::epaint::ClippedShape| {
-        let rect = cs.shape.visual_bounding_rect();
-        (rect.is_finite() && rect.width() < 1.0e4).then_some(rect)
-    };
-    // The bar: as thin as a bar and most of the pane wide, below the table's
-    // headings — not the shape of anything in a two-column table of switches.
-    let painted = out
-        .shapes
-        .iter()
-        .filter(|cs| matches!(cs.shape, egui::Shape::Rect(_)))
-        .filter_map(pane)
-        .filter(|rect| {
-            rect.height() <= bar + 0.5
-                && rect.width() >= screen.width() * 0.5
-                && rect.top() > heading.bottom()
-        })
-        .fold(egui::Rect::NOTHING, egui::Rect::union);
-    assert!(
-        painted.is_finite(),
-        "the comma table drew no sideways bar at {}pt, so it never overflowed and this proves \
-         nothing about it",
-        screen.width(),
-    );
-    // Painted at `floating_width` — the pointer is in the area, not on the bar —
-    // so the lane is a full bar up from its bottom edge, which is what egui
-    // senses and what a hover fills in.
-    let lane_top = painted.bottom() - bar;
-
-    // The table's own cells are the shapes the area clips to its content box.
-    // The bar and the area's fade are clipped to the whole tab body, which is a
-    // margin wider on each side, so neither is mistaken for one.
-    let cells = out
-        .shapes
-        .iter()
-        .filter(|cs| cs.clip_rect.width() < screen.width() - 1.0)
-        .filter_map(pane)
-        .filter(|rect| {
-            rect.top() >= heading.top() - 0.5 && rect.bottom() <= painted.bottom() + 0.5
-        });
-    let lowest = cells.fold(f32::NEG_INFINITY, |low, rect| low.max(rect.bottom()));
-    assert!(
-        lowest > heading.bottom(),
-        "the table drew its headings and no rows under them, so there is nothing to measure",
-    );
-    assert!(
-        lowest <= lane_top + 0.5,
-        "the table's cells run to {lowest} and the lane of the bar under them starts at {lane_top}",
-    );
+    assert!(find("Meantone").y > find("Major third").y);
+    assert!(find("Meantone").y < find("Harmonic seventh").y);
+    assert!(find("Marvel").y > find("Harmonic seventh").y);
 }
 
 /// The Lattice page drawn with the audio ring `width` thick and carrying

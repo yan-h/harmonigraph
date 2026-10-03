@@ -10,18 +10,18 @@ use crate::*;
 fn fractional_bloom_strength_is_independent_of_render_scale() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = single_marked_node(0, 0);
-    scene.glow_reach = 0.0;
+    scene.view.glow_reach = 0.0;
     scene.pluses.clear();
     scene.nodes[0].octaves.fill(1.0);
     scene.pitch_lut.fill(glam::Vec4::new(0.7, 0.5, 0.3, 1.0));
     let mut scale_totals = Vec::new();
     for scale in [1.0, 2.0] {
-        scene.render_scale = scale;
-        scene.bloom_strength = 0.0;
+        scene.view.render_scale = scale;
+        scene.view.note_bloom = 0.0;
         let plain = shooter.shot(&scene);
         let mut halos = Vec::new();
         for strength in [0.25, 0.75] {
-            scene.bloom_strength = strength;
+            scene.view.note_bloom = strength;
             let frame = shooter.shot(&scene);
             let halo: u64 = plain
                 .chunks_exact(4)

@@ -7,11 +7,8 @@
 //! through — and the site that acquires one next is covered by an assertion
 //! over the scene rather than by a test somebody remembers to add beside it.
 //!
-//! The door ([`ViewConfig::sanitize`]) repairs a loaded blob, so nothing
-//! arriving through the DAW reaches these sites broken. What this is for is
-//! the shells that never cross it: the offline layout, take replay and the
-//! harness each build a view in code, and there the failure is a blank or
-//! garbled frame with nothing on screen saying why.
+//! Production loads normalize their view. This intentionally bypasses loading
+//! to hold scene entry to the same repair when handed damaged values.
 
 use super::harness::*;
 use crate::*;
@@ -109,20 +106,16 @@ fn poisoned_view() -> ViewConfig {
         plus_arm: nan,
         plus_taper: nan,
         meantone: base.meantone,
-        meantone_auto: base.meantone_auto,
         marvel: base.marvel,
-        marvel_auto: base.marvel_auto,
         render_scale: nan,
         spiral_bloom: nan,
         glow_reach: nan,
         atmosphere: AtmosphereSettings {
-            texture: base.atmosphere.texture,
             material_style: base.atmosphere.material_style,
             material_amount: nan,
             material_shadow_pickup: nan,
             material_color_pickup: nan,
-            material_shadow_width: nan,
-            material_shadow_softness: nan,
+            pigment_reach: nan,
             stars: crate::StarSettings::default(),
             material_settings: crate::MaterialSettings {
                 velvet_size: nan,
@@ -213,11 +206,11 @@ impl Floats {
 fn scene_floats(scene: &Scene) -> Floats {
     let mut f = Floats::default();
     let Scene {
+        view,
         edge_softness_points,
         nodes,
         camera,
         node_radius,
-        note_animation,
         outer_inner,
         outer_outer,
         rings_outer,
@@ -230,25 +223,29 @@ fn scene_floats(scene: &Scene) -> Floats {
         plus_half_width,
         plus_taper_start,
         background,
-        mark_thickness,
         pitch_lut,
         pitch_lut_spacing,
         darkest_pitch,
         brightest_pitch,
+        marker_unit,
+        glow_rows: _,
+        glow_timing,
+    } = scene;
+    let ViewConfig {
+        note_animation,
         render_scale,
-        bloom_strength,
+        note_bloom: bloom_strength,
         glow_reach,
         glow_strength,
         glow_curve,
         shadow,
         glow_wash,
-        marker_unit,
         glow_blend,
         glow_accumulation,
-        glow_rows: _,
-        glow_timing,
+        mark_thickness,
         atmosphere,
-    } = scene;
+        ..
+    } = view;
     f.one("edge_softness_points", *edge_softness_points);
 
     for (i, node) in nodes.iter().enumerate() {
@@ -390,13 +387,11 @@ fn scene_floats(scene: &Scene) -> Floats {
     }
 
     let AtmosphereSettings {
-        texture: _,
         material_style: _,
         material_amount,
         material_shadow_pickup,
         material_color_pickup,
-        material_shadow_width,
-        material_shadow_softness,
+        pigment_reach,
         material_settings,
         stars,
         material_speed,
@@ -429,8 +424,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.material_amount", *material_amount);
     f.one("atmosphere.material_shadow_pickup", *material_shadow_pickup);
     f.one("atmosphere.material_color_pickup", *material_color_pickup);
-    f.one("atmosphere.material_shadow_width", *material_shadow_width);
-    f.one("atmosphere.material_shadow_softness", *material_shadow_softness);
+    f.one("atmosphere.pigment_reach", *pigment_reach);
     let crate::MaterialSettings {
         velvet_size,
         velvet_variety,
@@ -506,52 +500,35 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
         "`derive_scene` filled the glow timing, so the walk's empty arm is no longer honest",
     );
 
-    // Each site's chosen fallback, pinned — the VALUE, and no more than that.
-    // Several of these fallbacks are the fresh value as well (all three poses,
-    // and `render_scale`), so the line cannot tell a repair from a field the
-    // poison never reached, and none of them is offered as evidence that it
-    // did. What says the poison arrives is that this test was written and run
-    // against the unrepaired tree first, where it failed naming every site
-    // below and 147 nodes besides.
-    let step = crate::NODE_RADIUS_FACTOR;
-    let shadow = scene.shadow;
-    // The pose falls back to the fresh one (`NoteAnimationConfig::sanitized`).
-    let fresh = NoteAnimationConfig::default();
-    for (site, got, want) in [
-        ("node_radius", scene.node_radius, step),
-        ("marker_unit", scene.marker_unit, step * 1.8),
-        ("nodes[off the home sheet].scale", off_sheet, 0.15),
-        ("glow_reach", scene.glow_reach, 0.0),
-        ("glow_strength", scene.glow_strength, 0.0),
-        ("glow_wash", scene.glow_wash, 0.0),
-        ("glow_blend", scene.glow_blend, 0.0),
-        ("glow_accumulation", scene.glow_accumulation, 0.0),
-        ("render_scale", scene.render_scale, 1.0),
-        ("bloom_strength", scene.bloom_strength, crate::ViewConfig::default().note_bloom),
-        ("shadow.lattice_geometry.width", shadow.lattice_geometry.width, 0.0),
-        ("shadow.lattice_geometry.depth", shadow.lattice_geometry.depth, 0.0),
-        ("shadow.lattice_geometry.falloff", shadow.lattice_geometry.falloff, SHADOW_FALLOFF_MIN),
-        ("shadow.spectral_text.falloff", shadow.spectral_text.falloff, SHADOW_FALLOFF_MIN),
-        (
-            "note_animation.starting_scale",
-            scene.note_animation.starting_scale(),
-            fresh.starting_scale(),
-        ),
-        ("note_animation.radial_start", scene.note_animation.radial_start, fresh.radial_start),
-    ] {
-        assert_eq!(got, want, "{site} came out {got}, not the fallback this pass chose");
-    }
+    let mut normalized = poisoned_view();
+    normalized.sanitize();
+    // The requested window is independent of the view's repaired dials.
+    let mut expected = derive_scene(
+        &sounding(),
+        &Tuning::default(),
+        &normalized,
+        &poisoned_view().reach(),
+        &plain_frame(),
+        Camera::default(),
+        None,
+    );
+    NodeMotion::default().step(
+        &mut expected,
+        &sounding(),
+        &Tuning::default(),
+        &normalized,
+        &normalized.envelope(&plain_frame()),
+        &RingFade::default(),
+        0.0,
+    );
+    assert_eq!(scene.view, expected.view);
+    assert_eq!(scene_floats(&scene).0, scene_floats(&expected).0);
+    assert_eq!(off_sheet, normalized.sevens_size);
 
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the scene at: {}", names.join(", "));
 
-    // ...and the same sweep over a picture that still has MARKERS in it, which
-    // the pass above cannot have. A NaN arm reads as 0 through `size`, so
-    // `derive_pluses` ships an empty field and the walk's `pluses` loop runs zero times —
-    // leaving a marker's position, colour and strength unmeasured by the one
-    // test that claims the whole scene. One real arm is what it takes to
-    // get a marker drawn at all; everything the marker's own geometry and ink
-    // are derived from stays poisoned around it.
+    // A nonzero arm makes the marker walk reach its geometry and ink too.
     let drawable = ViewConfig { plus_arm: 0.5, ..poisoned_view() };
     let scene = scene_of(&sounding(), &Tuning::default(), &drawable, &plain_frame(), 0.0);
     assert!(!scene.pluses.is_empty(), "a real arm still shipped no marker field");

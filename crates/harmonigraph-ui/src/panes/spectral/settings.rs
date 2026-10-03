@@ -65,11 +65,6 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 &mut atmosphere.pitch_softness,
                 &mut atmosphere.time_softness,
             );
-            let soft = atmosphere.pitch_softness > 0.0 || atmosphere.time_softness > 0.0;
-            ui.add_enabled_ui(soft, |ui| {
-                ValueBar::new(&mut atmosphere.spread, 0.0..=1.0, "Wide blur mix").percent().show(ui)
-                    .on_hover_text("Blend the close blur with a blur five times wider. 0% uses the close blur only; 100% uses the wider field. Pitch and Time softness set their base widths.");
-            });
             let contours_visible = atmosphere.cloud_style != harmonigraph_scene::CloudStyle::Stars
                 || atmosphere.cloud_depth < 1.0;
             ui.add_enabled_ui(contours_visible, |ui| {

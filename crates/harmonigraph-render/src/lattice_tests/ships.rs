@@ -71,7 +71,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // fragments is thin; a Shadow this wide makes it most of the quad.
     let wide_shadow = || {
         let mut scene = parity_scene();
-        for style in scene.shadow.groups_mut() {
+        for style in scene.view.shadow.groups_mut() {
             style.width = 0.6;
         }
         scene
@@ -98,7 +98,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // path would run.
     let lit_field = || {
         let mut scene = wide_shadow();
-        scene.glow_reach = 0.8;
+        scene.view.glow_reach = 0.8;
         // One node with INK and no light of its own, which is what the cull
         // ships for its ink alone (`paints`): it draws its layers, takes the
         // wash under them, and emits nothing.
@@ -123,7 +123,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // an early-out of its own, which every fixture above compiles on one row.
     let distance = || {
         let mut scene = wide_shadow();
-        for style in scene.shadow.groups_mut() {
+        for style in scene.view.shadow.groups_mut() {
             style.kernel = harmonigraph_scene::ShadowKernel::Distance;
         }
         scene
@@ -522,7 +522,7 @@ fn ring_at_level(gpu: &mut Shooter, level: u8, spacing: harmonigraph_scene::LutS
     scene.outer_inner = rings.band.0;
     scene.outer_outer = rings.band.1;
     scene.rings_outer = rings.outer;
-    scene.octave_gap = view.octave_gap_width();
+    scene.octave_gap = view.ring_gap;
     let mut paint = harmonigraph_scene::SpectralPaint::silent();
     (paint.inner, paint.outer) = rings.audio;
     paint.folded = true;
@@ -883,9 +883,9 @@ fn offscreen_halos_draw_only_where_their_footprint_reaches() {
     };
     let at = |centre_x: f32| -> Scene {
         let mut scene = single_marked_node(0, 0);
-        scene.glow_reach = 0.8;
-        scene.glow_strength = 1.5;
-        scene.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.5;
+        scene.view.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
         let mut roamer = scene.nodes[0];
         roamer.world_pos = glam::Vec3::new((centre_x - scale.0) / scale.1, 0.0, 0.0);
         roamer.lattice_pos = harmonigraph_core::LatticePos::new(1, 0, 0);

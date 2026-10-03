@@ -610,6 +610,7 @@ pub(crate) fn spiral_pane(
         harmonigraph_render::SlideAxis::Across,
         Some(state.appearance.view.shadow.spectral_text),
         Some(crate::text::SPIRAL_SHADOW_SURFACE),
+        1.0,
     );
     painter.add(harmonigraph_render::spectral_shadow_prepare_callback(
         rect,

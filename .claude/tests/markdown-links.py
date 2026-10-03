@@ -104,16 +104,43 @@ Setext title
         files["README.md"] += "[missing]: docs/gone.md\n"
         self.assertEqual(len(self.check(files)), 1)
 
+    def test_inline_code_paths_must_be_tracked_unless_linked_patterns_or_archived(self):
+        files = {
+            "README.md": """`crates/a/src/lib.rs:12:5`, `crates/a/src/`, `crates/a/src/lib.rs::Item` and `crates/a/src/lib.rs#notes`
+`crates/a/src/gone.rs`
+`./crates/a/src/gone.rs`
+`crates/a/src/gone.rs` was deleted in #715
+[`crates/a/src/gone.rs`](https://github.com/o/r/blob/06d3f0a8/crates/a/src/gone.rs) is pinned to a commit
+[`crates/a/src/gone.rs`](https://github.com/o/r/blob/main/crates/a/src/gone.rs) follows a branch
+[the old
+`crates/a/old.rs`](crates/a/src/lib.rs) and `crates/a/src/after.rs`
+`crates/*/src`, `crates/<crate>/lib.rs`, `crates/harmonigraph-`, `lib.rs`, `src/gone.rs`
+```sh
+cat crates/a/src/fenced.rs
+```
+""",
+            "crates/a/src/lib.rs": "",
+            "docs/evidence/old.md": "`crates/a/src/archived.rs`\n",
+        }
+        errors = self.check(files)
+        self.assertEqual([e.split(": inline code")[0] for e in errors],
+                         ["README.md:2", "README.md:3", "README.md:4", "README.md:6", "README.md:8"], errors)
+
     def test_cli_rejects_present_untracked_targets_and_ignores_vendor_and_symlink_sources(self):
         with tempfile.TemporaryDirectory(prefix="markdown-links-") as tmp:
             root = Path(tmp)
             subprocess.run(["git", "init", "-q", tmp], check=True)
-            (root / "README.md").write_text("[New](new.md#new)\n")
+            (root / "README.md").write_text("[New](new.md#new)\n`vendor/build/`\n`docs/skills/README.md`\n")
+            # A directory-only pattern matches the untracked path only in its slash form.
+            (root / ".gitignore").write_text("vendor/build/\n")
             (root / "new.md").write_text("# New\n")
             (root / "vendor").mkdir()
             (root / "vendor/README.md").write_text("[Missing](gone.md)\n")
             (root / "AGENTS.md").symlink_to("vendor/README.md")
-            subprocess.run(["git", "add", "README.md", "vendor", "AGENTS.md"], cwd=tmp, check=True)
+            # A tracked directory symlink, like `.agents/skills` → `.claude/skills`.
+            (root / "docs").mkdir()
+            (root / "docs/skills").symlink_to("../vendor")
+            subprocess.run(["git", "add", "README.md", "vendor", "AGENTS.md", "docs"], cwd=tmp, check=True)
 
             def run():
                 return subprocess.run([sys.executable, "-B", str(SCRIPT)],

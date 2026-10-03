@@ -2,7 +2,8 @@
 //! aggregation, which supplies those pitches every callback, is the Hub in
 //! `tuning`.
 use harmonigraph_core::configuration::{
-    ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, ResolvedConfig, TuningModes,
+    ConfigEdit, ConfigMutation, ConfigReducer, PolicyConfig, PolicyEdit, ResolvedConfig,
+    TuningModes,
 };
 use harmonigraph_core::confirmed::{ConfirmedPitches, LearningState};
 use harmonigraph_core::{LearnedTuning, Tempered, Tuning};
@@ -23,28 +24,18 @@ pub const MUSICAL_SETTINGS: &str = "musical-settings";
 struct MusicalSettings {
     meantone: bool,
     marvel: bool,
-    meantone_auto: bool,
-    marvel_auto: bool,
     learning: bool,
     adaptive: harmonigraph_take::configuration::PolicyRecord,
 }
 impl Default for MusicalSettings {
     fn default() -> Self {
-        Self {
-            meantone: true,
-            marvel: true,
-            meantone_auto: true,
-            marvel_auto: true,
-            learning: false,
-            adaptive: Default::default(),
-        }
+        Self { meantone: true, marvel: true, learning: false, adaptive: Default::default() }
     }
 }
 impl MusicalSettings {
     fn modes(self) -> TuningModes {
         TuningModes {
             tempered: Tempered { syntonic: self.meantone, septimal_kleisma: self.marvel },
-            auto: [self.meantone_auto, self.marvel_auto],
             learning: self.learning,
         }
     }
@@ -52,8 +43,6 @@ impl MusicalSettings {
         Self {
             meantone: modes.tempered.syntonic,
             marvel: modes.tempered.septimal_kleisma,
-            meantone_auto: modes.auto[0],
-            marvel_auto: modes.auto[1],
             learning: modes.learning,
             adaptive: policy.into(),
         }
@@ -62,15 +51,12 @@ impl MusicalSettings {
 fn bits(modes: TuningModes) -> i32 {
     i32::from(modes.tempered.syntonic)
         | i32::from(modes.tempered.septimal_kleisma) << 1
-        | i32::from(modes.auto[0]) << 2
-        | i32::from(modes.auto[1]) << 3
-        | i32::from(modes.learning) << 4
+        | i32::from(modes.learning) << 2
 }
 fn modes(bits: i32) -> TuningModes {
     TuningModes {
         tempered: Tempered { syntonic: bits & 1 != 0, septimal_kleisma: bits & 2 != 0 },
-        auto: [bits & 4 != 0, bits & 8 != 0],
-        learning: bits & 16 != 0,
+        learning: bits & 4 != 0,
     }
 }
 fn encode_option(value: Option<bool>) -> i32 {
@@ -89,11 +75,11 @@ pub fn packet(edit: ConfigEdit) -> ConfigurationEdit {
     payload[0] = EDIT;
     payload[1] = encode_option(edit.tempered[0]);
     payload[2] = encode_option(edit.tempered[1]);
-    payload[3] = encode_option(edit.auto[0]);
-    payload[4] = encode_option(edit.auto[1]);
-    payload[5] = encode_option(edit.learning);
+    payload[3] = encode_option(edit.learning);
     if let Some(policy) = edit.policy {
-        payload[7..17].copy_from_slice(&policy.sanitize().words());
+        let (mask, values) = policy.words();
+        payload[6] = mask;
+        payload[7..17].copy_from_slice(&values);
     }
     ConfigurationEdit {
         values: edit.axes.map(|value| value.map(|v| v as f32 / 1_000_000.0)),
@@ -294,20 +280,25 @@ impl Owner {
                 raw,
             },
             _ => ConfigMutation::Edit(ConfigEdit {
-                // Full normalized/modulated raw input is coherent here. Unchanged
-                // axes carry no musical revision or fresh comma judgement.
-                axes: axes(raw).map(Some),
+                // A typed same-value entry is new input. Unchanged host automation
+                // (including echoes of our own notifications) is not. Modulation
+                // has no write mask, so also include changed committed axes.
+                axes: std::array::from_fn(|i| {
+                    ((command.origin == ConfigurationOrigin::Ui
+                        && command.edit.values[i].is_some())
+                        || commit.raw[i] != self.snapshot.raw[i])
+                        .then_some(axes(raw)[i])
+                }),
                 tempered: [
                     decode_option(command.edit.payload[1]),
                     decode_option(command.edit.payload[2]),
                 ],
-                auto: [
-                    decode_option(command.edit.payload[3]),
-                    decode_option(command.edit.payload[4]),
-                ],
-                learning: decode_option(command.edit.payload[5]),
+                learning: decode_option(command.edit.payload[3]),
                 policy: (command.edit.payload[7] == 3).then(|| {
-                    PolicyConfig::from_words(command.edit.payload[7..17].try_into().unwrap())
+                    PolicyEdit::from_words(
+                        command.edit.payload[6],
+                        command.edit.payload[7..17].try_into().unwrap(),
+                    )
                 }),
             }),
         };

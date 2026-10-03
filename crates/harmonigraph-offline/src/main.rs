@@ -269,9 +269,9 @@ fn tail_of_render(explicit: Option<f64>, trigger: RenderTrigger) -> f64 {
 
 /// The trigger a take was recorded under, read from its own appearance.
 ///
-/// Silent on a blob that does not parse: [`render::appearance_for`] has already
-/// said so when that blob is the one being drawn, and a take that cannot say
-/// how it ended keeps the ordinary tail.
+/// A malformed recorded look is only reachable with a valid replacement:
+/// [`render::appearance_for`] refuses it otherwise. Such a take cannot say
+/// how it ended, so an explicit replacement keeps the ordinary tail.
 fn recorded_trigger(take: &harmonigraph_take::Take) -> RenderTrigger {
     take.header
         .appearance
@@ -378,7 +378,7 @@ fn export(args: Args) -> Result<(), String> {
     // render defaults its size and layout to this, so a plain `harmonigraph-offline
     // take.take` reproduces exactly what was previewed; --appearance and --size
     // explicitly override it.
-    let appearance = render::appearance_for(&take, replacement.as_deref());
+    let appearance = render::appearance_for(&take, replacement.as_deref())?;
     let render_config = &appearance.render;
     let frame = render_config.frame;
     let layout = Layout::split(frame.lattice, frame.split);

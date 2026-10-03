@@ -20,38 +20,42 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
         // two draws per case that nothing reads (#1181).
         let sweep = root.is_some() || kernel == harmonigraph_scene::ShadowKernel::Distance;
         for (name, grow, order, spread) in [
-            ("plain", false, AnimationOrder::Simultaneous, 0.28),
-            ("grow", true, AnimationOrder::Simultaneous, 0.28),
+            ("plain", false, AnimationOrder::Circular, 0.0),
+            ("grow", true, AnimationOrder::Circular, 0.0),
             ("ordered", true, AnimationOrder::Circular, 0.28),
             ("wide", true, AnimationOrder::Circular, 0.9),
-            ("marks", false, AnimationOrder::Simultaneous, 0.28),
-            ("audio", false, AnimationOrder::Simultaneous, 0.28),
+            ("marks", false, AnimationOrder::Circular, 0.0),
+            ("audio", false, AnimationOrder::Circular, 0.0),
         ] {
             let mut scene = single_marked_node(MIDDLE_C, 0);
             scene.pluses.clear();
-            scene.glow_strength = 0.0;
-            scene.bloom_strength = 0.0;
-            scene.note_animation = NoteAnimationConfig {
+            scene.view.glow_strength = 0.0;
+            scene.view.note_bloom = 0.0;
+            scene.view.note_animation = NoteAnimationConfig {
                 order,
                 stagger_spread: spread,
                 radial_start: if grow { -1.0 } else { 0.0 },
             };
-            scene.shadow = one_shadow(0.6, 0.8, kernel);
+            scene.view.shadow = one_shadow(0.6, 0.8, kernel);
             if name == "marks" {
-                scene.shadow.lattice_geometry.falloff = 1.8;
+                scene.view.shadow.lattice_geometry.falloff = 1.8;
             }
             if name == "audio" {
-                scene.shadow.lattice_geometry.falloff = 0.6;
+                scene.view.shadow.lattice_geometry.falloff = 0.6;
                 scene.outer_outer = 0.0;
-                scene.mark_thickness = 0.0;
+                scene.view.mark_thickness = 0.0;
                 scene.spectral.inner = 0.2;
                 scene.spectral.outer = 0.45;
                 *scene.spectral.levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
                 *scene.spectral.color_levels = [200; harmonigraph_scene::SPECTRAL_BUCKETS];
                 scene.spectral.lut = [glam::Vec4::ONE; harmonigraph_scene::PITCH_LUT_N];
             }
-            let delays =
-                scene.note_animation.delays(&scene.octave_layout, scene.nodes[0].cents, 42, 1.0);
+            let delays = scene.view.note_animation.delays(
+                &scene.octave_layout,
+                scene.nodes[0].cents,
+                42,
+                1.0,
+            );
             // `p` sweeps the WHOLE arrival, which a stagger widens past one
             // sector's own duration: every sector animates for 1.0 and the
             // last one only starts at the widest delay.
@@ -161,9 +165,9 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
 fn zero_spread_orders_draw_the_same_smooth_arrival() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = single_marked_node(MIDDLE_C, 0);
-    scene.glow_reach = 1.5;
-    scene.glow_strength = 0.8;
-    scene.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+    scene.view.glow_reach = 1.5;
+    scene.view.glow_strength = 0.8;
+    scene.view.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
     let phases = [0.15f32, 0.4, 0.7, 1.0, -0.7, -0.4, -0.15];
     for phase in phases {
         let node = &mut scene.nodes[0];
@@ -174,15 +178,15 @@ fn zero_spread_orders_draw_the_same_smooth_arrival() {
         node.glow.level = phase.abs();
         let frame = shooter.shot(&scene);
         for order in AnimationOrder::ALL {
-            scene.note_animation.order = order;
-            scene.note_animation.stagger_spread = 0.0;
+            scene.view.note_animation.order = order;
+            scene.view.note_animation.stagger_spread = 0.0;
             assert_eq!(
                 shooter.shot(&scene),
                 frame,
                 "zero spread changed the smooth arrival for {order:?}"
             );
         }
-        scene.note_animation = NoteAnimationConfig::default();
+        scene.view.note_animation = NoteAnimationConfig::default();
     }
 }
 
@@ -214,12 +218,12 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
         scene.nodes.retain(|n| n.lattice_pos == harmonigraph_core::LatticePos::ORIGIN);
         scene.pluses.clear();
         scene.node_radius = 1.1;
-        scene.glow_strength = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.glow_strength = 0.0;
+        scene.view.note_bloom = 0.0;
         scene.outer_inner = 0.0;
         scene.outer_outer = 0.0;
-        scene.mark_thickness = 0.0;
-        scene.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
+        scene.view.mark_thickness = 0.0;
+        scene.view.shadow = one_shadow(0.0, 0.0, harmonigraph_scene::ShadowKernel::Gaussian);
         // An actually visible independently gated audio annulus; silence at
         // the gate is deliberately not the fixture this test measures.
         scene.spectral.inner = 0.2;
@@ -230,7 +234,7 @@ fn transition_keeps_gated_audio_fixed_through_midi_release_and_prune() {
         scene.nodes[0].audio_ring = 1.0;
         scene.nodes[0].slice_progress = [((2.0 - now) as f32).clamp(0.0, 1.0); 11];
         let shot = shooter.shot(&scene);
-        scene.note_animation = NoteAnimationConfig::default();
+        scene.view.note_animation = NoteAnimationConfig::default();
         let reference = shooter.shot(&scene);
         // The spark can move outside this independently opaque annulus;
         // measure the audio pixels, not the empty space around the ring.
@@ -256,7 +260,7 @@ fn smooth_grow_draws_complete_pieces_and_settles() {
     let Some(mut shooter) = Shooter::new([384, 384]) else { return };
     let mut scene = single_marked_node(0, 0);
     scene.node_radius = 1.6;
-    scene.glow_strength = 0.0;
+    scene.view.glow_strength = 0.0;
     scene.octave_layout = harmonigraph_scene::octave_layout(6, 60.0);
     scene.nodes[0].cents = 350.0;
     scene.nodes[0].octaves = [1.0; harmonigraph_scene::OCTAVE_SLOTS];
@@ -268,14 +272,15 @@ fn smooth_grow_draws_complete_pieces_and_settles() {
     for kernel in
         [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
     {
-        scene.shadow = one_shadow(0.6, 0.8, kernel);
+        scene.view.shadow = one_shadow(0.6, 0.8, kernel);
         scene.background = glam::Vec4::splat(0.2);
         scene.background.w = 1.0;
         shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
-        scene.note_animation = NoteAnimationConfig::default();
+        scene.view.note_animation = NoteAnimationConfig::default();
         scene.nodes[0].slice_progress = [1.0; 11];
         let reference = shooter.shot(&scene);
-        scene.note_animation = NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
+        scene.view.note_animation =
+            NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
         for (step, phase) in
             [0.08f32, 0.2, 0.3, 0.5, 0.72, 0.99, 1.0, -0.7, -0.3].into_iter().enumerate()
         {
@@ -322,7 +327,7 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
     let Some(mut shooter) = Shooter::new([384, 384]) else { return };
     let mut scene = single_marked_node(0, 0);
     scene.node_radius = 1.6;
-    scene.glow_strength = 0.0;
+    scene.view.glow_strength = 0.0;
     scene.octave_layout = harmonigraph_scene::octave_layout(6, 60.0);
     scene.nodes[0].cents = 350.0;
     scene.nodes[0].octaves = [1.0; 11];
@@ -334,14 +339,14 @@ fn all_orders_draw_complete_rotated_pieces_at_their_shared_delays() {
     for kernel in
         [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
     {
-        scene.shadow = one_shadow(0.6, 0.8, kernel);
+        scene.view.shadow = one_shadow(0.6, 0.8, kernel);
         scene.background = glam::Vec4::new(0.2, 0.2, 0.2, 1.0);
         shooter.clear = crate::wgpu::Color { r: 0.2, g: 0.2, b: 0.2, a: 1.0 };
         let mut arrivals = Vec::new();
         for order in AnimationOrder::ALL {
-            scene.note_animation =
+            scene.view.note_animation =
                 NoteAnimationConfig { order, radial_start: -1.0, ..Default::default() };
-            let delays = scene.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
+            let delays = scene.view.note_animation.delays(&scene.octave_layout, 350.0, 42, 1.0);
             let span = 1.0 + delays.iter().copied().fold(0.0, f32::max);
             for (step, time) in
                 [0.1f32, 0.25, 0.5, 0.8, 1.0, -0.1, -0.25, -0.5, -1.0].into_iter().enumerate()

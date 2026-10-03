@@ -13,6 +13,10 @@ pub(super) fn scene_of(
 ) -> Scene {
     let mut scene =
         derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None);
+    // The post-passes use the same normalized view as production composition.
+    let mut normalized = view.clone();
+    normalized.sanitize();
+    let view = &normalized;
     NodeMotion::default().step(
         &mut scene,
         tracker,
@@ -47,7 +51,7 @@ pub(super) fn scene_of(
 /// layers in `a_fresh_mark_eases_in_with_the_octave_it_links_to`.
 pub(super) fn plain_view() -> ViewConfig {
     let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..ViewConfig::default() };
-    view.note_animation.order = AnimationOrder::Simultaneous;
+    view.note_animation.stagger_spread = 0.0;
     view
 }
 

@@ -48,16 +48,21 @@ pub(crate) const DISTANCE_TEXELS_PER_POINT: f32 = 0.8;
 pub const SPECTRAL_WIDTH_POINTS: f32 = 4.0;
 
 /// A spectral style's σ in screen points.
-pub(crate) fn spectral_sigma_points(style: harmonigraph_scene::ShadowStyle) -> f32 {
-    sigma_points(style.width, SPECTRAL_WIDTH_POINTS)
+pub(crate) fn spectral_sigma_points(
+    style: harmonigraph_scene::ShadowStyle,
+    point_scale: f32,
+) -> f32 {
+    sigma_points(style.width, SPECTRAL_WIDTH_POINTS) * point_scale.max(0.0)
 }
 
 /// How far a spectral style's selected renderer can paint past its caster.
-pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle) -> f32 {
+/// `point_scale` scales the drawing after clamping the dial, so an enlarged
+/// composed preview can exceed the dial's maximum point reach.
+pub fn spectral_shadow_reach(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> f32 {
     let style = style.clamped(harmonigraph_scene::SPECTRAL_SHADOW_MAX);
     if style.casts() {
-        spectral_sigma_points(style) * style.kernel.reach_sigmas()
-            + style.gaussian_spread_points(spectral_sigma_points(style))
+        spectral_sigma_points(style, point_scale) * style.kernel.reach_sigmas()
+            + style.gaussian_spread_points(spectral_sigma_points(style, point_scale))
     } else {
         0.0
     }
@@ -1547,11 +1552,11 @@ pub(crate) mod tests {
                 kernel,
                 ..Default::default()
             };
-            assert!(spectral_shadow_reach(style(1.0, 1.0)) > 0.0, "the live fixture is shut");
-            assert_eq!(spectral_shadow_reach(style(0.0, 1.0)), 0.0, "width endpoint");
-            assert_eq!(spectral_shadow_reach(style(1.0, 0.0)), 0.0, "depth endpoint");
-            assert_eq!(spectral_shadow_reach(style(f32::NAN, 1.0)), 0.0, "repaired width");
-            assert_eq!(spectral_shadow_reach(style(1.0, f32::NAN)), 0.0, "repaired depth");
+            assert!(spectral_shadow_reach(style(1.0, 1.0), 1.0) > 0.0, "the live fixture is shut");
+            assert_eq!(spectral_shadow_reach(style(0.0, 1.0), 1.0), 0.0, "width endpoint");
+            assert_eq!(spectral_shadow_reach(style(1.0, 0.0), 1.0), 0.0, "depth endpoint");
+            assert_eq!(spectral_shadow_reach(style(f32::NAN, 1.0), 1.0), 0.0, "repaired width");
+            assert_eq!(spectral_shadow_reach(style(1.0, f32::NAN), 1.0), 0.0, "repaired depth");
         }
     }
 

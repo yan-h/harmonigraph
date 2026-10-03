@@ -1,0 +1,15 @@
+{
+  "build": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "harmonigraph-plugin",
+    "-p",
+    "harmonigraph-offline"
+  ],
+  "artifacts": [
+    "target/release/libharmonigraph_plugin.dylib",
+    "target/release/harmonigraph-offline"
+  ]
+}

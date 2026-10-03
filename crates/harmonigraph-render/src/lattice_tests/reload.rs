@@ -242,11 +242,11 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
     let _guard = reload::test_lock();
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
     let mut scene = parity_scene();
-    scene.glow_reach = 0.8;
+    scene.view.glow_reach = 0.8;
     let labels =
         |scene: &Scene| names(vec![(0, vec![name_glyph(scene, [112.0, 110.0, 24.0, 36.0])])]);
     let plain = shooter.shot_with(&scene, labels(&scene));
-    scene.bloom_strength = 1.0;
+    scene.view.note_bloom = 1.0;
     let bloomed = shooter.shot_with(&scene, labels(&scene));
     let dir = scratch("real-pipelines");
     let (common, lattice, text_path) =
@@ -280,7 +280,7 @@ fn a_reload_rebuilds_and_draws_both_bloom_variants() {
             "reload leaked into another context's compiled handles"
         );
     }
-    scene.bloom_strength = 0.0;
+    scene.view.note_bloom = 0.0;
     assert_eq!(plain, shooter.draw(&scene, labels(&scene)));
 
     // A rejected edit must retain the current context's compiled value too.

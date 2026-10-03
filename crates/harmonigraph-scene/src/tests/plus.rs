@@ -190,39 +190,18 @@ fn the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away() {
     );
 }
 
-/// An arm that is not a real number takes the field away, the way 0 does —
-/// and takes it away through the SAME `radius <= 0.0` test, because `size`
-/// answers every non-finite arm with 0 before a radius is built from it.
-///
-/// Which is why this pins the door and not only the picture. `derive_pluses`
-/// carries no NaN branch of its own and cannot: with `size` the only way in,
-/// there is nothing left to reach one. A radius assembled from some later
-/// factor that `size` has NOT been over would put a NaN past the off test —
-/// NaN answers no to `<= 0.0` the way it answers no to every comparison — and
-/// ship the field whole at a size the shader cannot draw, the resting
-/// structure gone with nothing on screen saying why. The lower assertion is
-/// what goes red when that door is the one that moved.
-///
-/// The arm has a repair at the blob's door; this is the picture's own,
-/// for shells that never cross it.
+/// An unreadable arm uses the same fresh setting at load and picture entry.
 #[test]
-fn a_marker_radius_that_is_not_a_number_takes_the_field_away() {
+fn a_nonfinite_marker_arm_draws_the_sanitized_field() {
     for arm in [f32::NAN, f32::NEG_INFINITY] {
         let view = ViewConfig { plus_arm: arm, ..plus_view() };
         let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-        // The fixture must reach a position for a marker to stand at.
-        assert!(
-            scene.nodes.iter().any(|n| n.on_home),
-            "an arm of {arm} left no home position to mark, so the field below proves nothing",
-        );
-        assert!(scene.pluses.is_empty(), "an arm of {arm} shipped a marker field");
-        // The door itself, so that the empty field above stays evidence of a
-        // repair rather than of a coincidence downstream.
-        assert_eq!(
-            crate::view::size(arm, PLUS_SIZE_MAX),
-            0.0,
-            "`size` passed an arm of {arm} through, so the off test alone is no longer the guard",
-        );
+        let mut normalized = view.clone();
+        normalized.sanitize();
+        let expected =
+            scene_of(&NoteTracker::new(), &Tuning::default(), &normalized, &plain_frame(), 0.0);
+        assert!(!scene.pluses.is_empty(), "the repaired arm must draw markers");
+        assert!(scene.pluses.iter().all(|p| p.radius == expected.pluses[0].radius));
     }
 }
 

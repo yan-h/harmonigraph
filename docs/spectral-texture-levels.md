@@ -10,8 +10,8 @@ rather than moving already-colored RGB pixels.
 Interpolating levels before coloring retains the stepped look;
 interpolating finished colors would soften those steps and can mix colors outside the gradient's path.
 
-Softness and Spread still build the source picture using the existing density-weighted filter.
-Watercolor reads that same combined field and keeps its overlapping globs,
+Pitch and time softness build the source picture using the density-weighted filter.
+Watercolor reads that same softened field and keeps its overlapping globs,
 lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
 Texture mix blends original and displaced levels before the shared Contours and palette lookup.

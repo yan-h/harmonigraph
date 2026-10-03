@@ -6,8 +6,14 @@ Rolling real-input audio analysis shared by the live UI and offline renderer.
 
 RealFFT owns the planned half-size complex transform and real-input postprocessing.
 Each channel retains its own plan and reusable input, output and scratch buffers.
-Configuration changes still reset the audio window;
-unchanged size/taper settings do nothing.
+Callers adopt one final `AnalyzerConfig` for all channels.
+Only a window-size change replans the transform;
+taper changes rebuild the estimator weights,
+and sample-rate changes rebuild the pitch-bucket reads.
+Any configuration change resets the audio window;
+unchanged settings do nothing.
+New channels start at the requested settings,
+while a source restart clears retained audio and keeps its estimator resources.
 There is no retained planner or shared plan cache.
 
 This is the minimum extraction needed to leave the reusable pitch-math crate dependency-free.

@@ -69,5 +69,5 @@ take/record transport its serialized text opaquely.
 `AppearanceDocument::parse` checks the appearance version and normalizes its settings once before export chooses output configuration or initializes drawing.
 Editor load calls the same `normalize` implementation on its nested document before applying any workspace state.
 An editor version-floor bump does not invalidate a recorded appearance.
-`install_appearance` installs the normalized value and clears the tuning detection verdicts;
+`install_appearance` installs the normalized value and restores its tuning links alongside the next parameter snapshot;
 context-owned resources and workspace dial invalidation retain their separate lifetimes.

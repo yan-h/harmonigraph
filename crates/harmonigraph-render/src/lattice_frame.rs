@@ -32,9 +32,10 @@ impl LatticeCallback {
         stats: Option<std::sync::Arc<LatticeStats>>,
     ) -> Self {
         let aspect = size_points.x / size_points.y.max(1.0);
-        let render_scale = scene.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
+        let render_scale =
+            scene.view.render_scale.clamp(RENDER_SCALE_RANGE.0, RENDER_SCALE_RANGE.1);
         let camera = scene.camera;
-        let atmosphere = scene.atmosphere.sanitized();
+        let atmosphere = scene.view.atmosphere.sanitized();
         // Reduce the decorative clock in f64 before uploading bounded phases.
         let texture_time =
             scene.glow_timing.map_or(0.0, |clock| clock.now) * f64::from(atmosphere.texture_speed);
@@ -159,11 +160,11 @@ impl LatticeCallback {
         // light is over — exactly 0, again rather than nearly, so a shipped
         // instance is always one with something to draw.
         let ringing = scene.spectral.ring_draws();
-        let lights = scene.glow_reach > 0.0 && scene.glow_strength > 0.0;
+        let lights = scene.view.glow_reach > 0.0 && scene.view.glow_strength > 0.0;
         let pickup_enabled = lights
             && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
             && atmosphere.material_amount > 0.0
-            && atmosphere.material_shadow_width > 0.0;
+            && atmosphere.pigment_reach > 0.0;
         let paints = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
                 || (lights && g.glow[0] > 0.0)
@@ -250,8 +251,8 @@ impl LatticeCallback {
         // packer needs no second conversion (`shadow::sigma_points`). A group
         // with either bar at the bottom hands over a σ of nothing, which is the
         // group's off switch all the way down — no cell, no atlas, no taps.
-        let geometry = scene.shadow.lattice_geometry;
-        let text = scene.shadow.lattice_text;
+        let geometry = scene.view.shadow.lattice_geometry;
+        let text = scene.view.shadow.lattice_text;
         let sigma_of = |style: harmonigraph_scene::ShadowStyle| {
             if style.casts() {
                 shadow::sigma_points(style.width, node_points)
@@ -276,15 +277,15 @@ impl LatticeCallback {
             if swell > 0.0 {
                 rim = rim.max(scene.outer_outer + swell);
             }
-            let marked = (g.marks[0] | g.marks[1]) != 0 && scene.mark_thickness > 0.0;
-            let mark_rim = scene.mark_inner + scene.mark_thickness + swell;
+            let marked = (g.marks[0] | g.marks[1]) != 0 && scene.view.mark_thickness > 0.0;
+            let mark_rim = scene.mark_inner + scene.view.mark_thickness + swell;
             if marked {
                 rim = rim.max(mark_rim);
             }
             let midi_rim =
                 if scene.outer_outer > scene.outer_inner { scene.outer_outer + swell } else { 0.0 };
             let midi_rim = if marked { midi_rim.max(mark_rim) } else { midi_rim };
-            rim = rim.max(scene.note_animation.reach(midi_rim));
+            rim = rim.max(scene.view.note_animation.reach(midi_rim));
             if ringing && g.ring > 0.0 {
                 rim = rim.max(scene.spectral.outer);
             }
@@ -373,8 +374,8 @@ impl LatticeCallback {
         }
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
         let breathes = scene.glow_timing.is_some()
-            && scene.glow_reach > 0.0
-            && scene.glow_strength > 0.0
+            && scene.view.glow_reach > 0.0
+            && scene.view.glow_strength > 0.0
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
         for &(_, _, i, ships) in &order {
@@ -432,11 +433,11 @@ impl LatticeCallback {
                 stars: atmosphere.stars.scaled(harmonigraph_scene::LATTICE_STAR_SIZE_SCALE),
                 direction: atmosphere.material_direction,
             },
-            glow_blend: scene.glow_blend,
+            glow_blend: scene.view.glow_blend,
             glyphs,
             casters,
             node_cells,
-            shadow: scene.shadow,
+            shadow: scene.view.shadow,
             marker_arm_points,
             draws,
             sheets: crate::SheetUploads { font: labels.atlas, marks: labels.marks },
@@ -449,7 +450,7 @@ impl LatticeCallback {
                     darkest_pitch: scene.darkest_pitch,
                     brightest_pitch: scene.brightest_pitch,
                     render_scale,
-                    bloom_strength: bloom_strength(scene.bloom_strength),
+                    bloom_strength: bloom_strength(scene.view.note_bloom),
                     background: Float4(scene.background.to_array()),
                     edge_softness_pixels: scene.edge_softness_points,
                     padding: 0.0,
@@ -467,16 +468,18 @@ impl LatticeCallback {
                     rings_outer: scene.rings_outer,
                     mark_inner: scene.mark_inner,
                     angular_gap: scene.octave_gap,
-                    mark_thickness: scene.mark_thickness,
-                    animation: if scene.note_animation.moves() || scene.note_animation.staggers() {
+                    mark_thickness: scene.view.mark_thickness,
+                    animation: if scene.view.note_animation.moves()
+                        || scene.view.note_animation.staggers()
+                    {
                         1.0
                     } else {
                         0.0
                     },
                     pose: Float4([
-                        scene.note_animation.starting_scale(),
-                        scene.note_animation.radial_start,
-                        scene.note_animation.reach(1.0),
+                        scene.view.note_animation.starting_scale(),
+                        scene.view.note_animation.radial_start,
+                        scene.view.note_animation.reach(1.0),
                         0.0,
                     ]),
                 },
@@ -499,25 +502,21 @@ impl LatticeCallback {
                 },
                 glow: if lights {
                     GlowParams {
-                        reach: scene.glow_reach,
-                        strength: scene.glow_strength,
+                        reach: scene.view.glow_reach,
+                        strength: scene.view.glow_strength,
                         padding: 0.0,
-                        curve: scene.glow_curve.shape(),
-                        wash: scene.glow_wash,
+                        curve: scene.view.glow_curve.shape(),
+                        wash: scene.view.glow_wash,
                         row_capacity: scene.glow_rows.max(1) as f32,
                         // Prepare sets this when any shipped instance is lit.
                         lit: 0.0,
-                        accumulation: scene.glow_accumulation,
+                        accumulation: scene.view.glow_accumulation,
                     }
                 } else {
                     bytemuck::Zeroable::zeroed()
                 },
                 texture: TextureParams {
-                    depth: if atmosphere.texture != harmonigraph_scene::LatticeTexture::None {
-                        atmosphere.texture_depth
-                    } else {
-                        0.0
-                    },
+                    depth: atmosphere.texture_depth,
                     scale: atmosphere.texture_scale,
                     drift: Float2([
                         (texture_time * 0.071).sin() as f32 * 0.9,
@@ -528,8 +527,8 @@ impl LatticeCallback {
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },
-                    width: atmosphere.material_shadow_width,
-                    softness: atmosphere.material_shadow_softness,
+                    width: atmosphere.pigment_width(),
+                    softness: atmosphere.pigment_softness(),
                     color: if pickup_enabled { atmosphere.material_color_pickup } else { 0.0 },
                 },
                 // Every shadow still casts with the glow disabled. Markers

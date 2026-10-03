@@ -32,9 +32,7 @@ impl Look {
         to.center_fives = from.center_fives;
         to.center_threes = from.center_threes;
         to.meantone = from.meantone;
-        to.meantone_auto = from.meantone_auto;
         to.marvel = from.marvel;
-        to.marvel_auto = from.marvel_auto;
     }
 
     pub(crate) fn apply(&self, appearance: &mut AppearanceDocument) {
@@ -411,31 +409,16 @@ mod tests {
         history.observe(before, &appearance, true);
         appearance.camera.distance = 7.0;
         appearance.view.center_fives = 12;
-        let tuning = (
-            appearance.view.meantone,
-            appearance.view.meantone_auto,
-            appearance.view.marvel,
-            appearance.view.marvel_auto,
-        );
+        let tuning = (appearance.view.meantone, appearance.view.marvel);
         appearance.view.meantone = !tuning.0;
-        appearance.view.meantone_auto = !tuning.1;
-        appearance.view.marvel = !tuning.2;
-        appearance.view.marvel_auto = !tuning.3;
+        appearance.view.marvel = !tuning.1;
         appearance.render.short_edge = 1920;
         history.finish(&appearance);
         history.undo(&mut appearance);
         assert_eq!(appearance.spectrum.attack, original);
         assert_eq!(appearance.camera.distance, 7.0);
         assert_eq!(appearance.view.center_fives, 12);
-        assert_eq!(
-            (
-                appearance.view.meantone,
-                appearance.view.meantone_auto,
-                appearance.view.marvel,
-                appearance.view.marvel_auto
-            ),
-            (!tuning.0, !tuning.1, !tuning.2, !tuning.3)
-        );
+        assert_eq!((appearance.view.meantone, appearance.view.marvel,), (!tuning.0, !tuning.1));
         assert_eq!(appearance.render.short_edge, 1920);
     }
     #[test]

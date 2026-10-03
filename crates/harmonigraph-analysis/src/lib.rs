@@ -10,9 +10,8 @@ use harmonigraph_core::spectrum::{
     midi_to_hz, BINS_PER_SEMITONE, SPECTRUM_BINS, SPECTRUM_MIN_MIDI,
 };
 
-/// The window length in samples an analyzer starts at before its caller sets
-/// one (~0.17 s at 48 kHz) — the UI's fresh Balanced setting. The UI changes
-/// it through [`SpectrumAnalyzer::set_fft_size`], trading response time against
+/// The default window length (~0.17 s at 48 kHz), the UI's fresh Balanced
+/// setting. The UI changes it through [`SpectrumAnalyzer::configure`], trading response time against
 /// bass precision at runtime. At the axis floor (20 Hz) one FFT bin spans
 /// several semitones, so the lowest octave reads coarse; that is inherent to
 /// the window length, not a bug.
@@ -27,6 +26,21 @@ pub const DEFAULT_FFT_SIZE: usize = 8192;
 /// fills at one taper. Past a handful the variance a taper removes costs more
 /// pitch than the reading has to give.
 pub const MAX_TAPERS: usize = 8;
+
+/// All inputs that determine an analyzer's estimator. Adopt them together so
+/// a caller never builds resources for intermediate settings.
+#[derive(Clone, Copy, Debug)]
+pub struct AnalyzerConfig {
+    pub sample_rate: f32,
+    pub fft_size: usize,
+    pub tapers: usize,
+}
+
+impl Default for AnalyzerConfig {
+    fn default() -> Self {
+        Self { sample_rate: 48_000.0, fft_size: DEFAULT_FFT_SIZE, tapers: 1 }
+    }
+}
 
 /// How far up the spectrum magnitudes are taken: a few bins past the crossover
 /// below which a pitch bucket is narrower than the FFT's bin spacing, and so the
@@ -91,11 +105,10 @@ pub struct SpectrumAnalyzer {
     sample_rate: f32,
     fft_size: usize,
     /// Which bins each bucket reads, derived from exactly `sample_rate` and
-    /// `fft_size` and rebuilt wherever either changes — [`configure`] and
-    /// [`set_sample_rate`] — so there is no key to check per column.
+    /// `fft_size` and rebuilt by [`configure`] whenever either changes, so
+    /// there is no key to check per column.
     ///
     /// [`configure`]: Self::configure
-    /// [`set_sample_rate`]: Self::set_sample_rate
     bucket_reads: Box<[BucketRead; SPECTRUM_BINS]>,
     /// The most recent `fft_size` samples, as a circular buffer.
     ring: Vec<f32>,
@@ -142,9 +155,9 @@ pub struct SpectrumAnalyzer {
 }
 
 impl SpectrumAnalyzer {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(config: AnalyzerConfig) -> Self {
         let mut analyzer = SpectrumAnalyzer {
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: config.sample_rate.max(1.0),
             fft_size: 0,
             bucket_reads: Box::new([BucketRead::Silent; SPECTRUM_BINS]),
             ring: Vec::new(),
@@ -161,34 +174,54 @@ impl SpectrumAnalyzer {
             bin_mag: Vec::new(),
             buckets: Box::new([0.0; SPECTRUM_BINS]),
         };
-        analyzer.configure(DEFAULT_FFT_SIZE, 1);
+        analyzer.configure(config);
         analyzer
     }
 
-    /// (Re)allocate every buffer for `fft_size` and `taper_count`, and clear
-    /// the window.
-    fn configure(&mut self, fft_size: usize, taper_count: usize) {
+    /// Adopt the final estimator, rebuilding only what its changed inputs
+    /// decide. A changed estimator deliberately requires a fresh audio window;
+    /// unchanged settings preserve readiness and allocate nothing.
+    pub fn configure(&mut self, config: AnalyzerConfig) {
+        let AnalyzerConfig { sample_rate, fft_size, tapers } = config;
         assert!(
             fft_size >= 4 && fft_size.is_power_of_two(),
             "a power of two, four up: real-input analysis requires an even window"
         );
-        let taper_count = taper_count.clamp(1, MAX_TAPERS);
+        let taper_count = tapers.clamp(1, MAX_TAPERS);
+        let sample_rate = sample_rate.max(1.0);
+        let size_changed = fft_size != self.fft_size;
+        let tapers_changed = taper_count != self.taper_count;
+        let rate_changed = (sample_rate - self.sample_rate).abs() > f32::EPSILON;
+        if !size_changed && !tapers_changed && !rate_changed {
+            return;
+        }
         self.fft_size = fft_size;
         self.taper_count = taper_count;
-        self.ring = vec![0.0; fft_size];
+        if rate_changed {
+            self.sample_rate = sample_rate;
+        }
+        if size_changed {
+            self.ring = vec![0.0; fft_size];
+            // No global cache or retained planner: each channel owns its plan.
+            let fft = realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size);
+            self.fft_input = fft.make_input_vec();
+            self.fft_output = fft.make_output_vec();
+            self.fft_scratch = fft.make_scratch_vec();
+            self.fft = Some(fft);
+            self.bin_power = vec![0.0; fft_size / 2];
+            self.bin_mag = vec![0.0; fft_size / 2];
+        } else {
+            self.ring.fill(0.0);
+        }
         self.write = 0;
         self.filled = 0;
-        self.tapers = build_tapers(fft_size, taper_count);
-        self.norm_power = taper_norm_power(&self.tapers, fft_size);
-        // No global cache or retained planner: each channel owns its plan.
-        let fft = realfft::RealFftPlanner::<f32>::new().plan_fft_forward(fft_size);
-        self.fft_input = fft.make_input_vec();
-        self.fft_output = fft.make_output_vec();
-        self.fft_scratch = fft.make_scratch_vec();
-        self.fft = Some(fft);
-        self.bin_power = vec![0.0; fft_size / 2];
-        self.bin_mag = vec![0.0; fft_size / 2];
-        self.plan_buckets();
+        if size_changed || tapers_changed {
+            self.tapers = build_tapers(fft_size, taper_count);
+            self.norm_power = taper_norm_power(&self.tapers, fft_size);
+        }
+        if size_changed || rate_changed {
+            self.plan_buckets();
+        }
     }
 
     /// Settle which bins every bucket reads for the current window length and
@@ -234,27 +267,6 @@ impl SpectrumAnalyzer {
         }
     }
 
-    /// Change the analysis window length (a power of two): longer =
-    /// sharper bass, slower response. A change empties the buffer.
-    /// No-op at the current size, so calling every frame is fine.
-    pub fn set_fft_size(&mut self, fft_size: usize) {
-        if fft_size != self.fft_size {
-            self.configure(fft_size, self.taper_count);
-        }
-    }
-
-    /// Change how many tapers the estimate averages: more = a steadier reading
-    /// of the same audio, at one FFT apiece and a wider main lobe. A change
-    /// empties the buffer, exactly as a window-length change does — the tapers
-    /// are what the buffer is read THROUGH, so a spectrum measured half under
-    /// one set and half under another is a measurement of neither. No-op at the
-    /// current count, so calling every frame is fine.
-    pub fn set_tapers(&mut self, taper_count: usize) {
-        if taper_count.clamp(1, MAX_TAPERS) != self.taper_count {
-            self.configure(self.fft_size, taper_count);
-        }
-    }
-
     /// How many tapers the estimate currently averages.
     pub fn tapers(&self) -> usize {
         self.taper_count
@@ -286,17 +298,6 @@ impl SpectrumAnalyzer {
     /// own mirror about the middle.
     pub fn window_center_offset(&self) -> f64 {
         0.5 * self.window_seconds()
-    }
-
-    /// Change the sample rate (host renegotiation). A change empties the
-    /// buffer: mixing samples from two clocks would smear every peak.
-    pub fn set_sample_rate(&mut self, sample_rate: f32) {
-        let sample_rate = sample_rate.max(1.0);
-        if (sample_rate - self.sample_rate).abs() > f32::EPSILON {
-            self.sample_rate = sample_rate;
-            self.clear_window();
-            self.plan_buckets();
-        }
     }
 
     /// Forget the retained audio, keeping the plan, the tapers and their
@@ -563,16 +564,14 @@ pub struct ChannelBank {
     per_channel: Vec<SpectrumAnalyzer>,
     /// One channel's samples, de-interleaved. Reused across pushes.
     scratch: Vec<f32>,
-    sample_rate: f32,
 }
 
 impl ChannelBank {
     /// A bank for `channels` channels (at least one).
-    pub fn new(sample_rate: f32, channels: usize) -> ChannelBank {
+    pub fn new(config: AnalyzerConfig, channels: usize) -> ChannelBank {
         ChannelBank {
-            per_channel: (0..channels.max(1)).map(|_| SpectrumAnalyzer::new(sample_rate)).collect(),
+            per_channel: (0..channels.max(1)).map(|_| SpectrumAnalyzer::new(config)).collect(),
             scratch: Vec::new(),
-            sample_rate,
         }
     }
 
@@ -580,61 +579,23 @@ impl ChannelBank {
         self.per_channel.len()
     }
 
-    /// Match the bank to the incoming channel count. A change rebuilds the
-    /// analyzers, which empties their windows — the same reset a sample-rate or
-    /// window change causes, and for the same reason: samples from one layout
-    /// say nothing about the next.
-    pub fn set_channels(&mut self, channels: usize) {
+    /// All channels measure through the same final estimator. A layout change
+    /// starts every channel empty; samples from one layout say nothing about
+    /// the next. New channels are built at the requested settings directly.
+    pub fn configure(&mut self, config: AnalyzerConfig, channels: usize) {
         let channels = channels.max(1);
         if channels != self.per_channel.len() {
-            *self = ChannelBank::new(self.sample_rate, channels);
+            self.per_channel = (0..channels).map(|_| SpectrumAnalyzer::new(config)).collect();
+        } else {
+            for analyzer in &mut self.per_channel {
+                analyzer.configure(config);
+            }
         }
     }
 
-    pub fn set_fft_size(&mut self, fft_size: usize) {
-        for analyzer in &mut self.per_channel {
-            analyzer.set_fft_size(fft_size);
-        }
-    }
-
-    /// How many tapers every channel's estimate averages — see
-    /// [`SpectrumAnalyzer::set_tapers`]. One setting for the bank, because the
-    /// channels are combined per bucket by [`power_sum`](Self::power_sum) and
-    /// two channels measured through different estimators do not add up to a
-    /// reading of anything.
-    pub fn set_tapers(&mut self, taper_count: usize) {
-        for analyzer in &mut self.per_channel {
-            analyzer.set_tapers(taper_count);
-        }
-    }
-
-    pub fn set_sample_rate(&mut self, sample_rate: f32) {
-        self.sample_rate = sample_rate;
-        for analyzer in &mut self.per_channel {
-            analyzer.set_sample_rate(sample_rate);
-        }
-    }
-
-    /// Begin a new source run: match `channels` and `sample_rate`, and empty
-    /// every retained window so no spectrum is ever read across the boundary.
-    ///
-    /// What this is NOT is `ChannelBank::new`, which is the obvious form and
-    /// throws a set of FFT plans away for every restart. A fresh bank starts
-    /// at [`DEFAULT_FFT_SIZE`] with one taper, so it plans a transform, builds
-    /// tapers for it and sizes four buffers to it — and the caller's next feed
-    /// re-plans all of that to the configured window and taper count before
-    /// pushing a sample. Those two settings are the only inputs
-    /// [`SpectrumAnalyzer::configure`] has; a restart changes neither, so the
-    /// plan a restart discarded was always the plan the next call rebuilt.
-    ///
-    /// A channel-count change is the one case that still rebuilds, because
-    /// there is an analyzer that did not exist before. That is exactly what
-    /// [`set_channels`](Self::set_channels) already costs on the feed path.
-    pub fn restart(&mut self, sample_rate: f32, channels: usize) {
-        self.set_channels(channels);
-        self.set_sample_rate(sample_rate);
-        // Unconditional, where `set_sample_rate` only clears on a CHANGE: a
-        // restart at the same rate is still a new run.
+    /// Forget retained audio at a source boundary, keeping every estimator
+    /// resource. The next feed adopts its final format with [`Self::configure`].
+    pub fn restart(&mut self) {
         for analyzer in &mut self.per_channel {
             analyzer.clear_window();
         }
@@ -823,8 +784,8 @@ mod tests {
         freqs_amps: &[(f32, f32)],
         sample_rate: f32,
     ) -> [f32; SPECTRUM_BINS] {
-        let mut analyzer = SpectrumAnalyzer::new(sample_rate);
-        analyzer.set_fft_size(fft_size);
+        let mut analyzer =
+            SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, fft_size, ..Default::default() });
         // Push in awkward chunk sizes to exercise the ring seam.
         let samples: Vec<f32> = (0..fft_size + 1234)
             .map(|i| {
@@ -852,7 +813,7 @@ mod tests {
 
     #[test]
     fn empty_analyzer_reports_nothing() {
-        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+        let mut analyzer = SpectrumAnalyzer::new(Default::default());
         assert!(analyzer.pitch_spectrum().is_none());
         analyzer.push_samples(&vec![0.1; DEFAULT_FFT_SIZE - 1]);
         assert!(analyzer.pitch_spectrum().is_none(), "one short of a window");
@@ -864,9 +825,8 @@ mod tests {
     fn silent_windows_keep_readiness_retained_audio_and_resume() {
         const N: usize = 4096;
         for tapers in [1, MAX_TAPERS] {
-            let mut analyzer = SpectrumAnalyzer::new(48_000.0);
-            analyzer.set_fft_size(N);
-            analyzer.set_tapers(tapers);
+            let mut analyzer =
+                SpectrumAnalyzer::new(AnalyzerConfig { fft_size: N, tapers, ..Default::default() });
             analyzer.push_samples(&vec![-0.0; N - 1]);
             assert!(analyzer.pitch_spectrum().is_none(), "zero input still needs a full window");
             analyzer.push_samples(&[0.0]);
@@ -1156,10 +1116,10 @@ mod tests {
 
     #[test]
     fn sample_rate_change_resets_the_window() {
-        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+        let mut analyzer = SpectrumAnalyzer::new(Default::default());
         analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(analyzer.pitch_spectrum().is_some());
-        analyzer.set_sample_rate(44_100.0);
+        analyzer.configure(AnalyzerConfig { sample_rate: 44_100.0, ..Default::default() });
         assert!(
             analyzer.pitch_spectrum().is_none(),
             "stale samples must not be analyzed under a new clock"
@@ -1180,10 +1140,13 @@ mod tests {
                         + if i % 97 == 0 { 0.3 } else { 0.0 }
                 })
                 .collect();
-            let mut changed = SpectrumAnalyzer::new(48_000.0);
-            changed.set_sample_rate(rate);
+            let mut changed = SpectrumAnalyzer::new(Default::default());
+            let plan = changed.fft.clone().unwrap();
+            changed.configure(AnalyzerConfig { sample_rate: rate, ..Default::default() });
+            assert!(std::sync::Arc::ptr_eq(&plan, changed.fft.as_ref().unwrap()));
             changed.push_samples(&samples);
-            let mut fresh = SpectrumAnalyzer::new(rate);
+            let mut fresh =
+                SpectrumAnalyzer::new(AnalyzerConfig { sample_rate: rate, ..Default::default() });
             fresh.push_samples(&samples);
             let expected = *fresh.pitch_spectrum().unwrap();
             assert!(expected.iter().filter(|p| **p > 0.0).count() > SPECTRUM_BINS / 2);
@@ -1192,18 +1155,18 @@ mod tests {
     }
 
     #[test]
-    fn set_fft_size_resets_the_window_and_noops_at_the_current_size() {
-        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+    fn changing_fft_size_resets_the_window_and_noops_at_the_current_size() {
+        let mut analyzer = SpectrumAnalyzer::new(Default::default());
         analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(analyzer.pitch_spectrum().is_some());
         // A genuine size change empties the buffer.
-        analyzer.set_fft_size(DEFAULT_FFT_SIZE * 2);
+        analyzer.configure(AnalyzerConfig { fft_size: DEFAULT_FFT_SIZE * 2, ..Default::default() });
         assert!(analyzer.pitch_spectrum().is_none(), "resized window starts empty");
         // Refilling to the new length produces a spectrum again.
         analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE * 2]);
         assert!(analyzer.pitch_spectrum().is_some());
         // Setting the same size again is a no-op: the filled window survives.
-        analyzer.set_fft_size(DEFAULT_FFT_SIZE * 2);
+        analyzer.configure(AnalyzerConfig { fft_size: DEFAULT_FFT_SIZE * 2, ..Default::default() });
         assert!(analyzer.pitch_spectrum().is_some(), "no-op resize kept the window");
     }
 
@@ -1220,17 +1183,17 @@ mod tests {
     /// window length is a setting on the Analyzer bar, so that is a dial away.
     #[test]
     fn shortening_the_window_darkens_the_buckets_it_can_no_longer_reach() {
-        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+        let mut analyzer = SpectrumAnalyzer::new(Default::default());
         // 20 Hz: the axis floor, and the bucket whose centre a 4096-point
         // window puts below its own first usable bin.
         let tone: Vec<f32> = (0..20_000)
             .map(|i| 0.5 * (std::f32::consts::TAU * 20.0 * i as f32 / 48_000.0).sin())
             .collect();
-        analyzer.set_fft_size(16_384);
+        analyzer.configure(AnalyzerConfig { fft_size: 16_384, ..Default::default() });
         analyzer.push_samples(&tone);
         let lit = analyzer.pitch_spectrum().expect("window filled")[0];
         assert!(lit > 0.0, "fixture must light the bottom bucket at the long window");
-        analyzer.set_fft_size(4096);
+        analyzer.configure(AnalyzerConfig { fft_size: 4096, ..Default::default() });
         analyzer.push_samples(&tone);
         assert_eq!(
             analyzer.pitch_spectrum().expect("window filled")[0],
@@ -1245,7 +1208,8 @@ mod tests {
         right: impl Fn(f32) -> f32,
     ) -> [f32; SPECTRUM_BINS] {
         let sr = 48_000.0f32;
-        let mut bank = ChannelBank::new(sr, 2);
+        let mut bank =
+            ChannelBank::new(AnalyzerConfig { sample_rate: sr, ..Default::default() }, 2);
         let interleaved: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
             .flat_map(|i| {
                 let t = i as f32 / sr;
@@ -1326,9 +1290,11 @@ mod tests {
     fn configured_analyzer_matches_direct_dft_after_ring_wrap() {
         for n in [4096, 8192, 16384] {
             for count in [1, 3, 5] {
-                let mut a = SpectrumAnalyzer::new(48_000.0);
-                a.set_fft_size(n);
-                a.set_tapers(count);
+                let mut a = SpectrumAnalyzer::new(AnalyzerConfig {
+                    fft_size: n,
+                    tapers: count,
+                    ..Default::default()
+                });
                 let input: Vec<_> = (0..n + 997)
                     .map(|i| {
                         let t = i as f64 / 48_000.0;
@@ -1398,9 +1364,8 @@ mod tests {
     fn noise_levels(tapers: usize, trials: usize, bucket: usize) -> Vec<f32> {
         let sample_rate = 48_000.0f32;
         let window = 1024;
-        let mut analyzer = SpectrumAnalyzer::new(sample_rate);
-        analyzer.set_fft_size(window);
-        analyzer.set_tapers(tapers);
+        let mut analyzer =
+            SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, fft_size: window, tapers });
         let mut noise = Noise(0x1234_5678);
         (0..trials)
             .map(|_| {
@@ -1446,8 +1411,8 @@ mod tests {
     fn a_full_scale_sine_reads_unity_at_every_taper_count() {
         for tapers in 1..=MAX_TAPERS {
             let sample_rate = 48_000.0f32;
-            let mut analyzer = SpectrumAnalyzer::new(sample_rate);
-            analyzer.set_tapers(tapers);
+            let mut analyzer =
+                SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, tapers, ..Default::default() });
             let samples: Vec<f32> = (0..DEFAULT_FFT_SIZE + 1234)
                 .map(|i| {
                     let t = i as f32 / sample_rate;
@@ -1517,8 +1482,8 @@ mod tests {
         for tapers in 1..=MAX_TAPERS {
             let levels = noise_levels(tapers, 480, bucket);
             let sample_rate = 48_000.0f32;
-            let mut analyzer = SpectrumAnalyzer::new(sample_rate);
-            analyzer.set_tapers(tapers);
+            let mut analyzer =
+                SpectrumAnalyzer::new(AnalyzerConfig { sample_rate, tapers, ..Default::default() });
             analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
             let started = std::time::Instant::now();
             let columns = 20;
@@ -1535,60 +1500,76 @@ mod tests {
         eprintln!();
     }
 
-    /// The same contract [`set_fft_size`](SpectrumAnalyzer::set_fft_size) holds,
-    /// and for the same reason: the tapers are what the buffer is read through,
-    /// so a change has to drop what was measured through the old set rather
-    /// than blend the two.
+    /// Changing the estimator requires a fresh window, while its unchanged
+    /// transform resources survive. Refilling must agree with a fresh analyzer.
     #[test]
-    fn set_tapers_resets_the_window_and_noops_at_the_current_count() {
-        let mut analyzer = SpectrumAnalyzer::new(48_000.0);
+    fn changing_tapers_retains_the_plan_but_requires_a_fresh_window() {
+        let mut analyzer = SpectrumAnalyzer::new(Default::default());
         analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
         assert!(analyzer.pitch_spectrum().is_some());
         assert_eq!(analyzer.tapers(), 1, "one taper with no toggle touched");
+        let plan = analyzer.fft.clone().unwrap();
 
-        analyzer.set_tapers(1);
+        analyzer.configure(AnalyzerConfig { tapers: 1, ..Default::default() });
         assert!(analyzer.pitch_spectrum().is_some(), "no-op at the current count");
 
-        analyzer.set_tapers(3);
+        let config = AnalyzerConfig { tapers: 3, ..Default::default() };
+        analyzer.configure(config);
         assert_eq!(analyzer.tapers(), 3);
+        assert!(std::sync::Arc::ptr_eq(&plan, analyzer.fft.as_ref().unwrap()));
         assert!(analyzer.pitch_spectrum().is_none(), "a change empties the window");
-        analyzer.push_samples(&vec![0.2; DEFAULT_FFT_SIZE]);
-        assert!(analyzer.pitch_spectrum().is_some());
+        let samples: Vec<_> = (0..DEFAULT_FFT_SIZE + 333)
+            .map(|i| (i as f32 * 0.07).sin() * 0.5 + if i % 97 == 0 { 0.3 } else { 0.0 })
+            .collect();
+        analyzer.push_samples(&samples[..DEFAULT_FFT_SIZE - 1]);
+        assert!(analyzer.pitch_spectrum().is_none(), "requires a whole new window");
+        analyzer.push_samples(&samples[DEFAULT_FFT_SIZE - 1..]);
+        let mut fresh = SpectrumAnalyzer::new(config);
+        fresh.push_samples(&samples);
+        assert_eq!(analyzer.pitch_spectrum().unwrap(), fresh.pitch_spectrum().unwrap());
 
         // Out of range clamps rather than panicking or allocating the moon: a
         // hand-edited blob reaches this through the config, and every count
         // still has to come out as a spectrum somebody can see.
-        analyzer.set_tapers(0);
+        analyzer.configure(AnalyzerConfig { tapers: 0, ..Default::default() });
         assert_eq!(analyzer.tapers(), 1);
-        analyzer.set_tapers(usize::MAX);
+        analyzer.configure(AnalyzerConfig { tapers: usize::MAX, ..Default::default() });
         assert_eq!(analyzer.tapers(), MAX_TAPERS);
     }
 
-    /// Every channel of a bank measures through the same estimator, which is
-    /// what makes [`power_sum`](ChannelBank::power_sum) an addition of
-    /// comparable things: two channels on different taper counts have
-    /// different noise floors and different effective kernels, and a sum of
-    /// those is a reading of nothing.
-    ///
-    /// The second channel is the one worth asserting — a fan-out that set only
-    /// the first would leave a stereo bank half-converted and a mono one
-    /// perfectly correct, which is the shape a mono test cannot see.
+    /// A joint format/estimator change builds every channel at the final
+    /// settings and discards audio from the old layout, including channel zero.
     #[test]
-    fn every_channel_of_a_bank_measures_through_the_same_tapers() {
-        let mut bank = ChannelBank::new(48_000.0, 2);
-        bank.set_tapers(3);
-        for (channel, analyzer) in bank.per_channel.iter().enumerate() {
-            assert_eq!(analyzer.tapers(), 3, "channel {channel} kept its own taper count");
+    fn joint_configuration_matches_a_fresh_bank_in_every_channel() {
+        let mut bank = ChannelBank::new(Default::default(), 1);
+        bank.push_frames(&vec![0.2; DEFAULT_FFT_SIZE]);
+        assert!(bank.power_sum().is_some());
+        let config = AnalyzerConfig { sample_rate: 22_050.0, fft_size: 4096, tapers: 3 };
+        // First replace the mono layout; then update both retained channels.
+        for config in [config, AnalyzerConfig { tapers: 5, ..config }] {
+            bank.configure(config, 2);
+            assert_eq!(bank.channels(), 2);
+            assert!(bank.power_sum().is_none());
+            let samples: Vec<_> = (0..config.fft_size + 333)
+                .flat_map(|i| [(i as f32 * 0.11).sin() * 0.5, (i as f32 * 0.23).cos() * 0.3])
+                .collect();
+            let prefix = (config.fft_size - 1) * 2;
+            bank.push_frames(&samples[..prefix]);
+            assert!(bank
+                .per_channel
+                .iter_mut()
+                .all(|analyzer| analyzer.pitch_spectrum().is_none()));
+            bank.push_frames(&samples[prefix..]);
+            let mut fresh = ChannelBank::new(config, 2);
+            fresh.push_frames(&samples);
+            for (actual, expected) in bank.per_channel.iter_mut().zip(&mut fresh.per_channel) {
+                assert_eq!(actual.pitch_spectrum().unwrap(), expected.pitch_spectrum().unwrap());
+            }
+            assert_eq!(bank.power_sum().unwrap(), fresh.power_sum().unwrap());
         }
-
-        // A rebuild is the other door in: it drops the bank for a fresh one, so
-        // the count goes back to the default and the caller has to re-set it.
-        bank.set_channels(1);
-        assert_eq!(bank.per_channel[0].tapers(), 1, "a rebuilt bank kept a stale count");
     }
 
-    /// A restart at the SAME rate and channel count is the case that has to be
-    /// asserted, and the only one [`ChannelBank::restart`] does any work in.
+    /// A restart must clear audio even when its format and estimator stay the same.
     ///
     /// Emptying the windows used to be a side effect of replacing the bank
     /// wholesale; now it is the whole job, while the transform the windows are
@@ -1598,13 +1579,12 @@ mod tests {
     /// anyway, which is the work this exists to stop doing.
     #[test]
     fn a_restart_empties_the_windows_and_keeps_the_configuration() {
-        let mut bank = ChannelBank::new(48_000.0, 2);
-        bank.set_fft_size(4096);
-        bank.set_tapers(3);
+        let mut bank =
+            ChannelBank::new(AnalyzerConfig { fft_size: 4096, tapers: 3, ..Default::default() }, 2);
         bank.push_frames(&vec![0.2; 4096 * 2]);
         assert!(bank.power_sum().is_some(), "fixture must fill both windows first");
 
-        bank.restart(48_000.0, 2);
+        bank.restart();
         assert!(bank.power_sum().is_none(), "a restart must not analyze across the boundary");
         for (channel, analyzer) in bank.per_channel.iter().enumerate() {
             assert_eq!(analyzer.fft_size, 4096, "channel {channel} lost its window length");

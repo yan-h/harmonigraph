@@ -359,7 +359,7 @@ fn a_mark_stands_off_the_outermost_ring_the_node_draws() {
     let staged = |band: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.octave_gap = PROBE_GAP;
-        scene.mark_thickness = rings.mark_thickness;
+        scene.view.mark_thickness = rings.mark_thickness;
         // The audio ring is drawn from an all-zero grid, which paints the
         // ramp's floor colour across the annulus — light at a known radius,
         // which is all this needs of it.
@@ -436,18 +436,18 @@ fn a_mark_follows_its_slices_thickness() {
         let mut scene = single_marked_node(if marked { MIDDLE_C } else { 0 }, 0);
         // No light, no bloom and no audio ring: the mark alone is what the
         // two shots part on.
-        scene.glow_reach = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
         scene.spectral = harmonigraph_scene::SpectralPaint::silent();
         scene.octave_gap = PROBE_GAP;
-        scene.mark_thickness = rings.mark_thickness;
+        scene.view.mark_thickness = rings.mark_thickness;
         (scene.outer_inner, scene.outer_outer) = rings.band;
         scene.rings_outer = rings.band.1;
         scene.mark_inner = rings.mark_inner;
         scene.nodes[0].thickness[harmonigraph_scene::MIDDLE_C_SLOT] = thickness;
         if arriving {
             // A hair short of settled, where the pose is all but home.
-            scene.note_animation = harmonigraph_scene::NoteAnimationConfig {
+            scene.view.note_animation = harmonigraph_scene::NoteAnimationConfig {
                 radial_start: -1.0,
                 ..Default::default()
             };
@@ -538,7 +538,7 @@ fn a_mark_with_no_ring_under_it_reaches_the_nodes_centre() {
     let staged = |rings: &harmonigraph_scene::RingStack, mark: bool| -> Scene {
         let mut scene = single_marked_node(MIDDLE_C, 0);
         scene.octave_gap = PROBE_GAP;
-        scene.mark_thickness = rings.mark_thickness;
+        scene.view.mark_thickness = rings.mark_thickness;
         // Silent paint carries the empty pair, so the audio ring is off the
         // way the bar leaves it rather than merely unlit.
         scene.spectral = harmonigraph_scene::SpectralPaint::silent();

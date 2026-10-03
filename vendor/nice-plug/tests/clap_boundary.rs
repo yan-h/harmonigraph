@@ -42,6 +42,7 @@ struct Control {
     host_cache: AtomicU64,
     pause_audio: AtomicBool,
     pause_begin: AtomicBool,
+    pause_apply: AtomicBool,
     audio_entered: AtomicBool,
     audio_resume: AtomicBool,
     pause_value: AtomicBool,
@@ -80,6 +81,7 @@ impl Default for Control {
             host_cache: AtomicU64::new(0),
             pause_audio: AtomicBool::new(false),
             pause_begin: AtomicBool::new(false),
+            pause_apply: AtomicBool::new(false),
             audio_entered: AtomicBool::new(false),
             audio_resume: AtomicBool::new(false),
             pause_value: AtomicBool::new(false),
@@ -218,6 +220,12 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
         _: ConfigurationCommand,
         commit: ConfigurationCommit,
     ) -> Option<ConfigurationSnapshot> {
+        if self.control.pause_apply.swap(false, Ordering::AcqRel) {
+            self.control.audio_entered.store(true, Ordering::Release);
+            while !self.control.audio_resume.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+        }
         let remaining = self.control.apply_limit.load(Ordering::Relaxed);
         if remaining == 0 {
             return None;
@@ -1496,4 +1504,132 @@ fn final_error_drain_requests_rescan_after_racing_restore() {
         }
         assert!((f64::from_bits(control.host_cache.load(Ordering::Relaxed)) - 0.9).abs() < 1e-6);
     }
+}
+
+#[test]
+fn restore_arriving_during_configuration_drain_waits_for_next_callback() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.combined");
+    let plugin_address = d.plugin as usize;
+    let restore = |value| {
+        let plugin = plugin_address as *const clap_plugin;
+        let wrapper = unsafe {
+            &*((*plugin)
+                .plugin_data
+                .cast::<nice_plug::wrapper::clap::Wrapper<Fixture<true, true>>>())
+        };
+        let mut state = wrapper.get_state_object();
+        state.params.insert("axis".to_owned(), nice_plug::plugin::ParamValue::F32(value));
+        wrapper.set_state_object_from_gui(state);
+    };
+    restore(0.25);
+    d.control.pause_apply.store(true, Ordering::Release);
+    let control = d.control.clone();
+    d = std::thread::scope(|scope| {
+        let audio = scope.spawn(move || {
+            d.run(0, 64, vec![], true);
+            d
+        });
+        while !control.audio_entered.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        // Restore commands have no 16-cell UI notification limit. A producer
+        // replenishing this queue must not extend the current audio callback.
+        restore(0.75);
+        control.audio_resume.store(true, Ordering::Release);
+        audio.join().unwrap()
+    });
+    assert_eq!(d.mailbox().published.load().raw[0], 0.25);
+    assert_eq!(d.mailbox().visible().0.raw[0], 0.75, "accepted restore remains visible");
+    assert_eq!(control.observed.lock().unwrap_or_else(|e| e.into_inner()).applies, [0]);
+    d.run(64, 64, vec![], true);
+    assert_eq!(d.mailbox().published.load().raw[0], 0.75);
+    assert_eq!(control.observed.lock().unwrap_or_else(|e| e.into_inner()).applies, [0, 64]);
+}
+
+#[test]
+fn owned_pool_waits_for_configuration_then_reclaims_the_complete_prefix() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.combined");
+    d.control.apply_limit.store(0, Ordering::Relaxed);
+    let batch = || {
+        (1..INPUT_SCAN).map(|index| {
+            let Input::Note(mut note) = on(0) else { unreachable!() };
+            note.note_id = index as i32;
+            Input::Note(note)
+        })
+    };
+    let mut input = vec![d.param(0)];
+    input.extend(batch());
+    d.run(0, 64, input, true);
+    {
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(o.configuration.is_empty(), "the first owned parameter must stall configuration");
+        assert!(o.inputs.is_empty(), "performance cannot pass configuration");
+    }
+    assert_eq!(d.run(64, 64, vec![on(0)], true), CLAP_PROCESS_ERROR);
+    d.control.apply_limit.store(usize::MAX, Ordering::Relaxed);
+    let Input::Transport(marker) = transport(0, true, 0) else { unreachable!() };
+    d.transport = Some(marker);
+    // Even the callback transport cannot fit yet. The failed capture must
+    // still let all three consumers finish the retained batch.
+    assert_eq!(d.run(128, 64, vec![], true), CLAP_PROCESS_ERROR);
+    {
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(o.callbacks[1].input_status, perf::InputStatus::Full);
+        assert_eq!(o.callbacks[2].input_status, perf::InputStatus::Full);
+        assert_eq!(o.configuration, o.inputs);
+        assert_eq!(o.inputs.len(), INPUT_SCAN);
+        for (index, event) in o.inputs.iter().enumerate() {
+            assert_eq!(event.sample, Some(0));
+            assert_eq!(event.event_index, index as u32);
+            if index > 0 {
+                assert!(matches!(event.value, InputValue::Note { note_id, .. } if note_id == index as i32));
+            }
+        }
+    }
+    d.transport = None;
+    // This fills the physical ring again, so an early pop, a lost cursor or
+    // retained acknowledged cells cannot hide behind unused capacity.
+    let mut input = vec![d.param(0)];
+    input.extend(batch());
+    assert_ne!(d.run(192, 64, input, true), CLAP_PROCESS_ERROR);
+    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(o.inputs.len(), 2 * INPUT_SCAN);
+    assert_eq!(o.configuration, o.inputs);
+    assert!(o.inputs[INPUT_SCAN..].iter().all(|event| event.sample == Some(192)));
+}
+
+#[test]
+fn reset_cancels_faulted_timed_input_and_retains_untimed_flush_once() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(Control::default(), c"fixture.combined");
+    let Input::Param(mut invalid) = d.param(1) else { unreachable!() };
+    invalid.value = f64::NAN;
+    d.run(0, 64, vec![on(0), Input::Param(invalid), on(2)], true);
+    {
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(o.faults, 1, "fixture reaches the configuration fault after a valid prefix");
+        assert_eq!(o.inputs.len(), 1);
+        assert_eq!(o.configuration, o.inputs);
+    }
+    d.flush(vec![d.param(57)]);
+    unsafe { ((*d.plugin).reset.unwrap())(d.plugin); }
+    assert_ne!(d.run(64, 64, vec![], true), CLAP_PROCESS_ERROR);
+    {
+        let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(o.configuration, o.inputs);
+        assert_eq!(o.inputs.len(), 2, "only the untimed flush survives cancellation");
+        let event = o.inputs[1];
+        assert!(event.flush);
+        assert_eq!(event.sample, Some(64));
+        assert_eq!(event.offset, 57);
+        assert_eq!(event.enclosing_start, None);
+        assert_eq!(event.enclosing_frames, 0);
+    }
+    assert_ne!(d.run(128, 64, vec![on(0); INPUT_SCAN], true), CLAP_PROCESS_ERROR);
+    let o = d.control.observed.lock().unwrap_or_else(|e| e.into_inner());
+    assert_eq!(o.inputs.len(), INPUT_SCAN + 2);
+    assert_eq!(o.configuration, o.inputs);
+    assert_eq!(o.faults, 1);
 }

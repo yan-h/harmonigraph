@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc};
 
-use harmonigraph_core::notes::{NoteEventKind, SourceId};
+use harmonigraph_core::notes::NoteEventKind;
 use harmonigraph_take::ParamKey;
 use parking_lot::Mutex;
 

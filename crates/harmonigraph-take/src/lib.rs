@@ -432,9 +432,9 @@ impl Take {
         // replaces it, and so on).
         let mut ordered: Vec<_> = take.events.drain(..).zip(event_lines).collect();
         ordered.sort_by(|(a, _), (b, _)| a.time().total_cmp(&b.time()));
-        let mut validation = harmonigraph_core::NoteTracker::new();
+        let mut validation = harmonigraph_core::canonical::CanonicalOrder::default();
         for (record, line) in ordered {
-            record.apply(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
+            record.check_order(&mut validation).map_err(|_| ReadError::InvalidCanonical(line))?;
             take.events.push(record);
         }
         take.params.sort_by(|a, b| a.t.total_cmp(&b.t));
@@ -850,6 +850,56 @@ mod tests {
         assert!(matches!(
             Take::parse(std::io::Cursor::new(text.as_bytes())),
             Err(ReadError::Version(_))
+        ));
+    }
+
+    #[test]
+    fn canonical_order_uses_stable_time_order_but_payload_errors_keep_file_precedence() {
+        use harmonigraph_core::canonical::*;
+        use harmonigraph_core::{NoteEvent, SourceId};
+        let header = ron::to_string(&Record::Header(Header::default())).unwrap();
+        let serialize =
+            |event| ron::to_string(&Record::Canonical(CanonicalRecord::from_event(event))).unwrap();
+        let baseline = SourceBaseline::new(SourceId::DIRECT, 1, 2.0, 5, true, &[]).unwrap();
+        let frame = serialize(CanonicalEvent::Baseline(&baseline));
+        let mut delta: NoteDelta = NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 0.8).into();
+        delta.sequence = 4;
+        let note = serialize(CanonicalEvent::Note(delta));
+        let mut later = delta;
+        later.sequence = 6;
+        later.event.time = 3.0;
+        let later = serialize(CanonicalEvent::Note(later));
+        let take = Take::parse(std::io::Cursor::new(format!(
+            "{header}\n{later}\n{note}\n{frame}\n{note}\n"
+        )))
+        .unwrap();
+        assert_eq!(take.events.len(), 4, "validation does not remove duplicate records");
+        assert!(matches!(take.events[0], CanonicalRecord::Delta(_)));
+        assert!(matches!(take.events[1], CanonicalRecord::Baseline(_)));
+        assert_eq!(take.events.last().unwrap().time(), 3.0);
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!("{header}\n{frame}\n{note}\n"))),
+            Err(ReadError::InvalidCanonical(3))
+        ));
+
+        delta.event.time = 3.0;
+        let late_history = serialize(CanonicalEvent::Note(delta));
+        let invalid_order = format!("{header}\n{late_history}\n{frame}\n");
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(&invalid_order)),
+            Err(ReadError::InvalidCanonical(2))
+        ));
+        delta.event.kind = harmonigraph_core::NoteEventKind::On { velocity: 2.0 };
+        let malformed_duplicate = serialize(CanonicalEvent::Note(delta));
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!(
+                "{header}\n{note}\n{frame}\n{malformed_duplicate}\n"
+            ))),
+            Err(ReadError::InvalidCanonical(4))
+        ));
+        assert!(matches!(
+            Take::parse(std::io::Cursor::new(format!("{invalid_order}{malformed_duplicate}\n"))),
+            Err(ReadError::InvalidCanonical(4))
         ));
     }
 

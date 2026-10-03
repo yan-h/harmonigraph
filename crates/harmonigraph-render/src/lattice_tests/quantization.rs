@@ -42,9 +42,9 @@ fn shadows_below_one_percent_still_fade_over_glow() {
             }
             let grey = glam::Vec4::new(0.8, 0.8, 0.8, 1.0);
             scene.pitch_lut.fill(grey);
-            scene.bloom_strength = 0.0;
-            scene.glow_reach = 0.0;
-            for style in scene.shadow.groups_mut() {
+            scene.view.note_bloom = 0.0;
+            scene.view.glow_reach = 0.0;
+            for style in scene.view.shadow.groups_mut() {
                 style.kernel = kernel;
                 style.width = 0.6;
                 style.depth = 0.0;
@@ -59,13 +59,13 @@ fn shadows_below_one_percent_still_fade_over_glow() {
             assert!(MARKER_X - MARKER_RADIUS > scene.rings_outer * scene.marker_unit);
             let marker_centre =
                 on_screen(&scene, shooter.size, glam::Vec3::new(MARKER_X, 0.0, 0.0));
-            scene.glow_reach = 3.0;
-            scene.glow_strength = 1.0;
+            scene.view.glow_reach = 3.0;
+            scene.view.glow_strength = 1.0;
             let lit = shooter.shot(&scene);
             let style = if marker {
-                &mut scene.shadow.lattice_text
+                &mut scene.view.shadow.lattice_text
             } else {
-                &mut scene.shadow.lattice_geometry
+                &mut scene.view.shadow.lattice_geometry
             };
             style.depth = 0.008;
             let shaded = shooter.shot(&scene);
@@ -99,8 +99,8 @@ fn the_lattice_keeps_its_gradients_in_half_floats_until_the_final_composite() {
         return;
     };
     let mut scene = single_marked_node(0, 0);
-    scene.glow_reach = 0.8;
-    scene.bloom_strength = 1.0;
+    scene.view.glow_reach = 0.8;
+    scene.view.note_bloom = 1.0;
     shooter.shot(&scene);
 
     // Inspect the resources allocated by the production prepare path, not only
@@ -136,9 +136,9 @@ fn final_dither_keeps_byte_representable_flat_ink_flat() {
             ..Default::default()
         };
         scene.nodes.clear();
-        scene.glow_reach = 0.0;
-        scene.bloom_strength = 0.0;
-        for style in scene.shadow.groups_mut() {
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
+        for style in scene.view.shadow.groups_mut() {
             style.depth = 0.0;
         }
         scene.plus_half_width = 1.0;
@@ -208,11 +208,11 @@ fn the_final_dither_breaks_radial_quantization_rings_without_temporal_noise() {
     scene.nodes[0].bass_color = grey;
     scene.nodes[0].audio_ring = 0.0;
     scene.pitch_lut.fill(grey);
-    scene.glow_reach = 1.4;
-    scene.glow_strength = 0.35;
-    scene.glow_blend = 1.0;
-    scene.bloom_strength = 0.0;
-    for style in scene.shadow.groups_mut() {
+    scene.view.glow_reach = 1.4;
+    scene.view.glow_strength = 0.35;
+    scene.view.glow_blend = 1.0;
+    scene.view.note_bloom = 0.0;
+    for style in scene.view.shadow.groups_mut() {
         style.depth = 0.0;
     }
 
@@ -237,7 +237,7 @@ fn the_final_dither_breaks_radial_quantization_rings_without_temporal_noise() {
 
     let points_per_world = on_screen(&scene, SIZE, glam::Vec3::X).distance(centre);
     let rim = scene.rings_outer * scene.marker_unit * points_per_world;
-    let edge = (scene.rings_outer + scene.glow_reach) * scene.marker_unit * points_per_world;
+    let edge = (scene.rings_outer + scene.view.glow_reach) * scene.marker_unit * points_per_world;
     let inner2 = (rim + 3.0).powi(2);
     let outer2 = (edge - 3.0).powi(2);
     assert!(outer2 > inner2, "the fixture left no halo-only annulus to measure");

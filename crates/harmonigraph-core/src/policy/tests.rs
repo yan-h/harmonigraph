@@ -13,7 +13,6 @@ fn just() -> MusicalConfig {
         ),
         TuningModes {
             tempered: Tempered { syntonic: false, septimal_kleisma: false },
-            auto: [false; 2],
             learning: false,
         },
     )

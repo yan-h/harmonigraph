@@ -17,6 +17,9 @@ fn motion_scene(
 ) -> Scene {
     let mut scene =
         derive_scene(tracker, tuning, view, &view.reach(), frame, Camera::default(), None);
+    let mut normalized = view.clone();
+    normalized.sanitize();
+    let view = &normalized;
     motion.step(
         &mut scene,
         tracker,
@@ -368,13 +371,20 @@ fn an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it() {
 /// would read as a second thing happening.
 #[test]
 fn a_lone_notes_mark_fades_out_with_it() {
-    for order in AnimationOrder::ALL {
+    for (order, spread) in AnimationOrder::ALL
+        .into_iter()
+        .flat_map(|o| [0.0, NoteAnimationConfig::default().stagger_spread].map(|s| (o, s)))
+    {
         let mut motion = NodeMotion::default();
         let mut tracker = NoteTracker::new();
         tracker.handle_event(on(0.0, 60));
         tracker.handle_event(off(1.0, 60));
         let view = ViewConfig {
-            note_animation: NoteAnimationConfig { order, ..NoteAnimationConfig::default() },
+            note_animation: NoteAnimationConfig {
+                order,
+                stagger_spread: spread,
+                ..NoteAnimationConfig::default()
+            },
             ..delayed_view(0.0)
         };
         let frame = attack_frame();
@@ -389,7 +399,7 @@ fn a_lone_notes_mark_fades_out_with_it() {
             let (melody, bass, octave) = at(now);
             assert_eq!(melody, bass, "{order:?}: both marks at {now}");
             assert_eq!(melody, octave, "{order:?}: mark and sector at {now}");
-            if order == AnimationOrder::Simultaneous && step == 5 {
+            if spread == 0.0 && step == 5 {
                 assert!((melody - 0.5).abs() < 1e-5, "half gone: {melody}");
             }
         }
@@ -631,17 +641,8 @@ fn a_delay_past_the_note_fade_still_measures_from_the_handoff() {
     assert_eq!(at(1.0 + DELAY + ramp), 1.0);
 }
 
-/// The Delay's range is held in `NodeMotion` and nowhere else — `sanitize`
-/// deliberately does range work for nothing, only finiteness — so a view out
-/// of range comes from a file and lands here. Both ends matter and they fail
-/// in opposite directions: a negative delay starts the ramp BEFORE the note
-/// took the end, which is every mark at full the frame it is claimed, exactly
-/// what easing them in exists to prevent; a huge one is the mark layer gone
-/// for as long as the take lasts, from a bar that cannot say so.
-///
-/// Asserted on the LEVEL rather than on a scene field, because unlike every
-/// geometry clamp this one reaches the picture only through
-/// the mark's ease — there is no `Scene::mark_delay` to read back.
+/// The normalized delay is consumed by motion without another repair. Both
+/// ends are measured through the mark's level, not just the saved number.
 #[test]
 fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
     let tracker = held(60);
@@ -676,9 +677,7 @@ fn the_mark_delay_is_clamped_to_the_bar_its_own_ends() {
 /// the crate's whole-scene finite sweep passes over this one: there is no NaN
 /// left in the scene for it to find.
 ///
-/// BOTH doors, because the picture is reached through both. A blob crosses
-/// `sanitize`; the offline layout, take replay and the harness each build a
-/// view in code and never do, so shared motion normalizes the delay too.
+/// The scene fixture normalizes the post-pass input, as production load does.
 #[test]
 fn a_non_finite_delay_draws_as_no_delay_at_all() {
     let tracker = held(60);

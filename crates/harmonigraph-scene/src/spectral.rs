@@ -369,40 +369,20 @@ impl SpectralPaint {
     /// second reading of the same bars: it is the innermost layer of the stack,
     /// so its inner edge is wherever the stack starts
     /// ([`ViewConfig::ring_inner`]), and the same one answer is
-    /// what places the band a gap outside it. That sum belongs in one place, and
-    /// its clamps are there rather than in `ViewConfig::sanitize` for the
-    /// reason every other geometry clamp is — the drawing code is reached by
-    /// more routes than the persist door (a take replay, the offline
-    /// renderer's layout, a standalone harness), and a hand-edited view must
-    /// still come out as a node somebody can see.
+    /// what places the band a gap outside it. The view has already been
+    /// sanitized at the picture's entry.
     pub fn new(view: &ViewConfig, gradient: Gradient) -> SpectralPaint {
         let (inner, outer) = view.rings().audio;
-        let ring = ring_gradient(gradient, view.lattice_ground_lightness());
+        let ring = ring_gradient(gradient, view.lattice_ground);
         SpectralPaint {
             lut: pitch_ramp_lut(ring),
             lut_spacing: LutSpacing::of(ring),
             folded: view.spectral_reading == SpectralReading::Fold,
             inner,
             outer,
-            range: clamp_or(
-                view.spectral_ring_range,
-                SPECTRAL_RANGE_MAX,
-                SPECTRAL_RANGE_MIN,
-                SPECTRAL_RANGE_MAX,
-            ),
-            // A hand-edited NaN falls back to the gate's OFF position, where
-            // the range above falls back to a value that draws something: this
-            // is the one setting the ring has that can empty the lattice, and a
-            // blob nobody can read must not be able to do that silently.
-            gate: clamp_or(
-                view.spectral_ring_gate,
-                SPECTRAL_GATE_MIN,
-                SPECTRAL_GATE_MIN,
-                SPECTRAL_GATE_MAX,
-            ),
-            // Repaired to 0 — one threshold — for the reason above it: a band
-            // nobody can read falls back to the simpler rule.
-            hysteresis: clamp_or(view.spectral_ring_hysteresis, 0.0, 0.0, SPECTRAL_HYSTERESIS_MAX),
+            range: view.spectral_ring_range,
+            gate: view.spectral_ring_gate,
+            hysteresis: view.spectral_ring_hysteresis,
             levels: Box::new([0; SPECTRUM_BINS]),
             color_levels: Box::new([0; SPECTRUM_BINS]),
         }
@@ -856,17 +836,6 @@ pub fn ring_gradient(gradient: Gradient, ground: f32) -> Gradient {
     }
 }
 
-/// `value` held inside `low..=high`, or `fallback` where it is not a number at
-/// all. `clamp` hands a NaN straight back — every comparison against one is
-/// false — so a blob's NaN would otherwise walk through as a radius.
-fn clamp_or(value: f32, fallback: f32, low: f32, high: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(low, high)
-    } else {
-        fallback
-    }
-}
-
 /// The MIDI pitch bucket `bucket` of the analyzer's grid is centred on.
 ///
 /// The grid is absolute log pitch at [`BINS_PER_SEMITONE`] buckets a semitone,
@@ -923,11 +892,12 @@ mod tests {
             (f32::NAN, 200.0),
             (-3.0, 200.0),
         ] {
-            let view = ringed(width, range);
+            let mut view = ringed(width, range);
+            view.sanitize();
             let paint = SpectralPaint::new(&view, Gradient::default());
             assert_eq!(
                 paint.ring_draws(),
-                width.is_finite() && width > 0.0,
+                view.spectral_ring_width > 0.0,
                 "a width of {width} reached the picture as ({}, {})",
                 paint.inner,
                 paint.outer,
@@ -1044,7 +1014,7 @@ mod tests {
         for ground in [0.0, 8.8, 20.0, 55.0, 100.0] {
             let view = ViewConfig { lattice_ground: ground, ..ringed(0.3, 200.0) };
             let silent = SpectralPaint::new(&view, analyzers()).lut[0];
-            let band = crate::grey_of_lightness(view.lattice_ground_lightness());
+            let band = crate::grey_of_lightness(view.lattice_ground);
             let step = (silent.truncate() - band.truncate()).abs().max_element();
             assert!(
                 step * 255.0 < 0.5,
@@ -1497,7 +1467,8 @@ mod tests {
     fn a_hand_edited_gate_never_empties_the_lattice() {
         let wheel = wheel();
         for gate in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -2.0, 7.0] {
-            let view = gated(gate, SpectralReading::Fold);
+            let mut view = gated(gate, SpectralReading::Fold);
+            view.sanitize();
             let paint = SpectralPaint::new(&view, Gradient::default());
             assert!(
                 (SPECTRAL_GATE_MIN..=SPECTRAL_GATE_MAX).contains(&paint.gate),
@@ -1513,11 +1484,7 @@ mod tests {
         }
     }
 
-    /// ...and the door a saved blob actually comes through repairs it the same
-    /// way. [`ViewConfig::sanitize`] runs before anything reads the view, so
-    /// [`SpectralPaint::new`]'s repair above only ever sees a value already
-    /// mended — which is what makes this its own test rather than a second
-    /// reading of that one.
+    /// The load door owns the gate repair; the picture above consumes it.
     ///
     /// Pointed at the OFF position and not at the fresh value the two settings
     /// either side of it take, which is the whole claim: a level nobody can

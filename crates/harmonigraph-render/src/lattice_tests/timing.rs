@@ -66,7 +66,7 @@ fn the_live_view() -> Scene {
 
 fn the_live_view_on_the_distance_row() -> Scene {
     let mut scene = the_live_view();
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.kernel = harmonigraph_scene::ShadowKernel::Distance;
     }
     scene
@@ -89,7 +89,7 @@ fn a_frame_of_names_costs_this_much() {
 #[ignore = "a probe: prints a timing and asserts nothing"]
 fn a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much() {
     let mut scene = the_live_view_on_the_distance_row();
-    for style in scene.shadow.groups_mut() {
+    for style in scene.view.shadow.groups_mut() {
         style.width = harmonigraph_scene::GLOW_SHADOW_MAX;
     }
     time_a_frame_of_names(scene, "the top of the Shadow bar");
@@ -111,11 +111,11 @@ fn a_frame_of_names_at_each_kernel_costs_this_much() {
     use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
     for kernel in [Gaussian, Distance] {
         for (shadow, where_) in [
-            (the_live_view().shadow.lattice_geometry.width, "the live view"),
+            (the_live_view().view.shadow.lattice_geometry.width, "the live view"),
             (harmonigraph_scene::GLOW_SHADOW_MAX, "the top of the bar"),
         ] {
             let mut scene = the_live_view();
-            for style in scene.shadow.groups_mut() {
+            for style in scene.view.shadow.groups_mut() {
                 style.width = shadow;
                 style.kernel = kernel;
             }
@@ -159,8 +159,8 @@ fn a_frame_of_audio_rings_costs_this_much() {
         }
         scene.node_radius = 0.34;
         scene.glow_rows = 1;
-        scene.glow_reach = 0.8;
-        scene.glow_strength = 1.5;
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.5;
         time_a_frame_of_names(
             scene,
             if lit { "225 audio rings, one MIDI glow" } else { "225 audio rings, no MIDI glow" },
@@ -227,30 +227,31 @@ fn atmosphere_costs_by_polyphony() {
             });
             match case {
                 "off" => {
-                    variant.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
-                    variant.atmosphere.breath_amount = 0.0;
+                    variant.view.atmosphere.texture_depth = 0.0;
+                    variant.view.atmosphere.breath_amount = 0.0;
                 }
                 "watercolor" => {
-                    variant.atmosphere.material_style =
+                    variant.view.atmosphere.material_style =
                         harmonigraph_scene::LatticeMaterial::Watercolor
                 }
                 "velvet" => {
-                    variant.atmosphere.material_style =
+                    variant.view.atmosphere.material_style =
                         harmonigraph_scene::LatticeMaterial::VelvetScales
                 }
                 "stars" | "stars-medium" | "stars-low" | "stars-uniform" => {
-                    variant.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Stars;
-                    variant.atmosphere.stars.star_halo_profile = match case {
+                    variant.view.atmosphere.material_style =
+                        harmonigraph_scene::LatticeMaterial::Stars;
+                    variant.view.atmosphere.stars.star_halo_profile = match case {
                         "stars-medium" => harmonigraph_scene::StarHaloProfile::Medium,
                         "stars-low" => harmonigraph_scene::StarHaloProfile::Low,
                         "stars-uniform" => harmonigraph_scene::StarHaloProfile::Uniform,
                         _ => harmonigraph_scene::StarHaloProfile::P3,
                     };
                 }
-                "no-nebula" => variant.atmosphere.texture_depth = 0.0,
-                "no-breath" => variant.atmosphere.breath_amount = 0.0,
-                "half-scale" => variant.render_scale *= 0.5,
-                "no-glow" => variant.glow_strength = 0.0,
+                "no-nebula" => variant.view.atmosphere.texture_depth = 0.0,
+                "no-breath" => variant.view.atmosphere.breath_amount = 0.0,
+                "half-scale" => variant.view.render_scale *= 0.5,
+                "no-glow" => variant.view.glow_strength = 0.0,
                 _ => {}
             }
             time_a_frame_of_names(variant, &format!("{count} MIDI notes / {case}"));
@@ -297,10 +298,10 @@ fn animation_costs_by_pose_and_density() {
                     None,
                     1.0,
                 );
-                scene.note_animation = config;
-                scene.shadow.lattice_geometry.kernel = kernel;
-                scene.shadow.lattice_geometry.width = 0.6;
-                scene.shadow.lattice_geometry.depth = 0.8;
+                scene.view.note_animation = config;
+                scene.view.shadow.lattice_geometry.kernel = kernel;
+                scene.view.shadow.lattice_geometry.width = 0.6;
+                scene.view.shadow.lattice_geometry.depth = 0.8;
                 if dense {
                     let mut node =
                         scene.nodes.iter().find(|n| n.activation > 0.0).copied().unwrap();
@@ -349,7 +350,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         scene.octave_layout = harmonigraph_scene::octave_layout(count, scene.octave_layout.center);
     }
     if let Ok(value) = std::env::var("PROBE_BLOOM") {
-        scene.bloom_strength = value.parse().expect("PROBE_BLOOM is a strength");
+        scene.view.note_bloom = value.parse().expect("PROBE_BLOOM is a strength");
     }
     let occlusion = std::env::var("PROBE_OCCLUSION")
         .map(|value| value.parse::<f32>().expect("PROBE_OCCLUSION is a strength"))
@@ -516,7 +517,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
         let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
         let cpu_ms = cpu_start.elapsed().as_secs_f64() * 1000.0;
         if frame == 0 {
-            eprintln!("{what}: cold prepare CPU {cpu_ms:.3} ms (includes pipeline/target creation), bloom {}", scene.bloom_strength);
+            eprintln!("{what}: cold prepare CPU {cpu_ms:.3} ms (includes pipeline/target creation), bloom {}", scene.view.note_bloom);
         }
         {
             // The closing stamp: this pass samples the scene target, so its

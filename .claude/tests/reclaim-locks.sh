@@ -766,7 +766,7 @@ SHIM
 
   # And the refusal must not cost the disk win: a worktree tier 2 could not
   # remove still falls through to tier 1.
-  if [ -d "$wt/target/debug" ]; then
+  if [ -f "$wt/target/debug/sentinel" ]; then
     echo "✗ $desc: a refused worktree stopped getting its cache pruned" >&2
     failures=$((failures + 1))
     return

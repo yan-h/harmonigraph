@@ -13,7 +13,9 @@ mod glow_curve;
 mod ring_stack;
 mod windowing;
 
-pub use animation::{AnimationOrder, NoteAnimationConfig};
+pub use animation::{
+    AnimationOrder, NoteAnimationConfig, RADIAL_START_RANGE, STAGGER_SPREAD_RANGE,
+};
 pub use drawn_window::DrawnWindow;
 pub use frame_params::FrameParams;
 pub use glow_curve::GlowCurve;
@@ -91,6 +93,33 @@ const MAX_CENTER: i32 = 1 << 30;
 /// [`DrawnWindow::fit_to_node_budget`] still bounds the work, but it is a
 /// backstop here rather than the thing that holds the picture together.
 pub const SEVENS_LAYER_LIMIT: i32 = 4;
+
+/// Shared bar and load range for [`ViewConfig::lattice_ground`].
+pub const LATTICE_GROUND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+/// Shared bar and load range for [`ViewConfig::marker_ink`].
+pub const MARKER_INK_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+/// Shared bar and load range for [`ViewConfig::sevens_size`].
+pub const SEVENS_SIZE_RANGE: std::ops::RangeInclusive<f32> = 0.15..=1.0;
+
+/// Shared bar and load range for [`ViewConfig::render_scale`].
+pub const LATTICE_RENDER_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+
+/// Shared bar and load range for [`ViewConfig::note_bloom`].
+pub const NOTE_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+
+/// Shared bar and load range for [`ViewConfig::spiral_bloom`].
+pub const SPIRAL_BLOOM_RANGE: std::ops::RangeInclusive<f32> = 0.0..=2.0;
+
+/// Shared bar and load range for [`ViewConfig::glow_wash`].
+pub const GLOW_WASH_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
+/// Shared bar and load range for [`ViewConfig::glow_blend`].
+pub const GLOW_BLEND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
+/// Shared bar and load range for [`ViewConfig::glow_accumulation`].
+pub const GLOW_ACCUMULATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
@@ -271,7 +300,7 @@ pub struct ViewConfig {
     /// one ring of the stack and the next (see [`rings`](Self::rings)), which
     /// is also what stands a melody/bass mark off the band it continues;
     /// angularly, the constant-thickness cut between one octave sector and the
-    /// next (see [`octave_gap_width`](Self::octave_gap_width)).
+    /// next.
     ///
     /// One number on both axes so the concentric layers and the sectors within
     /// them carry the same rhythm of empty space. The radial use spends room
@@ -691,65 +720,13 @@ pub struct ViewConfig {
     /// shadow treats the half-alpha contour as the end of the exact field, the
     /// same contour every other caster's distance cell holds.
     pub plus_taper: f32,
-    /// Meantone mode: lock the major-third tuning to four perfect fifths
-    /// (temper out the syntonic comma, 81/80). While on, the third-tuning
-    /// value is derived from the fifth (in `begin_frame`) and note names are
-    /// respelled without their comma marks.
-    ///
-    /// One of two comma switches, and the pattern for both: the flag is named
-    /// after the temperament that tempers its comma out, [`Self::marvel`] is
-    /// the same switch for 225/224, and [`ViewConfig::tempers`] is how the UI
-    /// reaches either by [`Comma`] rather than by name.
-    ///
-    /// Whether this engages by itself is [`Self::meantone_auto`]'s business;
-    /// releasing it is an edit of the major third (or this switch, while the
-    /// auto-detect is off), or a learned chord while the auto-detect is on
-    /// and no source has Retune on.
+    /// Link the major third to four fifths and spell syntonic-comma equivalents
+    /// identically. New tuning entries and fully evidenced Learn results
+    /// recognize this relationship; switching off keeps the displayed interval.
     pub meantone: bool,
-    /// Auto-detect meantone: engage [`Self::meantone`] whenever the tuning
-    /// params land within `TEMPER_TOLERANCE` of the meantone identity —
-    /// however they got there (a learned chord, the 12-TET preset, a drag
-    /// of either bar). The major third then snaps to four perfect fifths
-    /// and the comma marks go.
-    ///
-    /// No other drag releases it, deliberately: the lock has to survive
-    /// dragging the FIFTH, which moves the derived third out from under a
-    /// third param that is inert while the lock holds. So the releasing drag
-    /// is the one edit that can mean nothing else — pulling the major third
-    /// itself more than the tolerance away from the derived value. Learn is
-    /// the other release: while no source has Retune on, a learned chord
-    /// that evidences every axis the comma depends on sets the lock either
-    /// way, since a played third is not a dragged fifth.
-    ///
-    /// On by default: a project at 12-TET (400 = 4·700 − 2400) is meantone
-    /// whether or not anyone said so, and its E and E- name one pitch, so
-    /// the detect has something to say about most tunings without being
-    /// asked. Switching this off leaves the mode wherever it is and hands
-    /// the switch back.
-    pub meantone_auto: bool,
-    /// Marvel mode: lock the harmonic-seventh tuning to two fifths plus two
-    /// thirds (temper out the septimal kleisma, 225/224). The same switch as
-    /// [`Self::meantone`] one prime up — while on, the seventh-tuning value
-    /// is derived in `begin_frame` and the sevens sheet is respelled onto the
-    /// home sheet, where a harmonic seventh reads `A♯-2` (two fifths plus two
-    /// thirds) instead of `B♭↓`.
-    ///
-    /// The third it derives from is the one in USE, so with meantone on too
-    /// the pair composes into septimal meantone (a seventh of ten fifths) and
-    /// every name on the lattice comes out a plain letter.
+    /// Link the harmonic seventh to two fifths plus two thirds. Its name matches
+    /// the augmented sixth: A♯-2 from C, or plain A♯ with Meantone linked too.
     pub marvel: bool,
-    /// Auto-detect marvel: [`Self::meantone_auto`]'s twin, which no drag but
-    /// the seventh's own releases, for the same reason — the lock has to
-    /// survive dragging the fifth or the third, either of which moves the
-    /// derived seventh out from under a seventh param that is inert while
-    /// the lock holds.
-    ///
-    /// On by default, on the same grounds as the meantone detect: 12-TET
-    /// tempers 225/224 out as well (1000 = 2·700 + 2·400 − 1200), so a
-    /// project there has one pitch under `B♭↓` and `A♯` whether or not
-    /// anyone said "marvel", and the detect respelling the sevens sheet is
-    /// the tuning's own arithmetic showing up in the names.
-    pub marvel_auto: bool,
     /// Offscreen render resolution as a multiple of the pane's native pixel
     /// size: >1 supersamples (crisper glyph edges), <1 renders coarse and
     /// upscales. 1.0 reproduces the pre-offscreen-pass output exactly.
@@ -934,29 +911,7 @@ pub struct ViewConfig {
     pub glow_release: f32,
 }
 
-/// A size bar's value as the picture may use it: inside `0..=high`, and 0 —
-/// the off position every one of them has — where a hand-edited blob holds a
-/// NaN or an infinity, which no clamp of its own would catch.
-///
-/// Reached from [`derive`](crate::derive) as well as from the stack here,
-/// because the answer a size gets when it is not a number has to be one
-/// answer: a marker's arm read as NaN in one derivation and as 0 in the next
-/// is a picture assembled out of two readings of one bar.
-pub(crate) fn size(value: f32, high: f32) -> f32 {
-    if value.is_finite() {
-        value.clamp(0.0, high)
-    } else {
-        0.0
-    }
-}
-
 impl ViewConfig {
-    /// Shared note bloom, finite and within the control's range even for
-    /// callers that build a view without loading a saved appearance.
-    pub fn note_bloom_strength(&self) -> f32 {
-        finite_or(self.note_bloom, Self::default().note_bloom).clamp(0.0, 2.0)
-    }
-
     /// The note envelope, assembled from the two halves it is stored in: the
     /// shape is a LOOK and lives here, the duration is host-automatable and
     /// lives in [`FrameParams`].
@@ -970,9 +925,7 @@ impl ViewConfig {
     ///
     /// One assembly point for every envelope a NOTE runs on, so the split is
     /// invisible past this line and no caller can pair a duration with the
-    /// wrong shape. The shape is clamped to the range its bar offers — a
-    /// hand-edited blob can hold anything, and `sanitize` only repairs the
-    /// non-finite (a finite 40 would be a curve no bar can undo).
+    /// wrong shape. The shape has already passed through `sanitize`.
     ///
     /// The Note section's Fade curve bar builds one of its own, and it is the single
     /// exception rather than a second assembly point: it is drawing a PICTURE
@@ -985,7 +938,7 @@ impl ViewConfig {
         Envelope {
             attack_time: frame.fade_time,
             fade_time: frame.fade_time,
-            shape: self.fade_shape.clamp(0.0, 1.0),
+            shape: self.fade_shape,
         }
     }
 
@@ -1011,15 +964,11 @@ impl ViewConfig {
     /// copies of that sum is how a ring comes to sit a gap off a band that
     /// moved.
     ///
-    /// Every clamp the picture needs is here rather than in
-    /// [`sanitize`](Self::sanitize), for the reason every other geometry clamp
-    /// is: the drawing code is reached by more routes than the persist door — a
-    /// take replay, the offline renderer's layout, a standalone harness — so a
-    /// hand-edited blob has to come out as a node somebody can see rather than
-    /// as one that silently is not there.
+    /// Callers supply a sanitized view; this computes geometry limits rather
+    /// than repairing the saved dials a second time.
     pub fn rings(&self) -> RingStack {
-        let gap = size(self.ring_gap, GAP_MAX);
-        let inner = size(self.ring_inner, RING_INNER_MAX);
+        let gap = self.ring_gap;
+        let inner = self.ring_inner;
         // The cursor is the outer edge of the last layer DRAWN, and 0 until one
         // is — which is what makes a ring dialled to 0 cost its gap as well as
         // its slot: nothing moved the cursor, so the next ring starts where it
@@ -1027,8 +976,8 @@ impl ViewConfig {
         // opening value, because the two answer different questions: what a
         // layer stands off, and where the stack sits.
         let mut stack = Stack { inner, cursor: 0.0, reach: 0.0, full: false };
-        let audio = stack.take(gap, size(self.spectral_ring_width, RING_WIDTH_MAX));
-        let band = stack.take(gap, size(self.band_width, RING_WIDTH_MAX));
+        let audio = stack.take(gap, self.spectral_ring_width);
+        let band = stack.take(gap, self.band_width);
         RingStack {
             inner,
             audio,
@@ -1048,63 +997,8 @@ impl ViewConfig {
             // to refuse, arriving by the one door it does not cover: the strip
             // jumped a fifth of a node INWARD as the Inner handle moved out.
             mark_inner: slot_start(stack.reach, inner, gap),
-            mark_thickness: size(self.mark_thickness, MARK_THICKNESS_MAX),
+            mark_thickness: self.mark_thickness,
             gap,
-        }
-    }
-
-    /// [`ring_gap`](Self::ring_gap) as the angular width the shader can cut
-    /// with: on the axis, and a real number.
-    ///
-    /// Unlike the radial use through [`rings`](Self::rings), this reaches the
-    /// picture as a bare uniform rather than through a radius, so this is the
-    /// one place its clamp can live, and it is here rather than in
-    /// [`sanitize`](Self::sanitize) for the reason every other geometry clamp
-    /// is: the drawing code is reached by more routes than the persist door. A
-    /// non-finite width would threshold every fragment of every sector to
-    /// false, taking the whole octave layer off the node with nothing on screen
-    /// to say why.
-    pub fn octave_gap_width(&self) -> f32 {
-        size(self.ring_gap, GAP_MAX)
-    }
-
-    /// [`lattice_ground`](Self::lattice_ground) as an `L*` the colour path can
-    /// actually solve for: on the axis, and a real number.
-    ///
-    /// One function for the same reason [`rings`](Self::rings) is one: the two
-    /// layers standing on this ground resolve it in different crates' reach —
-    /// `derive_scene` for the octave band, [`SpectralPaint::new`](crate::SpectralPaint)
-    /// for the audio ring's table — and a ground repaired two ways is two
-    /// grounds. The repair
-    /// is here rather than in [`sanitize`](Self::sanitize) alone for that
-    /// function's own reason: the drawing code is reached by more routes than
-    /// the persist door, and a NaN walks through a `clamp` untouched into a
-    /// Newton solve that answers with whatever its guard parks on.
-    pub fn lattice_ground_lightness(&self) -> f32 {
-        if self.lattice_ground.is_finite() {
-            self.lattice_ground.clamp(0.0, 100.0)
-        } else {
-            DEFAULT_RING_GROUND
-        }
-    }
-
-    /// [`marker_ink`](Self::marker_ink) as an `L*` the colour path can actually
-    /// solve for: on the axis, and a real number.
-    ///
-    /// Its own function rather than the one above with a field swapped in,
-    /// because the two numbers are independent and a repair that read the wrong
-    /// one would be silent: both answers are drawable neutral greys, so only a
-    /// comparison against the bar exposes the swap. The reason the repair
-    /// exists at all is
-    /// [`lattice_ground_lightness`](Self::lattice_ground_lightness)'s: a NaN
-    /// walks through a `clamp` untouched into a Newton solve that answers with
-    /// whatever its guard parks on, and the drawing code is reached by more
-    /// routes than the persist door.
-    pub fn marker_ink_lightness(&self) -> f32 {
-        if self.marker_ink.is_finite() {
-            self.marker_ink.clamp(0.0, 100.0)
-        } else {
-            DEFAULT_MARKER_INK
         }
     }
 
@@ -1140,38 +1034,6 @@ impl ViewConfig {
         match comma {
             Comma::Syntonic => self.meantone,
             Comma::SeptimalKleisma => self.marvel,
-        }
-    }
-
-    /// Whether one comma's auto-detect is running.
-    pub fn temper_auto(&self, comma: Comma) -> bool {
-        match comma {
-            Comma::Syntonic => self.meantone_auto,
-            Comma::SeptimalKleisma => self.marvel_auto,
-        }
-    }
-
-    /// The switch for one comma's tempering, to read or set. Together with
-    /// [`Self::temper_auto_mut`] this is what lets the tempering section be a
-    /// loop over [`Comma::ALL`] instead of a block per comma.
-    ///
-    /// A third comma is then additive rather than another special case, but
-    /// it is not free: the variant and its arms on [`Comma`], two fields and
-    /// four arms here, one in `LatticePos::respell`, one in the UI's
-    /// `judged_axes`, and one in its `derived_key` — which lives there
-    /// because a `ParamKey` is the UI's to name, not core's.
-    pub fn temper_mut(&mut self, comma: Comma) -> &mut bool {
-        match comma {
-            Comma::Syntonic => &mut self.meantone,
-            Comma::SeptimalKleisma => &mut self.marvel,
-        }
-    }
-
-    /// The auto-detect switch for one comma.
-    pub fn temper_auto_mut(&mut self, comma: Comma) -> &mut bool {
-        match comma {
-            Comma::Syntonic => &mut self.meantone_auto,
-            Comma::SeptimalKleisma => &mut self.marvel_auto,
         }
     }
 
@@ -1254,10 +1116,9 @@ impl ViewConfig {
         self.octave_count = crate::octaves::clamp_count(self.octave_count);
         self.octave_center = crate::octaves::clamp_center(self.octave_center);
 
-        // Each off-sheet step multiplies geometry by this value. The draw path
-        // stays defensive, while load owns making the stored reading fit the
-        // bar that edits it.
-        self.sevens_size = finite_or(self.sevens_size, fresh.sevens_size).clamp(0.15, 1.0);
+        // Each off-sheet step multiplies geometry by this value.
+        self.sevens_size = finite_or(self.sevens_size, fresh.sevens_size)
+            .clamp(*SEVENS_SIZE_RANGE.start(), *SEVENS_SIZE_RANGE.end());
 
         // The mark delay, against that same hole: it is added to a timestamp
         // and the sum divided by the attack, so a non-finite one poisons the
@@ -1266,8 +1127,7 @@ impl ViewConfig {
         // every comparison), so the level stays at 0 while the slot bit is
         // still set, and the shader multiplies the ring's coverage away to
         // nothing. Silent, and it takes the whole layer wherever the marks
-        // are on. `mark_delay` in motion.rs repeats this repair for callers that
-        // do not pass through this load boundary.
+        // are on.
         self.mark_delay = finite_or(self.mark_delay, 0.0).clamp(0.0, crate::MARK_DELAY_MAX);
 
         // The envelope's shape, against the same hole. `Envelope::approach`
@@ -1291,55 +1151,15 @@ impl ViewConfig {
         self.spectral_width = finite_or(self.spectral_width, fresh.spectral_width)
             .clamp(crate::SPECTRAL_WIDTH_MIN, crate::SPECTRAL_WIDTH_MAX);
 
-        // The audio ring's width, against that same hole. A non-finite one
-        // costs less than the width above — [`ViewConfig::rings`] reads a NaN
-        // as the off position rather than letting it through as a radius — but
-        // what it costs is the SETTING: the ring is not drawn while the bar
-        // reads out a number, and dragging the bar is then the only way to find
-        // out that the number was never a size. Repaired to the fresh width, so
-        // the field and the picture agree about which it is.
-        //
-        // The fresh width is now 0 — the DAW capture at `64f7d41e` dialled the
-        // ring off — so this repair and `rings`' own reading of a NaN land in
-        // the same place today, and the sentence that used to stand here (a
-        // blob through this door "holds a ring somebody can see") stopped being
-        // true then. What the repair still buys is the agreement rather than
-        // the ring: the stored field stops being a number no layer matches.
-        // Should the fresh ring ever come back on, this line follows it.
-        //
-        // Where the ring SITS is not repaired here, because it is not stored: a
-        // width is a width whatever is inside it, and the stack is what turns
-        // the four of them into radii (`rings`).
+        // All radial widths share the load repair. Nonfinite sizes use the
+        // fresh setting; rings() only places the normalized widths in a stack.
         self.spectral_ring_width = finite_or(self.spectral_ring_width, fresh.spectral_ring_width)
             .clamp(0.0, RING_WIDTH_MAX);
-        // The three handles BESIDE it on the same bar, against the same hole
-        // and repaired for the same reason. Each is held to its own ceiling in
-        // [`rings`](Self::rings) for the picture, and the Layers bar reads the
-        // stored field back raw, so a blob past a ceiling leaves one handle out
-        // on the axis at a width no layer of the node matches — the ring's own
-        // case, three more times, and the one the bar is least able to report
-        // since the stack it draws under the handles is already the clamped one.
-        //
-        // To the fresh value rather than to 0, which is the ring's rule and not
-        // the delay's: 0 is a legal width on all four handles, but a layer
-        // silently absent is no safer a reading of a broken number than a layer
-        // at the wrong size, and the fresh stack is the one arrangement in the
-        // file known to seat all four.
         self.ring_inner = finite_or(self.ring_inner, fresh.ring_inner).clamp(0.0, RING_INNER_MAX);
         self.band_width = finite_or(self.band_width, fresh.band_width).clamp(0.0, RING_WIDTH_MAX);
         self.mark_thickness =
             finite_or(self.mark_thickness, fresh.mark_thickness).clamp(0.0, MARK_THICKNESS_MAX);
-        // The shared padding, against the same hole and for the reason the width
-        // above is repaired rather than left to the picture: [`GAP_MAX`] is a
-        // ceiling the bar is BUILT from, so a blob written when it stood
-        // higher carries a number no bar can reach, and `rings` holds it to the
-        // ceiling for the picture while the field keeps what the bar reads out.
-        // The stack under the bar then draws one padding and the bar names
-        // another, which is a value read out one way and drawn another.
-        //
-        // The clamp in [`rings`](Self::rings) stays where it is — the picture is
-        // reached by more routes than this door — and this one makes the number
-        // the door lets through a number the picture agrees with.
+        // The same padding is used radially and between octave sectors.
         self.ring_gap = finite_or(self.ring_gap, fresh.ring_gap).clamp(0.0, GAP_MAX);
         // How wide a window each wedge shows. A MULTIPLIER in the shader — a
         // fragment's across-the-wedge fraction scales by it into a cents
@@ -1354,8 +1174,7 @@ impl ViewConfig {
         // the two above take: a level nobody can read is a reason to draw every
         // ring, never to hide one, and a blob holding a NaN here would
         // otherwise open on a lattice with no rings and no way to tell that
-        // from an analyzer with nothing to say. `SpectralPaint::new` repairs
-        // the same way for the shells that never come through this door.
+        // from an analyzer with nothing to say.
         self.spectral_ring_gate = finite_or(self.spectral_ring_gate, crate::SPECTRAL_GATE_MIN)
             .clamp(crate::SPECTRAL_GATE_MIN, crate::SPECTRAL_GATE_MAX);
         // The hysteresis repairs to 0 — one threshold — on the same argument
@@ -1382,13 +1201,14 @@ impl ViewConfig {
         // NaN gradient and the whole ring goes to whatever the clamp in
         // `oklab_srgb` lands on. Both rings read the repaired number, which is
         // what keeps the bar's readout and the grey on screen the same value.
-        self.lattice_ground =
-            finite_or(self.lattice_ground, fresh.lattice_ground).clamp(0.0, 100.0);
+        self.lattice_ground = finite_or(self.lattice_ground, fresh.lattice_ground)
+            .clamp(*LATTICE_GROUND_RANGE.start(), *LATTICE_GROUND_RANGE.end());
         // The markers' own grey, on the same axis and repaired for the same
         // reason: it is solved for a neutral by the same Newton solve, and it
         // reaches no gradient, so a broken one costs the resting field and
         // nothing else.
-        self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink).clamp(0.0, 100.0);
+        self.marker_ink = finite_or(self.marker_ink, fresh.marker_ink)
+            .clamp(*MARKER_INK_RANGE.start(), *MARKER_INK_RANGE.end());
         // The node glow's pair, each repaired to its fresh value and clamped
         // to its bar. Deliberately fresh rather than 0 for the Reach (#1327):
         // a corrupt Reach opens with the fresh glow like every other repaired
@@ -1412,10 +1232,12 @@ impl ViewConfig {
         self.shadow = self.shadow.clamped();
         // The SHARES — of the light a lit slice stands in, of the light's own
         // peak, of a whole turn — so their range is the unit interval.
-        self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash).clamp(0.0, 1.0);
-        self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend).clamp(0.0, 1.0);
-        self.glow_accumulation =
-            finite_or(self.glow_accumulation, fresh.glow_accumulation).clamp(0.0, 1.0);
+        self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash)
+            .clamp(*GLOW_WASH_RANGE.start(), *GLOW_WASH_RANGE.end());
+        self.glow_blend = finite_or(self.glow_blend, fresh.glow_blend)
+            .clamp(*GLOW_BLEND_RANGE.start(), *GLOW_BLEND_RANGE.end());
+        self.glow_accumulation = finite_or(self.glow_accumulation, fresh.glow_accumulation)
+            .clamp(*GLOW_ACCUMULATION_RANGE.start(), *GLOW_ACCUMULATION_RANGE.end());
         // The light's own pair, in seconds, on the ring's rule: a bar's range,
         // and a poisoned number repaired to the fresh value rather than left
         // to make a coefficient nothing can carry.
@@ -1427,16 +1249,18 @@ impl ViewConfig {
         // These post-process controls are stored beside the view. Renderer
         // clamps remain wider defensive boundaries for callers that do not
         // load an AppearanceDocument through this sanitizer.
-        self.render_scale = finite_or(self.render_scale, fresh.render_scale).clamp(0.5, 2.0);
-        self.note_bloom = self.note_bloom_strength();
-        self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom).clamp(0.0, 2.0);
+        self.render_scale = finite_or(self.render_scale, fresh.render_scale)
+            .clamp(*LATTICE_RENDER_SCALE_RANGE.start(), *LATTICE_RENDER_SCALE_RANGE.end());
+        self.note_bloom = finite_or(self.note_bloom, fresh.note_bloom)
+            .clamp(*NOTE_BLOOM_RANGE.start(), *NOTE_BLOOM_RANGE.end());
+        self.spiral_bloom = finite_or(self.spiral_bloom, fresh.spiral_bloom)
+            .clamp(*SPIRAL_BLOOM_RANGE.start(), *SPIRAL_BLOOM_RANGE.end());
 
         // The resting marker's three lengths. The arm and its taper are a
         // reach-and-fade PAIR, held the way every such pair here is — the fade
         // clamped to its own reach — because `edge_bar` puts `reach - taper` on
         // the axis and a taper wider than its arm would show a low end the
-        // value does not say. `derive_pluses` clamps the reach again for the
-        // PICTURE, which is a separate job.
+        // value does not say.
         //
         // The width is clamped to the axis and NOT to the arm: past twice the
         // arm it draws a filled square, which is a picture rather than an
@@ -1454,12 +1278,6 @@ impl ViewConfig {
 /// No range: the caller's own clamp is the range, and this only has to hand
 /// it something a clamp can act on.
 ///
-/// Reached from [`derive`](crate::derive) and [`style`](crate::style) as well
-/// as from the door below, for the same reason [`size`] is: the drawing code
-/// is reached by more routes than the persist door — the offline layout, take
-/// replay and the harness each build a view in code — and one answer to "this
-/// is not a number" is what keeps the picture from being assembled out of two
-/// readings of one bar.
 pub(crate) fn finite_or(value: f32, fallback: f32) -> f32 {
     if value.is_finite() {
         value
@@ -1469,7 +1287,7 @@ pub(crate) fn finite_or(value: f32, fallback: f32) -> f32 {
 }
 
 /// The `L*` a fresh [`ViewConfig::lattice_ground`] opens on. Named because the
-/// `_lightness` accessor needs it without building a whole fresh view to read
+/// color helpers need it without building a whole fresh view to read
 /// one field off. Named, and not a second value: the `Default` below is written
 /// in terms of it, the way it is written in terms of `octaves::DEFAULT_COUNT`.
 ///
@@ -1662,9 +1480,7 @@ impl Default for ViewConfig {
             // spelling locks open on the tuning's own equivalences rather than
             // showing duplicate comma spellings.
             meantone: true,
-            meantone_auto: true,
             marvel: true,
-            marvel_auto: true,
             render_scale: 1.0,
             // The lattice's bloom strength (`bloom_strength`, retired into
             // `note_bloom` by #1140), which the Spiral shared until it had its

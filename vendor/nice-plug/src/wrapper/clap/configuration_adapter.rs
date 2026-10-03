@@ -198,16 +198,21 @@ impl<P: ClapPlugin> Wrapper<P> {
         true
     }
 
-    /// Every command accepted before this callback, applied at its boundary.
-    /// There is no per-command observation sample: an edit that arrives while a
-    /// block is in flight is simply drained by the next one.
+    /// A finite snapshot of accepted commands, applied at this boundary.
+    /// There is no per-command observation sample: an edit arriving after the
+    /// snapshot is drained at the next callback boundary.
     fn drain_configuration_commands(
         &self,
         runtime: &mut Runtime,
         plugin: &mut P,
         sample: i64,
     ) -> bool {
-        while let Ok(&command) = runtime.commands.peek() {
+        // The producer can refill slots as we release them. In particular,
+        // restores need no notification cell, so that bank cannot bound this
+        // loop. Arrivals after this snapshot wait for the next callback.
+        let pending = runtime.commands.slots();
+        for _ in 0..pending {
+            let command = *runtime.commands.peek().expect("captured configuration command");
             if !self.apply_configuration(runtime, plugin, command, sample, None) {
                 return false;
             }
@@ -262,8 +267,8 @@ impl<P: ClapPlugin> Wrapper<P> {
         if !self.drain_configuration_commands(runtime, &mut plugin, boundary.steady_time) {
             return;
         }
-        // THE configuration boundary, once every command accepted before this
-        // callback has reduced: one value for every group this block starts.
+        // THE configuration boundary, once the captured command prefix has
+        // reduced: one value for every group this block starts.
         plugin.clap_configuration_adopt();
         input.storage.bind_untimed(boundary.steady_time);
         // One walk, in input order, with each event's sample-precise timestamp

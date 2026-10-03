@@ -3,18 +3,16 @@
 
 use crate::{Comma, LearnedTuning, Tempered, Tuning};
 
-/// Runtime mode state. Judgements and command acknowledgements are deliberately
-/// separate: neither is part of a saved musical setting.
+/// Explicit interval links and Learn state. Recognition runs only on tuning edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TuningModes {
     pub tempered: Tempered,
-    pub auto: [bool; Comma::COUNT],
     pub learning: bool,
 }
 
 impl Default for TuningModes {
     fn default() -> Self {
-        Self { tempered: Tempered::default(), auto: [true; Comma::COUNT], learning: false }
+        Self { tempered: Tempered { syntonic: true, septimal_kleisma: true }, learning: false }
     }
 }
 
@@ -98,6 +96,112 @@ impl PolicyConfig {
     }
 }
 
+/// Intent from a possibly stale display. Only selected fields replace the
+/// owner's values; snapshots and restores still carry a complete policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PolicyEdit {
+    values: PolicyConfig,
+    mask: u16,
+}
+
+impl PolicyEdit {
+    const ALL: u16 = (1 << 12) - 1;
+    const DERIVE_KEYBOARD: u16 = 1 << 12;
+
+    pub fn changed(before: PolicyConfig, after: PolicyConfig) -> Self {
+        let values = after.sanitize();
+        let changed = [
+            before.radius != values.radius,
+            before.axes != values.axes,
+            before.pitch_flexibility != values.pitch_flexibility,
+            before.half_life_ms != values.half_life_ms,
+            before.register != values.register,
+            before.tolerance != values.tolerance,
+            before.silence_ms != values.silence_ms,
+            before.reset_stop != values.reset_stop,
+            before.reset_loop != values.reset_loop,
+            before.keyboard[0] != values.keyboard[0],
+            before.keyboard[1] != values.keyboard[1],
+            before.keyboard[2] != values.keyboard[2],
+        ];
+        let mask = changed
+            .into_iter()
+            .enumerate()
+            .fold(0, |mask, (i, changed)| mask | (u16::from(changed) << i));
+        Self { values, mask }
+    }
+
+    /// Complete synchronous adoption, not an edit from an observed UI value.
+    pub fn all(values: PolicyConfig) -> Self {
+        Self { values, mask: Self::ALL }
+    }
+
+    /// Derive from the owner's fifth after applying this transaction's fields.
+    /// An explicit click remains an action even if the display looks derived.
+    pub fn derive_keyboard(mut self) -> Self {
+        self.mask |= Self::DERIVE_KEYBOARD;
+        self
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.mask == 0
+    }
+
+    /// The mask occupies an otherwise unused word in the existing mailbox.
+    pub fn words(self) -> (i32, [i32; 10]) {
+        (i32::from(self.mask), self.values.sanitize().words())
+    }
+
+    pub fn from_words(mask: i32, values: [i32; 10]) -> Self {
+        Self {
+            values: PolicyConfig::from_words(values),
+            mask: mask as u16 & (Self::ALL | Self::DERIVE_KEYBOARD),
+        }
+    }
+
+    pub fn apply_to(self, current: &mut PolicyConfig) {
+        if self.is_empty() {
+            return;
+        }
+        if self.mask & 1 != 0 {
+            current.radius = self.values.radius;
+        }
+        if self.mask & (1 << 1) != 0 {
+            current.axes = self.values.axes;
+        }
+        if self.mask & (1 << 2) != 0 {
+            current.pitch_flexibility = self.values.pitch_flexibility;
+        }
+        if self.mask & (1 << 3) != 0 {
+            current.half_life_ms = self.values.half_life_ms;
+        }
+        if self.mask & (1 << 4) != 0 {
+            current.register = self.values.register;
+        }
+        if self.mask & (1 << 5) != 0 {
+            current.tolerance = self.values.tolerance;
+        }
+        if self.mask & (1 << 6) != 0 {
+            current.silence_ms = self.values.silence_ms;
+        }
+        if self.mask & (1 << 7) != 0 {
+            current.reset_stop = self.values.reset_stop;
+        }
+        if self.mask & (1 << 8) != 0 {
+            current.reset_loop = self.values.reset_loop;
+        }
+        for i in 0..3 {
+            if self.mask & (1 << (9 + i)) != 0 {
+                current.keyboard[i] = self.values.keyboard[i];
+            }
+        }
+        *current = current.sanitize();
+        if self.mask & Self::DERIVE_KEYBOARD != 0 {
+            current.keyboard = crate::tuning::fifth_generated(current.keyboard[0]);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResolvedConfig {
     pub revision: u64,
@@ -112,9 +216,8 @@ pub struct ResolvedConfig {
 pub struct ConfigEdit {
     pub axes: [Option<i32>; 5],
     pub tempered: [Option<bool>; Comma::COUNT],
-    pub auto: [Option<bool>; Comma::COUNT],
     pub learning: Option<bool>,
-    pub policy: Option<PolicyConfig>,
+    pub policy: Option<PolicyEdit>,
 }
 
 impl ConfigEdit {
@@ -124,9 +227,18 @@ impl ConfigEdit {
         edit
     }
 
-    pub fn unlock(comma: Comma, microcents: i32) -> Self {
-        let mut edit = Self::axis(comma.index() + 2, microcents);
-        edit.tempered[comma.index()] = Some(false);
+    /// Switch off at the interval currently heard and displayed, including a
+    /// value derived by another link. Send the value and flag as one edit so
+    /// host parameters and project saves retain that value too.
+    pub fn temper(comma: Comma, on: bool, current: Tuning) -> Self {
+        let mut edit = Self::default();
+        edit.tempered[comma.index()] = Some(on);
+        if !on {
+            edit.axes[comma.index() + 2] = Some(match comma {
+                Comma::Syntonic => crate::tuning::microcents(current.five_cents()),
+                Comma::SeptimalKleisma => crate::tuning::microcents(current.seven_cents()),
+            });
+        }
         edit
     }
 }
@@ -139,13 +251,9 @@ pub enum ConfigMutation {
         modes: TuningModes,
         policy: PolicyConfig,
     },
-    /// The keyboard tuning follows the learned fifth either way. The comma
-    /// judgement follows the learned chord only while no source is
-    /// `retuning`: with retuning off the lattice is a picture of the input,
-    /// with it on it is the target. `raw` is what the learned edit committed,
-    /// which is where the axes it moved arrive, and host modulation may have
-    /// moved them since. A comma the chord engages stays engaged; one it
-    /// releases `resolve` may engage again from that `raw`.
+    /// Learn classifies its unconstrained evidence before imposing any links.
+    /// With retuning active, only the origin and keyboard are learned: the
+    /// lattice intervals remain the target. `raw` is the committed host input.
     LearnResolved {
         learned: LearnedTuning,
         retuning: bool,
@@ -153,24 +261,13 @@ pub enum ConfigMutation {
     },
 }
 
-/// One comma's current verdict. Auto observes effective axes; an explicit
-/// release observes raw axes so earlier comma switches cannot undo it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Verdict {
-    Auto((i32, i32, i32)),
-    Released((i32, i32, i32)),
-}
-
-/// Pure comma resolver, used by the CLAP audio owner and synchronously by the
-/// standalone/legacy display adapter. Each comma judges the axes after earlier
-/// commas derive them, before its own derivation. Only those inputs key its verdict.
-/// An explicit release instead holds until the comma's raw axes change, so an
-/// earlier comma's switch moving the derived third does not undo it.
+/// One owner for edits and their effective tuning. Independent interval edits
+/// recognize relationships; a linked interval follows edits of its generators.
+/// Restore and display observation never rejudge an unchanged tuning.
 #[derive(Clone, Debug)]
 pub struct ConfigReducer {
     raw: Tuning,
     modes: TuningModes,
-    judged: [Option<Verdict>; Comma::COUNT],
     resolved: ResolvedConfig,
 }
 
@@ -185,7 +282,6 @@ impl ConfigReducer {
         let mut reducer = Self {
             raw,
             modes,
-            judged: [None; Comma::COUNT],
             resolved: ResolvedConfig {
                 revision: 0,
                 tuning: raw,
@@ -203,39 +299,21 @@ impl ConfigReducer {
     pub fn resolved(&self) -> ResolvedConfig {
         self.resolved
     }
-    pub fn judged(&self) -> [Option<Verdict>; Comma::COUNT] {
-        self.judged
-    }
-
-    /// Ask the next display observation to judge this comma again.
-    pub fn recheck(&mut self, comma: Comma) {
-        self.judged[comma.index()] = None;
-    }
-
-    /// A new display or restored appearance has no verdict about its tuning yet.
-    pub fn recheck_all(&mut self) {
-        self.judged = [None; Comma::COUNT];
-    }
-
-    /// Synchronous display adapter only. CLAP must submit explicit commands;
-    /// polling these raw values there would lose automation and commit identity.
+    /// Synchronous shells adapt actual parameter changes into edits. CLAP
+    /// supplies the edited axes directly, including same-value typed entries.
     pub fn sync_display(&mut self, raw: Tuning, modes: TuningModes, policy: PolicyConfig) -> bool {
-        // A changed switch after observation is an explicit display choice.
-        // An unjudged comma instead belongs to a fresh view or an Auto recheck.
-        let tempered = std::array::from_fn(|i| {
-            let comma = Comma::ALL[i];
-            (self.judged[i].is_some()
-                && self.modes.tempered.has(comma) != modes.tempered.has(comma))
-            .then_some(modes.tempered.has(comma))
-        });
-        self.raw = raw;
-        self.modes = modes;
-        // Policy and modes arrive together: resolving a policy edit sooner
-        // would consume a pending Auto recheck against the old display modes.
+        let before =
+            [self.raw.c_offset, self.raw.three, self.raw.five, self.raw.seven, self.raw.tolerance];
+        let after = [raw.c_offset, raw.three, raw.five, raw.seven, raw.tolerance];
         self.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered,
-            policy: Some(policy),
-            ..Default::default()
+            axes: std::array::from_fn(|i| (before[i] != after[i]).then_some(after[i])),
+            tempered: std::array::from_fn(|i| {
+                let comma = Comma::ALL[i];
+                (self.modes.tempered.has(comma) != modes.tempered.has(comma))
+                    .then_some(modes.tempered.has(comma))
+            }),
+            learning: Some(modes.learning),
+            policy: Some(PolicyEdit::all(policy)),
         }))
     }
 
@@ -248,11 +326,10 @@ impl ConfigReducer {
                 self.resolved.policy = policy.sanitize();
                 self.raw = raw;
                 self.modes = modes;
-                self.judged = [None; Comma::COUNT];
             }
             ConfigMutation::Edit(edit) => {
                 if let Some(policy) = edit.policy {
-                    self.resolved.policy = policy.sanitize();
+                    policy.apply_to(&mut self.resolved.policy);
                 }
                 let axes = [
                     &mut self.raw.c_offset,
@@ -266,20 +343,32 @@ impl ConfigReducer {
                         *axis = value;
                     }
                 }
+                // A switch-off carries a frozen interval, not a new independent
+                // tuning entry. It must not recognize a different released link.
+                let entered = [
+                    edit.axes[1].is_some(),
+                    edit.axes[2].is_some() && edit.tempered[0].is_none(),
+                    edit.axes[3].is_some() && edit.tempered[1].is_none(),
+                ];
+                let mut tuning = self.raw;
                 for comma in Comma::ALL {
                     let i = comma.index();
-                    if let Some(on) = edit.tempered[i] {
-                        self.modes.tempered = self.modes.tempered.with(comma, on);
-                        self.judged[i] =
-                            (!on).then(|| Verdict::Released(judged_axes(comma, self.raw)));
-                    }
-                    if let Some(on) = edit.auto[i] {
-                        self.modes.auto[i] = on;
-                        // Explicitly enabling Auto in the same command still
-                        // asks to recheck.
-                        if on {
-                            self.judged[i] = None;
-                        }
+                    let on = if let Some(on) = edit.tempered[i] {
+                        on
+                    } else if entered[i + 1]
+                        || (!self.modes.tempered.has(comma) && entered[..=i].iter().any(|v| *v))
+                    {
+                        comma.is_tempered(
+                            tuning.three_cents(),
+                            tuning.five_cents(),
+                            tuning.seven_cents(),
+                        )
+                    } else {
+                        self.modes.tempered.has(comma)
+                    };
+                    self.modes.tempered = self.modes.tempered.with(comma, on);
+                    if on {
+                        tuning.temper(comma);
                     }
                 }
                 if let Some(on) = edit.learning {
@@ -314,26 +403,6 @@ impl ConfigReducer {
     fn resolve(&mut self) {
         let mut tuning = self.raw;
         for comma in Comma::ALL {
-            let i = comma.index();
-            let axes = judged_axes(comma, tuning);
-            let held = !self.modes.tempered.has(comma)
-                && self.judged[i] == Some(Verdict::Released(judged_axes(comma, self.raw)));
-            if !held {
-                if self.modes.auto[i]
-                    && !self.modes.tempered.has(comma)
-                    && self.judged[i] != Some(Verdict::Auto(axes))
-                {
-                    self.modes.tempered = self.modes.tempered.with(
-                        comma,
-                        comma.is_tempered(
-                            tuning.three_cents(),
-                            tuning.five_cents(),
-                            tuning.seven_cents(),
-                        ),
-                    );
-                }
-                self.judged[i] = Some(Verdict::Auto(axes));
-            }
             if self.modes.tempered.has(comma) {
                 tuning.temper(comma);
             }
@@ -343,40 +412,17 @@ impl ConfigReducer {
     }
 }
 
-pub fn judged_axes(comma: Comma, tuning: Tuning) -> (i32, i32, i32) {
-    match comma {
-        Comma::Syntonic => (tuning.three, tuning.five, 0),
-        Comma::SeptimalKleisma => (tuning.three, tuning.five, tuning.seven),
-    }
-}
-
-fn learned_axes(
-    comma: Comma,
-    learned: LearnedTuning,
-    modes: TuningModes,
-) -> Option<(f32, f32, f32)> {
-    let (three, five) = (learned.three?, learned.five?);
-    match comma {
-        Comma::Syntonic => Some((three, five, 0.0)),
-        Comma::SeptimalKleisma => {
-            let five = if modes.tempered.has(Comma::Syntonic) {
-                crate::tuning::meantone_third(three)
-            } else {
-                five
-            };
-            Some((three, five, learned.seven?))
-        }
-    }
-}
-
-/// Learning alone may release an Auto comma when all of its required axes are
-/// evidenced. Syntonic derivation precedes the septimal verdict.
+/// Only relationships fully evidenced by the learned chord can change. The
+/// played intervals decide both flags, never values imposed by an existing link.
 pub fn learned_modes(learned: LearnedTuning, mut modes: TuningModes) -> TuningModes {
-    for comma in Comma::ALL {
-        if modes.auto[comma.index()] {
-            if let Some((three, five, seven)) = learned_axes(comma, learned, modes) {
-                modes.tempered = modes.tempered.with(comma, comma.is_tempered(three, five, seven));
-            }
+    if let (Some(three), Some(five)) = (learned.three, learned.five) {
+        modes.tempered.syntonic = Comma::Syntonic.is_tempered(three, five, 0.0);
+        if let Some(seven) = learned.seven {
+            // Use the newly recognized third, never an older imposed link.
+            let five =
+                if modes.tempered.syntonic { crate::tuning::meantone_third(three) } else { five };
+            modes.tempered.septimal_kleisma =
+                Comma::SeptimalKleisma.is_tempered(three, five, seven);
         }
     }
     modes
@@ -388,124 +434,159 @@ const _: () = assert!(std::mem::align_of::<ResolvedConfig>() <= 8);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tuning::microcents;
+    use crate::tuning::{microcents, FIVE_JUST, THREE_JUST};
 
     #[test]
-    fn marvel_judges_the_effective_third_and_preserves_an_explicit_release() {
-        let mut reducer = ConfigReducer::new(
-            Tuning::from_cents(0.0, 700.0, 386.0, 1000.0, 0.5),
-            TuningModes::default(),
-        );
-        assert!(!reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered: [Some(true), None],
-            ..Default::default()
-        }));
-        assert!(reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered: [None, Some(false)],
-            ..Default::default()
-        }));
-        assert!(!reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(2, microcents(387.0))));
-        assert!(
-            reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma),
-            "a raw-axis edit ends the release and rejudges even while Meantone derives the same third"
-        );
-        reducer.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered: [None, Some(false)],
-            ..Default::default()
-        }));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit {
-            auto: [None, Some(true)],
-            ..Default::default()
-        }));
-        assert!(reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
-    }
-
-    #[test]
-    fn releasing_meantone_after_marvel_does_not_re_engage_marvel() {
-        // Not exactly four fifths, so releasing Meantone moves Marvel's third.
-        let mut reducer = ConfigReducer::new(
-            Tuning::from_cents(0.0, 700.0, 400.1, 1000.0, 0.5),
-            TuningModes::default(),
-        );
-        assert!(reducer.resolved().modes.tempered.has(Comma::SeptimalKleisma));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered: [None, Some(false)],
-            ..Default::default()
-        }));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit {
-            tempered: [Some(false), None],
-            ..Default::default()
-        }));
-        let modes = reducer.resolved().modes;
-        assert!(!modes.tempered.has(Comma::Syntonic));
-        assert!(!modes.tempered.has(Comma::SeptimalKleisma), "the user's release holds");
-    }
-
-    #[test]
-    fn explicit_release_dependency_keys_and_auto_recheck_are_distinct() {
+    fn a_stale_policy_edit_preserves_the_keyboard_learned_since_observation() {
         let mut reducer = ConfigReducer::default();
-        assert!(reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        let release = ConfigEdit { tempered: [Some(false); 2], ..Default::default() };
-        reducer.apply(ConfigMutation::Edit(release));
-        let revision = reducer.resolved().revision;
-        reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(4, microcents(2.0))));
-        assert_eq!(reducer.resolved().revision, revision, "tolerance is display only");
-        reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(3, microcents(999.0))));
-        assert!(!reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(1, microcents(700.0))));
-        assert!(
-            !reducer.resolved().modes.tempered.has(Comma::Syntonic),
-            "same-value external automation is a command but no new judgement"
-        );
-        let mut recheck = ConfigEdit::default();
-        recheck.auto[0] = Some(true);
-        reducer.apply(ConfigMutation::Edit(recheck));
-        assert!(reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        reducer.apply(ConfigMutation::Edit(ConfigEdit::unlock(Comma::Syntonic, microcents(390.0))));
-        assert!(!reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        assert_eq!(reducer.raw().five, microcents(390.0));
-    }
-
-    #[test]
-    fn learning_can_release_with_complete_evidence_but_not_a_bare_fifth() {
-        let mut reducer = ConfigReducer::default();
-        // `raw` carries what the owner's learned edit committed.
-        let mut raw = reducer.raw();
-        raw.three = microcents(700.0);
+        let observed = reducer.resolved().policy;
+        let edit =
+            PolicyEdit::changed(observed, PolicyConfig { pitch_flexibility: 37, ..observed });
         reducer.apply(ConfigMutation::LearnResolved {
-            learned: LearnedTuning { three: Some(700.0), ..Default::default() },
+            learned: LearnedTuning { three: Some(696.578), ..Default::default() },
+            retuning: true,
+            raw: reducer.raw(),
+        });
+        let learned = reducer.resolved();
+        assert_ne!(learned.policy.keyboard, observed.keyboard);
+        reducer
+            .apply(ConfigMutation::Edit(ConfigEdit { policy: Some(edit), ..Default::default() }));
+        assert_eq!(reducer.resolved().policy.keyboard, learned.policy.keyboard);
+        assert_eq!(reducer.resolved().policy.pitch_flexibility, 37);
+        assert_eq!(reducer.resolved().revision, learned.revision + 1);
+    }
+
+    fn enter(reducer: &mut ConfigReducer, index: usize, cents: f32) {
+        assert!(reducer.apply(ConfigMutation::Edit(ConfigEdit::axis(index, microcents(cents)))));
+    }
+
+    fn switch(reducer: &mut ConfigReducer, comma: Comma, on: bool) {
+        let edit = ConfigEdit::temper(comma, on, reducer.resolved().tuning);
+        assert!(reducer.apply(ConfigMutation::Edit(edit)));
+    }
+
+    #[test]
+    fn manual_entries_recognize_and_release_links_with_matching_names_and_pitches() {
+        let mut reducer = ConfigReducer::new(
+            Tuning::just(),
+            TuningModes { tempered: Tempered::default(), ..Default::default() },
+        );
+        enter(&mut reducer, 1, 696.58);
+        assert!(reducer.resolved().modes.tempered.syntonic);
+        enter(&mut reducer, 3, 965.80);
+        let config = reducer.resolved();
+        assert!(config.modes.tempered.septimal_kleisma);
+        for (a, b) in [
+            (crate::LatticePos::new(0, 1, 0), crate::LatticePos::new(4, 0, 0)),
+            (crate::LatticePos::new(0, 0, 1), crate::LatticePos::new(2, 2, 0)),
+        ] {
+            assert_eq!(config.tuning.pitch_class(a), config.tuning.pitch_class(b));
+            assert_eq!(
+                a.respell(config.modes.tempered).note_name(),
+                b.respell(config.modes.tempered).note_name()
+            );
+        }
+        enter(&mut reducer, 2, 390.0);
+        assert!(!reducer.resolved().modes.tempered.syntonic);
+        assert_eq!(reducer.resolved().tuning.five, microcents(390.0));
+        assert!(reducer.resolved().modes.tempered.septimal_kleisma);
+        enter(&mut reducer, 3, 968.0);
+        assert!(!reducer.resolved().modes.tempered.septimal_kleisma);
+    }
+
+    #[test]
+    fn generator_edits_follow_links_and_switch_off_keeps_the_displayed_value() {
+        let mut reducer = ConfigReducer::default();
+        enter(&mut reducer, 1, 695.0);
+        assert_eq!(reducer.resolved().tuning.five, microcents(380.0));
+        assert_eq!(reducer.resolved().tuning.seven, microcents(950.0));
+        switch(&mut reducer, Comma::SeptimalKleisma, false);
+        switch(&mut reducer, Comma::Syntonic, false);
+        assert_eq!(reducer.raw().five, microcents(380.0));
+        assert_eq!(reducer.raw().seven, microcents(950.0));
+        let released = reducer.resolved();
+        for _ in 0..3 {
+            reducer.sync_display(reducer.raw(), released.modes, released.policy);
+        }
+        enter(&mut reducer, 0, 3.0);
+        enter(&mut reducer, 4, 2.0);
+        enter(&mut reducer, 3, 951.0);
+        assert!(!reducer.resolved().modes.tempered.syntonic);
+        // Entering even the same number is an explicit new tuning request.
+        enter(&mut reducer, 2, 380.0);
+        assert!(reducer.resolved().modes.tempered.syntonic);
+    }
+
+    #[test]
+    fn presets_and_restore_apply_atomically_without_rejudging_saved_switches() {
+        let mut reducer = ConfigReducer::default();
+        reducer.apply(ConfigMutation::Edit(ConfigEdit {
+            axes: [
+                None,
+                Some(microcents(THREE_JUST)),
+                Some(microcents(FIVE_JUST)),
+                Some(microcents(crate::tuning::SEVEN_JUST)),
+                None,
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(reducer.resolved().modes.tempered, Tempered::default());
+        switch(&mut reducer, Comma::Syntonic, true);
+        assert!(reducer.resolved().modes.tempered.syntonic);
+        let modes = TuningModes { tempered: Tempered::default(), learning: false };
+        reducer.apply(ConfigMutation::Restore {
+            raw: Tuning::default(),
+            modes,
+            policy: PolicyConfig::default(),
+        });
+        assert_eq!(reducer.resolved().modes, modes);
+        let revision = reducer.resolved().revision;
+        enter(&mut reducer, 4, 2.0);
+        assert_eq!(reducer.resolved().revision, revision, "display tolerance is not musical");
+    }
+
+    #[test]
+    fn learn_uses_unconstrained_evidence_and_leaves_unevidenced_links_alone() {
+        let mut reducer = ConfigReducer::default();
+        for comma in Comma::ALL {
+            switch(&mut reducer, comma, false);
+        }
+        let mut raw = reducer.raw();
+        raw.three = microcents(696.58);
+        reducer.apply(ConfigMutation::LearnResolved {
+            learned: LearnedTuning { three: Some(696.58), ..Default::default() },
             retuning: false,
             raw,
         });
-        assert!(reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        raw.five = microcents(crate::tuning::FIVE_JUST);
+        assert_eq!(reducer.resolved().modes.tempered, Tempered::default());
+        raw.five = microcents(386.32);
+        raw.seven = microcents(965.8);
         reducer.apply(ConfigMutation::LearnResolved {
             learned: LearnedTuning {
-                three: Some(700.0),
-                five: Some(crate::tuning::FIVE_JUST),
+                three: Some(696.58),
+                five: Some(386.32),
+                seven: Some(965.8),
                 ..Default::default()
             },
             retuning: false,
             raw,
         });
-        assert!(!reducer.resolved().modes.tempered.has(Comma::Syntonic));
-        let mut modes = TuningModes {
-            tempered: Tempered { syntonic: true, septimal_kleisma: false },
-            ..Default::default()
-        };
+        assert_eq!(reducer.resolved().modes.tempered, TuningModes::default().tempered);
         let learned = LearnedTuning {
             three: Some(700.0),
             five: Some(386.0),
             seven: Some(972.0),
             ..Default::default()
         };
-        modes.auto[0] = false;
+        let modes = learned_modes(learned, reducer.resolved().modes);
+        assert!(!modes.tempered.syntonic);
         assert!(
-            !learned_modes(learned, modes).tempered.has(Comma::SeptimalKleisma),
-            "septimal sees derived 400, not played 386"
+            modes.tempered.septimal_kleisma,
+            "Marvel uses played 386, not the old linked third"
         );
+        let before = reducer.resolved();
+        reducer.apply(ConfigMutation::LearnResolved { learned, retuning: true, raw });
+        assert_eq!(reducer.resolved().tuning, before.tuning);
+        assert_eq!(reducer.resolved().modes, before.modes);
     }
 }

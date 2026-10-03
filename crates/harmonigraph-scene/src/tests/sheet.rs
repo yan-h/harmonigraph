@@ -67,15 +67,15 @@ fn the_mark_depth_reaches_the_scene_and_is_clamped() {
     // than per node; 0 is the off state, as it is for every layer's width.
     let view = ViewConfig { mark_thickness: 0.15, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &view, &plain_frame(), 0.0);
-    assert_eq!(scene.mark_thickness, 0.15);
+    assert_eq!(scene.view.mark_thickness, 0.15);
 
     let off = ViewConfig { mark_thickness: 0.0, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &off, &plain_frame(), 0.0);
-    assert_eq!(scene.mark_thickness, 0.0, "0 passes through as the off state");
+    assert_eq!(scene.view.mark_thickness, 0.0, "0 passes through as the off state");
 
     let wild = ViewConfig { mark_thickness: 9.0, ..ViewConfig::default() };
     let scene = scene_of(&NoteTracker::new(), &Tuning::default(), &wild, &plain_frame(), 0.0);
-    assert!(scene.mark_thickness <= 0.3, "got {}", scene.mark_thickness);
+    assert!(scene.view.mark_thickness <= 0.3, "got {}", scene.view.mark_thickness);
 }
 
 #[test]
@@ -359,20 +359,10 @@ fn a_layer_with_no_room_left_in_the_node_is_not_drawn() {
     assert!(band_gone.is_some(), "the sweep never ran the band out of room, so it proved nothing");
 }
 
-/// A size a hand-edited blob holds but no bar can produce reaches the scene as
-/// the layer's own OFF position, and takes nothing else down with it.
-///
-/// A NaN is the case worth the test: it walks through a `clamp` untouched (it
-/// is its own answer to every comparison), and one that reached the shader as a
-/// radius would take the node's whole radial coverage to NaN — the layer, and
-/// every layer measured off it, silently gone while the bars read out numbers.
-///
-/// All four sizes and the shared padding, because `size` guards each unsanitized
-/// drawing path independently. Any one of the five is a door a non-finite value
-/// could otherwise reach the picture through, and each has a different layer
-/// to take down with it.
+/// Damaged size dials reach the scene with the same repair as a loaded view.
+/// Cover each stack width and the shared padding through their drawn radii.
 #[test]
-fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
+fn a_hand_edited_size_reaches_the_scene_as_the_sanitized_setting() {
     // Every layer on, at sizes far enough apart to read the whole stack off the
     // scene: middle 0..0.1 | audio 0.1..0.2 | gap | band 0.25..0.45 | marks.
     let sound = ViewConfig {
@@ -394,7 +384,7 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
             scene.outer_outer,
             scene.rings_outer,
             scene.mark_inner - scene.rings_outer,
-            scene.mark_thickness,
+            scene.view.mark_thickness,
             scene.octave_gap,
         ]
     };
@@ -410,49 +400,16 @@ fn a_hand_edited_size_reaches_the_scene_as_that_layers_off_position() {
     );
 
     for wild in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0] {
-        for (field, view, want) in [
-            (
-                "stack start",
-                ViewConfig { ring_inner: wild, ..sound.clone() },
-                // The whole stack seated on the node's own centre, which is
-                // this bar's own bottom rather than anything being switched
-                // off, and every layer still the width its own bar reads.
-                [0.15, 0.35, 0.35, 0.05, 0.1, 0.05],
-            ),
-            (
-                "audio ring width",
-                ViewConfig { spectral_ring_width: wild, ..sound.clone() },
-                // The ring off, and the band closes over its slot AND its gap
-                // rather than being carried off by it — in to the stack's own
-                // start, there being no layer left to stand off.
-                [0.1, 0.3, 0.3, 0.05, 0.1, 0.05],
-            ),
-            (
-                "band width",
-                ViewConfig { band_width: wild, ..sound.clone() },
-                // The octave layer off — the empty pair — and the marks fall
-                // back to standing off the audio ring.
-                [0.0, 0.0, 0.2, 0.05, 0.1, 0.05],
-            ),
-            (
-                "ring gap",
-                ViewConfig { ring_gap: wild, ..sound.clone() },
-                // The stack closes up: every layer meets the one inside it and
-                // the marks seat against the band, and the sectors close too.
-                [0.2, 0.4, 0.4, 0.0, 0.1, 0.0],
-            ),
-            (
-                "mark depth",
-                ViewConfig { mark_thickness: wild, ..sound.clone() },
-                // The marks off, and the rings they stand off untouched.
-                [0.25, 0.45, 0.45, 0.05, 0.0, 0.05],
-            ),
+        for view in [
+            ViewConfig { ring_inner: wild, ..sound.clone() },
+            ViewConfig { spectral_ring_width: wild, ..sound.clone() },
+            ViewConfig { band_width: wild, ..sound.clone() },
+            ViewConfig { ring_gap: wild, ..sound.clone() },
+            ViewConfig { mark_thickness: wild, ..sound.clone() },
         ] {
-            let got = stack(&view);
-            assert!(
-                close(got, want),
-                "a {field} of {wild} reached the scene as {got:?}, not {want:?}",
-            );
+            let mut normalized = view.clone();
+            normalized.sanitize();
+            assert!(close(stack(&view), stack(&normalized)), "size {wild} disagrees with sanitize");
         }
     }
 }
@@ -475,7 +432,6 @@ fn a_gap_dialled_past_its_ceiling_reads_back_as_the_padding_it_draws() {
             view.ring_gap,
             view.rings().gap,
         );
-        assert_eq!(view.ring_gap, view.octave_gap_width());
     }
 }
 

@@ -66,7 +66,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         }
     }
     poison!(a.view.atmosphere; texture_depth, texture_scale, texture_speed, material_amount, material_speed, material_direction,
-        material_shadow_pickup, material_color_pickup, material_shadow_width, material_shadow_softness,
+        material_shadow_pickup, material_color_pickup, pigment_reach,
         breath_amount, breath_speed);
     a.view.min_sevens = n;
     a.view.max_sevens = n;
@@ -97,7 +97,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // reach them. #933's contract is that a size the bar can offer is a size
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, spread, blur_time_step, contour_strength, contours, contour_softness,
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, blur_time_step, contour_strength, contours, contour_softness,
             cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, wash_pool, wash_pool_width,
             wash_pool_softness
     );
@@ -134,6 +134,11 @@ fn loaded(edge: Edge) -> SharedState {
     let serialized = saved.save_persist();
     let mut state = fresh();
     assert!(state.load_persist(&serialized));
+    // Plugin and standalone editor shells share this load door. Check the
+    // complete view invariant, including fields that have no value bar.
+    let mut normalized = state.picture.appearance.view.clone();
+    normalized.sanitize();
+    assert_eq!(state.picture.appearance.view, normalized);
     // Spiral and take-render settings share the load boundary but currently
     // have no recorded bar. Check their own normalization directly so adding
     // zero-visit panes to the matrix does not pretend the bar guard covers them.
@@ -215,9 +220,6 @@ fn backend(edge: Edge, meantone: bool, marvel: bool) -> Backend {
     let mut reducer = ConfigReducer::default();
     let modes = TuningModes {
         tempered: harmonigraph_core::Tempered { syntonic: meantone, septimal_kleisma: marvel },
-        // Auto detection would immediately overwrite the branch this scenario
-        // selected when the restored default tuning is judged.
-        auto: [false; 2],
         learning: false,
     };
     assert!(reducer.apply(ConfigMutation::Restore {
@@ -248,7 +250,6 @@ struct Scenario {
     style: harmonigraph_scene::CloudStyle,
     halo_profile: harmonigraph_scene::StarHaloProfile,
     material: harmonigraph_scene::LatticeMaterial,
-    visits: usize,
 }
 
 fn scenarios() -> Vec<Scenario> {
@@ -262,48 +263,19 @@ fn scenarios() -> Vec<Scenario> {
         style: harmonigraph_scene::CloudStyle::Watercolor,
         halo_profile: harmonigraph_scene::StarHaloProfile::default(),
         material: harmonigraph_scene::LatticeMaterial::None,
-        visits: 0,
     };
     let mut cases = Vec::new();
     for &pane in SETTINGS_PANES {
-        let visits = match pane {
-            panes::Tab::Tuning => 7,
-            // The pitch colors, then two bases and Thickness max.
-            // Mapped source weights are exercised in the enabled scenario.
-            panes::Tab::Mappings => 2 + 3,
-            // The picture, then the background glow and breathing (10) with its texture
-            // switched off, then two Gaussian shadow groups of three bars each.
-            panes::Tab::LatticeSettings => 15 + 1 + 10 + 6,
-            // The analyzer's view and axes (5) and analysis (3) with the
-            // spectrogram and ribbons switched off, the Spiral's bloom, two
-            // shadow groups.
-            panes::Tab::AnalyzerSettings => 5 + 3 + 1 + 6,
-            panes::Tab::System => 8,
-            panes::Tab::Video | panes::Tab::Console => 0,
-            _ => panic!("add the new settings page's range scenario"),
-        };
-        cases.push(Scenario { pane, visits, ..base });
-        // Exercise the conditional groups too: labels, marks, audio
-        // reading, sevens, the glow texture, roll/note names, the spectrogram,
-        // backdrop, glow and Contour shadow falloff (replacing Gaussian
-        // spread in each of a page's two groups).
-        let visits = match pane {
-            panes::Tab::Mappings => visits + 8,
-            panes::Tab::LatticeSettings => visits + 3 + 6,
-            // ...the spectrogram's twenty (the wash's nine among them), the
-            // ribbons' five, and the backdrop's height and stripe spacing.
-            panes::Tab::AnalyzerSettings => visits + 20 + 5 + 2,
-            _ => visits,
-        };
-        cases.push(Scenario { pane, visits, enabled: true, ..base });
+        cases.push(Scenario { pane, ..base });
+        // Draw conditional audio, mapping, spectrogram, ribbon and backdrop bars.
+        cases.push(Scenario { pane, enabled: true, ..base });
     }
     // Lattice materials share the spectrogram geometry bars, plus amount, speed,
-    // direction and four independent pigment controls.
+    // direction and three pigment controls.
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::Watercolor,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 6 + 4,
         ..base
     });
     for profile in [
@@ -318,42 +290,29 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile: profile,
             expanded: true,
             enabled: true,
-            visits: 15
-                + 1
-                + 10
-                + 6
-                + 3
-                + 6
-                + 2
-                + 16
-                + 4
-                + usize::from(profile == harmonigraph_scene::StarHaloProfile::Uniform),
             ..base
         });
     }
-    // Scales' own inventory: it takes the wash's nine bars off the Spectrogram
-    // section and puts seven of its own there, and nothing else on the page moves.
+    // Exercise the Scales-specific geometry controls in both pictures.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
         style: harmonigraph_scene::CloudStyle::VelvetScales,
         enabled: true,
-        visits: 13 + 20 + 5 + 2 + 2 - 9 + 7,
         ..base
     });
     cases.push(Scenario {
         pane: panes::Tab::LatticeSettings,
         material: harmonigraph_scene::LatticeMaterial::VelvetScales,
         enabled: true,
-        visits: 15 + 1 + 10 + 6 + 3 + 6 + 3 + 7 + 4,
         ..base
     });
     // Stars replace the wash's bars and shared Drift speed. Only the Uniform
     // override exposes the extra resolution bar; exercise its loaded range too.
-    for (halo_profile, bars) in [
-        (harmonigraph_scene::StarHaloProfile::P3, 16),
-        (harmonigraph_scene::StarHaloProfile::Medium, 16),
-        (harmonigraph_scene::StarHaloProfile::Low, 16),
-        (harmonigraph_scene::StarHaloProfile::Uniform, 17),
+    for halo_profile in [
+        harmonigraph_scene::StarHaloProfile::P3,
+        harmonigraph_scene::StarHaloProfile::Medium,
+        harmonigraph_scene::StarHaloProfile::Low,
+        harmonigraph_scene::StarHaloProfile::Uniform,
     ] {
         cases.push(Scenario {
             pane: panes::Tab::AnalyzerSettings,
@@ -361,7 +320,6 @@ fn scenarios() -> Vec<Scenario> {
             halo_profile,
             expanded: true,
             enabled: true,
-            visits: 13 + 20 + 5 + 2 + 2 - 9 - 1 + bars,
             ..base
         });
     }
@@ -370,16 +328,242 @@ fn scenarios() -> Vec<Scenario> {
             pane: panes::Tab::LatticeSettings,
             projection,
             enabled: true,
-            visits: 21 + 1 + 13 + 6,
             ..base
         });
     }
-    // The collapsed Keyboard and Context groups hide three and four bars.
+    // Keyboard and Context bars appear only when their groups expand.
     // Cover both open for each comma derivation branch, including both modes.
     for (meantone, marvel) in [(false, false), (true, false), (false, true), (true, true)] {
-        cases.push(Scenario { expanded: true, meantone, marvel, visits: 14, ..base });
+        cases.push(Scenario { expanded: true, meantone, marvel, ..base });
     }
     cases
+}
+
+/// Named inventories retain duplicate labels (two shadow groups, two mapping
+/// targets). A new or missing control fails with its label rather than a count.
+fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
+    use harmonigraph_scene::{CloudStyle, LatticeMaterial, StarHaloProfile};
+    use panes::Tab;
+    const WATERCOLOR: &[&str] = &[
+        "Patch size",
+        "Edge feathering",
+        "Shape warp",
+        "Refraction",
+        "Random brightness",
+        "Fine layer mix",
+    ];
+    const SCALES: &[&str] = &[
+        "Cell size",
+        "Size variation",
+        "Edge softness",
+        "Irregularity",
+        "Scale shape",
+        "Squareness",
+        "Tilt",
+    ];
+    let mut labels = Vec::new();
+    match scenario.pane {
+        Tab::Tuning => {
+            labels.extend([
+                "C pitch offset",
+                "Perfect fifth",
+                "Major third",
+                "Harmonic seventh",
+                "Note match tolerance",
+                "Pitch flexibility",
+                "Search radius",
+            ]);
+            if scenario.expanded {
+                labels.extend([
+                    "Fifth",
+                    "Third",
+                    "Seventh",
+                    "Half-life",
+                    "Weight per octave",
+                    "Same-note tolerance",
+                    "Silence reset",
+                ]);
+            }
+        }
+        Tab::Mappings => {
+            labels.extend([
+                "Pitch color range",
+                "Level color range",
+                "Opacity base",
+                "Thickness base",
+                "Thickness max",
+            ]);
+            if scenario.enabled {
+                for _ in 0..2 {
+                    labels.extend([
+                        "Velocity weight",
+                        "Gain weight",
+                        "Pressure weight",
+                        "Timbre weight",
+                    ]);
+                }
+            }
+        }
+        Tab::LatticeSettings => {
+            labels.extend([
+                "Size per depth step",
+                "Gap",
+                "Silent slice brightness",
+                "Octaves",
+                "Center pitch",
+                "Note fade",
+                "Fade curve",
+                "Mark delay",
+                "Stagger spread",
+                "Starting offset & scale",
+                "Label size",
+                "Idle label/cross brightness",
+                "Cross length",
+                "Note bloom",
+                "Background glow reach",
+                "Background glow gain",
+                "Overlap buildup",
+                "Falloff curve",
+                "Color smoothing",
+                "Light on notes",
+                "Background glow attack",
+                "Background glow release",
+                "Breathing depth",
+                "Breathing speed",
+                "Pattern contrast",
+                "Pattern size",
+                "Pattern speed",
+            ]);
+            labels.extend(match scenario.projection {
+                Projection::Cabinet => ["Depth angle", "Depth step scale"],
+                Projection::Perspective | Projection::Orthographic => {
+                    ["Horizontal angle", "Vertical angle"]
+                }
+            });
+            if scenario.enabled {
+                labels.extend([
+                    "Ring threshold",
+                    "Threshold hysteresis",
+                    "Ring attack",
+                    "Ring release",
+                    "Pitch tolerance",
+                    "Pitch span",
+                ]);
+            }
+            if scenario.material != LatticeMaterial::None {
+                labels.extend([
+                    "Material amount",
+                    "Dark pickup",
+                    "Color pickup",
+                    "Pigment reach",
+                    "Drift direction",
+                ]);
+                if scenario.material != LatticeMaterial::Stars {
+                    labels.push("Drift speed");
+                }
+            }
+            match scenario.material {
+                LatticeMaterial::None | LatticeMaterial::Stars => (),
+                LatticeMaterial::Watercolor => labels.extend_from_slice(WATERCOLOR),
+                LatticeMaterial::VelvetScales => labels.extend_from_slice(SCALES),
+            }
+        }
+        Tab::AnalyzerSettings => {
+            labels.extend([
+                "Frequency range",
+                "Axis label scale",
+                "History duration",
+                "Spectrum outline intensity",
+                "Backdrop strength",
+                "Spectrum level range",
+                "Live attack",
+                "Live release",
+                "Spiral bloom",
+            ]);
+            if scenario.enabled {
+                labels.extend([
+                    "Pitch softness",
+                    "Time softness",
+                    "Contour strength",
+                    "Contour levels",
+                    "Contour edge softness",
+                    "Texture mix",
+                    "Color pickup",
+                    "Color release",
+                    "Ribbon width",
+                    "Note bloom",
+                    "Held-note extension",
+                    "Extension release",
+                    "Label scale",
+                    "Backdrop height",
+                    "Stripe spacing",
+                    "Drift direction",
+                ]);
+                if scenario.style != CloudStyle::Stars {
+                    labels.push("Drift speed");
+                }
+                match scenario.style {
+                    CloudStyle::Watercolor => {
+                        labels.extend_from_slice(WATERCOLOR);
+                        labels.extend(["Edge pooling", "Pooling width", "Pooling softness"]);
+                    }
+                    CloudStyle::VelvetScales => labels.extend_from_slice(SCALES),
+                    CloudStyle::Stars => (),
+                }
+            }
+        }
+        Tab::System => labels.extend([
+            "Lattice resolution",
+            "Spectrogram time step",
+            "Interface scale",
+            "Interface lightness",
+            "Tint hue",
+            "Tint amount",
+            "Accent hue",
+            "Accent saturation",
+        ]),
+        Tab::Video | Tab::Console => (),
+        _ => panic!("add the new settings page's bar inventory"),
+    }
+    if scenario.pane == Tab::LatticeSettings || scenario.pane == Tab::AnalyzerSettings {
+        for _ in 0..2 {
+            labels.extend([
+                "Shadow width",
+                "Shadow darkness",
+                if scenario.enabled { "Shadow falloff" } else { "Shadow spread" },
+            ]);
+        }
+    }
+    let stars = (scenario.pane == Tab::LatticeSettings
+        && scenario.material == LatticeMaterial::Stars)
+        || (scenario.pane == Tab::AnalyzerSettings
+            && scenario.enabled
+            && scenario.style == CloudStyle::Stars);
+    if stars {
+        labels.extend([
+            "Star size",
+            "Size curve",
+            // Fresh spacing is reversed; poisoned endpoints load to equal bounds.
+            if edge == Edge::Fresh { "Star spacing, reversed" } else { "Star spacing" },
+            "Spacing curve",
+            "Star layers",
+            "Solid share, far stars",
+            "Solid share, near stars",
+            "Glow falloff",
+            "Brightness variation",
+            "Size variation",
+            "Position variation",
+            "Star speed",
+            "Speed curve",
+            "Star lifetime",
+            "Far twinkle",
+            "Near twinkle",
+        ]);
+        if scenario.halo_profile == StarHaloProfile::Uniform {
+            labels.push("Uniform halo resolution");
+        }
+    }
+    labels
 }
 
 fn check(edge: Edge) {
@@ -418,11 +602,9 @@ fn check(edge: Edge) {
         a.spectrum.atmosphere.cloud_style = scenario.style;
         a.spectrum.atmosphere.stars.star_halo_profile = scenario.halo_profile;
         a.view.atmosphere.stars.star_halo_profile = scenario.halo_profile;
-        a.view.atmosphere.texture = if scenario.enabled {
-            harmonigraph_scene::LatticeTexture::Clouds
-        } else {
-            harmonigraph_scene::LatticeTexture::None
-        };
+        if !scenario.enabled {
+            a.view.atmosphere.texture_depth = 0.0;
+        }
         a.view.atmosphere.material_style = scenario.material;
         for style in a.view.shadow.groups_mut() {
             style.kernel =
@@ -457,50 +639,11 @@ fn check(edge: Edge) {
                 },
             );
         });
-        assert_eq!(visits.len(), scenario.visits, "{edge:?} {scenario:?}: {visits:?}");
-        let saw = |label: &str| visits.iter().any(|visit| visit.label == label);
-        if scenario.pane == panes::Tab::AnalyzerSettings
-            && scenario.style == harmonigraph_scene::CloudStyle::Stars
-            || (scenario.pane == panes::Tab::LatticeSettings
-                && scenario.material == harmonigraph_scene::LatticeMaterial::Stars)
-        {
-            assert_eq!(
-                saw("Uniform halo resolution"),
-                scenario.halo_profile == harmonigraph_scene::StarHaloProfile::Uniform,
-            );
-        }
-        if scenario.pane == panes::Tab::LatticeSettings {
-            match scenario.projection {
-                Projection::Cabinet => {
-                    assert!(saw("Depth angle") && saw("Depth step scale"));
-                    assert!(!saw("Horizontal angle") && !saw("Vertical angle"));
-                }
-                Projection::Perspective | Projection::Orthographic => {
-                    assert!(saw("Horizontal angle") && saw("Vertical angle"));
-                    assert!(!saw("Depth angle") && !saw("Depth step scale"));
-                }
-            }
-        }
-        if scenario.pane == panes::Tab::Tuning {
-            assert!(saw("Pitch flexibility"));
-            assert_eq!(saw("Fifth") && saw("Half-life"), scenario.expanded);
-        }
-        // One shared note bloom is editable beside either picture it affects.
-        assert_eq!(
-            saw("Note bloom"),
-            scenario.pane == panes::Tab::LatticeSettings
-                || (scenario.pane == panes::Tab::AnalyzerSettings && scenario.enabled)
-        );
-        assert_eq!(
-            saw("Position variation"),
-            scenario.pane == panes::Tab::AnalyzerSettings
-                && scenario.enabled
-                && scenario.style == harmonigraph_scene::CloudStyle::Stars
-                || (scenario.pane == panes::Tab::LatticeSettings
-                    && scenario.material == harmonigraph_scene::LatticeMaterial::Stars)
-        );
-        assert_eq!(saw("Spiral bloom"), scenario.pane == panes::Tab::AnalyzerSettings);
-        assert!(!saw("Bloom base"), "{scenario:?} drew the retired mapping base");
+        let mut actual: Vec<_> = visits.iter().map(|visit| visit.label.as_str()).collect();
+        let mut expected = expected_labels(scenario, edge);
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected, "{edge:?} {scenario:?}: bar inventory changed");
         for visit in visits {
             if visit.label == "Contour levels" {
                 assert_eq!(

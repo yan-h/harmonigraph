@@ -8,7 +8,7 @@ The three styles this file names are a historical record.
 PR #928 retired the Plain/Blur/Lava selector and its transfer-stage switch,
 making the blur, the terraces and the cloud independent dials whose zero is off,
 so every sentence below naming a style or "its selector" describes a control that is gone.
-The measured numbers (35 ct, 120 ms, 25%, seven contours, 15%) are still the shipped defaults,
+The measured numbers (35 ct, 120 ms, 25%, seven contours, 15%) describe that historical fixture,
 and the three `spectrogram-style-{plain,blur,lava}` goldens survived the retirement — they are now reached by dialling rather than by selecting.
 One measured claim did not survive:
 "when both widths are zero the renderer uses the detailed field directly, skipping source integration, all four filters and the material bake" is false once a cloud is drawn,
@@ -63,7 +63,7 @@ so narrow bright content contributes before the reduced source footprint average
 The 10% linear toe preserves quiet values in `R16Float`.
 This is an artistic brightness weighting,
 not RGB gamma correction or another audio-power average.
-Both Gaussian scales and their Spread combination remain in that encoded domain.
+The Gaussian filter remains in that encoded domain.
 The reduced material bake applies the stable inverse `2*y / (0.1 + sqrt(0.01 + 3.6*y))` once per reduced pixel.
 The final composite linearly upsamples decoded intensity,
 accepting a small interpolation approximation on the smooth field to avoid a square root per full-resolution pixel.
@@ -71,13 +71,12 @@ Pitch and time softness are Gaussian widths in cents and milliseconds,
 converted using the full unclipped axes.
 Rotation transposes those widths;
 zoom and resize preserve their musical meaning.
-The wide field applies a Gaussian five times wider to the close field.
-Spread blends the two normalized fields.
+The separate wide field and Spread control have been retired at the fresh zero mix.
 Blur and Lava use that softened field directly;
 there is no raw-detail blend.
 
-The existing four separable Gaussian passes are reused.
-Each pass has seventeen taps.
+Two separable Gaussian passes apply the pitch and time widths.
+Each pass uses at most seventeen taps.
 Zero softness preserves full resolution on that axis;
 both zero widths bypass smoothing.
 The scratch images store one `R16Float` scalar per pixel.
@@ -159,12 +158,12 @@ not measurements of the current shader at 4K:
 
 History storage is four times the former byte store;
 completed display slabs and GPU uploads retain their old byte representation.
-Scalar filtering uses four two-byte-per-pixel targets,
+Scalar filtering now uses three two-byte-per-pixel targets (source, scratch and filtered),
 whose dimensions follow the two musical widths.
 An axis with zero softness retains display resolution;
 when both widths are zero the renderer uses the detailed field directly,
 skipping source integration,
-all four filters and the material bake while retaining Lava contours.
+both filters and the material bake while retaining contours when no texture needs the field.
 
 The earlier sparse CPU probe has two active bins and 256 slabs;
 its 5.80 ms median is not a full-cap or dense-spectrum bound.

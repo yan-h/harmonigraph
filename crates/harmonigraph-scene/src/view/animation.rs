@@ -4,26 +4,31 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AnimationOrder {
-    #[default]
-    Simultaneous,
     Circular,
+    #[default]
     Bidirectional,
     RandomStagger,
 }
 impl AnimationOrder {
     /// Every order, for the settings picker and the sweeps that compare them.
     /// Guarded exhaustively so the settings picker cannot miss a new variant.
-    pub const ALL: [Self; 4] = {
+    pub const ALL: [Self; 3] = {
         const fn covered(order: AnimationOrder) {
             use AnimationOrder::*;
             match order {
-                Simultaneous | Circular | Bidirectional | RandomStagger => (),
+                Circular | Bidirectional | RandomStagger => (),
             }
         }
-        covered(AnimationOrder::Simultaneous);
-        [Self::Simultaneous, Self::Circular, Self::Bidirectional, Self::RandomStagger]
+        covered(AnimationOrder::Bidirectional);
+        [Self::Circular, Self::Bidirectional, Self::RandomStagger]
     };
 }
+/// Shared bar and load range for [`NoteAnimationConfig::stagger_spread`].
+pub const STAGGER_SPREAD_RANGE: std::ops::RangeInclusive<f32> = 0.0..=0.9;
+
+/// Shared bar and load range for [`NoteAnimationConfig::radial_start`].
+pub const RADIAL_START_RANGE: std::ops::RangeInclusive<f32> = -1.0..=1.0;
+
 /// Starting pose of complete slices. Radial -1 places each anchor at the node centre.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -43,24 +48,16 @@ impl Default for NoteAnimationConfig {
 }
 impl NoteAnimationConfig {
     pub fn staggers(self) -> bool {
-        self.order != AnimationOrder::Simultaneous && self.stagger_spread > 0.0
+        self.stagger_spread > 0.0
     }
-    /// The finite, bounded pose the renderer is handed, for the shells that
-    /// never cross the persist door — `derive_scene` copies this config into
-    /// the scene whole, so a NaN in it is a node the shader places nowhere.
-    ///
-    /// The fallback is the FRESH value rather than each range's low bound,
-    /// which is the departure the rest of the picture's repairs do not make
-    /// and is the same one [`GlowCurve::sanitized`] makes. These values are a
-    /// POSE rather than a size: `radial_start`'s range is signed and its
-    /// neutral is 0, so a low bound here would be one extreme
-    /// of an animation rather than the least of one. Fresh is also the answer
-    /// [`ViewConfig::sanitize`] gives each of them, so the door and the
-    /// picture cannot disagree about what a broken pose looks like.
+    /// Repair the pose at view normalization. Nonfinite values use the fresh
+    /// pose: the signed offset's low bound would be an extreme, not neutral.
     pub fn sanitized(mut self) -> Self {
         let fresh = NoteAnimationConfig::default();
-        self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread).clamp(0.0, 0.9);
-        self.radial_start = finite_or(self.radial_start, fresh.radial_start).clamp(-1.0, 1.0);
+        self.stagger_spread = finite_or(self.stagger_spread, fresh.stagger_spread)
+            .clamp(*STAGGER_SPREAD_RANGE.start(), *STAGGER_SPREAD_RANGE.end());
+        self.radial_start = finite_or(self.radial_start, fresh.radial_start)
+            .clamp(*RADIAL_START_RANGE.start(), *RADIAL_START_RANGE.end());
         self
     }
     /// Fixed delays of complete displayed sectors; shared by live/export and
@@ -88,7 +85,6 @@ impl NoteAnimationConfig {
         let mut ranks = [0.0f32; 11];
         for (i, rank) in ranks.iter_mut().enumerate().take(span) {
             *rank = match self.order {
-                AnimationOrder::Simultaneous => 0.0,
                 // Slice zero is the lowest displayed pitch and `i` walks
                 // upward, so this starts at the low/high seam and sweeps low
                 // to high.

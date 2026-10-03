@@ -3,7 +3,7 @@
 //! The Hub's schedule is the authority for display, take and future context;
 //! these fixtures also check the tuning expressions actually emitted to hosts.
 use super::*;
-use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig};
+use harmonigraph_core::configuration::{ConfigEdit, PolicyConfig, PolicyEdit};
 use harmonigraph_core::{canonical::VoiceBaseline, LatticePos, Tuning};
 
 pub(super) fn configure(hub: &Device, tuning: Tuning) {
@@ -18,7 +18,6 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
                 None,
             ],
             tempered: [Some(false); 2],
-            auto: [Some(false); 2],
             learning: Some(false),
             policy: None,
         },
@@ -26,7 +25,7 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
 }
 
 fn configure_policy(hub: &Device, policy: PolicyConfig) {
-    submit(hub, ConfigEdit { policy: Some(policy), ..Default::default() });
+    submit(hub, ConfigEdit { policy: Some(PolicyEdit::all(policy)), ..Default::default() });
 }
 
 /// A transport carrying the host's seconds timeline at `seconds`.

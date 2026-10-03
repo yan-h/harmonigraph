@@ -95,13 +95,6 @@ pub(crate) fn render_pane(
             match pane {
                 Pane::Spectral => {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                    // Its text sizes itself off the rect it is given, so drawing
-                    // the pane small draws its type small, as the render will.
-                    // Shadows instead use screen points. Scale their widths for
-                    // this drawing only, including the reach used by roll culling.
-                    let shadow = state.appearance.view.shadow;
-                    state.appearance.view.shadow =
-                        preview_shadows(shadow, box_rect.width(), &state.appearance.render);
                     super::spectral::spectral_pane(
                         &mut child,
                         state,
@@ -110,7 +103,6 @@ pub(crate) fn render_pane(
                         preview_scale(box_rect.width(), &state.appearance.render),
                         super::spectral::Navigation::Preview,
                     );
-                    state.appearance.view.shadow = shadow;
                 }
                 Pane::Lattice => preview_lattice(
                     ui,
@@ -292,20 +284,6 @@ fn preview_drop_side(rect: egui::Rect, pointer: egui::Pos2) -> Option<LatticeSid
     .min_by(|a, b| a.0.total_cmp(&b.0))
     .unwrap();
     (distance <= 0.25).then_some(side)
-}
-
-fn preview_shadows(
-    mut shadow: harmonigraph_scene::ShadowSettings,
-    width: f32,
-    config: &crate::RenderConfig,
-) -> harmonigraph_scene::ShadowSettings {
-    // Shadows are user-sized styles. A preview larger than the export keeps
-    // the dial's maximum rather than manufacturing a wider shadow than the
-    // configured render will draw.
-    let scale = preview_scale(width, config).min(1.0);
-    shadow.spectral_geometry.width *= scale;
-    shadow.spectral_text.width *= scale;
-    shadow
 }
 
 /// The preview's logical frame size relative to the one the export uses.
@@ -1249,30 +1227,24 @@ mod tests {
                         harmonigraph_scene::SPECTRAL_SHADOW_MAX;
                     state.appearance.view.shadow.spectral_text.width =
                         harmonigraph_scene::SPECTRAL_SHADOW_MAX;
+                    state.appearance.view.shadow.spectral_geometry.spread = 0.2;
+                    state.appearance.view.shadow.spectral_text.spread = 0.2;
                     let saved = state.appearance.view.shadow;
-                    for width in [240.0, 480.0] {
-                        let scaled = preview_shadows(saved, width, &state.appearance.render);
-                        for (preview, export) in [
-                            (scaled.spectral_geometry, saved.spectral_geometry),
-                            (scaled.spectral_text, saved.spectral_text),
-                        ] {
-                            let reach = spectral_shadow_reach(export);
+                    for ratio in [0.25, 1.0, 1.25, 2.0] {
+                        let width = export_width * ratio;
+                        let scale = preview_scale(width, &state.appearance.render);
+                        for style in [saved.spectral_geometry, saved.spectral_text] {
+                            let reach = spectral_shadow_reach(style, 1.0);
                             assert!(reach > 0.0, "both shadow groups must cast");
                             assert!(
-                                (spectral_shadow_reach(preview) / width - reach / export_width)
+                                (spectral_shadow_reach(style, scale) / width
+                                    - reach / export_width)
                                     .abs()
                                     < 1e-6
                             );
-                            assert_eq!(preview.depth, export.depth);
-                            assert_eq!(preview.falloff, export.falloff);
-                            assert_eq!(preview.kernel, export.kernel);
                         }
                     }
-                    let enlarged =
-                        preview_shadows(saved, export_width * 2.0, &state.appearance.render);
-                    assert_eq!(enlarged.spectral_geometry, saved.spectral_geometry);
-                    assert_eq!(enlarged.spectral_text, saved.spectral_text);
-                    // Exercise the actual scoped draw too: it must restore the
+                    // Exercise the actual draw too: it must not change the
                     // settings that the dock and a subsequent export will read.
                     let ctx = egui::Context::default();
                     crate::theme::apply_theme(&ctx);
@@ -1362,7 +1334,7 @@ mod tests {
                 .expect("the preview did not reach the roll draw boundary");
             assert_eq!(probe.surface, PREVIEW_SURFACE);
             let expected = preview_scale(probe.pitch_len, &state.appearance.render);
-            assert!((probe.ribbon_floor_scale - expected).abs() < 1e-6);
+            assert!((probe.point_scale - expected).abs() < 1e-6);
             assert_eq!(probe.note_count, 1, "the fixture did not draw exactly one roll note");
             let half_pitch = probe.first_half_pitch.expect("the hairline fixture drew no note");
             samples.push((expected, half_pitch));

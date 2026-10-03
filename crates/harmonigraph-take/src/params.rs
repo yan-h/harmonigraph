@@ -222,10 +222,16 @@ impl ParamKey {
                 tuning::THREE_JUST - MAX_TUNING_OFFSET..=tuning::THREE_JUST + MAX_TUNING_OFFSET
             }
             ParamKey::Five => {
-                tuning::FIVE_JUST - MAX_TUNING_OFFSET..=tuning::FIVE_JUST + MAX_TUNING_OFFSET
+                // A released link must fit in the host parameter without a
+                // pitch jump. Include every third the fifth can derive.
+                let fifth = ParamKey::Three.range();
+                tuning::meantone_third(*fifth.start()).floor()
+                    ..=tuning::meantone_third(*fifth.end()).ceil()
             }
             ParamKey::Seven => {
-                tuning::SEVEN_JUST - MAX_TUNING_OFFSET..=tuning::SEVEN_JUST + MAX_TUNING_OFFSET
+                let (fifth, third) = (ParamKey::Three.range(), ParamKey::Five.range());
+                tuning::marvel_seventh(*fifth.start(), *third.start()).floor()
+                    ..=tuning::marvel_seventh(*fifth.end(), *third.end()).ceil()
             }
             ParamKey::Tolerance => 0.001..=49.999,
             // A second, which is where a fade stops being a release and

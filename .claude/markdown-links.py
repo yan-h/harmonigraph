@@ -6,10 +6,18 @@ Inline links/images and single-line reference definitions must name a tracked
 file or directory. Fragments on Markdown files must name a heading (GitHub's
 lowercase, punctuation-stripped IDs with duplicate suffixes). Other file types
 are checked for existence only. Web URLs and absolute paths are not checked.
-Fenced/indented code, inline code examples and HTML comments are ignored.
+Links inside fenced/indented code, inline code and HTML comments are ignored.
 This is a repository link gate, not a full Markdown renderer: raw HTML links
 and custom HTML anchors are outside its scope. Stage new documents and assets
 with git add before running it, just like semantic-breaks.py.
+
+Inline code naming a repository path (`crates/x/src/y.rs`, `tools/z.py:12`)
+must name a tracked file or directory too, because a moved or deleted file
+leaves exactly that behind and the audits kept finding it by hand. Only paths
+under a tracked top-level directory are checked; patterns, placeholders,
+gitignored paths and docs/evidence (a frozen archive) are skipped, and so is a
+code span labelling a link that is checked itself or pinned to a commit, which
+is how a file that is gone on purpose is cited.
 """
 
 from __future__ import annotations
@@ -28,6 +36,9 @@ FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 INLINE = re.compile(r"(?<!\\)!?\[((?:\\.|[^\[\]\\]|\[[^\]]*\])*)\]\(\s*")
 REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*", re.M)
 ESCAPE = re.compile(r"\\([" + re.escape(string.punctuation) + r"])")
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.*?)\1(?!`)", re.S)
+SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+PINNED = re.compile(r"^https://github\.com/[^/]+/[^/]+/(?:blob|tree)/[0-9a-f]{7,40}/")
 
 
 def blank(text: str) -> str:
@@ -86,9 +97,7 @@ def destination(text: str, start: int) -> str:
 
 
 def links(text: str):
-    text = re.sub(
-        r"(?<!`)(`+)(?!`)(.*?)\1(?!`)", lambda m: blank(m[0]), text, flags=re.S,
-    )
+    text = CODE_SPAN.sub(lambda m: blank(m[0]), text)
     for pattern in (INLINE, REFERENCE):
         for match in pattern.finditer(text):
             yield text.count("\n", 0, match.start()) + 1, destination(text, match.end())
@@ -119,23 +128,43 @@ def anchors(text: str) -> set[str]:
     return result
 
 
-def check(root: Path, tracked: set[str]) -> list[str]:
+def code_paths(text: str, tops: set[str]):
+    """Repository paths in inline code, except labels of checked or pinned links."""
+    labels = []
+    for label in INLINE.finditer(text):
+        url = destination(text, label.end())
+        if PINNED.match(url) or not (url.startswith("/") or SCHEME.match(url)):
+            labels.append(label.span(1))
+    for match in CODE_SPAN.finditer(text):
+        if any(start <= match.start() and match.end() <= end for start, end in labels):
+            continue
+        # Drop a fragment (`#L3`, `#heading`) and a `:12:5`, `:a-b` or `::Item` suffix.
+        path = match[2].strip().split("#")[0].split(":")[0].removeprefix("./").rstrip("/")
+        if (path.split("/")[0] in tops and "/" in path
+                and not re.search(r"[\s*?<>{}\[\]$]|\.\.\.|-$", path)):
+            yield text.count("\n", 0, match.start()) + 1, path
+
+
+def check(root: Path, tracked: set[str], ignored=lambda path: False) -> list[str]:
     sources = sorted(p for p in tracked if p.endswith(".md")
                      and not p.startswith("vendor/") and not (root / p).is_symlink())
     heading_ids: dict[str, set[str]] = {}
     failures = []
+    dirs = {"/".join(parts[:n]) for parts in (p.split("/") for p in tracked) for n in range(1, len(parts))}
+    tops = {d for d in dirs if "/" not in d}
+    known = tracked | dirs
     for source in sources:
         if not (root / source).is_file():
             failures.append(f"{source}: tracked Markdown source is missing")
             continue
         text = prose((root / source).read_text(encoding="utf-8"))
         for line, url in links(text):
-            if url.startswith("/") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", url):
+            if url.startswith("/") or SCHEME.match(url):
                 continue
             parsed = urlsplit(url)
             target = posixpath.normpath(posixpath.join(posixpath.dirname(source), unquote(parsed.path))) if parsed.path else source
             path = root / target
-            is_tracked = target == "." or target in tracked or any(p.startswith(target.rstrip("/") + "/") for p in tracked)
+            is_tracked = target == "." or target in tracked or target.rstrip("/") in dirs
             if not is_tracked or not path.exists():
                 failures.append(f"{source}:{line}: missing tracked target: {url!r} ({target})")
             elif parsed.fragment and target.endswith(".md"):
@@ -143,6 +172,16 @@ def check(root: Path, tracked: set[str]) -> list[str]:
                     heading_ids[target] = anchors(prose(path.read_text(encoding="utf-8")))
                 if unquote(parsed.fragment) not in heading_ids[target]:
                     failures.append(f"{source}:{line}: missing heading anchor: {url!r}")
+        if source.startswith("docs/evidence/"):
+            continue
+        for line, path in code_paths(text, tops):
+            if path in known:
+                continue
+            # Resolve a tracked directory symlink (`.agents/skills` → `.claude/skills`).
+            real = posixpath.relpath(posixpath.realpath(root / path), posixpath.realpath(root))
+            if real not in known and not ignored(path):
+                failures.append(f"{source}:{line}: inline code names a missing tracked path: {path!r}"
+                                " (if it is gone on purpose, link it to a commit where it existed)")
     return failures
 
 
@@ -151,12 +190,18 @@ def main() -> int:
     tracked = set(subprocess.run(
         ["git", "ls-files", "-z"], capture_output=True, text=True, check=True,
     ).stdout.split("\0")) - {""}
-    failures = check(Path.cwd(), tracked)
+    def ignored(path: str) -> bool:
+        # A directory-only pattern (`dir/`) matches only the slash form, and a
+        # personal global excludes file must not decide what CI accepts.
+        return subprocess.run(["git", "-c", "core.excludesFile=/dev/null", "check-ignore",
+                               "--no-index", path, path + "/"], stdout=subprocess.DEVNULL).returncode == 0
+
+    failures = check(Path.cwd(), tracked, ignored)
     for failure in failures:
         print(failure, file=sys.stderr)
     if failures:
         return 1
-    print("✓ tracked Markdown local targets and heading anchors resolve")
+    print("✓ tracked Markdown local targets, heading anchors and inline code paths resolve")
     return 0
 
 

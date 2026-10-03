@@ -258,7 +258,7 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     ppp: f32,
-    spread: f32,
+    padding: u32,
     contours: f32,
     contour_softness: f32,
     // How far the levels are gathered into terraces, 0 for none. This word was
@@ -327,7 +327,6 @@ struct Cloud {
 };
 @group(1) @binding(9) var color_memory: texture_2d<f32>;
 @group(1) @binding(0) var close_light: texture_2d<f32>;
-@group(1) @binding(1) var wide_light: texture_2d<f32>;
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 /// The cloud's scalar tone, one texel per cloud sample of pane, as `fs_cloud_tone`
@@ -395,15 +394,11 @@ fn fs_density_source(in: VertexOut) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs_cloud_light(in: VertexOut) -> @location(0) vec4<f32> {
-    // Combine the two smoothing scales in the scalar image so the final
-    // full-resolution pass needs only one filtered read per pixel.
-    let uv = in.position.xy / vec2<f32>(textureDimensions(wide_light));
-    let close = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
-    let wide = textureSampleLevel(wide_light, cloud_sampler, uv, 0.0).r;
-    // Both scales stay in the encoded domain until their final combination.
-    // Decode here once per reduced pixel; the composite linearly upsamples
-    // this display-intensity field without another full-resolution sqrt.
-    return vec4<f32>(density_decode(mix(close, wide, cloud.spread)), 0.0, 0.0, 1.0);
+    // Decode the filtered scalar image once per reduced pixel. The composite
+    // upsamples this field without a full-resolution decode.
+    let uv = in.position.xy / vec2<f32>(textureDimensions(close_light));
+    let level = textureSampleLevel(close_light, cloud_sampler, uv, 0.0).r;
+    return vec4<f32>(density_decode(level), 0.0, 0.0, 1.0);
 }
 fn baked_density(position: vec2<f32>) -> f32 {
     let uv = (position / cloud.ppp - cloud.origin) / cloud.size;
@@ -503,8 +498,8 @@ fn rotate_watercolor_tile_vector(v: vec2<f32>) -> vec2<f32> {
     return rotate_watercolor_tile_vector_for(v, cloud.pitch_vertical);
 }
 
-// `close_light` already holds the decoded, Spread-combined scalar material.
-// The wash reads that Spread-combined scalar picture. Geometry only selects
+// `close_light` already holds the decoded, softened scalar material.
+// The wash reads that softened scalar picture. Geometry only selects
 // the lookup: no gain, lighting, paper, pigment or independent wide tap.
 fn cloud_light(pt: vec2<f32>) -> f32 {
     return textureSampleLevel(close_light, cloud_sampler, pt / cloud.size, 0.0).r;
@@ -904,10 +899,8 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(linear_from_gamma_rgb(color.rgb), color.a);
 }
 
-// The level a star sees at pane point `pt`: the Spread-combined light, so
-// how loosely the stars follow the picture is `Wide blur mix` and the two
-// softnesses, as it is for every texture. A Stars-only blur toward the wide
-// light stood here and was that dial a second time.
+// Stars sample the same softened light as every texture; pitch and time
+// softness set how broadly they read the underlying sound.
 // =============================== THE STARFIELD ===============================
 //
 // The third texture, and the one that is not a displacement. Yan asked for *"lots

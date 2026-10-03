@@ -83,18 +83,19 @@ impl Stages {
 }
 
 /// Select and normalize once before output setup. Explicit re-render settings
-/// replace the recorded document in full. Refusal retains the existing default
-/// rendering policy and reports it where an offline user can see it.
+/// replace the recorded document in full. A malformed selected document refuses
+/// the export; only takes with no recorded appearance use the fresh settings.
 pub fn appearance_for(
     take: &harmonigraph_take::Take,
     replacement: Option<&str>,
-) -> AppearanceDocument {
+) -> Result<AppearanceDocument, String> {
     let Some(blob) = replacement.or(take.header.appearance.as_deref()) else {
-        return AppearanceDocument::default();
+        return Ok(AppearanceDocument::default());
     };
-    AppearanceDocument::parse(blob).unwrap_or_else(|err| {
-        eprintln!("warning: {err}; rendering at defaults (camera, view, spectrum and frame)");
-        AppearanceDocument::default()
+    AppearanceDocument::parse(blob).map_err(|err| {
+        let source =
+            if replacement.is_some() { "replacement appearance" } else { "recorded appearance" };
+        format!("cannot render {source}: {err}")
     })
 }
 
@@ -178,19 +179,6 @@ pub fn render(
 
     let mut state = PictureState::new(TextureFormat::Rgba8Unorm);
     state.install_appearance(appearance);
-    // The comma auto-detects are interactive too, in the sense that matters
-    // here: they answer a tuning EDIT, and a replay has no editor. This only
-    // governs LEAD-IN frames, before the take's first configuration record:
-    // from that record on, `Replay::advance_to` hands the recorded
-    // configuration to `observe_configuration`, which applies it verbatim
-    // every frame (#709). Before it, nothing is replayed and the reducer runs
-    // on these flags; left on, it would judge the take's tuning afresh — and
-    // a session that switched one off at a tuning that IS that temperament
-    // (12-TET, which is both of them) would open its export with it on,
-    // respelling names the recorded session did not show.
-    for comma in harmonigraph_core::Comma::ALL {
-        *state.appearance.view.temper_auto_mut(comma) = false;
-    }
     // "Spectrogram: Fit video" — the one setting only a render can answer,
     // since the render window is its length. Set once before the first frame,
     // so no cache keyed on the analyzer config sees it move.
@@ -565,7 +553,7 @@ mod tests {
                 &mut Replay::new(take.clone()),
                 audio,
                 &settings,
-                appearance_for(&take, None),
+                appearance_for(&take, None).unwrap(),
                 |bytes| {
                     frames.push(bytes);
                     Ok(Vec::new())
@@ -638,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn export_selects_one_complete_appearance_and_defaults_a_refused_replacement() {
+    fn export_selects_one_complete_appearance_and_refuses_parse_errors() {
         let mut recorded = AppearanceDocument::default();
         recorded.camera.yaw = 1.23;
         recorded.view.max_sevens = 3;
@@ -647,7 +635,7 @@ mod tests {
         recorded.render.short_edge = 2160;
         let mut take = take();
         take.header.appearance = Some(recorded.serialize());
-        let selected = appearance_for(&take, None);
+        let selected = appearance_for(&take, None).unwrap();
         assert_eq!(selected.serialize(), recorded.serialize());
         let mut replacement = AppearanceDocument::default();
         replacement.camera.yaw = -0.5;
@@ -655,7 +643,7 @@ mod tests {
         replacement.spectrum.low_midi = 45.0;
         replacement.spectrum.roll_thickness = 0.5;
         replacement.render.short_edge = 720;
-        let selected = appearance_for(&take, Some(&replacement.serialize()));
+        let selected = appearance_for(&take, Some(&replacement.serialize())).unwrap();
         assert_eq!(selected.serialize(), replacement.serialize());
         let expected_size = replacement.render.frame.pixels(720);
         assert_eq!(crate::output_size(None, &selected.render), expected_size);
@@ -666,16 +654,36 @@ mod tests {
         for refused in
             ["broken".to_string(), replacement.serialize().replacen("version:1", "version:0", 1)]
         {
-            assert_eq!(
-                appearance_for(&take, Some(&refused)).serialize(),
-                AppearanceDocument::default().serialize()
-            );
+            let error = appearance_for(&take, Some(&refused)).err().expect("refuse replacement");
+            assert!(error.contains("replacement appearance"), "{error}");
+            take.header.appearance = Some(refused);
+            let error = appearance_for(&take, None).err().expect("refuse recorded appearance");
+            assert!(error.contains("recorded appearance"), "{error}");
+            // An explicit valid replacement can still rescue an obsolete take.
+            assert!(appearance_for(&take, Some(&replacement.serialize())).is_ok());
         }
         take.header.appearance = None;
         assert_eq!(
-            appearance_for(&take, None).serialize(),
+            appearance_for(&take, None).unwrap().serialize(),
             AppearanceDocument::default().serialize()
         );
+    }
+
+    #[test]
+    fn recorded_and_replacement_appearances_normalize_before_rendering() {
+        let mut appearance = AppearanceDocument::default();
+        appearance.view.glow_reach = f32::NAN;
+        appearance.view.sevens_size = -1.0;
+        appearance.view.center_sevens = i32::MAX;
+        let serialized = appearance.serialize();
+        let mut expected = appearance.view.clone();
+        expected.sanitize();
+        let mut take = take();
+        take.header.appearance = Some(serialized.clone());
+        for replacement in [None, Some(serialized.as_str())] {
+            let selected = appearance_for(&take, replacement).unwrap();
+            assert_eq!(selected.view, expected);
+        }
     }
 
     fn settings() -> Settings {
@@ -742,7 +750,7 @@ mod tests {
     fn render_take(take: Take, settings: &Settings) -> Option<Vec<Vec<u8>>> {
         let mut replay = Replay::new(take);
         let mut frames = Vec::new();
-        let appearance = appearance_for(replay.take(), None);
+        let appearance = appearance_for(replay.take(), None).unwrap();
         match render(&mut replay, None, settings, appearance, |bytes| {
             frames.push(bytes);
             Ok(Vec::new())
@@ -885,7 +893,6 @@ mod tests {
             // leaves half of it on black.
             a.pitch_softness = 35.0;
             a.time_softness = 120.0;
-            a.spread = 0.25;
             // Fast enough that a second of render carries the field a visible
             // way: at 1x the whole run is a fraction of one glob. The
             // stars take their own speed, and their nearest at its top is as
@@ -910,7 +917,7 @@ mod tests {
                 &mut Replay::new(take.clone()),
                 Some(&mut audio),
                 &settings,
-                appearance_for(take, None),
+                appearance_for(take, None).unwrap(),
                 |bytes| {
                     frames.push(bytes);
                     Ok(Vec::new())
@@ -962,7 +969,7 @@ mod tests {
         assert_eq!(first.len(), 6);
         assert_eq!(first[1], first[5], "no independent background motion in silence");
         let mut appearance = AppearanceDocument::default();
-        appearance.view.atmosphere.texture = harmonigraph_scene::LatticeTexture::None;
+        appearance.view.atmosphere.texture_depth = 0.0;
         silent.header.appearance = Some(appearance.serialize());
         let off = render_take(silent, &settings).expect("the same GPU is available");
         assert_eq!(first, off, "atmosphere must not create light without notes");

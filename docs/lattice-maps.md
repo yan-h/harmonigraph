@@ -140,7 +140,8 @@ but their saved positions are ignored and must be set using the offset parameter
 Temperament,
 axis values and reference pitch remain shared musical settings.
 Selecting or capturing a map cannot restore another tuning.
-Auto retains the existing shared axis/lock semantics.
+Tuning entries recognize shared temperament links;
+map selection does not change them.
 Learn is suspended while Lattice Map is active,
 so preceding notes cannot move its reference or axes.
 Leaving or entering Adaptive clears its context at the next attack group;

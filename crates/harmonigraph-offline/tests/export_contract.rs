@@ -145,3 +145,32 @@ fn cli_finalizes_the_encoder_after_a_render_write_error() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Refuse the selected malformed look before creating an output or asking for
+/// audio/GPU resources. Both recorded and explicit appearances cross this door.
+#[test]
+fn cli_refuses_malformed_appearance_before_output_setup() {
+    let dir =
+        std::env::temp_dir().join(format!("harmonigraph-cli-appearance-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("broken.take");
+    let out = dir.join("never-created.mp4");
+    let replacement = dir.join("broken.ron");
+    std::fs::write(&replacement, "broken").unwrap();
+    let mut writer =
+        Writer::create(&path, &Header { appearance: Some("broken".into()), ..Default::default() })
+            .unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    for (extra, source) in [
+        (vec![], "recorded appearance"),
+        (vec!["--appearance", replacement.to_str().unwrap()], "replacement appearance"),
+    ] {
+        let result = render(&path, &out, &extra);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "{source}: {stderr}");
+        assert!(stderr.contains(&format!("cannot render {source}:")), "{stderr}");
+        assert!(!out.exists(), "a refused appearance created an output");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

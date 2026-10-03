@@ -166,13 +166,11 @@ impl ViewConfig {
         } else {
             0.0
         });
-        let halo = (rim + finite_or(self.glow_reach, 0.0).clamp(0.0, GLOW_REACH_MAX)).max(0.1)
-            * NODE_RADIUS_FACTOR
-            * 1.8;
-        let atmosphere = self.atmosphere.sanitized();
+        let halo = (rim + self.glow_reach).max(0.1) * NODE_RADIUS_FACTOR * 1.8;
+        let atmosphere = self.atmosphere;
         if atmosphere.material_style == crate::LatticeMaterial::None
             || atmosphere.material_amount <= 0.0
-            || atmosphere.material_shadow_width <= 0.0
+            || atmosphere.pigment_reach <= 0.0
             || atmosphere.material_shadow_pickup.max(atmosphere.material_color_pickup) <= 0.0
         {
             return halo;
@@ -180,10 +178,7 @@ impl ViewConfig {
         // Pickup can color another note's visible light even when this owner's
         // own halo ends off-pane. Its width/feather are in node radii, unlike
         // the ring stack's UV units, and its rim excludes decorative marks.
-        let pigment = NODE_RADIUS_FACTOR
-            * (1.8 * rings.outer.max(0.0)
-                + 0.5 * atmosphere.material_shadow_width
-                + atmosphere.material_shadow_softness);
+        let pigment = NODE_RADIUS_FACTOR * (1.8 * rings.outer.max(0.0) + atmosphere.pigment_reach);
         halo.max(pigment)
     }
 

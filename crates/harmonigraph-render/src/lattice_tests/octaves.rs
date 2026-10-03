@@ -96,7 +96,7 @@ fn octave_wheel_scene(layout: harmonigraph_scene::OctaveLayout, cents: f32) -> S
     scene.outer_outer = 0.95;
     scene.rings_outer = 0.95;
     scene.octave_gap = 0.10;
-    scene.mark_thickness = 0.0;
+    scene.view.mark_thickness = 0.0;
     // Every octave the wheel draws for THIS pitch class, and only those: a
     // level on a slot no sector draws is a state `derive_scene` cannot reach,
     // and the glow would still take a color from it. Slots outside the packing
@@ -635,8 +635,8 @@ fn a_thin_slice_lights_from_the_inner_edge_and_leaves_a_notch_beyond() {
     let scene = |level: f32, thickness: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
         // No light and no bloom, so an empty notch is the black pane.
-        scene.glow_reach = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
         let node = &mut scene.nodes[0];
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[slot] = level;
@@ -677,7 +677,7 @@ fn a_thin_slice_lights_from_the_inner_edge_and_leaves_a_notch_beyond() {
     // the settled path, and owes the same two halves: a hair short of
     // settled, where the pose is all but home.
     let mut arriving = scene(1.0, 0.5);
-    arriving.note_animation =
+    arriving.view.note_animation =
         harmonigraph_scene::NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
     arriving.nodes[0].slice_progress = [0.999; harmonigraph_scene::OCTAVE_SLOTS];
     let shot = gpu.shot(&arriving);
@@ -701,8 +701,8 @@ fn a_thick_slice_swells_past_the_band() {
     let slot = harmonigraph_scene::MIDDLE_C_SLOT;
     let scene = |thickness: f32| {
         let mut scene = octave_wheel_scene(layout, 0.0);
-        scene.glow_reach = 0.0;
-        scene.bloom_strength = 0.0;
+        scene.view.glow_reach = 0.0;
+        scene.view.note_bloom = 0.0;
         let node = &mut scene.nodes[0];
         node.octaves = [0.0; harmonigraph_scene::OCTAVE_SLOTS];
         node.octaves[slot] = 1.0;
@@ -726,7 +726,7 @@ fn a_thick_slice_swells_past_the_band() {
     let got = probe.mean_across(&thick, mid, wedge, inside.0, inside.1);
     assert!(near(got, lit), "inside the band a swelled slice reads {got:?}, not {lit:?}");
     let mut arriving = scene(1.5);
-    arriving.note_animation =
+    arriving.view.note_animation =
         harmonigraph_scene::NoteAnimationConfig { radial_start: -1.0, ..Default::default() };
     arriving.nodes[0].slice_progress = [0.999; harmonigraph_scene::OCTAVE_SLOTS];
     let shot = gpu.shot(&arriving);
@@ -872,14 +872,14 @@ fn the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre() {
     // The octave band is the ink the light's colour is read off, and it is the
     // only layer on: nothing is drawn inside it, so every pixel sampled below
     // is light and nothing else.
-    scene.mark_thickness = 0.0;
+    scene.view.mark_thickness = 0.0;
     scene.spectral = harmonigraph_scene::SpectralPaint::silent();
     scene.node_radius = 1.6;
-    scene.glow_reach = 0.8;
-    scene.glow_strength = 1.5;
+    scene.view.glow_reach = 0.8;
+    scene.view.glow_strength = 1.5;
     // Each octave's hue kept as its own arc rather than averaged round the
     // halo, which is the state a seam exists in at all.
-    scene.glow_blend = 0.0;
+    scene.view.glow_blend = 0.0;
     let px = shooter.shot(&scene);
 
     // The node is alone at the world origin and the camera looks at it, so the

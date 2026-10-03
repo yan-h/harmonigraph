@@ -11,6 +11,10 @@ use harmonigraph_scene::{
     BREATH_SPEED_MIN, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
     GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
+use harmonigraph_scene::{
+    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, NOTE_BLOOM_RANGE,
+    SPIRAL_BLOOM_RANGE,
+};
 
 /// The shadows under the lattice's ink, in their own section. They stay
 /// editable with glow off: they also darken the picture behind ink.
@@ -36,7 +40,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
 /// fall in the Analyzer and the Spiral alike.
 pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDocument) {
     section(ui, "Spiral", |ui| {
-        ValueBar::new(&mut appearance.view.spiral_bloom, 0.0..=2.0, "Spiral bloom")
+        ValueBar::new(&mut appearance.view.spiral_bloom, SPIRAL_BLOOM_RANGE, "Spiral bloom")
             .unit(1.0, "×")
             .show(ui)
             .on_hover_text(
@@ -66,7 +70,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
 
 /// The same global note bloom is editable beside either picture it affects.
 pub(crate) fn note_bloom(ui: &mut egui::Ui, strength: &mut f32) {
-    ValueBar::new(strength, 0.0..=2.0, "Note bloom")
+    ValueBar::new(strength, NOTE_BLOOM_RANGE, "Note bloom")
         .unit(1.0, "×")
         .show(ui)
         .on_hover_text(
@@ -107,7 +111,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     // Everything below shapes a light that draws only at a Reach and a gain
     // both above 0, so either at 0 greys it, as it does the breathing.
     ui.add_enabled_ui(view.glow_reach > 0.0 && view.glow_strength > 0.0, |ui| {
-            ValueBar::new(&mut view.glow_accumulation, 0.0..=1.0, "Overlap buildup")
+            ValueBar::new(&mut view.glow_accumulation, GLOW_ACCUMULATION_RANGE, "Overlap buildup")
                 .percent()
                 .show(ui)
                 .on_hover_text(
@@ -137,7 +141,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
             // the light goes, and this moves no light at all. It reads as a
             // percentage because it is a SHARE — of a whole turn — and not a
             // distance.
-            ValueBar::new(&mut view.glow_blend, 0.0..=1.0, "Color smoothing")
+            ValueBar::new(&mut view.glow_blend, GLOW_BLEND_RANGE, "Color smoothing")
                 .percent()
                 .show(ui)
                 .on_hover_text(
@@ -154,7 +158,7 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
         // no single coupled dial can name. Only the LIT ink is dialled, the
         // rest of the lattice always taking the whole field, for the reason the
         // hover text gives.
-        ValueBar::new(&mut view.glow_wash, 0.0..=1.0, "Light on notes")
+        ValueBar::new(&mut view.glow_wash, GLOW_WASH_RANGE, "Light on notes")
             .percent()
             .show(ui)
             .on_hover_text(

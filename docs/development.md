@@ -288,3 +288,15 @@ start a new agent session to refresh its skill catalog.
 Project-specific skills remain in `.claude/skills`.
 The shared skill is optional for development and CI,
 but must be installed before Yan invokes a merge audit.
+
+## Preserved build handoffs
+
+Install the shared `session-lifecycle` skill from agent-config.
+After checks and the draft PR, `./session-lifecycle.sh handoff` builds both packages,
+publishes their binaries with checksums in the common Git directory,
+and removes disposable compilation output.
+The source remains available for PR review.
+`./load-plugin.sh --list`, `--tag <branch>` and `<branch>` also work with preserved builds after worktree removal.
+The loader holds the publication lock throughout installation, so retention cannot remove one half of the pair during a load.
+The installed hourly fallback handles completed caches and delegates source cleanup to the owning host;
+Codex-managed source release may remain pending in the app.

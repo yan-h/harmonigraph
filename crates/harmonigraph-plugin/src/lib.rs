@@ -407,10 +407,24 @@ impl ParamBackend for PluginParamBackend<'_> {
         self.configuration.map(|(snapshot, pending)| configuration::view(snapshot, pending))
     }
     fn submit_tuning(&self, edit: harmonigraph_core::configuration::ConfigEdit) -> Option<bool> {
-        self.params
-            .configuration
-            .get()
-            .map(|mailbox| mailbox.submit(configuration::packet(edit)).is_ok())
+        let mut packet = configuration::packet(edit);
+        if let Some((snapshot, _)) = self.configuration {
+            for (i, on) in edit.tempered.into_iter().enumerate() {
+                let index = i + 2;
+                if let (Some(false), Some(value)) = (on, packet.values[index]) {
+                    // Releasing a link freezes its displayed, modulated pitch.
+                    // The host applies its offset again to a submitted base value.
+                    let param = self.params.param_for(ParamKey::TUNING[index]);
+                    packet.values[index] = Some(
+                        param.preview_plain(
+                            (param.preview_normalized(value) - snapshot.modulation[index])
+                                .clamp(0.0, 1.0),
+                        ),
+                    );
+                }
+            }
+        }
+        self.params.configuration.get().map(|mailbox| mailbox.submit(packet).is_ok())
     }
 
     fn camera_value(&self, key: ParamKey) -> Option<f32> {

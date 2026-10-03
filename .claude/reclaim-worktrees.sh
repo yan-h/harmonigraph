@@ -171,6 +171,16 @@
 
 set -uo pipefail
 
+LIFECYCLE_TOOL="${AGENT_LIFECYCLE_TOOL:-$HOME/.agents/skills/session-lifecycle/scripts/lifecycle.py}"
+remove_owned_worktree() {
+  local path="$1"; shift
+  if [ -f "$LIFECYCLE_TOOL" ]; then
+    python3 "$LIFECYCLE_TOOL" --repo "$path" run -- git -C "$ROOT" worktree remove "$@" "$path"
+  else
+    git -C "$ROOT" worktree remove "$@" "$path"
+  fi
+}
+
 MIN_IDLE_MINUTES=${RECLAIM_MIN_IDLE_MINUTES:-120}
 # The prune gate is depth behind the live-lock check (see prune_caches), so it
 # only has to outlast one build step: a cold release build runs ~4 minutes and a
@@ -424,6 +434,11 @@ head_contained_in_resolved() {
 # this script.
 detach_delete() {
   victim=$1
+  if [ -f "$LIFECYCLE_TOOL" ]; then
+    local cache_root="${victim%/target/*}" cache_path="target/${victim##*/}"
+    python3 "$LIFECYCLE_TOOL" --repo "$cache_root" prune-cache "$cache_path"
+    return $?
+  fi
   staging="$(dirname "$victim")/.reclaiming-$$-$(basename "$victim")"
   mv "$victim" "$staging" 2>/dev/null || return 1
   nohup rm -rf "$staging" >/dev/null 2>&1 &
@@ -733,7 +748,7 @@ remove_worktree() {
   # `2>&1 >/dev/null` keeps git's stderr and drops its stdout, and `rc` is read
   # into a variable at each step: `$?` after the `if` below would be the IF's
   # status, which is 0 whenever its condition is merely false.
-  err=$(git -C "$ROOT" worktree remove "$path" 2>&1 >/dev/null)
+  err=$(remove_owned_worktree "$path" 2>&1 >/dev/null)
   rc=$?
   if [ "$rc" != 0 ]; then
     # FAIL CLOSED, like the first clean check: an empty capture means "clean"
@@ -744,7 +759,7 @@ remove_worktree() {
     recheck=$(git -C "$path" status --porcelain 2>/dev/null)
     recheck_rc=$?
     if [ "$recheck_rc" = 0 ] && [ -z "$recheck" ]; then
-      err=$(git -C "$ROOT" worktree remove --force "$path" 2>&1 >/dev/null)
+      err=$(remove_owned_worktree "$path" --force 2>&1 >/dev/null)
       rc=$?
     fi
   fi

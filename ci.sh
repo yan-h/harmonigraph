@@ -11,7 +11,13 @@
 #   ./ci.sh              # every gate, in file order — the local default
 #   ./ci.sh workspace    # one group, which is what one CI job runs
 set -euo pipefail
+
 cd "$(dirname "$0")"
+
+LIFECYCLE_TOOL="${AGENT_LIFECYCLE_TOOL:-$HOME/.agents/skills/session-lifecycle/scripts/lifecycle.py}"
+if [[ -f "$LIFECYCLE_TOOL" && "${AGENT_LIFECYCLE_ACTIVE:-}" != "$(git rev-parse --show-toplevel)" ]]; then
+  exec python3 "$LIFECYCLE_TOOL" --repo . run -- bash ./ci.sh "$@"
+fi
 
 # The gates below are independent, so running them in one serial job makes the
 # wall clock their SUM (~11 min) when it only has to be their longest. Splitting
@@ -86,7 +92,8 @@ run .claude/semantic-breaks.py --check
 run python3 -B .claude/tests/semantic-breaks.py
 
 # Rustdoc below checks Rust comments only. Local Markdown links must also
-# resolve to tracked targets and current headings, including after docs move.
+# resolve to tracked targets and current headings, including after docs move,
+# and so must repository paths written as inline code.
 run python3 -B .claude/markdown-links.py
 run python3 -B .claude/tests/markdown-links.py
 
@@ -356,6 +363,7 @@ run .claude/tests/reclaim-locks.sh
 # build is absent from the menu, or every swap step reports success while the
 # DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
+run python3 -B .claude/tests/preserved-build.py
 
 # What the compile cache actually did, which nothing else here reports and
 # which is most of this script's wall clock. Every cargo command above goes

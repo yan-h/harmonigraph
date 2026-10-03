@@ -299,7 +299,7 @@ Already sounding notes keep that choice while later player expression and MIDI c
 Note timestamps retain sample precision;
 only configuration application is block-granular.
 
-Auto and Learn results become effective at block boundaries too, without reducing musical observation to the notes held at a block end.
+Recognized temperament links and Learn results become effective at block boundaries too, without reducing musical observation to the notes held at a block end.
 Display and recording use the configuration actually adopted, and take replay reuses the recorded pitches, times and configurations instead of re-running inference.
 
 Ordinary tuning edits do not reset the plugin or change its reported latency.
@@ -633,6 +633,9 @@ The vendored `nice-plug` wrapper supplies what the plugin cannot get for itself:
 - **Per-event host-acceptance feedback**, because `send_event` throws the result away and a plugin that owns downstream note ownership cannot infer acceptance.
 It is now the return value of the push rather than a later completion, which is why the callback that chose the event is the one that hears about it.
 
+The [CLAP boundary audit](audits/clap-boundary-1415.md) records the lock ownership, input-pool reuse argument and allocation-check reach.
+Configuration command reduction snapshots the queued prefix once per callback so concurrent restores cannot extend audio-thread work indefinitely.
+
 Removed from it during the #712 simplification:
 the retain-and-acknowledge input contract (`Consumption::Pending`), the legacy input walker, and a second complete notification emitter reachable only from fixtures.
 Kept, against an earlier plan to remove them:
@@ -685,7 +688,7 @@ The Hub's **Tuning → Tuning sources → Tuning delay** controls can apply one 
 each one then requests its own reactivation.
 4. In the Hub's **Tuning** pane, choose the tuning axes and policy-v3 controls for the session.
 Locked 12-TET produces zero adaptive correction;
-choose **Just** with **Auto** and **Learn** off for a first independent-tuning check.
+choose **Just** with **Learn** off for a first independent-tuning check.
 The moving-neighborhood defaults match the simulator's baseline profile;
 the [implementation record](adaptive-tuning-plugin.md#controls) describes every control and the precision profile used by its paired intentional-E examples.
 5. Play a phrase across several tracks and check the instrument's actual pitch as well as the displayed notes.

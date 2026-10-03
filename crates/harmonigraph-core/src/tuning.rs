@@ -100,13 +100,6 @@ pub fn marvel_seventh(fifth_cents: f32, third_cents: f32) -> f32 {
 /// tunings that were deliberately set a little off it, and tempering a comma
 /// out of a tuning that keeps a cent of it is a change to the picture nobody
 /// asked for.
-///
-/// It is also the width of the derived bar's magnet (see the UI's
-/// `tempered_bar`), so the same number says how far a drag has to pull to
-/// release a mode. At this width that is a pixel or two of an 80¢ bar, which
-/// makes it a release threshold rather than a snap anyone will feel: a mode is
-/// easy to leave and effectively unreachable by dragging alone. Reaching one
-/// is what the presets, learn and typing a value are for.
 pub const TEMPER_TOLERANCE: f32 = 0.5;
 
 /// Whether a fifth/third pair is (close to) a meantone temperament: the
