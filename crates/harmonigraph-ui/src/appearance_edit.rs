@@ -193,6 +193,7 @@ impl AppearanceEditor {
         before: Look,
         appearance: &mut AppearanceDocument,
         ctx: &egui::Context,
+        text_edit_was_focused: bool,
     ) {
         self.history.observe(
             before,
@@ -201,9 +202,10 @@ impl AppearanceEditor {
                 && ctx.dragged_id().is_some()
                 && ctx.input(|i| i.pointer.primary_down()),
         );
-        // Text edits own their history, including when there is nothing left
-        // to undo in the field. Handle appearance only after the body commits.
-        if crate::kept_focus(ctx) && !ctx.text_edit_focused() {
+        // TextEdit leaves key events in the input even after handling them.
+        // Keep its ownership for the whole frame: Undo followed by Enter can
+        // undo text and release focus in one pass, but must not also undo a look.
+        if crate::kept_focus(ctx) && !text_edit_was_focused && !ctx.text_edit_focused() {
             let mut handled = false;
             ctx.input_mut(|input| {
                 input.events.retain(|event| {
@@ -318,7 +320,12 @@ mod tests {
                 let _ = ctx.run_ui(
                     egui::RawInput { events: vec![shortcut_event(shortcut)], ..Default::default() },
                     |ui| {
-                        editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                        editor.end_frame(
+                            Look::capture(&appearance),
+                            &mut appearance,
+                            ui.ctx(),
+                            false,
+                        );
                         assert_eq!(&Look::capture(&appearance), expected);
                         assert!(
                             ui.input(|i| i.events.is_empty()),
@@ -338,7 +345,7 @@ mod tests {
             let _ = ctx.run_ui(
                 egui::RawInput { events: vec![shortcut_event(shortcut)], ..Default::default() },
                 |ui| {
-                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
                     assert_eq!(Look::capture(&appearance), changed);
                     assert!(!ui.input(|i| i.events.is_empty()));
                 },
@@ -361,8 +368,17 @@ mod tests {
             let _ = ctx.run_ui(
                 egui::RawInput { time: Some(time), events, ..Default::default() },
                 |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut text)).request_focus();
-                    editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                    let text_edit_was_focused = ui.ctx().text_edit_focused();
+                    let response = ui.add(egui::TextEdit::singleline(&mut text));
+                    if time == 1.0 {
+                        response.request_focus();
+                    }
+                    editor.end_frame(
+                        Look::capture(&appearance),
+                        &mut appearance,
+                        ui.ctx(),
+                        text_edit_was_focused,
+                    );
                     assert_eq!(appearance.spectrum.attack, 0.2);
                     assert_eq!(editor.history.undo.len(), 1);
                 },
@@ -374,6 +390,19 @@ mod tests {
         frame(vec![]);
         assert_eq!(frame(vec![shortcut_event(APPEARANCE_SHORTCUTS[0])]), "");
         assert_eq!(frame(vec![shortcut_event(APPEARANCE_SHORTCUTS[0])]), "");
+        assert_eq!(frame(vec![egui::Event::Text("Warm".into())]), "Warm");
+        frame(vec![]);
+        assert_eq!(
+            frame(vec![
+                shortcut_event(APPEARANCE_SHORTCUTS[0]),
+                shortcut_event(egui::KeyboardShortcut::new(
+                    egui::Modifiers::NONE,
+                    egui::Key::Enter
+                )),
+            ]),
+            ""
+        );
+        assert!(!ctx.text_edit_focused(), "Enter must release the field's focus");
     }
 
     #[test]
@@ -402,7 +431,7 @@ mod tests {
                     )
                     .show(ui)
                     .rect;
-                    editor.end_frame(before, &mut appearance, ui.ctx());
+                    editor.end_frame(before, &mut appearance, ui.ctx(), false);
                 },
             );
             rect
@@ -444,7 +473,7 @@ mod tests {
             },
             |ui| {
                 assert!(ui.input(|i| i.focused), "fixture matches baseview's unchanged raw flag");
-                editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx());
+                editor.end_frame(Look::capture(&appearance), &mut appearance, ui.ctx(), false);
             },
         );
         assert!(editor.history.pending.is_none());
@@ -513,7 +542,7 @@ mod tests {
                 let before = Look::capture(&appearance);
                 // ValueBar commits a typed value on losing focus, after toolbar drawing.
                 appearance.spectrum.attack = 0.2;
-                editor.end_frame(before, &mut appearance, ui.ctx());
+                editor.end_frame(before, &mut appearance, ui.ctx(), false);
             },
         );
         assert_eq!(appearance.spectrum.attack, original);

@@ -282,6 +282,7 @@ pub fn root_ui(
     }
     let before_camera = state.picture.appearance.camera_movement();
     let before_edit = appearance_edit::Look::capture(&state.picture.appearance);
+    let text_edit_was_focused = ui.ctx().text_edit_focused();
     let cpu_start = std::time::Instant::now();
     let workspace = &mut state.workspace;
     let frameless = workspace.interaction.frameless;
@@ -303,6 +304,7 @@ pub fn root_ui(
         before_edit,
         &mut state.picture.appearance,
         ui.ctx(),
+        text_edit_was_focused,
     );
     camera_movement::finish_edits(&mut state.picture.appearance, before_camera, params, ui.ctx());
     let cpu_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
