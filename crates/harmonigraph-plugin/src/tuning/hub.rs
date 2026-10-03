@@ -631,7 +631,20 @@ impl Hub {
         for offset in 0..TUNERS {
             let slot = (rotation + offset) % TUNERS;
             let Some(end) = ends[slot].as_mut() else { continue };
-            while self.batch.len() < BATCH_EVENTS {
+            // Discarded epochs do not fill the batch. Bound visits by what is
+            // here now so another instance cannot keep this drain running by
+            // replenishing rejected captures. New arrivals wait one callback.
+            let available = end.captures.slots();
+            #[cfg(test)]
+            tests::AFTER_SNAPSHOT.with_borrow_mut(|hook| {
+                if let Some(hook) = hook.take() {
+                    hook();
+                }
+            });
+            for _ in 0..available {
+                if self.batch.len() == BATCH_EVENTS {
+                    break;
+                }
                 let Ok(capture) = end.captures.pop() else { break };
                 if capture.epoch != epoch {
                     continue;
@@ -1371,3 +1384,81 @@ pub struct TestContext {
 }
 
 const _: () = assert!(std::mem::size_of::<Record>() <= 96);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tuning::{CAPTURE_RING, REPLY_RING};
+
+    thread_local! {
+        pub(super) static AFTER_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn capture(epoch: u64, serial: u64) -> session::Capture {
+        session::Capture {
+            retune: 1,
+            epoch,
+            serial,
+            sample: serial as i64,
+            event: Event::Midi { port: 0, data: [0xb0, 7, 1], flags: 0 },
+        }
+    }
+
+    fn row() -> (rtrb::Producer<session::Capture>, HubEnds) {
+        let (tx, captures) = rtrb::RingBuffer::new(CAPTURE_RING);
+        let (replies, _) = rtrb::RingBuffer::new(REPLY_RING);
+        (tx, HubEnds { captures, replies })
+    }
+
+    #[test]
+    fn discarded_epochs_cannot_extend_a_rows_drain_with_new_arrivals() {
+        let mut hub = Hub::new();
+        hub.epoch = 1;
+        let mut ends = Box::new(std::array::from_fn(|_| None));
+        let (mut tx, end) = row();
+        for serial in 0..3 {
+            tx.push(capture(2, serial)).unwrap();
+        }
+        ends[0] = Some(end);
+        let (mut peer, end) = row();
+        peer.push(capture(1, 10)).unwrap();
+        ends[1] = Some(end);
+        hub.ends = Some(ends);
+        // Inject through the real producer after the first row's availability
+        // snapshot. An unbounded discard loop would consume this fourth entry.
+        AFTER_SNAPSHOT.with_borrow_mut(|hook| {
+            *hook = Some(Box::new(move || tx.push(capture(1, 20)).unwrap()));
+        });
+        hub.collect();
+        assert_eq!(hub.batch.len(), 1);
+        assert_eq!((hub.batch[0].source, hub.batch[0].serial), (1, 10));
+        assert_eq!(hub.ends.as_ref().unwrap()[0].as_ref().unwrap().captures.slots(), 1);
+        hub.batch.clear();
+        hub.collect();
+        assert_eq!(hub.batch.len(), 1);
+        assert_eq!((hub.batch[0].source, hub.batch[0].serial), (0, 20));
+    }
+
+    #[test]
+    fn accepted_batch_limit_leaves_valid_backlog_for_rotated_collection() {
+        let mut hub = Hub::new();
+        hub.epoch = 1;
+        let mut ends = Box::new(std::array::from_fn(|_| None));
+        for slot in 0..3 {
+            let (mut tx, end) = row();
+            for serial in 0..CAPTURE_RING {
+                tx.push(capture(1, serial as u64)).unwrap();
+            }
+            ends[slot] = Some(end);
+        }
+        hub.ends = Some(ends);
+        hub.collect();
+        assert_eq!(hub.batch.len(), BATCH_EVENTS);
+        assert!(hub.batch.iter().all(|r| r.source < 2));
+        hub.batch.clear();
+        hub.collect();
+        assert_eq!(hub.batch.len(), 3 * CAPTURE_RING - BATCH_EVENTS);
+        assert!(hub.batch.iter().all(|r| r.source == 2));
+        assert!(hub.ends.as_ref().unwrap().iter().flatten().all(|end| end.captures.slots() == 0));
+    }
+}

@@ -51,6 +51,7 @@ struct Control {
     observed: Mutex<Observed>,
     final_flush: bool,
     process_error: bool,
+    statuses: Vec<ProcessStatus>,
     misuse: bool,
     apply_limit: AtomicUsize,
     restarts: AtomicUsize,
@@ -69,6 +70,7 @@ struct Observed {
     legacy: usize,
     finals: usize,
     faults: usize,
+    tails_before_process: Vec<u32>,
 }
 impl Default for Control {
     fn default() -> Self {
@@ -95,10 +97,12 @@ impl Default for Control {
                 callbacks: Vec::with_capacity(100),
                 pushes: Vec::with_capacity(3000),
                 applies: Vec::with_capacity(5000),
+                tails_before_process: Vec::with_capacity(16),
                 ..Default::default()
             }),
             final_flush: false,
             process_error: false,
+            statuses: vec![],
             misuse: false,
             apply_limit: AtomicUsize::new(usize::MAX),
             restarts: AtomicUsize::new(0),
@@ -110,6 +114,7 @@ struct Fixture<const CONFIG: bool, const PERFORMANCE: bool> {
     params: Arc<Parameters>,
     control: Arc<Control>,
     callback: usize,
+    processed: usize,
     mailbox: Option<Arc<ConfigurationMailbox>>,
 }
 impl<const C: bool, const P: bool> Default for Fixture<C, P> {
@@ -125,6 +130,7 @@ impl<const C: bool, const P: bool> Default for Fixture<C, P> {
                 .unwrap()
                 .clone(),
             callback: 0,
+            processed: 0,
             mailbox: None,
         }
     }
@@ -179,7 +185,19 @@ impl<const C: bool, const P: bool> Plugin for Fixture<C, P> {
             self.control.observed.lock().unwrap_or_else(|e| e.into_inner()).legacy += 1;
             context.send_event(event);
         }
-        ProcessStatus::Normal
+        let status =
+            self.control.statuses.get(self.processed).copied().unwrap_or(ProcessStatus::Normal);
+        if !self.control.statuses.is_empty() {
+            let plugin = self.control.plugin.load(Ordering::Relaxed) as *const clap_plugin;
+            self.control
+                .observed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .tails_before_process
+                .push(tail_samples(plugin));
+        }
+        self.processed += 1;
+        status
     }
 }
 impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
@@ -269,7 +287,7 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
                 std::thread::yield_now();
             }
         }
-        self.process(b, a, context);
+        let status = self.process(b, a, context);
         if self.control.misuse {
             context.send_event(NoteEvent::NoteOff {
                 timing: 0,
@@ -290,11 +308,7 @@ impl<const C: bool, const P: bool> ClapPlugin for Fixture<C, P> {
                     .push(accepted);
             }
         }
-        if self.control.process_error {
-            ProcessStatus::Error("fixture")
-        } else {
-            ProcessStatus::Normal
-        }
+        if self.control.process_error { ProcessStatus::Error("fixture") } else { status }
     }
     fn clap_performance_finalize(
         &mut self,
@@ -541,6 +555,67 @@ struct Device {
     control: Arc<Control>,
     sink: Sink,
     transport: Option<clap_event_transport>,
+}
+
+fn tail_samples(plugin: *const clap_plugin) -> u32 {
+    use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail};
+    unsafe {
+        let tail = ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_TAIL.as_ptr())
+            .cast::<clap_plugin_tail>();
+        assert!(!tail.is_null());
+        ((*tail).get.unwrap())(plugin)
+    }
+}
+
+#[test]
+fn exported_tail_tracks_processed_subblocks_and_processing_lifecycle() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = Device::new(
+        Control {
+            statuses: vec![
+                ProcessStatus::Tail(17),
+                ProcessStatus::Normal,
+                ProcessStatus::KeepAlive,
+                ProcessStatus::Error("fixture"),
+                ProcessStatus::Tail(23),
+                ProcessStatus::Tail(41),
+            ],
+            ..Default::default()
+        },
+        c"fixture.performance",
+    );
+    assert_eq!(tail_samples(d.plugin), 0);
+    for (index, (result, tail)) in [
+        (CLAP_PROCESS_CONTINUE, 17),
+        (CLAP_PROCESS_CONTINUE_IF_NOT_QUIET, 0),
+        (CLAP_PROCESS_CONTINUE, u32::MAX),
+        (CLAP_PROCESS_ERROR, 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(d.run(index as i64 * 64, 64, vec![], true), result);
+        assert_eq!(tail_samples(d.plugin), tail);
+    }
+    // Querying from the second subblock must see the first one's published tail.
+    assert_eq!(d.run(256, 64, vec![transport(32, false, 0)], true), CLAP_PROCESS_CONTINUE);
+    assert_eq!(tail_samples(d.plugin), 41);
+    assert_eq!(
+        d.control.observed.lock().unwrap_or_else(|e| e.into_inner()).tails_before_process,
+        [0, 17, 0, u32::MAX, 0, 23],
+    );
+    // An invalid input fails before plugin processing, so it cannot replace the
+    // last processed result. A plugin-returned Error above does replace it.
+    assert_eq!(d.run(320, 64, vec![on(64)], true), CLAP_PROCESS_ERROR);
+    assert_eq!(tail_samples(d.plugin), 41);
+    unsafe {
+        ((*d.plugin).reset.unwrap())(d.plugin);
+        assert_eq!(tail_samples(d.plugin), 41);
+        ((*d.plugin).stop_processing.unwrap())(d.plugin);
+        assert_eq!(tail_samples(d.plugin), 41);
+        assert!(((*d.plugin).start_processing.unwrap())(d.plugin));
+        assert_eq!(tail_samples(d.plugin), 0);
+    }
 }
 // Fixtures move only the serialized process call to a worker and return the
 // device before main-thread lifecycle/destruction. The host/owned sink stay pinned.

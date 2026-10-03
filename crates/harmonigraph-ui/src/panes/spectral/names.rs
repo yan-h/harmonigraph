@@ -2579,13 +2579,30 @@ mod tests {
     /// note with no name at all would read as a bug rather than as an answer.
     #[test]
     fn a_pitch_the_lattice_cannot_show_falls_back_to_its_piano_spelling() {
-        assert_eq!(equal_tempered_name(60.0).to_string(), "C");
-        assert_eq!(equal_tempered_name(66.0).to_string(), "F\u{266F}");
-        assert_eq!(equal_tempered_name(69.0).to_string(), "A");
-        // Rounded to the nearest key, and carrying no comma mark: the
-        // equal-tempered grid has no commas to report.
-        assert_eq!(equal_tempered_name(64.004).to_string(), "E");
-        assert_eq!(equal_tempered_name(63.9).to_string(), "E");
+        let just = Tuning::just();
+        let midi = 60.0 + just.five_cents() / 100.0;
+        let pitch = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
+        let mut view = ViewConfig { meantone: false, marvel: false, ..Default::default() };
+        let mut before = Namer::new(&view, view.reach(), &just);
+        assert!(before.shows_node(pitch));
+        assert_eq!(before.name(midi).to_string(), "E-");
+
+        // The held acoustic pitch stays fixed as the current tuning changes.
+        // Prove neither naming window contains a match before testing fallback.
+        view.meantone = true;
+        view.marvel = true;
+        let equal = Tuning::default();
+        let shown = view.reach();
+        assert!(naming_node_from(
+            shown.positions().map(|pos| (pos, equal.pitch_class(pos))),
+            view.tempered(),
+            &equal,
+            pitch,
+        )
+        .is_none());
+        let mut after = Namer::new(&view, shown, &equal);
+        assert!(!after.shows_node(pitch));
+        assert_eq!(after.name(midi).to_string(), "E");
     }
 
     /// The setting turns them off — and so does hiding the thing they label.

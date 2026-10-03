@@ -418,9 +418,12 @@ impl AudioSpectrum {
                 let attack = hop_alpha(config.attack, step);
                 let release = hop_alpha(config.release, step);
                 for (shown, new) in self.display.iter_mut().zip(&fresh) {
+                    // Invalid input must not poison the carried smoothing state
+                    // after clean audio has replaced the analyzer's window.
+                    let new = if new.is_finite() { *new } else { 0.0 };
                     // POWER, so "louder" is the same comparison in dB — the levels
                     // are mapped through `loudness` well downstream of here.
-                    let alpha = if *new > *shown { attack } else { release };
+                    let alpha = if new > *shown { attack } else { release };
                     *shown += (new - *shown) * alpha;
                 }
                 // Keep the RAW spectrum for the spectrogram (the smoothed

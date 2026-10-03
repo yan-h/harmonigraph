@@ -176,8 +176,9 @@ pub struct Wrapper<P: ClapPlugin> {
     /// Stores any events the plugin has output during the current processing cycle, analogous to
     /// `input_events`.
     output_events: AtomicRefCell<VecDeque<PluginNoteEvent<P>>>,
-    /// The last process status returned by the plugin. This is used for tail handling.
-    last_process_status: AtomicCell<ProcessStatus>,
+    /// Only tail length crosses callbacks. Retaining the full ProcessStatus (including
+    /// its error string) would make AtomicCell fall back to a lock on the audio thread.
+    last_tail_samples: AtomicU32,
     /// The current latency in samples, as set by the plugin through the
     /// [`ProcessContext`](nice_plug_core::context::process::ProcessContext). Uses the latency
     /// extension.
@@ -706,7 +707,7 @@ impl<P: ClapPlugin> Wrapper<P> {
             current_process_mode: AtomicCell::new(ProcessMode::Realtime),
             input_events: AtomicRefCell::new(VecDeque::with_capacity(if P::CLAP_PERFORMANCE { 0 } else { 512 })),
             output_events: AtomicRefCell::new(VecDeque::with_capacity(if P::CLAP_PERFORMANCE { 0 } else { 512 })),
-            last_process_status: AtomicCell::new(ProcessStatus::Normal),
+            last_tail_samples: AtomicU32::new(0),
             current_latency: AtomicU32::new(0),
             pending_latency: AtomicU32::new(0),
             // This is initialized just before calling `Plugin::initialize()` so that during the
@@ -2190,8 +2191,8 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(false, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        // Always reset the processing status when the plugin gets activated or deactivated
-        wrapper.last_process_status.store(ProcessStatus::Normal);
+        // A new processing run starts without a tail from the previous run.
+        wrapper.last_tail_samples.store(0, Ordering::Release);
         wrapper.is_processing.store(true, Ordering::SeqCst);
 
         // To be consistent with the VST3 wrapper, we'll also reset the buffers here in addition to
@@ -2540,7 +2541,12 @@ impl<P: ClapPlugin> Wrapper<P> {
                                 transport: unsafe { transport_info.as_ref().copied() } },
                             &mut output)
                     } else { plugin.process(buffers.main_buffer, &mut aux, &mut context) };
-                    wrapper.last_process_status.store(result);
+                    let tail = match result {
+                        ProcessStatus::Tail(samples) => samples,
+                        ProcessStatus::KeepAlive => u32::MAX,
+                        _ => 0,
+                    };
+                    wrapper.last_tail_samples.store(tail, Ordering::Release);
                     result
                 } else {
                     ProcessStatus::Normal
@@ -3630,11 +3636,7 @@ impl<P: ClapPlugin> Wrapper<P> {
         check_null_ptr!(0, plugin, unsafe { (*plugin).plugin_data });
         let wrapper = unsafe { &*((*plugin).plugin_data as *const Self) };
 
-        match wrapper.last_process_status.load() {
-            ProcessStatus::Tail(samples) => samples,
-            ProcessStatus::KeepAlive => u32::MAX,
-            _ => 0,
-        }
+        wrapper.last_tail_samples.load(Ordering::Acquire)
     }
 
     unsafe extern "C" fn ext_voice_info_get(

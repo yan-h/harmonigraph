@@ -38,12 +38,13 @@ cargo build --release -p harmonigraph-offline
 
 ## Saved appearance
 
-Takes use format v5 and carry a version-1 appearance document captured when recording starts.
+Takes use format v6 and carry a version-1 appearance document captured when recording is armed.
 It contains camera, view, spectrum and the whole video configuration;
 dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
-Automatic export uses that recorded appearance, with the resolution selected when the take stops.
-**Re-render take** replaces the recorded appearance with the current one.
-Camera gestures and settings changes during a take are not recorded.
+Automatic export uses that recorded appearance, including the captured Aspect and Output size.
+**Re-render take** uses the current appearance and output dimensions.
+Camera movement is recorded through host parameters;
+see [What is and isn't captured](#what-is-and-isnt-captured).
 
 For an explicit replacement file:
 
@@ -62,10 +63,10 @@ It replaces the recorded document completely;
 `--size` and other explicit output flags retain their precedence.
 
 Editor saves below version 7 are refused whole and a fresh instance opens at defaults, with a console message.
-Take formats v1–v4 are refused with a version error and must be recorded again.
-An unreadable or unsupported appearance document is reported on stderr and export continues at the default appearance;
-a refused replacement does not fall back to the recorded look.
-A missing appearance or missing settings groups use their normal defaults.
+Take formats v1–v5 are refused with a version error and must be recorded again.
+An unreadable or unsupported selected appearance document refuses the export with an error on stderr.
+A valid replacement overrides the recorded document completely.
+A missing recorded appearance or missing settings groups use their normal defaults.
 The retired `record_audio`, `auto_render`, `audio_path` and `audio_offset` saved settings are ignored and are not saved again.
 They were inactive;
 capture and automatic rendering remain unconditional for a finished take.
@@ -78,7 +79,7 @@ zoom and label controls remain available.
 The retired **Playhead** spectrogram mode and `--playhead` flag are no longer supported.
 An editor blob naming `Playhead` is refused whole with a console message, including its camera and layout;
 a fresh instance opens at defaults.
-An appearance naming it is also refused whole, and offline export reports the failure before using the default appearance.
+An appearance naming it is also refused whole, and offline export reports the failure and refuses the export.
 This enum parse failure happens before the editor version-floor check.
 No older format is migrated or partially recovered.
 
@@ -353,8 +354,9 @@ envelopes start where they actually started), per-note tuning and MPE bends, the
 
 **Camera movement is captured through its five host parameters** (yaw, pitch, distance and the two pan axes).
 Dragging or navigating the lattice, and choosing a camera preset, writes those parameters, so a take records the move like any other automation and the export replays it.
-Every take records the camera at its start;
-a take made before #1397, which has no camera channels, keeps the camera of the appearance it is rendered with.
+Every take records the camera at its start.
+Recorded camera movement also overrides replacement camera movement during replay;
+camera projection remains part of the selected appearance.
 
 **Not captured:** anything else you click mid-piece.
 
@@ -395,7 +397,3 @@ live in shipped renders while this stayed green.
 #135 is fixed (the tracker's collections are ordered, not hashed), and what guards it now is a set of unit tests on those collections' iteration order rather than this render.
 That is deliberate:
 a hash map can always come back sorted, so an end-to-end render is at best a probabilistic detector of one, while asserting key order over a few hundred keys fails with probability 1.
-
-Automatic exports use the Aspect and Output size captured when recording was armed,
-including when those controls change during recording.
-Re-render explicitly uses the current appearance and output dimensions.
