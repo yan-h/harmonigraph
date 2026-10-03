@@ -710,3 +710,53 @@ fn source_button_rows_use_the_slider_gap() {
         );
     }
 }
+
+#[test]
+fn removing_a_faded_dot_at_overflow_does_not_jump_the_survivors() {
+    let state = fresh_picture();
+    let ctx = themed();
+    let size = egui::vec2(60.0, 4.0); // Ten slots: eleven voices really overflow.
+    let mut voices: Vec<_> =
+        (0..11).map(|key| VoiceDot { pitch: 36.0 + key as f32 * 4.0, level: 1.0 }).collect();
+    let paint = |voices: &[VoiceDot]| {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
+            instance_voice_dots(
+                ui,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                voices,
+                &state,
+            );
+        })
+        .shapes
+        .into_iter()
+        .filter_map(|shape| match shape.shape {
+            egui::Shape::Circle(circle) => Some(circle),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    };
+    let full = paint(&voices);
+    assert_eq!(full.iter().filter(|circle| circle.radius < 1.0).count(), 3);
+    voices[0].level = 0.00001;
+    let before = paint(&voices);
+    voices.remove(0);
+    let after = paint(&voices);
+    for pitch in [40.0, 44.0, 48.0] {
+        let color = note_color(&state, pitch, 1.0);
+        let x = |circles: &[egui::epaint::CircleShape]| {
+            circles
+                .iter()
+                .find(|circle| circle.radius > 1.0 && circle.fill == color)
+                .unwrap()
+                .center
+                .x
+        };
+        assert!(
+            (x(&before) - x(&after)).abs() < 0.01,
+            "removing a nearly invisible tail moved held pitch {pitch}: {} -> {}",
+            x(&before),
+            x(&after)
+        );
+    }
+    assert_eq!(after.len(), 10, "the former overflow voices become ordinary dots");
+}

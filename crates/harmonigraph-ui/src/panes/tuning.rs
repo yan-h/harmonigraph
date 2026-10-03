@@ -517,45 +517,44 @@ impl SourceDots {
 /// A single, fixed-height strip; overflowing voices replace its last dot with an ellipsis.
 fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], state: &PictureState) {
     let scale = theme::ui_scale(ui.ctx());
-    let held = voices.len() as u64;
     let inner = rect.shrink2(egui::vec2(4.0 * scale, 0.0));
     let pitch = 5.0 * scale;
-    let capacity = (inner.width().max(0.0) / pitch).floor() as u64;
-    let overflow = held > capacity;
-    let dots = held.min(capacity).saturating_sub(u64::from(overflow));
-    // Center the painted group, including the wider ellipsis at its end.
-    let first_radius = if overflow && dots == 0 { 2.3 } else { 1.25 } * scale;
-    let last_radius = if overflow { 2.3 } else { 1.25 } * scale;
-    let overflow_level = voices[dots as usize..].iter().map(|dot| dot.level).fold(0.0, f32::max);
-    // Let each fading dot give up its horizontal space gradually too. Removing
-    // a fully faded voice then leaves the remaining dots exactly where they are.
-    let levels: Vec<_> = voices[..dots as usize]
+    let capacity = (inner.width().max(0.0) / pitch).floor();
+    if capacity == 0.0 {
+        return;
+    }
+    // Capacity follows animated width, not voice count. Otherwise pruning a
+    // zero-width tail can promote a fully bright hidden voice in one frame.
+    let total = voices.iter().map(|dot| dot.level).sum::<f32>();
+    let overflow_level = (total - capacity).clamp(0.0, 1.0);
+    let mut remaining = capacity - overflow_level;
+    let visible: Vec<_> = voices
         .iter()
-        .map(|dot| dot.level)
-        .chain((overflow && capacity != 0).then_some(overflow_level))
-        .collect();
-    let width = levels.iter().sum::<f32>() * pitch;
-    let mut x = rect.center().x - (width + last_radius - first_radius) * 0.5;
-    let centers: Vec<_> = levels
-        .iter()
-        .map(|level| {
-            let width = level * pitch;
-            let center = egui::pos2(x + width * 0.5, rect.center().y);
-            x += width;
-            center
+        .filter_map(|dot| {
+            let level = dot.level.min(remaining);
+            remaining -= level;
+            (level > 0.0).then_some(VoiceDot { level, ..*dot })
         })
         .collect();
-    for slot in 0..dots {
+    // Center the painted group, easing the wider ellipsis in with its opacity.
+    let last_radius = (1.25 + 1.05 * overflow_level) * scale;
+    let first_radius = if capacity == 1.0 { last_radius } else { 1.25 * scale };
+    let width = (visible.iter().map(|dot| dot.level).sum::<f32>() + overflow_level) * pitch;
+    let mut x = rect.center().x - (width + last_radius - first_radius) * 0.5;
+    for dot in visible {
+        let width = dot.level * pitch;
         ui.painter().circle_filled(
-            centers[slot as usize],
+            egui::pos2(x + width * 0.5, rect.center().y),
             1.25 * scale,
-            note_color(state, voices[slot as usize].pitch, voices[slot as usize].level),
+            note_color(state, dot.pitch, dot.level),
         );
+        x += width;
     }
-    if overflow && capacity != 0 {
+    if overflow_level > 0.0 {
+        let center = egui::pos2(x + overflow_level * pitch * 0.5, rect.center().y);
         for offset in [-1.7, 0.0, 1.7] {
             ui.painter().circle_filled(
-                centers[capacity as usize - 1] + egui::vec2(offset * scale, 0.0),
+                center + egui::vec2(offset * scale, 0.0),
                 0.6 * scale,
                 ui.visuals().weak_text_color().gamma_multiply(overflow_level),
             );
