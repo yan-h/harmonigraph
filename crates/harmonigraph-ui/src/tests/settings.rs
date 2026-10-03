@@ -286,7 +286,10 @@ fn the_video_pane_starts_with_appearance_actions_before_any_rule() {
     // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "RECORD"), (false, "FRAME")] {
         let (shapes, rule) = video_pane_shapes(supported);
-        let heading = text_y(&shapes, "Undo").expect("appearance actions lead the pane");
+        let heading = text_y(&shapes, "A").expect("appearance comparison leads the pane");
+        assert_eq!(text_y(&shapes, "B"), Some(heading));
+        assert!(text_y(&shapes, "Undo").is_none());
+        assert!(text_y(&shapes, "Redo").is_none());
         assert!(text_y(&shapes, leads).unwrap() > heading);
         // Only rules BELOW the tab bar are the pane's own. The dock's chrome
         // draws lines of its own above the body, in its own colors, and those
