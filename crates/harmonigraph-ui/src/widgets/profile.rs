@@ -216,47 +216,7 @@ pub(crate) fn shadow(
     lattice: bool,
 ) {
     use harmonigraph_scene::{SHADOW_FALLOFF_MAX, SHADOW_FALLOFF_MIN};
-    let plot = Plot::with_fields(ui, "Shadow profile", 3);
-    let (_, next) = plot.handle(ui, "Width and darkness", (style.width / max).sqrt(), style.depth);
-    if let Some(p) = next {
-        style.width = p.x * p.x * max;
-        style.depth = p.y;
-    }
-    if style.kernel.is_distance() {
-        let level = harmonigraph_scene::standoff_level(style.falloff, 0.5);
-        let (_, next) = plot.handle(
-            ui,
-            "Falloff",
-            0.5 * (style.width / max).sqrt(),
-            shadow_darkness(style.depth, level, lattice),
-        );
-        if let Some(p) = next {
-            if style.depth > 0.0 {
-                let (mut lo, mut hi) = (SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX);
-                for _ in 0..24 {
-                    let mid = (lo + hi) * 0.5;
-                    if shadow_darkness(
-                        style.depth,
-                        harmonigraph_scene::standoff_level(mid, 0.5),
-                        lattice,
-                    ) < p.y
-                    {
-                        lo = mid;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                style.falloff = (lo + hi) * 0.5;
-            }
-        }
-    } else {
-        // A schematic caster and blur width, not a fabricated Gaussian opacity
-        // profile: the actual blur depends on the caster's geometry.
-        let (_, next) = plot.handle(ui, "Caster spread", style.spread, 0.15);
-        if let Some(p) = next {
-            style.spread = p.x;
-        }
-    }
+    let plot = Plot::without_label(ui, 3);
     let (unit, suffix) =
         if lattice { (100.0, "%") } else { (harmonigraph_render::SPECTRAL_WIDTH_POINTS, " pt") };
     plot.fields(ui, |ui| {
@@ -275,50 +235,87 @@ pub(crate) fn shadow(
             value_bar(ui, &mut style.spread, 0.0..=1.0, ["Shadow spread", "Spread"], 100.0, "%");
         }
     });
-    plot.response.clone().on_hover_text("Drag the corner for width and darkness. Blur extent is schematic: its profile depends on the shape casting it.");
-    plot.line(
-        ui,
-        vec![
-            plot.point(0.0, style.depth),
-            plot.point((style.width / max).sqrt(), style.depth),
-            plot.point((style.width / max).sqrt(), 0.0),
-        ],
-        theme::hairline(),
+    plot.response.clone().on_hover_text(
+        "Shadow around a sample shape. Adjust Width, Darkness, and Falloff or Spread to preview the result. The sample is scaled to fit; the shadow on each shape depends on its size and outline.",
     );
-    plot.dot(ui, (style.width / max).sqrt(), style.depth);
-    if style.kernel.is_distance() {
-        curve(
-            &plot,
-            ui,
-            |p| {
-                (
-                    p * (style.width / max).sqrt(),
-                    shadow_darkness(
-                        style.depth,
-                        harmonigraph_scene::standoff_level(style.falloff, p),
-                        lattice,
-                    ),
-                )
-            },
-            super::value::curve_color(),
-        );
-        plot.dot(
-            ui,
-            0.5 * (style.width / max).sqrt(),
-            shadow_darkness(
-                style.depth,
-                harmonigraph_scene::standoff_level(style.falloff, 0.5),
-                lattice,
-            ),
-        );
-    } else {
-        plot.line(
-            ui,
-            vec![plot.point(0.0, style.depth), plot.point((style.width / max).sqrt(), style.depth)],
-            theme::accent(),
-        );
-        plot.dot(ui, style.spread, 0.15);
+    shadow_preview(ui, plot.rect, style.clamped(max), max, lattice);
+}
+
+/// A small CPU mesh of a rectangular caster's shadow. The Gaussian separates
+/// into two one-dimensional integrals, so no texture or blur pass is needed.
+fn shadow_preview(
+    ui: &Ui,
+    rect: egui::Rect,
+    style: harmonigraph_scene::ShadowStyle,
+    max: f32,
+    lattice: bool,
+) {
+    const COLUMNS: u32 = 48;
+    const ROWS: u32 = 32;
+    if !ui.is_rect_visible(rect) {
+        return;
     }
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, 2.0, theme::text_dim());
+    let size = rect.width().min(rect.height());
+    let caster = egui::Rect::from_center_size(rect.center(), size * egui::vec2(0.38, 0.20));
+    // Keep the sample and scale fixed as the controls move, with room for
+    // the widest Gaussian plus full spread (2.5 shadow widths).
+    let width = style.width / max * size * 0.15;
+    if style.casts() {
+        let sigma = width * 0.5;
+        let spread = style.gaussian_spread_points(sigma);
+        let blurred = caster.expand(spread);
+        let xs: [f32; COLUMNS as usize + 1] = std::array::from_fn(|x| {
+            let p = egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32);
+            gaussian_interval(p, blurred.left(), blurred.right(), sigma)
+        });
+        let ys: [f32; ROWS as usize + 1] = std::array::from_fn(|y| {
+            let p = egui::lerp(rect.y_range(), y as f32 / ROWS as f32);
+            gaussian_interval(p, blurred.top(), blurred.bottom(), sigma)
+        });
+        let mut mesh = egui::Mesh::default();
+        for y in 0..=ROWS {
+            for x in 0..=COLUMNS {
+                let p = egui::pos2(
+                    egui::lerp(rect.x_range(), x as f32 / COLUMNS as f32),
+                    egui::lerp(rect.y_range(), y as f32 / ROWS as f32),
+                );
+                let coverage = if style.kernel.is_distance() {
+                    harmonigraph_scene::standoff_level(
+                        style.falloff,
+                        caster.distance_to_pos(p) / width,
+                    )
+                } else {
+                    // The renderer's GAUSSIAN_GAIN in common.wgsl.
+                    (2.5 * xs[x as usize] * ys[y as usize]).min(1.0)
+                };
+                let darkness = shadow_darkness(style.depth, coverage, lattice);
+                mesh.colored_vertex(
+                    p,
+                    egui::Color32::from_black_alpha((255.0 * darkness).round() as u8),
+                );
+                if x < COLUMNS && y < ROWS {
+                    let a = y * (COLUMNS + 1) + x;
+                    let b = a + COLUMNS + 1;
+                    mesh.add_triangle(a, a + 1, b);
+                    mesh.add_triangle(a + 1, b + 1, b);
+                }
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+    }
+    painter.rect_filled(caster, 0.0, theme::text());
+}
+
+/// Integral of a Gaussian over one side of the sample rectangle. The tanh
+/// approximation of the normal CDF is ample for this small preview mesh.
+fn gaussian_interval(p: f32, low: f32, high: f32, sigma: f32) -> f32 {
+    let cdf = |edge: f32| {
+        let x = ((edge - p) / sigma).clamp(-3.0, 3.0);
+        0.5 + 0.5 * (0.797_884_6 * (x + 0.044_715 * x * x * x)).tanh()
+    };
+    (cdf(high) - cdf(low)).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

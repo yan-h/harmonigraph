@@ -161,13 +161,60 @@ fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
     }
 }
 #[test]
-fn shadow_profile_edits_width_and_depth_without_switching_kernel() {
-    let mut s = harmonigraph_scene::ShadowStyle { width: 0.2, depth: 0.3, ..Default::default() };
-    let kernel = s.kernel;
-    drag(|ui| shadow(ui, &mut s, 2.0, true), 0, egui::vec2(35.0, -15.0));
-    assert!(s.width > 0.2 && s.depth > 0.3);
-    assert_eq!(s.kernel, kernel);
+fn shadow_sliders_update_the_preview_without_switching_kernel() {
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Distance, harmonigraph_scene::ShadowKernel::Gaussian]
+    {
+        let mut s = harmonigraph_scene::ShadowStyle {
+            kernel,
+            width: 0.2,
+            depth: 0.3,
+            ..Default::default()
+        };
+        let ctx = crate::tests::probe::themed_at(1.0);
+        let mut draw = |ui: &mut Ui| shadow(ui, &mut s, 1.0, true);
+        let mut output = frame(&ctx, vec![], &mut draw);
+        for row in 0..3 {
+            let colors = |output: &egui::FullOutput| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Mesh(mesh) => {
+                            Some(mesh.vertices.iter().map(|v| v.color).collect::<Vec<_>>())
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let before = colors(&output);
+            let bars: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r)
+                        if r.fill == crate::theme::well()
+                            && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.1 =>
+                    {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .collect();
+            let bar = bars[row];
+            let from = bar.center();
+            let to = egui::pos2(bar.left() + 0.8 * bar.width(), bar.center().y);
+            frame(&ctx, vec![Event::PointerMoved(from)], &mut draw);
+            frame(&ctx, vec![press(from, true)], &mut draw);
+            frame(&ctx, vec![Event::PointerMoved(to)], &mut draw);
+            output = frame(&ctx, vec![press(to, false)], &mut draw);
+            assert_ne!(colors(&output), before, "{kernel:?}, row {row}");
+        }
+        assert!(s.width > 0.2 && s.depth > 0.3);
+        assert_eq!(s.kernel, kernel);
+    }
 }
+
 #[test]
 fn contour_slider_snaps_to_whole_levels_and_updates_its_preview() {
     for width in [120.0, 320.0] {
