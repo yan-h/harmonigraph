@@ -182,7 +182,10 @@ impl Editor for LatticeEditor {
                 .with_graphics_config(graphics)
                 .with_size_source(size_source),
             WindowState::new(self.shared.clone(), self.params.clone()),
-            |egui_ctx: &Context, _queue, state: &mut WindowState| {
+            |egui_ctx: &Context, queue, state: &mut WindowState| {
+                queue.set_key_capture(egui_baseview::KeyCapture::CaptureShortcuts(
+                    harmonigraph_ui::APPEARANCE_SHORTCUTS.to_vec(),
+                ));
                 // egui-baseview installs the current font texture in
                 // CallbackResources after applying this frame's deltas.
                 harmonigraph_ui::use_renderer_font_texture(egui_ctx);
