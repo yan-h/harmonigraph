@@ -14,6 +14,8 @@ struct VertexOut {
     metal::float4 lead;
     metal::float4 taper_depth;
     metal::float4 taper;
+    metal::float2 tremolo;
+    char _pad9[8];
     metal::float4 core;
     metal::float4 outline;
     metal::float2 at;
@@ -260,6 +262,7 @@ struct fs_shadow_coverageInput {
     metal::float4 lead [[user(loc4), flat]];
     metal::float4 taper_depth [[user(loc5), flat]];
     metal::float4 taper [[user(loc6), flat]];
+    metal::float2 tremolo [[user(loc7), flat]];
     metal::float4 core [[user(loc8), flat]];
     metal::float4 outline [[user(loc9), flat]];
     metal::float2 at [[user(loc10), center_perspective]];
@@ -275,7 +278,7 @@ fragment fs_shadow_coverageOutput fs_shadow_coverage(
   fs_shadow_coverageInput varyings [[stage_in]]
 , metal::float4 position [[position]]
 ) {
-    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
+    const VertexOut in = { position, varyings.local, varyings.half_extent, varyings.shear, varyings.outline_reach, {}, varyings.lead, varyings.taper_depth, varyings.taper, varyings.tremolo, {}, varyings.core, varyings.outline, varyings.at, varyings.who, varyings.feather, varyings.ramp, varyings.fade };
     VertexOut source = {};
     float _e3 = taper_at(in, in.local.y);
     if (_e3 <= 0.0) {

@@ -203,6 +203,10 @@ pub struct RollInstance {
     /// from the box: a caller whose ribbon swells hands over a box grown to
     /// its widest point and the widths as shares of that.
     pub taper: [f32; 4],
+    /// Dense-repeat ornament: take-time phase at the center (modulo 6 points),
+    /// then composition point scale. A zero scale leaves the body plain.
+    /// Only the fill color changes; coverage, edges and shadows stay solid.
+    pub tremolo: [f32; 2],
 }
 
 impl RollInstance {
@@ -227,6 +231,7 @@ impl RollInstance {
             15 => Float32x2, // fade
             5 => Float32x4,  // taper_depth
             6 => Float32x4,  // taper
+            7 => Float32x2,  // tremolo
         ],
     };
 }
@@ -1658,6 +1663,7 @@ mod tests {
             fade: [1.0, 1.0],
             taper_depth: [0.0; 4],
             taper: RollInstance::UNTAPERED,
+            tremolo: [0.0; 2],
         }
     }
 
@@ -1674,6 +1680,49 @@ mod tests {
     #[test]
     fn uniforms_match_the_bound_shader_layout() {
         crate::uniforms::layout::check_binding::<RollUniforms>(&crate::roll_source(), 0, 0);
+    }
+
+    #[test]
+    fn tremolo_marks_leave_the_edges_lead_and_coverage_continuous() {
+        let Some((device, queue)) = headless_device() else { return };
+        for axes in [TOP, BOTTOM, LEFT, RIGHT] {
+            for half_width in [3.0, 12.0] {
+                let note = RollInstance {
+                    half_extent: [half_width, 60.0],
+                    core: [128, 64, 96, 192],
+                    ..led_note(20.0, 0.0, 1.0)
+                };
+                let plain =
+                    draw_turned(&device, &queue, vec![note], axes, wgpu::Color::TRANSPARENT);
+                let marked = draw_turned(
+                    &device,
+                    &queue,
+                    vec![RollInstance { tremolo: [0.0, 1.0], ..note }],
+                    axes,
+                    wgpu::Color::TRANSPARENT,
+                );
+                let mut changed = 0;
+                for y in 0..SIZE[1] {
+                    for x in 0..SIZE[0] {
+                        let a = pixel(&plain, x, y);
+                        let b = pixel(&marked, x, y);
+                        assert_eq!(a[3], b[3], "ornament changed coverage at {x},{y}");
+                        if a == b {
+                            continue;
+                        }
+                        changed += 1;
+                        let delta = [x as f32 + 0.5 - 128.0, y as f32 + 0.5 - 128.0];
+                        let pitch = delta[0] * axes.pitch_dir[0] + delta[1] * axes.pitch_dir[1];
+                        let depth = delta[0] * axes.depth_dir[0] + delta[1] * axes.depth_dir[1];
+                        assert!(pitch.abs() < half_width - 0.5, "mark crossed the untouched rail");
+                        assert!(depth >= -40.0, "mark entered the lead");
+                        assert!(b[0] >= 32 && b[0] <= a[0], "mark lost the solid fill: {b:?}");
+                    }
+                }
+                assert!(changed > 30, "fixture must reach visible tremolo marks");
+                assert!(changed < 600, "ornament filled too much of the ribbon");
+            }
+        }
     }
 
     /// The cap belongs to the outline, so asked for more room than the outline
@@ -2008,6 +2057,7 @@ mod tests {
                     fade: [1.0, 1.0],
                     taper_depth: [0.0; 4],
                     taper: RollInstance::UNTAPERED,
+                    tremolo: [0.0; 2],
                 };
                 let cb = RollCallback {
                     point_scale: 1.0,

@@ -108,6 +108,8 @@ struct VertexOut {
     /// of its full `half_extent.x`. See [`taper_at`].
     @location(5) @interpolate(flat) taper_depth: vec4<f32>,
     @location(6) @interpolate(flat) taper: vec4<f32>,
+    /// Dense-repeat phase (composition points) and point scale; zero disables.
+    @location(7) @interpolate(flat) tremolo: vec2<f32>,
     /// Premultiplied, gamma-space, exactly as egui carries `Color32`.
     @location(8) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
@@ -140,6 +142,7 @@ fn vs_note(
     @location(15) fade: vec2<f32>,
     @location(5) taper_depth: vec4<f32>,
     @location(6) taper: vec4<f32>,
+    @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
@@ -192,6 +195,7 @@ fn vs_note(
     out.lead = lead;
     out.taper_depth = taper_depth;
     out.taper = taper;
+    out.tremolo = tremolo;
     out.core = core;
     out.outline = outline;
     out.at = pos;
@@ -243,6 +247,7 @@ fn vs_shadow_cell(
     // the ribbon.
     out.taper_depth = taper_depth;
     out.taper = taper;
+    out.tremolo = vec2<f32>(0.0);
     out.core = core;
     out.outline = outline;
     out.at = point;
@@ -633,6 +638,26 @@ fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(inside(in, box_distance(in), 0.0) * lead_coverage(in), 0.0, 0.0, 1.0);
 }
 
+/// Evenly spaced diagonal strokes every six composition points. The marks only
+/// dim RGB: neither the continuous silhouette nor its opacity is patterned.
+/// Keep an untouched rail beside both pitch edges, and leave the lead plain.
+fn tremolo_tone(in: VertexOut) -> f32 {
+    let scale = in.tremolo.y;
+    if scale <= 0.0 || in.local.y < -in.half_extent.y + in.lead.x {
+        return 1.0;
+    }
+    let x = (in.local.x - in.shear * in.local.y) / scale;
+    let half_width = in.half_extent.x * taper_at(in, in.local.y) / scale;
+    let reach = min(4.0, half_width * (2.0 / 3.0));
+    let diagonal = in.tremolo.x - in.local.y / scale - 0.7 * x;
+    let stroke_distance = (fract(diagonal / 6.0 + 0.5) - 0.5) * 6.0;
+    let distance = max(abs(x) - reach, abs(stroke_distance) / 1.220656 - 0.75);
+    let ink = inside(in, distance * scale, 0.0);
+    // The AA ramp must also stay inside a thin ribbon's edges.
+    let inset = clamp((half_width - abs(x)) / max(half_width * 0.5, 1e-6), 0.0, 1.0);
+    return 1.0 - 0.75 * ink * inset;
+}
+
 /// Flat premultiplied gamma-space body color, at the note's own opacity
 /// reading. A leading tip set to fade loses its contribution through
 /// [`lead_coverage`].
@@ -641,7 +666,8 @@ fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
 /// at the opacity the note is drawn at (#1289).
 fn core_color(in: VertexOut) -> vec4<f32> {
     if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
-    return in.core * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, in.fade);
+    let color = vec4<f32>(in.core.rgb * tremolo_tone(in), in.core.a);
+    return color * inside(in, box_distance(in), 0.0) * lead_coverage(in) * along(in, in.fade);
 }
 
 // One of the note's intensity readings at this depth: `ends` is its value at

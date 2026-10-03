@@ -24,3 +24,11 @@ These settle the open questions from the first trial above.
 - Positive Thickness receives the 1.5-point ribbon width minimum after mapping. Exact zero removes body and shadow. #1296
 - A touching re-strike gets a short narrowing at its actual onset. This local notch may fall below the ordinary width minimum. #1297
 - The minimum note length is one logical point, preserving the Retina reference. A shorter note extends flat at its onset pitch into the past; actual bends keep their timestamps and slopes. Lower-resolution output may resolve that minimum more softly. #1297
+
+## 2026-10-03 (repeat readability)
+
+- Readable repeated notes need a visible gap; the onset notch was too subtle when zooming out.
+- Reserve a one-point core per note and two points between neighbouring notes of the same source, channel and key. Trim the drawn ends around the factual boundary when needed; recorded MIDI times do not move.
+- When those cores and gaps no longer fit, join the local repeated-note run into a solid ribbon with uniform inset hatching. Bold diagonal strokes repeat evenly every six composition points; the long edges remain continuous. The strokes span the middle two-thirds of a typical ribbon and dim its fill by 75% so bloom does not wash them out. The ornament signals density rather than counting individual attacks.
+- Sustained notes remain plain. Resolvable rests and different voices remain separate. Pitch bends and expression history are retained inside dense runs.
+- Minimum-length onset padding meets the first effective pitch segment, including tuning received at the note-on timestamp; it must not leave a short line at the untuned key. Later pitch bends retain their recorded geometry.
