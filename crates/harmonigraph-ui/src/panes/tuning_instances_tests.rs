@@ -327,11 +327,27 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
             .collect();
         assert_eq!(dots.len(), 6, "the three rows have one, two and three voices");
         for row in params.0.borrow().iter() {
-            let name = text_bounds(&row.display_name);
+            let ink_bottom = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == row.display_name => {
+                        Some(text.pos.y + text.galley.mesh_bounds.bottom())
+                    }
+                    _ => None,
+                })
+                .unwrap();
             let below: Vec<_> = dots
                 .iter()
-                .filter(|dot| dot.center.y > name.bottom() && dot.center.y < name.bottom() + 10.0)
+                .filter(|dot| dot.center.y > ink_bottom && dot.center.y < ink_bottom + 10.0)
                 .collect();
+            for dot in &below {
+                assert!(
+                    (dot.center.y - dot.radius - ink_bottom - 1.0).abs() < 0.1,
+                    "the visible gap below {} must be one pixel",
+                    row.display_name
+                );
+            }
             assert_eq!(
                 below.len() as u64,
                 row.held,

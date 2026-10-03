@@ -669,23 +669,30 @@ fn instance_controls(
         if response.clicked() {
             selected = row.id;
         }
-        let mut name_rect = response.rect;
-        name_rect.max.y -= 5.0 * scale;
         let name = egui::RichText::new(&row.display_name);
         let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
         let galley = egui::WidgetText::from(name).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
-            (name_rect.width() - 2.0 * ui.spacing().button_padding.x).max(0.0),
+            (response.rect.width() - 2.0 * ui.spacing().button_padding.x).max(0.0),
             egui::TextStyle::Button,
         );
+        // Center the visible text and dots together, with one pixel of ink-to-dot gap.
+        let ink = if galley.mesh_bounds.is_finite() {
+            galley.mesh_bounds
+        } else {
+            egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
+        };
+        let ink_top = response.rect.center().y - (ink.height() + 3.5 * scale) * 0.5;
+        let text_pos =
+            egui::pos2(response.rect.center().x - galley.size().x * 0.5, ink_top - ink.top());
         ui.painter().galley(
-            name_rect.center() - galley.size() * 0.5,
+            text_pos,
             galley,
             ui.style().interact_selectable(&response, selected == row.id).text_color(),
         );
         let dots = egui::Rect::from_min_size(
-            egui::pos2(response.rect.left(), name_rect.bottom()),
+            egui::pos2(response.rect.left(), ink_top + ink.height() + 0.25 * scale),
             egui::vec2(response.rect.width(), 4.0 * scale),
         );
         instance_voice_dots(ui, dots, row.held);
