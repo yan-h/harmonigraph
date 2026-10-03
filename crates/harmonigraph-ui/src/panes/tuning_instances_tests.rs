@@ -385,7 +385,13 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
                 egui::Rect::from_min_size(egui::Pos2::ZERO, size),
                 vec![],
                 |ui| {
-                    strip = instance_voice_dots(ui, 60.0 * scale, held).rect;
+                    strip = ui
+                        .allocate_exact_size(
+                            egui::vec2(60.0 * scale, 4.0 * scale),
+                            egui::Sense::hover(),
+                        )
+                        .0;
+                    instance_voice_dots(ui, strip, held);
                 },
             );
             assert_eq!(strip.size(), egui::vec2(60.0 * scale, 4.0 * scale));
@@ -397,6 +403,20 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
                     _ => None,
                 })
                 .collect();
+            if !circles.is_empty() {
+                let left = circles
+                    .iter()
+                    .map(|circle| circle.center.x - circle.radius)
+                    .fold(f32::INFINITY, f32::min);
+                let right = circles
+                    .iter()
+                    .map(|circle| circle.center.x + circle.radius)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                assert!(
+                    ((left + right) * 0.5 - strip.center().x).abs() < 0.01,
+                    "the complete dot group is centered, including overflow"
+                );
+            }
             for circle in &circles {
                 assert!(
                     strip.contains_rect(egui::Rect::from_center_size(
@@ -415,5 +435,56 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
                 assert!(small.iter().all(|circle| circle.center.y == strip.center().y));
             }
         }
+    }
+}
+
+#[test]
+fn clicking_the_voice_dots_selects_the_source_button() {
+    for width in [120.0, 300.0] {
+        let params = Instances::new();
+        let ctx = themed();
+        let size = egui::vec2(width, 800.0);
+        let selected = std::cell::Cell::new(0);
+        let frame = |events| {
+            events_into(
+                &ctx,
+                size,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                events,
+                |ui| {
+                    instance_controls(ui, &params, &params.tuning_instances());
+                    selected.set(
+                        ui.data(|data| {
+                            data.get_temp::<u64>(ui.id().with("tuning-instance-selection"))
+                        })
+                        .unwrap(),
+                    );
+                },
+            )
+        };
+        frame(vec![]);
+        let output = frame(vec![]);
+        let dots: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) => Some(circle.center),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots.len(), 6);
+        let at = dots[1]; // The first dot in Bass, after the Hub's one dot.
+        assert_eq!(selected.get(), 0);
+        frame(vec![egui::Event::PointerMoved(at)]);
+        frame(vec![press(at, true)]);
+        frame(vec![press(at, false)]);
+        assert_eq!(selected.get(), 1, "clicking a dot selects Bass at {width}px");
+        let output = frame(vec![]);
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Rect(rect) if rect.rect.contains(at)
+                && (rect.rect.height() - (ctx.global_style().spacing.interact_size.y + 5.0)).abs() < 0.1)),
+            "the selected button background includes its dots"
+        );
     }
 }

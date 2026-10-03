@@ -329,7 +329,8 @@ Hidden sources keep updating, and Show restores their retained notes and history
 visibility also travels with the take's canonical baselines for offline replay.
 This does not select individual instruments out of the mixed audio spectrum.
 
-The tuning source list in **Tuning → Tuning sources** shows a tiny strip of dots beneath each name, one per sounding voice.
+The tuning source list in **Tuning → Tuning sources** shows a tiny centered strip of dots beneath each name, one per sounding voice.
+The name and dots share one selectable button.
 When more voices are held than fit across the name cell, the last dot becomes an ellipsis;
 hover the name or dots for the exact count.
 The strip stays the same height even at zero voices and never reserves space beside the name.

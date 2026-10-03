@@ -584,17 +584,19 @@ fn instance_section(ui: &mut egui::Ui, params: &dyn ParamBackend) {
 }
 
 /// A single, fixed-height strip; overflowing voices replace its last dot with an ellipsis.
-fn instance_voice_dots(ui: &mut egui::Ui, width: f32, held: u64) -> egui::Response {
+fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, held: u64) {
     let scale = theme::ui_scale(ui.ctx());
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(width, 4.0 * scale), egui::Sense::hover());
     let inner = rect.shrink2(egui::vec2(4.0 * scale, 0.0));
     let pitch = 5.0 * scale;
     let capacity = (inner.width().max(0.0) / pitch).floor() as u64;
     let overflow = held > capacity;
     let dots = held.min(capacity).saturating_sub(u64::from(overflow));
-    let center =
-        |slot: u64| egui::pos2(inner.left() + (slot as f32 + 0.5) * pitch, rect.center().y);
+    // Center the painted group, including the wider ellipsis at its end.
+    let first_radius = if overflow && dots == 0 { 2.3 } else { 1.25 } * scale;
+    let last_radius = if overflow { 2.3 } else { 1.25 } * scale;
+    let span = held.min(capacity).saturating_sub(1) as f32 * pitch;
+    let first_x = rect.center().x - (span + last_radius - first_radius) * 0.5;
+    let center = |slot: u64| egui::pos2(first_x + slot as f32 * pitch, rect.center().y);
     for slot in 0..dots {
         ui.painter().circle_filled(center(slot), 1.25 * scale, theme::accent());
     }
@@ -607,7 +609,6 @@ fn instance_voice_dots(ui: &mut egui::Ui, width: f32, held: u64) -> egui::Respon
             );
         }
     }
-    response
 }
 
 fn instance_controls(
@@ -653,30 +654,47 @@ fn instance_controls(
         (ui.available_width() - 140.0 * scale).max(60.0 * scale)
     };
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(name_width, ui.spacing().interact_size.y + 5.0 * scale),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.spacing_mut().item_spacing.y = scale;
-                let name = egui::RichText::new(&row.display_name);
-                let name =
-                    if row.status != "No faults" { name.color(theme::armed()) } else { name };
-                let response = ui.add_sized(
-                    [name_width, ui.spacing().interact_size.y],
-                    egui::Button::selectable(selected == row.id, name).truncate(),
-                );
-                if response.clicked() {
-                    selected = row.id;
-                }
-                let dots = instance_voice_dots(ui, name_width, row.held);
-                response.union(dots).on_hover_text(format!(
-                    "{} sounding {}\n{}",
-                    row.held,
-                    if row.held == 1 { "voice" } else { "voices" },
-                    row.status,
-                ));
-            },
+        let response = ui.add_sized(
+            [name_width, ui.spacing().interact_size.y + 5.0 * scale],
+            egui::Button::selectable(selected == row.id, ""),
         );
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                selected == row.id,
+                &row.display_name,
+            )
+        });
+        if response.clicked() {
+            selected = row.id;
+        }
+        let mut name_rect = response.rect;
+        name_rect.max.y -= 5.0 * scale;
+        let name = egui::RichText::new(&row.display_name);
+        let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
+        let galley = egui::WidgetText::from(name).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            (name_rect.width() - 2.0 * ui.spacing().button_padding.x).max(0.0),
+            egui::TextStyle::Button,
+        );
+        ui.painter().galley(
+            name_rect.center() - galley.size() * 0.5,
+            galley,
+            ui.style().interact_selectable(&response, selected == row.id).text_color(),
+        );
+        let dots = egui::Rect::from_min_size(
+            egui::pos2(response.rect.left(), name_rect.bottom()),
+            egui::vec2(response.rect.width(), 4.0 * scale),
+        );
+        instance_voice_dots(ui, dots, row.held);
+        response.on_hover_text(format!(
+            "{} sounding {}\n{}",
+            row.held,
+            if row.held == 1 { "voice" } else { "voices" },
+            row.status,
+        ));
     };
     let flags = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let mut retune = row.retune;
