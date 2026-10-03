@@ -12,20 +12,23 @@ impl Plot {
     /// Keep the picture a stable size beside exact values. Very narrow panes
     /// stack instead of squeezing labels, numbers, and handles into one row.
     pub fn with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {
-        Self::new(ui, label, count, false)
+        Self::new(ui, Some(label), count, false)
+    }
+    pub fn without_label(ui: &mut Ui, count: usize) -> Self {
+        Self::new(ui, None, count, false)
     }
     pub fn square_with_fields(ui: &mut Ui, label: &str, count: usize) -> Self {
-        Self::new(ui, label, count, true)
+        Self::new(ui, Some(label), count, true)
     }
-    fn new(ui: &mut Ui, label: &str, count: usize, square: bool) -> Self {
+    fn new(ui: &mut Ui, label: Option<&str>, count: usize, square: bool) -> Self {
         let scale = theme::ui_scale(ui.ctx());
         let width = super::bar::bar_width(ui);
         let gap = ui.spacing().item_spacing.y;
         let beside = count > 0 && width >= 220.0 * scale;
-        let title_beside = beside && count < 3;
+        let title_beside = label.is_some() && beside && count < 3;
         if title_beside {
             super::label::group_space(ui);
-        } else {
+        } else if let Some(label) = label {
             super::label(ui, label);
         }
         let rows = count + usize::from(title_beside);
@@ -56,7 +59,7 @@ impl Plot {
         } else {
             Rect::from_min_max(egui::pos2(bounds.left(), well.bottom() + gap), bounds.max)
         };
-        if title_beside {
+        if let Some(label) = label.filter(|_| title_beside) {
             let mut title_rect = fields;
             title_rect.min.x += super::bar::BAR_TEXT_PAD * scale;
             let mut title = ui.new_child(

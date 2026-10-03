@@ -200,25 +200,11 @@ fn the_glow_curve_bar_draws_the_curve_the_scene_receives() {
     .map(|cs| cs.shape)
     .collect();
     let paths = crate::widgets::curve_paths(&shapes);
-    let mut descending: Vec<&Vec<egui::Pos2>> =
+    let descending: Vec<&Vec<egui::Pos2>> =
         paths.iter().filter(|path| path.first().unwrap().y < path.last().unwrap().y).collect();
-    // The glow's and the enabled Distance falloffs of the lattice's own two
-    // shadow groups. Disabled Gaussian bars are dimmed out of curve_paths'
-    // identifying color. Count rather than silently selecting past an
-    // unexpected curve.
-    let shadow = harmonigraph_scene::ShadowSettings::default();
-    assert_eq!(
-        descending.len(),
-        1 + [shadow.lattice_geometry, shadow.lattice_text]
-            .iter()
-            .filter(|style| style.kernel.is_distance())
-            .count(),
-        "the Lattice page drew {} descending curves",
-        descending.len()
-    );
-    // The topmost is the glow's: its section stands above the Shadows on the
-    // page, which is a fact about the layout rather than about draw order.
-    descending.sort_by(|a, b| a[0].y.total_cmp(&b[0].y));
+    // Shadow previews are rendered meshes; only Glow draws a descending
+    // curve. Count rather than selecting past an unexpected curve.
+    assert_eq!(descending.len(), 1, "the Lattice page drew {} descending curves", descending.len());
     let points = descending[0];
     assert!(points.len() > 8, "the glow curve used only {} points", points.len());
 

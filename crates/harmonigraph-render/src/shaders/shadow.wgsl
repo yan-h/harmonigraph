@@ -137,11 +137,12 @@ const PEDESTAL: f32 = 0.011109;
 /// be written: `radius` is a CEILING, so a pedestal read off it would step
 /// every time `ceil` did and swing the effective σ by ±3% as the bar moves,
 /// where this holds it at 0.955..0.963 of σ across the whole range.
-fn blur(in: CellOut, axis: vec2<i32>) -> f32 {
+fn blur(in: CellOut, axis: vec2<i32>) -> vec2<f32> {
     let sigma = max(in.sigma, 1.0e-3);
     let radius = min(i32(ceil(REACH * sigma)), MAX_RADIUS);
     let at = vec2<i32>(in.position.xy);
     var sum = 0.0;
+    var ceiling = 0.0;
     var weight = 0.0;
     for (var i = -radius; i <= radius; i = i + 1) {
         let w = max(exp(-0.5 * f32(i * i) / (sigma * sigma)) - PEDESTAL, 0.0);
@@ -152,17 +153,22 @@ fn blur(in: CellOut, axis: vec2<i32>) -> f32 {
             || centre.x >= in.bounds.z || centre.y >= in.bounds.w {
             continue;
         }
-        sum = sum + w * textureLoad(src, tap, 0).r;
+        let source = textureLoad(src, tap, 0).rg;
+        sum = sum + w * source.r;
+        // The ceiling follows the same smooth support as the blur. An
+        // unweighted maximum lets distant held ink pin a fading slice's
+        // shadow and leaves a hard edge at the rectangular support boundary.
+        ceiling = max(ceiling, source.g * w / (1.0 - PEDESTAL));
     }
-    return sum / weight;
+    return vec2<f32>(sum / weight, ceiling);
 }
 
 @fragment
 fn fs_blur_x(in: CellOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(blur(in, vec2<i32>(1, 0)), 0.0, 0.0, 1.0);
+    return vec4<f32>(blur(in, vec2<i32>(1, 0)), 0.0, 1.0);
 }
 
 @fragment
 fn fs_blur_y(in: CellOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(blur(in, vec2<i32>(0, 1)), 0.0, 0.0, 1.0);
+    return vec4<f32>(blur(in, vec2<i32>(0, 1)), 0.0, 1.0);
 }

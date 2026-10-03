@@ -83,7 +83,7 @@ float standoff_coverage(
     return (metal::exp(shape * remaining) - 1.0) / (metal::exp(shape) - 1.0);
 }
 
-float shadow_kernel(
+metal::float2 shadow_profile(
     uint who,
     metal::float2 points,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
@@ -92,30 +92,42 @@ float shadow_kernel(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     if (who >= (1 + (_buffer_sizes.size2 - 0 - 64) / 64)) {
-        return 0.0;
+        return metal::float2(0.0);
     }
     metal::float4 cell_1 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].cell;
-    bool _e10 = cell_packed(cell_1);
-    if (!(_e10)) {
-        return 0.0;
+    bool _e11 = cell_packed(cell_1);
+    if (!(_e11)) {
+        return metal::float2(0.0);
     }
     metal::float2 atlas = static_cast<metal::float2>(metal::uint2(shadow_atlas.get_width(), shadow_atlas.get_height()));
     metal::float4 map = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].map;
     metal::float2 texel = metal::clamp(map.xy + (points * map.z), cell_1.xy + metal::float2(0.5), (cell_1.xy + cell_1.zw) - metal::float2(0.5));
-    metal::float4 _e39 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
-    float held_1 = _e39.x;
-    float _e45 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
-    if (_e45 == DISTANCE_COVERAGE_KIND) {
-        return metal::clamp(held_1, 0.0, 1.0);
+    metal::float4 _e41 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
+    metal::float2 held_1 = _e41.xy;
+    float _e47 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
+    if (_e47 == DISTANCE_COVERAGE_KIND) {
+        return metal::float2(metal::clamp(held_1.x, 0.0, 1.0));
     }
-    float _e55 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
-    if (_e55 >= 0.5) {
-        float _e62 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.z;
-        float _e69 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.w;
-        float _e70 = standoff_coverage(held_1, 2.0 * _e62, _e69);
-        return metal::clamp(_e70, 0.0, 1.0);
+    float _e59 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
+    if (_e59 >= 0.5) {
+        float _e67 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.z;
+        float _e74 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.w;
+        float _e75 = standoff_coverage(held_1.x, 2.0 * _e67, _e74);
+        return metal::float2(metal::clamp(_e75, 0.0, 1.0));
     }
-    return metal::min(GAUSSIAN_GAIN * metal::clamp(held_1, 0.0, 1.0), 1.0);
+    return metal::float2(metal::min(GAUSSIAN_GAIN * metal::clamp(held_1.x, 0.0, 1.0), 1.0), held_1.y);
+}
+
+float shadow_kernel(
+    uint who_1,
+    metal::float2 points_1,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_5 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    metal::float2 _e2 = shadow_profile(who_1, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    return _e2.x;
 }
 
 float shadow_transmittance(

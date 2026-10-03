@@ -177,9 +177,9 @@ fn a_node_distance_profile_matches_the_cpu_reference() {
         .and_then(|pane| pane.offscreen.as_ref())
         .and_then(|offscreen| offscreen.shadow.as_ref())
         .expect("the node packed a shadow atlas");
-    let bytes = crate::gpu_harness::readback_r16(&device, &queue, target.texture(), target.size);
+    let bytes = crate::gpu_harness::readback(&device, &queue, target.texture(), target.size);
     let held = |x: u32, y: u32| {
-        let i = ((y * target.size[0] + x) * 2) as usize;
+        let i = ((y * target.size[0] + x) * 4) as usize;
         shadow::tests::half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
     };
 
@@ -2422,4 +2422,113 @@ fn rectangular_panes_and_atlases_preserve_shadow_coordinates() {
         }
     }
     assert!(error < mass / 40, "translated shadow changed shape/width: error {error}, mass {mass}");
+}
+
+/// A disappearing octave slice must spend its own opacity after the blur's
+/// spatial profile, including when Spread makes that profile fully dark.
+#[test]
+fn a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    shooter.clear = over_ground();
+    for kernel in [Distance, Gaussian] {
+        for spread in [0.0, 0.8] {
+            let mut scene = on_ground(0.6, 1.0);
+            scene.view.shadow.lattice_geometry.kernel = kernel;
+            scene.view.shadow.lattice_geometry.spread = spread;
+            scene.spectral.outer = 0.0;
+            scene.nodes[0].audio_ring = 0.0;
+            scene.nodes[0].melody_level = 0.0;
+            scene.nodes[0].bass_level = 0.0;
+            scene.nodes[0].octaves.fill(0.0);
+            scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+            scene.nodes[0].activation = 1.0;
+            let full = shooter.shot(&scene);
+            scene.view.shadow.lattice_geometry.depth = 0.0;
+            let bare = shooter.shot(&scene);
+            let exterior: Vec<_> = bare
+                .chunks_exact(4)
+                .zip(full.chunks_exact(4))
+                .enumerate()
+                .filter_map(|(i, (a, b))| {
+                    (a[0] == 204 && a[1] == 204 && a[2] == 204 && a[0].saturating_sub(b[0]) > 30)
+                        .then_some(i * 4)
+                })
+                .collect();
+            assert!(
+                exterior.len() > 40,
+                "{kernel:?}/{spread}: only {} shadow pixels",
+                exterior.len()
+            );
+            scene.view.shadow.lattice_geometry.depth = 1.0;
+            for level in [0.75, 0.5, 0.25, 0.05, 0.0] {
+                scene.nodes[0].octaves[harmonigraph_scene::MIDDLE_C_SLOT] = level;
+                scene.nodes[0].activation = level;
+                let faded = shooter.shot(&scene);
+                let worst = exterior
+                    .iter()
+                    .map(|&i| {
+                        let full_loss = 204.0 - full[i] as f32;
+                        let faded_loss = 204.0 - faded[i] as f32;
+                        (faded_loss - full_loss * level).abs()
+                    })
+                    .fold(0.0, f32::max);
+                assert!(
+                    worst <= 3.0,
+                    "{kernel:?} spread={spread} level={level}: fade error {worst}"
+                );
+            }
+        }
+    }
+}
+
+/// A held slice must not raise a fading neighbor's shadow ceiling where its
+/// own blur contributes almost nothing. This reaches staggered slice motion,
+/// rather than fading every layer of a node together.
+#[test]
+fn a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur() {
+    use harmonigraph_scene::ShadowKernel::{Distance, Gaussian};
+    let Some(mut shooter) = Shooter::new(SIZE) else { return };
+    shooter.clear = over_ground();
+    for kernel in [Distance, Gaussian] {
+        for level in [0.75, 0.25, 0.05] {
+            let mut scene = on_ground(0.6, 1.0);
+            scene.view.shadow.lattice_geometry.kernel = kernel;
+            scene.view.shadow.lattice_geometry.spread = 0.8;
+            scene.view.note_animation.radial_start = 0.0;
+            scene.spectral.outer = 0.0;
+            scene.nodes[0].audio_ring = 0.0;
+            scene.nodes[0].melody_level = 0.0;
+            scene.nodes[0].bass_level = 0.0;
+            scene.nodes[0].slice_progress.fill(0.0);
+            scene.nodes[0].slice_progress[0] = level;
+            let fading = shooter.shot(&scene);
+            scene.nodes[0].slice_progress[0] = 0.0;
+            scene.nodes[0].slice_progress[2] = 1.0;
+            let held = shooter.shot(&scene);
+            scene.nodes[0].slice_progress[0] = level;
+            let combined = shooter.shot(&scene);
+            scene.view.shadow.lattice_geometry.depth = 0.0;
+            let bare = shooter.shot(&scene);
+            let mut reached = 0;
+            let mut excess = 0;
+            for (i, pixel) in bare.chunks_exact(4).enumerate() {
+                if pixel[..3] != [204, 204, 204] || held[i * 4] < 203 {
+                    continue;
+                }
+                let i = i * 4;
+                reached += usize::from(fading[i] < 200);
+                // Where the held slice casts at most one code of shadow,
+                // it cannot amplify the fading slice beyond RGBA8 rounding.
+                // Visible overlapping shadows may combine nonlinearly.
+                excess = excess
+                    .max(i32::from(fading[i]) + i32::from(held[i]) - i32::from(combined[i]) - 204);
+            }
+            assert!(reached > 40, "{kernel:?}/{level}: only {reached} fading shadow pixels");
+            assert!(
+                excess <= 4,
+                "{kernel:?}/{level}: neighboring ink amplified the shadow by {excess}"
+            );
+        }
+    }
 }
