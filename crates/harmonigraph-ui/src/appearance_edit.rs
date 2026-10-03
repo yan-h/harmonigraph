@@ -133,7 +133,6 @@ enum Command {
     Save,
 }
 
-#[derive(Default)]
 pub(crate) struct AppearanceEditor {
     history: History,
     inactive_history: History,
@@ -144,7 +143,24 @@ pub(crate) struct AppearanceEditor {
     command: Option<Command>,
 }
 
+impl Default for AppearanceEditor {
+    fn default() -> Self {
+        Self::restore(SavedLooks::default())
+    }
+}
+
 impl AppearanceEditor {
+    fn next_name(&self) -> String {
+        let mut number = 1;
+        loop {
+            let name = format!("Look {number}");
+            if !self.saved.named.contains_key(&name) {
+                return name;
+            }
+            number += 1;
+        }
+    }
+
     fn switch(&mut self, appearance: &mut AppearanceDocument) {
         self.history.finish(appearance);
         let active = Look::capture(appearance);
@@ -168,12 +184,21 @@ impl AppearanceEditor {
         if !name.is_empty() && !self.saved.named.contains_key(name) {
             self.saved.named.insert(name.to_owned(), Look::capture(appearance));
             self.selected = Some(name.to_owned());
-            self.name.clear();
+            self.name = self.next_name();
         }
     }
 
     pub(crate) fn restore(saved: SavedLooks) -> Self {
-        Self { saved, ..Default::default() }
+        let mut editor = Self {
+            history: History::default(),
+            inactive_history: History::default(),
+            saved,
+            name: String::new(),
+            selected: None,
+            command: None,
+        };
+        editor.name = editor.next_name();
+        editor
     }
 
     pub(crate) fn end_frame(
