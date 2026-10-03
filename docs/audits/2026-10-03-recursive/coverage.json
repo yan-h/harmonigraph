@@ -3,15 +3,15 @@
     "id": "A1",
     "question": "Audio/MIDI callback bounded work, allocations and payload lifetime",
     "investigator": "audio_tuning",
-    "status": "partial",
+    "status": "deeply examined",
     "scope": "plugin tuning/hub.rs collect; tune.rs epoch adoption; session.rs reset and SPSC rows",
     "evidence": [
       "investigations/audio-tuning.md"
     ],
-    "conclusion": "Accepted-event budget excludes rejected epochs; per-row entry snapshots are a small source-reasoned bound",
-    "confidence": "Two source traces and independent refutation; finite probe pending",
+    "conclusion": "Finite probe confirms discarded epochs bypass accepted-event budget: 3072 popped/0 retained versus matching 2048/2048",
+    "confidence": "Reproduced with real fixed-capacity queues plus independently challenged source reachability",
     "uncertainty": "No native dropout frequency or sustained concurrent drain measured; proposed fix not implemented",
-    "next_action": "Execute finite queue control; implement with bounded replenishment/queued-tail and peer-progress coverage in a later change"
+    "next_action": "Small entry bound in later change; test replenishment, queued tails and peer progress; no host stall claim"
   },
   {
     "id": "A2",
@@ -29,21 +29,21 @@
   },
   {
     "id": "A3",
-    "question": "Adaptive assignment and tuning changes \u00d7 held notes \u00d7 naming",
+    "question": "Adaptive assignment and tuning changes × held notes × naming",
     "investigator": "audio_tuning",
-    "status": "partial",
+    "status": "deeply examined",
     "scope": "tuning/state.rs frozen correction; core/notes.rs actual pitch; scene derive/motion; spectral/names.rs",
     "evidence": [
       "investigations/audio-tuning.md"
     ],
-    "conclusion": "Frozen sound and current display intentionally have different owners; fallback fixture can be strengthened",
-    "confidence": "Source trace, independent musical calculation and simulator 13/13; Namer probe pending",
+    "conclusion": "Fixed actual Just E names E- under Just and falls back to E under current equal temperament with no matching node",
+    "confidence": "Executed direct Namer fixture, source trace and 13 passing reference-model tests",
     "uncertainty": "Combined held-note, keyboard, engine and host expression sequence unverified",
-    "next_action": "Execute direct Namer lookup probe; keep native gesture sequence as conditional validation"
+    "next_action": "Optionally strengthen existing fallback fixture; full host gesture sequence remains conditional"
   },
   {
     "id": "S1",
-    "question": "UI edits \u00d7 host automation \u00d7 restored state",
+    "question": "UI edits × host automation × restored state",
     "investigator": "state_scene",
     "status": "deeply examined",
     "scope": "plugin/editor/frame.rs and persist.rs; configuration_adapter.rs; background.rs; vendored CLAP restore route",
@@ -113,21 +113,21 @@
   },
   {
     "id": "R3",
-    "question": "Scene changes \u00d7 GPU resource invalidation",
+    "question": "Scene changes × GPU resource invalidation",
     "investigator": "render",
     "status": "partial",
     "scope": "render/spectrogram.rs allocation-shape gate; atmosphere::Targets aggregate owner",
     "evidence": [
       "investigations/render.md"
     ],
-    "conclusion": "Halo-only shape changes can replace other transient resources; splitting adds rebinding obligations",
-    "confidence": "Source independently challenged; prepare probe pending",
+    "conclusion": "Halo-only change replaces unchanged source; CPU prepare median delta 252.938us across 30 alternating pairs; extra ownership is not justified by this evidence",
+    "confidence": "Native shape/identity assertion and scoped stage measurement; full-frame benefit unmeasured",
     "uncertainty": "Complete-frame effect and savings attributable to unchanged source are unknown",
-    "next_action": "Run narrow shape/identity probe; defer redesign absent relevant full-frame symptom"
+    "next_action": "Defer splitting; revisit only with a saved user-visible complete-frame hitch"
   },
   {
     "id": "T1",
-    "question": "Recording \u00d7 stop/seek/loop and canonical ordering",
+    "question": "Recording × stop/seek/loop and canonical ordering",
     "investigator": "coordinator",
     "status": "deeply examined",
     "scope": "record lifecycle, writer/pump, canonical/audio tests; plugin configuration recording",
@@ -141,7 +141,7 @@
   },
   {
     "id": "T2",
-    "question": "Live \u00d7 replay \u00d7 offline and appearance capture/export",
+    "question": "Live × replay × offline and appearance capture/export",
     "investigator": "coordinator",
     "status": "deeply examined",
     "scope": "take parsing; offline replay/render; record render_job queue and publication",
@@ -164,10 +164,10 @@
       "logs/measurements.jsonl",
       "experiments/run_measurements.py"
     ],
-    "conclusion": "Initial complete export samples exist; uncontrolled load prevents a performance recommendation",
-    "confidence": "Real FFmpeg complete samples; 138s interrupted repeat documents load instability",
-    "uncertainty": "No trustworthy spread/median or before-after benefit yet; historical corrected workload not yet exported",
-    "next_action": "Resume serialized measurements if external load subsides naturally; otherwise preserve explicit blocked timing scope"
+    "conclusion": "Three export workloads completed, but pooled wall ranges vary up to 5.3–108.2s for the same workload; no pipeline speedup established",
+    "confidence": "Encoder-inclusive complete samples, stream/frame inspection and recorded external-load transitions",
+    "uncertainty": "No stationary timing distribution, readback prototype or authentic current-v6 captured-look workload; later roll merge changes current-main cost",
+    "next_action": "Defer readback rework; rerun current-main workload only if a specific export bottleneck needs a decision"
   },
   {
     "id": "D1",
@@ -188,14 +188,14 @@
     "question": "Independent challenge of major proposals and clean claims",
     "investigator": "render and state_scene",
     "status": "deeply examined",
-    "scope": "A1/S1 independent challenge; R1\u2013R3 independent challenge; final recommendation review",
+    "scope": "A1/S1 independent challenge; R1–R3 independent challenge; final recommendation review",
     "evidence": [
       "investigations/challenge.md"
     ],
     "conclusion": "Claims narrowed to actual mechanisms and fixture reach; no demonstrated host stall or free resource-split win",
     "confidence": "Independent capable investigators; material disagreement preserved in DECISIONS",
-    "uncertainty": "Remaining performance recommendations depend on completed measurements",
-    "next_action": "Integrate outcomes and stop low-value redesign branches"
+    "uncertainty": "Native-host behavior and avoidable performance cost remain unverified; completed measurements do not establish a redesign win",
+    "next_action": "Completed measurements and final challenge are integrated; stop low-value redesign branches and follow the ranked continuation"
   },
   {
     "id": "A4",
@@ -220,11 +220,11 @@
     "evidence": [
       "experiments/nonfinite_probe.rs"
     ],
-    "conclusion": "Single NaN may permanently poison display after clean replacement",
-    "confidence": "Source inference, reproduction pending",
-    "uncertainty": "Occurrence in real projects unknown; visual robustness only",
-    "status": "partial",
-    "next_action": "Execute isolated recovery assertion; no generic recovery framework"
+    "conclusion": "Reproduced: 2564 display buckets stay nonfinite after two clean windows while newest history is finite and lit",
+    "confidence": "Deterministic scratch failure and carried-state recurrence; unmodified baseline suite passed",
+    "uncertainty": "No occurrence in real projects established; only Fast/48kHz malformed input probe executed",
+    "status": "deeply examined",
+    "next_action": "File low-priority visual recovery issue; prefer small finite guard outside callback, no recovery machinery"
   },
   {
     "id": "A6",
@@ -234,11 +234,11 @@
     "evidence": [
       "investigations/realtime-lifetime.md"
     ],
-    "conclusion": "Configuration/restore lifetimes retain valid independent owners; unnecessary full ProcessStatus publication can be narrowed to tail length",
+    "conclusion": "Fixed-value adoption and off-audio heap lifetime retain valid independent owners; current drain snapshots are bounded",
     "confidence": "Current source and fixture reach independently traced; allocation instrumentation not executed",
-    "uncertainty": "Native status query pending; debug-only allocation guards and host deadlines unverified",
+    "uncertainty": "Debug allocation instrumentation and native lifecycle/deadline behavior unverified in this run",
     "status": "deeply examined",
-    "next_action": "Run tiny native layout query; implement scalar tail publication with exported-tail behavior fixture if authorized"
+    "next_action": "Retain design; exact existing debug commands are preserved if fresh allocation evidence is needed"
   },
   {
     "id": "R4",
@@ -295,5 +295,39 @@
     "uncertainty": "Other platforms and device families not examined",
     "status": "unexamined",
     "next_action": "Only expand with supported platform workload; do not duplicate #1425"
+  },
+  {
+    "id": "A7",
+    "question": "Does CLAP need a retained full processing-status enum?",
+    "scope": "vendor nice-plug CLAP last_process_status stores and ext_tail_get; locked nice-plug-core/crossbeam-utils",
+    "investigator": "audio_tuning, coordinator; challenged by render",
+    "evidence": [
+      "investigations/realtime-lifetime.md",
+      "investigations/challenge.md",
+      "logs/probe-atomic-status.log",
+      "experiments/atomic_status_probe.rs"
+    ],
+    "conclusion": "Sole retained consumer needs u32; native ProcessStatus is 24 bytes and its AtomicCell is not lock-free; u32 cell is lock-free",
+    "confidence": "Native dependency layout query plus independent complete field-use trace",
+    "uncertainty": "No measured contention, deadline violation or CPU saving; exported-tail behavior fixture is implementation work",
+    "status": "deeply examined",
+    "next_action": "Publish AtomicU32 tail length with same processing/start boundaries and ordering; add exported-tail/status fixture"
+  },
+  {
+    "id": "P1",
+    "question": "CPU cost of shared visual runtime with dock, preview and no drawing",
+    "scope": "ui/tests/profile.rs forced 1600x1000@2x frames, six-voice analysis and tessellation",
+    "investigator": "coordinator",
+    "evidence": [
+      "logs/measurement-summary.json",
+      "logs/final-ui-runtime-0.log",
+      "logs/final-ui-runtime-1.log",
+      "logs/final-ui-runtime-2.log"
+    ],
+    "conclusion": "Median of run p50: active dock .675ms, dock+preview .906ms, active no-draw .064ms; no additional scene-cache owner justified by these costs",
+    "confidence": "Three runs with 600 measured frames per scenario and explicit second-surface reach assertion",
+    "uncertainty": "Excludes native scheduling/GPU callbacks; one 8.962ms maximum not attributed; quiet forced frames are not idle CPU",
+    "status": "deeply examined",
+    "next_action": "Retain ownership design; native frame/idle measurements only for an observed symptom"
   }
 ]

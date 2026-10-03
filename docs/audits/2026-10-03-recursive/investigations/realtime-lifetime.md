@@ -200,7 +200,7 @@ Direct Owner/map tests with no explicit guard supply behavior or capacity eviden
 
 ## Adjacent representation finding: only a tail length is read
 
-Status: source-confirmed mechanism on the shipped 64-bit targets; actual size/lock-free query and contention timing were not executed.
+Status: source-confirmed mechanism and coordinator-confirmed native size/lock-free query; contention timing was not executed.
 The check was prompted by another project's analogous candidate, then independently traced against this repository and its locked dependency sources.
 No result from that other project is used as evidence here.
 
@@ -248,3 +248,10 @@ When reporting coordinator results, label release functional tests separately fr
 If fresh callback allocation evidence is required, use the existing debug commands or the narrowly named exported fixtures above rather than writing another helper-only test.
 Real-host callback timing, thread migration, native window teardown and hostile/reentrant host behavior remain outside the observed execution scope.
 Those are explicit limits, not demonstrated product failures or reasons to impose a broader framework.
+
+## Coordinator native confirmation
+
+The real linked dependencies report ProcessStatus size 24, alignment 8 and AtomicCell lock_free=false; u32 is size/alignment 4 and lock_free=true.
+The native query does not measure contention or callback time.
+The independent challenge additionally records per-subblock, early-fault retention and start-only clearing requirements.
+See logs/probe-atomic-status.log, experiments/atomic_status_probe.rs and investigations/challenge.md.

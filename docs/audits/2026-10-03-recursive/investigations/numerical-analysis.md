@@ -11,7 +11,7 @@ The coordinator owns execution and integration.
 ## Scope and disposition
 
 Status: deep for calibration structure, exact-zero behavior, multichannel power pooling, pitch-resampling bounds, Fold floor semantics and history coarsening;
-partial for nonfinite-input recovery, with a bounded scratch test pending execution.
+the coordinator subsequently reproduced nonfinite-input recovery failure with the bounded scratch test below.
 
 The finite-input paths examined have coherent ownership and numerical semantics.
 No additional FFT backend, planner abstraction, precision framework or floor redesign earns its maintenance cost from this investigation.
@@ -184,7 +184,7 @@ Verdict: retain power sums and counts; reject repeated-dB averaging or a new exa
 
 ## Pending robustness probe: nonfinite input and display recovery
 
-Status: code-supported lead, **scratch execution pending**.
+Status: reproduced by the coordinator; see the execution outcome below.
 This is outside the finite-input clean conclusion above.
 There is no established occurrence in actual host audio or ordinary saved projects, so priority is low unless execution or real input evidence changes the assessment.
 
@@ -251,4 +251,10 @@ Any repair must justify its per-sample/per-bucket cost and ongoing contract agai
 Current finite-input numerical responsibilities are separated usefully: the analyzer owns calibrated raw power, channels pool power, the UI owns temporal smoothing, Fold owns local excess-power reading, and history owns weighted retention.
 Combining those states would erase real semantic differences rather than remove duplicated work.
 The strongest useful results here are verified fixture reach and explicit limits on what each oracle proves.
-The pending NaN experiment is narrow enough to settle its state-retention claim without inventing runtime-cost evidence or reopening accepted Fast/RealFFT decisions.
+The executed NaN experiment settles its stated state-retention claim without inventing runtime-cost evidence or reopening accepted Fast/RealFFT decisions.
+
+## Coordinator execution outcome
+
+The preserved Fast/48kHz scratch test reproduced the nonfinite recovery defect: 2564 display buckets remained nonfinite after two clean windows, while the newest history was finite and lit.
+See logs/probe-nonfinite.log and DECISIONS.md for scope and the low-priority local-guard recommendation.
+This does not establish real-project incidence.

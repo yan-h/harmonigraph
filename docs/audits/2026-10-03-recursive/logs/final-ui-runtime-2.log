@@ -1,0 +1,29 @@
+
+running 1 test
+test tests::profile::profile_visual_runtime ... quiet dock: total min 0.152 p50 0.155 p95 0.249 p99 0.399 max 0.590 ms; analysis min 0.000 p50 0.000 p95 0.000 p99 0.000 max 0.000 ms; frame min 0.152 p50 0.155 p95 0.249 p99 0.399 max 0.590 ms; allocations min 721.000 p50 721.000 p95 721.000 p99 721.000 max 721.000
+active dock: total min 0.636 p50 0.675 p95 0.905 p99 1.037 max 1.219 ms; analysis min 0.062 p50 0.065 p95 0.106 p99 0.137 max 0.319 ms; frame min 0.573 p50 0.601 p95 0.831 p99 0.922 max 1.001 ms; allocations min 985.000 p50 985.000 p95 986.000 p99 987.000 max 988.000
+active dock + preview: total min 0.854 p50 0.905 p95 1.200 p99 1.349 max 2.887 ms; analysis min 0.062 p50 0.067 p95 0.102 p99 0.137 max 0.352 ms; frame min 0.792 p50 0.834 p95 1.126 p99 1.272 max 2.535 ms; allocations min 1400.000 p50 1400.000 p95 1402.000 p99 1403.000 max 1406.000
+active no drawing: total min 0.062 p50 0.064 p95 0.100 p99 0.122 max 0.225 ms; analysis min 0.062 p50 0.064 p95 0.100 p99 0.121 max 0.225 ms; frame min 0.000 p50 0.000 p95 0.000 p99 0.001 max 0.002 ms; allocations min 2.000 p50 2.000 p95 3.000 p99 3.000 max 4.000
+quiet no drawing: total min 0.000 p50 0.000 p95 0.000 p99 0.000 max 0.000 ms; analysis min 0.000 p50 0.000 p95 0.000 p99 0.000 max 0.000 ms; frame min 0.000 p50 0.000 p95 0.000 p99 0.000 max 0.000 ms; allocations min 0.000 p50 0.000 p95 0.000 p99 0.000 max 0.000
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 769 filtered out; finished in 1.33s
+
+        1.33 real         1.27 user         0.02 sys
+            61800448  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                4027  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   1  voluntary context switches
+                1978  involuntary context switches
+         17549446813  instructions retired
+          4108091727  cycles elapsed
+            48415272  peak memory footprint

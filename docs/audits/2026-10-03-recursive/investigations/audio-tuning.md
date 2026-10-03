@@ -17,7 +17,8 @@ Alternative: global visited-pop count, spending on every successful pop, gives a
 Preserve rotation and queued tail; test mixed stale/valid rows across callbacks.
 Do not add a scheduler, epoch handshake, second queue or persisted fairness state.
 
-Confidence before experiment: verified code mechanism and legal overlap; actual duration/frequency unmeasured.
+Executed result: matching records popped/retained 2048; mismatched records popped 3072 and retained zero.
+The code mechanism and legal overlap are confirmed; actual host duration/frequency remain unmeasured.
 Independent challenge rejects any claim of demonstrated infinite production stall: Tune input has an 8192 pending capacity, and a refill hook imposes scheduling.
 The finite-capacity no-thread probe is the primary reproducible evidence; hook interleaving is supplemental.
 Verdict: pursue a small explicit work bound if the reproduction confirms it, not a new RT framework.
@@ -49,7 +50,7 @@ Historical assignment is not authority over today's lattice geometry.
 Verdict: retain these distinct owners. No stale-name cache found.
 Combined held-note × keyboard × engine × temperament behavior lacks one inspected end-to-end fixture; existing tests cover parts.
 Namer fallback test at `names.rs:2581` calls only equal_tempered_name, not failed Namer lookup; replace its fixture with actual lookup during a future test change.
-Scratch direct-Namer probe requested to verify this clean claim.
+The direct-Namer probe passed: fixed MIDI 63.863136 spells Just E-, then current equal-tempered E after asserting no matching node exists.
 
 ## Current documentation contradiction
 

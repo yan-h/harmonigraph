@@ -1,0 +1,59 @@
+[
+  {
+    "name": "atomic-status",
+    "command": [
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/atomic-status-probe"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.18527850000100443,
+    "log": "logs/probe-atomic-status.log"
+  },
+  {
+    "name": "hub",
+    "command": [
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/target/release/deps/harmonigraph_plugin-0254728e5626c0e0",
+      "audit_epoch_rejection_does_not_spend_the_collection_budget",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.48292366700115963,
+    "log": "logs/probe-hub.log"
+  },
+  {
+    "name": "naming",
+    "command": [
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/target/release/deps/harmonigraph_ui-9c745894bbbe223e",
+      "audit_fixed_just_pitch_uses_current_temperament_and_reaches_fallback",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.516603916999884,
+    "log": "logs/probe-naming.log"
+  },
+  {
+    "name": "nonfinite",
+    "command": [
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/target/release/deps/harmonigraph_ui-9c745894bbbe223e",
+      "audit_display_recovers_after_one_nonfinite_audio_sample",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit": 101,
+    "wall_seconds": 0.013090833999740425,
+    "log": "logs/probe-nonfinite.log"
+  },
+  {
+    "name": "targets",
+    "command": [
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/target/release/deps/harmonigraph_render-94974c23db5c22bd",
+      "audit_halo_only_resize_prepare_cpu_probe",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "exit": 0,
+    "wall_seconds": 0.7372488330001943,
+    "log": "logs/probe-targets.log"
+  }
+]

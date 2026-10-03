@@ -28,7 +28,7 @@ Scope: vendor/nice-plug/src/wrapper/clap/wrapper.rs:180,709,2194,2543,3633; nice
 History: inherited in #630; prior boundary work noted that not every AtomicCell was lock-free but did not remove this unnecessary representation.
 
 Workflow/frequency: every processed subblock, including ordinary Normal/KeepAlive output; actual lock contention, cost and audible impact are unmeasured.
-Evidence/confidence: independently verified representation, dependency fallback and sole consumer; native layout query pending.
+Evidence/confidence: independently verified representation, dependency fallback and sole consumer; native layout query confirms size 24, alignment 8, lock_free=false versus lock-free u32.
 Simplest intervention: AtomicU32 last_tail_samples, zero initially/on start, write the existing Tail(n)/KeepAlive/other mapping, and return its load in ext_tail_get.
 Keep the original local ProcessStatus for CLAP result and error handling.
 Doing nothing keeps a larger cross-thread representation and a fallback lock without a consumer for the additional data.
@@ -44,7 +44,7 @@ Performance gain: source-established removal of a lock operation per subblock; n
 Performance loss: none expected from scalar publication; verify the chosen ordering against the scalar-only reader.
 Correctness impact: tail values and immediate CLAP status/error must remain identical.
 New state/abstraction/synchronization/compatibility burden: no new field count, cache, queue or public schema; a smaller existing publication.
-Verdict: pursue after native representation confirmation; do not describe the whole wrapper as lock-free, since other locks and large AtomicCells remain.
+Verdict: pursue; native representation confirmed; do not describe the whole wrapper as lock-free, since other locks and large AtomicCells remain.
 
 ## Bound Hub collection by work visited, including discarded epochs
 
@@ -52,7 +52,7 @@ Concrete mechanism: accepted batch length bounds retained captures; mismatched p
 Scope: crates/harmonigraph-plugin/src/tuning/hub.rs collect, lines 600–654; Tune epoch adoption/publication and Session reset.
 Workflow/frequency: reset/epoch transitions with queued MIDI from separate Tune instances; dense concurrent controller input is the stress case.
 No normal-session dropout or sustained infinite drain has been measured.
-Evidence: two independent source traces plus the finite-capacity probe in experiments/hub_probe.rs.
+Evidence: two independent source traces and the executed finite-capacity probe: matching rows pop/retain 2048, mismatched rows pop 3072 and retain zero.
 
 Simplest intervention recommended: snapshot each paired row's available entries before draining, preserve accepted cap and row rotation.
 This gives a finite work limit without persistent state and preserves current finite-backlog cleanup throughput.
@@ -69,14 +69,14 @@ Performance gain: bounded worst-case work; no end-to-end improvement claimed.
 Performance loss: arrivals during drain may wait until a later callback; global budget also defers some existing backlog.
 Correctness: preserves dropped-epoch semantics, requires proving accepted work remains queued and eventually services peers.
 New state/abstraction/synchronization/compatibility burden: local counter only; no schema or compatibility work.
-Verdict: pursue a small fix after probe confirmation; do not build a scheduler or handshake.
+Verdict: pursue a small fix; finite probe confirmed the mechanism; do not build a scheduler or handshake.
 
 ## Make the existing naming fallback test reach Namer
 
 Concrete cost: a test named for the fallback only exercises equal_tempered_name directly.
 Scope: crates/harmonigraph-ui/src/panes/spectral/names.rs existing fallback fixture around line 2581.
 Workflow: an actual held pitch stops matching nodes after current tuning/equivalence edits.
-Evidence: source inspection; scratch probe directly asserts failed lattice lookup then Namer fallback.
+Evidence: source inspection; executed scratch probe asserts failed lattice lookup then Namer fallback for fixed MIDI 63.863136: Just E- becomes current equal-tempered E.
 Simplest intervention: strengthen the existing fixture with this path, replacing redundant helper-only assertions rather than multiplying tests.
 Doing nothing leaves this integration path unprotected by the named test, while source still appears correct.
 Maintenance gain: behavior-focused fixture proves its title; cost: a small setup, no framework.
@@ -90,15 +90,35 @@ Verdict: optional small improvement, behind the first two; do not call it a runt
 Concrete structure: any of seven allocation-shape changes recreates all transient Targets while tile/history are independently carried.
 Scope: crates/harmonigraph-render/src/spectrogram.rs lines 846–875; spectrogram/atmosphere.rs Targets::new around 1149–1171.
 Workflow: halo-quality edits or resize, not ordinary fixed-size frames.
-Evidence: source and preserved shape/identity/prepare probe; current end-to-end significance must be measured.
+Evidence: native Metal probe confirmed unchanged allocation shapes with source-view replacement.
+Across 30 alternating stable/change pairs at 1080p Uniform, CPU prepare median was 119.354 versus 372.292 microseconds (delta 252.938); p95 was 153.166 versus 462.458 microseconds.
+This is one stage run under recorded desktop load; the delta includes necessary halo allocation.
 Simplest possible intervention: retain only the demonstrated expensive unchanged resource, if a real drag hitch is attributable to it.
 Doing nothing keeps one readily audited aggregate owner and rebind path.
 Maintenance effect if split: negative unless a narrower owner also removes existing rules; selective retention adds dependent attachment/read bindings and invalidation conditions.
 Avoiding unnecessary allocations is a potential performance benefit, not a maintenance gain.
-Performance: a stage delta is an upper bound on possible savings, not a prototype speedup; halo allocations themselves are necessary.
+Performance: the stage delta includes necessary allocation and does not isolate avoidable work or predict savings.
 Correctness risk: stale views/bindings or history/carry failures during resize.
 New burden: resource identity/rebinding rules; no reason for a generic resource graph.
-Verdict: investigate further only if measured full-frame effect warrants it; otherwise defer.
+Verdict: defer. A roughly 0.25 ms stage delta does not justify extra rebinding ownership for this infrequent setting transition.
+Investigate further only if a saved real drag shows a material complete-frame hitch; the probe is not a prototype speedup.
+
+## Recover the visual display after a nonfinite input sample
+
+Concrete behavior: one NaN audio sample poisons smoothed display buckets; after two clean windows the newest history is finite and lit but 2564 display buckets remain nonfinite.
+Scope: crates/harmonigraph-ui/src/spectrum.rs:422 display recurrence, analysis input/output, and crates/harmonigraph-core/src/spectrogram.rs:61 history sanitization.
+Workflow/frequency: malformed upstream audio while audio continues flowing; occurrence in real projects is unknown.
+Evidence/confidence: deterministic failing scratch assertion at shipped Fast 4096/48kHz, attack/release zero; clean newest history rules out an incompletely replaced FFT window.
+The recurrence keeps a nonfinite carried value nonfinite even when subsequent input is finite; this is a visual recovery defect, not an observed audio dropout.
+
+Simplest intervention: a small finite-power guard at visual publication or the shared raw-power boundary, with the reproduced recovery behavior as its test.
+Prefer that to per-sample audio-callback validation or a reset/recovery state machine.
+Doing nothing accepts loss of the affected display until its state is reset.
+Maintenance gain: one explicit boundary contract; cost: a small guard and one behavior fixture.
+Performance gain: none claimed; a guard adds per-bucket work, so keep it off the audio callback and avoid duplicating whole-buffer passes.
+Correctness: prevents malformed input from permanently contaminating otherwise recovered visual state.
+New state/abstraction/synchronization/compatibility burden: none is needed.
+Verdict: pursue only the small local guard, low priority because actual incidence is unknown; reject a generic malformed-audio recovery framework.
 
 ## Rejected or retained on purpose
 

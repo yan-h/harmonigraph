@@ -1,0 +1,27 @@
+/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/inputs/chord.take: 7.8s take -> 480 frames at 60 fps, 1920x1080 @ 1.50x -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1920x1080-1.mp4
+progress: 0/480 frames (0%)
+[aist#1:0/pcm_s16le @ 0x7bbac0c300] Guessed Channel Layout: stereo
+progress: 3/480 frames (0%)progress: 49/480 frames (10%)progress: 101/480 frames (21%)progress: 139/480 frames (28%)progress: 179/480 frames (37%)progress: 219/480 frames (45%)progress: 254/480 frames (52%)progress: 288/480 frames (60%)progress: 319/480 frames (66%)progress: 352/480 frames (73%)progress: 383/480 frames (79%)progress: 414/480 frames (86%)progress: 445/480 frames (92%)[mp4 @ 0x7bbb064500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+progress: 480/480 frames (100%)
+progress: 480/480 frames (100%)
+done: 480 frames -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1920x1080-1.mp4
+timing: a 480-frame export in 7.1 s, 6.1 s of it drawing at 78.7 fps — ui+tess 1.00 ms/frame (8%), submit 2.39 ms/frame (19%), readback 8.03 ms/frame (63%), emit 1.27 ms/frame (10%)
+        7.14 real        34.24 user         3.07 sys
+           804962304  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               73957  page reclaims
+                 232  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+              117530  voluntary context switches
+              147860  involuntary context switches
+         12387394683  instructions retired
+          8457512386  cycles elapsed
+           342623096  peak memory footprint

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "settled-export-chord-1920x1080-1",
+    "command": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-count_frames",
+      "-show_entries",
+      "format=duration:stream=codec_type,codec_name,width,height,nb_read_frames,sample_rate",
+      "-of",
+      "json",
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1920x1080-1.mp4"
+    ],
+    "streams": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1920,
+          "height": 1080,
+          "nb_read_frames": "480"
+        },
+        {
+          "codec_name": "aac",
+          "codec_type": "audio",
+          "sample_rate": "48000",
+          "nb_read_frames": "375"
+        }
+      ],
+      "format": {
+        "duration": "8.000000"
+      }
+    }
+  },
+  {
+    "name": "settled-export-historical-1920x1080-0",
+    "command": [
+      "ffprobe",
+      "-v",
+      "error",
+      "-count_frames",
+      "-show_entries",
+      "format=duration:stream=codec_type,codec_name,width,height,nb_read_frames,sample_rate",
+      "-of",
+      "json",
+      "/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-historical-1920x1080-0.mp4"
+    ],
+    "streams": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1920,
+          "height": 1080,
+          "nb_read_frames": "240"
+        },
+        {
+          "codec_name": "aac",
+          "codec_type": "audio",
+          "sample_rate": "48000",
+          "nb_read_frames": "188"
+        }
+      ],
+      "format": {
+        "duration": "4.000000"
+      }
+    }
+  }
+]

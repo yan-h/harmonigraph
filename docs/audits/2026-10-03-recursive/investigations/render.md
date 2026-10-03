@@ -1,7 +1,7 @@
 # R1–R3: rendering and GPU resources
 
 Investigator: render, gpt-6-astra high; read-only at ad1c6e6b.
-Status: stated cache/lifetime questions deeply examined by code/fixture inspection; runtime cost hypotheses require central measurements.
+Status: stated cache/lifetime questions deeply examined by code/fixture inspection; the coordinator measured the narrow R3 prepare stage, not native complete-frame cost.
 
 ## R1 — label/atlas ownership
 
@@ -37,8 +37,10 @@ Spectrogram history uses 64-pixel allocation buckets (`atmosphere.rs:191`); `col
 
 Suspicion: seven allocation-shape comparisons (`spectrogram.rs:846–854`) trigger aggregate Targets::new (`atmosphere.rs:1149–1171`), replacing transient atlas/light targets even when only another dimension changes.
 Splitting could preserve expensive unchanged resources, but adds several rebind predicates and attachment/read lifetimes.
-No current evidence establishes a visible spike, so verdict is investigate further only with narrow prepare timing/allocation counts; otherwise leave the simpler aggregate owner.
-Experiment: warm 1080p/4K Stars, alternate halo quality and one-pixel widths, track prepare time and texture identity/creation; compare fixed-size controls.
+The executed 1080p Uniform halo-only probe confirms source replacement while other allocation shapes remain equal.
+Thirty alternating pairs measured CPU prepare median 119.354us stable versus 372.292us changing, a 252.938us delta that includes necessary halo allocation.
+Verdict: defer splitting; this stage cost does not establish a visible complete-frame hitch or justify more ownership rules.
+A 4K/width-drag experiment remains conditional on a saved user-visible symptom; it was not run merely to broaden the matrix.
 Preserve only the demonstrated expensive resource, not a generic resource graph.
 
 Fixture limit: tile rebake scheduling test (`spectrogram.rs:4281,4360–4369`) deliberately disables blur time to keep its target counter; it does not prove tile carry through actual Targets replacement.

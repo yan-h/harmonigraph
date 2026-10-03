@@ -29,9 +29,9 @@ Do not nest that wrapper around the measurement runner, which acquires the same 
 
 ```sh
 python3 docs/audits/2026-10-03-recursive/experiments/prepare_workloads.py
-./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/run_measurements.py ui --rounds 3
-./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/run_measurements.py export --rounds 3
-./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/run_measurements.py gpu --rounds 3
+./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/run_measurements.py ui --rounds 3 --tag rerun
+./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/run_measurements.py export --rounds 3 --tag rerun
+./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/run_measurements.py gpu --rounds 3 --tag rerun
 ```
 
 The UI scenario uses the existing 1600×1000 point, 2×-density test driver, six held MIDI voices and 800 mono samples per frame at 48 kHz, 60 warmups and 600 measured frames.
@@ -49,13 +49,17 @@ When the historical recording is unavailable, the synthetic workload remains rep
 
 ```sh
 python3 docs/audits/2026-10-03-recursive/experiments/probes.py apply
-./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/with_shared_lock.py cargo test --workspace --release audit_ --no-run -j 3
-./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/with_shared_lock.py env WGPU_BACKEND=metal HARMONIGRAPH_REQUIRE_GPU=1 cargo test --workspace --release audit_ -- --nocapture --test-threads=1
+./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/with_shared_lock.py cargo test --workspace --release audit_ --no-run -j 3 > docs/audits/2026-10-03-recursive/logs/build-probes.log 2>&1
+./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/with_shared_lock.py python3 docs/audits/2026-10-03-recursive/experiments/run_probes.py
 python3 docs/audits/2026-10-03-recursive/experiments/probes.py restore
 ```
 
 Keep the workspace package/feature selection consistent with the initial build; narrowing the package set can rebuild a different dependency graph.
-The NaN assertion may fail intentionally; restore probes after inspecting the failure, and run later package probes directly if Cargo stops at it.
+The runner compiles the tiny native layout query against the real cached dependency rlibs, then runs each scratch test binary separately and asserts that one test was actually reached.
+The NaN assertion fails intentionally on the audited source; its exit 101 is saved without preventing later probes.
+Inspect every exit in logs/probe-results.json, then restore source.
+This is reproduction of a defect, not an expected failure in the unmodified baseline suite.
+If more than one dependency rlib exists, choose the compatible artifact explicitly rather than guessing.
 The guarded script requires exact original source before application and exact probe source before restoration.
 If it refuses, inspect the difference; do not overwrite unrelated edits.
 It preserves the test-only patch.
@@ -70,6 +74,19 @@ No shipping behavior is changed by these snippets.
   This is stage cost, not a measured benefit from a candidate fix.
   Memory shape equality is not a claim of memory identity.
 
+Choose a fresh --tag on each measurement retry; the runner refuses to overwrite an existing log.
+Use --case historical1080 or chord720/chord1080 for a bounded export retry, and --test-binary with the exact build-log executable if several variants exist.
+After a workspace test build, rebuild the normal offline package feature set before timing exports; the test build can replace its executable with unified features.
 Keep repeated measurements separate from compilation.
 `logs/measurements.jsonl` preserves exact executable paths, arguments, environments and workload context for the baseline samples.
 See `HOST-VALIDATION.md` for checks deliberately left to a safe Bitwig session.
+
+## Completed-media inspection
+
+```sh
+./session-lifecycle.sh run -- python3 docs/audits/2026-10-03-recursive/experiments/with_shared_lock.py python3 docs/audits/2026-10-03-recursive/experiments/inspect_exports.py
+```
+
+The script names the two completed local outputs from this audit; select your corresponding completed output names for a fresh --tag.
+It verifies streams/frame counts and extracts local-only frames for visual inspection.
+The broad GPU sweep command above is preserved for continuation but was not executed in this audit; the completed suite, exports and narrow allocation probe supplied the relevant current evidence.

@@ -63,7 +63,7 @@ Native-host procedures are conditional follow-ups, not an instruction to disturb
 ## A6 — publish only the host-visible tail length
 
 Independent source challenge sustains the narrow representation recommendation;
-native layout/lock-free probe and new fixture execution remain pending.
+the native layout/lock-free probe subsequently confirmed the representation; the proposed exported-tail regression fixture remains implementation work.
 No measured speedup, contention, or dropout claim follows from this review.
 
 Within the CLAP wrapper, `last_process_status` has exactly one read (`vendor/nice-plug/src/wrapper/clap/wrapper.rs:3633`),

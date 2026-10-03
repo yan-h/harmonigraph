@@ -1,0 +1,27 @@
+/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/inputs/historical.take: 3.0s take -> 240 frames at 60 fps, 1920x1080 @ 1.50x -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-historical-1920x1080-0.mp4
+progress: 0/240 frames (0%)
+[aist#1:0/pcm_f32le @ 0x7acb444300] Guessed Channel Layout: stereo
+progress: 8/240 frames (3%)progress: 37/240 frames (15%)progress: 73/240 frames (30%)progress: 108/240 frames (45%)progress: 140/240 frames (58%)progress: 169/240 frames (70%)progress: 199/240 frames (82%)progress: 232/240 frames (96%)[mp4 @ 0x7acb448500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+progress: 240/240 frames (100%)
+progress: 240/240 frames (100%)
+done: 240 frames -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-historical-1920x1080-0.mp4
+timing: a 240-frame export in 4.4 s, 3.1 s of it drawing at 76.2 fps — ui+tess 0.91 ms/frame (7%), submit 2.42 ms/frame (18%), readback 7.45 ms/frame (57%), emit 2.32 ms/frame (18%)
+        4.37 real        18.52 user         1.62 sys
+           815136768  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               64572  page reclaims
+                1029  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+               60346  voluntary context switches
+               79387  involuntary context switches
+          5970199266  instructions retired
+          4202062313  cycles elapsed
+           320799584  peak memory footprint
