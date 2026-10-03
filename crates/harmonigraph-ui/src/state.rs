@@ -764,9 +764,8 @@ impl PictureState {
     /// Install an already normalized appearance at a load boundary.
     pub fn install_appearance(&mut self, appearance: crate::AppearanceDocument) {
         self.appearance = appearance;
-        // A restored project must judge its comma modes again even at the
-        // tuning the previous project already showed.
-        self.runtime.config_reducer.recheck_all();
+        // Restore saved links verbatim alongside the next parameter snapshot.
+        self.runtime.restore_configuration = true;
     }
     /// Drop everything that belongs to a particular egui context. Shells MUST
     /// call this whenever they build one.

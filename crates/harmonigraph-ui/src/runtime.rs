@@ -3,7 +3,7 @@
 
 use crate::params::{self, ParamBackend};
 use crate::{AudioSpectrum, Console};
-use harmonigraph_core::{Comma, NoteTracker, PitchClass, Tuning};
+use harmonigraph_core::{NoteTracker, PitchClass, Tuning};
 use harmonigraph_scene::FrameParams;
 
 /// Synchronous input, analysis and history, independent of any viewport.
@@ -22,6 +22,8 @@ pub struct VisualRuntime {
     /// While true, tuning params continuously re-learn from the held notes
     /// (v1's learn mode). Runtime-only; never persisted.
     pub learn_active: bool,
+    /// A load/start boundary adopts saved links with the next parameter snapshot.
+    pub(crate) restore_configuration: bool,
     pub(crate) config_reducer: harmonigraph_core::configuration::ConfigReducer,
     /// Offline replay supplies recorded resolved boundaries, never frame-driven detection.
     pub replayed_configuration: Option<harmonigraph_core::configuration::ResolvedConfig>,
@@ -48,8 +50,6 @@ pub struct VisualRuntime {
 }
 impl Default for VisualRuntime {
     fn default() -> Self {
-        let mut config_reducer = harmonigraph_core::configuration::ConfigReducer::default();
-        config_reducer.recheck_all();
         Self {
             lattice_maps: None,
             map_destination: None,
@@ -58,7 +58,8 @@ impl Default for VisualRuntime {
             tuning: Tuning::default(),
             frame_params: FrameParams::default(),
             learn_active: false,
-            config_reducer,
+            config_reducer: Default::default(),
+            restore_configuration: true,
             replayed_configuration: None,
             adaptive_policy: Default::default(),
             configuration_status: 0,
@@ -124,11 +125,18 @@ impl VisualRuntime {
             self.apply_resolved(appearance, recorded);
         } else {
             let modes = self.tuning_modes(appearance);
-            self.config_reducer.sync_display(
-                params::tuning_from_params(params),
-                modes,
-                self.adaptive_policy,
-            );
+            let raw = params::tuning_from_params(params);
+            if std::mem::take(&mut self.restore_configuration) {
+                self.config_reducer.apply(
+                    harmonigraph_core::configuration::ConfigMutation::Restore {
+                        raw,
+                        modes,
+                        policy: self.adaptive_policy,
+                    },
+                );
+            } else {
+                self.config_reducer.sync_display(raw, modes, self.adaptive_policy);
+            }
             self.apply_resolved(appearance, self.config_reducer.resolved());
         }
     }
@@ -142,7 +150,6 @@ impl VisualRuntime {
                 syntonic: appearance.view.meantone,
                 septimal_kleisma: appearance.view.marvel,
             },
-            auto: [appearance.view.meantone_auto, appearance.view.marvel_auto],
             learning: self.learn_active,
         }
     }
@@ -156,14 +163,11 @@ impl VisualRuntime {
         self.adaptive_policy = config.policy;
         appearance.view.meantone = config.modes.tempered.syntonic;
         appearance.view.marvel = config.modes.tempered.septimal_kleisma;
-        appearance.view.meantone_auto = config.modes.auto[0];
-        appearance.view.marvel_auto = config.modes.auto[1];
         self.learn_active = config.modes.learning;
     }
 
-    /// One semantic action, including every axis and explicit unlock in a preset.
-    /// CLAP submits it once; standalone/legacy writes synchronously through the same
-    /// pure reducer at the next frame boundary.
+    /// Apply one tuning action atomically. The synchronous shell uses the same
+    /// reducer as the audio owner; observation only adapts external param changes.
     pub(crate) fn edit_tuning(
         &mut self,
         appearance: &mut crate::AppearanceDocument,
@@ -177,31 +181,18 @@ impl VisualRuntime {
             }
             return;
         }
-        if let Some(policy) = edit.policy {
-            // Adopt the policy with the next observed axes/modes, so this
-            // edit cannot consume an Auto recheck using a stale parameter view.
-            policy.apply_to(&mut self.adaptive_policy);
-        }
+        self.config_reducer.sync_display(
+            params::tuning_from_params(params),
+            self.tuning_modes(appearance),
+            self.adaptive_policy,
+        );
+        self.config_reducer.apply(harmonigraph_core::configuration::ConfigMutation::Edit(edit));
         for (key, value) in params::ParamKey::TUNING.into_iter().zip(edit.axes) {
             if let Some(value) = value {
                 params.set(key, value as f32 / 1_000_000.0);
             }
         }
-        for comma in Comma::ALL {
-            let i = comma.index();
-            if let Some(on) = edit.tempered[i] {
-                *appearance.view.temper_mut(comma) = on;
-            }
-            if let Some(on) = edit.auto[i] {
-                *appearance.view.temper_auto_mut(comma) = on;
-                if on {
-                    self.config_reducer.recheck(comma);
-                }
-            }
-        }
-        if let Some(on) = edit.learning {
-            self.learn_active = on;
-        }
+        self.apply_resolved(appearance, self.config_reducer.resolved());
     }
 
     /// One tick of learn mode (v1 semantics): while armed, whenever the set of
@@ -230,6 +221,11 @@ impl VisualRuntime {
             return;
         }
         if !classes.is_empty() {
+            self.config_reducer.sync_display(
+                self.config_reducer.raw(),
+                self.tuning_modes(appearance),
+                self.adaptive_policy,
+            );
             let learned = harmonigraph_core::learn_tuning(&classes);
             // The audio owner's rule (`Owner::group_end`): with a source
             // retuning, the lattice is the target and only the C offset moves.
@@ -247,33 +243,14 @@ impl VisualRuntime {
                     params.set(key, value);
                 }
             }
-            if let Some(three) = learned.three {
-                let mut policy = self.adaptive_policy;
-                policy.keyboard = harmonigraph_core::tuning::fifth_generated(
-                    harmonigraph_core::tuning::microcents(three),
-                );
-                if policy != self.adaptive_policy {
-                    self.edit_tuning(
-                        appearance,
-                        params,
-                        harmonigraph_core::configuration::ConfigEdit {
-                            policy: Some(harmonigraph_core::configuration::PolicyEdit::changed(
-                                self.adaptive_policy,
-                                policy,
-                            )),
-                            ..Default::default()
-                        },
-                    );
-                }
-            }
-            if !retuning {
-                let modes = harmonigraph_core::configuration::learned_modes(
+            self.config_reducer.apply(
+                harmonigraph_core::configuration::ConfigMutation::LearnResolved {
                     learned,
-                    self.tuning_modes(appearance),
-                );
-                appearance.view.meantone = modes.tempered.syntonic;
-                appearance.view.marvel = modes.tempered.septimal_kleisma;
-            }
+                    retuning,
+                    raw: params::tuning_from_params(params),
+                },
+            );
+            self.apply_resolved(appearance, self.config_reducer.resolved());
             self.console.log(format!("learn: {} held classes -> {:?}", classes.len(), learned));
         }
         self.last_learned_classes = Some(classes);

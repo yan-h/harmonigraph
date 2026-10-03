@@ -18,7 +18,6 @@ pub(super) fn configure(hub: &Device, tuning: Tuning) {
                 None,
             ],
             tempered: [Some(false); 2],
-            auto: [Some(false); 2],
             learning: Some(false),
             policy: None,
         },

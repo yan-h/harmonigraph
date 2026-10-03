@@ -264,8 +264,25 @@ note matching,
 output **Note retuning**,
 and connected **Instances**.
 **Pass through** leaves incoming note pitches unchanged while the lattice's display tuning still applies.
-**Temperaments** follows **Lattice tuning**,
-so the constraints sit beside the intervals they control.
+**Tuning** puts the **Meantone** switch beside **Major third** and **Marvel** beside **Harmonic seventh**.
+A linked interval shows its calculated value with a ↔ indicator;
+in narrow panes its switch wraps below the interval.
+Meantone makes syntonic-comma equivalents share a pitch and name without syntonic marks.
+Marvel makes the harmonic seventh share the augmented sixth’s pitch and spelling (`A♯−2` from C with Marvel alone,
+plain `A♯` with both links).
+Typing,
+dragging,
+presets and Learn recognize temperaments automatically when their interval relationship is within 0.5¢,
+then impose the relationship exactly.
+Editing a linked interval independently recognizes or releases its link;
+editing its generators keeps it following them.
+Switching a link off keeps the currently displayed interval and stays off until a relevant tuning entry or sufficiently informative Learn result.
+Learn leaves relationships without enough evidence unchanged and preserves target intervals while retuning.
+The third and seventh parameter ranges include every interval their links can derive,
+so switching off a link does not clamp the pitch to an older slider limit.
+There is no separate Auto setting.
+Saved links and recorded configurations are restored as saved,
+without running recognition again.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
 In Lattice Map mode,
 **Saved map** stays visible above the **Map editing** fold,

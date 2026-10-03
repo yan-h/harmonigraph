@@ -273,14 +273,7 @@ fn persist_round_trips_camera_and_view() {
     // would overwrite if it did not.
     state.picture.appearance.view.note_names = NoteNames::All;
     state.picture.appearance.view.meantone = true;
-    // Off is the non-default here, and the one a project has to keep: the
-    // detect would otherwise re-engage the mode the user switched it off for.
-    state.picture.appearance.view.meantone_auto = false;
-    // The septimal comma's pair of switches carries the same way, and set the
-    // other way round from the syntonic one's so a blob that crossed them
-    // could not pass.
     state.picture.appearance.view.marvel = false;
-    state.picture.appearance.view.marvel_auto = true;
     state.workspace.interaction.camera_presets.push(CameraPreset {
         name: "reading".into(),
         yaw: 0.7,
@@ -317,12 +310,7 @@ fn persist_round_trips_camera_and_view() {
         "a non-default note-name mode round-trips",
     );
     assert!(restored.picture.appearance.view.meantone);
-    assert!(
-        !restored.picture.appearance.view.meantone_auto,
-        "a switched-off auto-detect round-trips"
-    );
     assert!(!restored.picture.appearance.view.marvel, "each comma keeps its own mode");
-    assert!(restored.picture.appearance.view.marvel_auto, "and its own detect");
     assert_eq!(restored.workspace.interaction.camera_presets.len(), 1);
     assert_eq!(restored.workspace.interaction.camera_presets[0].name, "reading");
     assert_eq!(restored.workspace.interaction.camera_presets[0].yaw, 0.7);
@@ -1394,41 +1382,30 @@ fn a_blob_older_than_the_version_floor_is_refused_whole() {
     assert_eq!(current.picture.appearance.camera.yaw, 1.23);
     assert_eq!(current.picture.appearance.view.max_sevens, 3);
 }
-/// Loading a project asks the detects afresh, even at a tuning this session
-/// has already judged.
-///
-/// A host can push state into a LIVE editor — Bitwig's undo, a preset change
-/// — and the modes that arrive are the incoming project's, so the verdicts
-/// reached about the tuning on screen a moment ago say nothing about them. It
-/// matters most for the case the serde defaults exist for: a blob written
-/// before a comma existed carries that mode off, and only a fresh look turns
-/// it on.
+/// Saved releases are restored verbatim, even when the intervals already
+/// satisfy the relationship. Loading is not a new independent tuning entry.
 #[test]
-fn loading_a_project_re_opens_the_comma_verdicts() {
-    use harmonigraph_core::Comma;
+fn loading_a_project_preserves_released_temperaments() {
     let mut state = fresh();
-    // A blob from before the septimal comma existed: its keys are stripped,
-    // so both `marvel` and `marvel_auto` take their engaged fresh defaults.
-    let full = state.save_persist();
-    let without_mode = full.replace("marvel:true,", "");
-    assert_ne!(without_mode, full, "mode removal must have hit");
-    let saved = without_mode.replace("marvel_auto:true,", "");
-    assert_ne!(saved, without_mode, "detect removal must have hit");
-
-    // This session has already judged the tuning it is sitting at.
-    state.picture.runtime.config_reducer.sync_display(
-        harmonigraph_core::Tuning::default(),
-        Default::default(),
-        Default::default(),
-    );
-    assert!(state.picture.runtime.config_reducer.judged().iter().all(Option::is_some));
-    state.load_persist(&saved);
-    assert_eq!(
-        state.picture.runtime.config_reducer.judged(),
-        [None; Comma::COUNT],
-        "a loaded project must be judged on its own terms",
-    );
-    assert!(state.picture.appearance.view.marvel_auto, "and the missing detect key still opts in");
+    state.picture.appearance.view.meantone = false;
+    state.picture.appearance.view.marvel = false;
+    let saved = state.save_persist();
+    assert!(!saved.contains("meantone_auto"));
+    assert!(!saved.contains("marvel_auto"));
+    let mut restored = fresh();
+    assert!(restored.load_persist(&saved));
+    struct Defaults;
+    impl crate::params::ParamBackend for Defaults {
+        fn get(&self, key: crate::params::ParamKey) -> f32 {
+            key.default_value()
+        }
+        fn set(&self, _: crate::params::ParamKey, _: f32) {}
+    }
+    for frame in 0..3 {
+        begin_frame(&mut restored.picture, &Defaults, frame as f64);
+        assert!(!restored.picture.appearance.view.meantone);
+        assert!(!restored.picture.appearance.view.marvel);
+    }
 }
 
 /// Dropping any one key from a serialized view costs THAT KEY alone, and the
