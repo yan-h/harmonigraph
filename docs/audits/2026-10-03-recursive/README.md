@@ -77,3 +77,16 @@ Native-host work is explicitly blocked by the non-disruption constraint, other p
 [REPRODUCE.md](REPRODUCE.md) contains exact commands and workload transformations.
 The scripts, test-only patch, logs and context snapshots are preserved; source recordings and rendered media remain ignored local artifacts.
 Existing #886, #1348, #1425, #1428/#1430 are linked in the investigations rather than duplicated.
+
+## Follow-up tracking
+
+The evidence is preserved in [draft PR #1434](https://github.com/yan-h/harmonigraph/pull/1434); it is open, draft and not merged at handoff.
+[Tracking issue #1439](https://github.com/yan-h/harmonigraph/issues/1439) indexes every area and its remaining limits.
+No implementation recommendation has been recorded as an accepted owner decision.
+
+- [#1435: publish only CLAP tail length](https://github.com/yan-h/harmonigraph/issues/1435).
+- [#1438: reconcile recording/export and bend documentation](https://github.com/yan-h/harmonigraph/issues/1438).
+- [#1436: bound discarded-epoch Hub work](https://github.com/yan-h/harmonigraph/issues/1436).
+- [#1437: recover spectral display after NaN input](https://github.com/yan-h/harmonigraph/issues/1437).
+
+The optional Namer fixture improvement remains in the tracking issue rather than a separate runtime-defect issue.
