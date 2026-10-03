@@ -290,7 +290,6 @@ pub(super) fn tuning_pane(
                 );
             }
         });
-        crate::widgets::weak(ui, "Temperaments are recognized when you enter or learn tuning.");
     });
 
     // Faults remain visible even when the tuning controls are folded.
