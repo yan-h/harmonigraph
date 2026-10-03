@@ -83,9 +83,8 @@ The MIDI pitch-bend range defaults to two semitones and follows RPN 0 sensitivit
 The participation toggle preserves player pitch while retaining the established note and pedal cleanup.
 
 Scheduled output pitch and onset pitch are separate factual fields.
-Channel-pitch changes update the scheduled voices, but no display/take baseline is requested for them, so neither the final nor any intermediate bent pitch reaches the display or take.
-That recording limitation is [issue #783](https://github.com/yan-h/harmonigraph/issues/783), closed not-planned;
-[the adaptive-tuning record](adaptive-tuning.md#pitch-output) names the code path.
+Channel bends reach both publication lanes;
+see [Pitch output](adaptive-tuning.md#pitch-output).
 
 Zero silence timeout means never reset for silence.
 A positive timeout is evaluated against the completed input frontier once no held context remains.

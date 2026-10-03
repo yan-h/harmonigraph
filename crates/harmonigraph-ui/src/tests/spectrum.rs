@@ -5,6 +5,36 @@ use super::probe::fresh;
 use crate::*;
 
 #[test]
+fn display_recovers_after_nonfinite_audio() {
+    let mut spectrum = AudioSpectrum::default();
+    let config = SpectrumConfig {
+        window: SpectrumWindow::Fast,
+        attack: 0.0,
+        release: 0.0,
+        ..SpectrumConfig::default()
+    };
+    let n = config.window.samples();
+    let mut poisoned = vec![0.0; n + 384];
+    poisoned[n / 2] = f32::NAN;
+    spectrum.push_samples(&poisoned, 1, 48_000.0, 1.0, &config);
+    assert!(spectrum.display(1.0).unwrap().iter().all(|p| p.is_finite()));
+
+    // Replace the entire FFT window and leave time for a complete clean hop.
+    // Zero smoothing rules out a long release being mistaken for failed recovery.
+    let clean: Vec<f32> = (0..2 * n)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+        .collect();
+    let now = 1.0 + clean.len() as f64 / 48_000.0;
+    spectrum.push_samples(&clean, 1, 48_000.0, now, &config);
+    let last = spectrum.history().back().expect("clean input emitted columns");
+    assert!(last.power_sum.iter().all(|p| p.is_finite()));
+    assert!(last.power_sum.iter().any(|p| *p > 0.01), "latest FFT measures the clean tone");
+    let shown = spectrum.display(now).expect("clean input is flowing");
+    assert!(shown.iter().all(|p| p.is_finite()));
+    assert!(shown.iter().any(|p| *p > 0.01), "the curve recovers, not just the history");
+}
+
+#[test]
 fn audio_spectrum_shows_while_flowing_and_hides_after() {
     // The Fast 4096-sample window draws A4 on its nearest bin, about 21¢
     // (seven buckets) sharp; the 8192-sample one resolves it to within a

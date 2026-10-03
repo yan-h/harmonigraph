@@ -54,9 +54,13 @@ The existing debug diagnostics remain in place.
 This moves the existing resize within preallocated capacity ahead of the presence check;
 it is necessary for #638's silent-input fallback to remain safe across variable callback sizes.
 `tests/clap_auxiliary.rs` reaches both bounds through an exported stereo plugin with auxiliary input and output ports, including disappearance, return and changing callback lengths.
+- **CLAP tail publication** (`src/wrapper/clap/wrapper.rs`): retain only atomic tail samples after each processed subblock.
+The full `ProcessStatus` includes an error string and its `AtomicCell` takes a fallback lock;
+only the scalar tail is needed across callbacks.
+`tests/clap_boundary.rs` checks exported tail values, intermediate subblock publication, immediate statuses and start/reset/error behavior.
 - **VST3 wrapper**: unpatched upstream, and not compiled into Harmonigraph, which ships only as a CLAP and depends on nice-plug without its default `vst3` feature (#1185).
 The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) and their fixture were reverted with the export, so an upgrade has nothing VST3 to reapply.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, root wrapper and state glue, manifest features, and both boundary fixtures.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, root wrapper and state glue, manifest features, and both boundary fixtures.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
