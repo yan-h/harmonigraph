@@ -1,0 +1,85 @@
+# History map: origin/main, last 250: 250 changes, 113 touching the files mapped
+# limited to: crates/harmonigraph-render/
+
+## Hotspots (changes, of them with a fix-like subject, lines now)
+   52    2   2571  crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+   49    2   4412  crates/harmonigraph-render/src/spectrogram.rs
+   37    1    997  crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+   32    1    581  crates/harmonigraph-render/src/lattice_frame.rs
+   31    1   3730  crates/harmonigraph-render/src/shaders/lattice.wgsl
+   23    0   3287  crates/harmonigraph-render/src/lib.rs
+   22    1    839  crates/harmonigraph-render/src/spectrogram/color_memory_tests.rs
+   21    2    465  crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+   20    1   1330  crates/harmonigraph-render/src/lattice_tests/glow_overlap.rs
+   19    0    707  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+   17    0    626  crates/harmonigraph-render/src/lattice_tests/timing.rs
+   16    0   1098  crates/harmonigraph-render/src/lattice_tests/fixtures.rs
+   16    0   3523  crates/harmonigraph-render/src/roll.rs
+   16    0    202  crates/harmonigraph-render/src/uniforms.rs
+   16    0    625  crates/harmonigraph-render/src/stars.rs
+   13    0    975  crates/harmonigraph-render/src/lattice_prepare.rs
+   13    1    402  crates/harmonigraph-render/src/shaders/stars.wgsl
+   11    0    556  crates/harmonigraph-render/src/lattice_material.rs
+   10    1   2534  crates/harmonigraph-render/src/lattice_tests/shadows.rs
+    9    0    567  crates/harmonigraph-render/src/lattice_tests/device.rs
+    9    0    690  crates/harmonigraph-render/src/shaders/roll.wgsl
+    8    0    403  crates/harmonigraph-render/src/shaders/common.wgsl
+    8    2    312  crates/harmonigraph-render/golden/live-view-distance-top.png
+    8    2    270  crates/harmonigraph-render/golden/live-view-distance.png
+    8    2    374  crates/harmonigraph-render/golden/zoomed-out-distance.png
+
+## Change coupling across directories (changes together)
+   35  crates/harmonigraph-render/src/spectrogram.rs  +  crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+   29  crates/harmonigraph-render/src/shaders/spectrogram.wgsl  +  crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+   27  crates/harmonigraph-render/src/shaders/spectrogram.wgsl  +  crates/harmonigraph-render/src/spectrogram.rs
+   16  crates/harmonigraph-render/src/spectrogram/atmosphere.rs  +  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+   16  crates/harmonigraph-render/src/lattice_frame.rs  +  crates/harmonigraph-render/src/shaders/lattice.wgsl
+   15  crates/harmonigraph-render/src/spectrogram/atmosphere.rs  +  crates/harmonigraph-render/src/stars.rs
+   14  crates/harmonigraph-render/src/spectrogram.rs  +  crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+   14  crates/harmonigraph-render/src/spectrogram/atmosphere.rs  +  crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+   14  crates/harmonigraph-render/src/spectrogram.rs  +  crates/harmonigraph-render/src/spectrogram/color_memory_tests.rs
+   12  crates/harmonigraph-render/src/spectrogram/color_memory_tests.rs  +  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+   12  crates/harmonigraph-render/src/spectrogram.rs  +  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+   11  crates/harmonigraph-render/src/lattice_frame.rs  +  crates/harmonigraph-render/src/lattice_tests/glow_overlap.rs
+   11  crates/harmonigraph-render/src/shaders/spectrogram.wgsl  +  crates/harmonigraph-render/src/spectrogram/tests/timing.rs
+   10  crates/harmonigraph-render/src/shaders/stars.wgsl  +  crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+   10  crates/harmonigraph-render/src/shaders/stars.wgsl  +  crates/harmonigraph-render/src/stars.rs
+   10  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs  +  crates/harmonigraph-render/src/stars.rs
+   10  crates/harmonigraph-render/src/lattice_tests/glow_overlap.rs  +  crates/harmonigraph-render/src/shaders/lattice.wgsl
+    9  crates/harmonigraph-render/src/shaders/spectrogram.wgsl  +  crates/harmonigraph-render/src/spectrogram/color_memory_tests.rs
+    9  crates/harmonigraph-render/src/shaders/spectrogram.wgsl  +  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+    9  crates/harmonigraph-render/src/spectrogram/color_memory_tests.rs  +  crates/harmonigraph-render/src/stars.rs
+    9  crates/harmonigraph-render/src/lib.rs  +  crates/harmonigraph-render/src/shaders/lattice.wgsl
+    9  crates/harmonigraph-render/src/shaders/lattice.wgsl  +  crates/harmonigraph-render/src/uniforms.rs
+    8  crates/harmonigraph-render/src/shaders/stars.wgsl  +  crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+    8  crates/harmonigraph-render/src/lattice_tests/fixtures.rs  +  crates/harmonigraph-render/src/shaders/lattice.wgsl
+    7  crates/harmonigraph-render/src/lattice_tests/glow_overlap.rs  +  crates/harmonigraph-render/src/spectrogram.rs
+
+## Widest changes (files touched; read the ones that change one concept)
+   34  7d5ee5c31d  Keep notation shadows local and add Gaussian shadow spread (#1164)
+   26  eb968753c6  Lattice drift leftovers: closed-form octaves, occlusion follows Darkness, Clouds detail fade, true-radius hovers (#1344)
+   25  fd1877deeb  Apply pane-relative sizing and stable ribbon labels (#1404)
+   24  2fa0110cbb  Share lattice pipeline construction and scene transmission (#1213)
+   23  19d2c17d47  refactor: carry the normalized view in each scene (#1423)
+   19  9bb46cad90  Share Stars rendering with the lattice background (#1269)
+   14  ad1c6e6b94  Simplify shadow previews and fade blur shadows with lattice slices (#1429)
+   13  dd2937c0fc  Delete Mosaic; give Scales Squareness and Tilt (#1354)
+   13  d3ab98ebc0  Capture the DAW look as fresh defaults and bump to 0.5.0 (#1205)
+   13  978f856876  Add Velvet Scales material with independent shape controls (#1273)
+   12  b5d54de977  Add watercolor lattice glow with source roughness (#1236)
+   12  14e41421aa  One Sheets struct for both glyph callbacks, and name what a call could swap (#995 items 5 and 4) (#1012)
+   11  cf0fc72697  Share lattice and spectrogram material controls (#1240)
+   11  adde6e286d  Add balanced watercolor brightness randomness (#1267)
+   11  8f26f69c8e  Simplify internal mark, marker, tuning, and progress contracts
+   11  81d1f4f6bb  Condense overlapping visual controls (#1353)
+   11  80994dd9cc  Add lattice Mosaic using shared spectrogram geometry (#1237)
+   11  0665a5e8a5  Share one Bloom base, measure note intensity from rest, and reshape slices and ribbons by thickness (#1140)
+   10  ba8c051a7e  Stop node shadows darkening the bloom's copy at full depth (#1285)
+   10  5542ef76b0  Replace shadow S curves with signed exponential falloff (#1041)
+    9  e82a641dca  Lattice stars: spectrogram level model, 5x sizes, separate size variation (#1287)
+    9  e69f9d9eef  Share spectral shaders and retain memory allocations during resize (#1224)
+    9  d711b3c30c  Settings fixes: curve readout, Mono, Dusk preset, background glow, cross width, release stagger (#1141)
+    9  d11d27988f  Fix contour node self-shadow during fades (#1241)
+    9  d0c698656f  Remove dead render state and duplicate upload ownership
+
+Fix-like subjects are a rough signal: read each commit before citing it.

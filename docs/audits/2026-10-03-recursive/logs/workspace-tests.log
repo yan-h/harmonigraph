@@ -1,0 +1,2154 @@
+    Finished `release` profile [optimized] target(s) in 0.59s
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_analysis-fbef580cadb68490)
+
+running 25 tests
+test tests::a440_lands_on_a4 ... ok
+test tests::a_full_scale_sine_reads_unity_at_every_taper_count ... ok
+test tests::a_restart_empties_the_windows_and_keeps_the_configuration ... ok
+test tests::a_sample_rate_change_reads_exactly_like_a_fresh_analyzer ... ok
+test tests::an_anti_phase_pair_reads_at_full_level_where_a_mixdown_would_see_silence ... ok
+test tests::changing_fft_size_resets_the_window_and_noops_at_the_current_size ... ok
+test tests::changing_tapers_retains_the_plan_but_requires_a_fresh_window ... ok
+test tests::configured_analyzer_matches_direct_dft_after_ring_wrap ... ok
+test tests::dyad_shows_both_pitches ... ok
+test tests::empty_analyzer_reports_nothing ... ok
+test tests::joint_configuration_matches_a_fresh_bank_in_every_channel ... ok
+test tests::more_tapers_steady_a_bucket_against_noise ... ok
+test tests::octaves_show_as_separate_peaks ... ok
+test tests::one_taper_is_the_hann_window_and_the_arithmetic_under_it ... ok
+test tests::out_of_range_partials_are_dropped_not_wrapped ... ok
+test tests::sample_rate_change_resets_the_window ... ok
+test tests::shortening_the_window_darkens_the_buckets_it_can_no_longer_reach ... ok
+test tests::silent_windows_keep_readiness_retained_audio_and_resume ... ok
+test tests::the_lowest_buckets_draw_at_every_window_length ... ok
+test tests::the_noise_floor_reads_higher_as_tapers_are_added ... ok
+test tests::the_power_sum_keeps_the_full_scale_calibration_and_drops_pan_from_it ... ok
+test tests::the_reconstruction_beats_a_straight_line_between_bins ... ok
+test tests::the_reconstruction_has_no_seam_at_a_bin ... ok
+test tests::the_reconstruction_never_overshoots_the_bins_it_reads ... ok
+test tests::the_taper_table ... ignored
+
+test result: ok. 24 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_core-1d2a244fb65c64ca)
+
+running 124 tests
+test canonical::tests::a_full_bend_buffer_preserves_the_gap_after_a_later_expression ... ok
+test canonical::tests::a_recovered_release_keeps_history_ordered_for_activity_and_trimming ... ok
+test canonical::tests::complete_64_voice_replacement_validates_before_touching_any_source ... ok
+test canonical::tests::empty_baseline_keeps_completed_history_and_duplicates_do_not_replay ... ok
+test canonical::tests::matching_baseline_preserves_bends_without_an_attack ... ok
+test canonical::tests::ordering_distinguishes_duplicates_from_history_missing_before_a_cut ... ok
+test configuration::tests::a_stale_policy_edit_preserves_the_keyboard_learned_since_observation ... ok
+test configuration::tests::generator_edits_follow_links_and_switch_off_keeps_the_displayed_value ... ok
+test configuration::tests::learn_uses_unconstrained_evidence_and_leaves_unevidenced_links_alone ... ok
+test configuration::tests::manual_entries_recognize_and_release_links_with_matching_names_and_pitches ... ok
+test configuration::tests::presets_and_restore_apply_atomically_without_rejudging_saved_switches ... ok
+test confirmed::tests::complete_maximum_rows_reach_all_32640_pairs_and_cache_exact_classes ... ok
+test confirmed::tests::incomplete_source_requires_authoritative_replacement_or_reset ... ok
+test coords::tests::a_sevens_step_no_longer_spells_like_two_fifths_down ... ok
+test coords::tests::a_tempered_comma_apart_is_one_pitch_and_one_name ... ok
+test coords::tests::adjacency_is_one_step_on_one_axis ... ok
+test coords::tests::both_commas_compose_into_septimal_meantone ... ok
+test coords::tests::marks_are_readable_separately_for_stacked_labels ... ok
+test coords::tests::marvel_spelling_folds_the_sevens_axis_onto_the_home_sheet ... ok
+test coords::tests::meantone_spelling_drops_commas ... ok
+test coords::tests::note_names_count_accidentals_and_commas ... ok
+test coords::tests::note_names_walk_the_lattice ... ok
+test coords::tests::positions_within_counts ... ok
+test history::tests::a_bent_voice_is_remembered_at_its_sounding_pitch ... ok
+test history::tests::a_note_enters_history_when_its_fade_completes_not_before ... ok
+test history::tests::clear_forgets_everything ... ok
+test history::tests::distinct_pitches_stay_distinct ... ok
+test history::tests::repeats_of_one_pitch_fold_into_a_single_visit ... ok
+test history::tests::the_oldest_pitch_is_forgotten_once_the_cap_is_reached ... ok
+test history::tests::visits_come_back_lowest_pitch_first ... ok
+test lattice_map::tests::a_pre_tuned_source_selects_by_rounded_key_and_is_not_corrected_twice ... ok
+test lattice_map::tests::substitution_preserves_exact_copy_and_travels_with_the_region ... ok
+test lattice_map::tests::travel_rotates_labels_and_keeps_unwrapped_drift ... ok
+test notes::tests::a_baseline_carries_its_voices_expressions ... ok
+test notes::tests::a_carried_level_lands_exactly_on_its_target ... ok
+test notes::tests::a_carried_level_walks_the_curve_the_attack_does ... ok
+test notes::tests::a_hiding_repair_baseline_cuts_the_fade_it_withdraws ... ok
+test notes::tests::a_higher_shape_front_loads_the_fade ... ok
+test notes::tests::a_non_finite_carry_steps_rather_than_hangs ... ok
+test notes::tests::a_non_finite_envelope_ends_rather_than_hangs ... ok
+test notes::tests::a_note_shorter_than_its_arrival_still_reaches_full ... ok
+test notes::tests::a_publication_gap_releases_its_voices_rather_than_dropping_them ... ok
+test notes::tests::a_released_voice_is_drawn_and_remembered_on_its_visibility_at_the_release ... ok
+test notes::tests::a_resuming_baseline_takes_back_the_release_the_gap_handed_out ... ok
+test notes::tests::a_stream_wide_gap_doubts_even_the_sources_it_never_named ... ok
+test notes::tests::a_zero_length_note_survives_its_first_prune ... ok
+test notes::tests::a_zero_length_ramp_steps_at_its_start ... ok
+test notes::tests::activation_is_full_while_held_then_decays_over_the_fade ... ok
+test notes::tests::all_notes_off_releases_the_voices_in_that_same_order ... ok
+test notes::tests::all_off_releases_every_channel ... ok
+test notes::tests::carrying_a_level_in_steps_lands_where_one_step_does ... ok
+test notes::tests::display_octave_uses_bitwig_c3_convention ... ok
+test notes::tests::every_shape_starts_and_finishes_exactly ... ok
+test notes::tests::held_then_released_then_pruned ... ok
+test notes::tests::held_voices_come_back_in_channel_note_order ... ok
+test notes::tests::missing_history_clears_once_every_heard_source_recovers ... ok
+test notes::tests::no_channel_is_dropped_on_the_way_in ... ok
+test notes::tests::retrigger_without_off_replaces_the_held_voice ... ok
+test notes::tests::same_key_sources_keep_independent_lifetimes_and_bends ... ok
+test notes::tests::the_attack_and_the_release_are_the_same_curve ... ok
+test notes::tests::tuning_bends_pitch_and_pitch_class ... ok
+test policy::tests::a_meantone_keyboards_c_key_cannot_become_b_sharp ... ok
+test policy::tests::a_schismatic_keyboards_two_a_keys_are_two_as ... ok
+test policy::tests::a_schismatic_third_chooses_just_e_or_pythagorean_e_without_doubling_c ... ok
+test policy::tests::a_slightly_mislearned_fifth_still_keeps_the_b_sharp_key ... ok
+test policy::tests::an_attack_bent_off_every_key_is_scored_against_every_node ... ok
+test policy::tests::an_unprofitable_keyboard_match_keeps_the_note_unsnapped ... ok
+test policy::tests::an_unsnapped_attack_preserves_drift_and_interrupts_a_repeated_node ... ok
+test policy::tests::channel_bend_and_rpn_sensitivity_are_resolved_before_attack ... ok
+test policy::tests::exponential_pitch_flexibility_sets_the_tradeoff_without_a_fixed_cutoff ... ok
+test policy::tests::hard_boundary_and_configured_axes_ignore_exact_remote_pitch ... ok
+test policy::tests::memory_refreshes_actual_register_pitch_and_orders_by_attack ... ok
+test policy::tests::octave_copies_of_a_note_add_no_vote ... ok
+test policy::tests::repeated_controller_chords_cross_one_hundred_dieses_without_wrapping ... ok
+test policy::tests::resource_exhaustion_is_explicit_and_never_truncates_to_a_winner ... ok
+test policy::tests::simulator_fixture_parity_includes_register_memory_and_precision ... ok
+test roll::tests::a_dense_expression_thins_across_the_whole_note ... ok
+test roll::tests::a_held_note_reaches_the_present_moment ... ok
+test roll::tests::a_note_is_in_the_roll_the_moment_it_sounds ... ok
+test roll::tests::a_note_settles_on_the_pitch_its_tuning_lands_it_at ... ok
+test roll::tests::a_note_switched_off_the_instant_it_started_never_sounded ... ok
+test roll::tests::a_ramp_that_fills_the_breakpoints_cannot_move_the_settled_pitch ... ok
+test roll::tests::a_retrigger_without_an_off_closes_the_previous_entry ... ok
+test roll::tests::a_staccato_note_is_kept_however_brief ... ok
+test roll::tests::all_off_closes_every_sounding_note ... ok
+test roll::tests::an_expression_after_a_held_level_is_a_step ... ok
+test roll::tests::an_unbent_note_is_one_flat_segment ... ok
+test roll::tests::bends_become_breakpoints_and_interpolate ... ok
+test roll::tests::breakpoints_are_capped_and_the_newest_wins ... ok
+test roll::tests::clear_forgets_everything ... ok
+test roll::tests::every_channel_reaches_the_roll ... ok
+test roll::tests::expressions_at_reads_lines_and_steps ... ok
+test roll::tests::old_notes_age_out_but_sounding_ones_never_do ... ok
+test roll::tests::one_press_delivered_as_on_off_on_is_one_note ... ok
+test roll::tests::repeats_of_one_pitch_stay_separate_entries ... ok
+test roll::tests::sounding_notes_come_back_in_channel_note_order ... ok
+test roll::tests::the_note_cap_drops_the_oldest_releases_first ... ok
+test roll::tests::the_settle_window_has_edges ... ok
+test spectrogram::tests::a_merged_column_is_timestamped_inside_the_pair_it_replaced ... ok
+test spectrogram::tests::coarse_tiers_conserve_linear_power_and_sample_count ... ok
+test spectrogram::tests::quantizing_preserves_order ... ok
+test spectrogram::tests::quantizing_round_trips_to_half_a_step ... ok
+test spectrogram::tests::the_column_count_is_bounded_however_long_it_runs ... ok
+test spectrogram::tests::the_flat_view_stays_in_time_order_across_tiers ... ok
+test spectrogram::tests::trimming_drops_the_oldest_first_and_clear_empties_it ... ok
+test spectrum::tests::midi_to_hz_anchors_a440_and_doubles_each_octave ... ok
+test tuning::tests::a_fifth_alone_spells_the_keyboards_third_and_seventh ... ok
+test tuning::tests::c_offset_learns_negative_from_a_flat_c ... ok
+test tuning::tests::distance_wraps_around ... ok
+test tuning::tests::every_comma_answers_for_itself ... ok
+test tuning::tests::fourth_implies_fifth ... ok
+test tuning::tests::is_marvel_accepts_12tet_rejects_just ... ok
+test tuning::tests::is_meantone_accepts_meantone_rejects_just ... ok
+test tuning::tests::just_fifth_stack ... ok
+test tuning::tests::kleisma_comma_equivalents_are_bit_identical ... ok
+test tuning::tests::learns_just_intervals_from_a_chord ... ok
+test tuning::tests::matching_respects_tolerance ... ok
+test tuning::tests::meantone_comma_equivalents_are_bit_identical ... ok
+test tuning::tests::nothing_close_learns_nothing ... ok
+test tuning::tests::pitch_class_wraps_at_octave ... ok
+test tuning::tests::quarter_comma_meantone_third_is_just ... ok
+test tuning::tests::tempering_sets_the_exact_derived_axis ... ok
+test tuning::tests::the_septimal_kleisma_is_the_gap_it_says_it_is ... ok
+test tuning::tests::tiny_negative_cents_fold_to_the_origin_not_a_full_octave ... ok
+
+test result: ok. 124 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_golden-26104d6a1aa82f41)
+
+running 1 test
+test tests::golden_requires_a_complete_frame_even_when_the_prefix_matches ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_metal_assets-c73f71ba18c27149)
+
+running 1 test
+test tests::embedded_inputs_round_trip_and_reject_edits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/main.rs (target/release/deps/harmonigraph_offline-6b4d13eac30b2183)
+
+running 84 tests
+test frames::tests::a_node_with_a_sheet_behind_it_is_still_a_lamp ... ok
+test frames::tests::a_released_note_lets_go_of_its_light ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::row_stride_is_padded_to_wgpus_alignment ... ok
+test frames::tests::the_audio_ring_draws_a_picture ... ignored, a visual probe: writes PNGs for inspection
+test frames::tests::the_clear_color_is_the_gamma_space_byte_not_a_linear_one ... ok
+test frames::tests::the_marker_depth_order_draws_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_node_glow_draws_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_resting_markers_draw_a_picture ... ignored, a probe: writes PNGs and asserts nothing
+test frames::tests::the_shadow_against_the_shared_gap ... ignored, a probe: writes PNGs and asserts nothing
+test golden::a_short_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_tall_pane_zoomed_out_draws_the_frame_on_record ... ok
+test golden::a_zoomed_in_pane_draws_the_frame_on_record ... ok
+test golden::default_stars_draw_the_medium_frame_on_record ... ok
+test golden::high_stars_draw_the_frame_on_record ... ok
+test golden::low_stars_draw_the_frame_on_record ... ok
+test golden::mixed_spectral_shadows_draw_the_frame_on_record ... ok
+test golden::scales_draw_the_frame_on_record ... ok
+test golden::the_watercolour_wash_draws_the_frame_on_record ... ok
+test golden::what_the_heatmap_costs_a_frame ... ignored
+test golden::what_the_spectral_shadow_routes_cost_a_frame ... ignored
+test render::tests::a_take_renders_the_expected_number_of_frames_and_they_are_not_blank ... ok
+test render::tests::a_whole_video_spectrogram_draws_the_render_window_as_its_span ... ok
+test render::tests::export_selects_one_complete_appearance_and_refuses_parse_errors ... ok
+test render::tests::lattice_atmosphere_requires_note_light_in_export ... ok
+test render::tests::recorded_and_replacement_appearances_normalize_before_rendering ... ok
+test render::tests::recorded_learn_mode_does_not_paint_editor_chrome_in_export ... ok
+test render::tests::rendering_a_drifting_wash_twice_is_byte_identical ... ok
+test render::tests::rendering_a_take_with_a_carried_light_twice_is_byte_identical ... ok
+test render::tests::rendering_sliced_audio_twice_is_byte_identical ... ok
+test render::tests::rendering_the_same_take_twice_is_byte_identical ... ok
+test render::tests::scrolling_audio_uses_the_supplied_sample_grid ... ok
+test render::tests::spectral_shadows_agree_with_the_shared_editor_path_at_every_export_scale ... ok
+test render::tests::the_picture_moves_as_the_take_plays ... ok
+test render::tests::the_timing_summary_accounts_for_the_render_loop ... ok
+test replay::recorder_parity::camera_records_override_replacement_and_replay_at_any_frame_cadence ... ok
+test replay::recorder_parity::canonical_recorder_display_and_disk_replay_share_gap_repair_and_routing ... ok
+test replay::recorder_parity::unsequenced_recorder_display_and_disk_replay_share_note_semantics ... ok
+test replay::tests::a_note_keeps_its_own_timestamp_not_the_frames ... ok
+test replay::tests::a_release_lost_to_an_outage_does_not_stay_held_for_the_rest_of_a_replay ... ok
+test replay::tests::accepted_off_after_gap_is_retained_without_a_held_baseline ... ok
+test replay::tests::an_unknown_parameter_id_is_skipped_rather_than_fatal ... ok
+test replay::tests::canonical_serialization_has_one_history_at_every_replay_cadence ... ok
+test replay::tests::events_arrive_on_the_frame_that_passes_them_and_not_before ... ok
+test replay::tests::parameter_automation_is_applied_in_time_order ... ok
+test replay::tests::params_start_at_their_defaults ... ok
+test replay::tests::resolved_configuration_round_trip_is_independent_of_replay_cadence ... ok
+test replay::tests::source_scopes_and_bends_round_trip_into_incremental_and_full_replay ... ok
+test replay::tests::visibility_boundaries_keep_pitch_history_independent_of_prune_cadence ... ok
+test sink::tests::a_blank_explicit_path_falls_through_to_the_search ... ok
+test sink::tests::a_successful_exit_with_too_few_encoded_frames_fails ... ok
+test sink::tests::a_write_failure_while_draining_is_reported ... ok
+test sink::tests::an_encoder_that_closes_the_pipe_early_fails_and_is_reaped ... ok
+test sink::tests::an_explicit_ffmpeg_that_does_not_exist_is_reported_not_ignored ... ok
+test sink::tests::every_frame_handed_over_reaches_the_encoder_in_order ... ok
+test sink::tests::finish_reports_the_encoders_count_until_it_is_done ... ok
+test sink::tests::real_encoder_keeps_the_click_on_the_flash_after_seek_and_delay ... [aist#1:0/pcm_f32le @ 0x7973400300] Guessed Channel Layout: mono
+[aac @ 0x7972811c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7973428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7c73058300] Guessed Channel Layout: mono
+[aac @ 0x7c72c51c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7c73064500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x74e883c300] Guessed Channel Layout: mono
+[aac @ 0x74e8855c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x74e944c500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7907400300] Guessed Channel Layout: mono
+[aac @ 0x7906835c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7907408500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x77bf410300] Guessed Channel Layout: mono
+[aac @ 0x77bec71c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x77bf438500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7934c34300] Guessed Channel Layout: mono
+[aac @ 0x7934c4dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x793505c500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7a59428300] Guessed Channel Layout: mono
+[aac @ 0x7a58849c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7a59450500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7690808300] Guessed Channel Layout: mono
+[aac @ 0x7690c49c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7691060500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7b8d018300] Guessed Channel Layout: mono
+[aac @ 0x7b8cc61c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7b8d024500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x763d44c300] Guessed Channel Layout: mono
+[aac @ 0x763c821c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x763c81c500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7a75428300] Guessed Channel Layout: mono
+[aac @ 0x7a74869c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7a75434500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7885034300] Guessed Channel Layout: mono
+[aac @ 0x7884c51c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7884c4c500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7a31010300] Guessed Channel Layout: mono
+[aac @ 0x7a30839c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7a31444500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x77a7424300] Guessed Channel Layout: mono
+[aac @ 0x77a6849c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x77a7430500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x75fb03c300] Guessed Channel Layout: mono
+[aac @ 0x75fac4dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x75fb064500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x767d400300] Guessed Channel Layout: mono
+[aac @ 0x767c809c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x767d428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x755b400300] Guessed Channel Layout: mono
+[aac @ 0x755a815c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x755b428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7bf2808300] Guessed Channel Layout: mono
+[aac @ 0x7bf281dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7bf3430500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+ok
+test sink::tests::real_encoder_omits_audio_only_when_the_clip_cannot_hold_aac_priming ... [aist#1:0/pcm_f32le @ 0x755305c300] Guessed Channel Layout: mono
+[aac @ 0x7552c25c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7552c20500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7bfb010300] Guessed Channel Layout: mono
+[aac @ 0x7bfac19c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7bfb038500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+ok
+test sink::tests::real_encoder_preserves_the_plan_for_every_soundtrack_extent ... [aist#1:0/pcm_f32le @ 0x7c11050300] Guessed Channel Layout: mono
+[aac @ 0x7c10c2dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7c10c28500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x78d3030300] Guessed Channel Layout: mono
+[aac @ 0x78d280dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x78d3420500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[in#1/wav @ 0x7b90824100] could not seek to position 0.021
+[aist#1:0/pcm_f32le @ 0x7b90814300] Guessed Channel Layout: mono
+[aac @ 0x7b9082dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7b91468500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x766701c300] Guessed Channel Layout: mono
+[aac @ 0x7666c75c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7667044500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x74a700c300] Guessed Channel Layout: mono
+[aac @ 0x74a6875c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x74a7428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7649050300] Guessed Channel Layout: mono
+[aac @ 0x7648c35c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7649078500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7510c28300] Guessed Channel Layout: mono
+[aac @ 0x7510c39c00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7511078500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+[aist#1:0/pcm_f32le @ 0x7661400300] Guessed Channel Layout: mono
+[aac @ 0x766080dc00] Too many bits 8192.000000 > 6144 per frame requested, clamping to max
+[mp4 @ 0x7661428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+ok
+test sink::tests::the_search_list_covers_both_homebrew_prefixes ... ok
+test tests::a_plain_command_line_renders_at_the_resolution_the_take_was_composed_at ... ok
+test tests::a_repeated_size_keeps_the_last_one ... ok
+test tests::a_size_at_the_frames_own_aspect_is_not_a_mismatch ... ok
+test tests::a_take_missing_note_history_is_exported_with_a_warning ... ok
+test tests::an_explicit_start_beats_the_lead ... ok
+test tests::appearance_files_replace_recorded_output_and_picture_together ... ok
+test tests::default_scale_keeps_the_ui_the_same_relative_size ... ok
+test tests::only_an_unasked_tail_on_a_loop_end_take_is_zero ... ok
+test tests::retired_playhead_flag_is_rejected ... ok
+test tests::separate_audio_replacement_flags_are_rejected ... ok
+test tests::size_accepts_the_forms_people_actually_type ... ok
+test tests::start_zero_is_distinguishable_from_no_start ... ok
+test tests::the_render_ends_after_both_the_last_release_and_the_soundtrack ... ok
+test tests::the_render_starts_where_the_recording_did ... ok
+test tests::the_short_edge_lands_where_asked_with_even_dimensions ... ok
+test wav::tests::a_compressed_wav_says_what_to_do_about_it ... ok
+test wav::tests::a_non_wav_file_is_rejected_clearly ... ok
+test wav::tests::a_stereo_slice_is_cut_on_frame_boundaries ... ok
+test wav::tests::all_encodings_extensible_padding_and_truncated_channel_frames ... ok
+test wav::tests::float32_stereo_keeps_its_channels ... ok
+test wav::tests::io_failure_is_returned_instead_of_silently_ending_a_range ... ok
+test wav::tests::large_ranges_seeks_and_final_chunks_keep_frames_and_bound_storage ... ok
+test wav::tests::pcm16_and_pcm24_decode_to_the_same_signal ... ok
+test wav::tests::seconds_and_slicing_line_up_with_the_sample_rate ... ok
+test wav::tests::unknown_chunks_between_fmt_and_data_are_skipped ... ok
+
+test result: ok. 76 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 13.90s
+
+     Running tests/export_contract.rs (target/release/deps/export_contract-104c221fc45e6e21)
+
+running 3 tests
+test cli_finalizes_the_encoder_after_a_render_write_error ... ok
+test cli_preserves_default_tail_explicit_end_late_start_and_loop_end ... ok
+test cli_refuses_malformed_appearance_before_output_setup ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.11s
+
+     Running tests/take_warning.rs (target/release/deps/take_warning-9a73f2618e7a1216)
+
+running 2 tests
+test a_take_with_a_hole_warns_before_the_command_line_is_judged ... ok
+test retired_layout_interfaces_fail_visibly ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_perf-3fde1230d74d1eb0)
+
+running 16 tests
+test tests::a_spike_leaves_the_mean_once_its_window_closes ... ok
+test tests::every_frame_cost_reaches_a_stage ... ok
+test tests::fps_converges_on_the_measured_frame_time ... ok
+test tests::fps_is_read_off_the_held_frame_time ... ok
+test tests::host_draw_completions_have_equal_weight_across_pending_gaps ... ok
+test tests::latching_keeps_the_tenths ... ok
+test tests::lattice_samples_are_consumed_across_idle_and_resume ... ok
+test tests::memory_eases_toward_a_new_reading ... ok
+test tests::memory_read_is_throttled_to_one_per_interval ... ok
+test tests::records_workload_and_reads_memory ... ok
+test tests::the_memory_readout_steps_rather_than_churning ... ok
+test tests::the_nested_means_still_sum_to_their_parent ... ok
+test tests::the_overlay_reports_cache_fallbacks_as_a_rate ... ok
+test tests::the_peak_expires_once_its_windows_roll_past ... ok
+test tests::the_printed_numbers_hold_between_latches ... ok
+test tests::the_printed_value_is_the_windows_arithmetic_mean ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_plugin-0254728e5626c0e0)
+
+running 163 tests
+test audio_ingress::tests::bounded_publication_keeps_format_frames_and_gaps_coherent ... ok
+test background::tests::a_blob_this_build_refuses_says_so_once ... ok
+test background::tests::a_closed_window_ages_the_voices_it_tracks ... ok
+test background::tests::a_closed_window_still_reaches_the_roll ... ok
+test background::tests::a_closed_window_still_reaches_the_spectrogram ... ok
+test background::tests::a_project_switched_while_the_window_is_shut_is_taken_too ... ok
+test background::tests::a_reloaded_save_leaves_the_state_where_it_was ... ok
+test background::tests::a_restored_window_reaches_the_analyzer_with_no_editor_ever_built ... ok
+test background::tests::a_take_ends_itself_while_the_editor_window_is_shut ... ok
+test background::tests::a_tick_admitted_before_opening_cannot_overwrite_a_live_edit ... ok
+test background::tests::an_empty_blob_is_a_project_with_nothing_saved ... ok
+test background::tests::an_open_window_is_left_to_drain_its_own_rings ... ok
+test background::tests::an_open_window_keeps_the_settings_it_is_being_used_to_change ... ok
+test background::tests::the_handover_neither_drops_a_column_nor_repeats_one ... ok
+test background::tests::the_ring_holds_many_polls_of_audio_at_any_rate_a_host_offers ... ok
+test background::tests::the_thread_runs_on_its_own_and_stops_when_dropped ... ok
+test configuration::recording::tests::output_frontier_and_recording_routes_read_samples_on_the_adopted_hub_clock ... ok
+test configuration::tests::a_full_command_queue_keeps_accepted_state ... ok
+test configuration::tests::a_note_through_the_configuration_owner_lets_a_stopped_transport_end_the_take ... ok
+test configuration::tests::a_pass_opened_mid_callback_is_opened_in_that_callback ... ok
+test configuration::tests::a_pass_split_by_a_loop_opens_with_the_note_held_across_it ... ok
+test configuration::tests::a_pending_restore_keeps_fault_and_refusal_status_visible ... ok
+test configuration::tests::a_playhead_moved_back_before_the_take_rolls_lets_stop_finish_one_file ... ok
+test configuration::tests::a_rewind_splits_the_take_and_an_edit_lands_in_the_pass_that_adopts_it ... ok
+test configuration::tests::a_short_stopped_export_finishes_on_restore_with_or_without_midi ... ok
+test configuration::tests::a_sidechain_selection_reaches_the_armed_takes_audio ... ok
+test configuration::tests::a_take_resumed_from_a_pause_opens_with_the_note_struck_during_it ... ok
+test configuration::tests::accepted_auto_restore_has_one_preview_and_save_before_and_after_adoption ... ok
+test configuration::tests::active_restore_without_callbacks_has_coherent_save_readback_and_ordered_adoption ... ok
+test configuration::tests::adaptive_settings_restore_preview_save_and_audio_adoption_agree ... ok
+test configuration::tests::camera_automation_is_captured_mid_song_and_rebased_for_each_pass ... ok
+test configuration::tests::camera_orbit_gestures_reach_the_host_once_per_axis ... ok
+test configuration::tests::canonical_publication_slots_and_loss_are_allocation_free ... ok
+test configuration::tests::configuration_observed_disarmed_does_not_become_later_armed_automation ... ok
+test configuration::tests::deactivated_stop_finishes_without_another_process_callback ... ok
+test configuration::tests::destroying_pending_or_faulted_configuration_owners_does_not_panic ... ok
+test configuration::tests::destruction_closes_a_stopped_take_without_another_process_callback ... ok
+test configuration::tests::interval_links_keep_their_value_on_release_and_recognize_new_entries ... ok
+test configuration::tests::keyboard_derivation_uses_the_adopted_fifth_in_one_transaction ... ok
+test configuration::tests::lattice_map_records_shared_tuning_at_its_actual_sample_boundary ... ok
+test configuration::tests::lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning ... ok
+test configuration::tests::learning_notifications_land_at_the_boundary_and_merge_with_performance ... ok
+test configuration::tests::learning_reads_the_hub_input_with_retune_off ... ok
+test configuration::tests::note_id_only_expression_and_release_match_only_the_addressed_held_note ... ok
+test configuration::tests::one_owned_input_pool_reaches_2048_in_a_callback_and_refuses_growth_past_it ... ok
+test configuration::tests::opt_out_wrapper_and_non_clap_plugin_construction_have_no_configuration_owner ... ok
+test configuration::tests::pass_through_learns_axes_even_with_retune_enabled ... ok
+test configuration::tests::pre_play_scrubs_emit_no_records_before_the_real_configuration_and_audio_origin ... ok
+test configuration::tests::queued_policy_edits_preserve_disjoint_fields_from_the_same_observation ... ok
+test configuration::tests::queued_unlock_and_distinct_ui_ids_survive_same_value_host_automation_and_flush ... ok
+test configuration::tests::real_same_sample_initial_tuning_is_in_learning_before_any_gui_drain ... ok
+test configuration::tests::rejected_gesture_end_is_retried_before_another_begin ... ok
+test configuration::tests::releasing_an_interval_link_accounts_for_the_hosts_current_modulation ... ok
+test configuration::tests::restore_preserves_held_modulation_without_a_new_host_mod_event ... ok
+test configuration::tests::stop_during_parked_callback_cannot_close_its_later_playing_segment ... ok
+test configuration::tests::successful_old_notification_after_restore_rescan_retains_another_rescan ... ok
+test configuration::tests::suspended_gui_restore_requests_main_thread_without_processing ... ok
+test editor::clock::tests::callback_jitter_does_not_retime_history ... ok
+test editor::clock::tests::never_maps_into_the_future ... ok
+test editor::clock::tests::presentation_clock_keeps_fading_after_a_fast_bounce_stops ... ok
+test editor::clock::tests::preserves_intra_batch_spacing ... ok
+test editor::clock::tests::source_rewind_preserves_the_display_clock ... ok
+test editor::frame::tests::a_cap_above_the_refresh_rate_paces_exactly_as_if_uncapped ... ok
+test editor::frame::tests::a_cap_sets_the_interval_it_names ... ok
+test editor::frame::tests::a_reopened_window_arms_its_own_timer ... ok
+test editor::frame::tests::an_unknown_display_falls_back_rather_than_racing ... ok
+test editor::frame::tests::nonsense_caps_and_rates_do_not_produce_a_runaway_timer ... ok
+test editor::frame::tests::the_slower_of_cap_and_display_wins ... ok
+test editor::frame::tests::uncapped_runs_ahead_of_the_display ... ok
+test editor::input::tests::catch_up_answers_whether_notes_arrived ... ok
+test editor::input::tests::drain_observes_the_batch_before_mapping_it ... ok
+test editor::input::tests::fast_bounce_preserves_the_realtime_picture_timeline ... ok
+test editor::input::tests::source_audio_columns_survive_callback_partitions_and_delayed_drains ... ok
+test editor::input::tests::source_discontinuities_refill_the_window_without_erasing_history ... ok
+test editor::shared::tests::arming_captures_the_whole_live_appearance_without_workspace_state ... ok
+test editor::shared::tests::recording_stop_debounce_counts_gui_callbacks_not_runtime_ticks ... ok
+test lattice_maps::tests::changes_is_the_open_interval_at_both_ends_of_a_full_history ... ok
+test lattice_maps::tests::changes_over_an_empty_window_yields_nothing ... ok
+test lattice_maps::tests::document_mutations_reach_the_audio_bank_without_changing_slot_identity ... ok
+test tests::a_bar_position_counts_from_the_songs_start_in_whatever_meter ... ok
+test tests::a_mono_input_is_duplicated_into_both_take_channels ... ok
+test tests::a_projects_saved_window_reaches_the_analyzer_with_no_editor_built ... ok
+test tests::a_restore_into_an_open_window_reaches_its_next_frame ... ok
+test tests::a_restore_no_frame_has_drawn_survives_the_window_closing ... ok
+test tests::a_restore_the_window_opened_with_is_not_applied_again ... ok
+test tests::a_save_between_a_restore_and_the_next_frame_stores_the_restore ... ok
+test tests::a_save_with_the_editor_open_stores_what_the_window_shows ... ok
+test tests::a_sidechain_process_block_feeds_analysis_and_leaves_main_untouched ... ok
+test tests::a_take_origin_prefers_the_transport_over_the_local_clock ... ok
+test tests::analysis_input_is_a_stable_non_automatable_main_default ... ok
+test tests::analysis_input_selection_never_falls_back_on_signal_content ... ok
+test tests::analyzer_source_time_ignores_transport_loops_stops_and_missing_positions ... ok
+test tests::every_param_key_id_matches_the_host_facing_id ... ok
+test tests::queued_history_keeps_its_clock_across_the_actual_plugin_reset ... ok
+test tests::the_audio_layout_exposes_one_named_stereo_sidechain ... ok
+test tests::the_background_analyzer_watches_the_flag_the_editor_sets ... ok
+test tests::the_stop_bar_names_the_bar_the_transport_is_reporting ... ok
+test tuning::tests::a_channel_bend_on_a_held_note_reaches_the_display_and_the_take ... ok
+test tuning::tests::a_departed_source_answers_after_a_display_gap ... ok
+test tuning::tests::a_full_copy_ring_costs_a_correction_rather_than_a_note ... ok
+test tuning::tests::a_full_hub_refuses_assignment_before_replying_to_a_locally_admitted_note ... ok
+test tuning::tests::a_full_local_line_refuses_onset_and_release_before_copying ... ok
+test tuning::tests::a_host_format_change_cuts_and_adopts_the_new_delay ... ok
+test tuning::tests::a_host_reset_on_one_tune_cuts_it_out_of_the_hubs_context ... ok
+test tuning::tests::a_late_reply_publishes_its_history_before_the_snapshot_that_covers_it ... ok
+test tuning::tests::a_record_arriving_after_its_sample_was_sequenced_is_still_assigned ... ok
+test tuning::tests::a_reply_from_before_the_cut_is_discarded_rather_than_attached ... 19:15:50 [INFO] HG-TUNING pid=41280 role=Tune build="dev" hubs=1 epoch=523 status="No faults" tune{epoch=523, slot=1, delay=512, input_on=1, output_on=0, captured=1, misses=0, dropped=0, held=0, pending=1, status=0}
+ok
+test tuning::tests::a_reset_completed_after_hub_adoption_still_clears_released_memory ... ok
+test tuning::tests::a_reset_with_an_attach_behind_it_still_clears_released_memory ... 19:15:50 [INFO] HG-TUNING pid=41280 role=Tune build="dev" hubs=1 epoch=554 status="No faults" tune{epoch=554, slot=1, delay=512, input_on=2, output_on=0, captured=2, misses=0, dropped=0, held=0, pending=2, status=0}
+ok
+test tuning::tests::a_same_key_retrigger_forgets_the_lifetime_it_replaced_from_policy_context ... ok
+test tuning::tests::a_same_sample_wildcard_initializes_each_addressed_onset ... ok
+test tuning::tests::a_second_hub_is_a_fault_status_and_never_a_silence ... ok
+test tuning::tests::a_tune_attaching_cuts_every_track_already_playing ... ok
+test tuning::tests::a_tune_run_after_the_hub_keeps_the_recorder_whole ... ok
+test tuning::tests::a_tunes_pressure_reaches_the_display_as_an_expression ... ok
+test tuning::tests::an_input_emits_at_its_own_sample_plus_the_delay_with_its_correction ... ok
+test tuning::tests::an_onset_past_the_held_ceiling_is_refused_before_copy_and_output ... 19:15:51 [INFO] HG-TUNING pid=41280 role=Tune build="dev" hubs=1 epoch=699 status="Tuning status: an event or assignment was dropped" tune{epoch=699, slot=1, delay=512, input_on=65, output_on=0, captured=64, misses=0, dropped=1, held=0, pending=64, status=128}
+ok
+test tuning::tests::an_onset_without_its_correction_emits_uncorrected_and_counts_the_miss ... ok
+test tuning::tests::an_unpaired_tune_passes_notes_through_uncorrected ... ok
+test tuning::tests::channel_bend_fanout_overflow_is_not_silent ... ok
+test tuning::tests::confirmed_tests::confirmed_snapshot_turnover_at_capacity_and_departure ... ok
+test tuning::tests::confirmed_tests::incomplete_source_blocks_learning_until_departure_or_reset ... ok
+test tuning::tests::control_tests::central_edits_include_harmonigraph_and_use_each_tuners_host_latency ... 19:15:51 [INFO] HG-TUNING pid=41280 role=Tune build="dev" hubs=1 epoch=799 status="No faults" tune{epoch=799, slot=1, delay=512, input_on=0, output_on=0, captured=0, misses=0, dropped=0, held=0, pending=0, status=0}
+ok
+test tuning::tests::control_tests::instance_settings_restore_independently_and_default_missing_fields ... ok
+test tuning::tests::control_tests::live_note_count_clears_when_the_host_stops_callbacks ... ok
+test tuning::tests::control_tests::retune_off_forgets_held_and_released_context_but_preserves_sounding_pitch ... ok
+test tuning::tests::control_tests::show_hides_and_restores_held_output_without_changing_tuning ... ok
+test tuning::tests::control_tests::source_dot_pitches_follow_emitted_tuning_bend_and_releases_even_when_hidden ... ok
+test tuning::tests::control_tests::track_names_follow_the_host_until_overridden ... ok
+test tuning::tests::destroy_leaves_no_registry_entry ... ok
+test tuning::tests::initial_expression_order_and_identity_match_in_both_production_routes ... ok
+test tuning::tests::initial_expressions_survive_unpaired_and_missed_reply_fallback ... ok
+test tuning::tests::map_tests::a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map ... ok
+test tuning::tests::map_tests::lattice_map_automation_precedes_coincident_attacks_in_both_callback_orders ... ok
+test tuning::tests::map_tests::lattice_map_held_notes_keep_onset_while_chased_notes_and_off_use_current_state ... ok
+test tuning::tests::map_tests::lattice_map_shared_axes_and_audition_apply_to_new_attacks_only ... ok
+test tuning::tests::map_tests::lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice ... ok
+test tuning::tests::missing_steady_time_rejects_the_callback_before_note_admission ... ok
+test tuning::tests::musical_tests::a_snapshot_one_lane_refused_does_not_freeze_the_other_lanes_identity ... 19:15:52 [INFO] HG-TUNING pid=41280 role=Hub build="dev" hubs=1 epoch=1200 status="No faults" tune{epoch=1200, slot=0, delay=512, input_on=0, output_on=0, captured=0, misses=0, dropped=0, held=0, pending=0, status=0} hub{epoch=1200, rows=3, context=0, decisions=0, published=0, reference_mc=0, status=0, direct_held=0, direct_pending=0}
+ok
+test tuning::tests::musical_tests::a_take_armed_between_an_onset_and_its_sound_opens_with_that_voice ... ok
+test tuning::tests::musical_tests::a_take_lane_gap_owes_every_source_its_own_snapshot ... ok
+test tuning::tests::musical_tests::an_unsnapped_onset_emits_existing_drift_without_claiming_a_node_or_the_reference ... ok
+test tuning::tests::musical_tests::initial_expressions_stay_with_their_source_before_musical_sorting ... ok
+test tuning::tests::musical_tests::production_a_held_note_struck_long_before_the_rest_weighs_less ... ok
+test tuning::tests::musical_tests::production_a_loop_clears_released_memory_once_before_the_next_attack ... ok
+test tuning::tests::musical_tests::production_a_note_released_long_before_the_rest_weighs_less ... ok
+test tuning::tests::musical_tests::production_a_released_note_never_outvotes_a_held_one ... ok
+test tuning::tests::musical_tests::production_moving_major_thirds_cross_old_coordinate_and_correction_limits ... ok
+test tuning::tests::musical_tests::production_musical_dfa_permutations_include_each_predecessor ... ok
+test tuning::tests::musical_tests::production_musical_ii_v_i_keeps_each_common_tone_through_the_change ... ok
+test tuning::tests::musical_tests::production_musical_nonjust_axes_select_locally_and_preserve_attack_expression ... ok
+test tuning::tests::musical_tests::production_repeating_the_note_struck_last_weighs_as_holding_it ... ok
+test tuning::tests::musical_tests::production_silence_and_stop_reset_settings_clear_only_the_musical_memory ... ok
+test tuning::tests::musical_tests::production_tune_preserves_player_pitch_and_freezes_only_the_adaptive_correction ... ok
+test tuning::tests::musical_tests::silence_policy_edits_apply_before_expiry_without_note_input ... ok
+test tuning::tests::pending_retriggers_and_endings_reuse_held_capacity_in_wire_order ... ok
+test tuning::tests::reset_cuts_and_audio_resumes_within_two_callbacks ... 19:15:53 [INFO] HG-TUNING pid=41280 role=Tune build="dev" hubs=1 epoch=1868 status="No faults" tune{epoch=1868, slot=1, delay=512, input_on=1, output_on=0, captured=1, misses=0, dropped=0, held=0, pending=1, status=0}
+ok
+test tuning::tests::reset_producers_completing_out_of_order_each_clear_released_memory ... ok
+test tuning::tests::the_cut_releases_every_held_voice_and_neutralises_the_pedals ... 19:15:53 [INFO] HG-TUNING pid=41280 role=Tune build="dev" hubs=1 epoch=1905 status="No faults" tune{epoch=1905, slot=1, delay=512, input_on=2, output_on=0, captured=3, misses=0, dropped=0, held=0, pending=3, status=0}
+ok
+test tuning::tests::the_delay_is_reported_as_latency_from_the_saved_multiplier_alone ... ok
+test tuning::tests::the_display_shows_the_schedule_rather_than_the_input ... ok
+test tuning::tests::the_last_callback_is_proven_at_a_cut_unless_a_record_is_stranded ... ok
+test tuning::tests::tune_and_hub_diagnostics_publish_once_per_audio_interval ... ok
+
+test result: ok. 163 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_record-a9874c47d7231d7f)
+
+running 97 tests
+test publication::tests::a_declined_snapshot_stays_owned_and_refuses_the_next_without_losing_history ... ok
+test publication::tests::a_full_lane_reports_its_outage_without_another_audio_callback ... ok
+test recorder::lifecycle::tests::arm_edges_reset_history_but_repeated_arm_cannot_revive_completion ... ok
+test recorder::lifecycle::tests::bar_table_preserves_crossing_history_and_preempts_a_deferred_split ... ok
+test recorder::lifecycle::tests::continuity_uses_previous_timing_with_inclusive_tolerance ... ok
+test recorder::lifecycle::tests::forward_audio_continuity_survives_pauses_and_observation_jitter ... ok
+test recorder::lifecycle::tests::playing_jitter_and_stopped_restore_have_distinct_boundaries ... ok
+test recorder::lifecycle::tests::policy_changes_drop_real_split_debt_in_both_resumption_directions ... ok
+test recorder::lifecycle::tests::pre_roll_scrubs_and_first_playing_snapback_do_not_complete_or_split ... ok
+test recorder::lifecycle::tests::trigger_table_reaches_playback_and_stopped_export_rewind_actions ... ok
+test recorder::render_job::tests::a_failed_renders_last_word_is_kept_over_the_counters ... ok
+test recorder::render_job::tests::a_render_that_warned_carries_it_onto_the_status_line_it_succeeded_on ... ok
+test recorder::render_job::tests::a_renderer_without_progress_records_still_reports_diagnostics ... ok
+test recorder::render_job::tests::a_signal_mid_read_is_not_the_end_of_the_render ... ok
+test recorder::render_job::tests::an_unterminated_last_counter_still_counts ... ok
+test recorder::render_job::tests::cancellation_before_publication_and_shutdown_never_publish_or_start_late_jobs ... ok
+test recorder::render_job::tests::cancellation_reaps_descendants_cleans_only_owned_files_and_preserves_other_jobs ... ok
+test recorder::render_job::tests::diagnostics_and_malformed_records_do_not_retarget_progress ... ok
+test recorder::render_job::tests::fifo_variants_capture_settings_keep_existing_files_and_continue_after_failure ... ok
+test recorder::render_job::tests::only_manual_requests_override_captured_settings ... ok
+test recorder::render_job::tests::the_default_renderer_path_is_absolute ... ok
+test recorder::render_job::tests::the_default_renderer_path_is_where_update_plugin_installs_it ... ok
+test recorder::render_job::tests::the_rewritten_counter_reaches_the_bar_as_the_render_goes ... ok
+test recorder::render_job::tests::two_instances_publish_distinct_videos_and_recorded_appearance_is_captured_at_enqueue ... ok
+test recorder::writer::audio_tests::a_forward_seek_finishes_one_file_with_a_notice_and_allows_another_take ... ok
+test recorder::writer::audio_tests::queued_rollover_keeps_each_pass_audio ... ok
+test recorder::writer::audio_tests::queued_stop_preserves_the_audio_prefix ... ok
+test recorder::writer::audio_tests::wav_finalization_failure_is_accounted_without_producer_disconnect ... ok
+test recorder::writer::audio_tests::wav_limit_is_reported_and_never_renders_an_incomplete_take ... ok
+test recorder::writer::canonical_tests::a_gap_that_outlived_the_pass_it_marked_is_on_the_pass_that_exports ... ok
+test recorder::writer::canonical_tests::a_gap_with_no_file_open_marks_the_take_that_opens_after_it ... ok
+test recorder::writer::canonical_tests::a_marker_flush_failure_refuses_stop_and_render ... ok
+test recorder::writer::canonical_tests::a_real_worker_carries_a_gap_it_drained_before_start_onto_the_take ... ok
+test recorder::writer::canonical_tests::a_second_gap_leaves_the_reader_naming_the_gap_the_file_marked ... ok
+test recorder::writer::canonical_tests::all_128_passes_need_source_closure_before_the_129th_file ... ok
+test recorder::writer::canonical_tests::an_audio_only_last_pass_renders_after_a_pass_with_midi ... ok
+test recorder::writer::canonical_tests::an_overflowed_take_finalises_and_launches_the_render_it_was_stopped_with ... ok
+test recorder::writer::canonical_tests::carried_marker_failure_visits_retained_passes_and_keeps_the_first_error ... ok
+test recorder::writer::canonical_tests::completed_recording_releases_its_status_before_accepting_another_start ... ok
+test recorder::writer::canonical_tests::delayed_history_and_baseline_keep_original_pass_and_both_wav_tails ... ok
+test recorder::writer::canonical_tests::failure_accounting_latches_its_marker_io_error ... ok
+test recorder::writer::canonical_tests::forward_seeks_split_real_audio_at_the_new_notes_origin ... ok
+test recorder::writer::canonical_tests::pump_flush_failure_is_accounted_before_stop ... ok
+test recorder::writer::canonical_tests::pump_flushes_buffered_records_in_current_and_retained_files ... ok
+test recorder::writer::canonical_tests::real_publication_ring_loss_is_durable_after_the_last_callback ... ok
+test recorder::writer::canonical_tests::real_worker_disconnect_finishes_the_stop_after_its_last_source_closure ... ok
+test recorder::writer::canonical_tests::real_worker_materializes_pending_start_before_accounting_a_recording_failure ... ok
+test recorder::writer::canonical_tests::retired_producer_keeps_real_writer_alive_after_every_ui_control_is_dropped ... ok
+test recorder::writer::canonical_tests::rollover_marker_failure_keeps_the_old_owner_until_failure_accounting ... ok
+test recorder::writer::canonical_tests::stopped_export_restore_keeps_the_unpublished_notes_original_route ... ok
+test recorder::writer::tests::a_block_that_both_owes_a_split_and_crosses_the_bar_opens_no_pass ... ok
+test recorder::writer::tests::a_full_ring_drops_the_block_rather_than_stalling ... ok
+test recorder::writer::tests::a_host_that_reports_no_bar_never_ends_the_take ... ok
+test recorder::writer::tests::a_one_file_trigger_refuses_an_owed_split_that_comes_due_rolling_forward ... ok
+test recorder::writer::tests::a_plain_wrap_splits_the_file_and_a_loop_end_wrap_does_not ... ok
+test recorder::writer::tests::a_playhead_dragged_across_the_stop_bar_does_not_end_the_take ... ok
+test recorder::writer::tests::a_playhead_parked_for_several_blocks_has_not_advanced ... ok
+test recorder::writer::tests::a_playhead_restored_after_an_export_ends_the_take_there ... ok
+test recorder::writer::tests::a_playhead_restored_after_an_export_neither_records_nor_splits ... ok
+test recorder::writer::tests::a_position_that_advances_rolls_even_when_the_host_says_it_is_not_playing ... ok
+test recorder::writer::tests::a_reservation_is_always_a_whole_number_of_frames ... ok
+test recorder::writer::tests::a_rewind_restarts_an_at_bar_take_rather_than_ending_it ... ok
+test recorder::writer::tests::a_rewind_while_stopped_splits_at_the_block_that_records_again ... ok
+test recorder::writer::tests::a_rollover_carries_the_recording_and_resets_the_file ... ok
+test recorder::writer::tests::a_scrub_forward_and_back_before_playing_does_not_end_the_take ... ok
+test recorder::writer::tests::a_step_back_smaller_than_the_threshold_is_jitter_rather_than_a_wrap ... ok
+test recorder::writer::tests::a_take_stamp_reads_as_the_calendar_date_and_time_it_names ... ok
+test recorder::writer::tests::a_wrap_without_at_loop_end_splits_and_keeps_rolling ... ok
+test recorder::writer::tests::a_zero_channel_bus_reserves_nothing ... ok
+test recorder::writer::tests::arming_past_the_stop_bar_never_ends_the_take ... ok
+test recorder::writer::tests::at_loop_end_ends_the_take_on_the_first_wrap_without_splitting ... ok
+test recorder::writer::tests::at_loop_end_ignores_the_jump_to_the_loop_start_when_playback_begins ... ok
+test recorder::writer::tests::collision_and_initialization_failure_remove_only_owned_files ... ok
+test recorder::writer::tests::configuration_audio_exhaustion_marks_the_recording_incomplete ... ok
+test recorder::writer::tests::configuration_pass_capacity_requires_actual_retirement_before_reuse ... ok
+test recorder::writer::tests::configuration_stop_preserves_the_observed_callback_and_drop_refuses_unclosed_work ... ok
+test recorder::writer::tests::gui_ticks_cannot_hide_a_nondrop_recording_ownership_failure ... ok
+test recorder::writer::tests::only_a_parked_transport_stops_a_block_being_recorded ... ok
+test recorder::writer::tests::params_record_only_changes_and_a_wrap_rewrites_every_one ... ok
+test recorder::writer::tests::playing_through_the_stop_bar_ends_the_take_there ... ok
+test recorder::writer::tests::re_arming_clears_the_loop_end_latch ... ok
+test recorder::writer::tests::re_arming_clears_the_stop_bar_latch ... ok
+test recorder::writer::tests::re_checking_armed_mid_take_does_not_reset_the_take ... ok
+test recorder::writer::tests::recorded_audio_reserves_whole_frames_and_counts_the_dropped_tail ... ok
+test recorder::writer::tests::reserved_audio_is_actually_written ... ok
+test recorder::writer::tests::retirement_failure_closes_after_a_full_publication_lane_and_its_final_loss ... ok
+test recorder::writer::tests::simultaneous_recordings_own_distinct_pairs_and_passes ... ok
+test recorder::writer::tests::stopped_continuity_edges_emit_only_the_accepted_blocks ... ok
+test recorder::writer::tests::stopping_a_take_that_is_not_running_does_nothing ... ok
+test recorder::writer::tests::switching_to_a_one_file_trigger_drops_a_split_the_take_owed ... ok
+test recorder::writer::tests::the_audio_start_is_declared_once_per_pass ... ok
+test recorder::writer::tests::the_first_pass_keeps_the_takes_name_and_later_passes_are_suffixed ... ok
+test recorder::writer::tests::the_gui_reads_back_the_rolling_the_audio_thread_published ... ok
+test recorder::writer::tests::the_header_carries_the_rate_the_look_and_the_source ... ok
+test recorder::writer::tests::the_shell_reads_recording_failure_and_last_finished_take ... ok
+test recorder::writer::tests::the_shipped_rings_have_room_for_what_the_audio_thread_pushes ... ok
+test recorder::writer::tests::the_status_line_separates_waiting_from_paused_from_recording ... ok
+
+test result: ok. 97 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_render-94974c23db5c22bd)
+
+running 397 tests
+test dot_shadow::tests::baked_dot_shadow_shader_validates ... ok
+test dot_shadow::tests::both_spiral_geometry_kernels_hold_at_editor_and_export_scales ... ok
+test dot_shadow::tests::either_spectral_geometry_endpoint_allocates_no_dot_shadow_atlas ... ok
+test dot_shadow::tests::gaussian_spread_expands_dot_shadow_and_contour_ignores_it ... ok
+test dot_shadow::tests::nothing_to_shadow_builds_no_pipelines ... ok
+test glow::tests::a_frame_with_nothing_to_light_paints_no_stale_halo ... ok
+test glow::tests::a_resized_pane_rebuilds_and_a_crowded_frame_grows_its_buffer ... ok
+test glow::tests::baked_glow_shader_validates ... ok
+test glow::tests::nothing_to_light_builds_no_chain ... ok
+test glow::tests::the_chain_covers_the_pixels_the_halo_is_stretched_across ... ok
+test glow::tests::the_halo_lands_around_the_mark_and_adds_only_light ... ok
+test glow::tests::the_halo_lands_on_the_marks_own_place_at_an_offset_rect_and_a_retina_scale ... ok
+test glow::tests::the_pipelines_build_against_a_headless_device ... ok
+test lattice_material::tests::settings_match_the_shader ... ok
+test lattice_material::tests::shader_validates ... ok
+test lattice_material::tests::watercolor_brightness_stays_neutral_for_missing_globs ... ok
+test lattice_stars::tests::shader_and_uniform_validate ... ok
+test lattice_tests::compose::fractional_bloom_strength_is_independent_of_render_scale ... ok
+test lattice_tests::compose::sheets_draw_back_to_front_along_the_sevens_axis ... ok
+test lattice_tests::contract::baked_blit_shader_validates ... ok
+test lattice_tests::contract::baked_shader_validates ... ok
+test lattice_tests::contract::octave_packing_matches_the_documented_layout ... ok
+test lattice_tests::contract::the_shader_uses_the_scenes_global_glow_curve ... ok
+test lattice_tests::contract::the_shaders_ink_strip_is_as_wide_as_the_texture_it_is_drawn_into ... ok
+test lattice_tests::contract::the_shaders_pitch_luts_are_the_length_the_scene_says ... ok
+test lattice_tests::contract::uniform_transport_matches_nagas_resolved_layout ... ok
+test lattice_tests::device::a_failed_lattice_timestamp_map_can_arm_again ... ok
+test lattice_tests::device::a_lattice_with_nothing_to_draw_reports_no_gpu_time ... ok
+test lattice_tests::device::a_second_lattice_view_in_the_same_frame_does_not_break_the_submit ... ok
+test lattice_tests::device::invalid_gpu_timestamp_pairs_are_not_published_as_zero_time ... ok
+test lattice_tests::device::offscreen_composite_matches_direct_draw ... ok
+test lattice_tests::device::pipelines_build_against_a_headless_device ... ok
+test lattice_tests::glow_colour::a_light_in_its_release_survives_the_pane_changing_size ... ok
+test lattice_tests::glow_colour::a_marked_slice_the_note_has_left_keeps_the_whole_light ... ok
+test lattice_tests::glow_colour::a_node_added_to_a_pane_lights_in_its_own_colour ... ok
+test lattice_tests::glow_colour::a_node_wearing_only_an_audio_ring_gives_off_no_light ... ok
+test lattice_tests::glow_colour::a_node_with_no_light_writes_into_no_other_nodes_colour ... ok
+test lattice_tests::glow_colour::a_nodes_light_has_no_ripple_the_ink_does_not ... ok
+test lattice_tests::glow_colour::a_nodes_light_takes_its_colour_from_the_frame_before ... ok
+test lattice_tests::glow_colour::a_nodes_light_takes_the_colour_of_whichever_layer_is_drawing ... ok
+test lattice_tests::glow_colour::a_silent_slice_puts_none_of_its_ground_in_the_light ... ok
+test lattice_tests::glow_colour::a_slice_part_way_out_carries_that_much_of_the_light ... ok
+test lattice_tests::glow_colour::glow_free_blur_cull_matches_unculled_rows_through_release_and_reuse ... ok
+test lattice_tests::glow_colour::the_ink_strip_has_a_row_for_every_node ... ok
+test lattice_tests::glow_colour::the_wash_reaches_a_lit_slice_and_nothing_else ... ok
+test lattice_tests::glow_colour::the_wash_reaches_a_wedge_the_volume_ramp_lit ... ok
+test lattice_tests::glow_colour::widening_a_layer_gives_its_colour_more_of_the_light ... ok
+test lattice_tests::glow_markers::a_crosss_shadow_is_worth_its_ink ... ok
+test lattice_tests::glow_markers::a_marker_holds_a_nodes_halo_off_its_own_cross ... ok
+test lattice_tests::glow_markers::a_markers_shadow_does_not_show_through_its_tapered_arm ... ok
+test lattice_tests::glow_markers::a_markers_shadow_fades_out_with_the_taper_of_its_arm ... ok
+test lattice_tests::glow_markers::a_resting_marker_wears_the_wash_it_stands_in ... ok
+test lattice_tests::glow_markers::a_tapered_arm_gives_up_its_shadow_with_the_ink_the_taper_takes ... ok
+test lattice_tests::glow_markers::one_shadow_is_one_distance_whatever_the_cross_it_stands_off ... ok
+test lattice_tests::glow_overlap::a_dense_saturated_chord_stays_under_the_fixed_peak ... ok
+test lattice_tests::glow_overlap::a_fading_neighbour_returns_to_the_lone_glow_without_moving_the_ceiling ... ok
+test lattice_tests::glow_overlap::a_held_nodes_light_breathes_without_advancing_its_ink_history ... ok
+test lattice_tests::glow_overlap::a_lone_glow_keeps_its_colour_profile_and_fade ... ok
+test lattice_tests::glow_overlap::accumulation_sweeps_to_the_original_screen_of_each_colour_channel ... ok
+test lattice_tests::glow_overlap::dense_faint_overlap_order_precision ... ignored, manual MRT precision stress measurement
+test lattice_tests::glow_overlap::dense_stars_follow_the_pattern_darkness_of_their_light ... ok
+test lattice_tests::glow_overlap::different_hues_meet_at_screened_luminance_in_either_order ... ok
+test lattice_tests::glow_overlap::marks_do_not_change_the_halo_footprint ... ok
+test lattice_tests::glow_overlap::material_controls_change_light_and_only_geometry_controls_rebake ... ok
+test lattice_tests::glow_overlap::material_shadow_pickup_darkens_light_without_adding_coverage ... ok
+test lattice_tests::glow_overlap::materials_drift_stays_continuous_across_axis_wraps ... ok
+test lattice_tests::glow_overlap::pickup_and_ordinary_shadows_are_independent ... ok
+test lattice_tests::glow_overlap::pickup_spreads_around_arc_ends_and_bloom_brightens_its_source ... ok
+test lattice_tests::glow_overlap::pigment_reach_extends_beyond_the_ordinary_node_quad ... ok
+test lattice_tests::glow_overlap::segment_pickup_tracks_pitch_position_and_activation_without_changing_coverage ... ok
+test lattice_tests::glow_overlap::shadow_pickup_bypasses_with_material_or_light_disabled ... ok
+test lattice_tests::glow_overlap::stage_clocks_and_bypasses_are_independent_on_a_carried_pane ... ok
+test lattice_tests::glow_overlap::stars_carried_material_and_profile_transitions_match_fresh_panes ... ok
+test lattice_tests::glow_overlap::stars_sample_note_color_with_bounded_premultiplied_light_and_clear_silence ... ok
+test lattice_tests::glow_overlap::textures_feed_materials_before_sampling ... ok
+test lattice_tests::glow_overlap::textures_shape_the_combined_light_without_creating_or_recoloring_it ... ok
+test lattice_tests::glow_overlap::the_clouds_detail_fades_where_it_is_finer_than_the_glow_texel ... ok
+test lattice_tests::glow_overlap::the_color_transition_ends_at_the_ring_even_with_a_wider_halo ... ok
+test lattice_tests::glow_overlap::watercolor_motion_and_silence_use_the_production_light ... ok
+test lattice_tests::glow_reach::a_lattice_with_only_marker_anchors_grows_no_glow ... ok
+test lattice_tests::glow_reach::the_glow_blend_says_how_separate_a_node_keeps_its_colours ... ok
+test lattice_tests::glow_reach::the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge ... ok
+test lattice_tests::glow_reach::the_glow_reach_says_how_far_a_node_lights_past_its_own_edge ... ok
+test lattice_tests::glow_reach::the_middle_of_a_node_is_where_its_light_is_fullest ... ok
+test lattice_tests::golden::a_chord_at_a_wide_reach_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_chord_at_the_fresh_view_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_name_at_render_scale_2_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_name_on_a_nodes_band_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_node_in_its_own_shadow_draws_the_frame_on_record ... ok
+test lattice_tests::golden::a_sheet_behind_a_node_draws_the_frame_on_record ... ok
+test lattice_tests::golden::names_overlapping_on_one_sheet_draw_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_at_the_top_of_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_live_view_goldens_exercise_both_shadow_kernels ... ok
+test lattice_tests::golden::the_live_view_on_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_resting_marker_field_draws_the_frame_on_record ... ok
+test lattice_tests::golden::the_zoomed_out_view_on_the_distance_row_draws_the_frame_on_record ... ok
+test lattice_tests::golden::two_strokes_of_one_name_draw_the_frame_on_record ... ok
+test lattice_tests::labels::a_culled_home_nodes_name_draws_over_the_markers_behind_it ... ok
+test lattice_tests::labels::a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow ... ok
+test lattice_tests::labels::a_label_adds_no_light_through_the_bloom ... ok
+test lattice_tests::labels::a_label_takes_its_own_nodes_place_in_the_order ... ok
+test lattice_tests::labels::a_name_casting_no_shadow_paints_its_ink_and_nothing_else ... ok
+test lattice_tests::labels::a_name_holds_the_light_off_the_ground_it_stands_on ... ok
+test lattice_tests::labels::a_name_is_not_darkened_by_its_own_shadow ... ok
+test lattice_tests::labels::a_name_on_a_nearer_node_shadows_a_farther_nodes_rings_and_not_the_reverse ... ok
+test lattice_tests::labels::a_name_wears_the_wash_it_stands_in ... ok
+test lattice_tests::labels::a_names_shadow_is_the_same_after_another_name_as_after_a_node ... ok
+test lattice_tests::labels::a_names_shadow_is_the_same_width_in_points_at_render_scale_2 ... ok
+test lattice_tests::labels::a_names_shadow_reaches_as_far_as_its_width_says ... ok
+test lattice_tests::labels::a_names_shadow_takes_the_same_share_off_ink_as_off_ground ... ok
+test lattice_tests::labels::a_nearer_node_covers_the_label_of_the_node_behind ... ok
+test lattice_tests::labels::a_pane_rebinds_its_sheets_only_when_one_moves ... ok
+test lattice_tests::labels::two_adjacent_names_from_different_sheets_draw_the_nearer_last ... ok
+test lattice_tests::labels::two_facing_strokes_cast_deeper_between_them_than_either_alone ... ok
+test lattice_tests::local_shadows::foreground_ink_restores_local_shadow_transmittance ... ok
+test lattice_tests::local_shadows::gaussian_spread_expands_node_label_and_marker_shadows_without_moving_ink ... ok
+test lattice_tests::local_shadows::notation_shadows_darken_saturated_light_without_changing_remote_pixels ... ok
+test lattice_tests::local_shadows::text_depth_scales_a_fixed_profile_on_the_pane_fill ... ok
+test lattice_tests::marks::a_gated_node_loses_its_ring_and_nothing_else ... ok
+test lattice_tests::marks::a_mark_follows_its_slices_thickness ... ok
+test lattice_tests::marks::a_mark_stands_off_the_outermost_ring_the_node_draws ... ok
+test lattice_tests::marks::a_mark_with_no_ring_under_it_reaches_the_nodes_centre ... ok
+test lattice_tests::marks::a_melody_bass_mark_extends_the_slice_it_names ... ok
+test lattice_tests::marks::a_real_held_chord_shows_its_melody_and_bass_marks ... ok
+test lattice_tests::marks::a_ring_part_way_through_its_fade_sits_between_the_two ... ok
+test lattice_tests::marks::the_audio_ring_reads_the_spectrum_around_each_octave ... ok
+test lattice_tests::marks::the_shader_spends_a_markers_proportions_on_the_shape_they_name ... ok
+test lattice_tests::metal_assets::generated_metal_assets_preserve_storage_binding_lengths ... ignored, manual generated-Metal-asset probe; requires Metal and test-only assets
+test lattice_tests::occlusion::a_nodes_faintest_shadow_hides_next_to_none_of_the_node_behind ... ok
+test lattice_tests::occlusion::partial_occlusion_fades_rear_ink_and_preserves_the_background ... ok
+test lattice_tests::octaves::a_lone_notes_octave_fades_in_a_straight_line ... ok
+test lattice_tests::octaves::a_released_octave_lands_on_its_ghost_without_a_step ... ok
+test lattice_tests::octaves::a_silent_slice_wears_the_ground_the_scene_names ... ok
+test lattice_tests::octaves::a_thick_slice_swells_past_the_band ... ok
+test lattice_tests::octaves::a_thin_slice_lights_from_the_inner_edge_and_leaves_a_notch_beyond ... ok
+test lattice_tests::octaves::an_indicator_is_drawn_at_its_own_pitchs_angle ... ok
+test lattice_tests::octaves::every_octave_in_the_range_is_drawn_and_they_close_the_ring ... ok
+test lattice_tests::octaves::the_folded_ring_reads_each_wedge_at_its_own_octave ... ok
+test lattice_tests::octaves::the_lights_colour_seams_run_at_one_width_from_its_edge_to_the_centre ... ok
+test lattice_tests::quantization::final_dither_keeps_byte_representable_flat_ink_flat ... ok
+test lattice_tests::quantization::shadows_below_one_percent_still_fade_over_glow ... ok
+test lattice_tests::quantization::the_final_dither_breaks_radial_quantization_rings_without_temporal_noise ... ok
+test lattice_tests::quantization::the_lattice_keeps_its_gradients_in_half_floats_until_the_final_composite ... ok
+test lattice_tests::reload::a_poll_over_files_that_did_not_move_rebuilds_nothing ... ok
+test lattice_tests::reload::a_published_reload_raises_the_count_and_hands_over_the_source ... ok
+test lattice_tests::reload::a_rejection_names_the_module_it_is_about ... ok
+test lattice_tests::reload::a_rejection_states_the_seam_its_own_module_was_joined_at ... ok
+test lattice_tests::reload::a_reload_rebuilds_and_draws_both_bloom_variants ... ok
+test lattice_tests::reload::an_edit_to_either_module_is_a_reload_of_both ... ok
+test lattice_tests::reload::an_edit_to_the_common_half_reaches_the_text_module_and_the_lattice_one ... ok
+test lattice_tests::reload::an_edit_whose_read_fails_is_not_swallowed ... ok
+test lattice_tests::reload::the_baked_common_half_seams_where_it_says_it_does ... ok
+test lattice_tests::reload::the_stated_seam_is_where_the_module_actually_starts ... ok
+test lattice_tests::shadow_staging::prepare_shadow_uploads_preserve_exact_cells_and_picture_across_panes ... ok
+test lattice_tests::shadows::a_crosss_shadow_is_its_own_share_of_the_one_cell_the_field_casts_from ... ok
+test lattice_tests::shadows::a_disappearing_slice_fades_its_shadow_in_proportion_to_its_ink ... ok
+test lattice_tests::shadows::a_distance_frame_of_markers_casts_without_an_atlas ... ok
+test lattice_tests::shadows::a_distance_markers_shadow_width_is_screen_constant_under_perspective ... ok
+test lattice_tests::shadows::a_distance_row_darkens_a_corner_as_deeply_as_an_edge_where_a_blur_retreats ... ok
+test lattice_tests::shadows::a_distance_rows_crease_is_no_deeper_than_a_lone_edge ... ok
+test lattice_tests::shadows::a_distance_rows_shadow_keeps_a_letterforms_gap_at_a_wide_shadow ... ok
+test lattice_tests::shadows::a_fading_node_does_not_show_its_shadow_through_its_own_ring ... ok
+test lattice_tests::shadows::a_frame_whose_groups_disagree_draws_both_renderers ... ok
+test lattice_tests::shadows::a_held_slice_does_not_pin_a_neighbors_shadow_outside_its_own_blur ... ok
+test lattice_tests::shadows::a_kernel_moves_the_picture_and_moves_nothing_with_the_shadow_shut ... ok
+test lattice_tests::shadows::a_marked_nodes_shadow_stands_off_an_unmarked_ones_by_the_strip_alone ... ok
+test lattice_tests::shadows::a_marker_inherits_the_text_groups_whole_shadow ... ok
+test lattice_tests::shadows::a_nearer_node_on_one_sheet_shadows_the_farther_and_not_the_reverse ... ok
+test lattice_tests::shadows::a_node_close_to_the_eye_packs_a_cell_the_atlas_can_hold ... ok
+test lattice_tests::shadows::a_node_distance_profile_matches_the_cpu_reference ... ok
+test lattice_tests::shadows::a_nodes_faintest_shadow_is_next_to_none_over_its_bloom ... ok
+test lattice_tests::shadows::a_nodes_own_rings_are_not_darkened_by_its_own_shadow ... ok
+test lattice_tests::shadows::a_released_nodes_shadow_fades_with_its_ink_and_ends_with_it ... ok
+test lattice_tests::shadows::a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible ... ok
+test lattice_tests::shadows::a_zero_width_mark_casts_no_distance_shadow ... ok
+test lattice_tests::shadows::a_zoomed_out_distance_shadow_does_not_break_a_ring_into_spikes ... ok
+test lattice_tests::shadows::neither_shadow_bar_at_its_bottom_casts_or_allocates ... ok
+test lattice_tests::shadows::node_shadow_darkness_scales_the_entire_profile ... ok
+test lattice_tests::shadows::only_a_frame_that_blurs_holds_the_blurs_intermediate ... ok
+test lattice_tests::shadows::rectangular_panes_and_atlases_preserve_shadow_coordinates ... ok
+test lattice_tests::shadows::the_falloff_moves_the_darkness_inside_the_width_and_not_its_edge ... ok
+test lattice_tests::shadows::the_grown_quad_holds_the_whole_blur_at_the_top_of_the_shadow_bar ... ok
+test lattice_tests::shadows::the_light_beside_a_ring_is_held_off_within_one_shadow_width ... ok
+test lattice_tests::shadows::the_text_groups_width_moves_a_names_shadow_and_no_other_casters ... ok
+test lattice_tests::shadows::two_nodes_crossing_shadows_multiply_rather_than_take_the_deeper ... ok
+test lattice_tests::ships::a_bent_ring_ramp_is_read_where_its_entries_stand ... ok
+test lattice_tests::ships::a_culled_node_behind_home_moves_no_marker ... ok
+test lattice_tests::ships::a_faded_out_ring_ships_no_idle_node ... ok
+test lattice_tests::ships::a_marker_nearer_the_eye_than_a_node_draws_after_it ... ok
+test lattice_tests::ships::a_resting_lattice_ships_one_marker_draw ... ok
+test lattice_tests::ships::a_ring_wedge_wears_its_own_levels_ramp_entry ... ok
+test lattice_tests::ships::a_silent_lattice_ships_no_nodes_and_still_draws_its_markers ... ok
+test lattice_tests::ships::an_open_ring_ships_every_idle_node ... ok
+test lattice_tests::ships::each_thing_that_makes_a_node_sounding_keeps_it_alone ... ok
+test lattice_tests::ships::offscreen_halos_draw_only_where_their_footprint_reaches ... ok
+test lattice_tests::ships::the_fragment_early_outs_do_not_change_a_pixel ... ok
+test lattice_tests::targets::bloom_toggles_preserve_release_history_and_only_replace_bloom ... ok
+test lattice_tests::targets::capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity ... ok
+test lattice_tests::targets::glow_clock_consumes_only_encoded_callbacks_and_uses_the_previous_level ... ok
+test lattice_tests::targets::glow_off_discards_history_when_target_maintenance_runs ... ok
+test lattice_tests::targets::untimed_snapshots_seed_current_ink_on_a_reused_pane ... ok
+test lattice_tests::targets::viewport_changes_keep_history_without_allocating_a_strip ... ok
+test lattice_tests::timing::a_frame_of_audio_rings_costs_this_much ... ignored, a probe: prints a timing and asserts nothing
+test lattice_tests::timing::a_frame_of_names_at_each_kernel_costs_this_much ... ignored, a probe: prints a timing and asserts nothing
+test lattice_tests::timing::a_frame_of_names_at_the_top_of_the_shadow_bar_costs_this_much ... ignored, a probe: prints a timing and asserts nothing
+test lattice_tests::timing::a_frame_of_names_costs_this_much ... ignored, a probe: prints a timing and asserts nothing
+test lattice_tests::timing::animation_costs_by_pose_and_density ... ignored, a probe: prints animation timing and asserts nothing
+test lattice_tests::timing::atmosphere_costs_by_polyphony ... ignored, manual atmosphere performance audit
+test lattice_tests::timing::timing_editor_pipeline_startup ... ignored, manual editor startup timing
+test lattice_tests::transitions::all_orders_draw_complete_rotated_pieces_at_their_shared_delays ... ok
+test lattice_tests::transitions::distance_shadows_fade_continuously_across_layers_and_settling ... ok
+test lattice_tests::transitions::smooth_grow_draws_complete_pieces_and_settles ... ok
+test lattice_tests::transitions::transition_keeps_gated_audio_fixed_through_midi_release_and_prune ... ok
+test lattice_tests::transitions::zero_spread_orders_draw_the_same_smooth_arrival ... ok
+test pass_aged::tests::a_stamp_from_the_future_ages_at_zero ... ok
+test pass_aged::tests::an_entry_survives_to_the_last_pass_before_the_limit ... ok
+test pass_aged::tests::every_entry_stamped_in_one_pass_survives_that_pass ... ok
+test pass_aged::tests::the_sweep_takes_only_the_entry_that_stopped ... ok
+test roll::tests::a_cap_is_never_wider_than_the_outline_it_belongs_to ... ok
+test roll::tests::a_caps_reach_is_the_callers_and_not_the_outlines ... ok
+test roll::tests::a_faded_note_keeps_its_color_over_bright_heatmaps_and_its_surround_fades_with_it ... ok
+test roll::tests::a_gaussian_shadow_behind_a_spent_lead_spreads_like_the_note_alone ... ok
+test roll::tests::a_glides_outline_keeps_its_thickness_instead_of_thinning_with_the_angle ... ok
+test roll::tests::a_growing_notes_gaussian_shadow_crosses_cell_boundaries_smoothly ... ok
+test roll::tests::a_lead_fade_takes_the_ribbon_out_toward_its_tip ... ok
+test roll::tests::a_leads_opacity_dims_the_lead_and_not_the_note ... ok
+test roll::tests::a_notes_bloom_follows_its_opacity_reading ... ok
+test roll::tests::a_notes_corners_are_square ... ok
+test roll::tests::a_pane_that_stops_drawing_gives_its_chain_back ... ok
+test roll::tests::a_reversed_depth_direction_only_mirrors_the_picture ... ok
+test roll::tests::a_shadow_never_darkens_under_another_ribbons_translucent_body ... ok
+test roll::tests::a_sheared_notes_cap_follows_its_center_line ... ok
+test roll::tests::a_sliver_glide_paints_nothing_along_pitch_past_its_reach ... ok
+test roll::tests::a_steep_glides_outline_wraps_its_ends_at_its_own_reach ... ok
+test roll::tests::a_stepped_width_keeps_its_shoulder_outlined ... ok
+test roll::tests::a_tapered_note_narrows_about_its_center_and_its_outline_follows ... ok
+test roll::tests::a_thin_ribbon_glows_in_proportion_to_the_ink_it_has ... ok
+test roll::tests::a_two_pixel_note_holds_its_brightness_as_it_scrolls ... ok
+test roll::tests::a_two_pixel_notes_bloom_holds_its_energy_as_it_scrolls ... ok
+test roll::tests::a_two_pixel_notes_coverage_centroid_moves_sub_pixel ... ok
+test roll::tests::an_outline_never_covers_another_notes_body ... ok
+test roll::tests::baked_roll_shader_validates ... ok
+test roll::tests::bloom_width_follows_resolution ... ok
+test roll::tests::bloom_width_uses_the_owning_pane ... ok
+test roll::tests::both_roll_geometry_kernels_hold_at_editor_and_export_scales ... ok
+test roll::tests::either_spectral_geometry_endpoint_allocates_no_roll_shadow_atlas ... ok
+test roll::tests::enlarged_preview_roll_shadows_extend_beyond_maximum_dial_reach ... ok
+test roll::tests::every_pane_prepared_in_one_frame_survives_until_paint ... ok
+test roll::tests::gaussian_spread_expands_roll_shadow_and_contour_ignores_it ... ok
+test roll::tests::pieces_of_a_tapered_note_tile_it ... ok
+test roll::tests::pieces_tile_their_note_and_a_fade_runs_along_it ... ok
+test roll::tests::the_bloom_adds_light_around_a_note ... ok
+test roll::tests::the_bloom_covers_the_pixels_the_halo_is_stretched_across ... ok
+test roll::tests::the_cap_is_unioned_with_the_wrap_and_not_added_to_it ... ok
+test roll::tests::the_outline_does_not_paint_over_a_hairline_note ... ok
+test roll::tests::the_outline_runs_the_whole_length_of_its_note ... ok
+test roll::tests::the_outline_wraps_every_side_of_a_note ... ok
+test roll::tests::the_pipeline_builds_against_a_headless_device ... ok
+test roll::tests::turning_the_axes_turns_the_picture ... ok
+test roll::tests::uniforms_match_the_bound_shader_layout ... ok
+test roll::tests::zero_thickness_has_no_body_shadow_or_bloom ... ok
+test shadow::tests::a_caster_that_darkens_nothing_takes_no_cell_and_no_room ... ok
+test shadow::tests::a_cell_the_atlas_cannot_hold_casts_nothing ... ok
+test shadow::tests::a_cells_blur_stays_inside_its_own_cell_and_keeps_its_mass ... ok
+test shadow::tests::a_cells_sigma_is_at_most_three_texels_at_every_shadow_width ... ok
+test shadow::tests::a_direct_distance_keeps_only_the_blur_cell ... ok
+test shadow::tests::a_distance_cell_reaches_the_stop_and_holds_its_quality_floor ... ok
+test shadow::tests::a_frame_with_no_caster_packs_no_cell ... ok
+test shadow::tests::a_kernel_row_costs_this_much_atlas_against_one_gaussian ... ok
+test shadow::tests::a_mixed_frame_packs_each_caster_at_its_own_style ... ok
+test shadow::tests::a_node_distance_cell_keeps_the_quality_floor_and_a_blur_does_not ... ok
+test shadow::tests::a_spectral_style_that_cannot_cast_has_no_reach ... ok
+test shadow::tests::an_atlas_distance_keeps_the_cell_its_scene_draw_samples ... ok
+test shadow::tests::falloff_keeps_the_same_cell_padding ... ok
+test shadow::tests::gaussian_spread_pads_the_source_without_changing_blur_or_contour ... ok
+test shadow::tests::packed_cells_are_disjoint_and_inside_the_atlas ... ok
+test shadow::tests::sigma_is_half_the_shadow_in_pane_points ... ok
+test shadow::tests::the_blurs_reach_and_loop_bound_are_the_packers_own ... ok
+test shadow::tests::the_falloff_preview_is_the_shaders_profile ... ok
+test shadow::tests::the_kernels_pedestal_is_its_own_weight_at_the_reach ... ok
+test shadow::tests::the_occluder_grid_lists_every_later_node_box_under_a_point ... ok
+test shadow::tests::the_shaders_caster_is_the_packers ... ok
+test shadow::tests::the_shaders_distance_kind_and_reach_are_the_packers ... ok
+test spectral_shadow::tests::a_surface_nobody_draws_to_gives_its_atlas_back ... ok
+test spectral_shadow::tests::two_gaussian_groups_dispatch_one_blur_chain_and_mixed_dispatches_two_kinds ... ok
+test spectrogram::atmosphere::color_memory_tests::a_drift_wrap_carries_the_colour_history ... ok
+test spectrogram::atmosphere::color_memory_tests::bucketed_memory_preserves_images_across_resize_and_sampling_changes ... ok
+test spectrogram::atmosphere::color_memory_tests::color_memory_uses_elapsed_time_and_resets_invalid_history ... ok
+test spectrogram::atmosphere::color_memory_tests::fresh_colour_memory_under_watercolor_settles_then_fades ... ok
+test spectrogram::atmosphere::color_memory_tests::halo_resolution_changes_carry_stars_color_history ... ok
+test spectrogram::atmosphere::color_memory_tests::jitter_edits_reset_only_the_stars_color_history ... ok
+test spectrogram::atmosphere::color_memory_tests::material_color_memory_carries_exact_texels_in_both_orientations ... ok
+test spectrogram::atmosphere::color_memory_tests::soloing_carries_and_updates_every_layers_color_history ... ok
+test spectrogram::atmosphere::color_memory_tests::star_color_memory_follows_cells_and_resets_each_new_life ... ok
+test spectrogram::atmosphere::color_memory_tests::star_memory_resets_when_height_or_budgeted_cell_sizes_change ... ok
+test spectrogram::atmosphere::color_memory_tests::star_memory_resets_when_star_layers_change_at_equal_spacing ... ok
+test spectrogram::atmosphere::color_memory_tests::watercolor_brightness_edits_preserve_held_color ... ok
+test spectrogram::atmosphere::tests::a_layer_left_out_is_not_allocated_or_baked ... ok
+test spectrogram::atmosphere::tests::a_tiled_drift_is_reduced_by_whole_repeats_before_it_narrows ... ok
+test spectrogram::atmosphere::tests::drift_follows_the_dial_at_a_constant_direction ... ok
+test spectrogram::atmosphere::tests::halo_profiles_group_actual_sizes_and_keep_depth_addresses ... ok
+test spectrogram::atmosphere::tests::halo_resolution_rounds_each_axis_without_losing_tiny_targets ... ok
+test spectrogram::atmosphere::tests::halos_follow_the_drawn_plan_at_the_lattice_scale ... ok
+test spectrogram::atmosphere::tests::one_star_size_is_one_star_at_every_depth ... ok
+test spectrogram::atmosphere::tests::retained_targets_bound_resolution_and_preserve_full_axes ... ok
+test spectrogram::atmosphere::tests::soloing_draws_only_the_soloed_layers ... ok
+test spectrogram::atmosphere::tests::soloing_keeps_the_cells_the_whole_field_draws ... ok
+test spectrogram::atmosphere::tests::spectral_uniforms_match_the_bound_shader_layouts ... ok
+test spectrogram::atmosphere::tests::stars_drift_with_parallax_at_the_prototypes_pace ... ok
+test spectrogram::atmosphere::tests::the_star_atlas_floors_only_the_finest_cells_and_only_past_its_budget ... ok
+test spectrogram::atmosphere::tests::the_star_atlas_holds_every_cell_the_walk_reads ... ok
+test spectrogram::atmosphere::tests::the_star_ring_holds_every_star_that_reaches_a_pixel ... ok
+test spectrogram::atmosphere::tests::the_tile_is_as_fine_as_the_pane_draws_a_cell ... ok
+test spectrogram::atmosphere::tests::the_time_step_bounds_the_light_field_by_the_runs_slabs_alone ... ok
+test spectrogram::atmosphere::tests::the_tone_target_appears_only_where_it_is_coarser_than_the_pane ... ok
+test spectrogram::atmosphere::tests::velvet_tone_density_tracks_size_and_softness_without_a_geometry_tile ... ok
+test spectrogram::tests::a_cloud_is_drawn_over_an_unblurred_picture ... ok
+test spectrogram::tests::a_delta_upload_draws_what_a_full_upload_draws ... ok
+test spectrogram::tests::a_pane_that_stops_drawing_gives_its_grid_back ... ok
+test spectrogram::tests::a_pixel_narrower_than_a_bucket_reads_between_the_two_under_it ... ok
+test spectrogram::tests::a_pixel_wider_than_a_bucket_reads_the_mean_of_the_buckets_under_it ... ok
+test spectrogram::tests::a_quiet_pane_takes_the_gradients_own_floor_rather_than_black ... ok
+test spectrogram::tests::a_range_past_the_top_of_the_spectrum_reads_its_last_two_buckets ... ok
+test spectrogram::tests::a_reduced_cloud_draws_no_seam_where_its_region_starts ... ok
+test spectrogram::tests::a_reduced_cloud_draws_the_same_picture_softened ... ok
+test spectrogram::tests::a_time_stepped_light_field_draws_the_smooth_picture_from_one_texel_a_slab ... ok
+test spectrogram::tests::baked_spectrogram_shader_validates ... ok
+test spectrogram::tests::contours_shape_the_refracted_levels ... ok
+test spectrogram::tests::density_weights_bright_buckets_before_pitch_source_reduction ... ok
+test spectrogram::tests::edge_pooling_shades_one_way_and_leaves_silence_alone ... ok
+test spectrogram::tests::float_output_uses_linear_palette_for_every_style ... ok
+test spectrogram::tests::golden_spectrogram_styles_broadband_quiet_and_silence ... ok
+test spectrogram::tests::held_newest_slab_and_zero_softness_preserve_the_field ... ok
+test spectrogram::tests::lava_preserves_silence_quiet_fields_and_nested_levels ... ok
+test spectrogram::tests::palette_uploads_follow_prepared_snapshots_and_resource_lifetimes ... ok
+test spectrogram::tests::slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads ... ok
+test spectrogram::tests::spectral_cloud_targets_refresh_after_palette_resize_disable_and_empty_frames ... ok
+test spectrogram::tests::spectral_cloud_targets_survive_pitch_zoom_and_span_drags ... ok
+test spectrogram::tests::spectral_clouds_extend_past_the_scrolling_history_edge ... ok
+test spectrogram::tests::spectral_clouds_follow_offset_panes_at_both_pixel_scales ... ok
+test spectrogram::tests::spectral_clouds_light_the_surroundings_and_leave_silence_dark ... ok
+test spectrogram::tests::spectral_diffusion_adds_no_texture_or_analyzer_coupling ... ok
+test spectrogram::tests::spectral_diffusion_colors_the_combined_intensity_once ... ok
+test spectrogram::tests::spectral_diffusion_removes_bright_grain_in_both_axes ... ok
+test spectrogram::tests::spectral_diffusion_softens_faint_detail_with_one_fade_to_the_palettes_floor ... ok
+test spectrogram::tests::star_split::a_core_depth_draws_its_stars_whole ... ok
+test spectrogram::tests::star_split::a_drawn_star_follows_the_cpu_profile ... ok
+test spectrogram::tests::star_split::a_layer_that_does_not_twinkle_never_shows_a_gap ... ok
+test spectrogram::tests::star_split::halo_profile_transitions_preserve_color_history ... ok
+test spectrogram::tests::star_split::quality_profiles_cover_partial_panes_at_fractional_scale ... ok
+test spectrogram::tests::star_split::separate_halos_reconstruct_the_wide_response_including_faint_tails ... ok
+test spectrogram::tests::star_split::star_split_activates_at_the_real_size_threshold ... ok
+test spectrogram::tests::star_split::star_split_matches_native_at_fractional_scale_with_and_without_memory ... ok
+test spectrogram::tests::star_split::uniform_halos_preserve_the_original_array_lookup ... ok
+test spectrogram::tests::textures_preserve_levels_and_vanishing_refraction_is_exact_identity ... ok
+test spectrogram::tests::the_headless_frame_is_the_frame_the_callback_paints ... ok
+test spectrogram::tests::the_pipeline_builds_against_a_headless_device ... ok
+test spectrogram::tests::the_starfield_lights_sound_and_leaves_silence_on_the_floor ... ok
+test spectrogram::tests::the_starfield_moves_by_the_drift ... ok
+test spectrogram::tests::the_tile_hash_fold_closes_every_lattice ... ok
+test spectrogram::tests::the_tile_is_rebaked_only_when_the_walk_moves ... ok
+test spectrogram::tests::the_tile_period_tiles_every_lattice ... ok
+test spectrogram::tests::the_wash_dials_each_reach_the_globs ... ok
+test spectrogram::tests::the_wash_grid_covers_the_plane_and_the_ring_holds_it ... ok
+test spectrogram::tests::the_wash_reads_the_light_at_each_globs_centre_and_invents_none ... ok
+test spectrogram::tests::the_watercolor_tile_uses_the_exact_rotation_in_both_pane_orientations ... ok
+test spectrogram::tests::timing::cloud_costs_by_style_and_dial ... ignored, a probe: prints timings and asserts timestamp ordering
+test spectrogram::tests::uniforms_match_the_bound_shader_layout ... ok
+test spectrogram::tests::velvet_samples_body_light_and_preserves_flat_fields ... ok
+test spectrogram::tests::watercolor_random_brightness_preserves_average_color ... ok
+test spectrogram::tests::wide_musical_blur_integrates_periodic_broadband_without_phase_aliasing ... ok
+test spectrogram::tests::zero_width_terraces_skip_offscreen_passes_at_live_capacity ... ok
+test text::tests::a_callback_tracks_the_shared_font_texture_by_resource_identity ... ok
+test text::tests::a_faded_label_takes_its_shadow_with_it ... ok
+test text::tests::a_front_label_shadows_back_ink_but_not_its_own_letters ... ok
+test text::tests::a_glyph_against_the_atlas_edge_paints_what_a_padded_one_does ... ok
+test text::tests::a_glyph_paints_its_ink_and_the_sdf_shadow_stands_outside_it ... ok
+test text::tests::a_glyph_reads_the_sheet_it_names ... ok
+test text::tests::a_glyph_slides_across_a_pixel_without_a_step ... ok
+test text::tests::a_pane_that_stops_drawing_gives_its_glyphs_back ... ok
+test text::tests::a_prepared_pane_survives_a_later_pane_growing_the_atlas ... ok
+test text::tests::a_reload_rebuilds_the_pipelines_without_dropping_the_atlas ... ok
+test text::tests::a_sliding_hairline_keeps_its_weight ... ok
+test text::tests::baked_text_shader_validates ... ok
+test text::tests::both_spectral_text_kernels_draw_from_the_glyph_sdf ... ok
+test text::tests::either_spectral_text_endpoint_allocates_no_shadow_atlas ... ok
+test text::tests::enlarged_preview_text_shadows_extend_beyond_maximum_dial_reach ... ok
+test text::tests::every_glyph_pipeline_is_built_from_one_module ... ok
+test text::tests::gaussian_spread_expands_spectral_text_shadow_without_changing_fill ... ok
+test text::tests::lattice_and_spectral_text_share_one_sdf_texture ... ok
+test text::tests::pipelines_built_before_a_reload_are_stale ... ok
+test text::tests::pipelines_built_for_another_format_are_stale ... ok
+test text::tests::spectral_text_can_cast_beyond_the_old_width_limit_at_every_scale ... ok
+test text::tests::the_pipelines_build_against_a_headless_device ... ok
+test text::tests::the_sdf_tile_padding_agrees_with_the_shader ... ok
+test text::tests::the_two_axis_filter_reconstructs_motion_in_either_direction ... ok
+
+test result: ok. 387 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 45.79s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_scene-70d06927e1d99368)
+
+running 219 tests
+test camera::tests::a_hand_edited_camera_still_yields_a_usable_label_scale ... ok
+test intensity::tests::a_source_drives_only_its_own_display_from_base ... ok
+test intensity::tests::bases_apply_without_routes_and_with_zero_weights ... ok
+test intensity::tests::fresh_settings_at_unity_gain_start_every_note_four_fifths_opaque ... ok
+test intensity::tests::gain_is_nonnegative_and_invalid_inputs_contribute_nothing ... ok
+test intensity::tests::one_source_drives_multiple_targets_with_independent_weights ... ok
+test intensity::tests::reach_keeps_clipping_and_gain_headroom_visible ... ok
+test intensity::tests::sources_on_one_display_add_and_the_sum_is_capped ... ok
+test intensity::tests::timbre_endpoints_add_and_subtract_the_whole_weight ... ok
+test motion::tests::a_bend_leaves_the_same_expression_reading_at_any_frame_cadence ... ok
+test motion::tests::a_faded_departure_leaves_no_pose_for_the_next_press_to_reverse ... ok
+test motion::tests::a_late_off_releases_from_the_reading_at_the_off ... ok
+test motion::tests::audio_presence_stays_settled_and_mark_delay_cancels_on_short_notes ... ok
+test motion::tests::every_staggered_slice_animates_for_the_whole_duration_from_its_own_start ... ok
+test motion::tests::fresh_opacity_routes_dim_the_glow_with_the_ink ... ok
+test motion::tests::halo_candidates_keep_between_frame_bends_after_voice_pruning ... ok
+test motion::tests::held_nodes_reentering_the_visible_window_do_not_replay_an_entrance ... ok
+test motion::tests::intensity_fades_the_ink_but_not_the_note ... ok
+test motion::tests::late_delivered_short_notes_recover_the_factual_timeline_once ... ok
+test motion::tests::octave_mark_handoff_keeps_delay_and_releases_the_old_slot ... ok
+test motion::tests::octaves_and_same_time_replacements_do_not_replay_but_true_disappearance_does ... ok
+test motion::tests::orders_apply_to_settled_departure_and_pending_pieces_cancel_on_interrupt ... ok
+test motion::tests::random_order_and_a_centre_start_reach_are_stable ... ok
+test motion::tests::reopening_a_hidden_surface_bounds_replay_to_the_settle_horizon ... ok
+test motion::tests::short_stabs_reverse_pose_and_opacity_at_event_time_across_frame_cadences ... ok
+test motion::tests::smooth_slice_motion_uses_the_note_fade_curve_in_both_directions ... ok
+test motion::tests::stagger_spread_spans_starts_and_reverses_without_waiting ... ok
+test motion::tests::thickness_reshapes_a_lit_slot_only ... ok
+test motion::tests::tuned_onsets_and_late_observation_use_the_factual_pitch_and_mark_clock ... ok
+test octaves::tests::a_node_turns_toward_its_own_octave ... ok
+test octaves::tests::a_ring_at_the_limits_keeps_its_span ... ok
+test octaves::tests::a_wheel_outside_the_limits_is_clamped ... ok
+test octaves::tests::an_even_axis_gives_every_node_even_slices ... ok
+test octaves::tests::an_even_axis_puts_a_pitch_at_the_same_angle_on_every_node ... ok
+test octaves::tests::drawn_indicators_sit_on_their_own_pitch ... ok
+test octaves::tests::the_axis_is_a_turn_per_span_octaves ... ok
+test octaves::tests::the_center_pitch_is_straight_up_on_every_node ... ok
+test octaves::tests::the_indicators_tile_the_turn ... ok
+test spectral::tests::a_band_of_nothing_is_one_threshold ... ok
+test spectral::tests::a_band_reaching_the_gate_releases_on_silence ... ok
+test spectral::tests::a_chroma_ramp_that_runs_out_leaves_the_ring_grey ... ok
+test spectral::tests::a_fade_of_nothing_is_the_gate_itself ... ok
+test spectral::tests::a_frame_drawn_twice_steps_the_fade_once ... ok
+test spectral::tests::a_hand_edited_audio_ring_still_draws_an_annulus ... ok
+test spectral::tests::a_hand_edited_gate_never_empties_the_lattice ... ok
+test spectral::tests::a_held_bucket_keeps_its_ring_until_the_level_clears_the_band ... ok
+test spectral::tests::a_loud_reading_is_the_analyzers_own_colour_exactly ... ok
+test spectral::tests::a_node_rings_where_one_of_its_wedges_reaches_the_gate ... ok
+test spectral::tests::a_ramp_opening_above_the_ground_is_still_moved_onto_it ... ok
+test spectral::tests::a_ramp_running_downward_is_pinned_at_its_bright_end ... ok
+test spectral::tests::a_ring_of_no_width_is_an_empty_annulus ... ok
+test spectral::tests::a_rings_coming_and_going_runs_on_the_fade ... ok
+test spectral::tests::a_silent_wedge_is_the_grey_the_octave_band_stands_on ... ok
+test spectral::tests::each_reading_is_gated_on_what_its_own_wedge_shows ... ok
+test spectral::tests::the_band_holds_a_ring_at_any_fade ... ok
+test spectral::tests::the_band_never_reaches_under_the_gates_floor ... ok
+test spectral::tests::the_bar_decides_a_node_either_way ... ok
+test spectral::tests::the_blobs_own_door_repairs_a_gate_toward_drawing ... ok
+test spectral::tests::the_gates_edge_is_a_steady_ramp_one_bucket_wide ... ok
+test spectral::tests::the_gates_floor_rings_every_node ... ok
+test spectral::tests::the_grid_is_centred_on_the_axis_it_spans ... ok
+test spectral::tests::the_ring_seats_on_the_stacks_start ... ok
+test spectral::tests::the_two_readings_share_one_annulus ... ok
+test spectral::tests::the_window_reaches_exactly_as_far_as_a_wedge_shows ... ok
+test star_plan::tests::a_reversed_pair_is_kept_and_drawn_reversed ... ok
+test star_plan::tests::a_star_is_drawn_at_its_size_and_held_whole_by_its_spacing ... ok
+test star_plan::tests::each_depth_takes_the_cheapest_gather_that_holds_its_stars ... ok
+test star_plan::tests::star_layers_keep_both_ends_and_spread_the_rest ... ok
+test star_plan::tests::the_profile_is_solid_then_a_glow_bent_by_its_falloff ... ok
+test star_plan::tests::twinkle_runs_evenly_in_depth ... ok
+test tests::bend::a_bend_moves_only_the_channels_on_it_and_never_their_ends ... ok
+test tests::bend::a_bend_rises_smoothly_from_line_to_line_with_both_ends_pinned ... ok
+test tests::bend::a_steep_bend_is_drawn_as_the_curve ... ok
+test tests::camera::cabinet_faces_the_sheet_and_shears_sevens_uniformly ... ok
+test tests::camera::camera_input_respects_clamps ... ok
+test tests::camera::camera_right_up_is_orthonormal_to_the_view ... ok
+test tests::camera::camera_target_projects_to_viewport_center ... ok
+test tests::camera::idle_off_sheet_nodes_are_not_pickable ... ok
+test tests::camera::orthographic_matches_perspective_at_the_focus_plane_and_is_uniform ... ok
+test tests::camera::pick_selects_the_node_nearest_the_pointer ... ok
+test tests::camera::points_behind_the_camera_do_not_project ... ok
+test tests::camera::the_reachs_count_matches_the_reachs_positions ... ok
+test tests::camera::zoom_by_scales_distance_and_clamps ... ok
+test tests::finite::a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers ... ok
+test tests::glow_curve::a_glow_curve_from_state_is_repaired_before_it_reaches_the_picture ... ok
+test tests::glow_curve::a_positive_shape_falls_quickly_without_an_inflection ... ok
+test tests::glow_curve::the_glow_curve_descends_between_its_fixed_endpoints ... ok
+test tests::glow_curve::zero_shape_makes_a_linear_curve ... ok
+test tests::gradient_cache::a_frame_of_a_drag_rebuilds_only_what_the_drag_changed ... ok
+test tests::gradient_cache::a_level_off_the_range_lands_on_the_nearest_end ... ok
+test tests::gradient_cache::gradients_drawing_one_picture_are_one_entry ... ok
+test tests::gradient_cache::one_gradient_too_many_evicts_the_stalest ... ok
+test tests::gradient_cache::the_hue_circle_answers_the_pair_it_is_asked_for ... ok
+test tests::gradient_cache::two_gradients_alternating_are_both_resident ... ok
+test tests::hue_space::one_chroma_setting_is_one_colorfulness_across_hue ... ok
+test tests::hue_space::the_chroma_knob_does_not_move_the_hue ... ok
+test tests::hue_space::the_default_arcs_chroma_ceiling_is_what_the_docs_say ... ok
+test tests::hue_space::the_default_opens_at_the_colorfulness_it_used_to ... ok
+test tests::hue_space::the_defaults_are_the_retired_arc_converted ... ok
+test tests::hue_space::the_hue_floor_is_never_above_the_gamut ... ok
+test tests::hue_space::the_hybrid_at_the_edges ... ok
+test tests::marks::a_chord_inside_one_pitch_class_separates_on_the_octave_layer ... ok
+test tests::marks::a_delay_holds_the_mark_off_until_its_note_has_worn_the_end_that_long ... ok
+test tests::marks::a_delay_past_the_note_fade_still_measures_from_the_handoff ... ok
+test tests::marks::a_folded_note_marks_the_lit_sector_on_the_ramp ... ok
+test tests::marks::a_fresh_mark_eases_in_with_the_octave_it_links_to ... ok
+test tests::marks::a_handoff_inside_one_pitch_class_marks_whichever_end_is_stronger ... ok
+test tests::marks::a_lone_held_note_is_marked_as_both_ends ... ok
+test tests::marks::a_lone_notes_mark_fades_out_with_it ... ok
+test tests::marks::a_mark_is_the_color_of_the_sector_it_extends ... ok
+test tests::marks::a_non_finite_delay_draws_as_no_delay_at_all ... ok
+test tests::marks::a_note_shorter_than_its_arrival_still_marks_level_with_its_sector ... ok
+test tests::marks::a_released_end_can_mark_a_lower_slice_than_the_live_one ... ok
+test tests::marks::an_end_dropped_inside_the_delay_does_not_mark_the_octave_that_replaced_it ... ok
+test tests::marks::an_end_dropped_inside_the_delay_is_never_marked_on_its_way_out ... ok
+test tests::marks::an_end_given_up_inside_the_delay_is_never_marked_at_all ... ok
+test tests::marks::an_inherited_end_eases_in_from_the_handoff_not_from_its_note_on ... ok
+test tests::marks::melody_and_bass_mark_the_outer_held_notes ... ok
+test tests::marks::same_key_sources_mark_their_own_emitted_pitch ... ok
+test tests::marks::the_mark_delay_is_clamped_to_the_bar_its_own_ends ... ok
+test tests::marks::the_two_marks_on_one_node_carry_their_own_sectors_colors ... ok
+test tests::nodes::a_broken_ground_reads_back_as_the_grey_it_draws ... ok
+test tests::nodes::a_chroma_ramp_spends_color_on_pitch ... ok
+test tests::nodes::a_degenerate_color_range_lands_where_the_shader_lands ... ok
+test tests::nodes::a_ground_past_either_end_of_the_bar_is_held_to_the_l_star_axis ... ok
+test tests::nodes::a_lit_octave_indicator_stands_for_the_pitch_it_is_drawn_at ... ok
+test tests::nodes::a_node_the_keys_have_lit_rings_whatever_the_gate_says ... ok
+test tests::nodes::a_non_finite_ground_still_draws_the_lattice_a_grey ... ok
+test tests::nodes::a_note_outside_the_ring_lights_the_outermost_indicator ... ok
+test tests::nodes::a_notes_color_varies_with_pitch ... ok
+test tests::nodes::a_played_nodes_ring_leaves_on_the_notes_own_fade ... ok
+test tests::nodes::a_ring_dialled_off_is_gated_by_nothing ... ok
+test tests::nodes::a_ring_reaching_under_the_packing_folds_onto_a_slot_it_has ... ok
+test tests::nodes::a_scene_derived_without_an_analyzer_carries_no_audio ... ok
+test tests::nodes::an_inverted_color_range_still_derives_a_scene ... ok
+test tests::nodes::each_node_draws_its_own_octaves_nearest_the_center ... ok
+test tests::nodes::every_channel_draws_the_same_node ... ok
+test tests::nodes::held_note_lights_matching_nodes ... ok
+test tests::nodes::more_chroma_is_more_color_at_every_setting ... ok
+test tests::nodes::neither_end_of_the_curve_leaves_the_chroma_axis ... ok
+test tests::nodes::neither_end_of_the_curve_leaves_the_l_star_axis ... ok
+test tests::nodes::octaves_fade_independently ... ok
+test tests::nodes::one_fade_time_carries_every_layer_of_the_node ... ok
+test tests::nodes::one_pitch_gives_the_disc_and_the_glyph_one_color ... ok
+test tests::nodes::the_delay_is_what_keeps_a_released_chord_from_smearing_rings ... ok
+test tests::nodes::the_fresh_node_fits_its_stack_inside_the_quad ... ok
+test tests::nodes::the_gate_takes_the_ring_and_leaves_the_node ... ok
+test tests::nodes::the_gradient_is_in_gamut_and_flat_when_its_ramp_is ... ok
+test tests::nodes::the_reading_leaves_the_midi_picture_alone ... ok
+test tests::nodes::the_table_tracks_the_curve_it_samples ... ok
+test tests::nodes::window_center_pans_which_nodes_display ... ok
+test tests::plus::a_fresh_lattice_holds_its_markers_above_the_ring_ground ... ok
+test tests::plus::a_hovered_position_draws_no_marker ... ok
+test tests::plus::a_marker_stands_at_every_home_position_and_nowhere_else ... ok
+test tests::plus::a_marker_takes_back_what_a_names_fade_gives_up ... ok
+test tests::plus::a_marker_that_survives_a_chord_is_painted_exactly_as_it_was ... ok
+test tests::plus::a_markers_shadow_fades_in_with_its_cross ... ok
+test tests::plus::a_named_position_draws_no_marker ... ok
+test tests::plus::a_node_lit_by_no_key_keeps_its_cross_whole ... ok
+test tests::plus::a_nonfinite_marker_arm_draws_the_sanitized_field ... ok
+test tests::plus::a_resting_marker_is_the_grey_its_own_bar_names ... ok
+test tests::plus::a_soft_notes_name_and_cross_hold_still_at_key_up ... ok
+test tests::plus::an_off_sheet_note_leaves_the_marker_field_alone ... ok
+test tests::plus::neither_proportion_moves_a_marker_or_changes_how_far_it_reaches ... ok
+test tests::plus::nothing_is_drawn_between_two_positions ... ok
+test tests::plus::the_arm_bar_sets_how_far_a_marker_reaches_and_0_takes_it_away ... ok
+test tests::plus::the_label_scale_sets_the_cross_width ... ok
+test tests::plus::the_marker_unit_is_what_reads_a_markers_world_back_as_its_bars ... ok
+test tests::plus::the_silent_ring_and_lattice_ground_are_one_grey ... ok
+test tests::plus::the_taper_reaches_the_scene_as_a_share_of_the_arm ... ok
+test tests::plus::the_two_at_rest_bars_move_nothing_of_each_others ... ok
+test tests::scroll::a_cabinet_camera_never_reaches_the_node_budget ... ok
+test tests::scroll::a_cabinet_pane_never_draws_a_node_the_reach_cannot_name ... ok
+test tests::scroll::a_loaded_view_never_draws_a_node_its_reach_cannot_name ... ok
+test tests::scroll::a_nonsense_camera_still_yields_a_drawable_window ... ok
+test tests::scroll::a_target_no_gesture_can_reach_still_names_and_draws ... ok
+test tests::scroll::a_tilted_window_does_not_mirror_its_far_side ... ok
+test tests::scroll::everything_the_pane_shows_is_in_the_window ... ok
+test tests::scroll::following_the_camera_does_not_move_the_picture ... ok
+test tests::scroll::no_camera_asks_for_more_than_the_budget ... ok
+test tests::scroll::panning_a_long_way_keeps_the_window_full ... ok
+test tests::scroll::the_budget_trims_the_horizon_not_the_foreground ... ok
+test tests::scroll::the_index_of_a_position_is_where_the_walk_puts_it ... ok
+test tests::scroll::the_window_is_not_much_wider_than_the_pane ... ok
+test tests::scroll::the_zoom_limit_lands_near_twenty_steps ... ok
+test tests::shadow::a_group_with_either_bar_at_its_bottom_casts_nothing ... ok
+test tests::shadow::falloff_runs_from_early_through_linear_to_late_without_inflections ... ok
+test tests::shadow::gaussian_spread_uses_resolved_width_and_contour_ignores_it ... ok
+test tests::shadow::the_endpoint_has_exactly_four_explicit_shadow_groups ... ok
+test tests::shadow::the_shadow_controls_keep_one_range_at_both_doors ... ok
+test tests::sheet::a_gap_dialled_past_its_ceiling_reads_back_as_the_padding_it_draws ... ok
+test tests::sheet::a_hand_edited_size_reaches_the_scene_as_the_sanitized_setting ... ok
+test tests::sheet::a_layer_with_no_room_left_in_the_node_is_not_drawn ... ok
+test tests::sheet::a_stack_width_dialled_past_its_ceiling_reads_back_as_the_layer_it_draws ... ok
+test tests::sheet::a_wild_radial_gap_is_clamped_and_the_stack_stops_at_the_ring_that_fits ... ok
+test tests::sheet::ground_color_keeps_srgb_bytes_as_they_are ... ok
+test tests::sheet::home_sheet_nodes_are_flagged_for_the_blank_ring ... ok
+test tests::sheet::off_sheet_nodes_shrink_away_from_the_home_sheet_both_ways ... ok
+test tests::sheet::sevens_size_never_enlarges_and_never_vanishes ... ok
+test tests::sheet::the_gap_reaches_both_axes_and_is_clamped ... ok
+test tests::sheet::the_mark_depth_reaches_the_scene_and_is_clamped ... ok
+test tests::sheet::the_mark_strip_never_falls_into_a_refused_layers_slot ... ok
+test tests::sheet::the_marker_field_is_the_home_sheet_and_only_it ... ok
+test tests::sheet::the_ring_geometry_is_sanitized_into_the_scene ... ok
+test tests::sheet::the_rings_stack_outward_from_where_the_stack_starts ... ok
+test tests::sheet::the_scene_carries_the_ground_the_pane_stands_on ... ok
+test tests::skins::every_skin_is_legible ... ok
+test tests::skins::saved_dials_are_brought_into_range ... ok
+test tests::skins::the_greys_share_one_slight_tint ... ok
+test tests::skins::the_neutral_layers_remain_ordered_by_lightness ... ok
+test tests::trail::a_memory_touches_no_field_but_trail ... ok
+test tests::trail::a_remembered_position_loses_its_marker_to_its_own_name ... ok
+test tests::trail::a_visited_node_is_marked_and_an_unvisited_one_is_not ... ok
+test tests::trail::an_off_sheet_node_stays_blank_even_after_it_is_played ... ok
+test tests::trail::clearing_the_history_wipes_every_mark ... ok
+test tests::trail::nothing_is_remembered_under_any_mode_but_past ... ok
+test trail::tests::the_nearest_marks_answer_what_a_scan_of_all_of_them_would ... ok
+test view::animation::tests::circular_and_bidirectional_orders_begin_at_the_low_high_seam ... ok
+test view::animation::tests::starting_scale_tracks_offset_and_preserves_the_pose_proportion ... ok
+
+test result: ok. 219 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.16s
+
+     Running unittests src/main.rs (target/release/deps/harmonigraph_standalone-5fef2258516016ad)
+
+running 8 tests
+test tests::all_notes_off_releases_everything ... ok
+test tests::bend_range_scales_and_mpe_note_starts_bent ... ok
+test tests::bend_tunes_only_the_held_notes_on_its_channel ... ok
+test tests::decoder_handles_note_messages ... ok
+test tests::mock_releases_each_chord_before_the_next_starts ... ok
+test tests::mock_skipping_the_gap_still_releases_the_held_chord ... ok
+test tests::recorded_frame_uses_current_just_defaults_edits_and_learning ... ok
+test tests::source_switch_after_newer_queued_input_replays_the_live_mock_chord ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_take-0792219a201e93c4)
+
+running 29 tests
+test render::tests::progress_records_round_trip_and_require_the_whole_record ... ok
+test render::tests::retired_export_fields_are_ignored_and_not_saved_again ... ok
+test render::trigger_tests::a_hand_edited_stop_bar_is_repaired_on_load ... ok
+test render::trigger_tests::only_at_bar_publishes_a_stop_bar ... ok
+test render::trigger_tests::only_the_trigger_that_survives_a_loop_keeps_splitting ... ok
+test tests::a_broken_line_in_the_middle_is_an_error ... ok
+test tests::a_file_without_a_header_is_rejected ... ok
+test tests::a_take_carrying_a_since_pruned_field_still_reads ... ok
+test tests::a_take_from_the_future_is_refused ... ok
+test tests::a_take_round_trips_through_a_file ... ok
+test tests::a_truncated_take_keeps_every_whole_line ... ok
+test tests::a_whole_take_is_not_flagged_as_truncated ... ok
+test tests::an_old_header_is_refused_before_a_final_record_can_look_truncated ... ok
+test tests::an_unfinished_record_before_trailing_lines_is_corruption ... ok
+test tests::blank_lines_and_comments_are_ignored ... ok
+test tests::canonical_order_uses_stable_time_order_but_payload_errors_keep_file_precedence ... ok
+test tests::duration_is_the_last_thing_that_happened ... ok
+test tests::first_event_survives_a_take_with_no_notes ... ok
+test tests::invalid_complete_final_baseline_and_out_of_order_cut_are_refused ... ok
+test tests::records_are_sorted_by_time_however_they_were_written ... ok
+test tests::simultaneous_records_keep_their_written_order ... ok
+test tests::the_fade_bar_reads_like_the_note_times_beside_it ... ok
+test wav_tests::a_failed_partial_wav_append_is_removed_when_finalizing ... ok
+test wav_tests::a_written_wav_has_the_sizes_and_samples_it_claims ... ok
+test wav_tests::dropping_the_writer_still_patches_the_sizes ... ok
+test wav_tests::unsupported_wav_header_values_do_not_truncate_an_existing_file ... ok
+test wav_tests::wav_accepts_its_exact_frame_limit_and_refuses_partial_frames ... ok
+test wav_tests::wav_limit_includes_the_riff_header_and_whole_frames ... ok
+test wav_tests::wav_limit_refuses_a_chunk_and_preserves_its_playable_prefix ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/release/deps/harmonigraph_ui-9c745894bbbe223e)
+
+running 768 tests
+test appearance_edit::tests::comparison_histories_and_named_recall_share_the_live_document ... ok
+test appearance_edit::tests::project_restore_retains_looks_and_comparison_but_discards_history ... ok
+test appearance_edit::tests::queued_look_survives_undo_ab_library_edits_and_incoming_camera ... ok
+test appearance_edit::tests::slider_drag_is_one_action_and_redo_is_invalidated_by_an_edit ... ok
+test appearance_edit::tests::toolbar_command_runs_after_the_body_commits_its_edit ... ok
+test appearance_edit::tests::undo_preserves_incoming_camera_tuning_and_output ... ok
+test appearance_edit::tests::window_focus_loss_finishes_a_pending_action ... ok
+test camera_movement::tests::absolute_pan_sync_is_idempotent_for_every_projection_and_restore ... ok
+test lattice_maps::tests::a_loaded_document_never_answers_from_another_documents_memo ... ok
+test lattice_maps::tests::names_are_memoized_and_every_document_mutation_invalidates_them ... ok
+test lattice_maps::tests::saved_identity_survives_rename_order_delete_and_exact_copy_recall ... ok
+test layout::tests::a_degenerate_pane_is_dropped_not_drawn ... ok
+test layout::tests::a_layout_covers_the_same_proportions_at_any_size ... ok
+test layout::tests::adjacent_panes_get_one_divider_centered_in_their_gap ... ok
+test layout::tests::exported_dividers_use_the_same_picture_ink_under_every_editor_skin ... ok
+test layout::tests::gaps_are_only_inserted_between_panes ... ok
+test layout::tests::no_layout_the_plugin_composes_shows_ground_between_two_panes ... ok
+test layout::tests::only_neighbours_get_a_divider ... ok
+test layout::tests::the_lattice_takes_the_side_it_names_and_the_same_share_of_it ... ok
+test marks::tests::a_drawn_accidental_breathes_less_than_the_type_it_replaced ... ok
+test marks::tests::a_flat_keeps_its_bowl_open ... ok
+test marks::tests::a_flats_bowl_is_lighter_than_its_stem_and_never_under_a_pixel ... ok
+test marks::tests::a_flats_outline_has_no_crease_where_the_bowl_lands ... ok
+test marks::tests::a_flats_stem_and_bowl_close_into_one_foot ... ok
+test marks::tests::a_mark_is_never_wider_than_the_sheet_it_is_packed_into ... ok
+test marks::tests::a_mark_is_one_bitmap_wherever_it_lands ... ok
+test marks::tests::a_piece_stays_inside_the_bounds_it_reports ... ok
+test marks::tests::a_plus_rasterizes_to_its_own_mirror ... ok
+test marks::tests::a_pluss_join_is_no_brighter_than_its_arms ... ok
+test marks::tests::a_sharp_rasterizes_to_its_own_half_turn ... ok
+test marks::tests::a_sliding_marks_ink_advances_with_the_quad_that_carries_it ... ok
+test marks::tests::every_drawn_mark_is_the_fonts_one_stroke_weight ... ok
+test marks::tests::no_marks_ink_reaches_the_margin_its_neighbour_reads ... ok
+test marks::tests::the_septimal_chevron_mirrors_with_its_direction ... ok
+test marks::tests::the_weight_floor_is_a_physical_pixel ... ok
+test panes::color::intensity::tests::inset_bands_stay_under_text_and_follow_base_drags ... ok
+test panes::color::intensity::tests::target_menus_add_independent_weights_and_delete_only_that_mapping ... ok
+test panes::glow_fade::tests::a_new_glow_attacks_from_darkness_and_keeps_its_owner ... ok
+test panes::glow_fade::tests::a_nodes_light_outlives_every_layer_that_lit_it ... ok
+test panes::glow_fade::tests::a_nodes_row_holds_still_while_its_neighbour_comes_and_goes ... ok
+test panes::glow_fade::tests::a_view_with_no_light_carries_nothing ... ok
+test panes::glow_fade::tests::an_audio_ring_holds_no_light ... ok
+test panes::glow_fade::tests::discarded_layout_passes_keep_the_row_owner_until_the_light_ends ... ok
+test panes::lattice::motion_tests::exact_onset_and_audio_first_keep_surface_local_stable_poses ... ok
+test panes::lattice::motion_tests::markers_and_midi_ring_floor_follow_the_reversed_note_and_existing_history ... ok
+test panes::lattice::motion_tests::measured_audio_keeps_repress_poses_until_the_tracked_lifetime_expires ... ok
+test panes::lattice::tests::a_departing_name_held_whole_leaves_no_marker_under_it ... ok
+test panes::lattice::tests::a_label_costs_one_quad_per_glyph ... ok
+test panes::lattice::tests::a_label_grows_with_the_camera ... ok
+test panes::lattice::tests::a_label_off_the_pane_is_not_laid_out ... ok
+test panes::lattice::tests::a_labels_ink_runs_from_the_marker_grey_to_white_on_the_l_star_axis ... ok
+test panes::lattice::tests::a_labels_lines_cross_from_white_to_the_marker_grey_on_the_note_fade ... ok
+test panes::lattice::tests::a_name_arriving_is_no_brighter_than_the_note_it_names ... ok
+test panes::lattice::tests::assignment_dot_keeps_sounding_ink_when_silent_and_shares_the_name_run ... ok
+test panes::lattice::tests::lattice_map_destination_click_excludes_camera_drags_other_modes_and_export ... ok
+test panes::lattice::tests::map_overlay_finds_ordinary_nodes_after_sparse_halo_insertion ... ok
+test panes::lattice::tests::naming_everything_puts_every_visible_node_at_the_kept_level ... ok
+test panes::lattice::tests::only_a_name_that_will_be_kept_stops_short_of_zero ... ok
+test panes::lattice::tests::only_the_interactive_copy_draws_the_learn_badge ... ok
+test panes::lattice::tests::only_the_interactive_copy_lets_picking_touch_the_hover ... ok
+test panes::lattice::tests::the_docked_copy_publishes_its_window_and_the_preview_leaves_it_alone ... ok
+test panes::render::export_tests::expanded_builder_fits_and_queues_each_path_with_captured_settings ... ok
+test panes::render::tests::analyzer_divider_stays_above_the_preview_orientation_drag ... ok
+test panes::render::tests::clicking_near_an_analyzer_edge_does_not_reorient_it ... ok
+test panes::render::tests::dragging_inside_a_wide_lattice_does_not_redock_it ... ok
+test panes::render::tests::preview_analyzer_drag_turns_at_its_own_edges_and_cancels_outside ... ok
+test panes::render::tests::preview_divider_drag_resizes_each_side_and_clamps ... ok
+test panes::render::tests::preview_lattice_accepts_wheel_with_or_without_shift_and_pinch_zoom ... ok
+test panes::render::tests::preview_lattice_drag_docks_to_every_edge_and_cancels_outside ... ok
+test panes::render::tests::preview_scale_tracks_the_logical_frame_below_and_above_export_size ... ok
+test panes::render::tests::preview_shadows_keep_the_exports_relative_reach_without_changing_the_dials ... ok
+test panes::render::tests::shift_drag_pans_the_preview_lattice_without_redocking_it ... ok
+test panes::render::tests::shift_drag_reaches_analyzer_zoom_beneath_the_orientation_overlay ... ok
+test panes::render::tests::video_preview_routes_its_frame_scale_into_hairline_roll_geometry ... ok
+test panes::selective_halo::tests::a_midi_pan_keeps_outgoing_halo_history_across_the_ordinary_window_edge ... ok
+test panes::selective_halo::tests::audio_only_adds_no_owners_and_a_full_window_has_no_spare_capacity ... ok
+test panes::selective_halo::tests::selective_owners_keep_regular_nodes_and_carried_release ... ok
+test panes::selective_halo::tests::wide_material_pickup_keeps_off_pane_light_owners ... ok
+test panes::spectral::names::tests::a_bent_notes_name_rides_the_ribbon_rather_than_its_onset ... ok
+test panes::spectral::names::tests::a_collapsed_tuning_names_a_pitch_plainly_rather_than_from_the_corner ... ok
+test panes::spectral::names::tests::a_displaced_name_stays_retired_until_it_leaves_the_view ... ok
+test panes::spectral::names::tests::a_held_note_wins_a_collision_with_a_released_note ... ok
+test panes::spectral::names::tests::a_held_notes_name_waits_at_the_now_line_and_leaves_when_released ... ok
+test panes::spectral::names::tests::a_held_travelling_name_keeps_priority_after_release ... ok
+test panes::spectral::names::tests::a_name_crosses_the_spectrum_but_never_leaves_the_pane ... ok
+test panes::spectral::names::tests::a_name_is_read_from_its_own_pitch_not_a_lane_neighbours ... ok
+test panes::spectral::names::tests::a_name_is_written_on_the_end_that_reads_first ... ok
+test panes::spectral::names::tests::a_name_leaves_the_far_edge_only_once_its_own_box_has ... ok
+test panes::spectral::names::tests::a_name_leaves_the_pitch_range_with_its_ribbon ... ok
+test panes::spectral::names::tests::a_name_lies_over_its_own_ribbon_at_either_anchor ... ok
+test panes::spectral::names::tests::a_name_never_blinks_out_and_back_as_the_roll_scrolls ... ok
+test panes::spectral::names::tests::a_name_sits_on_its_ribbon_at_the_leading_edge ... ok
+test panes::spectral::names::tests::a_name_sits_on_the_ribbon_the_roll_drew ... ok
+test panes::spectral::names::tests::a_names_drawn_position_advances_by_the_same_step_every_frame ... ok
+test panes::spectral::names::tests::a_names_letter_stands_the_same_distance_off_its_note_at_every_zoom ... ok
+test panes::spectral::names::tests::a_note_is_named_by_the_pitch_its_tuning_lands_it_at ... ok
+test panes::spectral::names::tests::a_note_that_began_before_the_window_is_still_named ... ok
+test panes::spectral::names::tests::a_pitch_the_lattice_cannot_show_falls_back_to_its_piano_spelling ... ok
+test panes::spectral::names::tests::a_pitch_the_picture_shows_is_named_off_the_picture ... ok
+test panes::spectral::names::tests::a_plain_spelling_beats_an_off_sheet_one_at_the_same_pitch ... ok
+test panes::spectral::names::tests::a_septimal_mark_is_in_the_measured_collision_box ... ok
+test panes::spectral::names::tests::a_shut_roll_region_draws_no_names ... ok
+test panes::spectral::names::tests::a_tie_between_two_spellings_is_broken_by_a_rule_not_by_iteration_order ... ok
+test panes::spectral::names::tests::a_travelling_name_leaves_the_pane_with_the_onset_it_is_written_on ... ok
+test panes::spectral::names::tests::a_travelling_name_lies_over_its_ribbon_toward_the_now_line ... ok
+test panes::spectral::names::tests::a_travelling_name_scrolls_at_the_pictures_own_rate_until_it_is_gone ... ok
+test panes::spectral::names::tests::a_travelling_name_starts_moving_at_once_and_the_release_is_not_an_event ... ok
+test panes::spectral::names::tests::a_wall_of_notes_is_thinned_by_the_room_there_is_for_names ... ok
+test panes::spectral::names::tests::arriving_notes_do_not_move_the_names_already_placed ... ok
+test panes::spectral::names::tests::every_note_is_named_repeats_included ... ok
+test panes::spectral::names::tests::names_at_different_pitches_share_collision_space ... ok
+test panes::spectral::names::tests::names_place_the_same_way_on_a_top_pane ... ok
+test panes::spectral::names::tests::notes_outside_the_pitch_zoom_are_left_out ... ok
+test panes::spectral::names::tests::notes_that_have_left_the_window_are_left_out ... ok
+test panes::spectral::names::tests::one_pitch_from_two_voices_is_named_once_at_either_anchor ... ok
+test panes::spectral::names::tests::one_press_is_named_once_however_the_host_delivers_it ... ok
+test panes::spectral::names::tests::panning_the_lattice_does_not_rename_a_pitch ... ok
+test panes::spectral::names::tests::surviving_names_are_disjoint_and_paint_in_musical_order ... ok
+test panes::spectral::names::tests::the_cull_follows_the_name_not_the_notes_onset ... ok
+test panes::spectral::names::tests::the_drawn_letter_lines_up_across_notes_in_right_orientation ... ok
+test panes::spectral::names::tests::the_first_instance_takes_the_name_and_the_next_waits_for_room ... ok
+test panes::spectral::names::tests::the_ink_plan_places_stands_off_its_ribbon_and_inside_the_pane ... ok
+test panes::spectral::names::tests::the_setting_turns_them_off_and_so_does_hiding_the_roll ... ok
+test panes::spectral::names::tests::travelling_names_never_blink_out_and_back_either ... ok
+test panes::spectral::names::tests::with_the_spectrum_on_the_right_a_name_holds_the_notes_left_end ... ok
+test panes::spectral::roll::tests::a_bend_at_the_last_sample_keeps_the_lead_flat ... ok
+test panes::spectral::roll::tests::a_bend_crossing_the_history_edge_keeps_its_pitch_and_expression ... ok
+test panes::spectral::roll::tests::a_bend_finished_before_the_region_leaves_nothing_at_its_edge ... ok
+test panes::spectral::roll::tests::a_brief_note_is_floored_at_the_length_it_can_scroll_without_flickering ... ok
+test panes::spectral::roll::tests::a_detached_extension_outlives_a_shorter_history_window ... ok
+test panes::spectral::roll::tests::a_floored_note_stays_inside_the_pitch_it_covered ... ok
+test panes::spectral::roll::tests::a_glide_off_the_zoom_is_dropped_however_steep ... ok
+test panes::spectral::roll::tests::a_glide_shears_the_note_rather_than_needing_another_shape ... ok
+test panes::spectral::roll::tests::a_hairline_ribbon_is_floored_at_the_width_it_can_be_seen_at ... ok
+test panes::spectral::roll::tests::a_note_keeps_drawing_until_its_outline_has_left_too ... ok
+test panes::spectral::roll::tests::a_note_long_released_keeps_its_ribbons_own_end ... ok
+test panes::spectral::roll::tests::a_note_that_is_not_leading_keeps_its_ink_behind_the_line ... ok
+test panes::spectral::roll::tests::a_note_that_stops_on_the_edge_is_not_refloored ... ok
+test panes::spectral::roll::tests::a_notes_clearance_survives_the_key_coming_up ... ok
+test panes::spectral::roll::tests::a_notes_fade_follows_its_pressure_in_pieces_of_one_box ... ok
+test panes::spectral::roll::tests::a_pane_with_no_spectrum_has_no_line_to_lead_over ... ok
+test panes::spectral::roll::tests::a_preview_hairline_ribbon_uses_the_preview_frame_scale ... ok
+test panes::spectral::roll::tests::a_released_notes_cap_stands_while_its_lead_is_still_fading ... ok
+test panes::spectral::roll::tests::a_released_notes_lead_fades_out_over_its_release_time ... ok
+test panes::spectral::roll::tests::a_scrolling_note_moves_sub_pixel_rather_than_in_whole_pixel_jumps ... ok
+test panes::spectral::roll::tests::a_short_touching_restrike_is_notched_at_its_real_onset ... ok
+test panes::spectral::roll::tests::a_sounding_note_carries_its_ribbon_past_the_now_line ... ok
+test panes::spectral::roll::tests::a_sounding_note_is_floored_into_the_past_alone ... ok
+test panes::spectral::roll::tests::a_swelled_note_is_kept_past_its_ribbon_width ... ok
+test panes::spectral::roll::tests::an_observation_cut_removes_the_lead_without_releasing_the_note ... ok
+test panes::spectral::roll::tests::drawing_a_small_export_uses_its_real_density ... ok
+test panes::spectral::roll::tests::only_the_leading_segment_of_a_sounding_note_leads ... ok
+test panes::spectral::roll::tests::positive_thickness_is_floored_after_mapping_and_zero_stays_absent ... ok
+test panes::spectral::roll::tests::the_lead_is_given_up_only_once_its_cap_is_whole ... ok
+test panes::spectral::roll::tests::the_leads_fade_is_its_own_setting_and_stops_at_the_reach ... ok
+test panes::spectral::roll::tests::the_length_floor_is_in_logical_points ... ok
+test panes::spectral::roll::tests::the_outline_is_opaque_black_at_every_width_that_casts ... ok
+test panes::spectral::roll::tests::the_segments_of_a_bent_note_tile_instead_of_overlapping ... ok
+test panes::spectral::roll::tests::tiny_expression_excursions_keep_positive_and_absent_intervals ... ok
+test panes::spectral::roll::tests::zero_shadow_depth_adds_no_roll_instance_or_culling_reach ... ok
+test panes::spectral::settings::tests::analysis_input_row_is_plugin_only_and_selects_sidechain ... ok
+test panes::spectral::spectrogram::gap_tests::resumed_slabs_fill_the_black_window_and_recover_gpu_uploads ... ok
+test panes::spectral::tests::a_collapsed_level_range_still_maps_to_a_finite_number ... ok
+test panes::spectral::tests::a_collapsed_level_window_rules_nothing ... ok
+test panes::spectral::tests::a_collapsed_range_rules_nothing ... ok
+test panes::spectral::tests::a_degenerate_pitch_range_still_paints ... ok
+test panes::spectral::tests::a_depth_drag_moves_only_the_value_its_region_measures ... ok
+test panes::spectral::tests::a_divider_dialled_at_the_new_size_is_the_size_that_is_kept ... ok
+test panes::spectral::tests::a_divider_dragged_shut_stays_shut_through_a_resize ... ok
+test panes::spectral::tests::a_drag_across_the_spectrum_still_pans_the_pitch_range ... ok
+test panes::spectral::tests::a_level_number_with_no_room_is_not_written ... ok
+test panes::spectral::tests::a_note_lit_on_the_lattice_is_not_flagged_off_it ... ok
+test panes::spectral::tests::a_pan_that_leans_slightly_along_depth_is_still_a_pan ... ok
+test panes::spectral::tests::a_pane_squeezed_and_opened_again_comes_back_to_its_picture ... ok
+test panes::spectral::tests::a_pane_with_no_depth_writes_nothing ... ok
+test panes::spectral::tests::a_pane_with_no_far_region_holds_nothing_and_forgets_nothing ... ok
+test panes::spectral::tests::a_ruled_level_axis_always_has_a_between ... ok
+test panes::spectral::tests::a_ruling_lands_where_the_curve_reaching_that_level_lands ... ok
+test panes::spectral::tests::a_short_axis_thins_the_ladder_and_keeps_the_numbers ... ok
+test panes::spectral::tests::an_off_lattice_note_gets_a_band_down_the_spectrum ... ok
+test panes::spectral::tests::analyzer_backdrop_lights_only_above_the_curve_and_fades_out_at_its_height ... ok
+test panes::spectral::tests::analyzer_fill_is_flat_and_independent_of_spectrogram_effects ... ok
+test panes::spectral::tests::analyzer_outline_is_independent_of_the_fill_and_leaves_silence_dark ... ok
+test panes::spectral::tests::both_spectral_pictures_size_themselves_from_one_raw_reading_of_the_density ... ok
+test panes::spectral::tests::depth_at_inverts_at_whichever_way_the_axes_run ... ok
+test panes::spectral::tests::dragging_the_divider_into_the_spectrum_grows_the_roll ... ok
+test panes::spectral::tests::dragging_the_divider_moves_the_split_with_the_pointer ... ok
+test panes::spectral::tests::dragging_the_spectrum_inward_opens_the_level_window ... ok
+test panes::spectral::tests::dragging_the_spectrum_outward_closes_the_level_window ... ok
+test panes::spectral::tests::every_level_number_sits_on_the_side_its_peaks_reach ... ok
+test panes::spectral::tests::footprint_resampling_returns_db_for_average_interpolation_and_silence ... ok
+test panes::spectral::tests::label_anchors_grow_into_the_pane ... ok
+test panes::spectral::tests::level_label_room_answers_to_the_axis_the_depth_runs_on ... ok
+test panes::spectral::tests::names_follow_the_pitch_zoom_and_markings_hold_still ... ok
+test panes::spectral::tests::only_the_decade_boundaries_take_the_stronger_ink ... ok
+test panes::spectral::tests::pitch_at_inverts_at_whichever_way_the_axes_run ... ok
+test panes::spectral::tests::pitch_climbs_the_same_way_in_the_pair_that_shares_an_axis ... ok
+test panes::spectral::tests::preview_navigation_reaches_both_depth_zoom_options ... ok
+test panes::spectral::tests::preview_wheel_zooms_pitch_with_or_without_shift_and_consumes_both_axes ... ok
+test panes::spectral::tests::resizing_across_the_pitch_axis_leaves_the_split_alone ... ok
+test panes::spectral::tests::resizing_the_editors_pane_leaves_the_exported_split_alone ... ok
+test panes::spectral::tests::roll_axes_match_what_axes_derives_for_the_same_orientation ... ok
+test panes::spectral::tests::seconds_per_point_matches_the_time_at_derivation ... ok
+test panes::spectral::tests::text_shrinks_with_the_pane ... ok
+test panes::spectral::tests::the_axes_take_the_pane_sides_the_orientation_asks_for ... ok
+test panes::spectral::tests::the_axis_labels_are_rimmed ... ok
+test panes::spectral::tests::the_curve_clears_the_pane_edge_by_the_same_points_at_any_size ... ok
+test panes::spectral::tests::the_frequency_grid_rules_one_step_per_decade ... ok
+test panes::spectral::tests::the_frequency_labels_ride_the_peak_end_of_the_spectrum ... ok
+test panes::spectral::tests::the_hz_readout_carries_its_unit ... ok
+test panes::spectral::tests::the_level_range_maps_floor_to_zero_and_ceiling_to_one ... ok
+test panes::spectral::tests::the_level_zoom_stops_at_the_minimum_span ... ok
+test panes::spectral::tests::the_level_zoom_turns_with_the_curve_when_the_spectrum_owns_the_pane ... ok
+test panes::spectral::tests::the_live_strip_fills_the_analysis_gap_only_while_fresh ... ok
+test panes::spectral::tests::the_live_time_axis_keeps_a_nonzero_geometry_window ... ok
+test panes::spectral::tests::the_lowest_level_is_inked_as_a_numbered_one ... ok
+test panes::spectral::tests::the_lowest_ruling_always_carries_a_number ... ok
+test panes::spectral::tests::the_names_filter_follows_the_axis_time_runs_along ... ok
+test panes::spectral::tests::the_now_line_lands_on_the_side_the_orientation_names ... ok
+test panes::spectral::tests::the_now_line_paints_over_the_roll_that_arrives_at_it ... ok
+test panes::spectral::tests::the_numbers_are_as_dense_as_the_type_allows ... ok
+test panes::spectral::tests::the_pane_paints_in_every_orientation ... ok
+test panes::spectral::tests::the_picture_paints_the_same_in_every_skin ... ok
+test panes::spectral::tests::the_roll_only_takes_depth_when_it_is_shown ... ok
+test panes::spectral::tests::the_rolls_ink_stops_at_the_now_line ... ok
+test panes::spectral::tests::the_rulings_go_under_the_spectrum_and_stop_at_the_now_line ... ok
+test panes::spectral::tests::the_settings_pane_paints_at_either_extreme_of_the_pitch_range ... ok
+test panes::spectral::tests::the_span_readout_names_its_own_unit ... ok
+test panes::spectral::tests::the_sparse_bound_wins_where_the_type_wants_more_room_than_the_axis_has ... ok
+test panes::spectral::tests::the_spectrogram_bed_is_the_gradients_floor ... ok
+test panes::spectral::tests::the_spectrogram_gives_way_down_to_its_floor_and_then_the_spectrum_yields ... ok
+test panes::spectral::tests::the_spectrum_keeps_its_size_as_the_pane_grows ... ok
+test panes::spectral::tests::the_split_band_straddles_the_divider_and_stays_inside_the_pane ... ok
+test panes::spectral::tests::the_strip_holds_its_leading_sliver_instead_of_running_past_the_run ... ok
+test panes::spectral::tests::the_volume_grid_follows_the_level_zoom_in_both_directions ... ok
+test panes::spectral::tests::the_volume_grid_rules_every_ten_decibels ... ok
+test panes::spectral::tests::the_volume_rulings_cross_the_pitch_axis_under_the_spectrum ... ok
+test panes::spectral::tests::turning_the_pane_over_re_dials_rather_than_carrying_points_across ... ok
+test panes::spectral_fold::tests::a_full_scale_sine_folds_to_zero_db ... ok
+test panes::spectral_fold::tests::a_node_the_analyzer_resolves_apart_stays_dark ... ok
+test panes::spectral_fold::tests::a_partial_off_a_node_dims_rather_than_switching_off ... ok
+test panes::spectral_fold::tests::a_probe_at_a_buckets_centre_reads_that_bucket_alone ... ok
+test panes::spectral_fold::tests::a_reading_rises_on_the_attack_and_falls_on_the_release ... ok
+test panes::spectral_fold::tests::a_ring_arrives_on_the_fade_the_notes_run_on ... ok
+test panes::spectral_fold::tests::a_sawtooth_draws_the_harmonic_series_as_a_constellation ... ok
+test panes::spectral_fold::tests::a_time_is_the_same_filter_at_any_step_size ... ok
+test panes::spectral_fold::tests::a_time_of_zero_lands_the_reading_at_once ... ok
+test panes::spectral_fold::tests::a_width_no_bar_can_produce_still_folds ... ok
+test panes::spectral_fold::tests::analyzed_audio_crosses_the_gate_and_carries_its_hysteresis_fade ... ok
+test panes::spectral_fold::tests::either_reading_draws_beside_the_keys_rather_than_instead_of_them ... ok
+test panes::spectral_fold::tests::no_audio_leaves_on_the_release_rather_than_at_once ... ok
+test panes::spectral_fold::tests::noise_alone_does_not_light_the_rings ... ok
+test panes::spectral_fold::tests::one_frame_drawn_twice_carries_the_reading_once ... ok
+test panes::spectral_fold::tests::silence_rings_nothing_and_a_tone_rings_its_own_class ... ok
+test panes::spectral_fold::tests::the_first_reading_settles_rather_than_fading_in ... ok
+test panes::spectral_fold::tests::the_gates_floor_rings_every_node ... ok
+test panes::spectral_fold::tests::the_plugin_has_two_colour_schemes_and_audio_wears_the_analyzers ... ok
+test panes::spectral_fold::tests::the_ring_color_levels_keep_values_outside_the_analyzer_window ... ok
+test panes::spectral_fold::tests::the_ring_draws_its_floor_before_any_audio_flows ... ok
+test panes::spectral_fold::tests::the_rings_levels_are_the_analyzers_own ... ok
+test panes::spectral_fold::tests::the_two_readings_are_measured_apart ... ok
+test panes::spectral_fold::tests::the_wedges_climb_in_register ... ok
+test panes::spiral::tests::a_collapsed_pitch_range_paints_no_nan ... ok
+test panes::spiral::tests::a_double_click_returns_to_the_whole_disc ... ok
+test panes::spiral::tests::a_drag_leaves_the_analyzers_own_settings_alone ... ok
+test panes::spiral::tests::a_drag_slides_the_picture_with_the_hand ... ok
+test panes::spiral::tests::a_frame_carrying_a_drag_and_a_pinch_spends_the_drag_once ... ok
+test panes::spiral::tests::a_gesture_cannot_take_the_framing_off_the_picture ... ok
+test panes::spiral::tests::a_hand_edited_framing_loads_at_a_drawable_one ... ok
+test panes::spiral::tests::a_look_puts_its_own_point_of_the_disc_at_the_pane_centre ... ok
+test panes::spiral::tests::a_magnified_disc_is_cut_no_finer_than_the_analyzers_grain ... ok
+test panes::spiral::tests::a_note_bent_just_under_a_pitch_class_is_named_with_it ... ok
+test panes::spiral::tests::a_note_outside_the_range_is_not_named ... ok
+test panes::spiral::tests::a_notes_dot_sits_inside_its_own_turn ... ok
+test panes::spiral::tests::a_notes_dot_stays_inside_the_pane ... ok
+test panes::spiral::tests::a_tone_lands_on_its_own_pitch_class ... ok
+test panes::spiral::tests::a_wheel_spun_at_either_end_leaves_the_look_where_it_is ... ok
+test panes::spiral::tests::a_zoom_at_the_rim_holds_the_look_and_lets_the_anchor_slide ... ok
+test panes::spiral::tests::an_octave_is_one_turn_of_the_spiral ... ok
+test panes::spiral::tests::c_is_at_the_top_and_pitch_ascends_clockwise ... ok
+test panes::spiral::tests::every_sounding_pitch_class_is_named_on_the_rim ... ok
+test panes::spiral::tests::magnifying_scales_the_picture_and_not_the_pitch_map_or_the_type ... ok
+test panes::spiral::tests::octaves_of_one_pitch_class_are_named_once ... ok
+test panes::spiral::tests::only_the_notes_the_range_reaches_are_marked ... ok
+test panes::spiral::tests::opacity_mapping_dims_spiral_dots_without_dimming_names ... ok
+test panes::spiral::tests::the_disc_keeps_its_hole_and_stays_in_the_pane ... ok
+test panes::spiral::tests::the_fresh_framing_draws_exactly_the_fit ... ok
+test panes::spiral::tests::the_halo_grows_from_the_dots_that_were_painted ... ok
+test panes::spiral::tests::the_halo_is_asked_for_on_every_frame_the_disc_draws ... ok
+test panes::spiral::tests::the_name_band_is_reserved_whether_or_not_anything_sounds ... ok
+test panes::spiral::tests::the_seam_runs_between_the_turns_once_per_octave ... ok
+test panes::spiral::tests::the_wheel_magnifies_about_the_pointer ... ok
+test panes::tuning::instance_tests::an_individual_show_flag_remains_reachable_in_a_narrow_column ... ok
+test panes::tuning::instance_tests::clicking_the_voice_dots_selects_the_source_button ... ok
+test panes::tuning::instance_tests::fading_dots_use_opacity_and_give_up_space_continuously ... ok
+test panes::tuning::instance_tests::instance_voice_dots_fit_below_names_without_moving_them ... ok
+test panes::tuning::instance_tests::live_instance_controls_fit_a_narrow_settings_column ... ok
+test panes::tuning::instance_tests::mixed_global_controls_enable_every_instance_then_disable_independently ... ok
+test panes::tuning::instance_tests::removing_a_faded_dot_at_overflow_does_not_jump_the_survivors ... ok
+test panes::tuning::instance_tests::source_button_rows_use_the_slider_gap ... ok
+test panes::tuning::instance_tests::source_dots_carry_the_lattice_envelope_through_bends_releases_and_retriggers ... ok
+test panes::tuning::instance_tests::voice_dot_overflow_uses_an_ellipsis_in_the_same_strip ... ok
+test panes::tuning::instance_tests::voice_dots_follow_the_current_pitch_palette ... ok
+test panes::tuning::map_tests::audition_can_be_seen_and_ended_with_map_editing_folded ... ok
+test perf::tests::every_breakdown_row_reports_the_cost_it_names ... ok
+test perf::tests::every_reading_reaches_a_row ... ok
+test perf::tests::the_basic_overlay_is_the_headline_rows_only ... ok
+test perf::tests::the_breakdown_is_this_exact_list_of_rows ... ok
+test perf::tests::the_build_tag_wraps_instead_of_widening_the_hud ... ok
+test perf::tests::the_value_column_clears_the_longest_label ... ok
+test shell::tests::an_unsaved_shell_is_not_a_corrupt_one ... ok
+test shell::tests::requests_are_two_dimensional_floored_and_consumed_once ... ok
+test shell::tests::what_close_saves_is_what_the_next_opening_restores ... ok
+test spectrogram::tests::a_full_refold_weights_mixed_tiers_by_original_sample_count ... ok
+test spectrogram::tests::a_gap_in_the_columns_keeps_a_row_for_every_silent_slab ... ok
+test spectrogram::tests::a_gradient_draws_its_own_ends ... ok
+test spectrogram::tests::a_larger_retention_recovers_a_cached_gap_without_new_columns ... ok
+test spectrogram::tests::a_long_window_keeps_the_fast_path_once_the_store_starts_merging ... ok
+test spectrogram::tests::a_preset_composes_the_pair_its_arm_names ... ok
+test spectrogram::tests::a_short_loud_column_contributes_its_linear_power_mean ... ok
+test spectrogram::tests::a_short_window_keeps_the_fast_path_across_merges ... ok
+test spectrogram::tests::a_single_missed_slab_holds_instead_of_going_black ... ok
+test spectrogram::tests::a_slab_is_anchored_to_absolute_time_not_ring_position ... ok
+test spectrogram::tests::a_slow_drag_with_tremor_crosses_a_rung_once ... ok
+test spectrogram::tests::a_span_dithering_across_a_rung_settles_on_one_width ... ok
+test spectrogram::tests::a_span_drag_refolds_once_per_rung_crossed ... ok
+test spectrogram::tests::a_streaming_run_shares_every_slab_but_the_ones_it_is_filling ... ok
+test spectrogram::tests::bounded_retention_preserves_clipped_holds_and_releases_old_capacity ... ok
+test spectrogram::tests::cells_are_opaque_and_run_dark_to_bright ... ok
+test spectrogram::tests::columns_going_back_in_time_still_get_a_row ... ok
+test spectrogram::tests::completed_averages_and_jitter_holds_survive_oldest_column_changes ... ok
+test spectrogram::tests::corrected_source_clock_keeps_history_and_incremental_aggregation_ordered ... ok
+test spectrogram::tests::dragging_the_span_holds_the_grid_between_ladder_steps ... ok
+test spectrogram::tests::gpu::a_bucket_above_a_dragged_down_floor_still_draws_a_colour ... ok
+test spectrogram::tests::gpu::a_pane_resize_does_not_re_send_the_grid_every_frame ... ok
+test spectrogram::tests::gpu::a_ramp_of_stored_bytes_renders_dark_to_bright ... ok
+test spectrogram::tests::gpu::brightness_across_resolutions ... ignored
+test spectrogram::tests::gpu::energy_at_one_bucket_of_one_slab_lights_that_texel_and_no_other ... ok
+test spectrogram::tests::gpu::slab_keys_before_zero_and_a_wrapping_run_land_where_the_shader_reads ... ok
+test spectrogram::tests::gpu::the_curve_and_the_heatmap_read_a_run_of_buckets_alike ... ok
+test spectrogram::tests::gpu::the_gpu_grid_equals_a_full_upload_after_any_sequence ... ok
+test spectrogram::tests::gpu::the_noise_floor_settles_as_the_pitch_axis_zooms_out ... ok
+test spectrogram::tests::holding_the_sliver_leaves_the_data_mapping_alone ... ok
+test spectrogram::tests::incremental_aggregation_matches_batch_step_for_step ... ok
+test spectrogram::tests::incremental_aggregation_matches_the_raw_columns_across_a_tier_merge ... ok
+test spectrogram::tests::live_gap_folds_bound_work_and_capacity_before_serving_the_view ... ok
+test spectrogram::tests::no_cache_layer_falls_back_as_the_window_scrolls ... ok
+test spectrogram::tests::quantizing_a_bucket_does_not_move_its_colour ... ok
+test spectrogram::tests::retention_changes_reuse_a_run_that_already_covers_its_columns ... ok
+test spectrogram::tests::the_folded_snapshot_changes_only_at_oldest_slab_boundaries ... ok
+test spectrogram::tests::the_held_width_survives_a_frame_through_the_surface ... ok
+test spectrogram::tests::the_leading_sliver_holds_the_newest_slabs_centre ... ok
+test spectrogram::tests::the_lut_key_folds_two_gradients_that_draw_one_picture ... ok
+test spectrogram::tests::the_plan_decides_the_layout_without_a_frame ... ok
+test spectrogram::tests::the_quiet_end_of_the_ramp_fades_instead_of_cutting_off ... ok
+test spectrogram::tests::the_run_key_names_the_fold_and_not_the_read ... ok
+test spectrogram::tests::the_shade_table_matches_the_mapping_it_replaces ... ok
+test spectrogram::tests::the_time_to_slab_mapping_is_a_straight_line ... ok
+test spectrogram::tests::unchanged_columns_reuse_the_folded_snapshot ... ok
+test spectrum::tests::a_fold_outlives_a_frame_that_brought_no_new_column ... ok
+test startup::tests::first_reveal_after_hidden_frames_uses_the_loading_path ... ok
+test startup::tests::hidden_lattice_tabs_do_not_trigger_graphics_preparation ... ok
+test startup::tests::loading_frames_age_released_notes_without_pruning_live_voices ... ok
+test tests::fold::a_discarded_pass_does_not_charge_an_internal_fold_twice ... ok
+test tests::fold::a_discarded_pass_does_not_toggle_a_fold_twice ... ok
+test tests::fold::a_folded_analyzer_keeps_one_header_row_and_its_spiral_choice ... ok
+test tests::fold::a_region_expand_button_takes_the_place_of_its_collapse_button ... ok
+test tests::fold::analyzer_local_region_folds_restore_the_original_split ... ok
+test tests::fold::analyzer_region_buttons_sit_flush_in_opposite_outer_corners ... ok
+test tests::fold::analyzer_region_folds_remain_usable_when_the_host_constrains_the_window ... ok
+test tests::fold::analyzer_region_restore_repays_its_width_after_orientation_changes ... ok
+test tests::fold::analyzer_region_restore_respects_a_split_edited_while_folded ... ok
+test tests::fold::analyzer_region_restore_survives_a_saved_project ... ok
+test tests::fold::analyzer_regions_fold_independently_and_restore_the_original_geometry ... ok
+test tests::fold::another_analyzer_tab_borrows_back_the_width_of_folded_regions ... ok
+test tests::fold::collapsed_panes_open_from_the_middle_of_their_rails ... ok
+test tests::fold::dividers_drag_while_another_analyzer_tab_borrows_folded_width ... ok
+test tests::fold::dividers_follow_the_pointer_in_both_arrangements ... ok
+test tests::fold::dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes ... ok
+test tests::fold::each_section_folds_independently_in_both_arrangements ... ok
+test tests::fold::independent_picture_and_settings_folds_leave_a_reopen_control ... ok
+test tests::fold::internal_fold_width_belongs_to_the_arrangement_that_removed_it ... ok
+test tests::fold::resetting_layout_restores_open_sections_after_traversal ... ok
+test tests::fold::resetting_the_layout_restores_space_held_by_analyzer_regions ... ok
+test tests::fold::right_clicking_a_picture_opens_its_settings_page ... ok
+test tests::fold::right_clicking_again_moves_the_open_menu ... ok
+test tests::fold::saved_fold_sizes_survive_a_new_context_and_a_constrained_window ... ok
+test tests::fold::section_and_region_chevrons_show_hover_feedback ... ok
+test tests::fold::shrinking_the_window_under_a_lent_width_keeps_the_saved_layout ... ok
+test tests::fold::stacked_settings_only_is_compact_and_all_sections_can_reopen ... ok
+test tests::fold::the_position_picker_restores_each_arrangements_sizes ... ok
+test tests::labels::a_drawn_mark_holds_its_size_in_points_at_every_pixel_density ... ok
+test tests::labels::a_mark_is_one_quad_in_the_batch_and_nothing_on_the_painter ... ok
+test tests::labels::a_name_and_the_marker_under_it_add_up_to_one_mark ... ok
+test tests::labels::a_names_drawn_marks_go_into_its_own_nodes_run ... ok
+test tests::labels::a_natural_note_label_is_just_the_letter ... ok
+test tests::labels::a_zoom_past_the_raster_ceiling_stops_growing_the_drawn_label ... ok
+test tests::labels::both_comma_marks_get_their_own_column ... ok
+test tests::labels::every_label_names_its_own_node_in_the_panes_own_space ... ok
+test tests::labels::lattice_names_reconstruct_both_axes_the_camera_moves ... ok
+test tests::labels::note_label_stacks_the_marks_and_stays_centered_on_the_node ... ok
+test tests::labels::only_the_all_mode_names_a_node_nothing_has_happened_on ... ok
+test tests::labels::the_cents_readout_sits_right_under_the_note_name ... ok
+test tests::labels::the_drawn_marks_magnify_with_the_letters_beside_them ... ok
+test tests::labels::the_reach_a_label_reports_is_where_its_drawn_mark_ends ... ok
+test tests::labels::the_septimal_mark_sits_across_the_divide_between_the_other_two ... ok
+test tests::labels::the_two_mark_rows_set_alike_and_clear_each_other ... ok
+test tests::lattice::a_wheel_over_the_lattice_does_not_end_the_drag_it_is_zooming ... ok
+test tests::lattice::double_click_resets_lattice_navigation_but_keeps_drafting_choices ... ok
+test tests::lattice::external_parameter_changes_only_recognize_related_intervals ... ok
+test tests::lattice::learn_disables_meantone_from_a_just_triad ... ok
+test tests::lattice::learn_enables_marvel_from_a_12tet_seventh ... ok
+test tests::lattice::learn_enables_meantone_from_a_12tet_triad ... ok
+test tests::lattice::learn_leaves_marvel_unchanged_without_a_seventh ... ok
+test tests::lattice::learn_leaves_meantone_unchanged_without_a_third ... ok
+test tests::lattice::learn_measures_the_septimal_comma_against_the_derived_third ... ok
+test tests::lattice::learn_step_writes_params_only_when_the_chord_changes ... ok
+test tests::lattice::scroll_over_lattice_zooms_the_camera ... ok
+test tests::lattice::standalone_edits_recognize_links_and_release_without_a_readout_jump ... ok
+test tests::lattice::the_lattice_pane_paints_the_ground_it_hands_the_scene ... ok
+test tests::lattice::the_pane_paints_the_shells_ground_rather_than_the_skins ... ok
+test tests::lattice::the_window_the_lattice_drew_reaches_the_panes_that_describe_it ... ok
+test tests::lattice::zoom_gesture_over_lattice_zooms_the_camera ... ok
+test tests::perf::a_dragged_perf_overlay_is_persisted ... ok
+test tests::perf::a_saved_position_opens_the_hud_where_it_was_left ... ok
+test tests::perf::folding_a_pane_does_not_move_the_perf_overlay ... ok
+test tests::perf::the_perf_overlay_cannot_be_dragged_out_of_the_editor ... ok
+test tests::perf::the_perf_overlay_comes_back_where_it_was_switched_off ... ok
+test tests::perf::the_perf_overlay_goes_where_it_is_dragged ... ok
+test tests::perf::the_perf_overlay_holds_its_corner_as_its_rows_shrink ... ok
+test tests::perf::the_perf_overlay_opens_in_the_editors_corner ... ok
+test tests::perf::the_performance_overlay_ships_off ... ok
+test tests::persist::a_blob_naming_a_curve_time_off_its_own_bar_opens_on_one_that_fits ... ok
+test tests::persist::a_blob_naming_a_fade_wider_than_its_edge_opens_on_one_that_fits ... ok
+test tests::persist::a_blob_naming_a_lead_release_off_its_own_bar_opens_on_one_that_fits ... ok
+test tests::persist::a_blob_naming_a_nonsense_camera_opens_on_what_it_can_reach ... ok
+test tests::persist::a_blob_naming_a_nonsense_camera_target_opens_on_a_drawable_one ... ok
+test tests::persist::a_blob_naming_a_nonsense_render_config_opens_on_what_it_can_reach ... ok
+test tests::persist::a_blob_naming_a_nonsense_soft_edge_opens_on_a_drawable_one ... ok
+test tests::persist::a_blob_naming_an_undrawable_level_range_opens_on_a_drawable_one ... ok
+test tests::persist::a_blob_naming_more_wheel_than_fits_opens_on_what_fits ... ok
+test tests::persist::a_blob_older_than_the_version_floor_is_refused_whole ... ok
+test tests::persist::a_blob_with_a_nonsense_heatmap_gradient_loads_at_a_drawable_one ... ok
+test tests::persist::a_blob_with_a_nonsense_pitch_range_loads_at_the_design_range ... ok
+test tests::persist::a_blob_with_outer_octave_settings_keeps_its_count_and_camera ... ok
+test tests::persist::a_blob_without_a_ui_scale_loads_at_the_design_size ... ok
+test tests::persist::a_double_click_on_a_soft_edge_restores_the_fresh_pair ... ok
+test tests::persist::a_dropped_variant_refuses_the_whole_document_and_says_so ... ok
+test tests::persist::a_folded_section_survives_an_editor_reopen ... ok
+test tests::persist::a_glow_curve_missing_shape_uses_the_fresh_shape ... ok
+test tests::persist::a_persist_blob_missing_a_spectrum_field_keeps_the_rest_of_the_blob ... ok
+test tests::persist::a_persist_blob_missing_any_one_section_keeps_the_rest ... ok
+test tests::persist::a_persist_blob_missing_any_one_spiral_key_keeps_the_rest ... ok
+test tests::persist::a_persist_blob_predating_the_spectrogram_loads_with_it_on ... ok
+test tests::persist::a_pitch_range_off_the_current_axis_is_pulled_back_onto_it ... ok
+test tests::persist::a_refused_blob_says_why ... ok
+test tests::persist::a_render_frame_round_trips ... ok
+test tests::persist::a_retired_key_is_ignored_and_the_rest_survives ... ok
+test tests::persist::a_saved_angle_lands_where_the_camera_controls_could_have_put_it ... ok
+test tests::persist::a_shadow_endpoint_missing_any_one_group_keeps_the_other_three ... ok
+test tests::persist::a_shadow_group_missing_one_field_fills_it_from_the_bare_style ... ok
+test tests::persist::a_view_carrying_a_key_the_struct_does_not_have_loads_intact ... ok
+test tests::persist::a_view_missing_any_one_key_reloads_at_the_fresh_value ... ok
+test tests::persist::an_appearance_missing_any_one_group_keeps_the_rest ... ok
+test tests::persist::an_impossible_ui_scale_is_clamped ... ok
+test tests::persist::an_old_dock_is_replaced_without_losing_appearance ... ok
+test tests::persist::analyzer_scalars_are_normalized_before_any_settings_are_drawn ... ok
+test tests::persist::animation_controls_round_trip_and_a_missing_one_loads_fresh ... ok
+test tests::persist::atmosphere_keys_default_individually_and_normalize_on_load ... ok
+test tests::persist::corrupt_persist_is_ignored ... ok
+test tests::persist::folding_the_analyzer_view_leaves_the_sections_below_it ... ok
+test tests::persist::lattice_map_indicator_visibility_round_trips_and_defaults_on ... ok
+test tests::persist::loading_a_project_preserves_released_temperaments ... ok
+test tests::persist::material_settings_are_independent_and_missing_nested_keys_default ... ok
+test tests::persist::persist_round_trips_camera_and_view ... ok
+test tests::persist::persist_round_trips_the_frame_rate_cap ... ok
+test tests::persist::persist_round_trips_the_spiral_framing ... ok
+test tests::persist::spectral_atmosphere_defaults_missing_controls_and_repairs_loaded_values ... ok
+test tests::persist::spectrum_config_round_trips_through_persist ... ok
+test tests::persist::star_rendering_controls_default_old_saves_and_roundtrip ... ok
+test tests::persist::tab_visibility_is_saved_only_with_the_editor ... ok
+test tests::persist::the_persist_blob_carries_exactly_these_top_level_keys ... ok
+test tests::persist::workspace_edits_do_not_change_recorded_appearance ... ok
+test tests::profile::profile_allocations ... ignored
+test tests::profile::profile_frame ... ignored
+test tests::profile::profile_picture_panes ... ignored
+test tests::profile::profile_settings_panes ... ignored
+test tests::profile::profile_shape_census ... ignored
+test tests::profile::profile_visual_runtime ... ignored
+test tests::scale::a_tab_bar_tracks_the_scale_and_still_fits_the_collapse_arrow ... ok
+test tests::scale::every_bar_has_its_declared_height ... ok
+test tests::scale::every_settings_row_is_one_row_high ... ok
+test tests::scale::pointing_at_a_control_leaves_the_row_where_it_is ... ok
+test tests::scale::the_dialled_skin_is_the_style_the_chrome_draws_with ... ok
+test tests::scale::the_ui_scale_leaves_the_picture_alone ... ok
+test tests::scale::the_ui_scale_shrinks_the_panel_chrome ... ok
+test tests::settings::a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer ... ok
+test tests::settings::a_configuration_fault_asks_for_a_host_reset ... ok
+test tests::settings::a_drag_that_loses_its_release_does_not_strand_the_wheel ... ok
+test tests::settings::a_folded_heading_keeps_its_rules_and_chevron_clear ... ok
+test tests::settings::a_heading_switch_turns_its_feature_off_without_folding_the_section ... ok
+test tests::settings::a_render_that_has_not_announced_its_total_has_no_fraction ... ok
+test tests::settings::a_transient_tuning_status_does_not_move_the_adaptive_controls ... ok
+test tests::settings::each_readings_own_bar_is_the_one_that_is_live ... ok
+test tests::settings::each_settings_tab_draws_its_own_body_and_only_that ... ok
+test tests::settings::every_bar_fills_its_settings_column_or_diagram_value_column ... ok
+test tests::settings::every_gradient_group_previews_itself_above_its_bars ... ok
+test tests::settings::every_settings_pane_scrolls_when_its_content_overflows ... ok
+test tests::settings::hidden_audio_ring_keeps_restoration_instructions ... ok
+test tests::settings::history_stays_editable_without_midi_ribbons ... ok
+test tests::settings::no_settings_pane_overruns_a_narrow_column ... ok
+test tests::settings::no_settings_tab_repeats_a_section_heading ... ok
+test tests::settings::nothing_is_drawn_under_a_settings_pane_scroll_bar ... ok
+test tests::settings::opening_analyzer_settings_does_not_change_loaded_values ... ok
+test tests::settings::shadow_falloff_only_appears_for_contour_shadows ... ok
+test tests::settings::temperament_switches_sit_beside_their_intervals ... ok
+test tests::settings::temperament_switches_wrap_under_their_intervals ... ok
+test tests::settings::the_cancel_stands_with_the_render_bar_and_asks_for_the_stop ... ok
+test tests::settings::the_console_names_a_drag_the_wheel_had_to_end ... ok
+test tests::settings::the_glow_curve_bar_draws_the_curve_the_scene_receives ... ok
+test tests::settings::the_render_bar_fills_to_the_share_of_frames_done ... ok
+test tests::settings::the_scrolling_spectrogram_choice_names_its_span ... ok
+test tests::settings::the_shape_bars_preview_is_the_curve_the_notes_run_on ... ok
+test tests::settings::the_standalone_keeps_the_render_row_a_take_is_not_needed_for ... ok
+test tests::settings::the_video_pane_scrolls_instead_of_squeezing_its_preview ... ok
+test tests::settings::the_video_pane_starts_with_appearance_actions_before_any_rule ... ok
+test tests::settings_ranges::a_fresh_appearance_is_a_fixed_point_of_its_own_normalize ... ok
+test tests::settings_ranges::fresh_settings_fit_real_bars ... ok
+test tests::settings_ranges::loaded_settings_high_fit_real_bars ... ok
+test tests::settings_ranges::loaded_settings_low_fit_real_bars ... ok
+test tests::settings_ranges::the_loaded_state_guard_poisons_every_dialled_view_float ... ok
+test tests::shell::a_separator_reads_against_both_grounds_a_pane_can_paint ... ok
+test tests::shell::every_settings_tab_fits_on_its_tab_bar ... ok
+test tests::shell::every_tab_has_its_own_id_whatever_its_title_says ... ok
+test tests::shell::frame_interval_converts_a_cap_to_a_spacing ... ok
+test tests::shell::nonsense_caps_read_as_uncapped ... ok
+test tests::shell::repainting_keeps_a_detached_extension_smooth_past_the_history_window ... ok
+test tests::shell::the_picture_panes_do_not_scroll ... ok
+test tests::spectral::a_curving_zoom_drag_does_not_turn_into_a_pan ... ok
+test tests::spectral::a_drag_over_the_spectrum_zooms_the_level_and_not_the_span ... ok
+test tests::spectral::dragging_the_spectral_picture_along_time_zooms_the_span ... ok
+test tests::spectral::dragging_the_spectral_picture_pans_the_pitch_range ... ok
+test tests::spectral::resizing_the_analyzer_resizes_the_spectrogram_and_not_the_spectrum ... ok
+test tests::spectral::the_divider_still_wins_the_drag_over_the_pane_behind_it ... ok
+test tests::spectral::the_spectral_divider_drags_through_the_dock ... ok
+test tests::spectral::the_wheel_zooms_the_pitch_range_and_leaves_the_time_span_alone ... ok
+test tests::spectrum::a_bucket_rises_on_the_attack_and_falls_on_the_release ... ok
+test tests::spectrum::a_chord_fills_most_of_the_analyzers_height ... ok
+test tests::spectrum::a_live_column_is_stamped_at_the_middle_of_its_window ... ok
+test tests::spectrum::a_tones_energy_lands_at_the_time_the_tone_started ... ok
+test tests::spectrum::audio_spectrum_shows_while_flowing_and_hides_after ... ok
+test tests::spectrum::changing_the_estimator_preserves_history_and_the_source_hop_grid ... ok
+test tests::spectrum::clearing_everything_empties_all_four_accumulations ... ok
+test tests::spectrum::columns_are_evenly_spaced_however_the_shell_batches_them ... ok
+test tests::spectrum::fold_is_shared_by_real_dock_preview_and_discarded_passes ... ok
+test tests::spectrum::fold_measurement_observes_same_time_audio_and_width_edits ... ok
+test tests::spectrum::frame_observes_a_longer_fade_before_pruning ... ok
+test tests::spectrum::physical_chunks_preserve_the_complete_logical_batch ... ok
+test tests::spectrum::runtime_advances_histories_without_a_surface ... ok
+test tests::spectrum::spectrogram_history_stays_bounded ... ok
+test tests::spectrum::spectrum_history_reaches_the_retention_cap ... ok
+test tests::spectrum::stereo_analysis_preserves_an_antiphase_partial ... ok
+test tests::spectrum::stored_columns_stay_finer_than_the_slabs_they_are_drawn_into ... ok
+test tests::spectrum::the_heatmap_reads_its_own_color_level_scale ... ok
+test tests::spectrum::the_tapers_setting_reaches_the_analyzer ... ok
+test tests::spectrum::two_placements_of_one_pane_fold_a_grid_each ... ok
+test tests::zoom_memory::repeated_lattice_zooms_reuse_the_bounded_atlas ... ok
+test text::tests::a_fresh_context_is_shown_the_atlas_again ... ok
+test text::tests::a_glyph_at_a_new_texel_refreshes_the_mirror ... ok
+test text::tests::a_lattice_glyph_maps_one_sdf_patch_at_every_display_scale ... ok
+test text::tests::a_lattice_that_drew_no_names_hands_over_no_atlas ... ok
+test text::tests::a_pass_boundary_packs_the_sheet_back_down_to_what_is_drawn ... ok
+test text::tests::a_renderer_font_texture_replaces_the_cpu_atlas_publication ... ok
+test text::tests::a_scale_change_refreshes_the_mirror_though_nothing_else_moves ... ok
+test text::tests::a_sheet_still_drawing_all_its_marks_is_not_repacked ... ok
+test text::tests::a_spectral_k_label_casts_both_kinds_of_shadow_on_the_gpu ... ok
+test text::tests::a_zoom_moves_the_drawn_size_smoothly_and_the_atlas_by_rungs ... ok
+test text::tests::an_ink_correction_lands_a_label_the_same_way_at_any_size ... ok
+test text::tests::an_unchanged_nonempty_batch_keeps_publishing_the_mark_snapshot ... ok
+test text::tests::every_batch_drawn_in_a_frame_has_an_id_of_its_own ... ok
+test text::tests::every_mark_gets_a_patch_of_its_own ... ok
+test text::tests::snapping_bounds_the_sizes_a_zoom_can_ask_for ... ok
+test text::tests::the_ladder_reconstructs_a_size_and_bounds_it_at_the_ceiling ... ok
+test text::tests::the_sheet_only_grows_downward_within_a_pass ... ok
+test text_sdf::tests::every_shadowed_text_producer_character_and_drawn_mark_has_an_sdf ... ok
+test text_sdf::tests::regenerate_the_baked_sheet ... ignored, writes the checked-in SDF asset
+test text_sdf::tests::the_baked_sheet_decodes_without_generating_fields ... ok
+test text_sdf::tests::the_baked_sheet_is_byte_identical_to_exact_regeneration ... ok
+test text_sdf::tests::the_exact_transform_puts_zero_between_ink_and_clear ... ok
+test text_sdf::tests::the_near_and_coarse_fields_handoff_without_a_step ... ok
+test widgets::bar::tests::coinciding_thumbs_paint_the_lit_one_last ... ok
+test widgets::bend::tests::a_click_moves_the_corner_and_a_double_click_straightens_it ... ok
+test widgets::direct_tests::cabinet_endpoint_sets_angle_and_length_within_the_quadrant ... ok
+test widgets::direct_tests::color_popup_edits_its_real_skin_coordinates_and_restores_pane_bounds ... ok
+test widgets::direct_tests::compact_values_fit_beside_the_picture_and_stack_in_narrow_panes ... ok
+test widgets::direct_tests::contour_slider_snaps_to_whole_levels_and_updates_its_preview ... ok
+test widgets::direct_tests::drift_edits_vector_and_compass_keeps_speed_independent ... ok
+test widgets::direct_tests::fade_duration_gesture_is_bracketed_and_shape_does_not_edit_time ... ok
+test widgets::direct_tests::numeric_entries_use_display_units_and_reject_non_finite_input ... ok
+test widgets::direct_tests::response_times_are_independent_and_zero_is_reachable ... ok
+test widgets::direct_tests::shadow_sliders_update_the_preview_without_switching_kernel ... ok
+test widgets::direct_tests::softness_handle_edits_both_axes ... ok
+test widgets::direct_tests::spectrum_buttons_form_a_compact_rectangle_and_select_each_edge ... ok
+test widgets::direct_tests::star_depth_endpoints_and_curve_edit_without_idle_round_trips ... ok
+test widgets::direct_tests::threshold_can_keep_a_band_below_zero_without_changing_the_gate ... ok
+test widgets::gradient::tests::a_band_lands_on_the_pixel_grid_the_bars_beside_it_do ... ok
+test widgets::gradient::tests::a_bar_reads_out_its_two_ends_in_pitch_order ... ok
+test widgets::gradient::tests::a_bar_stands_its_handles_where_its_numbers_say ... ok
+test widgets::gradient::tests::a_bar_stands_nothing_on_the_track_but_its_two_ends ... ok
+test widgets::gradient::tests::a_brightness_readout_names_the_ends_the_curve_draws ... ok
+test widgets::gradient::tests::a_chroma_readout_names_the_ends_the_curve_draws ... ok
+test widgets::gradient::tests::a_column_too_narrow_for_both_gives_the_row_to_the_button ... ok
+test widgets::gradient::tests::a_double_click_goes_home_to_the_gradient_the_bar_was_handed ... ok
+test widgets::gradient::tests::a_drag_begun_on_the_flip_button_turns_nothing ... ok
+test widgets::gradient::tests::a_dragged_end_moves_itself_and_leaves_its_partner ... ok
+test widgets::gradient::tests::a_dragged_end_stops_at_the_axis ... ok
+test widgets::gradient::tests::a_flat_ramp_opens_the_way_it_is_dragged ... ok
+test widgets::gradient::tests::a_flip_is_the_same_arc_read_backwards ... ok
+test widgets::gradient::tests::a_press_clear_of_the_handle_turns_the_circle_whichever_way_it_runs ... ok
+test widgets::gradient::tests::a_press_within_a_spread_ends_reach_takes_that_end_whichever_way_it_runs ... ok
+test widgets::gradient::tests::a_press_within_the_handles_reach_drags_the_handle_whichever_way_it_runs ... ok
+test widgets::gradient::tests::a_real_drag_on_a_brightness_bar_keeps_the_gesture_it_started ... ok
+test widgets::gradient::tests::a_real_drag_on_a_chroma_bar_lands_on_whole_percentages ... ok
+test widgets::gradient::tests::a_resting_pointer_lights_the_spread_end_it_is_beside ... ok
+test widgets::gradient::tests::a_slid_ramp_keeps_its_grabbed_width ... ok
+test widgets::gradient::tests::a_slid_ramp_squishes_against_the_end_it_meets ... ok
+test widgets::gradient::tests::a_span_of_nothing_reads_out_with_no_direction ... ok
+test widgets::gradient::tests::a_spectrum_drag_draws_the_arc_it_just_set ... ok
+test widgets::gradient::tests::a_spectrum_drag_draws_the_preview_it_just_set ... ok
+test widgets::gradient::tests::a_spread_bar_knocks_out_both_its_runs_under_a_thumb ... ok
+test widgets::gradient::tests::a_wide_ramp_leaves_both_the_handles_and_the_slide_reachable ... ok
+test widgets::gradient::tests::an_end_dragged_past_its_partner_inverts_the_ramp ... ok
+test widgets::gradient::tests::both_colour_bands_are_rounded_by_their_own_mesh ... ok
+test widgets::gradient::tests::both_colour_bands_fade_out_at_their_edges ... ok
+test widgets::gradient::tests::snapping_alone_would_leave_a_chroma_pair_sanitize_pulls_in ... ok
+test widgets::gradient::tests::the_bar_can_only_reach_pairs_sanitize_leaves_alone ... ok
+test widgets::gradient::tests::the_bars_the_panes_build_are_knocked_out_wherever_they_rest_under_a_thumb ... ok
+test widgets::gradient::tests::the_dimmed_remainder_is_the_same_circle_held_back ... ok
+test widgets::gradient::tests::the_flip_button_reads_the_arc_backwards ... ok
+test widgets::gradient::tests::the_handles_reach_is_the_same_at_every_chrome_scale ... ok
+test widgets::gradient::tests::the_middle_stays_grabbable_at_a_flat_ramp ... ok
+test widgets::gradient::tests::the_name_rides_the_circle_and_the_number_keeps_off_it ... ok
+test widgets::gradient::tests::the_pair_a_bar_writes_puts_both_ends_on_whole_readout_units ... ok
+test widgets::gradient::tests::the_preview_is_a_picture_and_not_a_control ... ok
+test widgets::gradient::tests::the_spectrum_bar_track_is_a_whole_turn_of_the_span_knob ... ok
+test widgets::gradient::tests::the_spectrum_handle_knocks_out_the_name_it_stands_in ... ok
+test widgets::gradient::tests::the_spectrum_handle_stands_where_its_readout_says ... ok
+test widgets::gradient::tests::the_track_is_hue_alone_and_the_preview_is_the_gradient ... ok
+test widgets::gradient::tests::turning_the_spectrum_keeps_the_grabbed_hue_under_the_pointer ... ok
+test widgets::label::tests::a_line_of_text_stands_one_gap_over_whatever_follows_it ... ok
+test widgets::layer::tests::a_double_click_goes_home_to_the_stack_a_fresh_view_opens_with ... ok
+test widgets::layer::tests::a_drag_keeps_the_handle_it_started_on ... ok
+test widgets::layer::tests::a_single_sheet_slides_from_its_own_cell_and_opens_from_beside_it ... ok
+test widgets::layer::tests::either_end_dragged_to_the_edge_lands_on_the_last_sheet ... ok
+test widgets::layer::tests::every_gesture_has_somewhere_to_be_pressed_at_every_stack ... ok
+test widgets::layer::tests::hovering_an_end_lights_that_end_alone ... ok
+test widgets::layer::tests::no_gesture_lets_home_leave_the_stack ... ok
+test widgets::layer::tests::sliding_keeps_the_stacks_shape_through_a_wall_and_back ... ok
+test widgets::layer::tests::the_strip_draws_a_cell_per_sheet_on_a_fixed_axis ... ok
+test widgets::layer::tests::the_strip_reads_out_the_stack_it_draws ... ok
+test widgets::layer::tests::the_strip_stands_a_handle_on_each_end_and_on_home ... ok
+test widgets::layer::tests::the_tallest_cell_is_home_wherever_home_sits ... ok
+test widgets::profile::shadow_tests::spectral_preview_keeps_the_stronger_tails_and_finite_full_darkness ... ok
+test widgets::range::tests::a_closed_fade_span_paints_a_solid_fill ... ok
+test widgets::range::tests::a_closed_span_at_the_floor_still_opens ... ok
+test widgets::range::tests::a_closed_span_slides_from_above_and_opens_from_below ... ok
+test widgets::range::tests::a_drag_near_an_end_takes_that_end ... ok
+test widgets::range::tests::a_dragged_end_stops_at_the_minimum_span ... ok
+test widgets::range::tests::a_fade_bars_thumb_reaches_the_end_of_the_bar ... ok
+test widgets::range::tests::a_fade_ramp_fades_out_at_its_square_end ... ok
+test widgets::range::tests::a_fade_span_bars_name_is_knocked_out_where_its_thumb_rests_on_it ... ok
+test widgets::range::tests::a_fade_span_fills_from_the_floor_and_ramps_out ... ok
+test widgets::range::tests::a_fully_soft_edge_keeps_the_fills_corner_round ... ok
+test widgets::range::tests::a_middle_drag_takes_the_whole_span ... ok
+test widgets::range::tests::a_narrow_row_elides_the_name_rather_than_the_numbers ... ok
+test widgets::range::tests::a_plain_range_bars_thumb_keeps_its_clearance ... ok
+test widgets::range::tests::a_press_within_an_ends_reach_takes_that_end_whichever_way_it_runs ... ok
+test widgets::range::tests::a_range_bar_names_itself_on_the_bar ... ok
+test widgets::range::tests::a_range_filling_the_axis_still_drags_from_the_middle ... ok
+test widgets::range::tests::a_readout_never_leaves_the_bar_however_cramped_the_row ... ok
+test widgets::range::tests::a_row_of_no_width_paints_rather_than_panicking ... ok
+test widgets::range::tests::a_slid_span_follows_the_pointer_at_its_grabbed_offset ... ok
+test widgets::range::tests::a_slid_span_squishes_against_the_end_it_meets ... ok
+test widgets::range::tests::a_span_handed_in_closed_opens_to_the_minimum ... ok
+test widgets::range::tests::a_widened_head_is_still_cut_back_at_the_reach ... ok
+test widgets::range::tests::an_edge_of_no_reach_paints_no_fill ... ok
+test widgets::range::tests::an_end_against_the_minimum_span_holds_inward_and_opens_outward ... ok
+test widgets::range::tests::an_integer_range_bar_lands_on_whole_values ... ok
+test widgets::range::tests::no_thumb_ever_stands_in_a_number_at_the_widths_the_column_opens_at ... ok
+test widgets::range::tests::squishing_is_stable_and_reversible_within_the_gesture ... ok
+test widgets::range::tests::the_end_in_hand_is_the_one_lit ... ok
+test widgets::range::tests::the_ends_still_reach_the_limits ... ok
+test widgets::range::tests::the_handle_reach_leaves_a_narrow_span_pannable ... ok
+test widgets::range::tests::the_handles_read_as_handles_even_at_the_limits ... ok
+test widgets::range::tests::the_name_holds_its_place_however_the_handles_move ... ok
+test widgets::range::tests::the_name_is_knocked_out_where_a_thumb_stands_in_it ... ok
+test widgets::range::tests::the_name_is_painted_once_where_no_thumb_reaches_it ... ok
+test widgets::range::tests::the_numbers_never_reach_the_name ... ok
+test widgets::range::tests::the_readout_pair_falls_back_through_placement_order ... ok
+test widgets::range::tests::the_readouts_move_inside_when_the_span_leaves_no_room ... ok
+test widgets::range_probe::scopes_isolate_threads_nesting_and_unwinding ... ok
+test widgets::rows::tests::a_label_sits_on_the_line_of_the_button_beside_it ... ok
+test widgets::rows::tests::a_row_too_wide_for_its_column_wraps_inside_it ... ok
+test widgets::rows::tests::number_option_labels_are_monospace_at_the_rows_own_size ... ok
+test widgets::stack::tests::a_drag_moves_only_the_layer_it_was_aimed_at ... ok
+test widgets::stack::tests::a_handle_lands_where_it_is_dragged ... ok
+test widgets::stack::tests::a_layer_widened_past_the_room_left_drops_the_ones_outside_it ... ok
+test widgets::stack::tests::a_name_is_laid_against_the_layer_it_names ... ok
+test widgets::stack::tests::a_name_never_covers_another_layers_cell_more_than_its_own ... ok
+test widgets::stack::tests::a_pile_of_thumbs_still_answers_four_presses ... ok
+test widgets::stack::tests::a_press_on_a_layer_takes_that_layer ... ok
+test widgets::stack::tests::a_refused_layer_keeps_its_width_when_its_handle_is_dragged ... ok
+test widgets::stack::tests::a_resting_pointer_lights_the_thumb_a_press_there_takes ... ok
+test widgets::stack::tests::a_ring_dragged_past_the_quad_edge_stops_at_it ... ok
+test widgets::stack::tests::a_second_gesture_on_the_bar_chooses_for_itself ... ok
+test widgets::stack::tests::a_slot_starting_past_the_quad_edge_leaves_no_room ... ok
+test widgets::stack::tests::a_stack_past_the_end_keeps_its_thumbs_on_the_bar ... ok
+test widgets::stack::tests::a_thumb_stands_in_the_gap_its_layer_holds_open ... ok
+test widgets::stack::tests::an_off_layer_keeps_its_thumb_on_its_boundary ... ok
+test widgets::stack::tests::an_off_layer_leaves_its_room_to_the_names_outside_it ... ok
+test widgets::stack::tests::double_click_restores_the_fresh_stack ... ok
+test widgets::stack::tests::dragging_a_handle_home_switches_its_layer_off ... ok
+test widgets::stack::tests::every_layer_on_the_node_is_named ... ok
+test widgets::stack::tests::spreading_moves_only_the_thumbs_that_would_overlap ... ok
+test widgets::stack::tests::the_bar_draws_a_thumb_for_every_layer ... ok
+test widgets::stack::tests::the_cell_at_the_nodes_center_reaches_the_end_of_the_bar ... ok
+test widgets::stack::tests::the_cells_are_the_stack_the_node_draws ... ok
+test widgets::stack::tests::the_layers_outside_a_dragged_one_keep_their_widths ... ok
+test widgets::stack::tests::the_marks_reach_their_full_depth_past_the_quad_edge ... ok
+test widgets::stack::tests::the_names_read_out_in_the_stacks_own_order ... ok
+test widgets::stack::tests::the_outermost_handle_sizes_the_mark_strip ... ok
+test widgets::tabs::tests::a_named_overflow_button_takes_its_room_from_the_tabs ... ok
+test widgets::tabs::tests::a_narrowing_strip_keeps_its_leading_tabs_beside_an_overflow_button ... ok
+test widgets::tabs::tests::a_strip_short_of_room_gives_up_tabs_from_the_right ... ok
+test widgets::tabs::tests::a_strip_with_room_for_no_tab_is_the_named_overflow_button ... ok
+test widgets::tabs::tests::a_strip_with_room_shows_every_tab ... ok
+test widgets::tabs::tests::an_overflowed_selection_names_the_overflow_button ... ok
+test widgets::tabs::tests::the_overflow_menu_grows_to_fit_a_longer_hidden_tab ... ok
+test widgets::value::tests::a_badged_bar_says_so_even_when_its_name_is_elided ... ok
+test widgets::value::tests::a_bar_with_no_curve_paints_no_line ... ok
+test widgets::value::tests::a_bar_with_no_fill_still_stripes ... ok
+test widgets::value::tests::a_bars_name_and_readout_never_collide_or_leave_the_track ... ok
+test widgets::value::tests::a_bars_name_holds_still_while_its_number_changes_width ... ok
+test widgets::value::tests::a_curve_preview_is_drawn_over_the_fill_and_under_the_bars_own_text ... ok
+test widgets::value::tests::a_curve_preview_spans_the_track_at_every_value ... ok
+test widgets::value::tests::a_curve_preview_stays_inside_the_bar_when_its_caller_does_not ... ok
+test widgets::value::tests::a_fill_is_the_part_of_the_track_left_of_the_frontier ... ok
+test widgets::value::tests::a_light_stripe_stands_where_a_dark_one_does ... ok
+test widgets::value::tests::a_magnet_holds_the_bar_until_an_edit_pulls_clear ... ok
+test widgets::value::tests::a_singleton_range_has_a_finite_fill_and_cannot_move ... ok
+test widgets::value::tests::a_stripe_is_one_flat_colour ... ok
+test widgets::value::tests::a_stripe_takes_the_shade_of_the_side_it_stands_on ... ok
+test widgets::value::tests::a_swatch_grip_knocks_out_the_name_it_stands_on ... ok
+test widgets::value::tests::a_swatch_track_runs_the_values_colours_with_the_grip_on_its_own ... ok
+test widgets::value::tests::eased_positions_round_trip ... ok
+test widgets::value::tests::integer_bars_snap ... ok
+test widgets::value::tests::linear_positions_round_trip ... ok
+test widgets::value::tests::no_stripe_leaves_the_track ... ok
+test widgets::value::tests::numeric_entry_uses_the_displayed_unit ... ok
+test widgets::value::tests::the_pattern_travels_one_stripe_a_turn ... ok
+test widgets::value::tests::the_stripes_are_painted_under_the_bars_readings ... ok
+test widgets::value::tests::the_stripes_lean ... ok
+test widgets::value::tests::the_track_stripes_are_painted_under_the_fill ... ok
+test workspace::tests::a_window_resize_scales_the_width_held_by_a_folded_region ... ok
+test workspace::tests::folding_a_region_keeps_the_analyzer_at_its_drag_minimum ... ok
+test workspace::tests::folds_preserve_other_picture_dimensions_at_the_requested_window ... ok
+test workspace::tests::manual_resizing_does_not_change_a_hidden_pictures_remembered_size ... ok
+test workspace::tests::persisted_layout_defaults_and_sanitization_are_local ... ok
+
+test result: ok. 760 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 14.97s
+
+     Running unittests src/main.rs (target/release/deps/xtask-054940bfb88e6e28)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

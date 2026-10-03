@@ -1,0 +1,181 @@
+diff --git a/crates/harmonigraph-plugin/src/tuning/hub.rs b/crates/harmonigraph-plugin/src/tuning/hub.rs
+index bdfad506..517f99ae 100644
+--- a/crates/harmonigraph-plugin/src/tuning/hub.rs
++++ b/crates/harmonigraph-plugin/src/tuning/hub.rs
+@@ -1371,3 +1371,40 @@ pub struct TestContext {
+ }
+ 
+ const _: () = assert!(std::mem::size_of::<Record>() <= 96);
++
++#[cfg(test)]
++#[test]
++fn audit_epoch_rejection_does_not_spend_the_collection_budget() {
++    fn collect(epoch: u64) -> (usize, usize) {
++        let mut hub = Hub::new();
++        hub.epoch = 1;
++        let mut ends: Box<[Option<HubEnds>; TUNERS]> = Box::new(std::array::from_fn(|_| None));
++        let mut producers = Vec::new();
++        for slot in 0..3 {
++            let (mut tx, rx) = rtrb::RingBuffer::new(super::CAPTURE_RING);
++            let (reply_tx, _reply_rx) = rtrb::RingBuffer::new(super::REPLY_RING);
++            for serial in 0..super::CAPTURE_RING {
++                assert!(tx.push(session::Capture {
++                    retune: 1, epoch, serial: serial as u64 + 1, sample: serial as i64,
++                    event: Event::Midi { port: 0, data: [0xb0, 7, 1], flags: 0 },
++                }).is_ok());
++            }
++            ends[slot] = Some(HubEnds { captures: rx, replies: reply_tx });
++            producers.push(tx);
++        }
++        hub.ends = Some(ends);
++        let initial: usize = hub.ends.as_ref().unwrap().iter().flatten().map(|end| end.captures.slots()).sum();
++        assert_eq!(initial, 3 * super::CAPTURE_RING);
++        hub.collect();
++        let remaining: usize = hub.ends.as_ref().unwrap().iter().flatten().map(|end| end.captures.slots()).sum();
++        let result = (initial - remaining, hub.batch.len());
++        drop(producers);
++        result
++    }
++    let matching = collect(1);
++    assert_eq!(matching, (BATCH_EVENTS, BATCH_EVENTS));
++    let mismatched = collect(2);
++    assert_eq!(mismatched, (3 * super::CAPTURE_RING, 0));
++    assert!(mismatched.0 > BATCH_EVENTS);
++    eprintln!("matching: {} popped, {} retained; mismatched: {} popped, {} retained", matching.0, matching.1, mismatched.0, mismatched.1);
++}
+diff --git a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+index 20f30e2d..fbfe1291 100644
+--- a/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
++++ b/crates/harmonigraph-render/src/spectrogram/tests/star_split.rs
+@@ -705,3 +705,58 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
+         "the twinkling layer showed {cracks} cracks, darkest {twinkling}"
+     );
+ }
++
++#[test]
++fn audit_halo_only_resize_prepare_cpu_probe() {
++    let (device, queue) = headless_device().expect("GPU required for allocation probe");
++    let _split = SplitOverride::set(None);
++    let mut cb = star_fixture([1920, 1080], egui::Pos2::ZERO);
++    let a = cb.atmosphere.as_mut().unwrap();
++    a.settings.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Uniform;
++    a.settings.stars.star_halo_resolution = 0.5;
++    a.settings.color_pickup = 0.6;
++    a.settings.color_release = 0.6;
++    let mut resources = CallbackResources::default();
++    let screen = ScreenDescriptor { size_in_pixels: [1920, 1080], pixels_per_point: 1.0 };
++    let prepare_cpu_us = |cb: &SpectrogramCallback, resources: &mut CallbackResources| {
++        let mut encoder = device.create_command_encoder(&Default::default());
++        let start = std::time::Instant::now();
++        let buffers = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
++        let cpu_us = start.elapsed().as_secs_f64() * 1_000_000.0;
++        queue.submit(buffers.into_iter().chain([encoder.finish()]));
++        device.poll(wgpu::PollType::wait_indefinitely()).expect("drain probe frame");
++        cpu_us
++    };
++    for _ in 0..3 { cb.pass_nr += 1; prepare_cpu_us(&cb, &mut resources); }
++    let old_source = target(&resources).source_view.clone();
++    let old_shapes = { let t = target(&resources); (t.size, t.tone_size(), t.near_size(), t.tile_texels(), t.star_size(), t.memory_size()) };
++    let old_halos = target(&resources).halo_layout();
++    assert!(old_halos.is_some() && old_shapes.5.is_some());
++    cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = 0.25;
++    cb.pass_nr += 1;
++    prepare_cpu_us(&cb, &mut resources);
++    let t = target(&resources);
++    assert_ne!(t.halo_layout(), old_halos);
++    assert_eq!((t.size, t.tone_size(), t.near_size(), t.tile_texels(), t.star_size(), t.memory_size()), old_shapes, "another allocation shape changed");
++    assert_ne!(t.source_view, old_source, "halo-only change did not rebuild source");
++    let mut stable = Vec::with_capacity(30);
++    let mut changing = Vec::with_capacity(30);
++    for pair in 0..30 {
++        for change in if pair % 2 == 0 { [false, true] } else { [true, false] } {
++            let source = target(&resources).source_view.clone();
++            if change {
++                let s = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
++                s.star_halo_resolution = if s.star_halo_resolution == 0.25 { 0.5 } else { 0.25 };
++            }
++            cb.pass_nr += 1;
++            let us = prepare_cpu_us(&cb, &mut resources);
++            if change { changing.push(us); assert_ne!(target(&resources).source_view, source); }
++            else { stable.push(us); assert_eq!(target(&resources).source_view, source); }
++        }
++    }
++    eprintln!("stable_samples_us={stable:?}\nchanging_samples_us={changing:?}");
++    let percentiles = |samples: &mut Vec<f64>| { samples.sort_by(f64::total_cmp); ((samples[14]+samples[15])/2.0, samples[28]) };
++    let stable_us = percentiles(&mut stable);
++    let changing_us = percentiles(&mut changing);
++    eprintln!("halo-only prepare CPU us stable median/p95={stable_us:?}; changing median/p95={changing_us:?}; median_delta={}", changing_us.0-stable_us.0);
++}
+diff --git a/crates/harmonigraph-ui/src/panes/spectral/names.rs b/crates/harmonigraph-ui/src/panes/spectral/names.rs
+index 8097a7a5..b5771311 100644
+--- a/crates/harmonigraph-ui/src/panes/spectral/names.rs
++++ b/crates/harmonigraph-ui/src/panes/spectral/names.rs
+@@ -2839,3 +2839,34 @@ mod tests {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod audit_naming_probe {
++    use super::*;
++    #[test]
++    fn audit_fixed_just_pitch_uses_current_temperament_and_reaches_fallback() {
++        let just = Tuning::just();
++        let node = LatticePos::new(0, 1, 0);
++        let midi = 60.0 + just.five_cents() / 100.0;
++        let pitch = PitchClass::from_cents(midi.rem_euclid(12.0) * 100.0);
++        let mut view = ViewConfig::default();
++        view.meantone = false;
++        view.marvel = false;
++        let shown = view.reach();
++        assert!(shown.positions().any(|pos| pos == node));
++        let mut before = Namer::new(&view, shown, &just);
++        assert!(before.shows_node(pitch));
++        assert_eq!(before.name(midi).to_string(), "E-");
++        view.meantone = true;
++        view.marvel = true;
++        let equal = Tuning::default();
++        let shown = view.reach();
++        assert!(!equal.matches(pitch, equal.pitch_class(node)));
++        assert!(naming_node_from(shown.positions().map(|pos| (pos, equal.pitch_class(pos))), view.tempered(), &equal, pitch).is_none());
++        let mut after = Namer::new(&view, shown, &equal);
++        assert!(!after.shows_node(pitch));
++        assert_eq!(after.name(midi).to_string(), "E");
++        assert_eq!(after.name(midi), equal_tempered_name(midi));
++        eprintln!("fixed Just E at MIDI {midi}: current Just E- => current equal fallback E; no equal node matches");
++    }
++}
+diff --git a/crates/harmonigraph-ui/src/tests/spectrum.rs b/crates/harmonigraph-ui/src/tests/spectrum.rs
+index 8093db2c..2f7d01c9 100644
+--- a/crates/harmonigraph-ui/src/tests/spectrum.rs
++++ b/crates/harmonigraph-ui/src/tests/spectrum.rs
+@@ -839,3 +839,29 @@ fn physical_chunks_preserve_the_complete_logical_batch() {
+         }
+     }
+ }
++
++#[test]
++fn audit_display_recovers_after_one_nonfinite_audio_sample() {
++    let mut spectrum = AudioSpectrum::default();
++    let config = SpectrumConfig {
++        window: SpectrumWindow::Fast,
++        attack: 0.0,
++        release: 0.0,
++        ..SpectrumConfig::default()
++    };
++    let n = config.window.samples();
++    let mut poisoned = vec![0.0; n + 384];
++    poisoned[n / 2] = f32::NAN;
++    spectrum.push_samples(&poisoned, 1, 48_000.0, 1.0, &config);
++    let bad_before = spectrum.display(1.0).unwrap().iter().filter(|p| !p.is_finite()).count();
++    let clean: Vec<f32> = (0..2 * n).map(|i| 0.5 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin()).collect();
++    let clean_end = 1.0 + clean.len() as f64 / 48_000.0;
++    spectrum.push_samples(&clean, 1, 48_000.0, clean_end, &config);
++    let last = spectrum.history().back().expect("clean input emitted columns");
++    assert!(last.power_sum.iter().all(|p| p.is_finite()));
++    assert!(last.power_sum.iter().any(|p| *p > 0.01), "last FFT measures clean tone");
++    let shown = spectrum.display(clean_end).expect("clean input is flowing");
++    let bad_after = shown.iter().filter(|p| !p.is_finite()).count();
++    eprintln!("window={n}; nonfinite display buckets before={bad_before}, after two clean windows={bad_after}; latest history is finite and lit");
++    assert_eq!(bad_after, 0, "past nonfinite input must not permanently poison the display");
++}

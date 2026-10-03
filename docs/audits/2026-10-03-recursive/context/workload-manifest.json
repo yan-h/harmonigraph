@@ -1,0 +1,23 @@
+{
+  "synthetic": {
+    "seconds": 8,
+    "notes": 24,
+    "simultaneous_notes": 6,
+    "audio": "48kHz stereo PCM16 four-harmonic chords",
+    "appearance": "explicitly current defaults (no captured document)"
+  },
+  "historical": {
+    "source": "/Users/yan/Music/Harmonigraph Takes/take-2026-09-25_22-16-27.take",
+    "sha256": "425fd1eb08acebac4b371fbd7b37d773d20503a7f24a579a2bf19919c91e110f",
+    "audio": "/Users/yan/Music/Harmonigraph Takes/take-2026-09-25_22-16-27.wav",
+    "audio_bytes": 1400876,
+    "transformation": "scratch copy only: every header explicitly v6 with current-default appearance; original per-header sample rate and audio start retained; participating renamed shown; event, param, config lines otherwise identical",
+    "headers_converted": 2,
+    "field_renames": 0
+  },
+  "generated": {
+    "historical.take": "54fe28bed678dbe9eb6c95f7578e52379fc4eb5a1630027324867c1640d1ce74",
+    "chord.take": "0165e7e88b4da7faf5e0336e1130b34967563a992bac5e41db0ca2bacf4dd8a8",
+    "chord.wav": "8c574f63ecf1a26c1270d498a4b0cbbc97ef1068d795cdc703d17400018e2257"
+  }
+}

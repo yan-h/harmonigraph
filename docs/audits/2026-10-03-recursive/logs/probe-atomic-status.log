@@ -1,0 +1,2 @@
+ProcessStatus: size=24 align=8 AtomicCell lock_free=false
+u32: size=4 align=4 AtomicCell lock_free=true; AtomicU32 size=4

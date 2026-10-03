@@ -1,0 +1,22 @@
+/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/inputs/chord.take: 7.8s take -> 480 frames at 60 fps, 1920x1080 @ 1.50x -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1920x1080-2.mp4
+progress: 0/480 frames (0%)
+[aist#1:0/pcm_s16le @ 0x7706c30300] Guessed Channel Layout: stereo
+time: command terminated abnormally
+        0.36 real         0.13 user         0.10 sys
+           123371520  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                9193  page reclaims
+                   7  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                3027  voluntary context switches
+                1961  involuntary context switches
+          1370245133  instructions retired
+           722488957  cycles elapsed
+           316965728  peak memory footprint

@@ -1,0 +1,57 @@
+   Compiling serde_core v1.0.228
+   Compiling syn v2.0.119
+   Compiling once_cell v1.21.4
+   Compiling serde_derive v1.0.228
+   Compiling bytemuck_derive v1.11.0
+   Compiling bytemuck v1.25.1
+   Compiling zerocopy-derive v0.8.54
+   Compiling thiserror-impl v2.0.18
+   Compiling zerocopy v0.8.54
+   Compiling thiserror v2.0.18
+   Compiling serde v1.0.228
+   Compiling bitflags v2.13.1
+   Compiling objc2-core-foundation v0.3.2
+   Compiling smallvec v1.15.2
+   Compiling parking_lot_core v0.9.12
+   Compiling parking_lot v0.12.5
+   Compiling objc2-foundation v0.3.2
+   Compiling kurbo v0.13.1
+   Compiling half v2.7.1
+   Compiling font-types v0.11.3
+   Compiling naga v29.0.4
+   Compiling wgpu-types v29.0.4
+   Compiling objc2-metal v0.3.2
+   Compiling color v0.3.3
+   Compiling peniko v0.6.1
+   Compiling read-fonts v0.39.2
+   Compiling objc2-quartz-core v0.3.2
+   Compiling raw-window-metal v1.1.0
+   Compiling vello_common v0.0.9
+   Compiling emath v0.35.0
+   Compiling ecolor v0.35.0
+   Compiling vello_cpu v0.0.9
+   Compiling wgpu-naga-bridge v29.0.4
+   Compiling wgpu-hal v29.0.4 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/vendor/wgpu-hal)
+   Compiling skrifa v0.42.1
+   Compiling harfrust v0.7.0
+   Compiling wgpu-core-deps-apple v29.0.4
+   Compiling ahash v0.8.12
+   Compiling wgpu-core v29.0.4
+   Compiling uuid v1.24.0
+   Compiling enumn v0.1.14
+   Compiling epaint v0.35.0
+   Compiling accesskit v0.24.1
+   Compiling glam v0.33.6
+   Compiling egui v0.35.0
+   Compiling harmonigraph-scene v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-scene)
+   Compiling wgpu v29.0.4
+   Compiling ron v0.12.2
+   Compiling egui-wgpu v0.35.0
+   Compiling harmonigraph-take v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-take)
+   Compiling png v0.18.1
+   Compiling image v0.25.10
+   Compiling harmonigraph-render v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-render)
+   Compiling harmonigraph-perf v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-perf)
+   Compiling harmonigraph-ui v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-ui)
+   Compiling harmonigraph-offline v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-offline)
+    Finished `release` profile [optimized] target(s) in 1m 12s

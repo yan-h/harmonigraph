@@ -1,0 +1,27 @@
+/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/inputs/chord.take: 7.8s take -> 480 frames at 60 fps, 1280x720 @ 1.00x -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1280x720-1.mp4
+progress: 0/480 frames (0%)
+[aist#1:0/pcm_s16le @ 0x7ad2810300] Guessed Channel Layout: stereo
+progress: 17/480 frames (3%)progress: 77/480 frames (16%)progress: 127/480 frames (26%)progress: 182/480 frames (37%)progress: 236/480 frames (49%)progress: 293/480 frames (61%)progress: 320/480 frames (66%)progress: 363/480 frames (75%)progress: 409/480 frames (85%)progress: 465/480 frames (96%)[mp4 @ 0x7ad3428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+progress: 480/480 frames (100%)
+progress: 480/480 frames (100%)
+done: 480 frames -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1280x720-1.mp4
+timing: a 480-frame export in 5.3 s, 4.9 s of it drawing at 97.5 fps — ui+tess 0.94 ms/frame (9%), submit 2.29 ms/frame (22%), readback 6.92 ms/frame (67%), emit 0.10 ms/frame (1%)
+        5.29 real        18.06 user         1.85 sys
+           360824832  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               42999  page reclaims
+                 218  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+               54128  voluntary context switches
+              105189  involuntary context switches
+         10793953161  instructions retired
+          7031045613  cycles elapsed
+           272696160  peak memory footprint

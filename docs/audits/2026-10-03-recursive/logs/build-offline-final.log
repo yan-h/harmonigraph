@@ -1,0 +1,5 @@
+Waiting for shared audit lock
+Acquired shared audit lock 2026-10-03T18:05:01.732374+00:00
+   Compiling harmonigraph-ui v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-ui)
+   Compiling harmonigraph-offline v0.5.0 (/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/crates/harmonigraph-offline)
+    Finished `release` profile [optimized] target(s) in 6.14s

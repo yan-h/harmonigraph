@@ -1,0 +1,84 @@
+# History map: origin/main, last 250: 250 changes, 245 touching the files mapped
+
+## Hotspots (changes, of them with a fix-like subject, lines now)
+   70    4    809  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+   64    2    333  crates/harmonigraph-metal-assets/assets/manifest.json
+   59    6   2222  crates/harmonigraph-ui/src/tests/persist.rs
+   55    1    555  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+   53    1    975  crates/harmonigraph-scene/src/atmosphere.rs
+   52    2   2571  crates/harmonigraph-render/src/spectrogram/atmosphere.rs
+   49    2   4412  crates/harmonigraph-render/src/spectrogram.rs
+   48    3    967  crates/harmonigraph-scene/src/lib.rs
+   47    1    537  crates/harmonigraph-scene/src/tests/finite.rs
+   38    5   1819  crates/harmonigraph-ui/src/tests/settings.rs
+   37    1    997  crates/harmonigraph-render/src/shaders/spectrogram.wgsl
+   32    1    581  crates/harmonigraph-render/src/lattice_frame.rs
+   32    1    946  crates/harmonigraph-metal-assets/assets/1895dcf296346a4b.metal
+   32    1   1146  crates/harmonigraph-metal-assets/assets/8b2dfd21a854b0da.metal
+   32    1    947  crates/harmonigraph-metal-assets/assets/c115d2f5daee9170.metal
+   32    1   1147  crates/harmonigraph-metal-assets/assets/d33b952958e8ccf4.metal
+   31    1   3730  crates/harmonigraph-render/src/shaders/lattice.wgsl
+   31    0    489  crates/harmonigraph-metal-assets/assets/e84724ee6416845d.metal
+   30    0     66  crates/harmonigraph-metal-assets/assets/256092bc05887c3c.metal
+   29    2   1525  crates/harmonigraph-scene/src/view/mod.rs
+   29    1      7  crates/harmonigraph-metal-assets/assets/07d855ffb565d6cd.options
+   29    0      7  crates/harmonigraph-metal-assets/assets/117d709742072482.options
+   28    1    446  crates/harmonigraph-metal-assets/assets/e70f17e05313c8c9.metal
+   28    1    451  crates/harmonigraph-offline/golden/spectrogram-spectral-shadows-mixed.png
+   27    1   2098  crates/harmonigraph-metal-assets/assets/9fb9c0566c2f08b7.metal
+
+## Change coupling across directories (changes together)
+    7  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer.rs
+    7  crates/harmonigraph-ui/src/panes/spectral/settings.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    7  crates/harmonigraph-ui/src/panes/spectral/tests.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    7  crates/harmonigraph-ui/src/panes/spectral/tests.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    6  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    6  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/testing.rs
+    6  crates/harmonigraph-ui/src/panes/spectral/settings.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    5  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+    5  crates/harmonigraph-ui/src/tests/fold.rs  +  crates/harmonigraph-ui/src/workspace.rs
+    4  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    4  crates/harmonigraph-record/src/recorder.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    4  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/canonical_tests.rs
+    4  crates/harmonigraph-record/src/recorder/writer.rs  +  crates/harmonigraph-record/src/recorder/writer/tests.rs
+    4  crates/harmonigraph-scene/src/atmosphere.rs  +  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+    4  crates/harmonigraph-offline/golden/spectrogram-spectral-shadows-mixed.png  +  crates/harmonigraph-ui/src/panes/spectral/settings.rs
+    4  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/lib.rs
+    4  crates/harmonigraph-plugin/src/configuration/tests.rs  +  crates/harmonigraph-plugin/src/tuning/hub.rs
+    4  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+    4  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/tests/settings_ranges.rs
+    4  crates/harmonigraph-ui/src/panes/spectral/settings.rs  +  crates/harmonigraph-ui/src/tests/settings.rs
+    4  crates/harmonigraph-ui/src/panes/mod.rs  +  crates/harmonigraph-ui/src/state.rs
+    4  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/panes/spectral/atmosphere.rs
+    4  crates/harmonigraph-ui/src/config.rs  +  crates/harmonigraph-ui/src/panes/spectral/tests.rs
+    4  crates/harmonigraph-ui/src/lib.rs  +  crates/harmonigraph-ui/src/panes/spectral/tests.rs
+    4  crates/harmonigraph-ui/src/lib.rs  +  crates/harmonigraph-ui/src/tests/persist.rs
+
+## Widest changes (files touched; read the ones that change one concept)
+  210  9bb46cad90  Share Stars rendering with the lattice background (#1269)
+  127  fd1877deeb  Apply pane-relative sizing and stable ribbon labels (#1404)
+  123  dd2937c0fc  Delete Mosaic; give Scales Squareness and Tilt (#1354)
+  121  5542ef76b0  Replace shadow S curves with signed exponential falloff (#1041)
+  111  7d5ee5c31d  Keep notation shadows local and add Gaussian shadow spread (#1164)
+  104  277c1aeb50  Occlude node ink through a grid of its bin's casters, not every later node (#1114)
+  100  b5d54de977  Add watercolor lattice glow with source roughness (#1236)
+   99  adde6e286d  Add balanced watercolor brightness randomness (#1267)
+   97  978f856876  Add Velvet Scales material with independent shape controls (#1273)
+   88  42bdfedabd  Stars: remove Distant gap fill and Overlap light (#1356)
+   87  81d1f4f6bb  Condense overlapping visual controls (#1353)
+   83  e6dc633685  Stars: outer-radius star shape, auto gather with clamp, test bed as overrides (#1347)
+   82  07a1ca6692  Stars: dev-only per-depth test bed over a shared star plan (#1337)
+   79  71b0582bbc  Stars: Star layers, Solid + Glow falloff shape, reversible ranges, steady clamp notice (#1357)
+   77  2fa0110cbb  Share lattice pipeline construction and scene transmission (#1213)
+   76  eb968753c6  Lattice drift leftovers: closed-form octaves, occlusion follows Darkness, Clouds detail fade, true-radius hovers (#1344)
+   74  ae4309c6d2  Stars: Twinkle, so a dense layer can close its gaps (#1401)
+   71  0665a5e8a5  Share one Bloom base, measure note intensity from rest, and reshape slices and ribbons by thickness (#1140)
+   70  036e4fac15  Stars: remove the dev test bed (#1359)
+   69  e82a641dca  Lattice stars: spectrogram level model, 5x sizes, separate size variation (#1287)
+   68  80994dd9cc  Add lattice Mosaic using shared spectrogram geometry (#1237)
+   61  fd7c8f9f9f  Add configurable Stars jitter and halo resolution (#1234)
+   61  cf0fc72697  Share lattice and spectrogram material controls (#1240)
+   61  ad1c6e6b94  Simplify shadow previews and fade blur shadows with lattice slices (#1429)
+   60  90f0dc72f9  Bring back Watercolor pigment as Edge pooling, with width, softness and a lightening side (#1335)
+
+Fix-like subjects are a rough signal: read each commit before citing it.

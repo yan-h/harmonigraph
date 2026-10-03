@@ -1,0 +1,27 @@
+/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/inputs/chord.take: 7.8s take -> 480 frames at 60 fps, 1920x1080 @ 1.50x -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/export-chord-1920x1080-0.mp4
+progress: 0/480 frames (0%)
+[aist#1:0/pcm_s16le @ 0x7b5b400300] Guessed Channel Layout: stereo
+progress: 4/480 frames (0%)progress: 49/480 frames (10%)progress: 82/480 frames (17%)progress: 116/480 frames (24%)progress: 150/480 frames (31%)progress: 188/480 frames (39%)progress: 221/480 frames (46%)progress: 248/480 frames (51%)progress: 277/480 frames (57%)progress: 306/480 frames (63%)progress: 320/480 frames (66%)progress: 345/480 frames (71%)progress: 374/480 frames (77%)progress: 399/480 frames (83%)progress: 431/480 frames (89%)progress: 465/480 frames (96%)[mp4 @ 0x7b5b428500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+progress: 480/480 frames (100%)
+progress: 480/480 frames (100%)
+done: 480 frames -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/export-chord-1920x1080-0.mp4
+timing: a 480-frame export in 8.4 s, 7.3 s of it drawing at 65.3 fps — ui+tess 1.03 ms/frame (7%), submit 2.42 ms/frame (16%), readback 9.30 ms/frame (61%), emit 2.55 ms/frame (17%)
+        8.45 real        34.49 user         3.11 sys
+           752680960  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               75817  page reclaims
+                 105  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+              116399  voluntary context switches
+              156797  involuntary context switches
+         12412575144  instructions retired
+          8523575446  cycles elapsed
+           341295992  peak memory footprint

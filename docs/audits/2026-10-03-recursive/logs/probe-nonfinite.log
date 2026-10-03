@@ -1,0 +1,18 @@
+
+running 1 test
+test tests::spectrum::audit_display_recovers_after_one_nonfinite_audio_sample ... window=4096; nonfinite display buckets before=2564, after two clean windows=2564; latest history is finite and lit
+
+thread 'tests::spectrum::audit_display_recovers_after_one_nonfinite_audio_sample' (634402) panicked at crates/harmonigraph-ui/src/tests/spectrum.rs:866:5:
+assertion `left == right` failed: past nonfinite input must not permanently poison the display
+  left: 2564
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    tests::spectrum::audit_display_recovers_after_one_nonfinite_audio_sample
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 769 filtered out; finished in 0.00s
+

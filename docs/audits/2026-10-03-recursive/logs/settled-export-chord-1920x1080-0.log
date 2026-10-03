@@ -1,0 +1,27 @@
+/Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/inputs/chord.take: 7.8s take -> 480 frames at 60 fps, 1920x1080 @ 1.50x -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1920x1080-0.mp4
+progress: 0/480 frames (0%)
+[aist#1:0/pcm_s16le @ 0x7cc5050300] Guessed Channel Layout: stereo
+progress: 2/480 frames (0%)progress: 4/480 frames (0%)progress: 7/480 frames (1%)progress: 10/480 frames (2%)progress: 13/480 frames (2%)progress: 14/480 frames (2%)progress: 16/480 frames (3%)progress: 17/480 frames (3%)progress: 19/480 frames (3%)progress: 22/480 frames (4%)progress: 25/480 frames (5%)progress: 27/480 frames (5%)progress: 28/480 frames (5%)progress: 29/480 frames (6%)progress: 34/480 frames (7%)progress: 37/480 frames (7%)progress: 39/480 frames (8%)progress: 41/480 frames (8%)progress: 43/480 frames (8%)progress: 46/480 frames (9%)progress: 50/480 frames (10%)progress: 52/480 frames (10%)progress: 57/480 frames (11%)progress: 58/480 frames (12%)progress: 62/480 frames (12%)progress: 64/480 frames (13%)progress: 66/480 frames (13%)progress: 69/480 frames (14%)progress: 73/480 frames (15%)progress: 74/480 frames (15%)progress: 76/480 frames (15%)progress: 79/480 frames (16%)progress: 82/480 frames (17%)progress: 85/480 frames (17%)progress: 88/480 frames (18%)progress: 91/480 frames (18%)progress: 94/480 frames (19%)progress: 97/480 frames (20%)progress: 100/480 frames (20%)progress: 103/480 frames (21%)progress: 106/480 frames (22%)progress: 112/480 frames (23%)progress: 113/480 frames (23%)progress: 114/480 frames (23%)progress: 117/480 frames (24%)progress: 122/480 frames (25%)progress: 124/480 frames (25%)progress: 127/480 frames (26%)progress: 129/480 frames (26%)progress: 132/480 frames (27%)progress: 135/480 frames (28%)progress: 136/480 frames (28%)progress: 137/480 frames (28%)progress: 141/480 frames (29%)progress: 145/480 frames (30%)progress: 147/480 frames (30%)progress: 151/480 frames (31%)progress: 154/480 frames (32%)progress: 156/480 frames (32%)progress: 159/480 frames (33%)progress: 162/480 frames (33%)progress: 165/480 frames (34%)progress: 171/480 frames (35%)progress: 174/480 frames (36%)progress: 177/480 frames (36%)progress: 180/480 frames (37%)progress: 183/480 frames (38%)progress: 184/480 frames (38%)progress: 185/480 frames (38%)progress: 189/480 frames (39%)progress: 191/480 frames (39%)progress: 194/480 frames (40%)progress: 195/480 frames (40%)progress: 198/480 frames (41%)progress: 201/480 frames (41%)progress: 204/480 frames (42%)progress: 207/480 frames (43%)progress: 209/480 frames (43%)progress: 210/480 frames (43%)progress: 221/480 frames (46%)progress: 223/480 frames (46%)progress: 227/480 frames (47%)progress: 230/480 frames (47%)progress: 235/480 frames (48%)progress: 238/480 frames (49%)progress: 249/480 frames (51%)progress: 254/480 frames (52%)progress: 256/480 frames (53%)progress: 262/480 frames (54%)progress: 280/480 frames (58%)progress: 306/480 frames (63%)progress: 331/480 frames (68%)progress: 350/480 frames (72%)progress: 373/480 frames (77%)progress: 397/480 frames (82%)progress: 425/480 frames (88%)progress: 459/480 frames (95%)[mp4 @ 0x7cc5058500] Not writing any edit list even though one would have been required
+    Last message repeated 2 times
+progress: 480/480 frames (100%)
+progress: 480/480 frames (100%)
+done: 480 frames -> /Users/yan/.codex/worktrees/recursive-audit/harmonigraph/docs/audits/2026-10-03-recursive/experiments/output/settled-export-chord-1920x1080-0.mp4
+timing: a 480-frame export in 97.3 s, 95.5 s of it drawing at 5.0 fps — ui+tess 15.67 ms/frame (8%), submit 52.65 ms/frame (26%), readback 61.11 ms/frame (31%), emit 69.46 ms/frame (35%)
+       97.35 real        59.08 user        10.25 sys
+           731987968  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              536196  page reclaims
+                2901  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+              118591  voluntary context switches
+              427249  involuntary context switches
+         13429663318  instructions retired
+         13842868407  cycles elapsed
+           341394296  peak memory footprint
