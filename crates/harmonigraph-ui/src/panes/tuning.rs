@@ -589,38 +589,42 @@ fn instance_controls(
     instances: &[crate::params::TuningInstance],
 ) {
     use crate::params::InstanceEdit;
-    ui.horizontal_wrapped(|ui| {
-        // Wrap whole controls; a label split into the last few points of a row
-        // can still leave its checkbox icon outside the column.
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-        for (label, retune) in [("Retune all", true), ("Show all", false)] {
-            let enabled =
-                instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
-            let mut all = enabled == instances.len();
-            let mixed = enabled != 0 && !all;
-            if ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed)).clicked() {
-                let value = enabled != instances.len();
-                for row in instances {
-                    params.edit_tuning_instance(
-                        row.id,
-                        if retune {
-                            InstanceEdit::Retune(value)
-                        } else {
-                            InstanceEdit::Show(value)
-                        },
-                    );
-                }
+    let scale = theme::ui_scale(ui.ctx());
+    let compact = ui.available_width() < 220.0 * scale;
+    let bulk_control = |ui: &mut egui::Ui, label: &str, retune: bool| {
+        let enabled =
+            instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
+        let mut all = enabled == instances.len();
+        let mixed = enabled != 0 && !all;
+        let response = if compact {
+            // A direct widget can wrap as a whole in the stacked layout.
+            ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed))
+        } else {
+            crate::widgets::checkbox_indeterminate(ui, &mut all, label, mixed)
+        };
+        if response
+            .on_hover_text(if retune { "Retune all instances" } else { "Show all instances" })
+            .clicked()
+        {
+            let value = enabled != instances.len();
+            for row in instances {
+                params.edit_tuning_instance(
+                    row.id,
+                    if retune { InstanceEdit::Retune(value) } else { InstanceEdit::Show(value) },
+                );
             }
         }
-    });
+    };
     let selection = ui.id().with("tuning-instance-selection");
     let mut selected = ui.data(|data| data.get_temp::<u64>(selection)).unwrap_or(instances[0].id);
     if !instances.iter().any(|row| row.id == selected) {
         selected = instances[0].id;
     }
-    let compact = ui.available_width() < 200.0 * theme::ui_scale(ui.ctx());
-    let name_width =
-        if compact { ui.available_width() } else { (ui.available_width() - 120.0).max(45.0) };
+    let name_width = if compact {
+        ui.available_width()
+    } else {
+        (ui.available_width() - 140.0 * scale).max(60.0 * scale)
+    };
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         ui.allocate_ui_with_layout(
             egui::vec2(name_width, ui.spacing().interact_size.y),
@@ -670,6 +674,11 @@ fn instance_controls(
         }
     };
     if compact {
+        ui.horizontal_wrapped(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            bulk_control(ui, "Retune all", true);
+            bulk_control(ui, "Show all", false);
+        });
         for row in instances {
             ui.push_id(row.id, |ui| {
                 identity(ui, row);
@@ -679,8 +688,8 @@ fn instance_controls(
     } else {
         egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
             crate::widgets::weak(ui, "Instance");
-            crate::widgets::weak(ui, "Retune");
-            crate::widgets::weak(ui, "Show");
+            bulk_control(ui, "Retune", true);
+            bulk_control(ui, "Show", false);
             ui.end_row();
             for row in instances {
                 ui.push_id(row.id, |ui| identity(ui, row));

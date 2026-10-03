@@ -340,7 +340,8 @@ Without a track name or override, the row uses **Tune N** or **Harmonigraph inpu
 Its **Instance details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
 Custom names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
 Retune defaults on for a Tune and off for Harmonigraph's own input.
-**Retune all** and **Show all** independently control all currently loaded instances, including the Hub input.
+The **Retune** and **Show** column-header checkboxes independently control all currently loaded instances, including the Hub input.
+In narrow columns, the stacked layout labels these controls **Retune all** and **Show all**.
 A mixed checkbox enables everyone on its next click;
 an enabled checkbox disables everyone, and individual rows remain adjustable afterward.
 New instances start from their own saved settings or defaults.

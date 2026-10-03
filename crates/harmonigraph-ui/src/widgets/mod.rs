@@ -43,7 +43,9 @@ pub use range::RangeBar;
 pub use rows::{
     button_row, checkbox, choice_row, option_label, record_button, row_field, toggle_switch,
 };
-pub(crate) use rows::{checkbox_box, choice_buttons, preset_row, selected_combo, CHECKBOX_BOX};
+pub(crate) use rows::{
+    checkbox_box, checkbox_indeterminate, choice_buttons, preset_row, selected_combo, CHECKBOX_BOX,
+};
 pub use stack::StackBar;
 pub(crate) use tabs::tab_strip;
 pub use value::{progress_bar, ValueBar};

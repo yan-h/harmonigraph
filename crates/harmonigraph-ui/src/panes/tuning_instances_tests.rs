@@ -66,7 +66,13 @@ fn mixed_global_controls_enable_every_instance_then_disable_independently() {
             )
         };
         frame(vec![]);
-        for label in ["Retune all", "Show all"] {
+        for retune in [true, false] {
+            let label = match (width < 220.0, retune) {
+                (true, true) => "Retune all",
+                (true, false) => "Show all",
+                (false, true) => "Retune",
+                (false, false) => "Show",
+            };
             for enabled in [true, false] {
                 let output = frame(vec![]);
                 let at = output
@@ -83,21 +89,19 @@ fn mixed_global_controls_enable_every_instance_then_disable_independently() {
                     .0
                     .borrow()
                     .iter()
-                    .map(|row| if label == "Retune all" { row.show } else { row.retune })
+                    .map(|row| if retune { row.show } else { row.retune })
                     .collect();
                 frame(vec![egui::Event::PointerMoved(at)]);
                 frame(vec![press(at, true)]);
                 frame(vec![press(at, false)]);
                 let rows = params.0.borrow();
-                assert!(rows.iter().all(|row| if label == "Retune all" {
+                assert!(rows.iter().all(|row| if retune {
                     row.retune == enabled
                 } else {
                     row.show == enabled
                 }));
-                let after: Vec<_> = rows
-                    .iter()
-                    .map(|row| if label == "Retune all" { row.show } else { row.retune })
-                    .collect();
+                let after: Vec<_> =
+                    rows.iter().map(|row| if retune { row.show } else { row.retune }).collect();
                 assert_eq!(after, untouched, "the other switch remains independent");
             }
         }
@@ -203,7 +207,7 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                         })
                         .expect("the wide table's flag heading is painted")
                 };
-                let columns = [heading_x("Retune"), heading_x("Show")];
+                let labels = [heading_x("Retune"), heading_x("Show")];
                 let boxes: Vec<_> = shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
@@ -217,7 +221,18 @@ fn live_instance_controls_fit_a_narrow_settings_column() {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(boxes.len(), 6, "the three live rows must each paint both flags");
+                assert_eq!(
+                    boxes.len(),
+                    8,
+                    "the column headers and three rows each paint both flags"
+                );
+                let columns = [boxes[0].left(), boxes[1].left()];
+                for (label, checkbox) in labels.iter().zip(&boxes[..2]) {
+                    assert!(*label > checkbox.right(), "each header names its bulk checkbox");
+                }
+                assert!(!shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if matches!(text.galley.text(), "Retune all" | "Show all"))),
+                    "the table integrates bulk controls into its headers");
                 for checkbox in boxes {
                     assert!(
                         columns.iter().any(|x| (checkbox.left() - x).abs() < 1.0),
