@@ -329,9 +329,16 @@ Hidden sources keep updating, and Show restores their retained notes and history
 visibility also travels with the take's canonical baselines for offline replay.
 This does not select individual instruments out of the mixed audio spectrum.
 
-The central instance list in **Tuning → Adaptive tuning** shows held notes, output counts and status.
+The central instance list in **Tuning → Instances** shows each name with a single live note count on the same row.
+The count tracks notes held at the Tune's output, rather than cumulative output events;
+instrument release tails are not counted.
+A highlighted name flags a status to inspect in its tooltip or **Instance details**.
+Names follow the containing track when the host supplies CLAP track information, including track renames.
+A custom name overrides the track name;
+clear it to follow the track again.
+Without a track name or override, the row uses **Tune N** or **Harmonigraph input**.
 Its **Instance details** include an editable name, input/output counts, last attack and correction, missed corrections and delay.
-Names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
+Custom names and switches are stored in each plugin's own project state, and absent fields default to an empty name with Show on;
 Retune defaults on for a Tune and off for Harmonigraph's own input.
 **Retune all** and **Show all** independently control all currently loaded instances, including the Hub input.
 A mixed checkbox enables everyone on its next click;

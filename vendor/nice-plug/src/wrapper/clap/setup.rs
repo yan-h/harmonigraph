@@ -10,6 +10,9 @@ pub trait Prepared: Send {
 }
 
 pub trait Setup: Send + Sync {
+    /// Main-thread host metadata, refreshed at init and on track-info changes.
+    /// None means the host does not supply a name. This is not saved state.
+    fn track_name_changed(&self, _name: Option<&str>) {}
     fn prepare(&self, state: &PluginState) -> Result<Box<dyn Prepared>, &'static str>;
     fn save(&self, state: &mut PluginState);
     /// Called during construction. The callback schedules independent main

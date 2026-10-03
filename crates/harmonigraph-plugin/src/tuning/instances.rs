@@ -50,6 +50,7 @@ pub fn snapshots() -> Vec<TuningInstance> {
             Some(TuningInstance {
                 id: *id,
                 name,
+                display_name: shared.display_name(),
                 is_hub: shared.is_hub(),
                 retune: shared.retuning() & 1 != 0,
                 show: shared.show.load(Ordering::Acquire),

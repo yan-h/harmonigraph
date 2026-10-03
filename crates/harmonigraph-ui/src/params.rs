@@ -86,7 +86,9 @@ pub trait ParamBackend {
 #[derive(Clone, Debug)]
 pub struct TuningInstance {
     pub id: u64,
+    /// User override; empty follows the host track name.
     pub name: String,
+    pub display_name: String,
     pub is_hub: bool,
     pub retune: bool,
     pub show: bool,

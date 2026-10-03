@@ -622,35 +622,27 @@ fn instance_controls(
     let name_width =
         if compact { ui.available_width() } else { (ui.available_width() - 120.0).max(45.0) };
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
-        ui.vertical(|ui| {
-            ui.set_width(name_width);
-            let name = if row.name.is_empty() {
-                if row.is_hub {
-                    "Harmonigraph input".to_owned()
-                } else {
-                    format!("Tune {}", row.id)
+        ui.allocate_ui_with_layout(
+            egui::vec2(name_width, ui.spacing().interact_size.y),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                crate::widgets::label(ui, row.held.to_string())
+                    .on_hover_text("Currently sounding notes");
+                let name = egui::RichText::new(&row.display_name);
+                let name =
+                    if row.status != "No faults" { name.color(theme::armed()) } else { name };
+                if ui
+                    .add_sized(
+                        [ui.available_width(), ui.spacing().interact_size.y],
+                        egui::Button::selectable(selected == row.id, name).truncate(),
+                    )
+                    .on_hover_text(&row.status)
+                    .clicked()
+                {
+                    selected = row.id;
                 }
-            } else {
-                row.name.clone()
-            };
-            if ui.add(egui::Button::selectable(selected == row.id, name).truncate()).clicked() {
-                selected = row.id;
-            }
-            let status = if row.misses != 0 {
-                format!("{} held · {} missed", row.held, row.misses)
-            } else {
-                format!("{} held · {} out", row.held, row.notes_out)
-            };
-            crate::widgets::label(ui, egui::RichText::new(status).small())
-                .on_hover_text(&row.status);
-            if row.status != "No faults" {
-                crate::widgets::label(
-                    ui,
-                    egui::RichText::new("Check status").small().color(theme::armed()),
-                )
-                .on_hover_text(&row.status);
-            }
-        });
+            },
+        );
     };
     let flags = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let mut retune = row.retune;
@@ -696,9 +688,10 @@ fn instance_controls(
                 if ui
                     .add(
                         egui::TextEdit::singleline(&mut name)
-                            .hint_text("Instance name")
+                            .hint_text(&row.display_name)
                             .desired_width(ui.available_width()),
                     )
+                    .on_hover_text("Custom name; leave empty to follow the track name")
                     .changed()
                 {
                     params.edit_tuning_instance(row.id, InstanceEdit::Name(name));

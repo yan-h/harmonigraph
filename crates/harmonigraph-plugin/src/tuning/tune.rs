@@ -294,6 +294,8 @@ impl Tune {
     /// of the voices this ends.
     pub fn stop(&mut self) {
         self.take_cut(session::session().cut());
+        // The host may stop callbacks here, so end() cannot publish this count.
+        self.shared.held.store(0, Ordering::Relaxed);
     }
 
     pub fn begin(&mut self, callback: api::Callback) {

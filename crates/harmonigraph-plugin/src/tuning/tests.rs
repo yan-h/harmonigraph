@@ -7,6 +7,10 @@ use clap_sys::{
     ext::{
         latency::{clap_host_latency, clap_plugin_latency, CLAP_EXT_LATENCY},
         params::{clap_plugin_params, CLAP_EXT_PARAMS},
+        track_info::{
+            clap_host_track_info, clap_plugin_track_info, clap_track_info, CLAP_EXT_TRACK_INFO,
+            CLAP_EXT_TRACK_INFO_COMPAT, CLAP_TRACK_INFO_HAS_TRACK_NAME,
+        },
     },
     factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID},
     host::clap_host,
@@ -30,6 +34,9 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 #[derive(Default)]
 struct Host {
+    track_info: bool,
+    track_info_compat: bool,
+    track_name: std::sync::Mutex<Option<String>>,
     callbacks: AtomicUsize,
     restarts: AtomicUsize,
     latency_changes: AtomicUsize,
@@ -44,12 +51,37 @@ struct Host {
     /// Notifications this host would have been right to discard.
     out_of_phase: AtomicUsize,
 }
-unsafe extern "C" fn extension(_: *const clap_host, id: *const c_char) -> *const c_void {
-    if unsafe { CStr::from_ptr(id) } == CLAP_EXT_LATENCY {
+unsafe extern "C" fn extension(host: *const clap_host, id: *const c_char) -> *const c_void {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    let id = unsafe { CStr::from_ptr(id) };
+    if stats.track_info
+        && id
+            == if stats.track_info_compat {
+                CLAP_EXT_TRACK_INFO_COMPAT
+            } else {
+                CLAP_EXT_TRACK_INFO
+            }
+    {
+        &HOST_TRACK_INFO as *const _ as *const c_void
+    } else if id == CLAP_EXT_LATENCY {
         &HOST_LATENCY as *const _ as *const c_void
     } else {
         ptr::null()
     }
+}
+static HOST_TRACK_INFO: clap_host_track_info = clap_host_track_info { get: Some(track_info) };
+unsafe extern "C" fn track_info(host: *const clap_host, info: *mut clap_track_info) -> bool {
+    let stats = unsafe { &*((*host).host_data.cast::<Host>()) };
+    let name = stats.track_name.lock().unwrap();
+    let Some(name) = &*name else {
+        return false;
+    };
+    let info = unsafe { &mut *info };
+    info.flags = CLAP_TRACK_INFO_HAS_TRACK_NAME;
+    for (target, byte) in info.name.iter_mut().zip(name.bytes()) {
+        *target = byte as c_char;
+    }
+    true
 }
 static HOST_LATENCY: clap_host_latency = clap_host_latency { changed: Some(latency_changed) };
 unsafe extern "C" fn latency_changed(host: *const clap_host) {
@@ -258,7 +290,10 @@ struct Device {
 }
 impl Device {
     fn new(tuner: bool) -> Self {
-        let mut stats = Box::<Host>::default();
+        Self::with_host(tuner, Host::default())
+    }
+    fn with_host(tuner: bool, host: Host) -> Self {
+        let mut stats = Box::new(host);
         let host = Box::new(clap_host {
             clap_version: CLAP_VERSION,
             host_data: (&mut *stats as *mut Host).cast(),

@@ -12,6 +12,8 @@ impl Instances {
                     id,
                     name: ["Harmonigraph input", "Bass", "Reference keyboard"][id as usize]
                         .to_owned(),
+                    display_name: ["Harmonigraph input", "Bass", "Reference keyboard"][id as usize]
+                        .to_owned(),
                     is_hub: id == 0,
                     retune: id == 0,
                     show: id == 1,
@@ -268,5 +270,46 @@ fn an_individual_show_flag_remains_reachable_in_a_narrow_column() {
                 "the individual Show control did not edit just Bass at width {width}"
             );
         }
+    }
+}
+
+#[test]
+fn instance_note_counts_share_the_name_row() {
+    for width in [120.0, 300.0] {
+        let params = Instances::new();
+        let ctx = themed();
+        let size = egui::vec2(width, 800.0);
+        let frame = || {
+            events_into(
+                &ctx,
+                size,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                vec![],
+                |ui| instance_section(ui, &params),
+            )
+        };
+        frame();
+        let output = frame();
+        let text_bounds = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label} at {width}px"))
+        };
+        for row in params.0.borrow().iter() {
+            let name = text_bounds(&row.display_name);
+            let count = text_bounds(&row.held.to_string());
+            assert!(
+                (name.center().y - count.center().y).abs() < 2.0,
+                "the live count stays beside the name"
+            );
+        }
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(" held") || text.galley.text().contains(" out"))));
     }
 }
