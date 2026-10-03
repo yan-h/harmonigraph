@@ -153,8 +153,8 @@ const OCCLUDER_HEADER: u32 = 5u;
 // construction, and a gain on top of that is a plateau over the whole padded box.
 const GAUSSIAN_GAIN: f32 = 2.5;
 
-// What a caster's shadow comes to at `points` of the pane, 0..=1 — the EXPONENT
-// `shadow_transmittance` then spends the depth over.
+// Calibrated shadow coverage and a node's local opacity ceiling at `points`.
+// Distance profiles already carry opacity, so both components are identical.
 //
 // One bilinear tap, branching on what the cell holds. A cell is drawn at a
 // fraction of the target's pixels once its σ is past `shadow::SIGMA_CELL_MAX`,
@@ -166,35 +166,49 @@ const GAUSSIAN_GAIN: f32 = 2.5;
 // The gain enters here rather than at the transmittance because whether it
 // applies is a property of the RENDERER, and a function taking the finished
 // exponent cannot tell the two apart.
-fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
+fn shadow_profile(who: u32, points: vec2<f32>) -> vec2<f32> {
     if who >= arrayLength(&shadow_casters) {
-        return 0.0;
+        return vec2<f32>(0.0);
     }
     let cell = shadow_casters[who].cell;
     if !cell_packed(cell) {
-        return 0.0;
+        return vec2<f32>(0.0);
     }
     let atlas = vec2<f32>(textureDimensions(shadow_atlas));
     let map = shadow_casters[who].map;
     // Held inside the cell, so a quad reaching a hair past its own box takes
     // that cell's own empty border rather than the neighbour packed beside it.
     let texel = clamp(map.xy + points * map.z, cell.xy + 0.5, cell.xy + cell.zw - 0.5);
-    let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).r;
+    let held = textureSampleLevel(shadow_atlas, shadow_sampler, texel / atlas, 0.0).rg;
     if shadow_casters[who].shade.y == DISTANCE_COVERAGE_KIND {
-        return clamp(held, 0.0, 1.0);
+        return vec2<f32>(clamp(held.r, 0.0, 1.0));
     }
     if shadow_casters[who].shade.y >= 0.5 * DISTANCE_KIND {
-        return clamp(
+        return vec2<f32>(clamp(
             standoff_coverage(
-                held,
+                held.r,
                 2.0 * shadow_casters[who].shade.z,
                 shadow_casters[who].shade.w,
             ),
             0.0,
             1.0,
-        );
+        ));
     }
-    return min(GAUSSIAN_GAIN * clamp(held, 0.0, 1.0), 1.0);
+    return vec2<f32>(min(GAUSSIAN_GAIN * clamp(held.r, 0.0, 1.0), 1.0), held.g);
+}
+
+// Fixed casters carry their opacity separately from the calibrated profile.
+fn shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
+    return shadow_profile(who, points).x;
+}
+
+// A node cell already contains each slice's fading opacity. The blur carries
+// its local maximum alongside the weighted coverage, so gain cannot hold a
+// disappearing slice's shadow at full strength. The maximum is local to the
+// same blur support: a held slice elsewhere on the node cannot pin this fade.
+fn node_shadow_kernel(who: u32, points: vec2<f32>) -> f32 {
+    let profile = shadow_profile(who, points);
+    return min(profile.x, profile.y);
 }
 
 // Normalized exponential over one Shadow width. Negative falls early,
@@ -365,7 +379,7 @@ fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
         // Reject before sampling: clamping an out-of-box sample to the cell
         // edge would otherwise extend its last nonzero texel indefinitely.
         if all(points >= caster.rect.xy) && all(points <= caster.rect.xy + caster.rect.zw) {
-            let full = shadow_kernel(at, points);
+            let full = node_shadow_kernel(at, points);
             let level = clamp(caster.shade.x, 0.0, 1.0);
             var hidden = level * full;
             if caster.shade.y < 0.5 * DISTANCE_KIND {

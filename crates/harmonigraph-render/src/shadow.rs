@@ -19,12 +19,14 @@ use crate::wgpu;
 
 const SHADOW_SRC: &str = include_str!("shaders/shadow.wgsl");
 
-/// What the atlas is kept in: one half-float coverage per texel.
+/// Blurred coverage (red) and its local source-opacity ceiling (green).
+/// The second half-float lets lattice nodes retain Gaussian gain without
+/// clipping away a slice's fade. Fixed casters and distance cells only read red.
 ///
 /// Half floats rather than a byte because the blur's tail is MULTIPLIED into
 /// the frame: a tail quantized to 1/255 steps across a wide soft shadow, where
 /// the light under it has no steps of its own to hide them in.
-pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+pub(crate) const ATLAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
 /// The most texels a cell's σ may be. What bounds the kernel, at
 /// `2 * ceil(REACH_SIGMAS * this) + 1` taps, and so the cost of a shadow at
@@ -590,7 +592,7 @@ pub(crate) struct ShadowTarget {
     half: Option<Plane>,
 }
 
-/// One atlas-sized R16Float target and the bind group that reads it, which are
+/// One atlas-sized Rg16Float target and the bind group that reads it, which are
 /// made together because neither is any use without the other.
 struct Plane {
     /// Kept only so a test can put ink in and read the blur back out
@@ -1604,12 +1606,12 @@ pub(crate) mod tests {
         let inked = |x: u32, y: u32| {
             x >= ax + pad && x < ax + aw - pad && y >= ay + pad && y < ay + ah - pad
         };
-        let mut ink = vec![0u8; (size[0] * size[1] * 2) as usize];
+        let mut ink = vec![0u8; (size[0] * size[1] * 4) as usize];
         let mut mass_before = 0.0f64;
         for y in 0..size[1] {
             for x in 0..size[0] {
                 if inked(x, y) {
-                    let at = ((y * size[0] + x) * 2) as usize;
+                    let at = ((y * size[0] + x) * 4) as usize;
                     ink[at..at + 2].copy_from_slice(&0x3c00u16.to_le_bytes());
                     mass_before += 1.0;
                 }
@@ -1621,7 +1623,7 @@ pub(crate) mod tests {
             &ink,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(size[0] * 2),
+                bytes_per_row: Some(size[0] * 4),
                 rows_per_image: Some(size[1]),
             },
             wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 },
@@ -1638,7 +1640,7 @@ pub(crate) mod tests {
         queue.submit([encoder.finish()]);
         let bytes = crate::gpu_harness::readback(&device, &queue, target.texture(), size);
         let at = |x: u32, y: u32| -> f32 {
-            let i = ((y * size[0]) * 4 + x * 2) as usize;
+            let i = ((y * size[0] + x) * 4) as usize;
             half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
         };
 

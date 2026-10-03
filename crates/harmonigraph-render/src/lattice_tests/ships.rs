@@ -1,7 +1,7 @@
 //! Which instances reach the GPU at all, and the early-outs that drop them.
 
 use super::fixtures::*;
-use crate::gpu_harness::{headless_device, readback, readback_r16, render_to_texture};
+use crate::gpu_harness::{headless_device, readback, render_to_texture};
 use crate::*;
 
 /// The fragment shader's early-outs — skipping the fragments outside
@@ -311,20 +311,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                         pass.draw(0..4, 0..pane.instance_count);
                     },
                 );
-                readback_r16(&device, &queue, &target, atlas_size)
+                readback(&device, &queue, &target, atlas_size)
             };
             let cell_fast = draw_cells(SHADER_SRC);
             let cell_slow = draw_cells(&reference_src);
             assert!(
-                cell_slow.chunks_exact(2).any(|p| {
+                cell_slow.chunks_exact(4).any(|p| {
                     let bits = u16::from_le_bytes([p[0], p[1]]);
                     shadow::tests::half(bits) >= 0.99
                 }),
                 "the Distance fixture wrote no opaque node interior",
             );
             let differing = cell_fast
-                .chunks_exact(2)
-                .zip(cell_slow.chunks_exact(2))
+                .chunks_exact(4)
+                .zip(cell_slow.chunks_exact(4))
                 .enumerate()
                 .find(|(_, (a, b))| a != b)
                 .map(|(i, (a, b))| {

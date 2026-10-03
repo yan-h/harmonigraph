@@ -15,6 +15,11 @@ struct ShadowCaster {
     metal::float4 shade;
 };
 typedef ShadowCaster type_5[1];
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
+    metal::float4 transmission;
+};
 struct Locals {
     metal::float2 screen_points;
     metal::float2 atlas_size;
@@ -27,13 +32,11 @@ struct Locals {
     float _pad0_;
     metal::float2 _pad1_;
 };
-struct SpectralShadowOut {
+struct BoxOut {
     metal::float4 position;
     metal::float2 at;
-    char _pad2[8];
-    metal::float4 rim;
+    float level;
     uint who;
-    char _pad4[12];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -78,7 +81,7 @@ float standoff_coverage(
     return (metal::exp(shape * remaining) - 1.0) / (metal::exp(shape) - 1.0);
 }
 
-float shadow_kernel(
+metal::float2 shadow_profile(
     uint who,
     metal::float2 points,
     metal::texture2d<float, metal::access::sample> shadow_atlas,
@@ -87,69 +90,76 @@ float shadow_kernel(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     if (who >= (1 + (_buffer_sizes.size2 - 0 - 64) / 64)) {
-        return 0.0;
+        return metal::float2(0.0);
     }
     metal::float4 cell_1 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].cell;
-    bool _e10 = cell_packed(cell_1);
-    if (!(_e10)) {
-        return 0.0;
+    bool _e11 = cell_packed(cell_1);
+    if (!(_e11)) {
+        return metal::float2(0.0);
     }
     metal::float2 atlas = static_cast<metal::float2>(metal::uint2(shadow_atlas.get_width(), shadow_atlas.get_height()));
     metal::float4 map = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].map;
     metal::float2 texel = metal::clamp(map.xy + (points * map.z), cell_1.xy + metal::float2(0.5), (cell_1.xy + cell_1.zw) - metal::float2(0.5));
-    metal::float4 _e39 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
-    float held = _e39.x;
-    float _e45 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
-    if (_e45 == DISTANCE_COVERAGE_KIND) {
-        return metal::clamp(held, 0.0, 1.0);
+    metal::float4 _e41 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
+    metal::float2 held = _e41.xy;
+    float _e47 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
+    if (_e47 == DISTANCE_COVERAGE_KIND) {
+        return metal::float2(metal::clamp(held.x, 0.0, 1.0));
     }
-    float _e55 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
-    if (_e55 >= 0.5) {
-        float _e62 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.z;
-        float _e69 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.w;
-        float _e70 = standoff_coverage(held, 2.0 * _e62, _e69);
-        return metal::clamp(_e70, 0.0, 1.0);
+    float _e59 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.y;
+    if (_e59 >= 0.5) {
+        float _e67 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.z;
+        float _e74 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size2 - 0 - 64) / 64)].shade.w;
+        float _e75 = standoff_coverage(held.x, 2.0 * _e67, _e74);
+        return metal::float2(metal::clamp(_e75, 0.0, 1.0));
     }
-    return metal::min(GAUSSIAN_GAIN * metal::clamp(held, 0.0, 1.0), 1.0);
+    return metal::float2(metal::min(GAUSSIAN_GAIN * metal::clamp(held.x, 0.0, 1.0), 1.0), held.y);
 }
 
-float shadow_transmittance(
+float shadow_kernel(
+    uint who_1,
+    metal::float2 points_1,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_5 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    metal::float2 _e2 = shadow_profile(who_1, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    return _e2.x;
+}
+
+float local_shadow_transmittance(
     float full,
     float depth,
     float level
 ) {
-    float keep = metal::max(1.0 - metal::clamp(depth, 0.0, 1.0), SHADOW_KEEP_FLOOR);
-    float through = metal::pow(keep, metal::clamp(full, 0.0, 1.0));
-    return 1.0 - (metal::clamp(level, 0.0, 1.0) * (1.0 - through));
+    return 1.0 - ((metal::clamp(full, 0.0, 1.0) * metal::clamp(depth, 0.0, 1.0)) * metal::clamp(level, 0.0, 1.0));
 }
 
-struct fs_spectral_shadowInput {
+struct fs_shadow_box_plainInput {
     metal::float2 at [[user(loc0), center_perspective]];
-    metal::float4 rim [[user(loc1), flat]];
+    float level [[user(loc1), flat]];
     uint who [[user(loc2), flat]];
 };
-struct fs_spectral_shadowOutput {
-    metal::float4 member [[color(0)]];
+struct fs_shadow_box_plainOutput {
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
+    metal::float4 transmission [[color(2)]];
 };
-fragment fs_spectral_shadowOutput fs_spectral_shadow(
-  fs_spectral_shadowInput varyings [[stage_in]]
+fragment fs_shadow_box_plainOutput fs_shadow_box_plain(
+  fs_shadow_box_plainInput varyings [[stage_in]]
 , metal::float4 position [[position]]
-, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(3)]]
-, metal::sampler shadow_sampler [[sampler(1)]]
+, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(4)]]
+, metal::sampler shadow_sampler [[sampler(2)]]
 , device type_5 const& shadow_casters [[buffer(1)]]
 , constant Locals& locals [[buffer(0)]]
 , constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
 ) {
-    const SpectralShadowOut in = { position, varyings.at, {}, varyings.rim, varyings.who };
-    if (in.rim.w <= 0.0) {
-        metal::discard_fragment();
-    }
-    float _e7 = shadow_kernel(in.who, in.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
-    float _e10 = locals.shadow_depth;
-    float _e12 = shadow_transmittance(_e7, _e10, 1.0);
-    float alpha = 1.0 - _e12;
-    if (alpha <= 0.0) {
-        metal::discard_fragment();
-    }
-    return fs_spectral_shadowOutput { in.rim * alpha };
+    const BoxOut in = { position, varyings.at, varyings.level, varyings.who };
+    float _e3 = shadow_kernel(in.who, in.at, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    float _e6 = locals.shadow_depth;
+    float _e8 = local_shadow_transmittance(_e3, _e6, in.level);
+    metal::float4 shadow = metal::float4(0.0, 0.0, 0.0, 1.0 - _e8);
+    const auto _tmp = SplitOut {shadow, shadow, shadow};
+    return fs_shadow_box_plainOutput { _tmp.other, _tmp.ink, _tmp.transmission };
 }

@@ -311,7 +311,7 @@ fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> f32 {
     if level <= 0.0 {
         return 1.0;
     }
-    let coverage = clamp(level, 0.0, 1.0) * shadow_kernel(u32(max(who, 0.0)), points);
+    let coverage = clamp(level, 0.0, 1.0) * node_shadow_kernel(u32(max(who, 0.0)), points);
     return 1.0 - glow_shadow_depth() * coverage;
 }
 
@@ -2547,10 +2547,11 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
     if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
-        return vec4<f32>(clamp(-ink.sd, 0.0, 1.0), 0.0, 0.0, 0.0);
+        let coverage = clamp(-ink.sd, 0.0, 1.0);
+        return vec4<f32>(coverage, coverage, 0.0, 0.0);
     }
     if analytic {
-        // Stabilize the value before the R16 attachment rounds it. The fast
+        // Stabilize the value before the half-float attachment rounds it. The fast
         // and reference builds carry different dead coverage branches and a
         // last f32 ulp may otherwise land on opposite sides of an f16 tie.
         // 1/32 point is far below both the cell's texel and the numeric
@@ -2562,7 +2563,10 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     }
     // The same floor the scene draw takes, so a cell holds the ink that draw
     // paints rather than a hair more of it.
-    return vec4<f32>(select(ink.alpha, 0.0, ink.alpha < INK_FLOOR), 0.0, 0.0, 0.0);
+    let coverage = select(ink.alpha, 0.0, ink.alpha < INK_FLOOR);
+    // The blur averages red and takes the maximum of green over the same
+    // support. Keep both tied to the visible source, including during release.
+    return vec4<f32>(coverage, coverage, 0.0, 0.0);
 }
 
 // ---- Resting markers -------------------------------------------------------

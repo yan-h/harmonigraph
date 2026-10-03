@@ -436,7 +436,11 @@ fn offscreen_composite_matches_direct_draw() {
         .chunks(4)
         .zip(direct.chunks(4))
         .zip(&occluded)
-        .filter(|((a, b), &o)| o && brightness(a) + 3 < brightness(b))
+        // The same three-code per-channel rounding allowance used below.
+        // Summing RGB first would charge one rounding step three times.
+        .filter(|((a, b), &o)| {
+            o && a[..3].iter().zip(&b[..3]).any(|(&a, &b)| i16::from(a) + 3 < i16::from(b))
+        })
         .count();
     assert_eq!(
         darker, 0,
