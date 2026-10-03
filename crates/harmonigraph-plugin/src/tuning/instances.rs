@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use harmonigraph_ui::params::{InstanceEdit, TuningInstance};
+use harmonigraph_ui::params::{InstanceEdit, TuningInstance, TuningVoice};
 
 use super::{setup, DELAY_MULTIPLIER_MAX};
 
@@ -54,12 +54,15 @@ pub fn snapshots() -> Vec<TuningInstance> {
                 is_hub: shared.is_hub(),
                 retune: shared.retuning() & 1 != 0,
                 show: shared.show.load(Ordering::Acquire),
-                pitches: shared
-                    .pitches
+                voices: shared
+                    .voices
                     .iter()
-                    .filter_map(|pitch| {
-                        let pitch = pitch.load(Ordering::Relaxed);
-                        (pitch != i64::MIN).then_some(pitch as f32 / 100_000_000.0)
+                    .filter_map(|voice| {
+                        let voice = voice.load(Ordering::Relaxed);
+                        (voice != u64::MAX).then_some(TuningVoice {
+                            key: (voice >> 32) as u16,
+                            pitch: f32::from_bits(voice as u32),
+                        })
                     })
                     .collect(),
                 notes_in: shared.notes_in.load(Ordering::Relaxed),

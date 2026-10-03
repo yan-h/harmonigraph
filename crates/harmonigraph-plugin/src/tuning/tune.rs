@@ -300,7 +300,7 @@ impl Tune {
         self.take_cut(session::session().cut());
         // The host may stop callbacks here, so end() cannot publish this count.
         self.shared.held.store(0, Ordering::Relaxed);
-        self.publish_pitches();
+        self.publish_voices();
     }
 
     pub fn begin(&mut self, callback: api::Callback) {
@@ -688,13 +688,18 @@ impl Tune {
         true
     }
 
-    fn publish_pitches(&self) {
-        for (voice, pitch) in self.held.iter().zip(&self.shared.pitches) {
-            pitch.store(
-                voice.map_or(i64::MIN, |voice| {
-                    (i64::from(voice.key) * 100_000_000)
+    fn publish_voices(&self) {
+        for (voice, slot) in self.held.iter().zip(&self.shared.voices) {
+            slot.store(
+                voice.map_or(u64::MAX, |voice| {
+                    let microcents = (i64::from(voice.key) * 100_000_000)
                         .saturating_add(voice.tuning)
-                        .saturating_add(self.channel_pitch[usize::from(voice.channel)].microcents())
+                        .saturating_add(
+                            self.channel_pitch[usize::from(voice.channel)].microcents(),
+                        );
+                    let pitch = microcents as f32 / 100_000_000.0;
+                    let key = u64::from(voice.channel) * 128 + u64::from(voice.key);
+                    (key << 32) | u64::from(pitch.to_bits())
                 }),
                 Ordering::Relaxed,
             );
@@ -708,7 +713,7 @@ impl Tune {
         }
         if let Some(callback) = self.callback.take() {
             self.shared.held.store(self.held() as u64, Ordering::Relaxed);
-            self.publish_pitches();
+            self.publish_voices();
             self.shared.notes_in.store(self.notes_in, Ordering::Relaxed);
             self.shared.notes_out.store(self.notes_out, Ordering::Relaxed);
             self.shared.status.store(self.status, Ordering::Release);

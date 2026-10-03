@@ -1,7 +1,14 @@
 use super::*;
-use crate::params::{InstanceEdit, TuningInstance};
-use crate::tests::probe::{events_into, fresh_picture, press, themed};
+use crate::params::{InstanceEdit, TuningInstance, TuningVoice};
+use crate::tests::probe::{events_into, press, themed};
 use std::cell::RefCell;
+
+// Geometry and interaction probes use instant fades; timing has its own probe.
+fn fresh_picture() -> PictureState {
+    let mut state = crate::tests::probe::fresh_picture();
+    state.runtime.frame_params.fade_time = 0.0;
+    state
+}
 
 struct Instances(RefCell<Vec<TuningInstance>>);
 impl Instances {
@@ -17,7 +24,9 @@ impl Instances {
                     is_hub: id == 0,
                     retune: id == 0,
                     show: id == 1,
-                    pitches: (0..=id).map(|n| 48.0 + n as f32 * 12.0).collect(),
+                    voices: (0..=id)
+                        .map(|n| TuningVoice { key: n as u16, pitch: 48.0 + n as f32 * 12.0 })
+                        .collect(),
                     notes_in: 34,
                     notes_out: 34,
                     misses: 0,
@@ -345,8 +354,8 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
                 .iter()
                 .filter(|dot| dot.center.y > ink_bottom && dot.center.y < ink_bottom + 10.0)
                 .collect();
-            for (dot, pitch) in below.iter().zip(&row.pitches) {
-                assert_eq!(dot.fill, note_color(&state, *pitch, 1.0));
+            for (dot, pitch) in below.iter().zip(&row.voices) {
+                assert_eq!(dot.fill, note_color(&state, pitch.pitch, 1.0));
                 assert!(
                     (dot.center.y - dot.radius - ink_bottom - 2.0).abs() < 0.1,
                     "the visible gap below {} must be two pixels",
@@ -355,7 +364,7 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
             }
             assert_eq!(
                 below.len() as u64,
-                row.pitches.len() as u64,
+                row.voices.len() as u64,
                 "dots sit tightly beneath {}",
                 row.display_name
             );
@@ -374,7 +383,9 @@ fn instance_voice_dots_fit_below_names_without_moving_them() {
             .collect();
         for held in [0, 9, 10, 64, 1] {
             for row in params.0.borrow_mut().iter_mut() {
-                row.pitches = (0..held).map(|n| 48.0 + n as f32).collect();
+                row.voices = (0..held)
+                    .map(|n| TuningVoice { key: n as u16, pitch: 48.0 + n as f32 })
+                    .collect();
             }
             let output = frame();
             for (name, before) in &positions {
@@ -413,7 +424,12 @@ fn voice_dot_overflow_uses_an_ellipsis_in_the_same_strip() {
                             egui::Sense::hover(),
                         )
                         .0;
-                    instance_voice_dots(ui, strip, &vec![60.0; held as usize], &state);
+                    instance_voice_dots(
+                        ui,
+                        strip,
+                        &vec![VoiceDot { pitch: 60.0, level: 1.0 }; held as usize],
+                        &state,
+                    );
                 },
             );
             assert_eq!(strip.size(), egui::vec2(60.0 * scale, 4.0 * scale));
@@ -546,7 +562,7 @@ fn voice_dots_follow_the_current_pitch_palette() {
                 instance_voice_dots(
                     ui,
                     egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 4.0)),
-                    &pitches,
+                    &pitches.map(|pitch| VoiceDot { pitch, level: 1.0 }),
                     &state,
                 );
             },
@@ -561,5 +577,136 @@ fn voice_dots_follow_the_current_pitch_palette() {
             .collect();
         assert_eq!(colors, pitches.map(|pitch| note_color(&state, pitch, 1.0)));
         assert_ne!(colors[0], colors[2], "different pitches must have different colors");
+    }
+}
+
+#[test]
+fn source_dots_carry_the_lattice_envelope_through_bends_releases_and_retriggers() {
+    let mut state = crate::tests::probe::fresh_picture();
+    state.runtime.frame_params.fade_time = 1.0;
+    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    let mut dots = SourceDots::default();
+    let mut voices = [TuningVoice { key: 60, pitch: 60.0 }, TuningVoice { key: 188, pitch: 60.0 }];
+    assert!(dots.step(&voices, 0.0, &env));
+    assert!(dots.step(&voices, 0.1, &env));
+    let arriving = env.carried(0.0, 0.1, true);
+    assert!(arriving > 0.0 && arriving < 1.0);
+    assert_eq!(dots.dots[&60].level, arriving);
+    assert_eq!(dots.dots.len(), 2, "unisons on different channels keep separate dots");
+    voices[0].pitch = 60.7;
+    dots.step(&voices[..1], 0.1, &env);
+    assert_eq!(dots.dots[&60].level, arriving, "same-frame passes do not advance twice");
+    assert_eq!(dots.dots[&60].pitch, 60.7, "bends update color without restarting arrival");
+    dots.step(&voices[..1], 0.15, &env);
+    let departing = env.carried(arriving, 0.05, false);
+    assert!((dots.dots[&188].level - departing).abs() < 1e-6);
+    assert!(
+        departing > 0.0 && departing < arriving,
+        "a rapid release fades instead of blinking off"
+    );
+    dots.step(&voices, 0.2, &env);
+    assert!(
+        (dots.dots[&188].level - env.carried(departing, 0.05, true)).abs() < 1e-6,
+        "a repeated note reverses continuously from its fading level"
+    );
+    dots.step(&voices, 2.0, &env);
+    assert!(dots.dots.values().all(|dot| dot.level == 1.0));
+    dots.step(&[], 2.1, &env);
+    assert!(dots.dots.values().all(|dot| dot.level > 0.0 && dot.level < 1.0));
+    assert!(!dots.step(&[], 4.0, &env));
+    assert!(dots.dots.is_empty(), "completed tails are discarded");
+    let instant =
+        harmonigraph_core::Envelope { attack_time: 0.0, fade_time: 0.0, shape: env.shape };
+    assert!(!dots.step(&voices, 4.0, &instant));
+    assert!(dots.dots.values().all(|dot| dot.level == 1.0));
+    assert!(!dots.step(&[], 4.0, &instant));
+    assert!(dots.dots.is_empty(), "zero-duration fades remain immediate");
+}
+
+#[test]
+fn fading_dots_use_opacity_and_give_up_space_continuously() {
+    let state = fresh_picture();
+    let ctx = themed();
+    let size = egui::vec2(160.0, 40.0);
+    let mut previous = None;
+    for level in [1.0, 0.5, 0.0] {
+        let voices = [VoiceDot { pitch: 48.0, level }, VoiceDot { pitch: 60.0, level: 1.0 }];
+        let output = events_into(
+            &ctx,
+            size,
+            egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+            vec![],
+            |ui| {
+                instance_voice_dots(
+                    ui,
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                    &voices,
+                    &state,
+                );
+            },
+        );
+        let circles: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) => Some(circle),
+                _ => None,
+            })
+            .collect();
+        let held = circles.last().unwrap();
+        if let Some(x) = previous {
+            assert!(held.center.x < x, "the surviving dot moves toward center during the fade");
+        }
+        previous = Some(held.center.x);
+        if level > 0.0 {
+            assert_eq!(circles[0].fill, note_color(&state, 48.0, level));
+        } else {
+            assert_eq!(
+                held.center.x,
+                size.x / 2.0,
+                "removing the zero-width tail cannot shift the survivor"
+            );
+        }
+    }
+}
+
+#[test]
+fn source_button_rows_use_the_slider_gap() {
+    let params = Instances::new();
+    let state = fresh_picture();
+    let ctx = themed();
+    let size = egui::vec2(300.0, 800.0);
+    let mut gap = 0.0;
+    let mut frame = || {
+        events_into(&ctx, size, egui::Rect::from_min_size(egui::Pos2::ZERO, size), vec![], |ui| {
+            gap = ui.spacing().item_spacing.y;
+            instance_section(ui, &state, &params);
+        })
+    };
+    frame();
+    let output = frame();
+    let buttons: Vec<_> = params
+        .0
+        .borrow()
+        .iter()
+        .map(|row| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == row.display_name => {
+                        let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                        Some((ink.top() - 3.0, ink.bottom() + 7.5))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        })
+        .collect();
+    for pair in buttons.windows(2) {
+        assert!(
+            (pair[1].0 - pair[0].1 - gap).abs() < 0.1,
+            "source buttons {buttons:?} must use the slider gap of {gap}"
+        );
     }
 }

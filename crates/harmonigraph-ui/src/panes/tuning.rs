@@ -19,6 +19,7 @@ use crate::widgets::{button_row, ValueBar};
 use crate::{theme, PictureState};
 use harmonigraph_core::configuration::ConfigEdit;
 use harmonigraph_core::tuning;
+use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[path = "tuning_instances_tests.rs"]
@@ -584,10 +585,50 @@ fn instance_section(ui: &mut egui::Ui, state: &PictureState, params: &dyn ParamB
     }
 }
 
+/// UI-only levels, keyed by MIDI channel/key rather than pitch or packed-list
+/// position, so bends and another voice ending cannot restart a dot's fade.
+#[derive(Clone, Default)]
+struct SourceDots {
+    at: Option<f64>,
+    dots: BTreeMap<u16, VoiceDot>,
+}
+
+#[derive(Clone, Copy)]
+struct VoiceDot {
+    pitch: f32,
+    level: f32,
+}
+
+impl SourceDots {
+    fn step(
+        &mut self,
+        voices: &[crate::params::TuningVoice],
+        now: f64,
+        env: &harmonigraph_core::Envelope,
+    ) -> bool {
+        let dt = self.at.map_or(0.0, |at| (now - at).max(0.0));
+        self.at = Some(now);
+        for voice in voices {
+            self.dots
+                .entry(voice.key)
+                .or_insert(VoiceDot { pitch: voice.pitch, level: 0.0 })
+                .pitch = voice.pitch;
+        }
+        let mut animating = false;
+        self.dots.retain(|key, dot| {
+            let held = voices.iter().any(|voice| voice.key == *key);
+            dot.level = env.carried(dot.level, dt, held);
+            animating |= dot.level != if held { 1.0 } else { 0.0 };
+            held || dot.level > 0.0
+        });
+        animating
+    }
+}
+
 /// A single, fixed-height strip; overflowing voices replace its last dot with an ellipsis.
-fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, pitches: &[f32], state: &PictureState) {
+fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, voices: &[VoiceDot], state: &PictureState) {
     let scale = theme::ui_scale(ui.ctx());
-    let held = pitches.len() as u64;
+    let held = voices.len() as u64;
     let inner = rect.shrink2(egui::vec2(4.0 * scale, 0.0));
     let pitch = 5.0 * scale;
     let capacity = (inner.width().max(0.0) / pitch).floor() as u64;
@@ -596,22 +637,38 @@ fn instance_voice_dots(ui: &egui::Ui, rect: egui::Rect, pitches: &[f32], state: 
     // Center the painted group, including the wider ellipsis at its end.
     let first_radius = if overflow && dots == 0 { 2.3 } else { 1.25 } * scale;
     let last_radius = if overflow { 2.3 } else { 1.25 } * scale;
-    let span = held.min(capacity).saturating_sub(1) as f32 * pitch;
-    let first_x = rect.center().x - (span + last_radius - first_radius) * 0.5;
-    let center = |slot: u64| egui::pos2(first_x + slot as f32 * pitch, rect.center().y);
+    let overflow_level = voices[dots as usize..].iter().map(|dot| dot.level).fold(0.0, f32::max);
+    // Let each fading dot give up its horizontal space gradually too. Removing
+    // a fully faded voice then leaves the remaining dots exactly where they are.
+    let levels: Vec<_> = voices[..dots as usize]
+        .iter()
+        .map(|dot| dot.level)
+        .chain((overflow && capacity != 0).then_some(overflow_level))
+        .collect();
+    let width = levels.iter().sum::<f32>() * pitch;
+    let mut x = rect.center().x - (width + last_radius - first_radius) * 0.5;
+    let centers: Vec<_> = levels
+        .iter()
+        .map(|level| {
+            let width = level * pitch;
+            let center = egui::pos2(x + width * 0.5, rect.center().y);
+            x += width;
+            center
+        })
+        .collect();
     for slot in 0..dots {
         ui.painter().circle_filled(
-            center(slot),
+            centers[slot as usize],
             1.25 * scale,
-            note_color(state, pitches[slot as usize], 1.0),
+            note_color(state, voices[slot as usize].pitch, voices[slot as usize].level),
         );
     }
     if overflow && capacity != 0 {
         for offset in [-1.7, 0.0, 1.7] {
             ui.painter().circle_filled(
-                center(capacity - 1) + egui::vec2(offset * scale, 0.0),
+                centers[capacity as usize - 1] + egui::vec2(offset * scale, 0.0),
                 0.6 * scale,
-                ui.visuals().weak_text_color(),
+                ui.visuals().weak_text_color().gamma_multiply(overflow_level),
             );
         }
     }
@@ -660,6 +717,18 @@ fn instance_controls(
     } else {
         (ui.available_width() - 140.0 * scale).max(60.0 * scale)
     };
+    let animation_id = selection.with("voice-dots");
+    let mut sources = ui
+        .data(|data| data.get_temp::<BTreeMap<u64, SourceDots>>(animation_id))
+        .unwrap_or_default();
+    sources.retain(|id, _| instances.iter().any(|row| row.id == *id));
+    let now = ui.input(|input| input.time);
+    let env = state.appearance.view.envelope(&state.runtime.frame_params);
+    for row in instances {
+        if sources.entry(row.id).or_default().step(&row.voices, now, &env) {
+            ui.ctx().request_repaint();
+        }
+    }
     let mut identity = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let name = egui::RichText::new(&row.display_name);
         let name = if row.status != "No faults" { name.color(theme::armed()) } else { name };
@@ -702,8 +771,9 @@ fn instance_controls(
             egui::pos2(response.rect.left(), ink_top + ink.height() + 1.25 * scale),
             egui::vec2(response.rect.width(), 4.0 * scale),
         );
-        instance_voice_dots(ui, dots, &row.pitches, state);
-        let held = row.pitches.len();
+        let voices: Vec<_> = sources[&row.id].dots.values().copied().collect();
+        instance_voice_dots(ui, dots, &voices, state);
+        let held = row.voices.len();
         response.on_hover_text(format!(
             "{held} sounding {}\n{}",
             if held == 1 { "voice" } else { "voices" },
@@ -739,19 +809,26 @@ fn instance_controls(
             });
         }
     } else {
-        egui::Grid::new("tuning-instances").num_columns(3).spacing([8.0, 6.0]).show(ui, |ui| {
-            crate::widgets::weak(ui, "Source");
-            bulk_control(ui, "Retune", true);
-            bulk_control(ui, "Show", false);
-            ui.end_row();
-            for row in instances {
-                ui.push_id(row.id, |ui| identity(ui, row));
-                flags(ui, row);
+        egui::Grid::new("tuning-instances")
+            .num_columns(3)
+            .min_row_height(0.0)
+            .spacing(ui.spacing().item_spacing)
+            .show(ui, |ui| {
+                crate::widgets::weak(ui, "Source");
+                bulk_control(ui, "Retune", true);
+                bulk_control(ui, "Show", false);
                 ui.end_row();
-            }
-        });
+                for row in instances {
+                    ui.push_id(row.id, |ui| identity(ui, row));
+                    flags(ui, row);
+                    ui.end_row();
+                }
+            });
     }
-    ui.data_mut(|data| data.insert_temp(selection, selected));
+    ui.data_mut(|data| {
+        data.insert_temp(selection, selected);
+        data.insert_temp(animation_id, sources);
+    });
     if let Some(row) = instances.iter().find(|row| row.id == selected) {
         ui.push_id(row.id, |ui| {
             subsection(ui, "Source details", |ui| {

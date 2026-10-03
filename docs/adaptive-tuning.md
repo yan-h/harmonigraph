@@ -329,12 +329,16 @@ Hidden sources keep updating, and Show restores their retained notes and history
 visibility also travels with the take's canonical baselines for offline replay.
 This does not select individual instruments out of the mixed audio spectrum.
 
-The tuning source list in **Tuning → Tuning sources** shows a tiny centered strip of dots beneath each name, one per sounding voice.
+The tuning source list in **Tuning → Tuning sources** shows a tiny centered strip of dots beneath each name, one per sounding or fading voice.
 The name and dots share one selectable button.
+Table rows use the same gap as the sliders.
 Each dot uses the same pitch gradient as the note display, including per-note tuning and channel bend, even when Show is off.
+Dots use the lattice's Fade duration and shape, easing their brightness and horizontal spacing instead of blinking on and off.
+Their animation follows source snapshots independently of Show;
+pitch bends update color without restarting a fade, and repeated keys reverse smoothly from their current brightness.
 At the default UI scale, the button leaves 3 pixels above the lettering, 2 pixels between the lettering and dots, and 3 pixels below the dots.
-When more voices are held than fit across the name cell, the last dot becomes an ellipsis;
-hover the name or dots for the exact count.
+When more sounding or fading voices appear than fit across the name cell, the last dot becomes an ellipsis;
+hover the name or dots for the exact currently sounding count, excluding visual fade tails.
 The strip stays the same height even at zero voices and never reserves space beside the name.
 The dots track notes held at the Tune's output, rather than cumulative output events;
 instrument release tails are not counted.

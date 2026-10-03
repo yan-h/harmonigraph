@@ -82,6 +82,15 @@ pub trait ParamBackend {
     }
 }
 
+/// A sounding MIDI key and its current output pitch, independent of Show.
+#[derive(Clone, Copy, Debug)]
+pub struct TuningVoice {
+    /// Channel * 128 + key: stable across tuning and pitch-bend changes.
+    pub key: u16,
+    /// MIDI note units, including tuning and channel bend.
+    pub pitch: f32,
+}
+
 /// Cosmetic snapshots and main-thread commands, never audio-owned references.
 #[derive(Clone, Debug)]
 pub struct TuningInstance {
@@ -92,8 +101,7 @@ pub struct TuningInstance {
     pub is_hub: bool,
     pub retune: bool,
     pub show: bool,
-    /// Sounding pitches in MIDI note units, including tuning and channel bend.
-    pub pitches: Vec<f32>,
+    pub voices: Vec<TuningVoice>,
     pub notes_in: u64,
     pub notes_out: u64,
     pub misses: u64,

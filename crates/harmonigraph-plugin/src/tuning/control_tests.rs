@@ -253,8 +253,7 @@ fn live_note_count_clears_when_the_host_stops_callbacks() {
     let mut pair = Pair::new();
     pair.step(vec![note(1, 0, 60, 0, true)]);
     pair.idle();
-    let count =
-        || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().pitches.len();
+    let count = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().voices.len();
     assert_eq!(count(), 1, "the note has reached the output");
     pair.tune.deactivate();
     assert_eq!(count(), 0, "the display clears without another process callback");
@@ -267,7 +266,10 @@ fn source_dot_pitches_follow_emitted_tuning_bend_and_releases_even_when_hidden()
     pair.tune.shared().set_show(false);
     pair.step(vec![note(1, 0, 60, 0, true), note(2, 0, 64, 1, true)]);
     pair.idle();
-    let pitches = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().pitches;
+    let voices = || instances::snapshots().into_iter().find(|row| !row.is_hub).unwrap().voices;
+    let pitches = || voices().iter().map(|voice| voice.pitch).collect::<Vec<_>>();
+    let keys = || voices().iter().map(|voice| voice.key).collect::<Vec<_>>();
+    assert_eq!(keys(), vec![60, 64]);
     let expected: Vec<_> = [60, 64]
         .into_iter()
         .map(|key| {
@@ -279,6 +281,7 @@ fn source_dot_pitches_follow_emitted_tuning_bend_and_releases_even_when_hidden()
     pair.step(vec![expression(2, 0.5, 0), raw_midi([0xe0, 0, 96], 1)]);
     pair.idle();
     let bent = pitches();
+    assert_eq!(keys(), vec![60, 64], "bends preserve dot identities");
     assert!((bent[0] - expected[0] - 1.0).abs() < 0.0001);
     assert!((bent[1] - expected[1] - 1.5).abs() < 0.0001);
     pair.step(vec![note(1, 0, 60, 0, false)]);
