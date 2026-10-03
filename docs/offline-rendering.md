@@ -42,7 +42,8 @@ Takes use format v6 and carry a version-1 appearance document captured when reco
 It contains camera, view, spectrum and the whole video configuration;
 dock layout, selected editor page, the Spiral's framing and other workspace settings stay in the editor save.
 Automatic export uses that recorded appearance, including the captured Aspect and Output size.
-**Re-render take** uses the current appearance and output dimensions.
+In **Exports**, **Queue last take** and **Queue paths** capture the selected current, saved or recorded appearance,
+with the current Video output settings and dimensions.
 Camera movement is recorded through host parameters;
 see [What is and isn't captured](#what-is-and-isnt-captured).
 
