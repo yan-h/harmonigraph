@@ -22,6 +22,12 @@ fn memory(resources: &CallbackResources) -> &Memory {
         .unwrap()
 }
 
+/// The history's physical allocation, read off the texture itself.
+fn allocated(memory: &Memory) -> [u32; 2] {
+    let size = memory.views[0].texture().size();
+    [size.width, size.height]
+}
+
 fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, memory: &Memory) -> Vec<[f32; 4]> {
     let [width, height] = memory.extent;
     let stride = (width * 16).next_multiple_of(256);
@@ -243,7 +249,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let prior = pixels(&device, &queue, memory(&resources));
         let old_slices = memory(&resources).frame.as_ref().unwrap().slices;
         let old_life = memory(&resources).frame.as_ref().unwrap().life;
-        let old_size = memory(&resources).size;
+        let old_size = allocated(memory(&resources));
         let a = cb.atmosphere.as_mut().unwrap();
         match case {
             "speed-min" => a.settings.stars.star_speed_far += 0.01,
@@ -263,7 +269,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         cb.grid.fill(0);
         prepare_once(&device, &queue, &mut resources, &cb);
         let m = memory(&resources);
-        assert_eq!(m.size, old_size, "{case}: fixture replaced the history allocation");
+        assert_eq!(allocated(m), old_size, "{case}: fixture replaced the history allocation");
         let after = pixels(&device, &queue, m);
         let frame = m.frame.as_ref().unwrap();
         if case == "width" {
@@ -533,7 +539,8 @@ fn resolution_changes_carry_stars_color_history() {
             .as_ref()
             .unwrap()
             .shape()
-            .tone;
+            .stars
+            .map(|stars| stars.image);
         assert_ne!(size, prior_size, "fixture did not change the star image");
         prior_size = size;
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
@@ -783,15 +790,19 @@ fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
             pixels(&device, &queue, memory(&exact)),
             "{style:?} frame {frame} changed history's logical texels"
         );
-        assert!(held.extent.iter().zip(held.size).all(|(&n, size)| n <= size && size - n < 64));
+        assert!(held
+            .extent
+            .iter()
+            .zip(allocated(held))
+            .all(|(&n, size)| n <= size && size - n < 64));
         let texture = held.views[0].texture().clone();
         if let Some((old_size, old_extent, old_rect, old_texture)) = prior {
             if frame == 7 {
-                assert_eq!(old_size, held.size, "sampling fixture changed physical bucket");
+                assert_eq!(old_size, allocated(held), "sampling fixture changed physical bucket");
                 assert_eq!(old_rect, cb.rect, "sampling fixture changed pane geometry");
                 assert_ne!(old_extent, held.extent, "sampling fixture kept its logical grid");
             }
-            if old_size == held.size {
+            if old_size == allocated(held) {
                 assert_eq!(texture, old_texture, "same bucket replaced its allocation");
                 reused += 1;
             } else {
@@ -799,7 +810,7 @@ fn bucketed_memory_preserves_images_across_resize_and_sampling_changes() {
                 replaced += 1;
             }
         }
-        prior = Some((held.size, held.extent, cb.rect, texture));
+        prior = Some((allocated(held), held.extent, cb.rect, texture));
     }
     assert!(
         reused >= 4 && replaced >= 2,

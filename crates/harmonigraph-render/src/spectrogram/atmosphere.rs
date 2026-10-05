@@ -382,8 +382,8 @@ struct Uniforms {
     size: Float2,
     step: Float2,
     ppp: f32,
-    /// 1 when the tone target holds this frame's reduced scalar cloud field
-    /// or the star image.
+    /// 1 when the tone target holds this frame's reduced scalar cloud field.
+    /// The starfield reads its own image and never this.
     tone_baked: u32,
     /// Cloud-space offset of the cloud texture, reduced from f64 on the CPU.
     ///
@@ -785,7 +785,6 @@ fn tile_pipeline(
 /// owed rather than a reallocation.
 pub(super) struct Tile {
     views: [wgpu::TextureView; 3],
-    texels: u32,
     baked: Option<TileKey>,
 }
 
@@ -794,7 +793,6 @@ pub(super) struct Memory {
     groups: [wgpu::BindGroup; 2],
     star_groups: [wgpu::BindGroup; 2],
     composite_groups: [wgpu::BindGroup; 2],
-    size: [u32; 2],
     extent: [u32; 2],
     index: usize,
     frame: Option<MemoryFrame>,
@@ -948,29 +946,114 @@ pub(super) struct Targets {
     /// draws a dark seam. The original data mesh still bounds measured sound.
     pub tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
-    /// The precomposite and its size: reduced scalar cloud tone or the star
-    /// image at `Stars resolution`. None works the texture out per pixel in
-    /// the composite. Allocated at [`Shape::tone`].
-    pub tone: Option<(wgpu::TextureView, [u32; 2])>,
+    /// The reduced scalar cloud tone, allocated at [`Shape::tone`].
+    tone: Option<wgpu::TextureView>,
     tile: Option<Tile>,
-    /// The star atlas and its size, `None` unless the starfield is drawn.
-    /// Allocated at [`Shape::stars`].
-    stars: Option<(wgpu::TextureView, [u32; 2])>,
+    stars: Option<Stars>,
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     filter_groups: [wgpu::BindGroup; 2],
-    pub bake_group: wgpu::BindGroup,
-    /// Reads the baked material and writes the tone target, so the tone target
-    /// is the one view this group must NOT carry.
-    pub tone_group: Option<wgpu::BindGroup>,
-    /// Writes all three tile targets, so those are the views it stands scratch
-    /// in for.
+    bake_group: wgpu::BindGroup,
+    /// Writes the tone target.
+    tone_group: Option<wgpu::BindGroup>,
+    /// Writes all three tile targets.
     tile_group: Option<wgpu::BindGroup>,
-    /// Writes the star atlas, so that is the view it stands a scratch in for.
-    star_group: Option<wgpu::BindGroup>,
-    pub composite_group: wgpu::BindGroup,
+    composite_group: wgpu::BindGroup,
     memory: Option<Memory>,
+}
+
+/// The starfield's targets and the groups of the two passes that fill them.
+struct Stars {
+    /// Every star on screen, one texel per cell, as `fs_star_bake` drew it.
+    atlas: wgpu::TextureView,
+    /// Every slice composited at `Stars resolution`, as `fs_stars` drew it, for
+    /// the composite to sample. Bound where the cloud tone would be: the two
+    /// are never drawn together.
+    image: wgpu::TextureView,
+    /// Writes the atlas, reading the light; [`Memory::star_groups`] stand in
+    /// for it while a colour history is kept.
+    atlas_group: wgpu::BindGroup,
+    /// Writes the image, reading the atlas.
+    image_group: wgpu::BindGroup,
+}
+
+/// The views a cloud group binds, one per texture slot of the composite layout.
+#[derive(Clone, Copy)]
+struct Slots<'a> {
+    /// Binding 0: the light the pass reads.
+    light: &'a wgpu::TextureView,
+    /// Binding 4: the cloud tone or the star image.
+    precomposite: &'a wgpu::TextureView,
+    /// Bindings 5, 6 and 13.
+    tile: [&'a wgpu::TextureView; 3],
+    /// Binding 8.
+    atlas: &'a wgpu::TextureView,
+    /// Binding 9: the colour history the pass reads.
+    memory: &'a wgpu::TextureView,
+}
+
+/// Builds the groups every cloud pass binds at group 1.
+struct Binder<'a> {
+    device: &'a wgpu::Device,
+    pipelines: &'a Pipelines,
+    uniform: &'a wgpu::Buffer,
+    /// What a float slot binds where it has nothing to carry, or where its
+    /// view is one the pass writes.
+    scratch: wgpu::TextureView,
+    /// The same for the atlas's unsigned slot.
+    atlas_scratch: wgpu::TextureView,
+}
+
+/// `view`, or `scratch` where `view` is a texture the pass `writes`.
+fn free<'v>(
+    view: &'v wgpu::TextureView,
+    scratch: &'v wgpu::TextureView,
+    writes: &[&wgpu::TextureView],
+) -> &'v wgpu::TextureView {
+    if writes.iter().any(|written| written.texture() == view.texture()) {
+        scratch
+    } else {
+        view
+    }
+}
+
+impl Binder<'_> {
+    /// A group of `slots` for a pass that renders into `writes`.
+    ///
+    /// wgpu validates every view a bound group carries against the pass's
+    /// attachments whether the shader reads it or not, so any slot holding a
+    /// texture the pass writes binds the stand-in instead. That costs a
+    /// correct pass nothing, since no pass may read what it writes.
+    fn group(&self, slots: Slots<'_>, writes: &[&wgpu::TextureView]) -> wgpu::BindGroup {
+        let texture = |binding, view, scratch| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::TextureView(free(view, scratch, writes)),
+        };
+        let float = &self.scratch;
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("spectral_cloud_composite_group"),
+            layout: &self.pipelines.composite_layout,
+            entries: &[
+                texture(0, slots.light, float),
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.pipelines.sampler),
+                },
+                wgpu::BindGroupEntry { binding: 3, resource: self.uniform.as_entire_binding() },
+                texture(4, slots.precomposite, float),
+                texture(5, slots.tile[0], float),
+                texture(6, slots.tile[1], float),
+                texture(13, slots.tile[2], float),
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&self.pipelines.tile_sampler),
+                },
+                texture(9, slots.memory, float),
+                texture(8, slots.atlas, &self.atlas_scratch),
+            ],
+        })
+    }
 }
 
 /// The sizes a [`Targets`] is allocated at, and so the whole of what decides a
@@ -985,17 +1068,24 @@ pub(super) struct Targets {
 pub(super) struct Shape {
     /// The light field, which the blur and the material passes share.
     pub size: [u32; 2],
-    /// The precomposite: reduced scalar cloud tone or the star image at
-    /// `Stars resolution`. None works the texture out per pixel in the
-    /// composite.
+    /// The reduced scalar cloud tone, for Watercolor and Scales. None works the
+    /// tone out per pixel in the composite; the starfield has its own image.
     pub tone: Option<[u32; 2]>,
     /// One side of the square tile, in texels ([`TileKey::texels`]).
     pub tile: Option<u32>,
-    /// The star atlas, sized by [`star_atlas_size`]; `None` unless the
-    /// starfield is drawn.
-    pub stars: Option<[u32; 2]>,
+    /// The starfield's targets; `None` unless it is drawn.
+    pub stars: Option<StarShape>,
     /// The colour history's bucketed allocation ([`memory_allocation_size`]).
     pub memory: Option<[u32; 2]>,
+}
+
+/// The starfield's two targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StarShape {
+    /// Every star on screen, one texel per cell ([`star_atlas_size`]).
+    pub atlas: [u32; 2],
+    /// Every slice composited at `Stars resolution` ([`star_image_size`]).
+    pub image: [u32; 2],
 }
 
 /// What one frame's cloud is drawn into and from: the [`Shape`] to allocate,
@@ -1037,24 +1127,30 @@ impl Plan {
         // A starfield always draws through its image, sized from the same
         // layout as its atlas. It keeps pane-relative texel addressing; the
         // scissor bounds the work.
-        let reduced = match stars {
-            Some(_) => Some(star_image_size(pixels, settings.stars)),
-            None => tone_size(pixels, ppp, atmosphere, sampling.pixel_points),
-        };
-        let star_size =
-            stars.map(|layout| star_atlas_size(layout.size(), held.and_then(|held| held.stars)));
+        let star_shape = stars.map(|layout| StarShape {
+            atlas: star_atlas_size(
+                layout.size(),
+                held.and_then(|held| held.stars).map(|s| s.atlas),
+            ),
+            image: star_image_size(pixels, settings.stars),
+        });
+        let reduced = stars
+            .is_none()
+            .then(|| tone_size(pixels, ppp, atmosphere, sampling.pixel_points))
+            .flatten();
         // Light, reduced tone, tile and history have separate sizing rules.
         // A scalar-field resize must not erase color memory.
         let memory_extent = (settings.effects().cloud
             && (settings.color_pickup > 0.0 || settings.color_release > 0.0))
             .then(|| {
-                star_size.unwrap_or_else(|| reduced.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
+                star_shape
+                    .map(|stars| stars.atlas)
+                    .unwrap_or_else(|| reduced.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
             });
         // Watercolor with a history works its tone out per history texel in
         // `fs_color_memory` and displays the history, so the reduced size is
         // the history's grid and a tone target would be drawn into by nothing.
-        // Scales draw their tone and then remember it, and Stars composite
-        // every depth into it.
+        // Scales draw their tone and then remember it.
         let tone = reduced.filter(|_| {
             memory_extent.is_none()
                 || settings.cloud_style != harmonigraph_scene::CloudStyle::Watercolor
@@ -1067,7 +1163,7 @@ impl Plan {
             }
         });
         Some(Self {
-            shape: Shape { size, tone, tile: tile.map(TileKey::texels), stars: star_size, memory },
+            shape: Shape { size, tone, tile: tile.map(TileKey::texels), stars: star_shape, memory },
             tile,
             stars,
             memory_extent,
@@ -1120,29 +1216,29 @@ impl Targets {
             size,
             tone: tone_size,
             tile: tile_texels,
-            stars: star_size,
+            stars: star_shape,
             memory: memory_size,
         } = shape;
-        let (carried, carried_memory) =
-            previous.map_or((None, None), |previous| (previous.tile, previous.memory));
+        // The tile's bake and the colour history are carried wherever their
+        // own sizes still fit.
+        let (carried, carried_memory) = previous.map_or((None, None), |previous| {
+            (
+                previous.tile.filter(|_| previous.shape.tile == tile_texels),
+                previous.memory.filter(|_| previous.shape.memory == memory_size),
+            )
+        });
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
         let sized = |label, size: [u32; 2]| formatted(label, size, FORMAT);
         let view = |label| sized(label, size);
         let source_view = view("spectral_cloud_source");
         let views = [view("spectral_cloud_scratch"), view("spectral_cloud_close")];
-        // Star presence is already part of the allocation key, so a style
-        // change also replaces the tone's format even at identical sizes.
-        let tone = tone_size.map(|size| {
-            let format = if star_size.is_some() { STAR_IMAGE_FORMAT } else { FORMAT };
-            (formatted("spectral_cloud_tone", size, format), size)
+        let tone = tone_size.map(|size| sized("spectral_cloud_tone", size));
+        let star_views = star_shape.map(|shape| {
+            (
+                formatted("spectral_star_atlas", shape.atlas, STAR_FORMAT),
+                formatted("spectral_star_image", shape.image, STAR_IMAGE_FORMAT),
+            )
         });
-        let stars =
-            star_size.map(|size| (formatted("spectral_star_atlas", size, STAR_FORMAT), size));
-        // What every group that does not read the atlas binds in its place, and
-        // what the star pass, which writes it, must.
-        let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
-        let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
-        let carried = carried.filter(|tile| Some(tile.texels) == tile_texels);
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
                 || {
@@ -1155,18 +1251,16 @@ impl Targets {
         let (memory_index, memory_frame) = carried_memory.map_or((1, None), |m| (m.index, m.frame));
         // Reused whenever it is already the right shape, key and all, so a
         // rebuild the LIGHT's size forced costs no walk at all.
-        let tile = tile_texels.map(|texels| match carried {
-            Some(tile) => tile,
-            None => Tile {
+        let tile = tile_texels.map(|texels| {
+            carried.unwrap_or_else(|| Tile {
                 views: [
                     ("spectral_cloud_tile_a", TILE_FORMAT),
                     ("spectral_cloud_tile_b", TILE_FORMAT),
                     ("spectral_cloud_tile_c", PIGMENT_FORMAT),
                 ]
                 .map(|(label, format)| formatted(label, [texels; 2], format)),
-                texels,
                 baked: None,
-            },
+            })
         });
         let buffer = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -1198,97 +1292,58 @@ impl Targets {
                 ],
             })
         });
-        // wgpu validates every resource a bound group carries against the pass's
-        // attachments whether the shader reads it or not, so the views a pass
-        // WRITES are PARAMETERS here: the tone pass binds a scratch where the
-        // tone target would be, and the tile pass binds one at each tile. The
-        // scratch is the harmless choice — neither `fs_cloud_tone` nor
-        // `fs_cloud_tile` reads any of those three bindings.
-        let cloud_group = |front: &wgpu::TextureView,
-                           tone: &wgpu::TextureView,
-                           tile: [&wgpu::TextureView; 3],
-                           stars: &wgpu::TextureView,
-                           memory: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("spectral_cloud_composite_group"),
-                layout: &pipelines.composite_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(front),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.sampler),
-                    },
-                    wgpu::BindGroupEntry { binding: 3, resource: uniform.as_entire_binding() },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::TextureView(tone),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: wgpu::BindingResource::TextureView(tile[0]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: wgpu::BindingResource::TextureView(tile[1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 13,
-                        resource: wgpu::BindingResource::TextureView(tile[2]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: wgpu::BindingResource::Sampler(&pipelines.tile_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 9,
-                        resource: wgpu::BindingResource::TextureView(memory),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 8,
-                        resource: wgpu::BindingResource::TextureView(stars),
-                    },
-                ],
-            })
+        let binder = Binder {
+            device,
+            pipelines,
+            uniform: &uniform,
+            scratch: sized("spectral_cloud_stand_in", [1, 1]),
+            atlas_scratch: formatted("spectral_star_stand_in", [1, 1], STAR_FORMAT),
         };
-        let scratch_tile = [&views[0], &views[0], &views[0]];
-        let tile_views = tile.as_ref().map_or(scratch_tile, |tile| tile.views.each_ref());
-        let star_view = stars.as_ref().map_or(&star_scratch, |(view, _)| view);
-        let bake_group = cloud_group(&views[1], &views[0], tile_views, star_view, &views[0]);
-        // Reads the baked material the light passes just wrote, or the star
-        // atlas, and writes the tone target — so that is the one view it
-        // stands a scratch in for.
-        let tone_group = tone
+        // Every pass after the material reads the light out of the source
+        // target, and every one binds whichever targets exist. Each group then
+        // differs only in what its pass writes and which history it reads.
+        let slots = Slots {
+            light: &source_view,
+            precomposite: tone
+                .as_ref()
+                .or(star_views.as_ref().map(|(_, image)| image))
+                .unwrap_or(&binder.scratch),
+            tile: tile.as_ref().map_or([&binder.scratch; 3], |tile| tile.views.each_ref()),
+            atlas: star_views.as_ref().map_or(&binder.atlas_scratch, |(atlas, _)| atlas),
+            memory: &binder.scratch,
+        };
+        // The material reads the blurred field and writes the source target.
+        let bake_group = binder.group(Slots { light: &views[1], ..slots }, &[&source_view]);
+        let tone_group = tone.as_ref().map(|tone| binder.group(slots, &[tone]));
+        let tile_group = tile.as_ref().map(|tile| binder.group(slots, &tile.views.each_ref()));
+        let star_groups = star_views
             .as_ref()
-            .map(|_| cloud_group(&source_view, &views[0], tile_views, star_view, &views[0]));
-        let tile_group = tile
-            .as_ref()
-            .map(|_| cloud_group(&source_view, &views[0], scratch_tile, star_view, &views[0]));
-        // Reads the finished light as the stars' level, like the tone pass.
-        let star_group = stars
-            .as_ref()
-            .map(|_| cloud_group(&source_view, &views[0], tile_views, &star_scratch, &views[0]));
-        let final_tone = tone.as_ref().map_or(&views[0], |(view, _)| view);
-        let composite_group =
-            cloud_group(&source_view, final_tone, tile_views, star_view, &views[0]);
+            .map(|(atlas, image)| (binder.group(slots, &[atlas]), binder.group(slots, &[image])));
+        let composite_group = binder.group(slots, &[]);
+        // The history pass writes one target and reads the other; the passes
+        // after it read the one it just wrote.
         let memory = memory_views.map(|history| Memory {
             groups: std::array::from_fn(|i| {
-                cloud_group(&source_view, final_tone, tile_views, &star_scratch, &history[1 - i])
+                binder.group(Slots { memory: &history[1 - i], ..slots }, &[&history[i]])
             }),
             star_groups: std::array::from_fn(|i| {
-                cloud_group(&source_view, &views[0], tile_views, &star_scratch, &history[i])
+                binder.group(Slots { memory: &history[i], ..slots }, &[slots.atlas])
             }),
             composite_groups: std::array::from_fn(|i| {
-                cloud_group(&source_view, final_tone, tile_views, star_view, &history[i])
+                binder.group(Slots { memory: &history[i], ..slots }, &[])
             }),
+            extent: memory_size.expect("history views exist only with a size"),
             views: history,
-            size: memory_size.unwrap(),
-            extent: memory_size.unwrap(),
             index: memory_index,
             frame: memory_frame,
         });
+        let stars =
+            star_views.zip(star_groups).map(|((atlas, image), (atlas_group, image_group))| Stars {
+                atlas,
+                image,
+                atlas_group,
+                image_group,
+            });
         let source_group = source_group(device, source_layout, &source_uniform, grid, lut);
         Self {
             #[cfg(test)]
@@ -1316,7 +1371,6 @@ impl Targets {
             bake_group,
             tone_group,
             tile_group,
-            star_group,
             composite_group,
             memory,
         }
@@ -1397,7 +1451,7 @@ impl Targets {
         }
         if let Some(coverage) = draw.star_coverage {
             self.draw_stars(encoder, pipelines, draw.pixels, coverage);
-        } else if let Some(((tone_view, _), tone_group)) =
+        } else if let Some((tone_view, tone_group)) =
             self.tone.as_ref().zip(self.tone_group.as_ref())
         {
             #[cfg(test)]
@@ -1427,15 +1481,15 @@ impl Targets {
         pixels: [u32; 2],
         coverage: [u32; 4],
     ) {
-        let Some((atlas, atlas_group)) = self.star_pass() else { return };
-        let (Some((image, size)), Some(tone_group)) = (&self.tone, &self.tone_group) else {
-            return;
-        };
+        let Some(stars) = &self.stars else { return };
+        let image = self.shape.stars.expect("star targets exist only with a shape").image;
+        let atlas_group =
+            self.memory.as_ref().map_or(&stars.atlas_group, |m| &m.star_groups[m.index]);
         #[cfg(test)]
         self.encoded_passes.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
         crate::stars::Pass {
             label: "spectral_star_atlas",
-            view: atlas,
+            view: &stars.atlas,
             pipeline: &pipelines.stars,
             groups: &[&self.source_group, atlas_group],
             scissor: None,
@@ -1443,20 +1497,12 @@ impl Targets {
         .draw(encoder);
         crate::stars::Pass {
             label: "spectral_star_image",
-            view: image,
+            view: &stars.image,
             pipeline: &pipelines.star_image,
-            groups: &[&self.source_group, tone_group],
-            scissor: Some(star_image_scissor(coverage, pixels, *size)),
+            groups: &[&self.source_group, &stars.image_group],
+            scissor: Some(star_image_scissor(coverage, pixels, image)),
         }
         .draw(encoder);
-    }
-
-    /// The star atlas and the group the pass that fills it binds.
-    fn star_pass(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
-        Some((
-            &self.stars.as_ref()?.0,
-            self.memory.as_ref().map_or(self.star_group.as_ref()?, |m| &m.star_groups[m.index]),
-        ))
     }
 
     /// One period of the cell walk into the tile, unless it already holds
@@ -1567,7 +1613,7 @@ impl Targets {
         // height every four minutes.
         let offset = cloud_offset(settings, atmosphere.now);
         let drift = cloud_drift(settings, offset, tile);
-        let image = self.shape.tone.unwrap_or([1, 1]);
+        let image = self.shape.stars.map_or([1, 1], |stars| stars.image);
         let slices = stars
             .map(|layout| {
                 star_slices(

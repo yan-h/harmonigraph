@@ -1540,7 +1540,8 @@ mod tests {
         assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars");
         let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
         let targets = targets.cloud.as_ref().unwrap();
-        assert!(targets.shape().tone.is_some() && targets.shape().tile.is_none());
+        let shape = targets.shape();
+        assert!(shape.stars.is_some() && shape.tone.is_none() && shape.tile.is_none());
         assert!(targets.shape().memory.is_some(), "the fresh Stars ran without their history");
         cb.grid.fill(0);
         cb.atmosphere.as_mut().unwrap().now += 7.0 * f64::from(fresh.color_release);
@@ -3359,7 +3360,7 @@ fn cs_wrap_probe() {
                     .as_ref();
                 let cloud = cloud.expect("zero refraction must still draw random brightness");
                 if sampling > 1.0 {
-                    let (_, size) = cloud.tone.as_ref().expect("fixture must reach reduced tone");
+                    let size = cloud.shape().tone.expect("fixture must reach reduced tone");
                     assert!(size[0] < 384 && size[1] < 384);
                 }
                 for c in 0..3 {
