@@ -77,8 +77,8 @@ struct StarSlice {
     /// `Position variation`.
     width: f32,
     /// The inverse of the narrowest radius a star is drawn at, in star
-    /// pixels: one texel of the star image, or as much of one as the slice's
-    /// read holds whole ([`star_slices`]).
+    /// pixels: the wider side of a texel of the star image, or what a 3x3
+    /// read holds where that is less ([`star_slices`]).
     inverse_floor: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,

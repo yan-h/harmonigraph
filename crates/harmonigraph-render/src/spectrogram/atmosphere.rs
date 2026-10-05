@@ -1736,11 +1736,12 @@ mod tests {
         }
     }
 
-    /// A star is drawn at least a texel of the star image wide, so a depth
-    /// whose stars that floor widens past its planned read takes the next
-    /// that holds them; a fine image leaves the plan as it was.
+    /// A star is drawn with a radius of at least a texel of the star image,
+    /// the wider of its sides, so a depth whose stars that floor widens past
+    /// its planned read takes the next that holds them; a fine image leaves
+    /// the plan as it was.
     #[test]
-    fn the_texel_floor_widens_the_read_that_holds_it() {
+    fn the_texel_floor_picks_the_read_that_holds_it() {
         use harmonigraph_scene::star_plan::StarGather;
         let fresh = harmonigraph_scene::StarSettings::default();
         let layout = star_layout(fresh, 4.0 / 3.0);
@@ -1758,6 +1759,12 @@ mod tests {
         for slice in coarse {
             let holds = Three.bound(fresh.star_jitter) * slice.cell;
             assert_eq!(slice.inverse_floor, 1.0 / (STAR_PANE / 75.0).min(holds));
+        }
+        // An image rounded wider across than down: the floor is the wider
+        // side, 8 star pixels against 7.2.
+        for slice in star_slices(fresh, 0.0, 0.0, &layout, [90, 75]) {
+            let holds = Three.bound(fresh.star_jitter) * slice.cell;
+            assert_eq!(slice.inverse_floor, 1.0 / (layout.pane[0] / 90.0).min(holds));
         }
     }
 

@@ -40,8 +40,8 @@ impl StarGather {
         }
     }
 
-    /// The cheapest read that holds a star `radius` star pixels wide whole in
-    /// cells `cell` wide, at `Position variation` `jitter`; 3x3 where none
+    /// The cheapest read that holds a star of radius `radius` star pixels
+    /// whole in cells `cell` wide, at `Position variation` `jitter`; 3x3 where none
     /// does. The plan's choice for its stars, and the renderer's for the
     /// floor it widens them to.
     pub fn holding(radius: f32, cell: f32, jitter: f32) -> Self {
@@ -94,6 +94,10 @@ pub fn star_jitter_width(jitter: f32) -> f32 {
 /// One depth as drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StarDepthPlan {
+    /// Whether the depth is drawn, and the cheapest read that holds its
+    /// stars in its own cell. The renderer reads it again over the cell the
+    /// atlas gives it, with the stars widened to the star image's texel
+    /// (`star_slices`), so the read drawn may differ either way.
     pub gather: StarGather,
     /// Where the depth sits from far (0) to near (1): its layer's place among
     /// `Star layers` ([`star_layer_depths`]), or its own place at five layers

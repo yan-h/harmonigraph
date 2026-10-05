@@ -19,8 +19,8 @@ struct StarSlice {
     grid: vec2<i32>,
     // The band a centre is drawn from, in cells.
     width: f32,
-    // The inverse of the narrowest radius a star is drawn at: one texel of
-    // the star image, or as much as the read holds (`star_slices`).
+    // The inverse of the narrowest radius a star is drawn at: a texel of the
+    // star image, or what a 3x3 read holds where that is less (`star_slices`).
     inverse_floor: f32,
     // 0 not drawn, 1 the whole star from its own cell, 2 from a 2x2 read, 3
     // from a 3x3 read.
