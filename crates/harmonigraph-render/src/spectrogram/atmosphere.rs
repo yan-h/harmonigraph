@@ -200,12 +200,9 @@ pub(super) fn memory_allocation_size(extent: [u32; 2], limit: u32) -> [u32; 2] {
     extent.map(|n| n.div_ceil(64).saturating_mul(64).min(limit))
 }
 
-/// The precomposite size, or `None` to work the texture out per pixel in the
-/// composite.
-///
-/// Stars always composite every layer into one image at `Stars resolution`
-/// ([`star_image_size`]). The caller retains a pane-relative allocation for
-/// texel addressing, but scissors this pass to the drawn region on every frame.
+/// The precomposite size for a cloud texture, or `None` to work the texture
+/// out per pixel in the composite. Stars size their own image instead
+/// ([`star_image_size`]).
 ///
 /// Other styles stay native at sample spacing at or under one DEVICE pixel — the fixed half point on a Retina pane and on a plain one —
 /// where a reduced target would be the pane's own resolution or larger and the
@@ -220,9 +217,6 @@ pub(super) fn tone_size(
     let settings = atmosphere.settings.sanitized();
     if !settings.effects().cloud {
         return None;
-    }
-    if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
-        return Some(star_image_size(pixels, settings.stars));
     }
     if settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales {
         // S1's broad bodies need 32 samples per cell, independent of display
@@ -1248,8 +1242,9 @@ impl Targets {
         coverage: [u32; 4],
     ) {
         let Some((atlas, atlas_group)) = self.star_pass() else { return };
-        let (image, size) = self.tone.as_ref().expect("star image");
-        let tone_group = self.tone_group.as_ref().expect("star image group");
+        let (Some((image, size)), Some(tone_group)) = (&self.tone, &self.tone_group) else {
+            return;
+        };
         #[cfg(test)]
         self.encoded_passes.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
         crate::stars::Pass {

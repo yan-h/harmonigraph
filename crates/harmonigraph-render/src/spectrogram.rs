@@ -770,20 +770,15 @@ impl CallbackTrait for SpectrogramCallback {
                     });
                     [start[0], start[1], end[0] - start[0], end[1] - start[1]]
                 });
-                let drawn_pixels = star_coverage.map_or(pixels, |r| [r[2], r[3]]);
-                let reduced =
-                    atmosphere::tone_size(drawn_pixels, ppp, settings, sampling.pixel_points)
-                        // Keep pane-relative texel addressing; the scissor bounds
-                        // work while the intermediate retains the full pane size.
-                        .map(|size| {
-                            if stars {
-                                atmosphere::star_image_size(pixels, settings.settings.stars)
-                            } else {
-                                size
-                            }
-                        });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
+                // A starfield always draws through its image, sized from the
+                // same layout as its atlas. It keeps pane-relative texel
+                // addressing; the scissor bounds the work.
+                let reduced = match stars {
+                    Some(_) => Some(atmosphere::star_image_size(pixels, settings.settings.stars)),
+                    None => atmosphere::tone_size(pixels, ppp, settings, sampling.pixel_points),
+                };
                 let star_size = stars.map(|layout| {
                     atmosphere::star_atlas_size(
                         layout.size(),

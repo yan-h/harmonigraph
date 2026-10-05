@@ -675,15 +675,13 @@ struct TileVertex {
     // cloud uniform is bound to the fragment stage alone and a vertex read of
     // it would widen every cloud pipeline's layout for this one entry point.
     @location(0) fraction: vec2<f32>,
-    @location(1) @interpolate(flat) layer: u32,
 };
 @vertex
-fn vs_cloud_tile(@builtin(vertex_index) vertex: u32, @builtin(instance_index) layer: u32) -> TileVertex {
+fn vs_cloud_tile(@builtin(vertex_index) vertex: u32) -> TileVertex {
     let uv = vec2<f32>(f32((vertex << 1u) & 2u), f32(vertex & 2u));
     var out: TileVertex;
     out.position = vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0);
     out.fraction = uv;
-    out.layer = layer;
     return out;
 }
 

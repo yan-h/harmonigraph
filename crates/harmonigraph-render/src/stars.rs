@@ -350,10 +350,11 @@ impl StarUniforms {
         now: f64,
         pixels: [u32; 2],
         layout: &StarLayout,
+        image: [u32; 2],
     ) -> Self {
         Self {
             size: Float2(pixels.map(|n| n as f32)),
-            star_image: Float2(star_image_size(pixels, settings).map(|n| n as f32)),
+            star_image: Float2(image.map(|n| n as f32)),
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,

@@ -240,7 +240,7 @@ impl Targets {
         }
         let held = held.as_ref().unwrap();
         let settings = Settings {
-            stars: StarUniforms::new(stars, direction, now, size, &layout),
+            stars: StarUniforms::new(stars, direction, now, size, &layout, held.allocation.image),
             depth: amount,
             _pad0: 0.0,
             _pad1: 0.0,

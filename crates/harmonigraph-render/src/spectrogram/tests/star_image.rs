@@ -55,8 +55,9 @@ fn target(resources: &CallbackResources) -> &atmosphere::Targets {
     resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap().cloud.as_ref().unwrap()
 }
 
-// A reference where every 1x1 and 2x2 read is a 3x3 one, to show the cheaper
-// reads lose nothing the widest sees.
+// A reference where every drawn depth is read over its nine cells by a loop
+// written here, independently of production's `star_gather3`, so the cheaper
+// reads are shown to lose nothing and the 3x3 read to index the right cells.
 thread_local! {
     static WIDE_REFERENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -65,12 +66,25 @@ pub(super) fn reference_source() -> Option<String> {
     if !WIDE_REFERENCE.get() {
         return None;
     }
-    let mut source = SPECTROGRAM_SRC.to_owned();
-    for read in ["slice = star_texel(s, f, index);", "slice = star_gather2(s, r);"] {
-        assert_eq!(source.matches(read).count(), 1, "the Stars read moved");
-        source = source.replace(read, "slice = star_gather3(s, f, index);");
-    }
-    Some(source)
+    let reads = "if s.gather == 1u {
+            slice = star_texel(s, f, index);
+        } else if s.gather == 2u {
+            slice = star_gather2(s, r);
+        } else if s.gather == 3u {
+            slice = star_gather3(s, f, index);
+        }";
+    assert_eq!(SPECTROGRAM_SRC.matches(reads).count(), 1, "the Stars reads moved");
+    Some(SPECTROGRAM_SRC.replace(
+        reads,
+        "if s.gather != 0u {
+            for (var y = -1; y <= 1; y += 1) {
+                for (var x = -1; x <= 1; x += 1) {
+                    let cell = index + y * s.grid.x + x;
+                    slice += star_texel(s, f - vec2<f32>(f32(x), f32(y)), cell);
+                }
+            }
+        }",
+    ))
 }
 
 /// Restore the thread's reference even if an assertion panics.
@@ -123,6 +137,7 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
             let layout = atmosphere::star_layout(settings.stars, cb.rect.aspect_ratio());
             let slices = atmosphere::star_slices(settings.stars, 0.0, 0.0, &layout);
             assert_eq!(slices.map(|s| s.gather)[..3], [2; 3], "jitter={jitter}: far not 2x2");
+            assert_eq!(slices[4].gather, 3, "jitter={jitter}: nearest not 3x3");
             if memory {
                 settings.color_pickup = 0.6;
                 settings.color_release = 0.6;
@@ -280,7 +295,10 @@ fn a_core_depth_draws_its_stars_whole() {
         let floor = cb.shades.lut[0];
         let lit = frames[0].chunks_exact(4).filter(|px| px[..3] != floor[..3]).count();
         assert!(lit > 500, "jitter={jitter}: only {lit} lit pixels");
-        assert_eq!(frames[0], frames[1], "jitter={jitter}: the 1x1 read cut a star");
+        // A cut star loses whole levels; the reference's own summation order
+        // moves a channel by one at most.
+        let worst = frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        assert!(worst <= 1, "jitter={jitter}: the 1x1 read cut a star ({worst}/255)");
     }
 }
 

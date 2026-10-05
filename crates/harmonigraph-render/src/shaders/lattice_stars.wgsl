@@ -13,12 +13,11 @@ struct Settings {
 @group(1) @binding(1) var cloud_tone: texture_2d<f32>;
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) layer: u32,
 };
 @vertex
-fn vs_stars(@builtin(vertex_index) vertex: u32, @builtin(instance_index) layer: u32) -> TileVertex {
+fn vs_stars(@builtin(vertex_index) vertex: u32) -> TileVertex {
     let uv = vec2<f32>(f32((vertex << 1u) & 2u), f32(vertex & 2u));
-    return TileVertex(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0), layer);
+    return TileVertex(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0));
 }
 fn star_size() -> vec2<f32> { return settings.stars.size; }
 fn star_randomness() -> f32 { return settings.stars.star_randomness; }

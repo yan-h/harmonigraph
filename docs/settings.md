@@ -39,7 +39,8 @@ Lattice note geometry, animation, labels and light effects fold independently.
 
 Analyzer textures read in decision order:
 choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
-For Stars, **Stars resolution** sits directly below the style choice in both pictures,
+For Stars, **Stars resolution** comes first among its controls in both pictures,
+after Texture mix in the spectrogram and Material amount in the lattice,
 at 75% by default.
 **Color pickup** follows brighter sound;
 **Color release** retains color as sound fades.
