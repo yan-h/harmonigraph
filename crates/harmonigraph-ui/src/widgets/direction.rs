@@ -16,12 +16,12 @@ pub(crate) fn drift(ui: &mut Ui, degrees: &mut f32, mut speed: Option<&mut f32>)
         let (_, next)=plot.handle(ui,"Direction and speed",x,y);
         if let Some(p)=next {
             let v=egui::vec2((p.x-0.5)/0.5,(0.5-p.y)/0.5);
-            if v.length()>0.001 { *degrees=v.y.atan2(v.x).to_degrees().rem_euclid(360.0); }
+            if v.length()>0.001 { *degrees=harmonigraph_scene::wrap_direction(v.y.atan2(v.x).to_degrees()); }
             if let Some(s)=speed.as_deref_mut() { *s=v.length().min(1.0).powi(2)*max; }
         }
         plot.fields(ui, |ui| {
         if value_bar(ui,degrees,0.0..=360.0,["Drift direction", "Direction"],1.0,"°").changed() {
-            *degrees = degrees.rem_euclid(360.0);
+            *degrees = harmonigraph_scene::wrap_direction(*degrees);
         }
         if let Some(s)=speed.as_deref_mut() { value_bar(ui,s,0.0..=max,["Drift speed", "Speed"],1.0,"×"); }
         });

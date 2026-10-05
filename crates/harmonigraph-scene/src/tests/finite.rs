@@ -535,3 +535,19 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     let names = broken(&scene);
     assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));
 }
+
+/// A drift direction a hair below zero is stored as 0, not as 360: a second
+/// sanitize must leave it alone, or the live view and its sanitized copy
+/// disagree (`panes/lattice.rs` asserts they agree in debug builds).
+#[test]
+fn a_direction_just_below_zero_sanitizes_once() {
+    let below = -1e-6_f32;
+    assert_eq!(below.rem_euclid(CLOUD_DIRECTION_MAX), CLOUD_DIRECTION_MAX);
+    let lattice =
+        AtmosphereSettings { material_direction: below, ..Default::default() }.sanitized();
+    assert_eq!(lattice.material_direction, 0.0);
+    assert_eq!(lattice.sanitized().material_direction, lattice.material_direction);
+    let spectral = SpectralAtmosphere { cloud_direction: below, ..Default::default() }.sanitized();
+    assert_eq!(spectral.cloud_direction, 0.0);
+    assert_eq!(spectral.sanitized().cloud_direction, spectral.cloud_direction);
+}
