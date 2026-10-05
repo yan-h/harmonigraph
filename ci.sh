@@ -363,6 +363,7 @@ run .claude/tests/reclaim-locks.sh
 # build is absent from the menu, or every swap step reports success while the
 # DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
+run .claude/tests/load-plugin-branch.sh
 run python3 -B .claude/tests/preserved-build.py
 
 # What the compile cache actually did, which nothing else here reports and

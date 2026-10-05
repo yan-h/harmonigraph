@@ -52,7 +52,7 @@ pub(crate) const DOCKED_SURFACE: usize = 0;
 /// node radius: uv 1.0 is 1.8 node radii (`marker_world` in harmonigraph-scene),
 /// so it reads 180%. Every lattice bar stored in quad uv (Reach, Gap, Cross
 /// length) displays and takes typed values through this, so its readout and
-/// its hover name the same radius as the Shadow and Pickup widths (#1327).
+/// its hover name the same radius as Shadow width and Pigment reach (#1327).
 /// Display only: the saved numbers stay in uv.
 pub(super) const QUAD_UV_PERCENT: f32 = 180.0;
 

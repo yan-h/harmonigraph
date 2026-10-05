@@ -71,7 +71,7 @@ drag a bar or double-click it to type in the displayed units.
 | Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
 | Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
 | Star size, spacing and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size and spacing use a logarithmic vertical scale; speed is linear. |
-| Shadow profile | Move the upper-right corner for width and darkness. Contour shadows have a curve handle; Blur shadows expose caster spread and show schematic extent because their actual profile depends on the caster. |
+| Shadows | Width, Darkness, and Falloff (Contour) or Spread (Blur) bars sit beside a rendered shadow around a sample shape. The sample is scaled to fit; the shadow on each drawn shape depends on its size and outline. |
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Contour levels | Drag the integer slider from 2 to 16, or double-click to type; the band preview shows the count. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
@@ -349,7 +349,7 @@ and double-click to reset.
   zero is linear, positive fades early, and negative fades late.
 
 **Shadow falloff** runs from −6 (early decay) through 0 (linear) to +6 (late decay).
-Its preview shows the Contour shadow profile,
+Its preview shows the Contour shadow around the sample shape,
 which reaches zero at one Shadow width and never bends into an S curve.
 Blur shadows keep their Gaussian profile.
 **Shadow spread** appears for Blur shadows.

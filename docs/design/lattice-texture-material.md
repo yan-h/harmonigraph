@@ -14,7 +14,7 @@ This is not a general layer stack or a new ambient background.
 Keep `ViewConfig::atmosphere` as the owner of lattice glow effects.
 Replace its combined enable/material controls with two independently selectable stages:
 
-- Texture: None, Clouds; depth, size and speed.
+- Texture: Clouds; depth (Pattern contrast, where zero turns it off), size and speed.
 - Material: None, Watercolor, Stars, Scales; amount and drift direction.
 Watercolor and Scales use Drift speed;
 Stars uses its depth-dependent Star speed range.
@@ -73,7 +73,7 @@ The active material source target has a lifetime bounded by the glow allocation;
 resizing the glow replaces that source as before.
 None or zero material amount releases both source and geometry resources and skips the pass, as before.
 Reactivation recreates them; changes between positive amounts retain geometry.
-None or zero texture depth bypasses modulation without disabling the material.
+Zero texture depth bypasses modulation without disabling the material.
 
 ## Saved-state consequence
 
@@ -194,25 +194,22 @@ Silence clears the output without running the star passes or discarding their al
 with independent values in each atmosphere's `stars` field and one shared controls widget.
 `harmonigraph-render::stars` owns the layout,
 clock reduction,
-profile sizes,
-halo allocation,
-uniform transport and bake/halo/far/near pass sequence.
+star image size,
+uniform transport and the bake and star image passes.
 `shaders/stars.wgsl` owns the star geometry and premultiplied composition.
 The spectrogram supplies its palette/color-memory adapter;
 `lattice_stars` supplies the colored-light adapter and pane-specific resource bindings.
 Color history remains spectrogram-owned.
 
 The raw lattice light remains half resolution.
-Stars has its own full-scene-resolution output so High and Uniform keep sharp foreground cores;
-Medium keeps the same reduced foreground policy as the spectrogram.
+Stars draws every depth into one image at **Stars resolution** of the full scene,
+the same policy as the spectrogram.
 `GlowTarget::binding` selects the finished material image for background composition and every node/label light reader,
 so normal shadows and bloom see the same picture.
 Other materials retain their existing half-resolution output.
 
 The lattice star allocation key contains actual output,
-atlas,
-halo,
-far and near image shapes.
+atlas and star image shapes.
 Time,
 color,
 amount,
