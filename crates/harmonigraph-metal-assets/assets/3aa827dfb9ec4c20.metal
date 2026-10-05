@@ -54,7 +54,7 @@ struct Cloud {
     float star_size_variation;
     uint star_pad0_;
     uint star_pad1_;
-    metal::float4 star_image;
+    metal::float4 star_image_size;
     type_10 star_slices;
     uint memory_enabled;
     uint memory_valid;
@@ -164,15 +164,24 @@ metal::float3 palette_color(
     return metal::mix(a, b, metal::fract(x));
 }
 
+metal::float4 star_image_at(
+    metal::float2 uv,
+    metal::sampler cloud_sampler,
+    metal::texture2d<float, metal::access::sample> cloud_image
+) {
+    metal::float4 _e4 = cloud_image.sample(cloud_sampler, uv, metal::level(0.0));
+    return _e4;
+}
+
 metal::float4 star_color(
     metal::float2 pt,
     constant Cloud& cloud,
     metal::sampler cloud_sampler,
-    metal::texture2d<float, metal::access::sample> cloud_tone
+    metal::texture2d<float, metal::access::sample> cloud_image
 ) {
-    metal::float2 _e3 = star_size(cloud);
-    metal::float4 _e6 = cloud_tone.sample(cloud_sampler, pt / _e3, metal::level(0.0));
-    return _e6;
+    metal::float2 _e1 = star_size(cloud);
+    metal::float4 _e3 = star_image_at(pt / _e1, cloud_sampler, cloud_image);
+    return _e3;
 }
 
 metal::float3 linear_from_gamma_rgb(
@@ -193,8 +202,8 @@ float baked_density(
     float _e3 = cloud.ppp;
     metal::float2 _e8 = cloud.origin;
     metal::float2 _e12 = cloud.size;
-    metal::float2 uv_1 = ((position / metal::float2(_e3)) - _e8) / _e12;
-    metal::float4 _e17 = close_light.sample(cloud_sampler, uv_1, metal::level(0.0));
+    metal::float2 uv_2 = ((position / metal::float2(_e3)) - _e8) / _e12;
+    metal::float4 _e17 = close_light.sample(cloud_sampler, uv_2, metal::level(0.0));
     return _e17.x;
 }
 
@@ -350,7 +359,7 @@ float cloud_tone_at(
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
     metal::sampler cloud_sampler,
-    metal::texture2d<float, metal::access::sample> cloud_tone,
+    metal::texture2d<float, metal::access::sample> cloud_image,
     metal::texture2d<float, metal::access::sample> cloud_tile_a,
     metal::texture2d<float, metal::access::sample> cloud_tile_b,
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
@@ -359,7 +368,7 @@ float cloud_tone_at(
     uint _e3 = cloud.cloud_style;
     if (_e3 == 3u) {
         metal::float2 _e10 = cloud.size;
-        metal::float4 _e13 = cloud_tone.sample(cloud_sampler, pt_5 / _e10, metal::level(0.0));
+        metal::float4 _e13 = cloud_image.sample(cloud_sampler, pt_5 / _e10, metal::level(0.0));
         return _e13.x;
     }
     float _e15 = wash_cloud_tone(pt_5, cloud, close_light, cloud_sampler, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
@@ -371,13 +380,13 @@ metal::int2 naga_f2i32(metal::float2 value) {
 }
 
 metal::float3 memory_color(
-    metal::float2 uv,
+    metal::float2 uv_1,
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> color_memory
 ) {
     metal::float2 _e3 = cloud.memory_extent;
     metal::int2 size = naga_f2i32(_e3);
-    metal::float2 p = (uv * static_cast<metal::float2>(size)) - metal::float2(0.5);
+    metal::float2 p = (uv_1 * static_cast<metal::float2>(size)) - metal::float2(0.5);
     metal::int2 lo = naga_f2i32(metal::floor(p));
     metal::float2 f = metal::fract(p);
     uint clamped_lod_e21 = metal::min(uint(0), color_memory.get_num_mip_levels() - 1);
@@ -403,7 +412,7 @@ metal::float4 clouded_base(
     metal::sampler cloud_sampler,
     metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> lut,
-    metal::texture2d<float, metal::access::sample> cloud_tone,
+    metal::texture2d<float, metal::access::sample> cloud_image,
     metal::texture2d<float, metal::access::sample> cloud_tile_a,
     metal::texture2d<float, metal::access::sample> cloud_tile_b,
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
@@ -421,7 +430,7 @@ metal::float4 clouded_base(
     uint _e21 = cloud.cloud_style;
     if (_e21 == 2u) {
         metal::float3 _e24 = palette_color(level_2, lut);
-        metal::float4 _e25 = star_color(pt_6, cloud, cloud_sampler, cloud_tone);
+        metal::float4 _e25 = star_color(pt_6, cloud, cloud_sampler, cloud_image);
         float _e29 = cloud.cloud_depth;
         return metal::float4(metal::mix(_e24, _e25.xyz, _e29), 1.0);
     }
@@ -430,8 +439,8 @@ metal::float4 clouded_base(
         metal::float2 dimensions = cloud.memory_extent;
         metal::float2 _e43 = cloud.size;
         metal::float2 _e54 = cloud.memory_fraction;
-        metal::float2 uv_2 = ((((pt_6 / _e43) * (dimensions - metal::float2(2.0))) + metal::float2(1.0)) + _e54) / dimensions;
-        metal::float3 _e57 = memory_color(uv_2, cloud, color_memory);
+        metal::float2 uv_3 = ((((pt_6 / _e43) * (dimensions - metal::float2(2.0))) + metal::float2(1.0)) + _e54) / dimensions;
+        metal::float3 _e57 = memory_color(uv_3, cloud, color_memory);
         float _e60 = cloud.cloud_depth;
         if (_e60 >= 1.0) {
             metal::float3 _e63 = gamma_from_linear_rgb(_e57);
@@ -446,10 +455,10 @@ metal::float4 clouded_base(
     uint _e78 = cloud.tone_baked;
     if (_e78 == 1u) {
         metal::float2 _e85 = cloud.size;
-        metal::float4 _e88 = cloud_tone.sample(cloud_sampler, pt_6 / _e85, metal::level(0.0));
+        metal::float4 _e88 = cloud_image.sample(cloud_sampler, pt_6 / _e85, metal::level(0.0));
         tone = _e88.x;
     } else {
-        float _e90 = cloud_tone_at(pt_6, cloud, close_light, cloud_sampler, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+        float _e90 = cloud_tone_at(pt_6, cloud, close_light, cloud_sampler, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
         tone = _e90;
     }
     float _e91 = tone;
@@ -466,7 +475,7 @@ metal::float4 clouded(
     metal::sampler cloud_sampler,
     metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> lut,
-    metal::texture2d<float, metal::access::sample> cloud_tone,
+    metal::texture2d<float, metal::access::sample> cloud_image,
     metal::texture2d<float, metal::access::sample> cloud_tile_a,
     metal::texture2d<float, metal::access::sample> cloud_tile_b,
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
@@ -474,7 +483,7 @@ metal::float4 clouded(
 ) {
     bool local = {};
     bool local_1 = {};
-    metal::float4 _e2 = clouded_base(level_3, position_2, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    metal::float4 _e2 = clouded_base(level_3, position_2, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     uint _e5 = cloud.cloud_style;
     if (!((_e5 != 1u))) {
         float _e13 = cloud.wash_randomness;
@@ -538,7 +547,7 @@ metal::float4 backdrop_color(
     metal::sampler cloud_sampler,
     metal::texture2d<float, metal::access::sample> color_memory,
     metal::texture2d<float, metal::access::sample> lut,
-    metal::texture2d<float, metal::access::sample> cloud_tone,
+    metal::texture2d<float, metal::access::sample> cloud_image,
     metal::texture2d<float, metal::access::sample> cloud_tile_a,
     metal::texture2d<float, metal::access::sample> cloud_tile_b,
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
@@ -547,7 +556,7 @@ metal::float4 backdrop_color(
     float level_4 = 0.0;
     bool _e1 = full_material_memory(cloud);
     if (_e1) {
-        metal::float4 _e3 = clouded(0.0, position_3, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+        metal::float4 _e3 = clouded(0.0, position_3, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
         return _e3;
     }
     bool _e6 = softened(cloud);
@@ -556,7 +565,7 @@ metal::float4 backdrop_color(
         level_4 = _e7;
     }
     float _e8 = level_4;
-    metal::float4 _e9 = clouded(_e8, position_3, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    metal::float4 _e9 = clouded(_e8, position_3, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     return _e9;
 }
 
@@ -575,14 +584,14 @@ fragment fs_cloud_backdrop_linearOutput fs_cloud_backdrop_linear(
 , metal::sampler cloud_sampler [[sampler(0)]]
 , metal::texture2d<float, metal::access::sample> color_memory [[texture(6)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
-, metal::texture2d<float, metal::access::sample> cloud_tone [[texture(2)]]
+, metal::texture2d<float, metal::access::sample> cloud_image [[texture(2)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_a [[texture(3)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_b [[texture(4)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_c [[texture(7)]]
 , metal::sampler tile_sampler [[sampler(1)]]
 ) {
     const VertexOut in = { position_4, varyings.slab, varyings.t };
-    metal::float4 _e3 = backdrop_color(in.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    metal::float4 _e3 = backdrop_color(in.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     metal::float3 _e5 = linear_from_gamma_rgb(_e3.xyz);
     return fs_cloud_backdrop_linearOutput { metal::float4(_e5, 1.0) };
 }

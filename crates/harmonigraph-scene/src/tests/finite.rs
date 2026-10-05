@@ -86,6 +86,7 @@ fn poisoned_view() -> ViewConfig {
         note_bloom: nan,
         note_animation: NoteAnimationConfig {
             order: base.note_animation.order,
+            lit_first: base.note_animation.lit_first,
             stagger_spread: nan,
             radial_start: nan,
         },
@@ -301,7 +302,8 @@ fn scene_floats(scene: &Scene) -> Floats {
 
     f.one("node_radius", *node_radius);
 
-    let NoteAnimationConfig { order: _, stagger_spread, radial_start } = note_animation;
+    let NoteAnimationConfig { order: _, lit_first: _, stagger_spread, radial_start } =
+        note_animation;
     f.one("note_animation.stagger_spread", *stagger_spread);
     f.one("note_animation.radial_start", *radial_start);
 

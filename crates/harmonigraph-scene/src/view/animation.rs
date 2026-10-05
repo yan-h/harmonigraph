@@ -36,6 +36,10 @@ pub struct NoteAnimationConfig {
     pub order: AnimationOrder,
     pub stagger_spread: f32,
     pub radial_start: f32,
+    /// The slices a note lights start with the earliest on arrival and with
+    /// the latest on an ordered departure; every other slice keeps `order`'s
+    /// delay.
+    pub lit_first: bool,
 }
 impl Default for NoteAnimationConfig {
     fn default() -> Self {
@@ -43,6 +47,7 @@ impl Default for NoteAnimationConfig {
             order: AnimationOrder::Bidirectional,
             stagger_spread: 0.538_799_94,
             radial_start: -0.057_507_753,
+            lit_first: false,
         }
     }
 }

@@ -54,7 +54,7 @@ struct Cloud {
     float star_size_variation;
     uint star_pad0_;
     uint star_pad1_;
-    metal::float4 star_image;
+    metal::float4 star_image_size;
     type_10 star_slices;
     uint memory_enabled;
     uint memory_valid;
@@ -434,7 +434,7 @@ float cloud_tone_at(
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
     metal::sampler cloud_sampler,
-    metal::texture2d<float, metal::access::sample> cloud_tone,
+    metal::texture2d<float, metal::access::sample> cloud_image,
     metal::texture2d<float, metal::access::sample> cloud_tile_a,
     metal::texture2d<float, metal::access::sample> cloud_tile_b,
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
@@ -443,7 +443,7 @@ float cloud_tone_at(
     uint _e3 = cloud.cloud_style;
     if (_e3 == 3u) {
         metal::float2 _e10 = cloud.size;
-        metal::float4 _e13 = cloud_tone.sample(cloud_sampler, pt_5 / _e10, metal::level(0.0));
+        metal::float4 _e13 = cloud_image.sample(cloud_sampler, pt_5 / _e10, metal::level(0.0));
         return _e13.x;
     }
     float _e15 = wash_cloud_tone(pt_5, cloud, close_light, cloud_sampler, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
@@ -558,7 +558,7 @@ fragment fs_color_memoryOutput fs_color_memory(
 , metal::sampler cloud_sampler [[sampler(0)]]
 , metal::texture2d<float, metal::access::sample> color_memory [[texture(6)]]
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
-, metal::texture2d<float, metal::access::sample> cloud_tone [[texture(2)]]
+, metal::texture2d<float, metal::access::sample> cloud_image [[texture(2)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_a [[texture(3)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_b [[texture(4)]]
 , metal::texture2d<float, metal::access::sample> cloud_tile_c [[texture(7)]]
@@ -613,7 +613,7 @@ fragment fs_color_memoryOutput fs_color_memory(
     metal::float2 _e72 = cloud.memory_fraction;
     metal::float2 _e77 = cloud.size;
     metal::float2 pt_6 = ((((static_cast<metal::float2>(texel) + metal::float2(0.5)) - metal::float2(1.0)) - _e72) / grid) * _e77;
-    float _e79 = cloud_tone_at(pt_6, cloud, close_light, cloud_sampler, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    float _e79 = cloud_tone_at(pt_6, cloud, close_light, cloud_sampler, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     metal::float3 _e80 = palette_color(_e79, lut);
     metal::float3 _e81 = linear_from_gamma_rgb(_e80);
     metal::float4 current_2 = metal::float4(_e81, _e79);
