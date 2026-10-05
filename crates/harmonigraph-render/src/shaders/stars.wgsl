@@ -19,7 +19,9 @@ struct StarSlice {
     grid: vec2<i32>,
     // The band a centre is drawn from, in cells.
     width: f32,
-    pad: u32,
+    // The inverse of the narrowest radius a star is drawn at: a texel of the
+    // star image, or what a 3x3 read holds where that is less (`star_slices`).
+    inverse_floor: f32,
     // 0 not drawn, 1 the whole star from its own cell, 2 from a 2x2 read, 3
     // from a 3x3 read.
     gather: u32,
@@ -224,7 +226,12 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
     let shape = unpack2x16float(t.w);
-    let cover = star_profile(s, dist * shape.x) * shape.y;
+    // A star narrower than a texel would show only where a texel centre fell
+    // inside it: one under the floor's radius is drawn at it instead, dimmed
+    // by the ratio of the areas so it keeps its light.
+    let inverse = min(shape.x, s.inverse_floor);
+    let dim = inverse / shape.x;
+    let cover = star_profile(s, dist * inverse) * shape.y * dim * dim;
     if cover <= 0.0 { return vec4<f32>(0.0); }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
     return vec4<f32>(colour * cover, cover);

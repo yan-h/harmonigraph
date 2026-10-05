@@ -1380,9 +1380,16 @@ impl Targets {
         // height every four minutes.
         let offset = cloud_offset(settings, atmosphere.now);
         let drift = cloud_drift(settings, offset, tile);
+        let image = self.tone_size().unwrap_or([1, 1]);
         let slices = stars
             .map(|layout| {
-                star_slices(settings.stars, settings.cloud_direction, atmosphere.now, &layout)
+                star_slices(
+                    settings.stars,
+                    settings.cloud_direction,
+                    atmosphere.now,
+                    &layout,
+                    image,
+                )
             })
             .unwrap_or_default();
         let life = star_life(settings.stars, atmosphere.now);
@@ -1521,10 +1528,7 @@ impl Targets {
             star_size_variation: settings.stars.star_size_variation,
             star_pad0: 0,
             star_pad1: 0,
-            star_image: {
-                let [width, height] = self.tone_size().unwrap_or([1, 1]);
-                Float4([width as f32, height as f32, 0.0, 0.0])
-            },
+            star_image: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -1639,6 +1643,7 @@ mod tests {
             settings.cloud_direction,
             now,
             &star_layout(settings.stars, 16.0 / 9.0),
+            [1920, 1080],
         )
     }
 
@@ -1680,9 +1685,7 @@ mod tests {
     fn the_star_image_rounds_each_axis_without_losing_tiny_targets() {
         let fresh = harmonigraph_scene::StarSettings::default();
         assert_eq!(super::star_image_size([161, 121], fresh), [121, 91]);
-        for (resolution, wanted) in
-            [(0.25, [1, 2]), (1.0 / 3.0, [1, 2]), (0.5, [2, 3]), (1.0, [3, 5])]
-        {
+        for (resolution, wanted) in [(0.25, [1, 2]), (0.5, [2, 3]), (0.75, [3, 4]), (1.0, [3, 5])] {
             let settings =
                 harmonigraph_scene::StarSettings { star_resolution: resolution, ..fresh };
             assert_eq!(super::star_image_size([3, 5], settings), wanted);
@@ -1712,7 +1715,7 @@ mod tests {
             }
         }
         assert_eq!(layout.texels, full.texels - left_out);
-        let slices = star_slices(three, 0.0, 0.0, &layout);
+        let slices = star_slices(three, 0.0, 0.0, &layout, [1920, 1080]);
         assert!(off.iter().zip(slices).all(|(&off, slice)| off == (slice.gather == 0)));
     }
 
@@ -1733,6 +1736,38 @@ mod tests {
         }
     }
 
+    /// A star is drawn with a radius of at least a texel of the star image,
+    /// the wider of its sides, so a depth whose stars that floor widens past
+    /// its planned read takes the next that holds them; a fine image leaves
+    /// the plan as it was.
+    #[test]
+    fn the_texel_floor_picks_the_read_that_holds_it() {
+        use harmonigraph_scene::star_plan::StarGather;
+        let fresh = harmonigraph_scene::StarSettings::default();
+        let layout = star_layout(fresh, 4.0 / 3.0);
+        let plan = fresh.plan().depths.map(|depth| depth.gather);
+        let codes = |slices: [super::StarSlice; STAR_SLICES]| slices.map(|slice| slice.gather);
+        use StarGather::{Three, Two};
+        assert_eq!(plan, [Two, Two, Two, Three, Three]);
+        let fine = star_slices(fresh, 0.0, 0.0, &layout, [2880, 2160]);
+        assert_eq!(codes(fine), [2, 2, 2, 3, 3]);
+        assert!(fine.iter().all(|slice| slice.inverse_floor == 2160.0 / STAR_PANE));
+        // A 25% image of a 300-pixel pane: a texel of 7.2 star pixels, past
+        // what the far depths' 2x2 holds.
+        let coarse = star_slices(fresh, 0.0, 0.0, &layout, [100, 75]);
+        assert_eq!(codes(coarse), [3; STAR_SLICES]);
+        for slice in coarse {
+            let holds = Three.bound(fresh.star_jitter) * slice.cell;
+            assert_eq!(slice.inverse_floor, 1.0 / (STAR_PANE / 75.0).min(holds));
+        }
+        // An image rounded wider across than down: the floor is the wider
+        // side, 8 star pixels against 7.2.
+        for slice in star_slices(fresh, 0.0, 0.0, &layout, [90, 75]) {
+            let holds = Three.bound(fresh.star_jitter) * slice.cell;
+            assert_eq!(slice.inverse_floor, 1.0 / (layout.pane[0] / 90.0).min(holds));
+        }
+    }
+
     /// Solo changes only composition; hidden slices still bake and keep memory.
     /// A flag on a depth omitted by Star layers solos nothing.
     #[test]
@@ -1743,8 +1778,8 @@ mod tests {
             let full = harmonigraph_scene::StarSettings { star_layers: layers, ..fresh };
             let selected = harmonigraph_scene::StarSettings { star_solo: solo, ..full };
             let layout = star_layout(full, 16.0 / 9.0);
-            let slices = star_slices(selected, 37.0, 5.0, &layout);
-            let baseline = star_slices(full, 37.0, 5.0, &layout);
+            let slices = star_slices(selected, 37.0, 5.0, &layout, [1920, 1080]);
+            let baseline = star_slices(full, 37.0, 5.0, &layout, [1920, 1080]);
             for (k, (got, mut expected)) in slices.into_iter().zip(baseline).enumerate() {
                 if layers == 5 && !solo[k] {
                     expected.gather = 0;
@@ -1853,9 +1888,11 @@ mod tests {
             let layout = star_layout(settings.stars, aspect);
             assert!(layout.fits(), "{layout:?}");
             let size = pixels.map(|side| side as f32 / ppp);
-            for (k, slice) in star_slices(settings.stars, settings.cloud_direction, 0.0, &layout)
-                .iter()
-                .enumerate()
+            let image = super::star_image_size(pixels, settings.stars);
+            for (k, slice) in
+                star_slices(settings.stars, settings.cloud_direction, 0.0, &layout, image)
+                    .iter()
+                    .enumerate()
             {
                 for axis in 0..2 {
                     let half = f64::from(layout.pane[axis] / 2.0 / slice.cell);

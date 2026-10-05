@@ -20,7 +20,7 @@ struct StarSlice {
     metal::int2 origin;
     metal::int2 grid;
     float width;
-    uint pad;
+    float inverse_floor;
     uint gather;
     float twinkle;
 };

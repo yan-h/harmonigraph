@@ -1834,7 +1834,6 @@ mod tests {
     /// a flipped one moves it the other way: either fails the first assert.
     #[test]
     fn the_starfield_moves_by_the_drift() {
-        use harmonigraph_scene::star_plan::StarGather;
         const PANE: u32 = 540;
         const SHIFT: usize = 8;
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
@@ -1860,12 +1859,19 @@ mod tests {
                 (SPEED, SPEED, 0.0);
             s.stars.star_lifetime = 20.0;
             // Equal sizes: the smallest stars resample unevenly in the reduced
-            // image under a whole-pixel shift, which is not drift.
+            // image under a whole-pixel shift, which is not drift. Far stars
+            // big enough that 2x2 holds the 50% image's floor of 2 star
+            // pixels (a size of 3.8 at the fresh jitter and spacing), or the
+            // first arm would read them 3x3 too.
             s.stars.star_size_variation = 0.0;
             s.stars.star_resolution = 0.5;
+            s.stars.star_size_far = 4.0;
             s.stars.star_spacing_ratio_near = spacing_near;
-            let gathers = s.stars.plan().depths.map(|depth| depth.gather);
-            assert_eq!(gathers.contains(&StarGather::Three), three, "{gathers:?}");
+            let layout = atmosphere::star_layout(s.stars, 1.0);
+            let image = atmosphere::star_image_size([PANE, PANE], s.stars);
+            let gathers =
+                atmosphere::star_slices(s.stars, 0.0, 0.0, &layout, image).map(|s| s.gather);
+            assert_eq!(gathers.contains(&3), three, "{gathers:?}");
             let mut resources = CallbackResources::default();
             let before = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().now +=

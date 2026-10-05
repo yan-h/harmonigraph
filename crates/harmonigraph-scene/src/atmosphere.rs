@@ -145,6 +145,19 @@ pub const STAR_LAYERS_MIN: u32 = 2;
 /// Bounds for [`StarSettings::star_resolution`].
 pub const STAR_RESOLUTION_MIN: f32 = 0.25;
 pub const STAR_RESOLUTION_MAX: f32 = 1.0;
+/// The grid [`StarSettings::star_resolution`] snaps to: 25, 50, 75 and 100%.
+///
+/// Only the star image's pixels scale with it, so 99% saves about 2% of them
+/// while every ratio below 100% pays the bilinear resample's softening: on
+/// a lavapipe render at 1280x800, 99% already sat 4.5/255 from 100% where
+/// 75% sat 5.7. A ratio p/q also repeats its texel-to-pixel phase every q
+/// pixels, and a near-1 ratio does so slowly enough to see: 99% left a
+/// column beat of 107 px in the difference, at four times the amplitude of
+/// any ratio with q of 4 or less. Eighths' 7/8, 5/8 and 3/8 repeat every 8
+/// px, where a modelled far star's brightness swung 6-53% as it drifted
+/// against none at quarters, and 7/8 bought nearly 75%'s softness for 2.5 ms
+/// more of a 4K frame.
+pub const STAR_RESOLUTION_STEP: f32 = 0.25;
 
 /// Bounds shared by the two ends of the `Star spacing` control
 /// ([`StarSettings::star_spacing_ratio_far`], [`StarSettings::star_spacing_ratio_near`])
@@ -526,7 +539,8 @@ pub struct StarSettings {
     /// relative to the pane's device pixels, filtered up into the pane. Lower
     /// values soften every star alike and cost less, without moving stars or
     /// changing their reach. Runs over
-    /// [`STAR_RESOLUTION_MIN`]..=[`STAR_RESOLUTION_MAX`].
+    /// [`STAR_RESOLUTION_MIN`]..=[`STAR_RESOLUTION_MAX`], snapped to
+    /// [`STAR_RESOLUTION_STEP`].
     pub star_resolution: f32,
     /// Which depths are soloed: while any drawn depth is, only the soloed
     /// ones are composited. Hidden layers keep baking and updating colour
@@ -668,12 +682,14 @@ impl StarSettings {
         self.star_solid_near =
             clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);
         self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
-        self.star_resolution = clamp(
+        self.star_resolution = (clamp(
             self.star_resolution,
             fresh.star_resolution,
             STAR_RESOLUTION_MIN,
             STAR_RESOLUTION_MAX,
-        );
+        ) / STAR_RESOLUTION_STEP)
+            .round()
+            * STAR_RESOLUTION_STEP;
         self
     }
 }

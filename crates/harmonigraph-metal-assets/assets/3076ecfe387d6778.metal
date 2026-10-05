@@ -30,7 +30,7 @@ struct StarSlice {
     metal::int2 origin;
     metal::int2 grid;
     float width;
-    uint pad;
+    float inverse_floor;
     uint gather;
     float twinkle;
 };
@@ -792,15 +792,15 @@ metal::float4 cloud_color(
     return _e15;
 }
 
-struct fs_cloud_gammaInput {
+struct fs_cloud_linearInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_gammaOutput {
+struct fs_cloud_linearOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_gammaOutput fs_cloud_gamma(
-  fs_cloud_gammaInput varyings [[stage_in]]
+fragment fs_cloud_linearOutput fs_cloud_linear(
+  fs_cloud_linearInput varyings [[stage_in]]
 , metal::float4 position_3 [[position]]
 , constant Cloud& cloud [[buffer(2)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -818,5 +818,6 @@ fragment fs_cloud_gammaOutput fs_cloud_gamma(
 ) {
     const VertexOut in = { position_3, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, locals, grid, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler, _buffer_sizes);
-    return fs_cloud_gammaOutput { _e1 };
+    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
+    return fs_cloud_linearOutput { metal::float4(_e3, _e1.w) };
 }

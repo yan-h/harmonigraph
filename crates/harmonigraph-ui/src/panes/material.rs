@@ -173,9 +173,10 @@ pub(super) fn stars_resolution(ui: &mut egui::Ui, stars: &mut harmonigraph_scene
         "Stars resolution",
     )
     .percent()
+    .step(harmonigraph_scene::STAR_RESOLUTION_STEP)
     .show(ui)
     .on_hover_text(
-        "Resolution the stars are drawn at, relative to the pane. 100% is the sharpest; 50% draws a quarter of the pixels, softer and faster. Star positions, sizes and reach stay the same.",
+        "Resolution the stars are drawn at, relative to the pane, in quarters. 100% is the sharpest; 50% draws a quarter of the pixels, softer and faster. Star positions, sizes and reach stay the same.",
     );
 }
 

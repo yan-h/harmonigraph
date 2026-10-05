@@ -1702,7 +1702,8 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
 
 /// A save from before `Stars resolution` still loads, its dropped profile
 /// and halo resolution ignored, and the resolution round-trips on both
-/// textures and through the offline document.
+/// textures and through the offline document, an off-grid one snapped to the
+/// quarter the slider shows.
 #[test]
 fn star_resolution_defaults_old_saves_and_roundtrips() {
     use harmonigraph_scene::SpectralAtmosphere;
@@ -1720,10 +1721,10 @@ fn star_resolution_defaults_old_saves_and_roundtrips() {
     );
     let mut state = fresh();
     state.picture.appearance.view.atmosphere.stars.star_jitter = 0.37;
-    state.picture.appearance.view.atmosphere.stars.star_resolution = 0.5;
+    state.picture.appearance.view.atmosphere.stars.star_resolution = 0.6;
     state.picture.appearance.view.atmosphere.material_style =
         harmonigraph_scene::LatticeMaterial::Stars;
-    state.picture.appearance.spectrum.atmosphere.stars.star_resolution = 0.625;
+    state.picture.appearance.spectrum.atmosphere.stars.star_resolution = 0.25;
     let saved = state.save_persist();
     let mut editor = fresh();
     assert!(editor.load_persist(&saved));
@@ -1733,10 +1734,10 @@ fn star_resolution_defaults_old_saves_and_roundtrips() {
         editor.picture.appearance.view.atmosphere.material_style,
         harmonigraph_scene::LatticeMaterial::Stars
     );
-    assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_resolution, 0.625);
+    assert_eq!(editor.picture.appearance.spectrum.atmosphere.stars.star_resolution, 0.25);
     let offline = crate::AppearanceDocument::parse(&state.picture.appearance.serialize()).unwrap();
     assert_eq!(offline.view.atmosphere.stars.star_resolution, 0.5);
-    assert_eq!(offline.spectrum.atmosphere.stars.star_resolution, 0.625);
+    assert_eq!(offline.spectrum.atmosphere.stars.star_resolution, 0.25);
 }
 
 #[test]

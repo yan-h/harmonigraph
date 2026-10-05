@@ -41,7 +41,8 @@ Analyzer textures read in decision order:
 choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
 For Stars, **Stars resolution** comes first among its controls in both pictures,
 after Texture mix in the spectrogram and Material amount in the lattice,
-at 75% by default.
+at 75% by default and in quarters from 25%:
+a ratio just below 100% saves almost nothing yet softens the stars nearly as much as 75%.
 **Color pickup** follows brighter sound;
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.
