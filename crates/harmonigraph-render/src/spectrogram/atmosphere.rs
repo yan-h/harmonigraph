@@ -1230,6 +1230,7 @@ impl Targets {
         #[cfg(test)]
         self.encoded_passes.fetch_add(2, std::sync::atomic::Ordering::Relaxed);
         crate::stars::Pass {
+            label: "spectral_star_atlas",
             view: atlas,
             pipeline: &pipelines.stars,
             groups: &[&self.source_group, atlas_group],
@@ -1237,6 +1238,7 @@ impl Targets {
         }
         .draw(encoder);
         crate::stars::Pass {
+            label: "spectral_star_image",
             view: image,
             pipeline: &pipelines.star_image,
             groups: &[&self.source_group, tone_group],
@@ -1495,7 +1497,7 @@ impl Targets {
             tile_cells: tile.map_or(0, TileKey::period),
             pitch_vertical: u32::from(pitch_vertical),
             star_randomness: settings.stars.star_randomness,
-            star_life: star_life(settings.stars, atmosphere.now),
+            star_life: life,
             star_size_variation: settings.stars.star_size_variation,
             star_pad0: 0,
             star_pad1: 0,

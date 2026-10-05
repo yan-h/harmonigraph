@@ -392,6 +392,8 @@ impl StarUniforms {
 
 /// A material draw; resource bindings remain owned by the light-field consumer.
 pub(crate) struct Pass<'a> {
+    /// What a GPU capture calls the pass.
+    pub label: &'a str,
     pub view: &'a wgpu::TextureView,
     pub pipeline: &'a wgpu::RenderPipeline,
     pub groups: &'a [&'a wgpu::BindGroup],
@@ -400,7 +402,7 @@ pub(crate) struct Pass<'a> {
 impl Pass<'_> {
     pub(crate) fn draw(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("star_material"),
+            label: Some(self.label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: self.view,
                 depth_slice: None,

@@ -271,12 +271,12 @@ impl Targets {
             });
             return;
         }
-        for (view, pipeline, group) in [
-            (&self.atlas, &pipelines.bake, &self.bake),
-            (&self.image, &pipelines.image, &self.image_group),
-            (&self.output, &pipelines.material, &self.material),
+        for (label, view, pipeline, group) in [
+            ("lattice_star_atlas", &self.atlas, &pipelines.bake, &self.bake),
+            ("lattice_star_image", &self.image, &pipelines.image, &self.image_group),
+            ("lattice_star_material", &self.output, &pipelines.material, &self.material),
         ] {
-            stars::Pass { view, pipeline, groups: &[&self.source, group], scissor: None }
+            stars::Pass { label, view, pipeline, groups: &[&self.source, group], scissor: None }
                 .draw(encoder);
         }
     }
