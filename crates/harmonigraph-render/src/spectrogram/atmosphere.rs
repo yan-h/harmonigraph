@@ -1056,14 +1056,14 @@ pub(super) struct Targets {
     /// Both sampled fields must be filled beyond that region: a displaced or
     /// bilinear read at the divider otherwise blends with a cleared texel and
     /// draws a dark seam. The original data mesh still bounds measured sound.
-    pub tone_vertices: wgpu::Buffer,
+    tone_vertices: wgpu::Buffer,
     views: [wgpu::TextureView; 2],
     /// The reduced scalar cloud tone, allocated at [`Shape::tone`].
     tone: Option<wgpu::TextureView>,
     tile: Option<Tile>,
     stars: Option<Stars>,
     source_uniform: wgpu::Buffer,
-    pub source_group: wgpu::BindGroup,
+    source_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     filter_groups: [wgpu::BindGroup; 2],
     bake_group: wgpu::BindGroup,
@@ -1593,7 +1593,7 @@ impl Targets {
         pixels: [u32; 2],
         coverage: [u32; 4],
     ) {
-        let Some(stars) = &self.stars else { return };
+        let stars = self.stars.as_ref().expect("star coverage comes only with star targets");
         let image = self.shape.stars.expect("star targets exist only with a shape").image;
         let atlas_group =
             self.memory.as_ref().map_or(&stars.atlas_group, |m| &m.star_groups[m.index]);
@@ -1835,6 +1835,14 @@ impl Targets {
         if let Some(memory) = self.memory.as_mut() {
             memory.frame = None;
         }
+    }
+
+    /// Frees the colour history for a pane whose cloud is not drawn at all.
+    /// The shape forgets it too, so drawing with a history again rebuilds the
+    /// targets with a fresh one.
+    pub fn release_memory(&mut self) {
+        self.memory = None;
+        self.shape.memory = None;
     }
 
     pub fn composite_group(&self) -> &wgpu::BindGroup {

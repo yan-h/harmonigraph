@@ -322,8 +322,8 @@ struct Cloud {
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 /// The cloud's scalar tone, one texel per cloud sample of pane, as `fs_cloud_tone`
 /// drew it — or, under Stars, the star image `fs_stars` drew, which
-/// `star_color` samples. The two are never drawn together. Bound whether or not it holds anything — a pass that RENDERS into it
-/// binds a stand-in here, since wgpu validates every resource in a bound group
+/// `star_color` samples. The two are never drawn together. Bound whether or
+/// not it holds anything — a pass that RENDERS into it binds a stand-in here, since wgpu validates every resource in a bound group
 /// against the attachments whether the shader reads it or not.
 @group(1) @binding(4) var cloud_tone: texture_2d<f32>;
 /// One period of the cell walk's OUTPUT, as `fs_cloud_tile` baked it, and bound

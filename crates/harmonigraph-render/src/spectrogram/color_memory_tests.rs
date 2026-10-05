@@ -637,6 +637,32 @@ fn color_memory_uses_elapsed_time_and_resets_invalid_history() {
     close(answers[0], answers[1]);
 }
 
+/// With every effect off nothing is drawn, so no colour history is held for
+/// it; drawing the look again starts a fresh one.
+#[test]
+fn a_look_turned_off_holds_no_color_history() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Watercolor);
+    cb.atmosphere.as_mut().unwrap().settings.color_pickup = 5.0;
+    let held = |resources: &CallbackResources| {
+        let pane = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        pane.cloud.as_ref().unwrap().memory.is_some()
+    };
+    let mut resources = CallbackResources::default();
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert!(held(&resources), "fixture kept no history");
+    let on = cb.atmosphere.unwrap().settings;
+    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+    s.cloud_depth = 0.0;
+    s.pitch_softness = 0.0;
+    s.time_softness = 0.0;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert!(!held(&resources), "history held for a look not drawn");
+    cb.atmosphere.as_mut().unwrap().settings = on;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    assert!(held(&resources), "drawing again started no history");
+}
+
 /// What switching away from the fresh Stars gives: Watercolor under
 /// the fresh colour response (Pickup 0.04 s, Release 0.71 s), at both ends of
 /// the production cloud sample spacing.
