@@ -8,9 +8,9 @@ struct Settings {
 };
 @group(0) @binding(0) var<uniform> settings: Settings;
 @group(0) @binding(1) var source: texture_2d<f32>;
-@group(0) @binding(2) var cloud_sampler: sampler;
+@group(0) @binding(2) var light_sampler: sampler;
 @group(1) @binding(0) var star_atlas: texture_2d<u32>;
-@group(1) @binding(1) var cloud_tone: texture_2d<f32>;
+@group(1) @binding(1) var star_image_texture: texture_2d<f32>;
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
 };
@@ -23,9 +23,12 @@ fn star_size() -> vec2<f32> { return settings.stars.size; }
 fn star_randomness() -> f32 { return settings.stars.star_randomness; }
 fn star_life() -> f32 { return settings.stars.star_life; }
 fn star_size_variation() -> f32 { return settings.stars.star_size_variation; }
-fn star_image() -> vec2<f32> { return settings.stars.star_image; }
+fn star_image_size() -> vec2<f32> { return settings.stars.star_image_size; }
 fn star_slice(k: u32) -> StarSlice { return settings.stars.star_slices[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }
+fn star_image_at(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(star_image_texture, light_sampler, uv, 0.0);
+}
 // The spectrogram's star over a linear palette: the light's hue from black at
 // level 0 to full brightness at 1, the level being the light's opacity. The
 // star is whole and its level is in its colour, as a palette position is.
@@ -34,7 +37,7 @@ fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }
 // ceiling and Pattern contrast barely darkened them. Pinned at that ceiling
 // instead of full brightness, Variation could only dim a glow's centre.
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
-    let light = textureSampleLevel(source, cloud_sampler, pt / settings.stars.size, 0.0);
+    let light = textureSampleLevel(source, light_sampler, pt / settings.stars.size, 0.0);
     if light.a <= 0.0 { return vec4<f32>(0.0); }
     let randomness = settings.stars.star_randomness;
     let spread = (1.0 - randomness) + randomness * (0.35 + 0.65 * rank);
@@ -44,7 +47,7 @@ fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
 }
 @fragment
 fn fs_lattice_stars(in: TileVertex) -> @location(0) vec4<f32> {
-    let raw = textureSampleLevel(source, cloud_sampler, in.position.xy / settings.stars.size, 0.0);
+    let raw = textureSampleLevel(source, light_sampler, in.position.xy / settings.stars.size, 0.0);
     var result = star_color(in.position.xy);
     // Star alpha is coverage, not the light's opacity: a dim star is still a
     // whole star. The stars hide what is behind them as the light they sit in

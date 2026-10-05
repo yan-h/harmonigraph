@@ -32,7 +32,7 @@ struct StarSlice {
 struct StarUniforms {
     // The pane, and the star image's actual size, in device pixels.
     size: vec2<f32>,
-    star_image: vec2<f32>,
+    star_image_size: vec2<f32>,
     star_randomness: f32,
     star_life: f32,
     star_size_variation: f32,
@@ -303,10 +303,11 @@ fn star_layers(pt: vec2<f32>) -> vec4<f32> {
 // and the final target's colour conversion are applied once, in the composite.
 @fragment
 fn fs_stars(in: TileVertex) -> @location(0) vec4<f32> {
-    return star_layers(in.position.xy / star_image() * star_size());
+    return star_layers(in.position.xy / star_image_size() * star_size());
 }
 
-// The star image under the pane point `pt`, filtered.
+// The star image under the pane point `pt`, filtered. The host reads its own
+// binding in `star_image_at`, so neither host has to name it for the other.
 fn star_color(pt: vec2<f32>) -> vec4<f32> {
-    return textureSampleLevel(cloud_tone, cloud_sampler, pt / star_size(), 0.0);
+    return star_image_at(pt / star_size());
 }

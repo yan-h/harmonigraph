@@ -258,7 +258,7 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     ppp: f32,
-    // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
+    // 1 when `cloud_image` holds a precomposite: a reduced scalar field for
     // clouds, or the starfield's RGB at `Stars resolution`. 0 works the texture
     // out per pixel in the composite instead.
     tone_baked: u32,
@@ -295,7 +295,7 @@ struct Cloud {
     star_pad0: u32,
     star_pad1: u32,
     // The star image's actual size in texels; zw are padding.
-    star_image: vec4<f32>,
+    star_image_size: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
@@ -321,12 +321,13 @@ struct Cloud {
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 /// The cloud's scalar tone, one texel per cloud sample of pane, as `fs_cloud_tone`
-/// drew it. Bound whether or not it holds anything — a pass that RENDERS into it
-/// binds a stand-in here, since wgpu validates every resource in a bound group
-/// against the attachments whether the shader reads it or not.
-@group(1) @binding(4) var cloud_tone: texture_2d<f32>;
+/// drew it, or under Stars the star image (`star_image_at`). Bound whether or
+/// not it holds anything — a pass that RENDERS into it binds a stand-in here,
+/// since wgpu validates every resource in a bound group against the
+/// attachments whether the shader reads it or not.
+@group(1) @binding(4) var cloud_image: texture_2d<f32>;
 /// One period of the cell walk's OUTPUT, as `fs_cloud_tile` baked it, and bound
-/// on the same terms as `cloud_tone` above — the pass that renders into these
+/// on the same terms as `cloud_image` above — the pass that renders into these
 /// two binds a stand-in here. The wash fills both (see `WashField`).
 @group(1) @binding(5) var cloud_tile_a: texture_2d<f32>;
 @group(1) @binding(6) var cloud_tile_b: texture_2d<f32>;
@@ -341,7 +342,7 @@ struct Cloud {
 /// return the light from the far side of the picture.
 @group(1) @binding(7) var tile_sampler: sampler;
 /// Every star on screen this frame, one texel per cell, as `fs_star_bake` drew
-/// it; bound on the same terms as `cloud_tone`. See `star_texel` for the
+/// it; bound on the same terms as `cloud_image`. See `star_texel` for the
 /// packing.
 @group(1) @binding(8) var star_atlas: texture_2d<u32>;
 
@@ -611,7 +612,7 @@ fn wash_cloud_tone(pt: vec2<f32>) -> f32 {
 // no two lanes ever disagree about it.
 fn cloud_tone_at(pt: vec2<f32>) -> f32 {
     if cloud.cloud_style == 3u {
-        return textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).r;
+        return textureSampleLevel(cloud_image, cloud_sampler, pt / cloud.size, 0.0).r;
     }
     return wash_cloud_tone(pt);
 }
@@ -793,7 +794,7 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // where the texture over them is not.
     var tone: f32;
     if cloud.tone_baked == 1u {
-        tone = textureSampleLevel(cloud_tone, cloud_sampler, pt / cloud.size, 0.0).r;
+        tone = textureSampleLevel(cloud_image, cloud_sampler, pt / cloud.size, 0.0).r;
     } else {
         tone = cloud_tone_at(pt);
     }
@@ -943,9 +944,12 @@ fn star_size() -> vec2<f32> { return cloud.size; }
 fn star_randomness() -> f32 { return cloud.star_randomness; }
 fn star_life() -> f32 { return cloud.star_life; }
 fn star_size_variation() -> f32 { return cloud.star_size_variation; }
-fn star_image() -> vec2<f32> { return cloud.star_image.xy; }
+fn star_image_size() -> vec2<f32> { return cloud.star_image_size.xy; }
 fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }
+fn star_image_at(uv: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(cloud_image, cloud_sampler, uv, 0.0);
+}
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     let level = star_level_at(pt);
     if cloud.memory_enabled != 0u {

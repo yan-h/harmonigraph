@@ -361,7 +361,7 @@ pub(crate) fn star_image_scissor(
 uniform_group! {
     struct StarUniforms {
         size: Float2,
-        star_image: Float2,
+        star_image_size: Float2,
         star_randomness: f32,
         star_life: f32,
         star_size_variation: f32,
@@ -380,7 +380,7 @@ impl StarUniforms {
     ) -> Self {
         Self {
             size: Float2(pixels.map(|n| n as f32)),
-            star_image: Float2(image.map(|n| n as f32)),
+            star_image_size: Float2(image.map(|n| n as f32)),
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,

@@ -417,7 +417,7 @@ struct Uniforms {
     star_pad0: u32,
     star_pad1: u32,
     /// The star image's actual dimensions; zw are padding.
-    star_image: Float4,
+    star_image_size: Float4,
     star_slices: [StarSlice; STAR_SLICES],
     memory_enabled: u32,
     memory_valid: u32,
@@ -1499,7 +1499,7 @@ impl Targets {
             star_size_variation: settings.stars.star_size_variation,
             star_pad0: 0,
             star_pad1: 0,
-            star_image: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
+            star_image_size: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
