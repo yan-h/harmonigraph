@@ -35,6 +35,7 @@ fn distance_shadows_fade_continuously_across_layers_and_settling() {
                 order,
                 stagger_spread: spread,
                 radial_start: if grow { -1.0 } else { 0.0 },
+                ..Default::default()
             };
             scene.view.shadow = one_shadow(0.6, 0.8, kernel);
             if name == "marks" {

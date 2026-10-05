@@ -250,6 +250,8 @@ pub(super) fn motion(ui: &mut egui::Ui, view: &mut ViewConfig, params: &dyn Para
             (order, label, hint)
         });
     choice_row(ui, "Slice order", &mut view.note_animation.order, &orders);
+    crate::widgets::checkbox(ui, &mut view.note_animation.lit_first, "Lit slices first")
+        .on_hover_text("The slices a note lights start with the first slice on arrival and with the last one on release, so they appear first and disappear last. Every other slice keeps the slice order's timing. Needs a stagger spread above zero.");
     ValueBar::new(&mut view.note_animation.stagger_spread, STAGGER_SPREAD_RANGE, "Stagger spread")
                 .unit(100.0, "%")
                 .show(ui)

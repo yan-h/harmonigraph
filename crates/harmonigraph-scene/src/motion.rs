@@ -401,11 +401,33 @@ impl NodeMotion {
                 motion.delay = motion.order_delay;
                 let last = motion.order_delay.into_iter().fold(0.0, f32::max);
                 motion.level_wait = motion.levels.map(|l| if l >= 1.0 { last } else { 0.0 });
+                // Lit means what `level_wait` holds: still full at the off, so
+                // the slice that retracts last is the one whose ink outlasts
+                // the others. One released earlier keeps its order's delay.
+                if view.note_animation.lit_first {
+                    for (delay, &level) in motion.delay.iter_mut().zip(&motion.levels) {
+                        if level >= 1.0 {
+                            *delay = last;
+                        }
+                    }
+                }
             } else if gate != motion.gate {
                 // A reversal never schedules new waiting: pending pieces cancel
                 // on off and every piece reverses its current pose immediately.
                 motion.delay = [0.0; 11];
                 motion.level_wait = [0.0; 11];
+            }
+            // A lit slot never waits while the gate is held: not on the
+            // arrival's first frame, and not when a second note lights it
+            // while the order is still running. The order's earliest delay is
+            // always zero (`delays` normalizes its ranks), so this starts it
+            // with the first.
+            if view.note_animation.lit_first && gate {
+                for (delay, &target) in motion.delay.iter_mut().zip(&motion.targets) {
+                    if target > 0.0 {
+                        *delay = 0.0;
+                    }
+                }
             }
             motion.gate = gate;
             if (seed_settled || (newly_visible && preexisting)) && gate {
@@ -1370,6 +1392,79 @@ mod tests {
             }
             whole(started, done, "departing");
         }
+    }
+    #[test]
+    fn lit_first_moves_only_the_lit_slice_to_the_ends_of_the_order() {
+        let step = 0.01f64;
+        let spread = 0.9f32;
+        // Every frame of one press and release: the node's presence and each
+        // slice's reveal, and the slot the note lights.
+        let run = |lit_first: bool| {
+            let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+            view.note_animation.stagger_spread = spread;
+            view.note_animation.lit_first = lit_first;
+            let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+            // C3: a slice Bidirectional starts neither first nor last, 0.6 of
+            // the 0.9 spread. C5 is the seam's, already first.
+            tracker.handle_event(on(0.0, 48));
+            let first = draw(&mut motion, &mut tracker, &view, 0.0, false);
+            let targets = motion.nodes[&LatticePos::ORIGIN].targets;
+            let lit = targets.iter().position(|&t| t > 0.0).expect("lit slot");
+            let span = first.octave_layout.span as usize;
+            let mut frames = Vec::new();
+            let mut now = 0.0;
+            while now < 2.0 * f64::from(spread) + 3.0 {
+                now += step;
+                if (now - 2.5).abs() < step / 2.0 {
+                    tracker.handle_event(off(now, 48));
+                }
+                let scene = draw(&mut motion, &mut tracker, &view, now, false);
+                frames.push((now, origin(&scene).activation, origin(&scene).slice_progress));
+            }
+            (lit, span, frames)
+        };
+        let (lit, span, plain) = run(false);
+        let (_, _, ordered) = run(true);
+        let off_at = 2.5;
+        let when = |frames: &[(f64, f32, [f32; 11])], slot: usize, f: fn(f32) -> bool, from| {
+            frames.iter().find(|(t, _, p)| *t >= from && f(p[slot])).map(|(t, ..)| *t).unwrap()
+        };
+        let starts = |frames: &[_], slot| when(frames, slot, |p| p > 0.0, 0.0);
+        let leaves = |frames: &[_], slot| when(frames, slot, |p| p < 1.0, off_at);
+        // The fixture reaches the change only if the order puts the lit slice
+        // somewhere in the middle; at either end the toggle moves nothing.
+        let plain_start = starts(&plain, lit);
+        assert!(plain_start > 0.1 && plain_start < f64::from(spread) - 0.1, "{plain_start}");
+
+        assert!(starts(&ordered, lit) <= step + 1e-9, "the lit slice waited to arrive");
+        let last = (0..span).map(|i| leaves(&plain, i)).fold(0.0, f64::max);
+        assert!((leaves(&ordered, lit) - last).abs() <= step + 1e-9, "the lit slice left early");
+        for ((_, a, p), (t, b, q)) in plain.iter().zip(&ordered) {
+            assert_eq!(a, b, "presence moved at {t}");
+            for i in (0..span).filter(|&i| i != lit) {
+                assert_eq!(p[i], q[i], "unlit slice {i} moved at {t}");
+            }
+        }
+    }
+    #[test]
+    fn lit_first_starts_a_slot_a_second_note_lights_mid_arrival() {
+        let mut view = ViewConfig { fade_shape: 0.0, mark_delay: 0.0, ..view() };
+        view.note_animation.stagger_spread = 0.9;
+        view.note_animation.lit_first = true;
+        let (mut tracker, mut motion) = (NoteTracker::new(), NodeMotion::default());
+        tracker.handle_event(on(0.0, 48));
+        draw(&mut motion, &mut tracker, &view, 0.0, false);
+        let early = motion.nodes[&LatticePos::ORIGIN].targets;
+        // C4 a rolled moment later, on the slot Bidirectional delays by 0.3:
+        // the arrival is already running, so it is never scheduled afresh.
+        tracker.handle_event(on(0.05, 60));
+        draw(&mut motion, &mut tracker, &view, 0.05, false);
+        let order = motion.nodes[&LatticePos::ORIGIN].order_delay;
+        let late = motion.nodes[&LatticePos::ORIGIN].targets;
+        let second = (0..11).find(|&i| late[i] > early[i]).expect("C4's slot");
+        assert!(order[second] > 0.2, "C4's slot would start first anyway: {order:?}");
+        let scene = draw(&mut motion, &mut tracker, &view, 0.1, false);
+        assert!(origin(&scene).slice_progress[second] > 0.0, "the later lit slot waited");
     }
     #[test]
     fn random_order_and_a_centre_start_reach_are_stable() {

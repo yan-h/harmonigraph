@@ -2109,6 +2109,7 @@ fn animation_controls_round_trip_and_a_missing_one_loads_fresh() {
             order,
             stagger_spread: 0.63,
             radial_start: -0.5,
+            lit_first: true,
         };
         let mut restored = fresh();
         assert!(restored.load_persist(&state.save_persist()));
