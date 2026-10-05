@@ -803,7 +803,7 @@ impl CallbackTrait for SpectrogramCallback {
                 // texel in `fs_color_memory` and displays the history, so the
                 // reduced size is the history's grid and a tone target would be
                 // drawn into by nothing. Scales draw their tone and then
-                // remember it, and Stars composite their far depths into it.
+                // remember it, and Stars composite every depth into it.
                 let tone_size = reduced.filter(|_| {
                     memory_extent.is_none()
                         || settings.settings.cloud_style

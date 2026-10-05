@@ -421,7 +421,7 @@ impl Gradient {
         let widest_chroma_ramp = 2.0 * chroma.min(1.0 - chroma);
         Gradient {
             // Wrapped rather than clamped: it names a point on a circle.
-            hue_start: finite(self.hue_start, default_hue_start()).rem_euclid(360.0),
+            hue_start: crate::wrap_degrees(finite(self.hue_start, default_hue_start())),
             // A span of zero has no direction, so it is written with the one
             // sign that reads as none. `-0.0` is the sign that lies: it is not
             // `< 0.0`, so everything that asks which way the arc runs takes it
@@ -466,7 +466,7 @@ impl Gradient {
     pub fn flipped(self) -> Gradient {
         let g = self.sanitized();
         Gradient {
-            hue_start: (g.hue_start + g.hue_span).rem_euclid(360.0),
+            hue_start: g.hue_start + g.hue_span,
             hue_span: -g.hue_span,
             // The bend stays: it says where along the RANGE the change is
             // spent, and a flip reverses which hues, not where they change.

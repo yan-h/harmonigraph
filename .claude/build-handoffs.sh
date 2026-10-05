@@ -32,6 +32,15 @@ build_commit() {
   fi
 }
 
+# The short form every message prints, or '?' when the source cannot be read.
+# Under `set -euo pipefail` a bare failing read ends the loader silently
+# mid-load; without pipefail it is empty, which matches any stamped sha.
+build_short() {
+  local sha
+  sha="$(build_commit "$1" 2>/dev/null)" && [[ -n "$sha" ]] || sha='?'
+  echo "${sha:0:7}"
+}
+
 build_commit_time() {
   if [[ -f "$1/handoff.json" ]]; then
     python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit_time"])' "$1/handoff.json"

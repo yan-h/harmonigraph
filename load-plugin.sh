@@ -17,7 +17,7 @@
 #   ./load-plugin.sh            # interactive menu of every worktree's build
 #   ./load-plugin.sh --list     # print the table only; load nothing
 #   ./load-plugin.sh --tag      # print the overlay tag of THIS worktree's build
-#   ./load-plugin.sh <branch>   # load that branch's build (unique substring ok)
+#   ./load-plugin.sh <branch>   # load that branch's build (exact, else unique substring)
 #
 # Staleness is WARN-ONLY: a build not made at its branch HEAD is flagged but
 # still loadable. The test is the commit STAMPED IN THE BINARY against HEAD,
@@ -122,7 +122,7 @@ build_info() {
     mtime="$(stat -f %m "$dylib")"
     built="$(ago "$mtime")"
     head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
-    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    head_short="$(build_short "$path")"
     tag="$(build_tag "$dylib" "${WT_BRANCH[$1]}")"
     sha="${tag##*@}"
     [[ "$sha" == "$tag" ]] && sha=""   # no tag read; ${..##*@} echoes the input
@@ -335,7 +335,7 @@ load_build() {  # $1 = worktree index
     local offline_mtime head_ct head_short
     offline_mtime="$(stat -f %m "$offline")"
     head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
-    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    head_short="$(build_short "$path")"
     if (( head_ct > offline_mtime )); then
       echo "WARNING: that renderer was built before $head_short ($(ago "$offline_mtime")). Video exports" >&2
       echo "         come out drawn by the older build while the editor shows the new one, and" >&2
@@ -361,7 +361,7 @@ load_build() {  # $1 = worktree index
   local loaded_tag; loaded_tag="$(build_tag "$dylib" "$branch")"
   { echo "worktree=$path"
     echo "branch=$branch"
-    echo "commit=$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    echo "commit=$(build_short "$path")"
     echo "tag=${loaded_tag:-unknown}"
     echo "loaded_at=$(date +%s)"
   } > "$LOADED"
@@ -371,7 +371,7 @@ load_build() {  # $1 = worktree index
   if [[ -n "$loaded_tag" ]]; then
     echo "The performance overlay will read:  build  $loaded_tag"
     local head_short loaded_sha
-    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    head_short="$(build_short "$path")"
     loaded_sha="${loaded_tag##*@}"
     if [[ "$head_short" != '?' \
        && "$head_short" != "$loaded_sha"* && "$loaded_sha" != "$head_short"* ]]; then
@@ -408,6 +408,32 @@ wt_containing() {
   return 1
 }
 
+# The build a branch argument names: the branch spelled exactly, else the one
+# branch it is a substring of. Exact wins because the full name is what a
+# handover and update-plugin.sh pass, and retained handoffs keep branches like
+# `codex/foo-2` beside `codex/foo` long after either worktree is gone. Either
+# way it must be unique: every detached worktree is listed as `(detached)`.
+# Returns 1 when nothing matches and 2 when several do.
+branch_index() {
+  local i matches=()
+  for i in "${!WT_BRANCH[@]}"; do
+    [[ "${WT_BRANCH[$i]}" == "$1" ]] && matches+=("$i")
+  done
+  if (( ${#matches[@]} == 0 )); then
+    for i in "${!WT_BRANCH[@]}"; do
+      [[ "${WT_BRANCH[$i]}" == *"$1"* ]] && matches+=("$i")
+    done
+  fi
+  if (( ${#matches[@]} == 0 )); then
+    echo "No build branch matching '$1'." >&2; return 1
+  elif (( ${#matches[@]} > 1 )); then
+    echo "'$1' matches multiple branches:" >&2
+    for i in "${matches[@]}"; do echo "  ${WT_BRANCH[$i]}  ${WT_PATH[$i]}" >&2; done
+    return 2
+  fi
+  echo "${matches[0]}"
+}
+
 # --- dispatch ----------------------------------------------------------------
 case "${1:-}" in
   --list|-l)
@@ -418,21 +444,10 @@ case "${1:-}" in
     # belonging to the worktree you are standing in — which is what a session
     # handing over its own build wants.
     if [[ -n "${2:-}" ]]; then
-      # Unique substring, on the same terms as loading: a query that silently
-      # picks one of several matches reports a tag for a build you did not name,
-      # which is the exact failure this mode exists to remove.
-      tag_matches=()
-      for i in "${!WT_BRANCH[@]}"; do
-        [[ "${WT_BRANCH[$i]}" == *"$2"* ]] && tag_matches+=("$i")
-      done
-      if (( ${#tag_matches[@]} == 0 )); then
-        echo "No build branch matching '$2'." >&2; exit 1
-      elif (( ${#tag_matches[@]} > 1 )); then
-        echo "'$2' matches multiple branches:" >&2
-        for i in "${tag_matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done
-        exit 1
-      fi
-      tag_idx="${tag_matches[0]}"
+      # On the same terms as loading: a query that silently picks one of
+      # several matches reports a tag for a build you did not name, which is
+      # the exact failure this mode exists to remove.
+      tag_idx="$(branch_index "$2")" || exit 1
     else
       tag_idx="$(wt_containing "$PWD")" || {
         echo "Not inside a known worktree; pass a branch: ./load-plugin.sh --tag <branch>" >&2
@@ -460,18 +475,7 @@ case "${1:-}" in
     exit 1
     ;;
   *)
-    # Match the argument as a substring of a branch name; require it to be unique.
-    matches=()
-    for i in "${!WT_BRANCH[@]}"; do
-      [[ "${WT_BRANCH[$i]}" == *"$1"* ]] && matches+=("$i")
-    done
-    if (( ${#matches[@]} == 0 )); then
-      echo "No build branch matching '$1'." >&2; print_table; exit 1
-    elif (( ${#matches[@]} > 1 )); then
-      echo "'$1' matches multiple branches:" >&2
-      for i in "${matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done
-      exit 1
-    fi
-    load_build "${matches[0]}"
+    idx="$(branch_index "$1")" || { status=$?; (( status == 1 )) && print_table; exit 1; }
+    load_build "$idx"
     ;;
 esac

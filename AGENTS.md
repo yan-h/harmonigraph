@@ -100,6 +100,9 @@ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
   shader_assets::catalog::production_metal_asset_catalog
 ```
 
+It passes only with `1 passed`:
+the catalog compiles on macOS alone,
+so elsewhere it runs 0 tests and proves nothing (the `metal-corpus` skill has what to do instead).
 `Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
 Regenerate on the runner, never locally —
 the `metal-corpus` skill has the command, the import, and why grepping the fallback notice is not a check (#947).
@@ -165,19 +168,20 @@ neither covers a DROPPED ENUM VARIANT, which fails the whole parse —
 still fine, but say so in the PR body.
 Read the `persistence-contract` skill before changing a persisted shape.
 
-## What you could not finish goes to an ISSUE, not the backlog
+## Fix what you find in this PR; an issue is for a substantial design decision
 
-A session that measures a bug and does not fix it is holding the most expensive thing it produced:
-the list of what the bug is NOT.
-File that with `gh issue create` —
-reproduction, what was eliminated and by what measurement, what was tried and reverted, what is left to try —
-and link the PR the probes are in (issue #121 is the worked example).
+A defect, stale document or cleanup found along the way rides along in the PR at hand:
+its own commit,
+a test that fails first when the fix is code,
+and its own line in the PR body so review reads it rather than skims past it.
+Open an issue with `gh issue create` only for a substantial design decision that is Yan's to make —
+a restructuring, a new mechanism, behaviour nobody asked to change —
+carrying the evidence and the options.
 
-A bug you tripped over rather than went looking for takes the same exit, not a hunk in this diff:
-a fix riding in on an unrelated branch gets the least review attention of anything in the PR.
-The exception is when the requested behavior cannot work until the bug is fixed, and the PR body says so.
-
-`BACKLOG.md` is not the alternative:
+A bug measured and not fixed still owes its record:
+what it is NOT, by what measurement, what was tried and reverted, and what is left to try,
+in the PR body beside the probes.
+`BACKLOG.md` is no place for any of it:
 it is gitignored and per-clone, so a worktree session has no copy of it.
 
 ## Claude permissions a worktree session needs go in `.claude/settings.json`

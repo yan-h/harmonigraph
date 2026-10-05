@@ -1247,8 +1247,8 @@ impl ViewConfig {
             finite_or(self.glow_release, fresh.glow_release).clamp(0.0, GLOW_BALLISTICS_MAX);
 
         // These post-process controls are stored beside the view. Renderer
-        // clamps remain wider defensive boundaries for callers that do not
-        // load an AppearanceDocument through this sanitizer.
+        // clamps remain wider defensive boundaries for a scene built without
+        // `derive_scene`, which runs this sanitizer on every view it carries.
         self.render_scale = finite_or(self.render_scale, fresh.render_scale)
             .clamp(*LATTICE_RENDER_SCALE_RANGE.start(), *LATTICE_RENDER_SCALE_RANGE.end());
         self.note_bloom = finite_or(self.note_bloom, fresh.note_bloom)

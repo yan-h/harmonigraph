@@ -121,11 +121,6 @@ pub const CLOUD_SPEED_MAX: f32 = 20.0;
 const MATERIAL_SPEED_DEFAULT: f32 = 4.242_738_7;
 const MATERIAL_DIRECTION_DEFAULT: f32 = 174.0;
 
-/// Bounds shared by the [`SpectralAtmosphere::cloud_direction`] control and sanitizer.
-pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
-/// See [`CLOUD_DIRECTION_MIN`].
-pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
-
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
 /// bottom is its mirror, where the edge lightens instead.
@@ -780,7 +775,7 @@ impl SpectralAtmosphere {
         self.cloud_speed =
             clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.cloud_direction = if self.cloud_direction.is_finite() {
-            self.cloud_direction.rem_euclid(CLOUD_DIRECTION_MAX)
+            crate::wrap_degrees(self.cloud_direction)
         } else {
             fresh.cloud_direction
         };
@@ -923,7 +918,7 @@ impl AtmosphereSettings {
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.material_direction = if self.material_direction.is_finite() {
-            self.material_direction.rem_euclid(CLOUD_DIRECTION_MAX)
+            crate::wrap_degrees(self.material_direction)
         } else {
             fresh.material_direction
         };

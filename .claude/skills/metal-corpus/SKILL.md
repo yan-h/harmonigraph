@@ -30,6 +30,11 @@ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
   shader_assets::catalog::production_metal_asset_catalog
 ```
 
+On macOS only:
+the catalog module is `cfg(target_os = "macos")`, so on Linux the same command reports `running 0 tests` and exits 0.
+Read for `1 passed`, as `ci.sh` does;
+off macOS, dispatch the `Metal shader assets` workflow instead.
+
 `strict` drops the compile-from-source fallback, so a missing library fails the pipeline that wanted it and names its key.
 The catalog is the enumeration of production constructors the corpus is generated FROM, so this covers every library in it rather than whatever the golden frames happen to draw —
 and it is the same test in the same mode the `Metal shader assets` workflow reports as `strict-catalog`.

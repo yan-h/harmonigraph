@@ -541,7 +541,7 @@ impl<'a> SpectrumBar<'a> {
                     Some(Gradient { hue_span: winding * offset_at(p.x).abs(), ..aimed })
                 }
                 SpectrumGrab::Rotate { held } => Some(Gradient {
-                    hue_start: (held - offset_at(p.x)).rem_euclid(FULL_TURN),
+                    hue_start: harmonigraph_scene::wrap_degrees(held - offset_at(p.x)),
                     ..aimed
                 }),
                 SpectrumGrab::Outside => None,
