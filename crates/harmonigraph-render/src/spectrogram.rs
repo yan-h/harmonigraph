@@ -725,7 +725,7 @@ impl CallbackTrait for SpectrogramCallback {
             // The measured picture is every effect at zero, and it takes the
             // plain pipeline: no target, no pass, nothing paid for a look that
             // is not being drawn. This is what the `Plain` style used to say.
-            .filter(|a| !a.settings.effects().none())
+            .filter(|a| a.settings.effects().light())
         {
             let viewport = egui::epaint::ViewportInPixels::from_points(
                 &self.rect,
@@ -860,164 +860,156 @@ impl CallbackTrait for SpectrogramCallback {
                     self.shades.lut.clone(),
                     self.grid.first_key + self.grid.run.len() as i64,
                 );
-                // Terraces alone still need their transfer/composite, but the
-                // one-pixel source would integrate the whole history only for
-                // the composite to discard that expensive result. A cloud is
-                // the case that needs the field WITHOUT a blur: it reads its
-                // light out of these targets, so they are filled at zero
-                // softness too, where each filter pass is a one-tap copy.
-                if settings.settings.effects().light() {
-                    {
+                // A cloud is the case that needs the field WITHOUT a blur: it
+                // reads its light out of these targets, so they are filled at
+                // zero softness too, where each filter pass is a one-tap copy.
+                {
+                    #[cfg(test)]
+                    target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                    #[cfg(test)]
+                    let source_query = tests::SOURCE_QUERY.with_borrow_mut(Option::take);
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("spectral_cloud_source"),
                         #[cfg(test)]
-                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                        #[cfg(test)]
-                        let source_query = tests::SOURCE_QUERY.with_borrow_mut(Option::take);
-                        let mut pass =
-                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("spectral_cloud_source"),
-                                #[cfg(test)]
-                                timestamp_writes: source_query.as_ref().map(|query_set| {
-                                    wgpu::RenderPassTimestampWrites {
-                                        query_set,
-                                        beginning_of_pass_write_index: Some(0),
-                                        end_of_pass_write_index: None,
-                                    }
-                                }),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &target.source_view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                ..Default::default()
-                            });
-                        pass.set_pipeline(&cloud.source);
-                        pass.set_bind_group(0, &target.source_group, &[]);
-                        pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
-                        pass.draw(0..pane.count, 0..1);
-                    }
-                    target.blur(egui_encoder, cloud);
-                    {
-                        // Once filtering is finished, the raw source texture is
-                        // free to hold the soft intensity. Fill the whole pane:
-                        // refraction and reduced tone interpolation can read past
-                        // the region divider. Clearing that part of the material
-                        // makes the reduced cloud blend toward zero at its edge.
-                        // Final painting still uses the region's coverage quad.
-                        #[cfg(test)]
-                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                        let mut pass =
-                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("spectral_cloud_material"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &target.source_view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                ..Default::default()
-                            });
-                        pass.set_pipeline(&cloud.bake);
-                        pass.set_bind_group(0, &target.source_group, &[]);
-                        pass.set_bind_group(1, &target.bake_group, &[]);
-                        pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
-                        pass.draw(0..6, 0..1);
-                    }
-                    // One period of the cell walk, when the cached tile
-                    // does not already hold it. Before the
-                    // tone pass and the composite because both read it; it
-                    // reads neither the light nor the pane, so where it sits
-                    // among the light passes decides nothing.
-                    if let Some(key) = tile.filter(|&key| target.tile_owes(key)) {
-                        if let Some((views, group)) = target.tile_pass() {
-                            #[cfg(test)]
-                            target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                            let attachment = |view| {
-                                Some(wgpu::RenderPassColorAttachment {
-                                    view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })
-                            };
-                            {
-                                let mut pass =
-                                    egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                        label: Some("spectral_cloud_tile"),
-                                        color_attachments: &[
-                                            attachment(&views[0]),
-                                            attachment(&views[1]),
-                                            attachment(&views[2]),
-                                        ],
-                                        ..Default::default()
-                                    });
-                                pass.set_pipeline(&cloud.tile);
-                                pass.set_bind_group(0, &target.source_group, &[]);
-                                pass.set_bind_group(1, group, &[]);
-                                pass.draw(0..3, 0..1);
+                        timestamp_writes: source_query.as_ref().map(|query_set| {
+                            wgpu::RenderPassTimestampWrites {
+                                query_set,
+                                beginning_of_pass_write_index: Some(0),
+                                end_of_pass_write_index: None,
                             }
-                            // Inside the pass's own branch, so a key can only be
-                            // recorded against a tile that was actually filled.
-                            target.tile_baked(key);
-                        }
-                    }
-                    let velvet = settings.settings.cloud_style
-                        == harmonigraph_scene::CloudStyle::VelvetScales;
-                    if !velvet {
-                        target.remember(egui_encoder, cloud);
-                    }
-                    if settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
-                        target.draw_stars(
-                            egui_encoder,
-                            cloud,
-                            pixels,
-                            star_coverage.expect("Stars coverage"),
-                        );
-                    } else if let Some(((tone_view, _), tone_group)) =
-                        target.tone.as_ref().zip(target.tone_group.as_ref())
-                    {
+                        }),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.source_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&cloud.source);
+                    pass.set_bind_group(0, &target.source_group, &[]);
+                    pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
+                    pass.draw(0..pane.count, 0..1);
+                }
+                target.blur(egui_encoder, cloud);
+                {
+                    // Once filtering is finished, the raw source texture is
+                    // free to hold the soft intensity. Fill the whole pane:
+                    // refraction and reduced tone interpolation can read past
+                    // the region divider. Clearing that part of the material
+                    // makes the reduced cloud blend toward zero at its edge.
+                    // Final painting still uses the region's coverage quad.
+                    #[cfg(test)]
+                    target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("spectral_cloud_material"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.source_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&cloud.bake);
+                    pass.set_bind_group(0, &target.source_group, &[]);
+                    pass.set_bind_group(1, &target.bake_group, &[]);
+                    pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
+                    pass.draw(0..6, 0..1);
+                }
+                // One period of the cell walk, when the cached tile
+                // does not already hold it. Before the
+                // tone pass and the composite because both read it; it
+                // reads neither the light nor the pane, so where it sits
+                // among the light passes decides nothing.
+                if let Some(key) = tile.filter(|&key| target.tile_owes(key)) {
+                    if let Some((views, group)) = target.tile_pass() {
                         #[cfg(test)]
                         target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                        let mut pass =
-                            egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("spectral_cloud_tone"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: tone_view,
-                                    depth_slice: None,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                })],
-                                ..Default::default()
-                            });
-                        pass.set_pipeline(
-                            if settings.settings.cloud_style
-                                == harmonigraph_scene::CloudStyle::VelvetScales
-                            {
-                                &cloud.velvet
-                            } else {
-                                &cloud.tone
+                        let attachment = |view| {
+                            Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })
+                        };
+                        {
+                            let mut pass =
+                                egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("spectral_cloud_tile"),
+                                    color_attachments: &[
+                                        attachment(&views[0]),
+                                        attachment(&views[1]),
+                                        attachment(&views[2]),
+                                    ],
+                                    ..Default::default()
+                                });
+                            pass.set_pipeline(&cloud.tile);
+                            pass.set_bind_group(0, &target.source_group, &[]);
+                            pass.set_bind_group(1, group, &[]);
+                            pass.draw(0..3, 0..1);
+                        }
+                        // Inside the pass's own branch, so a key can only be
+                        // recorded against a tile that was actually filled.
+                        target.tile_baked(key);
+                    }
+                }
+                let velvet =
+                    settings.settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales;
+                if !velvet {
+                    target.remember(egui_encoder, cloud);
+                }
+                if settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
+                    target.draw_stars(
+                        egui_encoder,
+                        cloud,
+                        pixels,
+                        star_coverage.expect("Stars coverage"),
+                    );
+                } else if let Some(((tone_view, _), tone_group)) =
+                    target.tone.as_ref().zip(target.tone_group.as_ref())
+                {
+                    #[cfg(test)]
+                    target.encoded_passes.fetch_add(1, Ordering::Relaxed);
+                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("spectral_cloud_tone"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: tone_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
                             },
-                        );
-                        pass.set_bind_group(0, &target.source_group, &[]);
-                        pass.set_bind_group(1, tone_group, &[]);
-                        pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
-                        pass.draw(0..6, 0..1);
-                    }
-                    if velvet {
-                        target.remember(egui_encoder, cloud);
-                    }
+                        })],
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(
+                        if settings.settings.cloud_style
+                            == harmonigraph_scene::CloudStyle::VelvetScales
+                        {
+                            &cloud.velvet
+                        } else {
+                            &cloud.tone
+                        },
+                    );
+                    pass.set_bind_group(0, &target.source_group, &[]);
+                    pass.set_bind_group(1, tone_group, &[]);
+                    pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
+                    pass.draw(0..6, 0..1);
+                }
+                if velvet {
+                    target.remember(egui_encoder, cloud);
                 }
                 pane.cloud_ready = true;
             }
@@ -1602,27 +1594,20 @@ mod tests {
                 s.cloud_style = style;
                 s.color_pickup = 0.0;
                 s.color_release = 0.0;
-                s.contour_strength = 1.0;
                 s.cloud_depth = 1.0;
             }
             if pixel < 1.0 {
-                for contours in [0.0, 1.0] {
-                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                    s.contour_strength = contours;
-                    s.material_settings.wash_refract = 0.0;
-                    assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
-                    let bare = frame_with(&device, &queue, &mut resources, &cb);
-                    let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-                    s.material_settings.wash_refract = f32::MIN_POSITIVE;
-                    let vanishing = frame_with(&device, &queue, &mut resources, &cb);
-                    let pane = resources.get::<SpectrogramResources>().unwrap();
-                    let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
-                    assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
-                    assert!(
-                        vanishing == bare,
-                        "{style:?}, contours={contours}: the texture moved the levels"
-                    );
-                }
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.material_settings.wash_refract = 0.0;
+                assert!(!s.sanitized().effects().cloud, "zero refraction drew a cloud");
+                let bare = frame_with(&device, &queue, &mut resources, &cb);
+                let s = &mut cb.atmosphere.as_mut().unwrap().settings;
+                s.material_settings.wash_refract = f32::MIN_POSITIVE;
+                let vanishing = frame_with(&device, &queue, &mut resources, &cb);
+                let pane = resources.get::<SpectrogramResources>().unwrap();
+                let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
+                assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
+                assert!(vanishing == bare, "{style:?}: the texture moved the levels");
             }
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
             s.material_settings.wash_refract = 0.0;
@@ -1683,7 +1668,6 @@ mod tests {
         s.color_release = 0.0;
         s.cloud_speed = 0.0;
         s.cloud_depth = 1.0;
-        s.contour_strength = 0.0;
         let mut resources = CallbackResources::default();
         let bodies = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
@@ -1724,44 +1708,6 @@ mod tests {
                 "Velvet invented structure over flat {value}"
             );
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
-        }
-    }
-
-    /// The existing three quantization controls reach the displaced picture at
-    /// full depth, including when the displaced levels were rendered reduced.
-    #[test]
-    fn contours_shape_the_refracted_levels() {
-        type Turn = fn(&mut harmonigraph_scene::SpectralAtmosphere);
-        let Some((device, queue)) = headless_device() else { return };
-        let style = harmonigraph_scene::CloudStyle::Watercolor;
-        for pixel in [0.5, 2.0] {
-            let mut cb = refracted_fixture();
-            let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-            s.cloud_style = style;
-            s.cloud_depth = 1.0;
-            s.contour_strength = 1.0;
-            s.contour_softness = 0.01;
-            s.contours = 4.0;
-            let baseline = *s;
-            let mut resources = CallbackResources::default();
-            resources
-                .insert(atmosphere::CloudSampling { pixel_points: pixel, ..Default::default() });
-            let stepped = frame_with(&device, &queue, &mut resources, &cb);
-            for (name, turn) in [
-                ("strength", (|s| s.contour_strength = 0.0) as Turn),
-                ("count", |s| s.contours = 12.0),
-                ("softness", |s| s.contour_softness = 0.5),
-            ] {
-                cb.atmosphere.as_mut().unwrap().settings = baseline;
-                turn(&mut cb.atmosphere.as_mut().unwrap().settings);
-                let adjusted = frame_with(&device, &queue, &mut resources, &cb);
-                let moved =
-                    stepped.iter().zip(&adjusted).filter(|(a, b)| a.abs_diff(**b) > 2).count();
-                assert!(
-                    moved > stepped.len() / 100,
-                    "{style:?} contour {name} did not reach pixel={pixel}"
-                );
-            }
         }
     }
 
@@ -1934,10 +1880,8 @@ mod tests {
             // Pin the visible diffusion used by the pixel probes independently
             // of the fresh appearance's gentler setting.
             settings: harmonigraph_scene::SpectralAtmosphere {
-                // The blur alone. The probes read the diffusion transfer;
-                // terraces or a cloud over them would move the very pixels
-                // they measure.
-                contour_strength: 0.0,
+                // The blur alone. The probes read the diffusion transfer; a
+                // cloud over it would move the very pixels they measure.
                 cloud_depth: 0.0,
                 color_pickup: 0.0,
                 color_release: 0.0,
@@ -1945,10 +1889,6 @@ mod tests {
                 // ridge, which is what the diffusion probes measure.
                 pitch_softness: 35.0,
                 time_softness: 120.0,
-                // The retired Lava style's terraces, for the probes that turn
-                // `contour_strength` up.
-                contours: 7.0,
-                contour_softness: 0.15,
                 // The wash at 1x, for the probes that turn `cloud_depth` up: a
                 // cloud the refraction reaches, where the fresh Stars would
                 // paint a field of their own.
@@ -1974,72 +1914,26 @@ mod tests {
     }
 
     /// Every effect at zero, which is the measured heatmap — what selecting the
-    /// `Plain` style used to mean, now that the three effects are dials.
+    /// `Plain` style used to mean, now that the effects are dials.
     fn every_effect_off(cb: &mut SpectrogramCallback) {
         let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
         settings.pitch_softness = 0.0;
         settings.time_softness = 0.0;
-        settings.contour_strength = 0.0;
         settings.cloud_depth = 0.0;
-    }
-
-    #[test]
-    fn lava_preserves_silence_quiet_fields_and_nested_levels() {
-        let Some((device, queue)) = headless_device() else { return };
-        let mut cb = cloud_fixture();
-        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
-        for (smooth, contours) in [(false, 7.0), (true, 7.0), (false, 64.0), (true, 64.0)] {
-            cb.atmosphere.as_mut().unwrap().settings.contours = contours;
-            cb.atmosphere.as_mut().unwrap().settings.pitch_softness =
-                if smooth { 35.0 } else { 0.0 };
-            cb.atmosphere.as_mut().unwrap().settings.time_softness =
-                if smooth { 120.0 } else { 0.0 };
-            let mut previous = 0;
-            for value in [0, 1, 3, 8, 13, 20, 64, 96, 128, 160, 192, 224, 255] {
-                cb.grid.fill(value);
-                let frame = fresh_frame(&device, &queue, &cb);
-                let blue = frame[(64 * 128 + 64) * 4 + 2];
-                if value == 0 {
-                    assert_eq!(blue, 0);
-                } else if value > 1 {
-                    assert!(blue > previous, "quiet and nested levels survive: {value}");
-                }
-                // The first byte can round to black after the palette's
-                // half-sample interpolation; allow one output byte of slack.
-                if value <= 13 {
-                    assert!(
-                        f32::from(blue) + 1.0 >= f32::from(value) * 0.7,
-                        "first contour collapsed quiet intensity: {value} -> {blue}"
-                    );
-                }
-                previous = blue;
-                for y in 0..128 {
-                    for x in 0..128 {
-                        assert!(
-                            frame[(y * 128 + x) * 4 + 2].abs_diff(blue) <= 1,
-                            "flat field gained texture"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     #[test]
     fn float_output_uses_linear_palette_for_every_style() {
         let Some((device, queue)) = headless_device() else { return };
-        // The three pipelines a float target can be drawn through: the plain
-        // heatmap with every effect at zero, the composite over a blurred
-        // field, and the same composite with the terrace transfer in it.
-        for (style, soft, contour_strength) in
-            [("measured", false, 0.0), ("blurred", true, 0.0), ("terraced", true, 1.0)]
-        {
+        // The two pipelines a float target can be drawn through: the plain
+        // heatmap with every effect at zero, and the composite over a blurred
+        // field.
+        for (style, soft) in [("measured", false), ("blurred", true)] {
             let mut cb = cloud_fixture();
             cb.target_format = wgpu::TextureFormat::Rgba16Float;
             cb.grid.fill(96);
             cb.shades.lut = Arc::new(vec![[128, 128, 128, 255]; 256]);
             let settings = &mut cb.atmosphere.as_mut().unwrap().settings;
-            settings.contour_strength = contour_strength;
             if !soft {
                 settings.pitch_softness = 0.0;
                 settings.time_softness = 0.0;
@@ -2102,65 +1996,6 @@ mod tests {
                 assert!((actual - expected).abs() < 0.001, "{style}: {actual} != {expected}");
             }
         }
-    }
-
-    #[test]
-    fn zero_width_terraces_skip_offscreen_passes_at_live_capacity() {
-        let Some((device, queue)) = headless_device() else { return };
-        let mut resources = CallbackResources::default();
-        let mut cb = cloud_fixture();
-        frame_with(&device, &queue, &mut resources, &cb);
-        assert_eq!(
-            resources
-                .get::<SpectrogramResources>()
-                .unwrap()
-                .panes
-                .get(0)
-                .expect("the spectrogram prepared a pane")
-                .cloud
-                .as_ref()
-                .unwrap()
-                .encoded_passes
-                .load(Ordering::Relaxed),
-            4,
-            "the counter must observe actual source, filter and bake passes"
-        );
-        // The prior one-pixel source integrated every slab and visible bin:
-        // reach the live cap with the production bin count, not a tiny grid.
-        let bins = harmonigraph_core::spectrum::SPECTRUM_BINS as u32;
-        cb.grid = grid_of(Arc::new(vec![96; 1024 * bins as usize]), bins, 1024, 0);
-        relay_quad(&mut cb, 1024);
-        cb.read.span = bins as f32 / BINS_PER_SEMITONE;
-        cb.atmosphere.as_mut().unwrap().settings.contour_strength = 1.0;
-        for width in [0.0, -1.0] {
-            cb.atmosphere.as_mut().unwrap().settings.pitch_softness = width;
-            cb.atmosphere.as_mut().unwrap().settings.time_softness = width;
-            let screen = ScreenDescriptor { size_in_pixels: SIZE, pixels_per_point: 1.0 };
-            let mut encoder = device.create_command_encoder(&Default::default());
-            let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, &mut resources);
-            let pane = resources
-                .get::<SpectrogramResources>()
-                .unwrap()
-                .panes
-                .get(0)
-                .expect("the spectrogram prepared a pane");
-            assert!(pane.cloud_ready, "the terraces must still use their transfer/composite");
-            assert_eq!(
-                pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed),
-                0,
-                "zero widths encoded unused history integration/filter passes"
-            );
-            // Check before submission so a regression cannot run millions of
-            // bucket reads in one fragment before this assertion reports it.
-            queue.submit(bufs.into_iter().chain([encoder.finish()]));
-        }
-        let terraces = frame_with(&device, &queue, &mut resources, &cb);
-        cb.atmosphere = None;
-        assert_ne!(
-            terraces,
-            fresh_frame(&device, &queue, &cb),
-            "zero widths disabled the terraces"
-        );
     }
 
     #[test]
@@ -2366,13 +2201,8 @@ mod tests {
             }
         }
         cb.grid.set_bytes(&bytes);
-        // Plain, musical softness, and terraces over softness each exercise
-        // a visible path. Fresh terraces are too subtle on this smooth field.
+        // Plain and musical softness each exercise a visible path.
         let gate = harmonigraph_golden::Gate::new(env!("CARGO_MANIFEST_DIR"));
-        let apart = |a: &[u8], b: &[u8]| {
-            let total: u32 = a.iter().zip(b).map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
-            f64::from(total) / a.len() as f64
-        };
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         (s.pitch_softness, s.time_softness, s.blur_time_step) = (60.0, 200.0, 1.0);
         let mut resources = CallbackResources::default();
@@ -2381,11 +2211,6 @@ mod tests {
         let passes = pane.cloud.as_ref().unwrap().encoded_passes.load(Ordering::Relaxed);
         assert_eq!(passes, 4, "source, two filters and decode bake");
         gate.check("spectrogram-style-blur", SIZE, &blur);
-        let s = &mut cb.atmosphere.as_mut().unwrap().settings;
-        (s.contour_strength, s.contours, s.contour_softness) = (1.0, 5.0, 0.05);
-        let lava = fresh_frame(&device, &queue, &cb);
-        assert!(apart(&lava, &blur) > 2.0, "the terraces do not show over the blur");
-        gate.check("spectrogram-style-lava", SIZE, &lava);
         every_effect_off(&mut cb);
         gate.check("spectrogram-style-plain", SIZE, &fresh_frame(&device, &queue, &cb));
     }
@@ -4290,7 +4115,6 @@ fn cs_rotation_probe() {
             ("Pooling width", |s| s.wash_pool_width = 0.2),
             ("Pooling softness", |s| s.wash_pool_softness = 0.0),
             ("Pitch softness", |s| s.pitch_softness = 300.0),
-            ("Contour strength", |s| s.contour_strength = 1.0),
             // Scales' own dial, which the wash's walk cannot read.
             ("Size variation", |s| s.material_settings.velvet_variety = 1.0),
         ] {

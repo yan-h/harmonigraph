@@ -120,8 +120,7 @@ pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Opti
 /// cache is invalidated.
 ///
 /// **What decides this size, both directions.** The pane's pixels and `ppp`,
-/// the two softnesses through `points_per_cent`/`points_per_ms`, whether the
-/// field is drawn at all, and now
+/// the two softnesses through `points_per_cent`/`points_per_ms`, and now
 /// [`harmonigraph_scene::SpectralAtmosphere::blur_time_step`] with
 /// [`SpectrogramAtmosphere::points_per_slab`]. Nothing else reaches the
 /// picture's needed resolution, so nothing else may serve a stale one. The
@@ -137,14 +136,9 @@ pub(super) fn source_size(
     atmosphere: SpectrogramAtmosphere,
 ) -> [u32; 2] {
     let settings = atmosphere.settings.sanitized();
-    // Terraces alone read the level under the pixel, so nothing is ever drawn
-    // into this target and it costs one texel. A cloud at zero softness is the
-    // other case and falls through: both radii are zero, so both axes come out
-    // at full resolution and the filter's sub-texel arm copies the measured
+    // A cloud at zero softness has both radii zero, so both axes come out at
+    // full resolution and the filter's sub-texel arm copies the measured
     // picture through for the cloud to read.
-    if !settings.effects().light() {
-        return [1, 1];
-    }
     let pitch = settings.pitch_softness * atmosphere.points_per_cent * ppp;
     let time = settings.time_softness * atmosphere.points_per_ms * ppp;
     let sigma = if atmosphere.pitch_vertical { [time, pitch] } else { [pitch, time] };
@@ -329,9 +323,6 @@ pub(super) fn tile_key(
         pitch_softness: _,     // applied after the tile bake
         time_softness: _,      // applied after the tile bake
         blur_time_step: _,     // applied after the tile bake
-        contour_strength: _,   // applied after the tile bake
-        contours: _,           // applied after the tile bake
-        contour_softness: _,   // applied after the tile bake
         cloud_depth: _,        // does not change the baked cell walk
         color_pickup: _,       // does not change the baked cell walk
         color_release: _,      // does not change the baked cell walk
@@ -387,10 +378,6 @@ struct Uniforms {
     size: Float2,
     step: Float2,
     ppp: f32,
-    padding: u32,
-    contours: f32,
-    contour_softness: f32,
-    contour_strength: f32,
     /// 1 when the tone target holds this frame's reduced scalar cloud field
     /// or the star image.
     tone_baked: u32,
@@ -836,12 +823,9 @@ fn memory_key(
         pitch_softness,
         time_softness,
         blur_time_step: _, // response/coverage changes do not change material identity
-        contour_strength,
-        contours,
-        contour_softness,
-        cloud_depth: _,   // response/coverage changes do not change material identity
-        color_pickup: _,  // response/coverage changes do not change material identity
-        color_release: _, // response/coverage changes do not change material identity
+        cloud_depth: _,    // response/coverage changes do not change material identity
+        color_pickup: _,   // response/coverage changes do not change material identity
+        color_release: _,  // response/coverage changes do not change material identity
         cloud_speed,
         cloud_direction,
         wash_pool,
@@ -926,9 +910,6 @@ fn memory_key(
             velvet_shape,
             velvet_square,
             velvet_tilt,
-            contours,
-            contour_softness,
-            contour_strength,
         ]),
         CloudStyle::Watercolor => values.extend([
             1.0,
@@ -945,9 +926,6 @@ fn memory_key(
             // so they reset the history only once one is drawn.
             if wash_pool != 0.0 { wash_pool_width } else { 0.0 },
             if wash_pool != 0.0 { wash_pool_softness } else { 0.0 },
-            contours,
-            contour_softness,
-            contour_strength,
         ]),
     }
     values.into_iter().map(f32::to_bits).collect()
@@ -1495,17 +1473,6 @@ impl Targets {
             size: Float2(rect.size().into()),
             step: Float2([radius[0] / rect.width(), radius[1] / rect.height()]),
             ppp,
-            padding: 0,
-            contours: settings.contours,
-            contour_softness: settings.contour_softness,
-            // At full Stars mix the underlying terraced picture is hidden.
-            contour_strength: if settings.cloud_style == harmonigraph_scene::CloudStyle::Stars
-                && settings.cloud_depth >= 1.0
-            {
-                0.0
-            } else {
-                settings.contour_strength
-            },
             tone_baked: u32::from(self.tone.is_some()),
             drift: Float2(drift),
             cloud_depth: if settings.effects().cloud { settings.cloud_depth } else { 0.0 },

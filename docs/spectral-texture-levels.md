@@ -4,7 +4,7 @@ Watercolor at 0% Random brightness displaces the scalar spectrogram picture with
 lighting or pigment.
 This is the A2/B2 choice from issue #1027:
 sample the displaced levels,
-then apply Contours and the selected palette.
+then apply the selected palette.
 It preserves the palette and the sampled levels,
 rather than moving already-colored RGB pixels.
 Interpolating levels before coloring retains the stepped look;
@@ -14,7 +14,7 @@ Pitch and time softness build the source picture using the density-weighted filt
 Watercolor reads that same softened field and keeps its overlapping globs,
 lookup feathering and bleed,
 and the Layers blend between coarse and fine sampled levels.
-Texture mix blends original and displaced levels before the shared Contours and palette lookup.
+Texture mix blends original and displaced levels before the shared palette lookup.
 Since #1042 there is no Cloud pixel size:
 cloud sampling is fixed at 0.5 pt,
 which is native on 1x and 2x displays,
@@ -27,13 +27,13 @@ Zero Refraction alone does not reach that path at the shipped defaults:
 Color pickup and Color release are on by default and keep temporal color memory running regardless of Refraction (see [color memory](spectrogram-color-memory.md)).
 Refraction over a constant source cannot invent a pattern;
 half-float intermediate storage and filtering can round the output by one channel byte.
-Contour strength,
-Contour levels and Contour edge softness remain the quantization controls and now affect the refracted picture even at full Texture mix.
 
 Scale relief and Edge pooling are removed because they only changed lighting and pigment.
 Their old saved keys are ignored;
 other saved appearance settings remain readable.
-Existing projects will look different with a texture enabled because the old tone adjustments are gone and Contours now applies.
+Existing projects will look different with a texture enabled because the old tone adjustments are gone.
+The level contours that once quantized the refracted picture were removed in turn;
+their saved keys are ignored the same way.
 
 Watercolor’s Random brightness varies globs after the palette lookup and color memory,
 using a stable signed draw blended across their feathered edges and fine layer.

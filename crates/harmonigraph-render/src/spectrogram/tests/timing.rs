@@ -1,7 +1,7 @@
 //! What the spectrogram's cloud textures cost per frame, on whatever GPU runs
 //! this. `#[ignore]`d — it prints figures and asserts timestamp ordering.
-//! The GPU interval starts on the first real source pass (or paint for plain
-//! and terraces-only cases), and ends on the final composite. Historical
+//! The GPU interval starts on the first real source pass (or paint for the
+//! plain case), and ends on the final composite. Historical
 //! `end/full`, `begin/full`, light and paint columns used independent stamp
 //! passes and are not comparable to this `source/full` interval (#1203).
 //! Memory is off except in explicitly named memory cases; Watercolor is
@@ -77,15 +77,7 @@ fn memory(s: &mut SpectralAtmosphere) {
 
 const CASES: &[(&str, Option<Turn>)] = &[
     ("plain", None),
-    ("blur only", Some(|s| (s.contour_strength, s.cloud_depth) = (0.0, 0.0))),
-    ("blur + terraces", Some(|s| (s.cloud_depth, s.contour_strength) = (0.0, 1.0))),
-    (
-        "terraces only",
-        Some(|s| {
-            (s.pitch_softness, s.time_softness, s.cloud_depth) = (0.0, 0.0, 0.0);
-            s.contour_strength = 1.0;
-        }),
-    ),
+    ("blur only", Some(|s| s.cloud_depth = 0.0)),
     ("velvet, defaults", Some(|s| s.cloud_style = CloudStyle::VelvetScales)),
     (
         "velvet, small cells",
@@ -102,7 +94,6 @@ const CASES: &[(&str, Option<Turn>)] = &[
         }),
     ),
     ("watercolor, defaults", Some(|_| {})),
-    ("watercolor, terraces", Some(|s| s.contour_strength = 1.0)),
     ("watercolor, no blur", Some(|s| (s.pitch_softness, s.time_softness) = (0.0, 0.0))),
     ("watercolor, layers 0", Some(|s| s.material_settings.wash_layers = 0.0)),
     ("watercolor, lobe 0", Some(|s| s.material_settings.wash_lobe = 0.0)),
@@ -381,7 +372,7 @@ fn cloud_costs_by_style_and_dial() {
             let bufs = cb.prepare(&device, &queue, &screen, &mut encoder, resources);
             let prepare_ms = prepare_start.elapsed().as_secs_f64() * 1000.0;
             // The source consumes the query when it actually encodes a pass.
-            // With no source (plain or terraces only), paint owns both stamps.
+            // With no source (plain), paint owns both stamps.
             let source_stamped = SOURCE_QUERY.with_borrow_mut(|query| query.take().is_none());
             {
                 let mut pass = stamped_pass(&mut encoder, source_stamped);

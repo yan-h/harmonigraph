@@ -7,7 +7,7 @@ use harmonigraph_core::LatticePos;
 ///
 /// Distinct constructions: [`CloudStyle::Watercolor`] is a field of
 /// overlapping globs that displaces the scalar picture without altering its
-/// levels, then applies the shared Contours and palette controls.
+/// levels, then applies the shared palette.
 /// [`CloudStyle::VelvetScales`] instead averages each overlapping scallop's
 /// sampled light, with no raw source overlay at full material depth.
 ///
@@ -28,8 +28,8 @@ use harmonigraph_core::LatticePos;
 ///
 /// [`CloudStyle::Stars`] is the odd one out: it does not displace the picture's
 /// levels at all but REPLACES the picture — pinpoint stars in depth, each one
-/// palette colour picked by the sound under it — so Contours do not reach it and
-/// every `star_` setting belongs to it alone.
+/// palette colour picked by the sound under it — and every `star_` setting
+/// belongs to it alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CloudStyle {
     Watercolor,
@@ -103,16 +103,6 @@ pub const PITCH_SOFTNESS_MAX: f32 = 300.0;
 pub const TIME_SOFTNESS_MIN: f32 = 0.0;
 /// See [`TIME_SOFTNESS_MIN`].
 pub const TIME_SOFTNESS_MAX: f32 = 2000.0;
-
-/// Bounds shared by the [`SpectralAtmosphere::contours`] control and sanitizer.
-pub const CONTOURS_MIN: f32 = 2.0;
-/// See [`CONTOURS_MIN`].
-pub const CONTOURS_MAX: f32 = 16.0;
-
-/// Bounds shared by the [`SpectralAtmosphere::contour_softness`] control and sanitizer.
-pub const CONTOUR_SOFTNESS_MIN: f32 = 0.01;
-/// See [`CONTOUR_SOFTNESS_MIN`].
-pub const CONTOUR_SOFTNESS_MAX: f32 = 0.5;
 
 /// Bounds shared by the [`SpectralAtmosphere::cloud_speed`] control and sanitizer.
 pub const CLOUD_SPEED_MIN: f32 = 0.0;
@@ -329,11 +319,10 @@ impl MaterialSettings {
 
 /// Independent spectrogram diffusion, analyzer shading and note light.
 ///
-/// There is no style here. Plain, Blur and Lava were three presets over three
-/// effects that never depended on each other — the blur, the terraces and the
-/// cloud — so each is a dial whose zero is OFF, and [`Self::effects`] is what
-/// the renderer reads to pay for exactly the ones that are on. The measured
-/// picture is all of them at zero.
+/// There is no style here. Plain and Blur were presets over effects that never
+/// depended on each other — the blur and the cloud — so each is a dial whose
+/// zero is OFF, and [`Self::effects`] is what the renderer reads to pay for
+/// exactly the ones that are on. The measured picture is both at zero.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectralAtmosphere {
@@ -397,13 +386,8 @@ pub struct SpectralAtmosphere {
     /// lock breaks wherever `retained_size` holds a stale size through a Span
     /// drag.
     pub blur_time_step: f32,
-    /// How far the levels are gathered into terraces, 0 for none. What the
-    /// `Lava` style used to switch on whole.
-    pub contour_strength: f32,
-    pub contours: f32,
-    pub contour_softness: f32,
-    /// Texture strength. Without memory, displaced levels mix before Contours
-    /// and the palette. With memory, held RGB mixes in linear light.
+    /// Texture strength. Without memory, displaced levels mix before the
+    /// palette. With memory, held RGB mixes in linear light.
     /// Zero disables the texture; zero refraction disables displacement alone.
     pub cloud_depth: f32,
     /// Linear-light color response times in seconds. Both zero bypass history.
@@ -419,8 +403,7 @@ pub struct SpectralAtmosphere {
     /// right, 90 down, 180 left and 270 up.
     pub cloud_direction: f32,
     /// Watercolor's tide line: a glob shaded along the arc of the glob painted
-    /// over it, 0 for none. Above 0 it darkens the level before Contours and
-    /// the palette; below 0 it lightens it in proportion to `level * (1 -
+    /// over it, 0 for none. Above 0 it darkens the level before the palette; below 0 it lightens it in proportion to `level * (1 -
     /// level)`. Silence stays on the palette's floor either way. Here rather
     /// than in [`MaterialSettings`] because the lattice's watercolor glow,
     /// which shares that struct, draws no pigment.
@@ -694,29 +677,22 @@ impl StarSettings {
     }
 }
 
-/// Which of the three spectrogram effects a setting actually draws — what the
+/// Which of the two spectrogram effects a setting actually draws — what the
 /// retired style enum used to say in one word, read off the dials instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpectralEffects {
     /// Either softness is above zero, so the picture is the blurred field.
     pub soft: bool,
-    /// The levels are gathered into terraces.
-    pub contours: bool,
     /// A cloud texture is drawn over the picture.
     pub cloud: bool,
 }
 
 impl SpectralEffects {
-    /// Nothing is on: the measured heatmap, on the renderer's plain path.
-    pub fn none(self) -> bool {
-        !(self.soft || self.contours || self.cloud)
-    }
-
-    /// Whether the scalar light field has to be built. The blur IS that field,
-    /// and the cloud reads it — at zero softness it is the measured picture
-    /// carried through unblurred, which is what lets a cloud be drawn over a
-    /// sharp spectrogram. The terraces alone read the level under the pixel and
-    /// need none of it.
+    /// Whether the scalar light field has to be built, which is whether
+    /// anything is drawn but the measured heatmap on the renderer's plain path.
+    /// The blur IS that field, and the cloud reads it — at zero softness it is
+    /// the measured picture carried through unblurred, which is what lets a
+    /// cloud be drawn over a sharp spectrogram.
     pub fn light(self) -> bool {
         self.soft || self.cloud
     }
@@ -734,10 +710,6 @@ impl Default for SpectralAtmosphere {
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
             blur_time_step: 1.0,
-            // A fresh texture starts smooth; terracing is an explicit choice.
-            contour_strength: 0.0,
-            contours: 16.0,
-            contour_softness: 0.492_202_6,
             cloud_depth: 1.0,
             color_pickup: 0.043_984_346,
             color_release: 0.711_714_74,
@@ -777,14 +749,6 @@ impl SpectralAtmosphere {
             (clamp(self.blur_time_step, fresh.blur_time_step, 0.0, BLUR_TIME_STEP_MAX) * 2.0)
                 .round()
                 / 2.0;
-        self.contour_strength = clamp(self.contour_strength, fresh.contour_strength, 0.0, 1.0);
-        self.contours = clamp(self.contours, fresh.contours, CONTOURS_MIN, CONTOURS_MAX).round();
-        self.contour_softness = clamp(
-            self.contour_softness,
-            fresh.contour_softness,
-            CONTOUR_SOFTNESS_MIN,
-            CONTOUR_SOFTNESS_MAX,
-        );
         self.cloud_depth = clamp(self.cloud_depth, fresh.cloud_depth, 0.0, 1.0);
         self.color_pickup = clamp(self.color_pickup, fresh.color_pickup, 0.0, COLOR_MEMORY_MAX);
         self.color_release = clamp(self.color_release, fresh.color_release, 0.0, COLOR_MEMORY_MAX);
@@ -822,7 +786,6 @@ impl SpectralAtmosphere {
     pub fn effects(self) -> SpectralEffects {
         SpectralEffects {
             soft: self.pitch_softness > 0.0 || self.time_softness > 0.0,
-            contours: self.contour_strength > 0.0,
             // A stationary sample still draws brightness variation or a temporal
             // color response; only a texture with none of these is bypassed.
             cloud: self.cloud_depth > 0.0

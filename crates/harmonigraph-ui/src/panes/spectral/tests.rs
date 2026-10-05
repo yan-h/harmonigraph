@@ -1852,7 +1852,6 @@ fn analyzer_fill_is_flat_and_independent_of_spectrogram_effects() {
     assert!(body.vertices.iter().any(|v| v.color.a() == BODY_ALPHA), "fixture must draw a body");
     cfg.atmosphere.pitch_softness = 0.0;
     cfg.atmosphere.time_softness = 0.0;
-    cfg.atmosphere.contour_strength = 0.0;
     cfg.atmosphere.cloud_depth = 0.0;
     assert_eq!(meshes(cfg), fill, "other effects changed the analyzer");
 }

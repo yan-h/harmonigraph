@@ -2704,11 +2704,8 @@ mod tests {
             |c: &mut SpectrumConfig| c.tilt += 1.0,
             |c: &mut SpectrumConfig| c.roll_seconds *= 1.01,
             |c: &mut SpectrumConfig| c.roll_fraction += 0.01,
-            |c: &mut SpectrumConfig| c.atmosphere.contour_strength = 1.0,
             |c: &mut SpectrumConfig| c.atmosphere.pitch_softness = 250.0,
             |c: &mut SpectrumConfig| c.atmosphere.time_softness = 1800.0,
-            |c: &mut SpectrumConfig| c.atmosphere.contours = 12.0,
-            |c: &mut SpectrumConfig| c.atmosphere.contour_softness = 0.4,
             |c: &mut SpectrumConfig| c.atmosphere.cloud_depth = 0.9,
             |c: &mut SpectrumConfig| c.atmosphere.material_settings.wash_refract = 0.8,
         ] {

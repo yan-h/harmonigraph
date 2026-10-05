@@ -216,51 +216,6 @@ fn shadow_sliders_update_the_preview_without_switching_kernel() {
 }
 
 #[test]
-fn contour_slider_snaps_to_whole_levels_and_updates_its_preview() {
-    for width in [120.0, 320.0] {
-        let ctx = crate::tests::probe::themed_at(1.0);
-        let mut n = 7.0;
-        for (fraction, expected) in [(1.0, 16.0), (0.0, 2.0), (0.43, 8.0)] {
-            let output = {
-                let mut draw = |ui: &mut Ui| {
-                    ui.set_max_width(width);
-                    contours(ui, &mut n);
-                };
-                let output = frame(&ctx, vec![], &mut draw);
-                let bar = output
-                    .shapes
-                    .iter()
-                    .find_map(|s| match &s.shape {
-                        egui::Shape::Rect(r)
-                            if r.fill == crate::theme::well()
-                                && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.1 =>
-                        {
-                            Some(r.rect)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
-                let from = bar.center();
-                let to = egui::pos2(bar.left() + fraction * bar.width(), bar.center().y);
-                frame(&ctx, vec![Event::PointerMoved(from)], &mut draw);
-                frame(&ctx, vec![press(from, true)], &mut draw);
-                frame(&ctx, vec![Event::PointerMoved(to)], &mut draw);
-                frame(&ctx, vec![press(to, false)], &mut draw)
-            };
-            assert_eq!(n, expected);
-            let bands = output
-                .shapes
-                .iter()
-                .find_map(|s| match &s.shape {
-                    egui::Shape::Mesh(mesh) => Some(mesh.vertices.len() / 4),
-                    _ => None,
-                })
-                .unwrap();
-            assert_eq!(bands, expected as usize);
-        }
-    }
-}
-#[test]
 fn spectrum_buttons_form_a_compact_rectangle_and_select_each_edge() {
     use crate::SpectralOrientation::{Bottom, Left, Right, Top};
     for scale in [0.7, 1.0, 1.5] {

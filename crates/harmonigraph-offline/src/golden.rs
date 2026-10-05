@@ -260,8 +260,8 @@ impl Shot {
     /// and the roll is not what #503 moves.
     ///
     /// The plain heatmap because that is what the bucket filter's claims were
-    /// measured on: #514 predates every effect (#872 added the first). A blur,
-    /// terraces or a texture over the frame would put a resample of their own
+    /// measured on: #514 predates every effect (#872 added the first). A blur
+    /// or a texture over the frame would put a resample of their own
     /// between the filter and the gate, and the fresh Stars paint a field of
     /// their own over it.
     fn take(&self) -> Take {
@@ -269,7 +269,6 @@ impl Shot {
             let atmosphere = &mut a.spectrum.atmosphere;
             atmosphere.pitch_softness = 0.0;
             atmosphere.time_softness = 0.0;
-            atmosphere.contour_strength = 0.0;
             atmosphere.cloud_depth = 0.0;
         })
     }

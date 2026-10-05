@@ -2,8 +2,6 @@
 
 Yan’s decisions recorded for future drift audits.
 
-## 2026-10-02 (issue sweep)
+## 2026-10-05
 
-- Fresh Contour strength is 0%; switching away from Stars starts with a smooth texture. Saved contour settings remain as set. #1314 Spectrogram Q2
-
-- Disable the Level contours block at Stars with 100% Texture mix, retaining its values for lower mix settings. Skip hidden contour work. #1314 Spectrogram Q1
+- Remove the spectrogram's level contours (Contour strength, Contour levels, Contour edge softness) entirely: Yan did not use them. This supersedes the two 2026-10-02 contour decisions from #1314 (fresh strength 0%, block disabled under full Stars).
