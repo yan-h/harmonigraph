@@ -301,3 +301,9 @@ The source remains available for PR review.
 The loader holds the publication lock throughout installation, so retention cannot remove one half of the pair during a load.
 The installed hourly fallback handles completed caches and delegates source cleanup to the owning host;
 Codex-managed source release may remain pending in the app.
+
+The skill also ships the worktree reclaimer, and its own check runs the reclaimer's tests on every change to it.
+`.claude/reclaim-worktrees.sh` is a wrapper that runs the shared copy for the SessionStart hook and hand-runs,
+and the hourly sweep runs it directly,
+so a reclaimer fix lands once in agent-config for every project.
+Without the skill installed, nothing reclaims.

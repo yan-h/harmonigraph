@@ -11,7 +11,7 @@ set -uo pipefail
 
 # This test creates and enters a throwaway repository, so inherited GIT_DIR
 # and related variables would point every git call below at the caller's repo.
-# Same guard, same reason, as `.claude/tests/reclaim-locks.sh`.
+# Same guard, same reason, as the shared reclaimer's tests.
 for v in $(env | sed -n 's/^\(GIT_[A-Z_]*\)=.*/\1/p'); do
   unset "$v"
 done
