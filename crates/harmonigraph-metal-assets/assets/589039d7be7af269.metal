@@ -24,7 +24,7 @@ struct type_8 {
 };
 struct StarUniforms {
     metal::float2 size;
-    metal::float2 star_image;
+    metal::float2 star_image_size;
     float star_randomness;
     float star_life;
     float star_size_variation;
@@ -66,15 +66,24 @@ metal::float2 star_size(
     return _e3;
 }
 
+metal::float4 star_image_at(
+    metal::float2 uv,
+    metal::sampler light_sampler,
+    metal::texture2d<float, metal::access::sample> star_image_texture
+) {
+    metal::float4 _e4 = star_image_texture.sample(light_sampler, uv, metal::level(0.0));
+    return _e4;
+}
+
 metal::float4 star_color(
     metal::float2 pt,
     constant Settings& settings,
-    metal::sampler cloud_sampler,
-    metal::texture2d<float, metal::access::sample> cloud_tone
+    metal::sampler light_sampler,
+    metal::texture2d<float, metal::access::sample> star_image_texture
 ) {
-    metal::float2 _e3 = star_size(settings);
-    metal::float4 _e6 = cloud_tone.sample(cloud_sampler, pt / _e3, metal::level(0.0));
-    return _e6;
+    metal::float2 _e1 = star_size(settings);
+    metal::float4 _e3 = star_image_at(pt / _e1, light_sampler, star_image_texture);
+    return _e3;
 }
 
 struct fs_lattice_starsInput {
@@ -86,14 +95,14 @@ fragment fs_lattice_starsOutput fs_lattice_stars(
   metal::float4 position [[position]]
 , constant Settings& settings [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
-, metal::sampler cloud_sampler [[sampler(0)]]
-, metal::texture2d<float, metal::access::sample> cloud_tone [[texture(2)]]
+, metal::sampler light_sampler [[sampler(0)]]
+, metal::texture2d<float, metal::access::sample> star_image_texture [[texture(2)]]
 ) {
     const TileVertex in = { position };
     metal::float4 result = {};
     metal::float2 _e8 = settings.stars.size;
-    metal::float4 raw = source.sample(cloud_sampler, in.position.xy / _e8, metal::level(0.0));
-    metal::float4 _e14 = star_color(in.position.xy, settings, cloud_sampler, cloud_tone);
+    metal::float4 raw = source.sample(light_sampler, in.position.xy / _e8, metal::level(0.0));
+    metal::float4 _e14 = star_color(in.position.xy, settings, light_sampler, star_image_texture);
     result = _e14;
     float _e17 = result.x;
     float _e19 = result.y;

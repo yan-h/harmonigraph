@@ -24,7 +24,7 @@ struct type_6 {
 };
 struct StarUniforms {
     metal::float2 size;
-    metal::float2 star_image;
+    metal::float2 star_image_size;
     float star_randomness;
     float star_life;
     float star_size_variation;
@@ -263,10 +263,10 @@ metal::float4 star_layers(
     return _e86;
 }
 
-metal::float2 star_image(
+metal::float2 star_image_size(
     constant Settings& settings
 ) {
-    metal::float2 _e3 = settings.stars.star_image;
+    metal::float2 _e3 = settings.stars.star_image_size;
     return _e3;
 }
 
@@ -281,7 +281,7 @@ fragment fs_starsOutput fs_stars(
 , metal::texture2d<uint, metal::access::sample> star_atlas [[texture(1)]]
 ) {
     const TileVertex in = { position };
-    metal::float2 _e3 = star_image(settings);
+    metal::float2 _e3 = star_image_size(settings);
     metal::float2 _e5 = star_size(settings);
     metal::float4 _e7 = star_layers((in.position.xy / _e3) * _e5, settings, star_atlas);
     return fs_starsOutput { _e7 };

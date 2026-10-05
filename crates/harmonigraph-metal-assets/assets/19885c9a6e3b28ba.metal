@@ -24,7 +24,7 @@ struct type_10 {
 };
 struct StarUniforms {
     metal::float2 size;
-    metal::float2 star_image;
+    metal::float2 star_image_size;
     float star_randomness;
     float star_life;
     float star_size_variation;
@@ -187,10 +187,10 @@ metal::float4 star_source(
     int index,
     constant Settings& settings,
     metal::texture2d<float, metal::access::sample> source,
-    metal::sampler cloud_sampler
+    metal::sampler light_sampler
 ) {
     metal::float2 _e8 = settings.stars.size;
-    metal::float4 light = source.sample(cloud_sampler, pt / _e8, metal::level(0.0));
+    metal::float4 light = source.sample(light_sampler, pt / _e8, metal::level(0.0));
     if (light.w <= 0.0) {
         return metal::float4(0.0);
     }
@@ -219,7 +219,7 @@ metal::uint4 star_bake(
     int index_1,
     constant Settings& settings,
     metal::texture2d<float, metal::access::sample> source,
-    metal::sampler cloud_sampler
+    metal::sampler light_sampler
 ) {
     metal::float3 colour = {};
     float radius = {};
@@ -230,7 +230,7 @@ metal::uint4 star_bake(
     metal::float2 _e20 = star_size(settings);
     metal::float2 at = ((((static_cast<metal::float2>(cell_1) + _e7.centre) + s_1.offset) * s_1.cell) * (_e15.y / STAR_PANE)) + (_e20 * 0.5);
     float _e26 = star_rank(_e7.own.x, settings);
-    metal::float4 _e27 = star_source(at, _e26, index_1, settings, source, cloud_sampler);
+    metal::float4 _e27 = star_source(at, _e26, index_1, settings, source, light_sampler);
     if (_e27.w <= 0.0) {
         return metal::uint4(0u);
     }
@@ -240,7 +240,7 @@ metal::uint4 star_bake(
     if (_e7.blend > 0.0) {
         metal::float3 _e48 = colour;
         float _e51 = star_rank(_e7.other.x, settings);
-        metal::float4 _e52 = star_source(at, _e51, index_1, settings, source, cloud_sampler);
+        metal::float4 _e52 = star_source(at, _e51, index_1, settings, source, light_sampler);
         colour = metal::mix(_e48, _e52.xyz, _e7.blend);
         float _e56 = radius;
         float _e58 = star_size_variation(settings);
@@ -285,7 +285,7 @@ fragment fs_star_bakeOutput fs_star_bake(
   metal::float4 position [[position]]
 , constant Settings& settings [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
-, metal::sampler cloud_sampler [[sampler(0)]]
+, metal::sampler light_sampler [[sampler(0)]]
 ) {
     const TileVertex in = { position };
     uint k = 0u;
@@ -320,7 +320,7 @@ fragment fs_star_bakeOutput fs_star_bake(
             if (_e30) {
                 metal::int2 local_3 = metal::int2(naga_mod(at_1, _e16.grid.x), naga_div(at_1, _e16.grid.x));
                 uint _e42 = k;
-                metal::uint4 _e45 = star_bake(_e16, as_type<metal::int2>(as_type<metal::uint2>(_e16.origin) + as_type<metal::uint2>(local_3)), 1000u + (3u * _e42), index_2, settings, source, cloud_sampler);
+                metal::uint4 _e45 = star_bake(_e16, as_type<metal::int2>(as_type<metal::uint2>(_e16.origin) + as_type<metal::uint2>(local_3)), 1000u + (3u * _e42), index_2, settings, source, light_sampler);
                 return fs_star_bakeOutput { _e45 };
             }
         }
