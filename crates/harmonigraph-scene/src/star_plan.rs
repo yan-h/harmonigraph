@@ -39,6 +39,14 @@ impl StarGather {
             Self::Three => 1.5 - half_band,
         }
     }
+
+    /// The cheapest read that holds a star `radius` star pixels wide whole in
+    /// cells `cell` wide, at `Position variation` `jitter`; 3x3 where none
+    /// does. The plan's choice for its stars, and the renderer's for the
+    /// floor it widens them to.
+    pub fn holding(radius: f32, cell: f32, jitter: f32) -> Self {
+        Self::DRAWN.into_iter().find(|g| radius <= g.bound(jitter) * cell).unwrap_or(Self::Three)
+    }
 }
 
 /// One star's coverage at `t`, its distance over its own outer radius: full
@@ -133,12 +141,8 @@ impl StarSettings {
             let ratio =
                 along(k, self.star_spacing_ratio_far, self.star_spacing_ratio_near, spacing);
             let (cell, radius) = (ratio * diameter, 0.5 * diameter);
-            let fits = |gather: StarGather| radius <= gather.bound(jitter) * cell;
-            let gather = if !drawn(k) {
-                StarGather::Off
-            } else {
-                StarGather::DRAWN.into_iter().find(|&g| fits(g)).unwrap_or(StarGather::Three)
-            };
+            let gather =
+                if !drawn(k) { StarGather::Off } else { StarGather::holding(radius, cell, jitter) };
             StarDepthPlan {
                 gather,
                 depth: place(k),

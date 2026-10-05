@@ -290,15 +290,13 @@ pub(crate) fn star_slices(
         // works it out, with the original conservative neighbor and margin.
         let origin: [i32; 2] =
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
-        let holds = |gather: StarGather| gather.bound(jitter) * cell;
-        let widest = depth.radius.max(texel);
+        // The plan's radius always fits 3x3 (`Star spacing` never runs
+        // below `STAR_SPACING_MIN`), so the floor stops where 3x3 does. The
+        // layout's cell, which the atlas may have raised past the plan's.
+        let floor = texel.min(StarGather::Three.bound(jitter) * cell);
         let gather = match depth.gather {
             StarGather::Off => StarGather::Off,
-            planned => StarGather::DRAWN
-                .into_iter()
-                .skip_while(|&gather| gather != planned)
-                .find(|&gather| widest <= holds(gather))
-                .unwrap_or(StarGather::Three),
+            _ => StarGather::holding(depth.radius.max(floor), cell, jitter),
         };
         StarSlice {
             offset: Float2(offset),
@@ -311,8 +309,7 @@ pub(crate) fn star_slices(
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
             width: star_jitter_width(jitter),
-            inverse_floor: 1.0
-                / if gather == StarGather::Off { texel } else { texel.min(holds(gather)) },
+            inverse_floor: 1.0 / floor,
             gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(gather) },
             twinkle: depth.twinkle,
         }
