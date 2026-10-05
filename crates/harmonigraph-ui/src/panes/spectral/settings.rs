@@ -34,8 +34,8 @@ pub(crate) fn span_readout(seconds: f32) -> String {
     format!("{:.1} s", seconds.max(0.0))
 }
 
-/// The spectrogram's look: how soft it is and the texture over it. First on the Analyzer page, being what gets
-/// dialled per song. Its switch is in the heading, because off there is
+/// The spectrogram's look: how soft it is and the texture over it. First on the
+/// Analyzer page, being what gets dialled per song. Its switch is in the heading, because off there is
 /// nothing here that draws; the history it shares with the ribbons is under
 /// View, the axis it is.
 pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
@@ -50,9 +50,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
         ),
         |ui| {
             block(ui, "Softness");
-            // No style selector. Plain and Blur were presets over independent
-            // effects — the blur and the cloud — and each now has a dial whose zero
-            // is off. The measured picture is both at zero, and the renderer takes its plain path there, so nothing is paid
+            // No style selector. The retired Plain/Blur/Lava styles were presets over
+            // independent effects, and each surviving one — the blur and the cloud —
+            // now has a dial whose zero is off. The measured picture is both at zero,
+            // and the renderer takes its plain path there, so nothing is paid
             // for an effect that is not drawn. A row whose effect is off is greyed
             // rather than hidden, like every other section of this page, so the page's
             // inventory does not move under a drag.

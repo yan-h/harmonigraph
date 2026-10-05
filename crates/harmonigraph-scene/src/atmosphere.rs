@@ -319,10 +319,11 @@ impl MaterialSettings {
 
 /// Independent spectrogram diffusion, analyzer shading and note light.
 ///
-/// There is no style here. Plain and Blur were presets over effects that never
-/// depended on each other — the blur and the cloud — so each is a dial whose
-/// zero is OFF, and [`Self::effects`] is what the renderer reads to pay for
-/// exactly the ones that are on. The measured picture is both at zero.
+/// There is no style here. The retired Plain/Blur/Lava styles were presets over
+/// effects that never depended on each other, so each surviving one — the blur
+/// and the cloud — is a dial whose zero is OFF, and [`Self::effects`] is what
+/// the renderer reads to pay for exactly the ones that are on. The measured
+/// picture is both at zero.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpectralAtmosphere {
@@ -403,8 +404,8 @@ pub struct SpectralAtmosphere {
     /// right, 90 down, 180 left and 270 up.
     pub cloud_direction: f32,
     /// Watercolor's tide line: a glob shaded along the arc of the glob painted
-    /// over it, 0 for none. Above 0 it darkens the level before the palette; below 0 it lightens it in proportion to `level * (1 -
-    /// level)`. Silence stays on the palette's floor either way. Here rather
+    /// over it, 0 for none. Above 0 it darkens the level before the palette;
+    /// below 0 it lightens it in proportion to `level * (1 - level)`. Silence stays on the palette's floor either way. Here rather
     /// than in [`MaterialSettings`] because the lattice's watercolor glow,
     /// which shares that struct, draws no pigment.
     pub wash_pool: f32,

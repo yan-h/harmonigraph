@@ -119,6 +119,10 @@ pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Opti
 /// these Gaussian passes. The allocation key is this size alone; no measurement
 /// cache is invalidated.
 ///
+/// Asked only where [`harmonigraph_scene::SpectralEffects::light`] holds: with
+/// no effect on it still answers a full-resolution size for a field nobody
+/// draws, so a caller filters on that first, as `prepare` does.
+///
 /// **What decides this size, both directions.** The pane's pixels and `ppp`,
 /// the two softnesses through `points_per_cent`/`points_per_ms`, and now
 /// [`harmonigraph_scene::SpectralAtmosphere::blur_time_step`] with

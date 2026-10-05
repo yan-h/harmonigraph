@@ -430,9 +430,6 @@ fn palette_color(level: f32) -> vec3<f32> {
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return mix(a, b, fract(x));
 }
-fn density_color(level: f32) -> vec4<f32> {
-    return vec4<f32>(palette_color(level), 1.0);
-}
 
 // Cloud space is the pane's, aspect-corrected and independent of DPI, and it is
 // FIXED: ten cloud units across the pane's height, which is what the shipped
@@ -743,7 +740,7 @@ fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
     let grid = vec2<f32>(dimensions - 2);
     let pt = (vec2<f32>(texel) + 0.5 - 1.0 - cloud.memory_fraction) / grid * cloud.size;
     let level = cloud_tone_at(pt);
-    let current = vec4<f32>(linear_from_gamma_rgb(density_color(level).rgb), level);
+    let current = vec4<f32>(linear_from_gamma_rgb(palette_color(level)), level);
     let previous = texel + cloud.memory_shift;
     if cloud.memory_valid == 0u || any(previous < vec2<i32>(0)) || any(previous >= dimensions) { return current; }
     return remembered(current, textureLoad(color_memory, previous, 0));
@@ -769,13 +766,13 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // vanished with the blur. The field is built whenever a cloud is drawn now,
     // and at zero softness it holds the measured picture unblurred.
     if cloud.cloud_depth <= 0.0 {
-        return density_color(level);
+        return vec4<f32>(palette_color(level), 1.0);
     }
     let pt = position / cloud.ppp - cloud.origin;
     // The starfield is colour, not a level: `Texture mix` blends the plain
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
-        return vec4<f32>(mix(density_color(level).rgb, star_color(pt).rgb, cloud.cloud_depth), 1.0);
+        return vec4<f32>(mix(palette_color(level), star_color(pt).rgb, cloud.cloud_depth), 1.0);
     }
     if cloud.memory_enabled != 0u {
         let dimensions = cloud.memory_extent;
@@ -786,7 +783,7 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
         }
         // Memory is RGB, so its partial Texture mix is a bounded linear-light
         // blend. Both response times zero retain the original scalar mix below.
-        let base = linear_from_gamma_rgb(density_color(level).rgb);
+        let base = linear_from_gamma_rgb(palette_color(level));
         return vec4<f32>(gamma_from_linear_rgb(mix(base, held, cloud.cloud_depth)), 1.0);
     }
     // Either the tone worked out under this pixel (a tile tap and its
@@ -803,7 +800,7 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // Mix levels before the one shared palette lookup: `Texture mix` and
     // Watercolor's `Fine layer mix` cannot introduce RGB blends outside the
     // authored ramp.
-    return density_color(mix(level, tone, cloud.cloud_depth));
+    return vec4<f32>(palette_color(mix(level, tone, cloud.cloud_depth)), 1.0);
 }
 // Brightness is a display adjustment, after the palette and color memory.
 // It reads the same globs at every blur resolution and never feeds back into
