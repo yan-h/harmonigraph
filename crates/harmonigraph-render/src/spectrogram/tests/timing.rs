@@ -420,7 +420,13 @@ fn cloud_costs_by_style_and_dial() {
             format!("{:.3}/{:.3}/{:.3}/{:.3}/{:.3}", at(0), at(10), at(50), at(90), at(100))
         };
         let median = |samples: &[f64]| samples[samples.len() / 2];
-        let source = case.cb.atmosphere.map(|a| atmosphere::source_size(size, ppp, a));
+        // `prepare` draws no light field when no effect is on, so neither is
+        // one reported.
+        let source = case
+            .cb
+            .atmosphere
+            .filter(|a| a.settings.sanitized().effects().light())
+            .map(|a| atmosphere::source_size(size, ppp, a));
         eprintln!(
             "{} / {:.2} / {:.1}: {}; wall {:.3}; CPU {:.3}; source px {:?}",
             case.name,
