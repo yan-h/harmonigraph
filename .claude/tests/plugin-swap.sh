@@ -69,10 +69,12 @@ git -C "$repo" worktree add -q -b "$codex_branch" "$codex_wt" HEAD 2>/dev/null |
   echo "✗ could not create the Codex-managed worktree fixture" >&2; exit 1; }
 
 # The artifacts a build would have left. The dylib carries the build tag the
-# loader reads back out of it with `strings`, in the shape build.rs stamps it.
+# loader reads back out of it with `strings`, in the shape the plugin stores it:
+# NUL-terminated, with the next string packed straight after and starting with
+# hex digits, as the linker laid it out in #1428.
 mkdir -p "$repo/target/release"
 cat > "$TMP/new.c" <<C
-const char *tag = "main @$sha";
+const char *tag = "main @$sha\0" "abc formatting trait implementation";
 int fixture_value(void) { return 0; }
 C
 cc -dynamiclib -o "$repo/target/release/libharmonigraph_plugin.dylib" "$TMP/new.c" 2>/dev/null || {
