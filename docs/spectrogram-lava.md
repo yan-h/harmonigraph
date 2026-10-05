@@ -14,6 +14,9 @@ One measured claim did not survive:
 "when both widths are zero the renderer uses the detailed field directly, skipping source integration, all four filters and the material bake" is false once a cloud is drawn,
 because `SpectralEffects::light()` is `soft || cloud`,
 so the Measured cost section understates its own worst case.
+The terraces themselves were later removed outright —
+Contour strength, Contour levels and Contour edge softness are gone, along with the `spectrogram-style-lava` golden —
+so Lava's transfer below is no longer reachable by any dial.
 
 The spectrogram averages linear power in time.
 Plain shows the mapped field;

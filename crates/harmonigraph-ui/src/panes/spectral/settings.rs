@@ -2,8 +2,6 @@
 //! audio analysis, then spectrogram appearance. Color tables live on
 //! [`super::super::color`].
 
-use harmonigraph_scene::{CONTOUR_SOFTNESS_MAX, CONTOUR_SOFTNESS_MIN};
-
 use crate::config::BALLISTICS_MAX;
 use crate::panes::{block, edge_bar, section, switched_section};
 use crate::params::{AnalysisInput, ParamBackend};
@@ -36,9 +34,8 @@ pub(crate) fn span_readout(seconds: f32) -> String {
     format!("{:.1} s", seconds.max(0.0))
 }
 
-/// The spectrogram's look: how soft it is, whether its levels are terraced,
-/// and the texture over it. First on the Analyzer page, being what gets
-/// dialled per song. Its switch is in the heading, because off there is
+/// The spectrogram's look: how soft it is and the texture over it. First on the
+/// Analyzer page, being what gets dialled per song. Its switch is in the heading, because off there is
 /// nothing here that draws; the history it shares with the ribbons is under
 /// View, the axis it is.
 pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumConfig) {
@@ -53,10 +50,10 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
         ),
         |ui| {
             block(ui, "Softness");
-            // No style selector. Plain, Blur and Lava were three presets over three
-            // independent effects — the blur, the terraces and the cloud — and each of
-            // those now has a dial whose zero is off. The measured picture is all three
-            // at zero, and the renderer takes its plain path there, so nothing is paid
+            // No style selector. The retired Plain/Blur/Lava styles were presets over
+            // independent effects, and each surviving one — the blur and the cloud —
+            // now has a dial whose zero is off. The measured picture is both at zero,
+            // and the renderer takes its plain path there, so nothing is paid
             // for an effect that is not drawn. A row whose effect is off is greyed
             // rather than hidden, like every other section of this page, so the page's
             // inventory does not move under a drag.
@@ -65,53 +62,33 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 &mut atmosphere.pitch_softness,
                 &mut atmosphere.time_softness,
             );
-            let contours_visible = atmosphere.cloud_style != harmonigraph_scene::CloudStyle::Stars
-                || atmosphere.cloud_depth < 1.0;
-            ui.add_enabled_ui(contours_visible, |ui| {
-            block(ui, "Level contours");
-            ValueBar::new(&mut atmosphere.contour_strength, 0.0..=1.0, "Contour strength")
-                .percent()
-                .show(ui)
-                .on_hover_text(
-                    "How far the levels are gathered into smooth terraces. 0% leaves the measured \
-                     levels alone and costs nothing. Applies after texture refraction, so the \
-                     same controls set the stepping of the refracted picture.",
-                );
-            ui.add_enabled_ui(atmosphere.contour_strength > 0.0, |ui| {
-                crate::widgets::contours(ui, &mut atmosphere.contours);
-                ValueBar::new(
-                    &mut atmosphere.contour_softness,
-                    CONTOUR_SOFTNESS_MIN..=CONTOUR_SOFTNESS_MAX,
-                    "Contour edge softness",
-                )
-                .percent()
-                .show(ui)
-                .on_hover_text("Blend across adjacent level bands. 0% makes sharp boundaries; higher values soften the transitions.");
-            });
-            }).response.on_disabled_hover_text("Contours affect the underlying picture, which Stars hides at 100% Texture mix.");
             block(ui, "Texture");
             use harmonigraph_scene::CloudStyle;
             choice_row(
-                    ui,
-                    "Style",
-                    &mut atmosphere.cloud_style,
-                    &[
-                        (
-                            CloudStyle::Stars,
-                            "Stars",
-                            "Pinpoint stars at several depths, each taking the color and brightness \
+                ui,
+                "Style",
+                &mut atmosphere.cloud_style,
+                &[
+                    (
+                        CloudStyle::Stars,
+                        "Stars",
+                        "Pinpoint stars at several depths, each taking the color and brightness \
                              of the sound under it as it drifts. Nearer stars are fewer, bigger, \
-                             brighter and faster. Contour levels do not apply to it",
-                        ),
-                        (
-                            CloudStyle::Watercolor,
-                            "Watercolor",
-                            "A field of overlapping patches, each reading the sound near its own \
-                             centre. Fine layer mix blends their levels before Contour levels and the palette",
-                        ),
-                        (CloudStyle::VelvetScales, "Scales", "Soft overlapping scallops, each carrying the light sampled at its center"),
-                    ],
-                );
+                             brighter and faster",
+                    ),
+                    (
+                        CloudStyle::Watercolor,
+                        "Watercolor",
+                        "A field of overlapping patches, each reading the sound near its own \
+                             centre. Fine layer mix blends their levels before the palette",
+                    ),
+                    (
+                        CloudStyle::VelvetScales,
+                        "Scales",
+                        "Soft overlapping scallops, each carrying the light sampled at its center",
+                    ),
+                ],
+            );
             ValueBar::new(&mut atmosphere.cloud_depth, 0.0..=1.0, "Texture mix")
                 .percent().show(ui).on_hover_text(
                     "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",

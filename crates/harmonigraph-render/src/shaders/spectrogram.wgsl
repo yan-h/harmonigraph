@@ -258,13 +258,6 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     ppp: f32,
-    padding: u32,
-    contours: f32,
-    contour_softness: f32,
-    // How far the levels are gathered into terraces, 0 for none. This word was
-    // a style enum: Plain, Blur and Lava are now the blur, the terraces and the
-    // cloud each at zero or not, read off their own dials.
-    contour_strength: f32,
     // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
     // clouds, or the starfield's RGB at `Stars resolution`. 0 works the texture
     // out per pixel in the composite instead.
@@ -408,22 +401,6 @@ fn baked_density(position: vec2<f32>) -> f32 {
 fn softened() -> bool {
     return any(cloud.step != vec2<f32>(0.0));
 }
-// Local style transfer. No history, upload, smoothing or palette work is
-// duplicated when adding a display style here. A residual slope preserves
-// quiet fields below the first terrace; the zero input remains exactly zero.
-//
-// `Contour strength` scales the blend and nothing else, so 100% is what the
-// Lava style drew and 0 is the level untouched — behind the knob, because the
-// `fwidth` pair and the smoothsteps are per-pixel work for a blend of nothing.
-fn style_level(level: f32) -> f32 {
-    if cloud.contour_strength <= 0.0 { return level; }
-    let x = clamp(level, 0.0, 1.0) * cloud.contours;
-    let edge = min(0.5, max(cloud.contour_softness, fwidth(x) * 0.5));
-    let terraces = (floor(x) + smoothstep(0.5 - edge, 0.5 + edge, fract(x))) / cloud.contours;
-    let strength = 0.9 * cloud.contour_strength * smoothstep(0.0, 1.0, x)
-        * (1.0 - smoothstep(0.5, 1.5, fwidth(x)));
-    return mix(level, terraces, strength);
-}
 // Interpolate the authored palette's center samples only after diffusion.
 //
 // **Level 0 is the gradient's own floor, not black.** The bottom of the range
@@ -452,9 +429,6 @@ fn palette_color(level: f32) -> vec3<f32> {
     let a = textureLoad(lut, vec2<u32>(i, 0u), 0).rgb;
     let b = textureLoad(lut, vec2<u32>(min(i + 1u, levels - 1u), 0u), 0).rgb;
     return mix(a, b, fract(x));
-}
-fn density_color(raw_level: f32) -> vec4<f32> {
-    return vec4<f32>(palette_color(style_level(raw_level)), 1.0);
 }
 
 // Cloud space is the pane's, aspect-corrected and independent of DPI, and it is
@@ -529,8 +503,7 @@ fn cloud_light(pt: vec2<f32>) -> f32 {
 // Each glob reads the displaced scalar level, and `Edge pooling` is the one
 // tone adjustment: off by default, darkening along an edge above 0 and
 // lightening below it, and never moving silence off the palette's floor.
-// `Fine layer mix` mixes the levels before the shared Contours and palette
-// transfer.
+// `Fine layer mix` mixes the levels before the shared palette transfer.
 //
 // **Feather is the fuzziness.** A visible glob dissolves at its OWN rim into
 // whatever lies beneath it, reaching half and half exactly on the boundary so
@@ -767,7 +740,7 @@ fn fs_color_memory(in: TileVertex) -> @location(0) vec4<f32> {
     let grid = vec2<f32>(dimensions - 2);
     let pt = (vec2<f32>(texel) + 0.5 - 1.0 - cloud.memory_fraction) / grid * cloud.size;
     let level = cloud_tone_at(pt);
-    let current = vec4<f32>(linear_from_gamma_rgb(density_color(level).rgb), level);
+    let current = vec4<f32>(linear_from_gamma_rgb(palette_color(level)), level);
     let previous = texel + cloud.memory_shift;
     if cloud.memory_valid == 0u || any(previous < vec2<i32>(0)) || any(previous >= dimensions) { return current; }
     return remembered(current, textureLoad(color_memory, previous, 0));
@@ -793,13 +766,13 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // vanished with the blur. The field is built whenever a cloud is drawn now,
     // and at zero softness it holds the measured picture unblurred.
     if cloud.cloud_depth <= 0.0 {
-        return density_color(level);
+        return vec4<f32>(palette_color(level), 1.0);
     }
     let pt = position / cloud.ppp - cloud.origin;
     // The starfield is colour, not a level: `Texture mix` blends the plain
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
-        return vec4<f32>(mix(density_color(level).rgb, star_color(pt).rgb, cloud.cloud_depth), 1.0);
+        return vec4<f32>(mix(palette_color(level), star_color(pt).rgb, cloud.cloud_depth), 1.0);
     }
     if cloud.memory_enabled != 0u {
         let dimensions = cloud.memory_extent;
@@ -810,13 +783,13 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
         }
         // Memory is RGB, so its partial Texture mix is a bounded linear-light
         // blend. Both response times zero retain the original scalar mix below.
-        let base = linear_from_gamma_rgb(density_color(level).rgb);
+        let base = linear_from_gamma_rgb(palette_color(level));
         return vec4<f32>(gamma_from_linear_rgb(mix(base, held, cloud.cloud_depth)), 1.0);
     }
     // Either the tone worked out under this pixel (a tile tap and its
     // refraction), or one bilinear tap into what `fs_cloud_tone` already worked
     // out. The palette lookup and the mix stay HERE whichever it was, so the
-    // base picture, its terraces and the gradient are full resolution even
+    // base picture and the gradient are full resolution even
     // where the texture over them is not.
     var tone: f32;
     if cloud.tone_baked == 1u {
@@ -824,10 +797,10 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     } else {
         tone = cloud_tone_at(pt);
     }
-    // Mix levels before the one shared style/palette lookup: `Texture mix` and
+    // Mix levels before the one shared palette lookup: `Texture mix` and
     // Watercolor's `Fine layer mix` cannot introduce RGB blends outside the
     // authored ramp.
-    return density_color(mix(level, tone, cloud.cloud_depth));
+    return vec4<f32>(palette_color(mix(level, tone, cloud.cloud_depth)), 1.0);
 }
 // Brightness is a display adjustment, after the palette and color memory.
 // It reads the same globs at every blur resolution and never feeds back into
@@ -940,7 +913,7 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // laid far to near, each OVER what is under it, so no core can whiten and no rim
 // can turn another colour. Round 8 of the prototype (`round8.py`, Yan's YB3).
 //
-// The ground under them is the scheme's floor, and contours never reach it.
+// The ground under them is the scheme's floor.
 // Silence is exactly the floor: a star over silence is not drawn.
 //
 // Every length is in STAR PIXELS, a 540th of the pane's height, because the

@@ -42,10 +42,6 @@ struct Cloud {
     metal::float2 size;
     metal::float2 step;
     float ppp;
-    uint padding;
-    float contours;
-    float contour_softness;
-    float contour_strength;
     uint tone_baked;
     metal::float2 drift;
     float cloud_depth;
@@ -251,8 +247,8 @@ float bucket_level(
     float _e18 = locals.level0_;
     float _e21 = locals.level_per_step;
     float _e26 = locals.level_per_midi;
-    float level_7 = (_e18 + (_e21 * v_2)) + (_e26 * midi_1);
-    float mapped = metal::clamp(level_7, 0.0, 1.0);
+    float level_6 = (_e18 + (_e21 * v_2)) + (_e26 * midi_1);
+    float mapped = metal::clamp(level_6, 0.0, 1.0);
     if (density) {
         float _e32 = density_encode(mapped);
         return _e32;
@@ -400,37 +396,6 @@ bool softened(
     return metal::any(_e2 != metal::float2(0.0));
 }
 
-float style_level(
-    float level_2,
-    constant Cloud& cloud
-) {
-    float _e3 = cloud.contour_strength;
-    if (_e3 <= 0.0) {
-        return level_2;
-    }
-    float _e11 = cloud.contours;
-    float x_2 = metal::clamp(level_2, 0.0, 1.0) * _e11;
-    float _e15 = cloud.contour_softness;
-    float _e16 = metal::fwidth(x_2);
-    float edge = metal::min(0.5, metal::max(_e15, _e16 * 0.5));
-    float _e32 = cloud.contours;
-    float terraces = (metal::floor(x_2) + metal::smoothstep(0.5 - edge, 0.5 + edge, metal::fract(x_2))) / _e32;
-    float _e36 = cloud.contour_strength;
-    float _e43 = metal::fwidth(x_2);
-    float strength = ((0.9 * _e36) * metal::smoothstep(0.0, 1.0, x_2)) * (1.0 - metal::smoothstep(0.5, 1.5, _e43));
-    return metal::mix(level_2, terraces, strength);
-}
-
-metal::float4 density_color(
-    float raw_level,
-    constant Cloud& cloud,
-    metal::texture2d<float, metal::access::sample> lut
-) {
-    float _e1 = style_level(raw_level, cloud);
-    metal::float3 _e2 = palette_color(_e1, lut);
-    return metal::float4(_e2, 1.0);
-}
-
 metal::float2 watercolor_tile_uv(
     metal::float2 r_1,
     constant Cloud& cloud
@@ -550,7 +515,7 @@ float wash_cloud_tone(
     metal::texture2d<float, metal::access::sample> cloud_tile_c,
     metal::sampler tile_sampler
 ) {
-    float level_3 = {};
+    float level_2 = {};
     float _e4 = cloud.wash_size;
     float cells = WASH_CELLS / _e4;
     float _e9 = cloud.size.y;
@@ -558,16 +523,16 @@ float wash_cloud_tone(
     metal::float2 _e13 = wash_cell_at(pt_4, cloud);
     WashField _e14 = wash_tile_field(_e13, cloud, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     float _e16 = wash_level(_e14.coarse, pane_per_cell_1, pt_4, cloud, close_light, cloud_sampler);
-    level_3 = _e16;
+    level_2 = _e16;
     float _e20 = cloud.wash_layers;
     if (_e20 > 0.0) {
         float _e26 = wash_level(_e14.fine, pane_per_cell_1 / WASH_LACUNARITY, pt_4, cloud, close_light, cloud_sampler);
         float _e29 = cloud.wash_layers;
         float over = _e29 * _e14.cover;
-        float _e32 = level_3;
-        level_3 = metal::mix(_e32, _e26, over);
+        float _e32 = level_2;
+        level_2 = metal::mix(_e32, _e26, over);
     }
-    float _e34 = level_3;
+    float _e34 = level_2;
     return _e34;
 }
 
@@ -622,7 +587,7 @@ metal::float3 memory_color(
 }
 
 metal::float4 clouded_base(
-    float level_4,
+    float level_3,
     metal::float2 position_1,
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -638,35 +603,35 @@ metal::float4 clouded_base(
     float tone = {};
     float _e4 = cloud.cloud_depth;
     if (_e4 <= 0.0) {
-        metal::float4 _e7 = density_color(level_4, cloud, lut);
-        return _e7;
+        metal::float3 _e7 = palette_color(level_3, lut);
+        return metal::float4(_e7, 1.0);
     }
-    float _e10 = cloud.ppp;
-    metal::float2 _e15 = cloud.origin;
-    metal::float2 pt_6 = (position_1 / metal::float2(_e10)) - _e15;
-    uint _e19 = cloud.cloud_style;
-    if (_e19 == 2u) {
-        metal::float4 _e22 = density_color(level_4, cloud, lut);
-        metal::float4 _e24 = star_color(pt_6, cloud, cloud_sampler, cloud_tone);
-        float _e28 = cloud.cloud_depth;
-        return metal::float4(metal::mix(_e22.xyz, _e24.xyz, _e28), 1.0);
+    float _e12 = cloud.ppp;
+    metal::float2 _e17 = cloud.origin;
+    metal::float2 pt_6 = (position_1 / metal::float2(_e12)) - _e17;
+    uint _e21 = cloud.cloud_style;
+    if (_e21 == 2u) {
+        metal::float3 _e24 = palette_color(level_3, lut);
+        metal::float4 _e25 = star_color(pt_6, cloud, cloud_sampler, cloud_tone);
+        float _e29 = cloud.cloud_depth;
+        return metal::float4(metal::mix(_e24, _e25.xyz, _e29), 1.0);
     }
-    uint _e34 = cloud.memory_enabled;
-    if (_e34 != 0u) {
+    uint _e35 = cloud.memory_enabled;
+    if (_e35 != 0u) {
         metal::float2 dimensions = cloud.memory_extent;
-        metal::float2 _e42 = cloud.size;
-        metal::float2 _e53 = cloud.memory_fraction;
-        metal::float2 uv_2 = ((((pt_6 / _e42) * (dimensions - metal::float2(2.0))) + metal::float2(1.0)) + _e53) / dimensions;
-        metal::float3 _e56 = memory_color(uv_2, cloud, color_memory);
-        float _e59 = cloud.cloud_depth;
-        if (_e59 >= 1.0) {
-            metal::float3 _e62 = gamma_from_linear_rgb(_e56);
-            return metal::float4(_e62, 1.0);
+        metal::float2 _e43 = cloud.size;
+        metal::float2 _e54 = cloud.memory_fraction;
+        metal::float2 uv_2 = ((((pt_6 / _e43) * (dimensions - metal::float2(2.0))) + metal::float2(1.0)) + _e54) / dimensions;
+        metal::float3 _e57 = memory_color(uv_2, cloud, color_memory);
+        float _e60 = cloud.cloud_depth;
+        if (_e60 >= 1.0) {
+            metal::float3 _e63 = gamma_from_linear_rgb(_e57);
+            return metal::float4(_e63, 1.0);
         }
-        metal::float4 _e65 = density_color(level_4, cloud, lut);
-        metal::float3 _e67 = linear_from_gamma_rgb(_e65.xyz);
+        metal::float3 _e66 = palette_color(level_3, lut);
+        metal::float3 _e67 = linear_from_gamma_rgb(_e66);
         float _e70 = cloud.cloud_depth;
-        metal::float3 _e72 = gamma_from_linear_rgb(metal::mix(_e67, _e56, _e70));
+        metal::float3 _e72 = gamma_from_linear_rgb(metal::mix(_e67, _e57, _e70));
         return metal::float4(_e72, 1.0);
     }
     uint _e78 = cloud.tone_baked;
@@ -680,12 +645,12 @@ metal::float4 clouded_base(
     }
     float _e91 = tone;
     float _e94 = cloud.cloud_depth;
-    metal::float4 _e96 = density_color(metal::mix(level_4, _e91, _e94), cloud, lut);
-    return _e96;
+    metal::float3 _e96 = palette_color(metal::mix(level_3, _e91, _e94), lut);
+    return metal::float4(_e96, 1.0);
 }
 
 metal::float4 clouded(
-    float level_5,
+    float level_4,
     metal::float2 position_2,
     constant Cloud& cloud,
     metal::texture2d<float, metal::access::sample> close_light,
@@ -700,7 +665,7 @@ metal::float4 clouded(
 ) {
     bool local = {};
     bool local_1 = {};
-    metal::float4 _e2 = clouded_base(level_5, position_2, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+    metal::float4 _e2 = clouded_base(level_4, position_2, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     uint _e5 = cloud.cloud_style;
     if (!((_e5 != 1u))) {
         float _e13 = cloud.wash_randomness;
@@ -773,7 +738,7 @@ metal::float4 cloud_color(
     metal::sampler tile_sampler,
     constant _mslBufferSizes& _buffer_sizes
 ) {
-    float level_6 = {};
+    float level_5 = {};
     bool _e1 = full_material_memory(cloud);
     if (_e1) {
         metal::float4 _e5 = clouded(0.0, in_3.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
@@ -782,25 +747,25 @@ metal::float4 cloud_color(
     bool _e7 = softened(cloud);
     if (_e7) {
         float _e10 = baked_density(in_3.position.xy, cloud, close_light, cloud_sampler);
-        level_6 = _e10;
+        level_5 = _e10;
     } else {
         float _e11 = heatmap_level(in_3, locals, grid, _buffer_sizes);
-        level_6 = _e11;
+        level_5 = _e11;
     }
-    float _e12 = level_6;
+    float _e12 = level_5;
     metal::float4 _e15 = clouded(_e12, in_3.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
     return _e15;
 }
 
-struct fs_cloud_linearInput {
+struct fs_cloud_gammaInput {
     float slab [[user(loc0), center_perspective]];
     float t [[user(loc1), center_perspective]];
 };
-struct fs_cloud_linearOutput {
+struct fs_cloud_gammaOutput {
     metal::float4 member [[color(0)]];
 };
-fragment fs_cloud_linearOutput fs_cloud_linear(
-  fs_cloud_linearInput varyings [[stage_in]]
+fragment fs_cloud_gammaOutput fs_cloud_gamma(
+  fs_cloud_gammaInput varyings [[stage_in]]
 , metal::float4 position_3 [[position]]
 , constant Cloud& cloud [[buffer(2)]]
 , metal::texture2d<float, metal::access::sample> close_light [[texture(1)]]
@@ -818,6 +783,5 @@ fragment fs_cloud_linearOutput fs_cloud_linear(
 ) {
     const VertexOut in = { position_3, varyings.slab, varyings.t };
     metal::float4 _e1 = cloud_color(in, cloud, close_light, cloud_sampler, color_memory, lut, cloud_tone, locals, grid, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler, _buffer_sizes);
-    metal::float3 _e3 = linear_from_gamma_rgb(_e1.xyz);
-    return fs_cloud_linearOutput { metal::float4(_e3, _e1.w) };
+    return fs_cloud_gammaOutput { _e1 };
 }

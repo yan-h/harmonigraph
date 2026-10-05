@@ -13,9 +13,7 @@ use super::probe::{fresh, themed};
 use crate::widgets::range_probe::collect;
 use crate::*;
 use harmonigraph_core::configuration::{ConfigMutation, ConfigReducer, PolicyConfig, TuningModes};
-use harmonigraph_scene::{
-    Projection, ShadowKernel, SpectralAtmosphere, SpectralReading, SEVENS_LAYER_LIMIT,
-};
+use harmonigraph_scene::{Projection, ShadowKernel, SpectralReading, SEVENS_LAYER_LIMIT};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Edge {
@@ -97,7 +95,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     // reach them. #933's contract is that a size the bar can offer is a size
     // the blob keeps; this is what holds the bar and the clamp to one pair of
     // numbers.
-    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, blur_time_step, contour_strength, contours, contour_softness,
+    poison!(a.spectrum.atmosphere; pitch_softness, time_softness, blur_time_step,
             cloud_depth, color_pickup, color_release, cloud_speed, cloud_direction, wash_pool, wash_pool_width,
             wash_pool_softness
     );
@@ -465,9 +463,6 @@ fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
                 labels.extend([
                     "Pitch softness",
                     "Time softness",
-                    "Contour strength",
-                    "Contour levels",
-                    "Contour edge softness",
                     "Texture mix",
                     "Color pickup",
                     "Color release",
@@ -622,16 +617,6 @@ fn check(edge: Edge) {
         expected.sort_unstable();
         assert_eq!(actual, expected, "{edge:?} {scenario:?}: bar inventory changed");
         for visit in visits {
-            if visit.label == "Contour levels" {
-                assert_eq!(
-                    visit.values,
-                    vec![match edge {
-                        Edge::Low => *visit.range.start(),
-                        Edge::High => *visit.range.end(),
-                        Edge::Fresh => SpectralAtmosphere::default().contours,
-                    }]
-                );
-            }
             for value in &visit.values {
                 if !visit.range.contains(value) {
                     violations.push(format!("{edge:?} {scenario:?}: {visit:?}"));

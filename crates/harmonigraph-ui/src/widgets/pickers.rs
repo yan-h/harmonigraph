@@ -83,52 +83,6 @@ pub(crate) fn skin_color(
     });
 }
 
-pub(crate) fn contours(ui: &mut Ui, levels: &mut f32) {
-    use harmonigraph_scene::{CONTOURS_MAX, CONTOURS_MIN};
-    super::label(ui, "Contour levels");
-    let scale = theme::ui_scale(ui.ctx());
-    let inline = super::bar::bar_width(ui) >= 220.0 * scale;
-    let mut preview = None;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.y;
-        if inline {
-            preview = Some(
-                ui.allocate_exact_size(
-                    egui::vec2(112.0 * scale, theme::row_height(scale)),
-                    egui::Sense::hover(),
-                )
-                .0,
-            );
-        }
-        super::ValueBar::new(levels, CONTOURS_MIN..=CONTOURS_MAX, "Contour levels")
-            .caption("Levels")
-            .integer()
-            .show(ui)
-            .on_hover_text("Contour levels · drag to adjust, double-click to type");
-    });
-    let n = *levels as i32;
-    let rect = preview.unwrap_or_else(|| {
-        ui.allocate_exact_size(
-            egui::vec2(super::bar::bar_width(ui), theme::row_height(scale)),
-            egui::Sense::hover(),
-        )
-        .0
-    });
-    let mut mesh = egui::Mesh::default();
-    for i in 0..n {
-        let left = rect.left() + rect.width() * i as f32 / n as f32;
-        let right = rect.left() + rect.width() * (i + 1) as f32 / n as f32;
-        mesh.add_colored_rect(
-            egui::Rect::from_min_max(
-                egui::pos2(left, rect.top()),
-                egui::pos2(right, rect.bottom()),
-            ),
-            theme::well().lerp_to_gamma(theme::text(), i as f32 / (n - 1) as f32),
-        );
-    }
-    ui.painter().add(egui::Shape::mesh(mesh));
-}
-
 pub(crate) fn spectrum_edge(ui: &mut Ui, edge: &mut crate::SpectralOrientation) {
     use crate::SpectralOrientation::*;
     super::label(ui, "Spectrum edge");

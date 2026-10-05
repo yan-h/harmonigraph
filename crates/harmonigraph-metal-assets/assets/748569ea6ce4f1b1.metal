@@ -27,10 +27,6 @@ struct Cloud {
     metal::float2 size;
     metal::float2 step;
     float ppp;
-    uint padding;
-    float contours;
-    float contour_softness;
-    float contour_strength;
     uint tone_baked;
     metal::float2 drift;
     float cloud_depth;

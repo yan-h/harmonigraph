@@ -13,7 +13,7 @@ under CLAP it also configures adaptive tuning and each connected Tune instance.
 | --- | --- |
 | Tuning | Lattice tuning and temperaments, note matching, retuning engine and saved maps, adaptive tuning and connected tuning sources. |
 | Lattice | **View**: camera, seventh layers. Independent sections for **Note layers**, **Octave layout**, **Note animation**, **Note labels**, **Audio ring**, **Idle lattice**, **Note bloom**, **Background glow**, **Glow pattern**, **Glow material**, and **Shadows**. |
-| Analyzer | **Spectrogram**: pitch/time softness, level contours, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
+| Analyzer | **Spectrogram**: pitch/time softness, Watercolor, Scales or Stars texture. **MIDI ribbons**: width, held-note extension, note names and bloom. **View**: dock, spectrum edge, shared frequency range, axis label scale and history, spectrum outline and backdrop. **Analysis**: audio input, frequency resolution and averaging, level mapping and tilt, live response. **Spiral** bloom. **Shadows** for Analyzer/Spiral notes and labels. |
 | Mappings | MIDI note colors by pitch and audio colors by level, with separate ranges and previews. **MIDI note intensity** maps velocity, gain, pressure and timbre to opacity or thickness. |
 | Video | Record take, output frame and size, history mode, re-rendering, and an interactive composition preview. |
 | System | **Editor and exports**: lattice resolution and spectrogram time sampling. **Editor only**: frame limit and performance overlay; interface scale, interface lightness, tint and accent colors, tab-bar visibility and layout reset. |
@@ -73,13 +73,10 @@ drag a bar or double-click it to type in the displayed units.
 | Star size, spacing and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size and spacing use a logarithmic vertical scale; speed is linear. |
 | Shadows | Width, Darkness, and Falloff (Contour) or Spread (Blur) bars sit beside a rendered shadow around a sample shape. The sample is scaled to fit; the shadow on each drawn shape depends on its size and outline. |
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
-| Contour levels | Drag the integer slider from 2 to 16, or double-click to type; the band preview shows the count. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |
 
 These controls edit the existing saved values.
 Saved keys are unchanged.
-Contour levels default to 16 and are capped there;
-older values above 16 are clamped when loaded.
 
 ## Condensed appearance controls
 
@@ -247,7 +244,6 @@ Fresh projects use **Balanced** frequency resolution (8192 samples); saved Fast 
 Fast trades pitch precision for response time,
 and its wider bins can lose low audio-ring fundamental wedges while their harmonics still light the pitch class.
 The cutoff depends on sample rate and the material.
-Fresh **Contour strength** is 0%, so textures start smooth.
 **Silent slice brightness** lives in Note layers and colours silent MIDI octave slices on sounding or fading nodes,
 plus the audio ring’s quiet endpoint.
 Idle lattice positions use the separate label/cross brightness.

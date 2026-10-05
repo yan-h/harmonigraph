@@ -903,7 +903,7 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
     // under the Display pane's headers is layout, not this test's business.
     for (what, grab) in [
         ("the analyzer picture", Grab::Point(egui::pos2(600.0, 200.0))),
-        ("a settings bar", Grab::Bar("Contour strength")),
+        ("a settings bar", Grab::Bar("Texture mix")),
     ] {
         for lose_it in [Lose::Pointer, Lose::Focus, Lose::Nothing] {
             let moved = scroll_settings_after_lost_drag(grab, lose_it).0;
@@ -926,13 +926,13 @@ fn a_drag_that_loses_its_release_does_not_strand_the_wheel() {
 /// outside the window ends that way every time.
 #[test]
 fn the_console_names_a_drag_the_wheel_had_to_end() {
-    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Contour strength"), Lose::Nothing);
+    let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Texture mix"), Lose::Nothing);
     assert!(
         logged.iter().any(|line| line.starts_with("wheel: a drag on")),
         "the wheel ended a stranded drag without saying so: {logged:?}",
     );
     for quiet in [Lose::Pointer, Lose::Focus] {
-        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Contour strength"), quiet);
+        let (_, logged) = scroll_settings_after_lost_drag(Grab::Bar("Texture mix"), quiet);
         assert!(
             !logged.iter().any(|line| line.starts_with("wheel:")),
             "{quiet:?} is an ordinary end of a gesture and reported one: {logged:?}",
@@ -964,8 +964,6 @@ enum Grab {
 /// told along the way.
 fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>) {
     let mut state = fresh();
-    // Contours must affect the picture for their bar to accept a drag.
-    state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
@@ -1074,12 +1072,12 @@ fn scroll_settings_after_lost_drag(grab: Grab, lose: Lose) -> (f32, Vec<String>)
 #[test]
 fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     let mut state = fresh();
-    // Contours must affect the picture for their bar to accept a drag.
+    // At the bottom of its range, so a drag to the right has somewhere to go.
     state.picture.appearance.spectrum.atmosphere.cloud_depth = 0.0;
     // The Analyzer settings.
     let tab = panes::Tab::AnalyzerSettings;
     state.workspace.layout.select(tab);
-    // Tall enough that Contour strength is actually on screen below the view,
+    // Tall enough that Texture mix is actually on screen below the view,
     // analysis and level-mapping controls; a clipped bar cannot start this drag.
     let screen_h = 1800.0;
     let mut h = DockHarness::at(egui::vec2(1000.0, screen_h));
@@ -1103,19 +1101,19 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
     // state read below is the one the frames wrote.
     let ctx = h.ctx.clone();
     let mut frame = |state: &mut SharedState, events: Vec<egui::Event>| h.frame(state, events);
-    // Contour strength: a plain 0..=1 bar, so where the
+    // Texture mix: a plain 0..=1 bar, so where the
     // pointer is says what the value should be, and the far end of the range is
     // what an off-window drag to the right must arrive at.
     let out = frame(&mut state, vec![]);
     let name =
-        bar_named(&out, "Contour strength").expect("the Contour bar is drawn on the Analyzer page");
+        bar_named(&out, "Texture mix").expect("the Texture mix bar is drawn on the Analyzer page");
     let on_the_bar = name + egui::vec2(2.0, 4.0);
-    let before = state.picture.appearance.spectrum.atmosphere.contour_strength;
+    let before = state.picture.appearance.spectrum.atmosphere.cloud_depth;
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar)]);
     frame(&mut state, vec![press(on_the_bar, true)]);
     frame(&mut state, vec![egui::Event::PointerMoved(on_the_bar + egui::vec2(60.0, 0.0))]);
-    assert!(ctx.dragged_id().is_some(), "the press on the Contour bar started no drag");
-    let inside = state.picture.appearance.spectrum.atmosphere.contour_strength;
+    assert!(ctx.dragged_id().is_some(), "the press on the Texture mix bar started no drag");
+    let inside = state.picture.appearance.spectrum.atmosphere.cloud_depth;
     assert!(inside != before, "the bar did not follow the pointer inside the window");
 
     // Out past the right edge of the window, with the button still down: the
@@ -1126,7 +1124,7 @@ fn a_bar_dragged_past_the_window_edge_keeps_tracking_the_pointer() {
         "the bar let go of the drag when the pointer left the window",
     );
     assert_eq!(
-        state.picture.appearance.spectrum.atmosphere.contour_strength, 1.0,
+        state.picture.appearance.spectrum.atmosphere.cloud_depth, 1.0,
         "the bar stopped following the pointer at the window edge (it reads {inside} still)",
     );
 
