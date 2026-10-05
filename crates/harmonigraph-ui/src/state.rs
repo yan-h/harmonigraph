@@ -73,8 +73,8 @@ pub struct TakeState {
     pub exports: Vec<harmonigraph_take::render::ExportJob>,
     pub export_actions: Vec<ExportAction>,
     pub export_paths: String,
-    /// Empty selects the current appearance; otherwise a named look.
-    pub export_look: Option<String>,
+    /// Empty selects the current appearance; otherwise a slot.
+    pub export_look: Option<usize>,
     pub export_recorded: bool,
     pub export_error: String,
 }
@@ -492,7 +492,7 @@ impl SharedState {
             folded_sections: self.workspace.interaction.folded_sections.clone(),
             appearance: self.picture.appearance.clone(),
             camera_presets: self.workspace.interaction.camera_presets.clone(),
-            saved_looks: self.workspace.interaction.appearance_editor.saved.clone(),
+            look_slots: self.workspace.interaction.appearance_editor.slots.clone(),
             fps_cap: self.workspace.interaction.fps_cap,
             ui_scale: self.workspace.interaction.ui_scale,
             frameless: self.workspace.interaction.frameless,
@@ -550,10 +550,10 @@ impl SharedState {
         self.workspace.window_size_change = egui::Vec2::ZERO;
         self.workspace.interaction.folded_sections = persist.folded_sections;
         self.picture.install_appearance(appearance);
-        let mut saved_looks = persist.saved_looks;
-        saved_looks.sanitize();
+        let mut look_slots = persist.look_slots;
+        look_slots.sanitize();
         self.workspace.interaction.appearance_editor =
-            crate::appearance_edit::AppearanceEditor::restore(saved_looks);
+            crate::appearance_edit::AppearanceEditor::restore(look_slots);
         self.workspace.interaction.camera_presets = persist.camera_presets;
         for preset in &mut self.workspace.interaction.camera_presets {
             preset.sanitize();
@@ -647,7 +647,7 @@ pub(crate) struct UiPersist {
     pub(crate) folded_sections: std::collections::BTreeSet<String>,
     pub(crate) appearance: crate::AppearanceDocument,
     pub(crate) camera_presets: Vec<CameraPreset>,
-    pub(crate) saved_looks: crate::appearance_edit::SavedLooks,
+    pub(crate) look_slots: crate::appearance_edit::Slots,
     /// A missing cap reads as uncapped.
     pub(crate) fps_cap: Option<f32>,
     /// Chrome defaults to the design size, shared with Interaction.
@@ -676,7 +676,7 @@ impl Default for UiPersist {
             folded_sections: Default::default(),
             appearance: crate::AppearanceDocument::default(),
             camera_presets: Vec::new(),
-            saved_looks: Default::default(),
+            look_slots: Default::default(),
             fps_cap: None,
             ui_scale: default_ui_scale(),
             frameless: false,

@@ -603,6 +603,7 @@ fn export_queue(
     appearance: &crate::AppearanceDocument,
     interaction: &mut crate::Interaction,
 ) {
+    use crate::appearance_edit::{slot_name, SLOT_COUNT};
     use crate::ExportAction;
     use harmonigraph_take::render::ExportStatus;
     egui::CollapsingHeader::new("Exports").show(ui, |ui| {
@@ -610,11 +611,11 @@ fn export_queue(
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"));
         ui.checkbox(&mut interaction.take.export_recorded, "Use each take's recorded appearance");
         if !interaction.take.export_recorded {
-            let selected = interaction.take.export_look.as_deref().unwrap_or("Current appearance");
+            let selected = interaction.take.export_look.map_or("Current appearance".into(), slot_name);
             egui::ComboBox::from_id_salt("export-look").selected_text(selected).width(ui.available_width()).truncate().show_ui(ui, |ui| {
                 ui.selectable_value(&mut interaction.take.export_look, None, "Current appearance");
-                for name in interaction.appearance_editor.saved.named.keys() {
-                    ui.selectable_value(&mut interaction.take.export_look, Some(name.clone()), name);
+                for slot in 0..SLOT_COUNT {
+                    ui.selectable_value(&mut interaction.take.export_look, Some(slot), slot_name(slot));
                 }
             });
         }
@@ -702,13 +703,8 @@ pub(crate) fn capture_export(
             .unwrap_or_default()
     } else {
         let mut captured = appearance.clone();
-        if let Some(name) = &interaction.take.export_look {
-            let look = interaction
-                .appearance_editor
-                .saved
-                .named
-                .get(name)
-                .ok_or_else(|| format!("saved look {name} was deleted; choose another look"))?;
+        let slots = &interaction.appearance_editor.slots;
+        if let Some(look) = interaction.take.export_look.and_then(|slot| slots.stored(slot)) {
             look.apply(&mut captured);
         }
         captured
@@ -1394,15 +1390,7 @@ mod export_tests {
             modifiers: egui::Modifiers::NONE,
         };
         let first = frame(vec![]);
-        let at = text(&first, "Looks");
-        frame(vec![egui::Event::PointerMoved(at)]);
-        frame(vec![press(at, true)]);
-        frame(vec![press(at, false)]);
-        for _ in 0..5 {
-            frame(vec![]);
-        }
-        let library = frame(vec![]);
-        let at = text(&library, "Exports");
+        let at = text(&first, "Exports");
         frame(vec![egui::Event::PointerMoved(at)]);
         frame(vec![press(at, true)]);
         frame(vec![press(at, false)]);
