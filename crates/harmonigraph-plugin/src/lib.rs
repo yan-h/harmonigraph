@@ -19,7 +19,13 @@ mod editor;
 mod lattice_maps;
 
 /// Identity of this plugin build, supplied to the shared performance overlay.
-pub(crate) const BUILD_TAG: &str = env!("LATTICE_BUILD_TAG");
+pub(crate) const BUILD_TAG: &str = BUILD_TAG_NUL.split_at(BUILD_TAG_NUL.len() - 1).0;
+
+/// The bytes `BUILD_TAG` points into, NUL-terminated so that `load-plugin.sh`
+/// can tell where the tag ends. A bare `&str` has no terminator, and the linker
+/// packs the next string straight after it: one starting with a hex digit read
+/// as more of the sha (#1428, #1430).
+const BUILD_TAG_NUL: &str = concat!(env!("LATTICE_BUILD_TAG"), "\0");
 
 #[cfg(all(feature = "startup-probe", target_os = "macos"))]
 pub use editor::startup_probe::run as editor_startup_probe;

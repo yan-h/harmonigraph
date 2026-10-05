@@ -103,9 +103,13 @@ find_dylib() {
 # The plugin's build.rs stamps the commit the build sat on. The current HEAD
 # can move after a build (including a rebase), so the log cannot tell us which
 # commit the binary actually carries.
+#
+# The plugin stores the tag NUL-terminated, so the sha is anchored to the end
+# of its `strings` line: unanchored, the next string's leading hex digits read
+# as more of the sha (#1428).
 build_tag() {
   local name="${2#worktree-}"
-  strings -a "$1" 2>/dev/null | grep -oE "$name @[0-9a-f]{7,40}" | head -1
+  strings -a "$1" 2>/dev/null | grep -oE "$name @[0-9a-f]{7,40}\$" | head -1
 }
 
 # Echo the display fields for worktree index $1 as:
