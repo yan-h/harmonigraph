@@ -227,8 +227,8 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
     let shape = unpack2x16float(t.w);
     // A star narrower than a texel would show only where a texel centre fell
-    // inside it: it is drawn at the floor instead, dimmed by the ratio of
-    // the areas so it keeps its light.
+    // inside it: one under the floor's radius is drawn at it instead, dimmed
+    // by the ratio of the areas so it keeps its light.
     let inverse = min(shape.x, s.inverse_floor);
     let dim = inverse / shape.x;
     let cover = star_profile(s, dist * inverse) * shape.y * dim * dim;

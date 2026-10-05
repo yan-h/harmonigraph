@@ -25,7 +25,7 @@ The nine-cell read is drawn inline in the same pass.
 The image evaluates each star at its texel centres,
 so a star narrower than a texel would show only where a centre fell inside it,
 and blink as it drifted past them (#1446).
-Every star is therefore drawn at least one texel wide,
+Every star is therefore drawn with a radius of at least one texel,
 dimmed by the ratio of the areas so it keeps its light,
 and a depth whose stars that floor widens past its read takes the next read that holds them.
 At the fresh dials the farthest depth moves from four cells to nine on a pane under about 610 device pixels tall over the resolution:

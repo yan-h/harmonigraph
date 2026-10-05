@@ -1380,9 +1380,9 @@ impl Targets {
         // height every four minutes.
         let offset = cloud_offset(settings, atmosphere.now);
         let drift = cloud_drift(settings, offset, tile);
+        let image = self.tone_size().unwrap_or([1, 1]);
         let slices = stars
             .map(|layout| {
-                let image = self.tone_size().unwrap_or([1, 1]);
                 star_slices(
                     settings.stars,
                     settings.cloud_direction,
@@ -1528,10 +1528,7 @@ impl Targets {
             star_size_variation: settings.stars.star_size_variation,
             star_pad0: 0,
             star_pad1: 0,
-            star_image: {
-                let [width, height] = self.tone_size().unwrap_or([1, 1]);
-                Float4([width as f32, height as f32, 0.0, 0.0])
-            },
+            star_image: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
             memory_valid: u32::from(memory_valid),
@@ -1688,9 +1685,7 @@ mod tests {
     fn the_star_image_rounds_each_axis_without_losing_tiny_targets() {
         let fresh = harmonigraph_scene::StarSettings::default();
         assert_eq!(super::star_image_size([161, 121], fresh), [121, 91]);
-        for (resolution, wanted) in
-            [(0.25, [1, 2]), (1.0 / 3.0, [1, 2]), (0.5, [2, 3]), (1.0, [3, 5])]
-        {
+        for (resolution, wanted) in [(0.25, [1, 2]), (0.5, [2, 3]), (0.75, [3, 4]), (1.0, [3, 5])] {
             let settings =
                 harmonigraph_scene::StarSettings { star_resolution: resolution, ..fresh };
             assert_eq!(super::star_image_size([3, 5], settings), wanted);
