@@ -66,8 +66,7 @@ struct Cloud {
 struct TileVertex {
     metal::float4 position;
     metal::float2 fraction;
-    uint layer;
-    char _pad3[4];
+    char _pad2[8];
 };
 constant float CLOUD_TILE_ROT_SIN = 0.6;
 constant float CLOUD_TILE_ROT_COS = 0.8;
@@ -328,7 +327,6 @@ metal::float2 star_image(
 
 struct fs_starsInput {
     metal::float2 fraction [[user(loc0), center_perspective]];
-    uint layer [[user(loc1), flat]];
 };
 struct fs_starsOutput {
     metal::float4 member [[color(0)]];
@@ -340,7 +338,7 @@ fragment fs_starsOutput fs_stars(
 , metal::texture2d<float, metal::access::sample> lut [[texture(0)]]
 , metal::texture2d<uint, metal::access::sample> star_atlas [[texture(5)]]
 ) {
-    const TileVertex in = { position, varyings.fraction, varyings.layer };
+    const TileVertex in = { position, varyings.fraction };
     metal::float2 _e3 = star_image(cloud);
     metal::float2 _e5 = star_size(cloud);
     metal::float4 _e7 = star_layers((in.position.xy / _e3) * _e5, cloud, lut, star_atlas);

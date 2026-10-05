@@ -40,8 +40,6 @@ struct Settings {
 };
 struct TileVertex {
     metal::float4 position;
-    uint layer;
-    char _pad2[12];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -80,20 +78,18 @@ metal::float4 star_color(
 }
 
 struct fs_lattice_starsInput {
-    uint layer [[user(loc0), flat]];
 };
 struct fs_lattice_starsOutput {
     metal::float4 member [[color(0)]];
 };
 fragment fs_lattice_starsOutput fs_lattice_stars(
-  fs_lattice_starsInput varyings [[stage_in]]
-, metal::float4 position [[position]]
+  metal::float4 position [[position]]
 , constant Settings& settings [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
 , metal::sampler cloud_sampler [[sampler(0)]]
 , metal::texture2d<float, metal::access::sample> cloud_tone [[texture(2)]]
 ) {
-    const TileVertex in = { position, varyings.layer };
+    const TileVertex in = { position };
     metal::float4 result = {};
     metal::float2 _e8 = settings.stars.size;
     metal::float4 raw = source.sample(cloud_sampler, in.position.xy / _e8, metal::level(0.0));

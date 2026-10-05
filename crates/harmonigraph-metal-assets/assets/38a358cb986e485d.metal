@@ -6,8 +6,6 @@ using metal::uint;
 
 struct TileVertex {
     metal::float4 position;
-    uint layer;
-    char _pad2[12];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -31,13 +29,11 @@ struct vs_starsInput {
 };
 struct vs_starsOutput {
     metal::float4 position [[position]];
-    uint layer [[user(loc0), flat]];
 };
 vertex vs_starsOutput vs_stars(
   uint vertex_ [[vertex_id]]
-, uint layer [[instance_id]]
 ) {
     metal::float2 uv = metal::float2(static_cast<float>((vertex_ << 1u) & 2u), static_cast<float>(vertex_ & 2u));
-    const auto _tmp = TileVertex {metal::float4((uv * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0), layer};
-    return vs_starsOutput { _tmp.position, _tmp.layer };
+    const auto _tmp = TileVertex {metal::float4((uv * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0)};
+    return vs_starsOutput { _tmp.position };
 }

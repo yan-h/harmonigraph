@@ -7,8 +7,7 @@ using metal::uint;
 struct TileVertex {
     metal::float4 position;
     metal::float2 fraction;
-    uint layer;
-    char _pad3[4];
+    char _pad2[8];
 };
 constant float CLOUD_TILE_ROT_SIN = 0.6;
 constant float CLOUD_TILE_ROT_COS = 0.8;
@@ -40,18 +39,15 @@ struct vs_cloud_tileInput {
 struct vs_cloud_tileOutput {
     metal::float4 position [[position]];
     metal::float2 fraction [[user(loc0), center_perspective]];
-    uint layer [[user(loc1), flat]];
 };
 vertex vs_cloud_tileOutput vs_cloud_tile(
   uint vertex_ [[vertex_id]]
-, uint layer [[instance_id]]
 ) {
     TileVertex out = {};
     metal::float2 uv = metal::float2(static_cast<float>((vertex_ << 1u) & 2u), static_cast<float>(vertex_ & 2u));
     out.position = metal::float4((uv * metal::float2(2.0, -2.0)) + metal::float2(-1.0, 1.0), 0.0, 1.0);
     out.fraction = uv;
-    out.layer = layer;
-    TileVertex _e26 = out;
-    const auto _tmp = _e26;
-    return vs_cloud_tileOutput { _tmp.position, _tmp.fraction, _tmp.layer };
+    TileVertex _e24 = out;
+    const auto _tmp = _e24;
+    return vs_cloud_tileOutput { _tmp.position, _tmp.fraction };
 }

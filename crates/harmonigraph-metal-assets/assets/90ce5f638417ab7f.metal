@@ -40,8 +40,6 @@ struct Settings {
 };
 struct TileVertex {
     metal::float4 position;
-    uint layer;
-    char _pad2[12];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -271,18 +269,16 @@ metal::float2 star_image(
 }
 
 struct fs_starsInput {
-    uint layer [[user(loc0), flat]];
 };
 struct fs_starsOutput {
     metal::float4 member [[color(0)]];
 };
 fragment fs_starsOutput fs_stars(
-  fs_starsInput varyings [[stage_in]]
-, metal::float4 position [[position]]
+  metal::float4 position [[position]]
 , constant Settings& settings [[buffer(0)]]
 , metal::texture2d<uint, metal::access::sample> star_atlas [[texture(1)]]
 ) {
-    const TileVertex in = { position, varyings.layer };
+    const TileVertex in = { position };
     metal::float2 _e3 = star_image(settings);
     metal::float2 _e5 = star_size(settings);
     metal::float4 _e7 = star_layers((in.position.xy / _e3) * _e5, settings, star_atlas);

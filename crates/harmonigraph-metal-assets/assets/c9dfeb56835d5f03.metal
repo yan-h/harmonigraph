@@ -51,8 +51,6 @@ struct StarDraw {
 };
 struct TileVertex {
     metal::float4 position;
-    uint layer;
-    char _pad2[12];
 };
 constant float DISTANCE_KIND = 1.0;
 constant float DISTANCE_COVERAGE_KIND = 2.0;
@@ -279,19 +277,17 @@ int naga_div(int lhs, int rhs) {
 
 
 struct fs_star_bakeInput {
-    uint layer [[user(loc0), flat]];
 };
 struct fs_star_bakeOutput {
     metal::uint4 member [[color(0)]];
 };
 fragment fs_star_bakeOutput fs_star_bake(
-  fs_star_bakeInput varyings [[stage_in]]
-, metal::float4 position [[position]]
+  metal::float4 position [[position]]
 , constant Settings& settings [[buffer(0)]]
 , metal::texture2d<float, metal::access::sample> source [[texture(0)]]
 , metal::sampler cloud_sampler [[sampler(0)]]
 ) {
-    const TileVertex in = { position, varyings.layer };
+    const TileVertex in = { position };
     uint k = 0u;
     bool local = {};
     metal::int2 texel = naga_f2i32(metal::floor(in.position.xy));

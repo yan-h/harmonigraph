@@ -88,8 +88,7 @@ struct StarDraw {
 struct TileVertex {
     metal::float4 position;
     metal::float2 fraction;
-    uint layer;
-    char _pad3[4];
+    char _pad2[8];
 };
 constant float CLOUD_TILE_ROT_SIN = 0.6;
 constant float CLOUD_TILE_ROT_COS = 0.8;
@@ -582,7 +581,6 @@ int naga_div(int lhs, int rhs) {
 
 struct fs_color_memoryInput {
     metal::float2 fraction [[user(loc0), center_perspective]];
-    uint layer [[user(loc1), flat]];
 };
 struct fs_color_memoryOutput {
     metal::float4 member [[color(0)]];
@@ -601,7 +599,7 @@ fragment fs_color_memoryOutput fs_color_memory(
 , metal::texture2d<float, metal::access::sample> cloud_tile_c [[texture(7)]]
 , metal::sampler tile_sampler [[sampler(1)]]
 ) {
-    const TileVertex in = { position, varyings.fraction, varyings.layer };
+    const TileVertex in = { position, varyings.fraction };
     uint k = 0u;
     bool local = {};
     bool local_1 = {};

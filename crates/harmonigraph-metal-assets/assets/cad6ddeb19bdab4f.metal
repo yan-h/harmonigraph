@@ -93,8 +93,7 @@ struct Cloud {
 struct TileVertex {
     metal::float4 position;
     metal::float2 fraction;
-    uint layer;
-    char _pad3[4];
+    char _pad2[8];
 };
 struct TileBake {
     metal::float4 a;
@@ -443,7 +442,6 @@ WashField wash_field(
 
 struct fs_cloud_tileInput {
     metal::float2 fraction [[user(loc0), center_perspective]];
-    uint layer [[user(loc1), flat]];
 };
 struct fs_cloud_tileOutput {
     metal::float4 a [[color(0)]];
@@ -455,7 +453,7 @@ fragment fs_cloud_tileOutput fs_cloud_tile(
 , metal::float4 position [[position]]
 , constant Cloud& cloud [[buffer(2)]]
 ) {
-    const TileVertex in = { position, varyings.fraction, varyings.layer };
+    const TileVertex in = { position, varyings.fraction };
     TileBake out = {};
     uint _e3 = cloud.tile_cells;
     int period_8 = static_cast<int>(_e3);
