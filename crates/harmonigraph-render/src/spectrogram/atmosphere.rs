@@ -781,7 +781,7 @@ fn tile_pipeline(
 /// The one thing here that does NOT follow the pane: every other target is
 /// rewritten from scratch each frame, where refilling these three is a whole cell
 /// walk. So they are carried across a rebuild the light's size forces (see
-/// `SpectrogramCallback::prepare`), and [`Self::baked`] is what says a bake is
+/// [`Targets::prepare`]), and [`Self::baked`] is what says a bake is
 /// owed rather than a reallocation.
 pub(super) struct Tile {
     views: [wgpu::TextureView; 3],
@@ -938,7 +938,7 @@ fn memory_key(
 pub(super) struct Targets {
     #[cfg(test)]
     pub encoded_passes: std::sync::atomic::AtomicU32,
-    pub size: [u32; 2],
+    shape: Shape,
     pub source_view: wgpu::TextureView,
     pub coverage_vertices: wgpu::Buffer,
     /// The whole-pane quad for the material and reduced-tone passes.
@@ -950,13 +950,11 @@ pub(super) struct Targets {
     views: [wgpu::TextureView; 2],
     /// The precomposite and its size: reduced scalar cloud tone or the star
     /// image at `Stars resolution`. None works the texture out per pixel in
-    /// the composite.
-    /// Part of the allocation key beside [`Self::size`] — see
-    /// `SpectrogramCallback::prepare`.
+    /// the composite. Allocated at [`Shape::tone`].
     pub tone: Option<(wgpu::TextureView, [u32; 2])>,
     tile: Option<Tile>,
-    /// The star atlas and its size, `None` unless the starfield is drawn. Part
-    /// of the allocation key, sized by [`star_atlas_size`].
+    /// The star atlas and its size, `None` unless the starfield is drawn.
+    /// Allocated at [`Shape::stars`].
     stars: Option<(wgpu::TextureView, [u32; 2])>,
     source_uniform: wgpu::Buffer,
     pub source_group: wgpu::BindGroup,
@@ -975,38 +973,158 @@ pub(super) struct Targets {
     memory: Option<Memory>,
 }
 
-/// Target shapes for the light field, optional tone/tile, star atlas and
-/// retained color. Each follows its own sampling grid, so `prepare` compares
-/// every shape before rebuilding. Cached tiles and color history can survive
-/// allocation changes in the other fields.
-pub(super) struct Allocation {
+/// The sizes a [`Targets`] is allocated at, and so the whole of what decides a
+/// rebuild: [`Targets::prepare`] compares this and nothing else.
+///
+/// Sizes only, because a rebuild replaces every target and bind group at once.
+/// The tile is here as its texel size alone: the rest of its [`TileKey`]
+/// decides a rebake, and carrying it here would rebuild everything at the rate
+/// a walk dial moves. Each size follows its own sampling grid; a rebuild still
+/// carries the tile's bake and the colour history where their own sizes fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Shape {
+    /// The light field, which the blur and the material passes share.
     pub size: [u32; 2],
+    /// The precomposite: reduced scalar cloud tone or the star image at
+    /// `Stars resolution`. None works the texture out per pixel in the
+    /// composite.
     pub tone: Option<[u32; 2]>,
-    pub tile: Option<TileKey>,
-    pub carried: Option<Tile>,
+    /// One side of the square tile, in texels ([`TileKey::texels`]).
+    pub tile: Option<u32>,
+    /// The star atlas, sized by [`star_atlas_size`]; `None` unless the
+    /// starfield is drawn.
     pub stars: Option<[u32; 2]>,
+    /// The colour history's bucketed allocation ([`memory_allocation_size`]).
     pub memory: Option<[u32; 2]>,
-    pub carried_memory: Option<Memory>,
+}
+
+/// What one frame's cloud is drawn into and from: the [`Shape`] to allocate,
+/// and the per-frame inputs worked out on the way to it.
+#[derive(Clone, Copy)]
+pub(super) struct Plan {
+    pub shape: Shape,
+    /// The tile this frame wants baked ([`tile_key`]).
+    pub tile: Option<TileKey>,
+    /// The starfield's layout ([`stars`]), `Some` exactly where it is drawn.
+    pub stars: Option<StarLayout>,
+    /// The colour history's logical texel grid, inside its bucketed
+    /// [`Shape::memory`] allocation.
+    pub memory_extent: Option<[u32; 2]>,
+}
+
+impl Plan {
+    /// The plan for a pane of `pixels`, or `None` where the light field would
+    /// have no texels. `held` is the pane's current targets: the light field
+    /// and the star atlas each hold their size within a band of what is asked.
+    /// `limit` is the device's largest texture side.
+    pub fn new(
+        pixels: [u32; 2],
+        ppp: f32,
+        atmosphere: SpectrogramAtmosphere,
+        sampling: CloudSampling,
+        held: Option<&Targets>,
+        limit: u32,
+    ) -> Option<Self> {
+        let held = held.map(Targets::shape);
+        let size =
+            retained_size(source_size(pixels, ppp, atmosphere), pixels, held.map(|held| held.size));
+        if size.contains(&0) {
+            return None;
+        }
+        let settings = atmosphere.settings.sanitized();
+        let tile = tile_key(pixels, atmosphere, sampling.tile_cells);
+        let stars = stars(pixels, atmosphere);
+        // A starfield always draws through its image, sized from the same
+        // layout as its atlas. It keeps pane-relative texel addressing; the
+        // scissor bounds the work.
+        let reduced = match stars {
+            Some(_) => Some(star_image_size(pixels, settings.stars)),
+            None => tone_size(pixels, ppp, atmosphere, sampling.pixel_points),
+        };
+        let star_size =
+            stars.map(|layout| star_atlas_size(layout.size(), held.and_then(|held| held.stars)));
+        // Light, reduced tone, tile and history have separate sizing rules.
+        // A scalar-field resize must not erase color memory.
+        let memory_extent = (settings.effects().cloud
+            && (settings.color_pickup > 0.0 || settings.color_release > 0.0))
+            .then(|| {
+                star_size.unwrap_or_else(|| reduced.unwrap_or(pixels).map(|n| (n + 2).min(limit)))
+            });
+        // Watercolor with a history works its tone out per history texel in
+        // `fs_color_memory` and displays the history, so the reduced size is
+        // the history's grid and a tone target would be drawn into by nothing.
+        // Scales draw their tone and then remember it, and Stars composite
+        // every depth into it.
+        let tone = reduced.filter(|_| {
+            memory_extent.is_none()
+                || settings.cloud_style != harmonigraph_scene::CloudStyle::Watercolor
+        });
+        let memory = memory_extent.map(|extent| {
+            if stars.is_some() {
+                extent
+            } else {
+                memory_allocation_size(extent, limit)
+            }
+        });
+        Some(Self {
+            shape: Shape { size, tone, tile: tile.map(TileKey::texels), stars: star_size, memory },
+            tile,
+            stars,
+            memory_extent,
+        })
+    }
+}
+
+/// What [`Targets::encode`] draws from beyond the targets themselves.
+pub(super) struct Draw<'a> {
+    pub style: harmonigraph_scene::CloudStyle,
+    /// The measured mesh the source pass rasterizes, and its vertex count.
+    pub mesh: wgpu::BufferSlice<'a>,
+    pub count: u32,
+    /// The pane's size in device pixels.
+    pub pixels: [u32; 2],
+    /// The pane pixels the starfield shades: `Some` wherever it is drawn.
+    pub star_coverage: Option<[u32; 4]>,
 }
 
 impl Targets {
-    pub fn new(
+    /// The pane's targets for `shape`, rebuilt only where the held ones were
+    /// allocated at another. A rebuild carries the tile's bake and the colour
+    /// history across wherever their own sizes still fit.
+    pub fn prepare<'a>(
+        held: &'a mut Option<Self>,
         device: &wgpu::Device,
         pipelines: &Pipelines,
-        wanted: Allocation,
+        shape: Shape,
+        source_layout: &wgpu::BindGroupLayout,
+        grid: &wgpu::Buffer,
+        lut: &wgpu::TextureView,
+    ) -> &'a mut Self {
+        if held.as_ref().is_none_or(|held| held.shape != shape) {
+            let previous = held.take();
+            *held = Some(Self::new(device, pipelines, shape, previous, source_layout, grid, lut));
+        }
+        held.as_mut().expect("allocated above")
+    }
+
+    fn new(
+        device: &wgpu::Device,
+        pipelines: &Pipelines,
+        shape: Shape,
+        previous: Option<Self>,
         source_layout: &wgpu::BindGroupLayout,
         grid: &wgpu::Buffer,
         lut: &wgpu::TextureView,
     ) -> Self {
-        let Allocation {
+        let Shape {
             size,
             tone: tone_size,
-            tile: tile_key,
-            carried,
+            tile: tile_texels,
             stars: star_size,
             memory: memory_size,
-            carried_memory,
-        } = wanted;
+        } = shape;
+        let (carried, carried_memory) =
+            previous.map_or((None, None), |previous| (previous.tile, previous.memory));
         let formatted = |label, size, format| crate::stars::image(device, label, size, format);
         let sized = |label, size: [u32; 2]| formatted(label, size, FORMAT);
         let view = |label| sized(label, size);
@@ -1024,6 +1142,7 @@ impl Targets {
         // what the star pass, which writes it, must.
         let star_scratch = formatted("spectral_star_scratch", [1, 1], STAR_FORMAT);
         let carried_memory = carried_memory.filter(|m| Some(m.size) == memory_size);
+        let carried = carried.filter(|tile| Some(tile.texels) == tile_texels);
         let memory_views = memory_size.map(|size| {
             carried_memory.as_ref().map_or_else(
                 || {
@@ -1036,16 +1155,16 @@ impl Targets {
         let (memory_index, memory_frame) = carried_memory.map_or((1, None), |m| (m.index, m.frame));
         // Reused whenever it is already the right shape, key and all, so a
         // rebuild the LIGHT's size forced costs no walk at all.
-        let tile = tile_key.map(|key| match carried {
-            Some(tile) if tile.texels == key.texels => tile,
-            _ => Tile {
+        let tile = tile_texels.map(|texels| match carried {
+            Some(tile) => tile,
+            None => Tile {
                 views: [
                     ("spectral_cloud_tile_a", TILE_FORMAT),
                     ("spectral_cloud_tile_b", TILE_FORMAT),
                     ("spectral_cloud_tile_c", PIGMENT_FORMAT),
                 ]
-                .map(|(label, format)| formatted(label, [key.texels; 2], format)),
-                texels: key.texels,
+                .map(|(label, format)| formatted(label, [texels; 2], format)),
+                texels,
                 baked: None,
             },
         });
@@ -1174,7 +1293,7 @@ impl Targets {
         Self {
             #[cfg(test)]
             encoded_passes: std::sync::atomic::AtomicU32::new(0),
-            size,
+            shape,
             source_view,
             coverage_vertices: create_vertex_buffer::<SpectrogramVertex>(
                 device,
@@ -1203,20 +1322,105 @@ impl Targets {
         }
     }
 
-    /// The precomposite target's size, for the allocation key to compare
-    /// against what this frame's settings ask for.
-    pub fn tone_size(&self) -> Option<[u32; 2]> {
-        self.tone.as_ref().map(|&(_, size)| size)
+    /// The sizes these targets were allocated at.
+    pub fn shape(&self) -> Shape {
+        self.shape
     }
 
-    /// The star atlas's size, for the allocation key.
-    pub fn star_size(&self) -> Option<[u32; 2]> {
-        self.stars.as_ref().map(|&(_, size)| size)
+    /// Every pass the cloud owes this frame, in order: the measured source,
+    /// its blur, the material, the tile where its bake is stale, the colour
+    /// history, and the starfield or the reduced tone. The composite that reads
+    /// them is drawn in `paint`, through [`Self::composite_group`].
+    pub fn encode(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        plan: &Plan,
+        draw: Draw<'_>,
+    ) {
+        // A cloud is the case that needs the field WITHOUT a blur: it reads its
+        // light out of these targets, so they are filled at zero softness too,
+        // where each filter pass is a one-tap copy.
+        {
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            #[cfg(test)]
+            let source_query = super::tests::SOURCE_QUERY.with_borrow_mut(Option::take);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_cloud_source"),
+                #[cfg(test)]
+                timestamp_writes: source_query.as_ref().map(|query_set| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: Some(0),
+                        end_of_pass_write_index: None,
+                    }
+                }),
+                color_attachments: &[Some(cleared(&self.source_view))],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipelines.source);
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_vertex_buffer(0, draw.mesh);
+            pass.draw(0..draw.count, 0..1);
+        }
+        self.blur(encoder, pipelines);
+        {
+            // Once filtering is finished, the raw source texture is free to hold
+            // the soft intensity. Fill the whole pane: refraction and reduced
+            // tone interpolation can read past the region divider. Clearing that
+            // part of the material makes the reduced cloud blend toward zero at
+            // its edge. Final painting still uses the region's coverage quad.
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_cloud_material"),
+                color_attachments: &[Some(cleared(&self.source_view))],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipelines.bake);
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_bind_group(1, &self.bake_group, &[]);
+            pass.set_vertex_buffer(0, self.tone_vertices.slice(..));
+            pass.draw(0..6, 0..1);
+        }
+        // One period of the cell walk, when the cached tile does not already
+        // hold it. Before the tone pass and the composite because both read it;
+        // it reads neither the light nor the pane, so where it sits among the
+        // light passes decides nothing.
+        if let Some(key) = plan.tile {
+            self.bake_tile(encoder, pipelines, key);
+        }
+        let velvet = draw.style == harmonigraph_scene::CloudStyle::VelvetScales;
+        if !velvet {
+            self.remember(encoder, pipelines);
+        }
+        if let Some(coverage) = draw.star_coverage {
+            self.draw_stars(encoder, pipelines, draw.pixels, coverage);
+        } else if let Some(((tone_view, _), tone_group)) =
+            self.tone.as_ref().zip(self.tone_group.as_ref())
+        {
+            #[cfg(test)]
+            self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_cloud_tone"),
+                color_attachments: &[Some(cleared(tone_view))],
+                ..Default::default()
+            });
+            pass.set_pipeline(if velvet { &pipelines.velvet } else { &pipelines.tone });
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_bind_group(1, tone_group, &[]);
+            pass.set_vertex_buffer(0, self.tone_vertices.slice(..));
+            pass.draw(0..6, 0..1);
+        }
+        if velvet {
+            self.remember(encoder, pipelines);
+        }
     }
 
     /// The atlas bake, then every slice into the star image, scissored to
     /// the drawn `coverage` of the pane's `pixels`.
-    pub fn draw_stars(
+    fn draw_stars(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
@@ -1248,45 +1452,44 @@ impl Targets {
     }
 
     /// The star atlas and the group the pass that fills it binds.
-    pub fn star_pass(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
+    fn star_pass(&self) -> Option<(&wgpu::TextureView, &wgpu::BindGroup)> {
         Some((
             &self.stars.as_ref()?.0,
             self.memory.as_ref().map_or(self.star_group.as_ref()?, |m| &m.star_groups[m.index]),
         ))
     }
 
-    /// The held tile's texel size, which is the whole of what it was ALLOCATED
-    /// for — both targets exist whatever the style, so a style change is a
-    /// rebake and never a reallocation.
-    pub fn tile_texels(&self) -> Option<u32> {
-        self.tile.as_ref().map(|tile| tile.texels)
-    }
-
-    /// Whether the tile holds something other than `key` and so owes a walk.
-    /// The WHOLE of the rebake decision — see [`TileKey`] for what is in one.
-    pub fn tile_owes(&self, key: TileKey) -> bool {
-        self.tile.as_ref().is_some_and(|tile| tile.baked != Some(key))
-    }
-
-    /// The tile's three targets and the group the pass that writes them binds.
-    pub fn tile_pass(&self) -> Option<(&[wgpu::TextureView; 3], &wgpu::BindGroup)> {
-        Some((&self.tile.as_ref()?.views, self.tile_group.as_ref()?))
-    }
-
-    /// Records the key the tile now holds. Called once the bake is encoded.
-    pub fn tile_baked(&mut self, key: TileKey) {
-        if let Some(tile) = self.tile.as_mut() {
-            tile.baked = Some(key);
+    /// One period of the cell walk into the tile, unless it already holds
+    /// `key` — the WHOLE of the rebake decision; see [`TileKey`] for what is
+    /// in one.
+    fn bake_tile(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        key: TileKey,
+    ) {
+        let (Some(tile), Some(group)) = (self.tile.as_mut(), self.tile_group.as_ref()) else {
+            return;
+        };
+        if tile.baked == Some(key) {
+            return;
         }
-    }
-
-    /// The baked tile, for a rebuilt set of targets to carry across.
-    pub fn take_memory(&mut self) -> Option<Memory> {
-        self.memory.take()
-    }
-
-    pub fn into_tile(self) -> Option<Tile> {
-        self.tile
+        #[cfg(test)]
+        self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("spectral_cloud_tile"),
+                color_attachments: &tile.views.each_ref().map(|view| Some(cleared(view))),
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipelines.tile);
+            pass.set_bind_group(0, &self.source_group, &[]);
+            pass.set_bind_group(1, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        // Only once the pass is encoded, so a key can only be recorded against
+        // a tile that was actually filled.
+        tile.baked = Some(key);
     }
 
     pub fn rebind(
@@ -1307,12 +1510,11 @@ impl Targets {
         rect: egui::Rect,
         ppp: f32,
         atmosphere: SpectrogramAtmosphere,
-        tile: Option<TileKey>,
-        stars: Option<StarLayout>,
-        memory_extent: Option<[u32; 2]>,
+        plan: &Plan,
         palette: std::sync::Arc<Vec<[u8; 4]>>,
         source_end: i64,
     ) {
+        let Plan { tile, stars, memory_extent, .. } = *plan;
         // The source mesh records only measured history. Its already-blurred
         // light can occupy the whole spectrogram region, without crossing the
         // analyzer divider or widening the exact heatmap's sample footprint.
@@ -1352,8 +1554,9 @@ impl Targets {
         // that axis's bucket footprint per reduced pixel, not one full-range
         // footprint per texel of the smaller visible rectangle.
         let visible_pixels = if pitch_vertical { rect.height() } else { rect.width() } * ppp;
-        read.rows =
-            (read.rows as f32 * self.size[axis] as f32 / visible_pixels).round().max(1.0) as u32;
+        read.rows = (read.rows as f32 * self.shape.size[axis] as f32 / visible_pixels)
+            .round()
+            .max(1.0) as u32;
         queue.write_buffer(&self.source_uniform, 0, bytemuck::bytes_of(&read));
         let settings = atmosphere.settings.sanitized();
         let pitch = settings.pitch_softness * atmosphere.points_per_cent;
@@ -1364,7 +1567,7 @@ impl Targets {
         // height every four minutes.
         let offset = cloud_offset(settings, atmosphere.now);
         let drift = cloud_drift(settings, offset, tile);
-        let image = self.tone_size().unwrap_or([1, 1]);
+        let image = self.shape.tone.unwrap_or([1, 1]);
         let slices = stars
             .map(|layout| {
                 star_slices(
@@ -1517,33 +1720,27 @@ impl Targets {
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
 
+    /// Ends the colour history, so the next frame starts it from that frame's
+    /// colour. The targets stay: both history paths return the current colour
+    /// wherever the history is not valid, and the history pass clears what it
+    /// draws into.
     pub fn invalidate_memory(&mut self) {
-        self.memory = None;
-    }
-
-    pub fn memory_size(&self) -> Option<[u32; 2]> {
-        self.memory.as_ref().map(|m| m.size)
+        if let Some(memory) = self.memory.as_mut() {
+            memory.frame = None;
+        }
     }
 
     pub fn composite_group(&self) -> &wgpu::BindGroup {
         self.memory.as_ref().map_or(&self.composite_group, |m| &m.composite_groups[m.index])
     }
 
-    pub fn remember(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+    fn remember(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
         let Some(memory) = &self.memory else {
             return;
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("spectral_color_memory"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &memory.views[memory.index],
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
+            color_attachments: &[Some(cleared(&memory.views[memory.index]))],
             ..Default::default()
         });
         pass.set_viewport(0.0, 0.0, memory.extent[0] as f32, memory.extent[1] as f32, 0.0, 1.0);
@@ -1555,28 +1752,34 @@ impl Targets {
     }
 
     /// Separable musical softness, from source through scratch to the filtered field.
-    pub fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+    fn blur(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
         // Every pass reads a different texture from the attachment it writes.
         for (i, (input, output)) in [(0, 0), (1, 1)].into_iter().enumerate() {
             #[cfg(test)]
             self.encoded_passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("spectral_cloud_blur"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.views[output],
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[Some(cleared(&self.views[output]))],
                 ..Default::default()
             });
             pass.set_pipeline(&pipelines.filters[i]);
             pass.set_bind_group(0, &self.filter_groups[input], &[]);
             pass.draw(0..3, 0..1);
         }
+    }
+}
+
+/// A colour attachment cleared to transparent and stored: every cloud target is
+/// drawn whole each time it is drawn at all.
+fn cleared(view: &wgpu::TextureView) -> wgpu::RenderPassColorAttachment<'_> {
+    wgpu::RenderPassColorAttachment {
+        view,
+        depth_slice: None,
+        resolve_target: None,
+        ops: wgpu::Operations {
+            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            store: wgpu::StoreOp::Store,
+        },
     }
 }
 

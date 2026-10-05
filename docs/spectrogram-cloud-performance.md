@@ -365,7 +365,7 @@ The tone reads the sound, so a stale tone lags the music; the walk is the only p
 
 - The two walks: `crates/harmonigraph-render/src/shaders/spectrogram.wgsl`, `dome_octave` / `cloud_domes` and `wash_glob` / `wash_scan`.
 - What reads them: `scale_clouds` and `wash_clouds` / `wash_tone`, reached from `clouded`.
-- Light field sizing and passes: `crates/harmonigraph-render/src/spectrogram/atmosphere.rs`, `source_size` and `Targets::blur`; scheduling in `SpectrogramCallback::prepare`.
+- Light field sizing and passes: `crates/harmonigraph-render/src/spectrogram/atmosphere.rs`, `source_size`, `Plan::new` for every target's size, and `Targets::encode` for the order of the passes.
 - The backdrop and composite draws: `SpectrogramCallback::paint`.
 
 

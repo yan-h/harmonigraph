@@ -172,10 +172,10 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
                 let b = frame_at_ppp(&device, &queue, &mut partial, &cb, PPP);
                 let settings = cb.atmosphere.unwrap().settings;
                 assert_eq!(
-                    target(&partial).tone_size(),
+                    target(&partial).shape().tone,
                     Some(atmosphere::star_image_size([161, 121], settings.stars))
                 );
-                assert_eq!(target(&partial).memory_size().is_some(), memory);
+                assert_eq!(target(&partial).shape().memory.is_some(), memory);
                 let width = (cb.rect.max.x * PPP).ceil() as usize + 1;
                 let mut checked = 0;
                 let mut lit = 0;

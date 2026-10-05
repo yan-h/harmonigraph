@@ -532,7 +532,8 @@ fn resolution_changes_carry_stars_color_history() {
             .cloud
             .as_ref()
             .unwrap()
-            .tone_size();
+            .shape()
+            .tone;
         assert_ne!(size, prior_size, "fixture did not change the star image");
         prior_size = size;
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
@@ -712,8 +713,8 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         let targets = pane.cloud.as_ref().unwrap();
         let grid = if pixel_points > 1.0 { PANE / 2 } else { PANE };
         assert_eq!(targets.memory.as_ref().map(|m| m.extent), Some([grid + 2; 2]), "{case}");
-        assert_eq!(targets.tone_size(), None, "{case}: a tone target nothing draws");
-        assert!(targets.tile_texels().is_some(), "{case}: no texture was drawn");
+        assert_eq!(targets.shape().tone, None, "{case}: a tone target nothing draws");
+        assert!(targets.shape().tile.is_some(), "{case}: no texture was drawn");
         cb.grid.fill(0);
         let floor = alone(&mut cb, |s| s.cloud_depth = 0.0);
         let release = cb.atmosphere.unwrap().settings.color_release;
