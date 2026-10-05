@@ -11,3 +11,8 @@ One line per decision; the audit reads this before asking anything.
 
 - Retain Uniform’s large-pane optimization; do not restart performance research as part of this sweep. #1314 Stars Q4
 - Solo keeps every layer baking and updating colour history, hiding only composition. The full-field cost is accepted so toggles preserve the look. #1392
+
+## 2026-10-05 (merge audit, #1444)
+
+- #1442 replaced the High, Medium, Low and Uniform profiles with one Stars resolution slider (default 75%), superseding the 09-29 "Medium quality" and #1314 Stars Q4.
+Every resolution draws stars in their own pass into one image, so Uniform's large-pane split has no separate switch to retain.

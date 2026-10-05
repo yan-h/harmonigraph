@@ -58,9 +58,14 @@ it is necessary for #638's silent-input fallback to remain safe across variable 
 The full `ProcessStatus` includes an error string and its `AtomicCell` takes a fallback lock;
 only the scalar tail is needed across callbacks.
 `tests/clap_boundary.rs` checks exported tail values, intermediate subblock publication, immediate statuses and start/reset/error behavior.
+- **CLAP track info** (`src/wrapper/clap/track_info_adapter.rs`, `src/wrapper/clap/{setup,wrapper}.rs`): a plugin with a Setup adapter answers `CLAP_EXT_TRACK_INFO` and its draft-era compat id.
+`init` and every host `changed` callback read the track name on the main thread, outside the audio lock, and pass it to `Setup::track_name_changed` (`None` when the host supplies none).
+The read stops at the first NUL or the end of the host's fixed buffer.
+The name is not saved state;
+tuning sources follow it unless the user has set a custom name (#1426).
 - **VST3 wrapper**: unpatched upstream, and not compiled into Harmonigraph, which ships only as a CLAP and depends on nice-plug without its default `vst3` feature (#1185).
 The local VST3 fixes (#741's bus arrangements, #1128's note-expression lanes) and their fixture were reverted with the export, so an upgrade has nothing VST3 to reapply.
-- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, root wrapper and state glue, manifest features, and both boundary fixtures.
+- **Upgrade**: replace the vendored upstream files including the license, retain the standalone `[workspace]` table, and reapply activation notification ordering, scalar tail publication, auxiliary descriptor bounds and storage sizing, production configuration/performance/setup seams, track info, root wrapper and state glue, manifest features, and both boundary fixtures.
 No tuning or sequencing policy belongs in this framework patch.
 
 ## baseview — vendored at `vendor/baseview/`
@@ -309,6 +314,12 @@ Texture deltas stay exempt and are checked first, so a frame carrying one is nev
 The same change also runs `free_textures` on all three render exits instead of only past the acquire:
 a `free`-only delta on a bailing frame used to drop egui's texture-manager ids permanently, leaking the retired atlas exactly when the backoff above forces a frame through on the strength of consuming that delta.
 `wants_render` and `after_render` are pure functions with their own tests in `vendor/egui-baseview`, which `ci.sh` runs.
+- **Patch 18** (`src/window.rs`, `src/translate.rs`): reserve app shortcuts from the host (#1433).
+`KeyCapture::CaptureShortcuts` captures its listed `egui::KeyboardShortcut`s even when no widget has keyboard focus, so the editor's appearance undo and redo (Cmd+Z, Cmd+Shift+Z, and Ctrl+Y off macOS) never reach the DAW while the editor window has the keyboard.
+Every other key still passes to the host unless egui wants keyboard input.
+Each mode's capture decision is now one `KeyCapture::status`, replacing the per-mode branches in `on_event` and the separate wants-keyboard check after them, with its own test.
+`translate_virtual_key` lowercases a character before matching it,
+so Shift and Caps Lock letters still produce egui key events.
 - **`[workspace]` table** (`Cargo.toml`): an empty `[workspace]` table, for the same ancestor-root-exclusion reason `vendor/baseview/Cargo.toml` carries one —
 without it, a worktree under `.claude/worktrees/` walks past its own root to the main checkout's `exclude` entries, which resolve under a different prefix and exclude nothing here, and cargo refuses outright.
 `ci.sh` runs `cargo test --manifest-path` against this crate from exactly there.

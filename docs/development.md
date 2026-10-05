@@ -46,7 +46,7 @@ cargo test
 ./ci.sh
 
 # Read the plugin's live settings from a saved Bitwig project.
-# Close the plugin window and save the project first.
+# Save the project first; the window may stay open.
 ./read-plugin-state.py
 ```
 

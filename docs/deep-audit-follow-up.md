@@ -36,6 +36,7 @@ The new check protects carried curve smoothing without broadening raw analyzer s
 - Defer readback pipelining: load-sensitive export samples do not establish encoder-inclusive savings sufficient to justify more queues and GPU synchronization.
 - Retain shared label/atlas ownership and distinct upload timing: lattice preparation and text painting use resources at different points in the frame.
 - Retain Solo's full-layer work and Uniform's large-pane split: accepted color history and threshold-reaching parity coverage justify those paths.
+  #1442 later removed the split with the rendering profiles: every Stars resolution draws stars in their own pass.
 - Retain recording's separate source, configuration and producer closure frontiers: they protect different late-data owners.
 - Reject another analyzer/settings cache or generalized settings schema: recent ownership changes already removed the duplicate work, with no demonstrated need for more invalidation rules.
 - Defer dense refold optimization pending the representative saved workload requested in [#886](https://github.com/yan-h/harmonigraph/issues/886); synthetic stress is not evidence of ordinary usage.

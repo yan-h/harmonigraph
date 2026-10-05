@@ -21,7 +21,7 @@ pub struct AudioSpectrum {
     display_revision: u64,
     /// One lazy Fold, keyed on everything its value is measured from and
     /// nothing else. `Fold::measure` is a pure function of `display` and the
-    /// clamped width: `display_revision` stands for the first — the only two
+    /// sanitized width: `display_revision` stands for the first — the only two
     /// writes to `display` bump it on the adjacent line — and the width is
     /// carried by bits. Geometry, palettes and TIME are not inputs; a frame
     /// with no new column measures the same numbers the last one did, so `now`

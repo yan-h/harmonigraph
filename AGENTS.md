@@ -100,6 +100,9 @@ HARMONIGRAPH_SHADER_ASSETS=strict cargo test -p harmonigraph-render \
   shader_assets::catalog::production_metal_asset_catalog
 ```
 
+It passes only with `1 passed`:
+the catalog compiles on macOS alone, so elsewhere it runs 0 tests and proves nothing —
+a cloud session dispatches the `Metal shader assets` workflow instead.
 `Full CI` green is not mergeable: read `mergeStateStatus`, because `Metal shader assets` reports separately.
 Regenerate on the runner, never locally —
 the `metal-corpus` skill has the command, the import, and why grepping the fallback notice is not a check (#947).
