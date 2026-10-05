@@ -263,7 +263,8 @@ formatting,
 build handoff and draft pull requests.
 Almost all implementation is written through LLM coding sessions under Yan's direction and review.
 Maintainability and technical-debt work is tracked as ordinary GitHub issues rather than a standing plan document;
-`docs/` holds design and contracts, not dated audits or batch plans.
+`docs/` holds design and contracts, not dated audits or batch plans;
+an audit stays only while a contract document cites it, as `docs/adaptive-tuning.md` cites the CLAP boundary audit.
 
 ## Shared agent skills
 
