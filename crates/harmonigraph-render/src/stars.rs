@@ -76,7 +76,10 @@ struct StarSlice {
     /// The band a star's centre is drawn from, in cells: the slice's
     /// `Position variation`.
     width: f32,
-    pad: u32,
+    /// The inverse of the narrowest radius a star is drawn at, in star
+    /// pixels: one texel of the star image, or as much of one as the slice's
+    /// read holds whole ([`star_slices`]).
+    inverse_floor: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
     /// How far its stars fade between lives: the plan's. Below 1 a star
@@ -241,14 +244,25 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
     (now / f64::from(settings.star_lifetime)).rem_euclid(STAR_LIFE_PERIOD) as f32
 }
 
-/// Every slice's numbers for this frame. Each depth moves as one sheet at its
-/// own speed.
+/// Every slice's numbers for this frame, for a star image `image` texels
+/// across and down. Each depth moves as one sheet at its own speed.
+///
+/// The star image is drawn by evaluating each star at its texel centres, so
+/// a star narrower than a texel would show only where a centre happened to
+/// fall inside it, and blink as it drifted past them (#1446). Every star is
+/// therefore drawn at least a texel wide, dimmed by the ratio of the areas
+/// so it keeps its light, and each slice takes the cheapest read that holds
+/// a star that wide whole. Where even the 3x3 read cannot, the floor stops
+/// at what it holds: those cells are finer than a texel, so their stars were
+/// never told apart at this resolution.
 pub(crate) fn star_slices(
     settings: harmonigraph_scene::StarSettings,
     direction: f32,
     now: f64,
     layout: &StarLayout,
+    image: [u32; 2],
 ) -> [StarSlice; STAR_SLICES] {
+    let texel = STAR_PANE / image[1].max(1) as f32;
     // Star pixels travelled at a speed of one.
     let travel = now * star_px_per_second();
     let (sin, cos) = f64::from(direction).to_radians().sin_cos();
@@ -272,6 +286,16 @@ pub(crate) fn star_slices(
         // works it out, with the original conservative neighbor and margin.
         let origin: [i32; 2] =
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
+        let holds = |gather: StarGather| gather.bound(jitter) * cell;
+        let widest = depth.radius.max(texel);
+        let gather = match depth.gather {
+            StarGather::Off => StarGather::Off,
+            planned => StarGather::DRAWN
+                .into_iter()
+                .skip_while(|&gather| gather != planned)
+                .find(|&gather| widest <= holds(gather))
+                .unwrap_or(StarGather::Three),
+        };
         StarSlice {
             offset: Float2(offset),
             cell,
@@ -283,8 +307,9 @@ pub(crate) fn star_slices(
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
             width: star_jitter_width(jitter),
-            pad: 0,
-            gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(depth.gather) },
+            inverse_floor: 1.0
+                / if gather == StarGather::Off { texel } else { texel.min(holds(gather)) },
+            gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(gather) },
             twinkle: depth.twinkle,
         }
     })
@@ -359,7 +384,7 @@ impl StarUniforms {
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,
             pad: 0.0,
-            star_slices: star_slices(settings, direction, now, layout),
+            star_slices: star_slices(settings, direction, now, layout, image),
         }
     }
 }

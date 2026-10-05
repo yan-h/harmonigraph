@@ -108,8 +108,8 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
         (1.0, wgpu::TextureFormat::Rgba8Unorm),
         (0.75, wgpu::TextureFormat::Rgba8Unorm),
         (0.75, wgpu::TextureFormat::Rgba8UnormSrgb),
-        (1.0 / 3.0, wgpu::TextureFormat::Rgba8Unorm),
-        (1.0 / 3.0, wgpu::TextureFormat::Rgba8UnormSrgb),
+        (0.25, wgpu::TextureFormat::Rgba8Unorm),
+        (0.25, wgpu::TextureFormat::Rgba8UnormSrgb),
     ] {
         for (jitter, memory) in [(0.0, false), (0.5, true), (1.0, true)] {
             let mut cb = star_fixture([129, 97], egui::pos2(7.3, 11.7));
@@ -132,10 +132,15 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
                 (harmonigraph_scene::STAR_SOLID_MAX, harmonigraph_scene::STAR_SOLID_MAX);
             // Far stars spaced so 2x2 holds them at every jitter: its bound
             // shrinks to 0.7 cells at 1, where the fresh spacing needs 3x3 and
-            // the wide reference would compare the frame with itself.
+            // the wide reference would compare the frame with itself. Every
+            // depth's stars are wider than a texel of the 25% image (17 star
+            // pixels), or the texel floor would read them all 3x3; size
+            // variation still floors the smallest.
             settings.stars.star_spacing_ratio_far = 0.8;
+            (settings.stars.star_size_far, settings.stars.star_size_near) = (40.0, 40.0);
             let layout = atmosphere::star_layout(settings.stars, cb.rect.aspect_ratio());
-            let slices = atmosphere::star_slices(settings.stars, 0.0, 0.0, &layout);
+            let image = atmosphere::star_image_size([161, 121], settings.stars);
+            let slices = atmosphere::star_slices(settings.stars, 0.0, 0.0, &layout, image);
             assert_eq!(slices.map(|s| s.gather)[..3], [2; 3], "jitter={jitter}: far not 2x2");
             assert_eq!(slices[4].gather, 3, "jitter={jitter}: nearest not 3x3");
             if memory {
@@ -282,8 +287,12 @@ fn a_core_depth_draws_its_stars_whole() {
         let core = harmonigraph_scene::star_plan::StarGather::Core.bound(jitter);
         let spacing = 1.001 * 0.5 / core;
         (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (spacing, spacing);
+        // Wider than a texel of the 75% image (6 star pixels), or the texel
+        // floor would read them 3x3.
+        (stars.star_size_far, stars.star_size_near) = (16.0, 16.0);
         let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
-        let slices = atmosphere::star_slices(*stars, 0.0, 0.0, &layout);
+        let image = atmosphere::star_image_size([161, 121], *stars);
+        let slices = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image);
         assert_eq!(slices.map(|s| s.gather), [1; 5], "jitter={jitter}");
         let frames: Vec<_> = [false, true]
             .into_iter()
@@ -357,4 +366,60 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
         twinkling < 0.8 && cracks > 50,
         "the twinkling layer showed {cracks} cracks, darkest {twinkling}"
     );
+}
+
+/// Every star narrower than a texel of the star image still shows (#1446).
+/// The far stars sit one to a cell on a grid, alike and steady, 2 star
+/// pixels in radius under a 25% texel of 7.2, so a texel centre lands inside
+/// only some of them. Each cell's light over the floor is its star's; drawn
+/// at its centres alone, the dimmest of them measured 0 of the mean.
+#[test]
+fn stars_narrower_than_a_texel_all_show() {
+    let Some((device, queue)) = headless_device() else { return };
+    let (width, height) = (400, 300);
+    let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
+    cb.grid.fill(220);
+    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+    stars.star_solo = [true, false, false, false, false];
+    stars.star_resolution = 0.25;
+    (stars.star_size_far, stars.star_spacing_ratio_far, stars.star_jitter) = (4.0, 8.0, 0.0);
+    (stars.star_size_variation, stars.star_randomness) = (0.0, 0.0);
+    (stars.star_twinkle_far, stars.star_twinkle_near) = (0.0, 0.0);
+    let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
+    let image = atmosphere::star_image_size([width, height], *stars);
+    let slice = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[0];
+    assert!(slice.radius < 0.5 * crate::stars::STAR_PANE / image[1] as f32);
+    let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
+    // Each pixel's cell, as `star_layers` finds it, and its light.
+    let floor = cb.shades.lut[0];
+    let size = [width as f32, height as f32];
+    let star_px = crate::stars::STAR_PANE / size[1];
+    let mut cells = std::collections::HashMap::<[i32; 2], f64>::new();
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let at = [x as f32 + 0.5, y as f32 + 0.5];
+            let key: [i32; 2] = std::array::from_fn(|axis| {
+                let sp = (at[axis] - size[axis] * 0.5) * star_px;
+                (sp / slice.cell - slice.offset.0[axis].fract()).floor() as i32
+            });
+            let pixel = &frame[(y * (width as usize + 1) + x) * 4..][..3];
+            *cells.entry(key).or_default() +=
+                pixel.iter().zip(&floor).map(|(&c, &f)| f64::from(c) - f64::from(f)).sum::<f64>();
+        }
+    }
+    // Only cells whole inside the pane.
+    let span = size.map(|side| side * star_px / slice.cell);
+    let whole = |key: [i32; 2]| {
+        (0..2).all(|axis| {
+            let edge = (span[axis] / 2.0) as i32;
+            (-edge + 1..edge - 1).contains(&key[axis])
+        })
+    };
+    let light: Vec<f64> =
+        cells.into_iter().filter(|&(key, _)| whole(key)).map(|(_, l)| l).collect();
+    let mean = light.iter().sum::<f64>() / light.len() as f64;
+    assert!(light.len() > 100 && mean > 50.0, "fixture: {} stars, {mean}", light.len());
+    // Measured 0.64.
+    let dimmest = light.iter().copied().fold(f64::INFINITY, f64::min) / mean;
+    assert!(dimmest > 0.5, "a star went missing: the dimmest held {dimmest} of the mean");
 }

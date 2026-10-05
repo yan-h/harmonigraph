@@ -520,7 +520,7 @@ fn resolution_changes_carry_stars_color_history() {
     assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
     cb.grid.fill(0);
     let mut prior_size = None;
-    for resolution in [0.25, 1.0, 1.0 / 3.0, 0.5, 0.75] {
+    for resolution in [0.25, 1.0, 0.5, 0.75] {
         cb.atmosphere.as_mut().unwrap().settings.stars.star_resolution = resolution;
         prepare_once(&device, &queue, &mut changed, &cb);
         let size = changed

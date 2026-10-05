@@ -22,6 +22,19 @@ four,
 or nine.
 The nine-cell read is drawn inline in the same pass.
 
+The image evaluates each star at its texel centres,
+so a star narrower than a texel would show only where a centre fell inside it,
+and blink as it drifted past them (#1446).
+Every star is therefore drawn at least one texel wide,
+dimmed by the ratio of the areas so it keeps its light,
+and a depth whose stars that floor widens past its read takes the next read that holds them.
+At the fresh dials the farthest depth moves from four cells to nine on a pane under about 610 device pixels tall over the resolution:
+820 at 75%,
+1,230 at 50% and 2,450 at 25%,
+with the next depths following on smaller panes.
+Where even nine cells cannot hold a texel,
+the floor stops at what they hold.
+
 This replaced the High, Medium, Low and Uniform presets.
 Those drew the far three depths and the near two into separately sized images,
 and drew each nine-cell depth's glow into its own reduced halo image so its core could stay sharper than its glow.
