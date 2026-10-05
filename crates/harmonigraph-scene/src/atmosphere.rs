@@ -126,18 +126,6 @@ pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
 /// See [`CLOUD_DIRECTION_MIN`].
 pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
 
-/// A drift direction in `[0, 360)`. `rem_euclid` alone rounds an angle a hair
-/// below zero up to exactly 360, which a second wrap turns into 0: the stored
-/// value and its sanitized copy then disagree though they draw the same.
-pub fn wrap_direction(degrees: f32) -> f32 {
-    let wrapped = degrees.rem_euclid(CLOUD_DIRECTION_MAX);
-    if wrapped < CLOUD_DIRECTION_MAX {
-        wrapped
-    } else {
-        CLOUD_DIRECTION_MIN
-    }
-}
-
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
 /// bottom is its mirror, where the edge lightens instead.
@@ -792,7 +780,7 @@ impl SpectralAtmosphere {
         self.cloud_speed =
             clamp(self.cloud_speed, fresh.cloud_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.cloud_direction = if self.cloud_direction.is_finite() {
-            wrap_direction(self.cloud_direction)
+            crate::wrap_degrees(self.cloud_direction)
         } else {
             fresh.cloud_direction
         };
@@ -935,7 +923,7 @@ impl AtmosphereSettings {
         self.material_speed =
             clamp(self.material_speed, fresh.material_speed, CLOUD_SPEED_MIN, CLOUD_SPEED_MAX);
         self.material_direction = if self.material_direction.is_finite() {
-            wrap_direction(self.material_direction)
+            crate::wrap_degrees(self.material_direction)
         } else {
             fresh.material_direction
         };

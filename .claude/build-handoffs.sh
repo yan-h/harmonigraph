@@ -32,11 +32,13 @@ build_commit() {
   fi
 }
 
-# The short form every message prints, or '?' when the source cannot be read:
-# under `set -euo pipefail` a bare failing pipeline would end the loader
-# silently, mid-load, or read as a fresh match for any stamped sha.
+# The short form every message prints, or '?' when the source cannot be read.
+# Under `set -euo pipefail` a bare failing read ends the loader silently
+# mid-load; without pipefail it is empty, which matches any stamped sha.
 build_short() {
-  build_commit "$1" 2>/dev/null | cut -c1-7 || echo '?'
+  local sha
+  sha="$(build_commit "$1" 2>/dev/null)" && [[ -n "$sha" ]] || sha='?'
+  echo "${sha:0:7}"
 }
 
 build_commit_time() {

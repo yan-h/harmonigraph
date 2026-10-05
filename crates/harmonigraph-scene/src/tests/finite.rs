@@ -536,18 +536,22 @@ fn a_view_of_nothing_but_nan_still_derives_a_scene_of_real_numbers() {
     assert!(names.is_empty(), "a NaN view reached the marked scene at: {}", names.join(", "));
 }
 
-/// A drift direction a hair below zero is stored as 0, not as 360: a second
-/// sanitize must leave it alone, or the live view and its sanitized copy
-/// disagree (`panes/lattice.rs` asserts they agree in debug builds).
+/// An angle a hair below zero is stored as 0, not as 360: a second sanitize
+/// must leave the view alone, or the live view and its sanitized copy disagree
+/// (`panes/lattice.rs` asserts they agree in debug builds).
 #[test]
-fn a_direction_just_below_zero_sanitizes_once() {
+fn angles_just_below_zero_sanitize_once() {
     let below = -1e-6_f32;
-    assert_eq!(below.rem_euclid(CLOUD_DIRECTION_MAX), CLOUD_DIRECTION_MAX);
-    let lattice =
-        AtmosphereSettings { material_direction: below, ..Default::default() }.sanitized();
-    assert_eq!(lattice.material_direction, 0.0);
-    assert_eq!(lattice.sanitized().material_direction, lattice.material_direction);
+    assert_eq!(below.rem_euclid(360.0), 360.0, "the fixture must reach the rounding");
+    let mut view = ViewConfig::default();
+    view.atmosphere.material_direction = below;
+    view.pitch_gradient.hue_start = below;
+    view.sanitize();
+    assert_eq!(view.atmosphere.material_direction, 0.0);
+    assert_eq!(view.pitch_gradient.hue_start, 0.0);
+    let mut again = view.clone();
+    again.sanitize();
+    assert_eq!(again, view);
     let spectral = SpectralAtmosphere { cloud_direction: below, ..Default::default() }.sanitized();
     assert_eq!(spectral.cloud_direction, 0.0);
-    assert_eq!(spectral.sanitized().cloud_direction, spectral.cloud_direction);
 }

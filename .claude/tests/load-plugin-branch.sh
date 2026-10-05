@@ -54,10 +54,17 @@ expect foo "'foo' matches multiple branches:
   codex/foo
   codex/foo-2"
 
+# Every detached worktree shares one label, so even an exact match refuses.
+git -C "$repo" worktree add -q --detach "$TMP/detached-a" HEAD
+git -C "$repo" worktree add -q --detach "$TMP/detached-b" HEAD
+expect "(detached)" "'(detached)' matches multiple branches:
+  (detached)
+  (detached)"
+
 # A handoff record the loader cannot read prints '?' rather than ending the
-# loader under `set -euo pipefail` partway through a load.
+# loader partway through a load, whether or not the caller sets pipefail.
 mkdir -p "$TMP/unreadable" && echo '{}' > "$TMP/unreadable/handoff.json"
-got=$(set -euo pipefail; . "$ROOT/.claude/build-handoffs.sh"; short="$(build_short "$TMP/unreadable")"; echo "$short")
+got=$(set -eu; . "$ROOT/.claude/build-handoffs.sh"; short="$(build_short "$TMP/unreadable")"; echo "$short")
 if [ "$got" = "?" ]; then
   echo "✓ unreadable handoff reads '?'"
 else

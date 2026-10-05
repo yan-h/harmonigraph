@@ -411,21 +411,25 @@ wt_containing() {
 # The build a branch argument names: the branch spelled exactly, else the one
 # branch it is a substring of. Exact wins because the full name is what a
 # handover and update-plugin.sh pass, and retained handoffs keep branches like
-# `codex/foo-2` beside `codex/foo` long after either worktree is gone.
+# `codex/foo-2` beside `codex/foo` long after either worktree is gone. Either
+# way it must be unique: every detached worktree is listed as `(detached)`.
+# Returns 1 when nothing matches and 2 when several do.
 branch_index() {
   local i matches=()
   for i in "${!WT_BRANCH[@]}"; do
-    [[ "${WT_BRANCH[$i]}" == "$1" ]] && { echo "$i"; return 0; }
+    [[ "${WT_BRANCH[$i]}" == "$1" ]] && matches+=("$i")
   done
-  for i in "${!WT_BRANCH[@]}"; do
-    [[ "${WT_BRANCH[$i]}" == *"$1"* ]] && matches+=("$i")
-  done
+  if (( ${#matches[@]} == 0 )); then
+    for i in "${!WT_BRANCH[@]}"; do
+      [[ "${WT_BRANCH[$i]}" == *"$1"* ]] && matches+=("$i")
+    done
+  fi
   if (( ${#matches[@]} == 0 )); then
     echo "No build branch matching '$1'." >&2; return 1
   elif (( ${#matches[@]} > 1 )); then
     echo "'$1' matches multiple branches:" >&2
     for i in "${matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done
-    return 1
+    return 2
   fi
   echo "${matches[0]}"
 }
@@ -471,7 +475,7 @@ case "${1:-}" in
     exit 1
     ;;
   *)
-    idx="$(branch_index "$1")" || { print_table; exit 1; }
+    idx="$(branch_index "$1")" || { status=$?; (( status == 1 )) && print_table; exit 1; }
     load_build "$idx"
     ;;
 esac
