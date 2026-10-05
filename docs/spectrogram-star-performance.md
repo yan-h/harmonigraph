@@ -13,7 +13,7 @@ The atlas bakes each star's position,
 life,
 size,
 and color once per frame.
-Every drawn depth is then composited far to near into one RGBA16Float image at **Stars resolution** of the pane's width and height (75% by default, 25–100%),
+Every drawn depth is then composited far to near into one RGBA16Float image at **Stars resolution** of the pane's width and height (75% by default, in quarters from 25 to 100%),
 and the final pass samples it bilinearly,
 keeping Texture mix and the underlying spectrogram at native resolution.
 Each depth reads the fewest cells that hold its stars whole:
