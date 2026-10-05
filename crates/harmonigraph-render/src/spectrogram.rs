@@ -733,12 +733,14 @@ impl CallbackTrait for SpectrogramCallback {
                 screen_descriptor.size_in_pixels,
             );
             let pixels = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
-            let size = atmosphere::retained_size(
-                atmosphere::source_size(pixels, ppp, settings),
+            if let Some(plan) = atmosphere::Plan::new(
                 pixels,
-                pane.cloud.as_ref().map(|c| c.size),
-            );
-            if size.iter().all(|&v| v > 0) {
+                ppp,
+                settings,
+                sampling,
+                pane.cloud.as_ref(),
+                device.limits().max_texture_dimension_2d,
+            ) {
                 let cloud = cloud.get_or_insert_with(|| {
                     atmosphere::Pipelines::new(device, self.target_format, layout)
                 });
@@ -751,8 +753,7 @@ impl CallbackTrait for SpectrogramCallback {
                 // The callback can include the spectrum above the Stars region.
                 // Shade only pixels the backdrop or measured mesh can read.
                 // Include both so clipped/extended data quads stay supported.
-                let stars = settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars;
-                let star_coverage = stars.then(|| {
+                let star_coverage = plan.stars.map(|_| {
                     let bounds = self.vertices.iter().fold(settings.region, |bounds, v| {
                         bounds.union(egui::Rect::from_min_max(v.pos.into(), v.pos.into()))
                     });
@@ -770,254 +771,46 @@ impl CallbackTrait for SpectrogramCallback {
                     });
                     [start[0], start[1], end[0] - start[0], end[1] - start[1]]
                 });
-                let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
-                let stars = atmosphere::stars(pixels, settings);
-                // A starfield always draws through its image, sized from the
-                // same layout as its atlas. It keeps pane-relative texel
-                // addressing; the scissor bounds the work.
-                let reduced = match stars {
-                    Some(_) => Some(atmosphere::star_image_size(pixels, settings.settings.stars)),
-                    None => atmosphere::tone_size(pixels, ppp, settings, sampling.pixel_points),
-                };
-                let star_size = stars.map(|layout| {
-                    atmosphere::star_atlas_size(
-                        layout.size(),
-                        pane.cloud.as_ref().and_then(atmosphere::Targets::star_size),
-                    )
-                });
-                // Light, reduced tone, tile and history have separate sizing
-                // rules. Rebuild bind groups when any allocation changes, but
-                // carry the tile bake and color history when their own sizes
-                // still fit. A scalar-field resize must not erase color memory.
-                let memory_extent = (settings.settings.effects().cloud
-                    && (settings.settings.color_pickup > 0.0
-                        || settings.settings.color_release > 0.0))
-                    .then(|| {
-                        star_size.unwrap_or_else(|| {
-                            reduced
-                                .unwrap_or(pixels)
-                                .map(|n| (n + 2).min(device.limits().max_texture_dimension_2d))
-                        })
-                    });
-                // Watercolor with a history works its tone out per history
-                // texel in `fs_color_memory` and displays the history, so the
-                // reduced size is the history's grid and a tone target would be
-                // drawn into by nothing. Scales draw their tone and then
-                // remember it, and Stars composite every depth into it.
-                let tone_size = reduced.filter(|_| {
-                    memory_extent.is_none()
-                        || settings.settings.cloud_style
-                            != harmonigraph_scene::CloudStyle::Watercolor
-                });
-                let memory_size = memory_extent.map(|extent| {
-                    if stars.is_some() {
-                        extent
-                    } else {
-                        atmosphere::memory_allocation_size(
-                            extent,
-                            device.limits().max_texture_dimension_2d,
-                        )
-                    }
-                });
-                let texels = tile.map(atmosphere::TileKey::texels);
-                let resize = pane.cloud.as_ref().is_none_or(|c| {
-                    c.size != size
-                        || c.tone_size() != tone_size
-                        || c.tile_texels() != texels
-                        || c.star_size() != star_size
-                        || c.memory_size() != memory_size
-                });
-                if resize {
-                    let carried_memory =
-                        pane.cloud.as_mut().and_then(atmosphere::Targets::take_memory);
-                    let carried = pane
-                        .cloud
-                        .take()
-                        .filter(|held| held.tile_texels() == texels)
-                        .and_then(atmosphere::Targets::into_tile);
-                    let wanted = atmosphere::Allocation {
-                        size,
-                        tone: tone_size,
-                        tile,
-                        carried,
-                        stars: star_size,
-                        memory: memory_size,
-                        carried_memory,
-                    };
-                    pane.cloud =
-                        Some(atmosphere::Targets::new(device, cloud, wanted, layout, grid, lut));
-                }
-                let target = pane.cloud.as_mut().expect("allocated above");
+                let target = atmosphere::Targets::prepare(
+                    &mut pane.cloud,
+                    device,
+                    cloud,
+                    plan.shape,
+                    layout,
+                    grid,
+                    lut,
+                );
                 target.update(
                     queue,
                     uniforms,
                     rect,
                     ppp,
                     settings,
-                    tile,
-                    stars,
-                    memory_extent,
+                    &plan,
                     self.shades.lut.clone(),
                     self.grid.first_key + self.grid.run.len() as i64,
                 );
-                // A cloud is the case that needs the field WITHOUT a blur: it
-                // reads its light out of these targets, so they are filled at
-                // zero softness too, where each filter pass is a one-tap copy.
-                {
-                    #[cfg(test)]
-                    target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                    #[cfg(test)]
-                    let source_query = tests::SOURCE_QUERY.with_borrow_mut(Option::take);
-                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("spectral_cloud_source"),
-                        #[cfg(test)]
-                        timestamp_writes: source_query.as_ref().map(|query_set| {
-                            wgpu::RenderPassTimestampWrites {
-                                query_set,
-                                beginning_of_pass_write_index: Some(0),
-                                end_of_pass_write_index: None,
-                            }
-                        }),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &target.source_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(&cloud.source);
-                    pass.set_bind_group(0, &target.source_group, &[]);
-                    pass.set_vertex_buffer(0, pane.vertex_buffer.slice(..));
-                    pass.draw(0..pane.count, 0..1);
-                }
-                target.blur(egui_encoder, cloud);
-                {
-                    // Once filtering is finished, the raw source texture is
-                    // free to hold the soft intensity. Fill the whole pane:
-                    // refraction and reduced tone interpolation can read past
-                    // the region divider. Clearing that part of the material
-                    // makes the reduced cloud blend toward zero at its edge.
-                    // Final painting still uses the region's coverage quad.
-                    #[cfg(test)]
-                    target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("spectral_cloud_material"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &target.source_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(&cloud.bake);
-                    pass.set_bind_group(0, &target.source_group, &[]);
-                    pass.set_bind_group(1, &target.bake_group, &[]);
-                    pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
-                    pass.draw(0..6, 0..1);
-                }
-                // One period of the cell walk, when the cached tile
-                // does not already hold it. Before the
-                // tone pass and the composite because both read it; it
-                // reads neither the light nor the pane, so where it sits
-                // among the light passes decides nothing.
-                if let Some(key) = tile.filter(|&key| target.tile_owes(key)) {
-                    if let Some((views, group)) = target.tile_pass() {
-                        #[cfg(test)]
-                        target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                        let attachment = |view| {
-                            Some(wgpu::RenderPassColorAttachment {
-                                view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })
-                        };
-                        {
-                            let mut pass =
-                                egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("spectral_cloud_tile"),
-                                    color_attachments: &[
-                                        attachment(&views[0]),
-                                        attachment(&views[1]),
-                                        attachment(&views[2]),
-                                    ],
-                                    ..Default::default()
-                                });
-                            pass.set_pipeline(&cloud.tile);
-                            pass.set_bind_group(0, &target.source_group, &[]);
-                            pass.set_bind_group(1, group, &[]);
-                            pass.draw(0..3, 0..1);
-                        }
-                        // Inside the pass's own branch, so a key can only be
-                        // recorded against a tile that was actually filled.
-                        target.tile_baked(key);
-                    }
-                }
-                let velvet =
-                    settings.settings.cloud_style == harmonigraph_scene::CloudStyle::VelvetScales;
-                if !velvet {
-                    target.remember(egui_encoder, cloud);
-                }
-                if settings.settings.cloud_style == harmonigraph_scene::CloudStyle::Stars {
-                    target.draw_stars(
-                        egui_encoder,
-                        cloud,
+                target.encode(
+                    egui_encoder,
+                    cloud,
+                    &plan,
+                    atmosphere::Draw {
+                        style: settings.settings.cloud_style,
+                        mesh: pane.vertex_buffer.slice(..),
+                        count: pane.count,
                         pixels,
-                        star_coverage.expect("Stars coverage"),
-                    );
-                } else if let Some(((tone_view, _), tone_group)) =
-                    target.tone.as_ref().zip(target.tone_group.as_ref())
-                {
-                    #[cfg(test)]
-                    target.encoded_passes.fetch_add(1, Ordering::Relaxed);
-                    let mut pass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("spectral_cloud_tone"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: tone_view,
-                            depth_slice: None,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        ..Default::default()
-                    });
-                    pass.set_pipeline(
-                        if settings.settings.cloud_style
-                            == harmonigraph_scene::CloudStyle::VelvetScales
-                        {
-                            &cloud.velvet
-                        } else {
-                            &cloud.tone
-                        },
-                    );
-                    pass.set_bind_group(0, &target.source_group, &[]);
-                    pass.set_bind_group(1, tone_group, &[]);
-                    pass.set_vertex_buffer(0, target.tone_vertices.slice(..));
-                    pass.draw(0..6, 0..1);
-                }
-                if velvet {
-                    target.remember(egui_encoder, cloud);
-                }
+                        star_coverage,
+                    },
+                );
                 pane.cloud_ready = true;
             }
         }
 
+        // No cloud this frame — every effect off, or no light field to draw
+        // — so its history is freed rather than held for a look not drawn.
         if !pane.cloud_ready {
             if let Some(target) = pane.cloud.as_mut() {
-                target.invalidate_memory();
+                target.release_memory();
             }
         }
         Vec::new()
@@ -1606,7 +1399,7 @@ mod tests {
                 let vanishing = frame_with(&device, &queue, &mut resources, &cb);
                 let pane = resources.get::<SpectrogramResources>().unwrap();
                 let targets = pane.panes.get(0).unwrap().cloud.as_ref().unwrap();
-                assert!(targets.tile_texels().is_some(), "{style:?} drew no cloud");
+                assert!(targets.shape().tile.is_some(), "{style:?} drew no cloud");
                 assert!(vanishing == bare, "{style:?}: the texture moved the levels");
             }
             let s = &mut cb.atmosphere.as_mut().unwrap().settings;
@@ -1626,8 +1419,8 @@ mod tests {
                 .cloud
                 .as_ref()
                 .unwrap();
-            assert_eq!(targets.tone_size().is_some(), pixel > 1.0);
-            assert!(targets.tile_texels().is_some());
+            assert_eq!(targets.shape().tone.is_some(), pixel > 1.0);
+            assert!(targets.shape().tile.is_some());
             // Intermediate depth must stay on the curved palette too.
             // Mixing RGB endpoints would cut across this ramp's curve.
             cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.5;
@@ -1749,8 +1542,9 @@ mod tests {
         assert!(steps(&stars) > 4 * steps(&bare).max(1), "no stars");
         let targets = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
         let targets = targets.cloud.as_ref().unwrap();
-        assert!(targets.tone_size().is_some() && targets.tile_texels().is_none());
-        assert!(targets.memory_size().is_some(), "the fresh Stars ran without their history");
+        let shape = targets.shape();
+        assert!(shape.stars.is_some() && shape.tone.is_none() && shape.tile.is_none());
+        assert!(targets.shape().memory.is_some(), "the fresh Stars ran without their history");
         cb.grid.fill(0);
         cb.atmosphere.as_mut().unwrap().now += 7.0 * f64::from(fresh.color_release);
         let silent = frame_with(&device, &queue, &mut resources, &cb);
@@ -2482,7 +2276,7 @@ mod tests {
                     .unwrap();
                 allocations += usize::from(previous.as_ref() != Some(&target.source_view));
                 previous = Some(target.source_view.clone());
-                for (held, requested) in target.size.into_iter().zip(requested) {
+                for (held, requested) in target.shape().size.into_iter().zip(requested) {
                     assert!(held * 10 >= requested * 9 && held * 10 <= requested * 11);
                 }
             }
@@ -2595,6 +2389,7 @@ mod tests {
                 .cloud
                 .as_ref()
                 .unwrap()
+                .shape()
                 .size,
             atmosphere::source_size([128, 64], 1.0, cb.atmosphere.unwrap())
         );
@@ -3567,7 +3362,7 @@ fn cs_wrap_probe() {
                     .as_ref();
                 let cloud = cloud.expect("zero refraction must still draw random brightness");
                 if sampling > 1.0 {
-                    let (_, size) = cloud.tone.as_ref().expect("fixture must reach reduced tone");
+                    let size = cloud.shape().tone.expect("fixture must reach reduced tone");
                     assert!(size[0] < 384 && size[1] < 384);
                 }
                 for c in 0..3 {

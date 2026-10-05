@@ -258,9 +258,9 @@ struct Cloud {
     size: vec2<f32>,
     step: vec2<f32>,
     ppp: f32,
-    // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
-    // clouds, or the starfield's RGB at `Stars resolution`. 0 works the texture
-    // out per pixel in the composite instead.
+    // 1 when `cloud_tone` holds the reduced scalar cloud field. 0 works the
+    // texture out per pixel in the composite instead. The starfield reads its
+    // own image out of the same binding (`star_color`) and never this.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
     // are the sanitized settings. The filter shader declares only the head of
@@ -321,8 +321,9 @@ struct Cloud {
 @group(1) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(3) var<uniform> cloud: Cloud;
 /// The cloud's scalar tone, one texel per cloud sample of pane, as `fs_cloud_tone`
-/// drew it. Bound whether or not it holds anything — a pass that RENDERS into it
-/// binds a stand-in here, since wgpu validates every resource in a bound group
+/// drew it — or, under Stars, the star image `fs_stars` drew, which
+/// `star_color` samples. The two are never drawn together. Bound whether or
+/// not it holds anything — a pass that RENDERS into it binds a stand-in here, since wgpu validates every resource in a bound group
 /// against the attachments whether the shader reads it or not.
 @group(1) @binding(4) var cloud_tone: texture_2d<f32>;
 /// One period of the cell walk's OUTPUT, as `fs_cloud_tile` baked it, and bound
