@@ -55,6 +55,9 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
         if settings.material_style != LatticeMaterial::None {
             ValueBar::new(&mut settings.material_amount, 0.0..=1.0, "Material amount")
                 .percent().show(ui).on_hover_text("How strongly the material reshapes the textured light. 0% bypasses the material while preserving the texture.");
+            if settings.material_style == LatticeMaterial::Stars {
+                super::material::stars_resolution(ui, &mut settings.stars);
+            }
             ValueBar::new(&mut settings.material_shadow_pickup, 0.0..=1.0, "Dark pickup")
                 .percent().show(ui).on_hover_text("Dark pigment behind unlit ring segments, picked up by the material. Fades as each segment lights up. Actual ring and label shadows keep their own settings.");
             ValueBar::new(&mut settings.material_color_pickup, 0.0..=1.0, "Color pickup")
@@ -62,7 +65,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
             ValueBar::new(&mut settings.pigment_reach, 0.0..=PIGMENT_REACH_MAX, "Pigment reach")
                 .percent().show(ui).on_hover_text("Distance pigment reaches from each ring segment, as a percentage of the node radius. Grows the source band and its soft feather together. 0% disables dark and colored pickup; actual shadows are unchanged.");
             // Stars put their look first: size and spacing matter more than
-            // how they drift, and the rendering profile comes last.
+            // how they drift.
             let stars = settings.material_style == LatticeMaterial::Stars;
             if stars {
                 super::block(ui, "Appearance");
@@ -83,11 +86,7 @@ pub(super) fn settings(ui: &mut egui::Ui, view: &mut harmonigraph_scene::ViewCon
                     super::block(ui, "Appearance");
                     super::material::velvet(ui, &mut settings.material_settings);
                 }
-                LatticeMaterial::Stars => {
-                    super::block(ui, "Rendering");
-                    super::material::stars_quality(ui, &mut settings.stars);
-                }
-                LatticeMaterial::None => {},
+                LatticeMaterial::Stars | LatticeMaterial::None => {},
             }
         }
         crate::widgets::button_row(ui, |ui| {

@@ -1,22 +1,14 @@
-//! How each star depth is drawn: its cell, its stars' radius and shape, which
-//! cells a pixel reads for it, and the images the far and near depths and the
-//! halos are drawn into.
+//! How each star depth is drawn: its cell, its stars' radius and shape, and
+//! which cells a pixel reads for it.
 //!
 //! The renderer draws every frame from the [`StarPlan`] its settings give
 //! ([`StarSettings::plan`]), worked out afresh each time from the dials, so
 //! nothing in it is ever stale.
-use crate::{StarHaloProfile, StarSettings};
+use crate::StarSettings;
 
 /// How many depths the starfield draws, far (0) to near. The renderer's
 /// `STAR_SLICES`.
 pub const STAR_DEPTHS: usize = 5;
-/// The farthest depths, which share the far image when there is one. The
-/// shader's `STAR_FAR_LAYERS`.
-pub const STAR_FAR_DEPTHS: usize = 3;
-/// How many halo resolutions a plan may use at once: the renderer binds one
-/// halo image array per resolution, and the spectrogram's shader has no room
-/// for more.
-pub const STAR_HALO_TIERS: usize = 3;
 /// Which cells a pixel reads to draw one depth's stars.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StarGather {
@@ -27,9 +19,8 @@ pub enum StarGather {
     /// The four cells whose centres surround the pixel, drawing the whole
     /// star in one pass.
     Two,
-    /// The star's part inside its own cell at the depth's resolution, plus
-    /// the rest gathered from nine cells into a halo image at its tier's
-    /// resolution.
+    /// The nine cells around the pixel's own, for stars that reach past
+    /// the four.
     Three,
 }
 
@@ -74,9 +65,8 @@ pub fn star_falloff_bend(falloff: f32) -> f32 {
 
 /// Where each depth sits from far (0) to near (1) at `Star layers` `layers`,
 /// or `None` where it is not drawn. Layer `i` of `n` sits at `i / (n - 1)`,
-/// in the depth whose own place at five layers is nearest, so it keeps that
-/// depth's image and halo tier: two layers are the farthest and the nearest,
-/// three add the middle.
+/// in the depth whose own place at five layers is nearest: two layers are the
+/// farthest and the nearest, three add the middle.
 pub fn star_layer_depths(layers: u32) -> [Option<f32>; STAR_DEPTHS] {
     let n = (layers as usize).clamp(2, STAR_DEPTHS);
     let mut depths = [None; STAR_DEPTHS];
@@ -119,42 +109,18 @@ pub struct StarDepthPlan {
     /// [`StarSettings::star_twinkle_far`] and [`StarSettings::star_twinkle_near`]
     /// evenly in depth. Below 1 a star keeps its place across its lives.
     pub twinkle: f32,
-    /// Which of [`StarPlan::halo_tiers`] a [`StarGather::Three`] halo is
-    /// drawn at.
-    pub tier: usize,
 }
 
 /// Everything the renderer needs to know about how to draw each depth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StarPlan {
     pub depths: [StarDepthPlan; STAR_DEPTHS],
-    /// Halo image resolutions, as a fraction of the pane on each axis.
-    pub halo_tiers: [f32; STAR_HALO_TIERS],
-    /// The far image's resolution: the far depths drawn once into their own
-    /// image and sampled filtered. 1 draws them at the pane's resolution,
-    /// split off only on a big pane.
-    pub far: f32,
-    /// The near image's resolution: the near depths drawn over the far image
-    /// at this fraction and filtered up. 1 draws them straight into the pane,
-    /// and so does any value while [`Self::far`] is 1.
-    pub near: f32,
 }
 
 impl StarSettings {
-    /// The plan the renderer draws: the `Stars rendering` profile's images and
-    /// halo tiers, every depth's cell and star from the dials, each gathered
-    /// by the cheapest read that holds its stars whole.
+    /// The plan the renderer draws: every depth's cell and star from the
+    /// dials, each gathered by the cheapest read that holds its stars whole.
     pub fn plan(self) -> StarPlan {
-        let ([nearer, nearest], far, near) = match self.star_halo_profile {
-            StarHaloProfile::Uniform => ([self.star_halo_resolution, 1.0], 1.0, 1.0),
-            StarHaloProfile::P3 => ([1.0, 0.6], 0.75, 1.0),
-            StarHaloProfile::Medium => ([0.75, 0.45], 0.5, 0.75),
-            StarHaloProfile::Low => ([0.5, 0.3], 1.0 / 3.0, 0.5),
-        };
-        // The third tier is where a far depth's halo goes when it is gathered
-        // 3x3: at the far image's own resolution.
-        let halo_tiers = [nearer, nearest, far];
-        let uniform = self.star_halo_profile == StarHaloProfile::Uniform;
         let layers = star_layer_depths(self.star_layers);
         let drawn = |k: usize| layers[k].is_some();
         let place = |k: usize| layers[k].unwrap_or(k as f32 / (STAR_DEPTHS - 1) as f32);
@@ -173,11 +139,6 @@ impl StarSettings {
             } else {
                 StarGather::DRAWN.into_iter().find(|&g| fits(g)).unwrap_or(StarGather::Three)
             };
-            let tier = match (uniform, k < STAR_FAR_DEPTHS) {
-                (true, _) => 0,
-                (false, true) => 2,
-                (false, false) => (k - STAR_FAR_DEPTHS).min(1),
-            };
             StarDepthPlan {
                 gather,
                 depth: place(k),
@@ -195,10 +156,9 @@ impl StarSettings {
                     let (far, near) = (self.star_twinkle_far, self.star_twinkle_near);
                     far + (near - far) * place(k)
                 },
-                tier,
             }
         });
-        StarPlan { depths, halo_tiers, far, near }
+        StarPlan { depths }
     }
 }
 
@@ -207,8 +167,7 @@ mod tests {
     use super::*;
 
     /// Each depth is read by the cheapest gather that holds its stars whole.
-    /// At the fresh dials the far three fit 2x2 and the near two need 3x3,
-    /// which is what the presets drew before sizes chose.
+    /// At the fresh dials the far three fit 2x2 and the near two need 3x3.
     #[test]
     fn each_depth_takes_the_cheapest_gather_that_holds_its_stars() {
         let fresh = StarSettings::default().plan();

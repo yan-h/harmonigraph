@@ -266,9 +266,8 @@ struct Cloud {
     // cloud each at zero or not, read off their own dials.
     contour_strength: f32,
     // 1 when `cloud_tone` holds a precomposite: a reduced scalar field for
-    // clouds, or RGB of the three far Stars layers (75%, 50% or a third of the
-    // pane at High, Medium and Low; native at Uniform on a large pane). 0 works
-    // the texture out per pixel in the composite instead.
+    // clouds, or the starfield's RGB at `Stars resolution`. 0 works the texture
+    // out per pixel in the composite instead.
     tone_baked: u32,
     // Watercolour clouds. `drift` is the wash's offset in cloud units; the rest
     // are the sanitized settings. The filter shader declares only the head of
@@ -302,8 +301,8 @@ struct Cloud {
     star_size_variation: f32,
     star_pad0: u32,
     star_pad1: u32,
-    star_far: vec4<f32>,
-    star_near: vec4<f32>,
+    // The star image's actual size in texels; zw are padding.
+    star_image: vec4<f32>,
     // One entry per depth, worked out on the CPU from the dials and the clock
     // (`star_slices` in atmosphere.rs, which says what each field is).
     star_slices: array<StarSlice, 5>,
@@ -317,7 +316,6 @@ struct Cloud {
     wash_randomness: f32,
     memory_extent: vec2<f32>,
     previous_slices: array<StarSlice, 5>,
-    star_halo_samples: array<StarHaloSample, 5>,
     velvet: vec4<f32>,
     // Scales' `Cell size`, `Squareness` and `Tilt`; w is padding.
     velvet_form: vec4<f32>,
@@ -353,9 +351,6 @@ struct Cloud {
 /// it; bound on the same terms as `cloud_tone`. See `star_texel` for the
 /// packing.
 @group(1) @binding(8) var star_atlas: texture_2d<u32>;
-@group(1) @binding(10) var star_halos: texture_2d_array<f32>;
-@group(1) @binding(11) var star_halos_b: texture_2d_array<f32>;
-@group(1) @binding(12) var star_halos_c: texture_2d_array<f32>;
 
 // Scalar display intensity has no gamma transfer function. In particular,
 // the float source target must not take fs_heatmap_linear's RGB conversion.
@@ -914,17 +909,16 @@ fn fs_cloud_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // cells of `Star size`'s far end, many and faint) to near (cells of its near
 // end, few, bright, soft), each sliding at the shared drift times its own
 // parallax factor. The CPU works out every slice's numbers and its drift
-// (`star_slices`); native composition reads one core per slice and its halo image.
+// (`star_slices`); every slice is drawn into one image at `Stars resolution`.
 //
 // **Each star is worked out once a frame, not once per pixel.** Everything about
 // a star but its coverage — its life, jitter, the light under it, its
 // colour and size — depends on the star alone, and nine cells a slice round
 // every pixel took it again at every pixel in reach: about 500 times a frame for
 // a far star at 4K and 6000 for a near one. So `fs_star_bake` draws every
-// slice's cells on screen into `star_atlas`, a texel a cell, and the pixel's
-// native walk reads one texel a slice. The separate halo pass gathers nine
-// cells at the selected resolution and keeps each slice's color and coverage separate
-// (#1142).
+// slice's cells on screen into `star_atlas`, a texel a cell, and each pixel of
+// the star image reads one, four or nine texels a slice, as few as hold its
+// stars whole (#1142).
 //
 // **Lives.** A star lives `Star lifetime`, then its cell draws a new star,
 // fading the old one out and the new one in over the ends of their lives. Cells
@@ -974,16 +968,12 @@ fn star_paint(level: f32, rank: f32) -> vec3<f32> {
     let lift = 0.5 * STAR_LIFT * rank * smoothstep(0.0, 0.15, level);
     return palette_color(clamp(level * spread + lift, 0.0, 1.0));
 }
-fn star_origin() -> vec2<f32> { return cloud.origin; }
 fn star_size() -> vec2<f32> { return cloud.size; }
-fn star_ppp() -> f32 { return cloud.ppp; }
 fn star_randomness() -> f32 { return cloud.star_randomness; }
 fn star_life() -> f32 { return cloud.star_life; }
 fn star_size_variation() -> f32 { return cloud.star_size_variation; }
-fn star_far() -> vec4<f32> { return cloud.star_far; }
-fn star_near() -> vec4<f32> { return cloud.star_near; }
+fn star_image() -> vec2<f32> { return cloud.star_image.xy; }
 fn star_slice(k: u32) -> StarSlice { return cloud.star_slices[k]; }
-fn star_halo_sample(k: u32) -> StarHaloSample { return cloud.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(palette_color(0.0), 1.0); }
 fn star_source(pt: vec2<f32>, rank: f32, index: i32) -> vec4<f32> {
     let level = star_level_at(pt);

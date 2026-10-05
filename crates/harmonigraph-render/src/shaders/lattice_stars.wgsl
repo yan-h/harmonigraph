@@ -10,10 +10,7 @@ struct Settings {
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var cloud_sampler: sampler;
 @group(1) @binding(0) var star_atlas: texture_2d<u32>;
-@group(1) @binding(1) var star_halos: texture_2d_array<f32>;
-@group(1) @binding(2) var star_halos_b: texture_2d_array<f32>;
-@group(1) @binding(3) var star_halos_c: texture_2d_array<f32>;
-@group(1) @binding(4) var cloud_tone: texture_2d<f32>;
+@group(1) @binding(1) var cloud_tone: texture_2d<f32>;
 struct TileVertex {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) layer: u32,
@@ -23,16 +20,12 @@ fn vs_stars(@builtin(vertex_index) vertex: u32, @builtin(instance_index) layer: 
     let uv = vec2<f32>(f32((vertex << 1u) & 2u), f32(vertex & 2u));
     return TileVertex(vec4<f32>(uv * vec2<f32>(2.0, -2.0) + vec2<f32>(-1.0, 1.0), 0.0, 1.0), layer);
 }
-fn star_origin() -> vec2<f32> { return settings.stars.origin; }
 fn star_size() -> vec2<f32> { return settings.stars.size; }
-fn star_ppp() -> f32 { return settings.stars.ppp; }
 fn star_randomness() -> f32 { return settings.stars.star_randomness; }
 fn star_life() -> f32 { return settings.stars.star_life; }
 fn star_size_variation() -> f32 { return settings.stars.star_size_variation; }
-fn star_far() -> vec4<f32> { return settings.stars.star_far; }
-fn star_near() -> vec4<f32> { return settings.stars.star_near; }
+fn star_image() -> vec2<f32> { return settings.stars.star_image; }
 fn star_slice(k: u32) -> StarSlice { return settings.stars.star_slices[k]; }
-fn star_halo_sample(k: u32) -> StarHaloSample { return settings.stars.star_halo_samples[k]; }
 fn star_floor() -> vec4<f32> { return vec4<f32>(0.0); }
 // The spectrogram's star over a linear palette: the light's hue from black at
 // level 0 to full brightness at 1, the level being the light's opacity. The

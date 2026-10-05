@@ -37,23 +37,6 @@ pub enum CloudStyle {
     VelvetScales,
 }
 
-/// Stars rendering resolutions: the far image, the near image and the halo
-/// images. Which depths are drawn 2x2 or 3x3 is not the profile's choice but
-/// their stars' size ([`crate::star_plan`]). P3 is the High preset; `Uniform`
-/// draws at the pane's resolution and gives every 3x3 depth the adjustable
-/// halo resolution.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum StarHaloProfile {
-    Uniform,
-    /// Far three at 75%; near halos at 100% and 60%.
-    P3,
-    /// Back three at 50%, foreground at 75%, near halos at 75% and 45%.
-    #[default]
-    Medium,
-    /// Back three at one third, foreground at half, near halos at 50% and 30%.
-    Low,
-}
-
 /// The band the cloud size dials run over — [`MaterialSettings::wash_size`]
 /// and [`MaterialSettings::velvet_size`], which mean the same thing about
 /// different textures and so are worth one pair of numbers rather than two.
@@ -164,9 +147,9 @@ pub const STAR_SOLID_MAX: f32 = 0.9;
 /// The fewest [`StarSettings::star_layers`]; the most is
 /// [`crate::star_plan::STAR_DEPTHS`].
 pub const STAR_LAYERS_MIN: u32 = 2;
-/// Bounds for the per-axis resolution of the Stars halo images.
-pub const STAR_HALO_RESOLUTION_MIN: f32 = 0.25;
-pub const STAR_HALO_RESOLUTION_MAX: f32 = 1.0;
+/// Bounds for [`StarSettings::star_resolution`].
+pub const STAR_RESOLUTION_MIN: f32 = 0.25;
+pub const STAR_RESOLUTION_MAX: f32 = 1.0;
 
 /// Bounds shared by the two ends of the `Star spacing` control
 /// ([`StarSettings::star_spacing_ratio_far`], [`StarSettings::star_spacing_ratio_near`])
@@ -544,14 +527,12 @@ pub struct StarSettings {
     /// 0 stays bright almost to the edge, 0.5 falls evenly, 1 drops at once
     /// and leaves a long faint tail ([`crate::star_plan::star_falloff_bend`]).
     pub star_glow_falloff: f32,
-    /// Halo image width and height relative to the pane's device pixels.
-    /// Lower values soften the halo sampling without moving stars or changing
-    /// their reach. Runs over [`STAR_HALO_RESOLUTION_MIN`]..=[`STAR_HALO_RESOLUTION_MAX`].
-    pub star_halo_resolution: f32,
-    /// Uniform uses `star_halo_resolution`; the quality presets fix their own
-    /// resolutions, for the far three depths' one shared image and the
-    /// nearest two's halos. Saves without a profile use Medium.
-    pub star_halo_profile: StarHaloProfile,
+    /// The width and height of the one image every depth is drawn into,
+    /// relative to the pane's device pixels, filtered up into the pane. Lower
+    /// values soften every star alike and cost less, without moving stars or
+    /// changing their reach. Runs over
+    /// [`STAR_RESOLUTION_MIN`]..=[`STAR_RESOLUTION_MAX`].
+    pub star_resolution: f32,
     /// Which depths are soloed: while any drawn depth is, only the soloed
     /// ones are composited. Hidden layers keep baking and updating colour
     /// history, so toggles preserve the look and cost the full field. A flag on a
@@ -583,12 +564,10 @@ impl Default for StarSettings {
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
             // keep its cost. The far cores fill their stars, as the old capped
             // cores did, which is what made the far bed dense; the nearest
-            // core is the old one's share. A wider near core would sit mostly
-            // in a 3x3 depth's reduced halo image, soft and shimmering as it
-            // drifts. The gentle falloff holds the far stars near full
-            // coverage out to half a cell, as the old fringe on a wide core
-            // did; at 0.7 the fresh Medium frame sits 5.6/255 from the old
-            // one on average.
+            // core is the old one's share. The gentle falloff holds the far
+            // stars near full coverage out to half a cell, as the old fringe
+            // on a wide core did; at 0.7 the fresh frame of the time sat
+            // 5.6/255 from the old one on average.
             star_size_far: 1.66,
             star_size_near: 15.8,
             star_size_curve: 2.3,
@@ -604,8 +583,9 @@ impl Default for StarSettings {
             star_solid_far: 0.48,
             star_solid_near: 0.0,
             star_glow_falloff: 0.5,
-            star_halo_resolution: 0.5,
-            star_halo_profile: StarHaloProfile::default(),
+            // Between the old Medium preset's 50% far and 75% near images:
+            // sharper than Medium, cheaper than High.
+            star_resolution: 0.75,
             star_solo: [false; crate::star_plan::STAR_DEPTHS],
         }
     }
@@ -693,11 +673,11 @@ impl StarSettings {
         self.star_solid_near =
             clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);
         self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
-        self.star_halo_resolution = clamp(
-            self.star_halo_resolution,
-            fresh.star_halo_resolution,
-            STAR_HALO_RESOLUTION_MIN,
-            STAR_HALO_RESOLUTION_MAX,
+        self.star_resolution = clamp(
+            self.star_resolution,
+            fresh.star_resolution,
+            STAR_RESOLUTION_MIN,
+            STAR_RESOLUTION_MAX,
         );
         self
     }

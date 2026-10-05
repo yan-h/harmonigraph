@@ -39,9 +39,8 @@ Lattice note geometry, animation, labels and light effects fold independently.
 
 Analyzer textures read in decision order:
 choose **Style**, set **Texture mix**, then adjust **Motion**, **Appearance** and **Color response**.
-For Stars, **Stars rendering** sits directly below the style choice in both pictures,
-with Medium selected by default.
-Uniform reveals its halo-resolution control below the quality selector.
+For Stars, **Stars resolution** sits directly below the style choice in both pictures,
+at 75% by default.
 **Color pickup** follows brighter sound;
 **Color release** retains color as sound fades.
 Both use seconds, with zero responding immediately.

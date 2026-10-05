@@ -104,7 +104,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
         star_randomness, star_size_variation, star_jitter, star_solid_far, star_solid_near, star_glow_falloff,
-        star_halo_resolution, star_speed_far, star_speed_near, star_spacing_ratio_far, star_spacing_ratio_near,
+        star_resolution, star_speed_far, star_speed_near, star_spacing_ratio_far, star_spacing_ratio_near,
         star_spacing_ratio_curve, star_size_far, star_size_near, star_size_curve,
         star_speed_curve, star_lifetime, star_twinkle_far, star_twinkle_near);
     }
@@ -248,7 +248,6 @@ struct Scenario {
     /// own bars, so the page has one inventory per texture, and the base
     /// scenario draws the wash's.
     style: harmonigraph_scene::CloudStyle,
-    halo_profile: harmonigraph_scene::StarHaloProfile,
     material: harmonigraph_scene::LatticeMaterial,
 }
 
@@ -261,7 +260,6 @@ fn scenarios() -> Vec<Scenario> {
         meantone: false,
         marvel: false,
         style: harmonigraph_scene::CloudStyle::Watercolor,
-        halo_profile: harmonigraph_scene::StarHaloProfile::default(),
         material: harmonigraph_scene::LatticeMaterial::None,
     };
     let mut cases = Vec::new();
@@ -278,21 +276,13 @@ fn scenarios() -> Vec<Scenario> {
         enabled: true,
         ..base
     });
-    for profile in [
-        harmonigraph_scene::StarHaloProfile::P3,
-        harmonigraph_scene::StarHaloProfile::Medium,
-        harmonigraph_scene::StarHaloProfile::Low,
-        harmonigraph_scene::StarHaloProfile::Uniform,
-    ] {
-        cases.push(Scenario {
-            pane: panes::Tab::LatticeSettings,
-            material: harmonigraph_scene::LatticeMaterial::Stars,
-            halo_profile: profile,
-            expanded: true,
-            enabled: true,
-            ..base
-        });
-    }
+    cases.push(Scenario {
+        pane: panes::Tab::LatticeSettings,
+        material: harmonigraph_scene::LatticeMaterial::Stars,
+        expanded: true,
+        enabled: true,
+        ..base
+    });
     // Exercise the Scales-specific geometry controls in both pictures.
     cases.push(Scenario {
         pane: panes::Tab::AnalyzerSettings,
@@ -306,23 +296,14 @@ fn scenarios() -> Vec<Scenario> {
         enabled: true,
         ..base
     });
-    // Stars replace the wash's bars and shared Drift speed. Only the Uniform
-    // override exposes the extra resolution bar; exercise its loaded range too.
-    for halo_profile in [
-        harmonigraph_scene::StarHaloProfile::P3,
-        harmonigraph_scene::StarHaloProfile::Medium,
-        harmonigraph_scene::StarHaloProfile::Low,
-        harmonigraph_scene::StarHaloProfile::Uniform,
-    ] {
-        cases.push(Scenario {
-            pane: panes::Tab::AnalyzerSettings,
-            style: harmonigraph_scene::CloudStyle::Stars,
-            halo_profile,
-            expanded: true,
-            enabled: true,
-            ..base
-        });
-    }
+    // Stars replace the wash's bars and shared Drift speed.
+    cases.push(Scenario {
+        pane: panes::Tab::AnalyzerSettings,
+        style: harmonigraph_scene::CloudStyle::Stars,
+        expanded: true,
+        enabled: true,
+        ..base
+    });
     for projection in [Projection::Perspective, Projection::Orthographic] {
         cases.push(Scenario {
             pane: panes::Tab::LatticeSettings,
@@ -342,7 +323,7 @@ fn scenarios() -> Vec<Scenario> {
 /// Named inventories retain duplicate labels (two shadow groups, two mapping
 /// targets). A new or missing control fails with its label rather than a count.
 fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
-    use harmonigraph_scene::{CloudStyle, LatticeMaterial, StarHaloProfile};
+    use harmonigraph_scene::{CloudStyle, LatticeMaterial};
     use panes::Tab;
     const WATERCOLOR: &[&str] = &[
         "Patch size",
@@ -541,6 +522,7 @@ fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
             && scenario.style == CloudStyle::Stars);
     if stars {
         labels.extend([
+            "Stars resolution",
             "Star size",
             "Size curve",
             // Fresh spacing is reversed; poisoned endpoints load to equal bounds.
@@ -559,9 +541,6 @@ fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
             "Far twinkle",
             "Near twinkle",
         ]);
-        if scenario.halo_profile == StarHaloProfile::Uniform {
-            labels.push("Uniform halo resolution");
-        }
     }
     labels
 }
@@ -600,8 +579,6 @@ fn check(edge: Edge) {
         a.spectrum.backdrop_strength =
             if scenario.enabled { a.spectrum.backdrop_strength.max(0.85) } else { 0.0 };
         a.spectrum.atmosphere.cloud_style = scenario.style;
-        a.spectrum.atmosphere.stars.star_halo_profile = scenario.halo_profile;
-        a.view.atmosphere.stars.star_halo_profile = scenario.halo_profile;
         if !scenario.enabled {
             a.view.atmosphere.texture_depth = 0.0;
         }

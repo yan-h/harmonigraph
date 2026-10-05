@@ -505,10 +505,10 @@ fn jitter_edits_reset_only_the_stars_color_history() {
     }
 }
 
-/// Resolution changes rebuild halo targets but must carry material history,
+/// Resolution changes rebuild the star image but must carry material history,
 /// including paused redraws whose dark current input would expose a reset.
 #[test]
-fn halo_resolution_changes_carry_stars_color_history() {
+fn resolution_changes_carry_stars_color_history() {
     let Some((device, queue)) = headless_device() else { return };
     let mut cb = fixture(CloudStyle::Stars);
     let mut changed = CallbackResources::default();
@@ -519,22 +519,11 @@ fn halo_resolution_changes_carry_stars_color_history() {
     let lit = pixels(&device, &queue, memory(&changed));
     assert!(lit.iter().filter(|p| p[3] > 0.1).count() > 1000);
     cb.grid.fill(0);
-    use harmonigraph_scene::StarHaloProfile::{Low, Medium, Uniform, P3};
-    let mut prior_layout = None;
-    for (profile, resolution) in [
-        (Uniform, 0.25),
-        (Uniform, 1.0),
-        (Uniform, 1.0 / 3.0),
-        (Uniform, 0.5),
-        (P3, 0.5),
-        (Medium, 0.5),
-        (Low, 0.5),
-        (P3, 0.5),
-    ] {
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_profile = profile;
-        cb.atmosphere.as_mut().unwrap().settings.stars.star_halo_resolution = resolution;
+    let mut prior_size = None;
+    for resolution in [0.25, 1.0, 1.0 / 3.0, 0.5, 0.75] {
+        cb.atmosphere.as_mut().unwrap().settings.stars.star_resolution = resolution;
         prepare_once(&device, &queue, &mut changed, &cb);
-        let layout = changed
+        let size = changed
             .get::<SpectrogramResources>()
             .unwrap()
             .panes
@@ -543,9 +532,9 @@ fn halo_resolution_changes_carry_stars_color_history() {
             .cloud
             .as_ref()
             .unwrap()
-            .halo_layout();
-        assert_ne!(layout, prior_layout, "fixture did not change the halo targets");
-        prior_layout = layout;
+            .tone_size();
+        assert_ne!(size, prior_size, "fixture did not change the star image");
+        prior_size = size;
         assert_eq!(pixels(&device, &queue, memory(&changed)), lit);
     }
     cb.atmosphere.as_mut().unwrap().now += 0.05;

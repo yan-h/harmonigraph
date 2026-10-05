@@ -164,33 +164,19 @@ fn star_solo(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
     });
 }
 
-/// The rendering profile, last among the Stars controls: a quality and cost
-/// choice made once, where the rest shape the look.
-pub(super) fn stars_quality(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
-    use harmonigraph_scene::StarHaloProfile;
-    crate::widgets::choice_row(
-        ui,
-        "Stars rendering",
-        &mut stars.star_halo_profile,
-        &[
-            (StarHaloProfile::Low, "Low", "Lower rendering cost with softer foreground points and coarser distant detail."),
-            (StarHaloProfile::Medium, "Medium", "Faster rendering with softer stars, including the foreground."),
-            (StarHaloProfile::P3, "High", "Sharper foreground stars with slightly softer distant stars."),
-            (StarHaloProfile::Uniform, "Uniform", "Draw at the pane's resolution, with one halo resolution for every depth that needs a halo."),
-        ],
+/// The resolution every star is drawn at, first among the Stars controls: a
+/// quality and cost choice made once, where the rest shape the look.
+pub(super) fn stars_resolution(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
+    ValueBar::new(
+        &mut stars.star_resolution,
+        harmonigraph_scene::STAR_RESOLUTION_MIN..=harmonigraph_scene::STAR_RESOLUTION_MAX,
+        "Stars resolution",
+    )
+    .percent()
+    .show(ui)
+    .on_hover_text(
+        "Resolution the stars are drawn at, relative to the pane. 100% is the sharpest; 50% draws a quarter of the pixels, softer and faster. Star positions, sizes and reach stay the same.",
     );
-    if stars.star_halo_profile == StarHaloProfile::Uniform {
-        ValueBar::new(
-            &mut stars.star_halo_resolution,
-            harmonigraph_scene::STAR_HALO_RESOLUTION_MIN..=harmonigraph_scene::STAR_HALO_RESOLUTION_MAX,
-            "Uniform halo resolution",
-        )
-        .percent()
-        .show(ui)
-        .on_hover_text(
-            "Halo image width and height relative to the pane. 50% uses a quarter of the pixels; 100% uses native resolution. Lower values soften the glow. Star positions, sharp cores and halo reach stay the same.",
-        );
-    }
 }
 
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {

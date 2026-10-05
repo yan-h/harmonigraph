@@ -409,37 +409,26 @@ fn scales_draw_the_frame_on_record() {
     check_take("spectrogram-scales", shot, take);
 }
 
-/// High retains its original starfield reference: every slice, palette
-/// position, fringe and far-to-near compositing at full foreground resolution.
+/// Stars at full resolution: every slice, palette position and far-to-near
+/// compositing at the pane's own pixels.
 #[test]
-fn high_stars_draw_the_frame_on_record() {
+fn full_resolution_stars_draw_the_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-        a.spectrum.atmosphere.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::P3;
+        a.spectrum.atmosphere.stars.star_resolution = 1.0;
     });
     check_take("spectrogram-starfield", shot, take);
 }
 
-/// Fresh Stars settings use Medium and reach its reduced foreground export path.
+/// Fresh Stars settings draw into a reduced image, filtered up into the pane.
 #[test]
-fn default_stars_draw_the_medium_frame_on_record() {
+fn default_stars_draw_the_reduced_frame_on_record() {
     let shot = Shot { size: TALL, range: whole_axis() };
     let take = shot.dialled(|a| {
         a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
     });
-    check_take("spectrogram-starfield-medium", shot, take);
-}
-
-/// Low uses the selected L1 resolutions through the export renderer.
-#[test]
-fn low_stars_draw_the_frame_on_record() {
-    let shot = Shot { size: TALL, range: whole_axis() };
-    let take = shot.dialled(|a| {
-        a.spectrum.atmosphere.cloud_style = harmonigraph_scene::CloudStyle::Stars;
-        a.spectrum.atmosphere.stars.star_halo_profile = harmonigraph_scene::StarHaloProfile::Low;
-    });
-    check_take("spectrogram-starfield-low", shot, take);
+    check_take("spectrogram-starfield-reduced", shot, take);
 }
 
 /// A non-vacuous Step 7 frame: held roll notes use the Gaussian geometry

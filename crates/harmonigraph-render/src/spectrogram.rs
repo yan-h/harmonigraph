@@ -57,9 +57,7 @@ pub(crate) const SPECTROGRAM_ENTRY_POINTS: &[&str] = &[
     "fs_cloud_tile",
     "fs_velvet_tone",
     "fs_star_bake",
-    "fs_star_far",
-    "fs_star_near",
-    "fs_star_halo",
+    "fs_stars",
     "fs_color_memory",
 ];
 
@@ -402,7 +400,6 @@ impl SpectrogramResources {
                 } else {
                     "fs_heatmap_gamma"
                 },
-                false,
             ),
             cloud: None,
             layout,
@@ -466,7 +463,6 @@ fn create_spectrogram_pipeline(
     layout: &wgpu::BindGroupLayout,
     extra_layout: Option<&wgpu::BindGroupLayout>,
     fragment: &str,
-    split_stars: bool,
 ) -> wgpu::RenderPipeline {
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("spectrogram_pipeline_layout"),
@@ -487,10 +483,7 @@ fn create_spectrogram_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: if split_stars { &[("STAR_SPLIT", 1.0)] } else { &[] },
-                ..Default::default()
-            },
+            compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: Some(EGUI_BLEND),
@@ -784,24 +777,13 @@ impl CallbackTrait for SpectrogramCallback {
                         // work while the intermediate retains the full pane size.
                         .map(|size| {
                             if stars {
-                                atmosphere::star_far_size(pixels, settings.settings.stars)
+                                atmosphere::star_image_size(pixels, settings.settings.stars)
                             } else {
                                 size
                             }
                         });
                 let tile = atmosphere::tile_key(pixels, settings, sampling.tile_cells);
                 let stars = atmosphere::stars(pixels, settings);
-                let near_size =
-                    stars.and_then(|_| atmosphere::star_near_size(pixels, settings.settings.stars));
-                let near_coverage = near_size.map(|size| {
-                    atmosphere::star_far_scissor(
-                        star_coverage.expect("Stars coverage"),
-                        pixels,
-                        size,
-                    )
-                });
-                let halos =
-                    stars.map(|_| atmosphere::star_halo_layout(pixels, settings.settings.stars));
                 let star_size = stars.map(|layout| {
                     atmosphere::star_atlas_size(
                         layout.size(),
@@ -846,10 +828,8 @@ impl CallbackTrait for SpectrogramCallback {
                 let resize = pane.cloud.as_ref().is_none_or(|c| {
                     c.size != size
                         || c.tone_size() != tone_size
-                        || c.near_size() != near_size
                         || c.tile_texels() != texels
                         || c.star_size() != star_size
-                        || c.halo_layout() != halos
                         || c.memory_size() != memory_size
                 });
                 if resize {
@@ -863,11 +843,9 @@ impl CallbackTrait for SpectrogramCallback {
                     let wanted = atmosphere::Allocation {
                         size,
                         tone: tone_size,
-                        near: near_size,
                         tile,
                         carried,
                         stars: star_size,
-                        halos,
                         memory: memory_size,
                         carried_memory,
                     };
@@ -1008,7 +986,6 @@ impl CallbackTrait for SpectrogramCallback {
                             cloud,
                             pixels,
                             star_coverage.expect("Stars coverage"),
-                            near_coverage,
                         );
                     } else if let Some(((tone_view, _), tone_group)) =
                         target.tone.as_ref().zip(target.tone_group.as_ref())
@@ -1098,21 +1075,12 @@ impl CallbackTrait for SpectrogramCallback {
             // The spectrogram's bed is black, including unwritten history.
             // Color the diffused intensity there first; then the measured mesh
             // replaces its own pixels with the unified core and soft field.
-            let split = cloud.star_size().is_some() && cloud.tone.is_some();
-            render_pass.set_pipeline(if split {
-                &pipelines.star_backdrop
-            } else {
-                &pipelines.backdrop
-            });
+            render_pass.set_pipeline(&pipelines.backdrop);
             render_pass.set_bind_group(0, bind_group, &[]);
             render_pass.set_bind_group(1, cloud.composite_group(), &[]);
             render_pass.set_vertex_buffer(0, cloud.coverage_vertices.slice(..));
             render_pass.draw(0..6, 0..1);
-            render_pass.set_pipeline(if split {
-                &pipelines.star_composite
-            } else {
-                &pipelines.composite
-            });
+            render_pass.set_pipeline(&pipelines.composite);
         } else {
             render_pass.set_pipeline(&resources.pipeline);
         }
@@ -1861,28 +1829,25 @@ mod tests {
     /// over a flat level so a star's colour does not change with where
     /// it is, on a 540-point pane so a star pixel is a device pixel — and the
     /// clock steps by the time the drift takes to cover a whole number of
-    /// them, and of texels in every reduced star image too, so resampling is
-    /// not read as a move. No one profile is whole at 8 pixels everywhere
-    /// (Medium's nearest halo at 45% would move 3.6 texels), so the field is
-    /// drawn twice: Medium with no depth close enough to read 3x3, for its
-    /// far 50% and near 75% images (4 and 6 texels), and Uniform at 50%, for
-    /// the 3x3 halos (4). A longer step instead moves fading stars past the
+    /// them, and of texels in the star image too, so resampling is not read
+    /// as a move: 8 pixels is 4 texels at 50%. The field is drawn twice, with
+    /// no depth close enough to read 3x3 and with the nearest reading 3x3.
+    /// A longer step instead moves fading stars past the
     /// threshold. Lives are long and the step short, so a star's fade moves a
     /// couple of levels at most, and a life that turns over is at zero at both
     /// ends of the turn. An ignored offset leaves the field where it was, and
     /// a flipped one moves it the other way: either fails the first assert.
     #[test]
     fn the_starfield_moves_by_the_drift() {
-        use harmonigraph_scene::{star_plan::StarGather, StarHaloProfile};
+        use harmonigraph_scene::star_plan::StarGather;
         const PANE: u32 = 540;
         const SHIFT: usize = 8;
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
         let fresh = harmonigraph_scene::StarSettings::default();
-        for (profile, spacing_near, three) in [
-            (StarHaloProfile::Medium, fresh.star_spacing_ratio_far, false),
-            (StarHaloProfile::Uniform, fresh.star_spacing_ratio_near, true),
-        ] {
+        for (spacing_near, three) in
+            [(fresh.star_spacing_ratio_far, false), (fresh.star_spacing_ratio_near, true)]
+        {
             let mut cb = refracted_fixture();
             cb.rect =
                 egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
@@ -1899,13 +1864,13 @@ mod tests {
             (s.stars.star_speed_far, s.stars.star_speed_near, s.cloud_direction) =
                 (SPEED, SPEED, 0.0);
             s.stars.star_lifetime = 20.0;
-            // Equal sizes: the smallest stars' cores resample unevenly in the
-            // reduced halo images under a whole-pixel shift, which is not drift.
+            // Equal sizes: the smallest stars resample unevenly in the reduced
+            // image under a whole-pixel shift, which is not drift.
             s.stars.star_size_variation = 0.0;
-            (s.stars.star_halo_profile, s.stars.star_halo_resolution) = (profile, 0.5);
+            s.stars.star_resolution = 0.5;
             s.stars.star_spacing_ratio_near = spacing_near;
             let gathers = s.stars.plan().depths.map(|depth| depth.gather);
-            assert_eq!(gathers.contains(&StarGather::Three), three, "{profile:?}: {gathers:?}");
+            assert_eq!(gathers.contains(&StarGather::Three), three, "{gathers:?}");
             let mut resources = CallbackResources::default();
             let before = frame_with(&device, &queue, &mut resources, &cb);
             cb.atmosphere.as_mut().unwrap().now +=
@@ -1928,19 +1893,22 @@ mod tests {
             let lit = interior()
                 .filter(|&(x, y)| apart(px(&before, x, y), [floor[0], floor[1], floor[2]]))
                 .count();
-            assert!(lit * 5 > total, "{profile:?}: too few stars to see a move: {lit} of {total}");
+            assert!(
+                lit * 5 > total,
+                "three={three}: too few stars to see a move: {lit} of {total}"
+            );
             let moved = interior()
                 .filter(|&(x, y)| apart(px(&after, x, y), px(&before, x - SHIFT, y)))
                 .count();
             assert!(
                 moved * 200 < total,
-                "{profile:?}: the field is not the earlier one moved {SHIFT} px: {moved} of {total} differ"
+                "three={three}: the field is not the earlier one moved {SHIFT} px: {moved} of {total} differ"
             );
             let still =
                 interior().filter(|&(x, y)| apart(px(&after, x, y), px(&before, x, y))).count();
             assert!(
                 still * 10 > total,
-                "{profile:?}: the field did not move: only {still} of {total} pixels changed"
+                "three={three}: the field did not move: only {still} of {total} pixels changed"
             );
         }
     }
@@ -4073,14 +4041,12 @@ fn cs_wrap_probe() {
     thread_local! {
         /// Consumed only when the timing probe's first real source pass runs.
         pub(super) static SOURCE_QUERY: std::cell::RefCell<Option<wgpu::QuerySet>> = const { std::cell::RefCell::new(None) };
-        /// Compare both paths without allocating a large pane in every test.
-        pub(super) static STAR_SPLIT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     }
 
     /// The source every spectrogram pipeline is built from: production's, or
-    /// the reference a star-split test asks for.
+    /// the reference a star-image test asks for.
     pub(super) fn pipeline_source() -> std::borrow::Cow<'static, str> {
-        if let Some(source) = star_split::reference_source() {
+        if let Some(source) = star_image::reference_source() {
             return source.into();
         }
         SPECTROGRAM_SRC.into()
@@ -4399,7 +4365,7 @@ fn cs_rotation_probe() {
         );
     }
 
-    mod star_split;
+    mod star_image;
     mod timing;
 }
 

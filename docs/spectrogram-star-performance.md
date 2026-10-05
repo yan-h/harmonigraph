@@ -13,33 +13,25 @@ The atlas bakes each star's position,
 life,
 size,
 and color once per frame.
-All five depth layers remain.
-High (formerly Optimized) renders the complete farthest three responses together into an RGBA16Float image at 75% width and height,
-then samples it bilinearly.
-Those layers use four neighboring cells and shorter glow;
-the nearest two retain native cores and their existing 100% and 60% halo images.
-The three unused far-layer halo images and passes are absent.
-
-Medium renders the far three at 50% width and height,
-then the nearest two over that image at 75% in a second RGBA16Float target.
-Its foreground halo targets use 75% and 45% dimensions.
-The final pass samples that composite bilinearly,
+Every drawn depth is then composited far to near into one RGBA16Float image at **Stars resolution** of the pane's width and height (75% by default, 25–100%),
+and the final pass samples it bilinearly,
 keeping Texture mix and the underlying spectrogram at native resolution.
-Low uses the same path with one-third background dimensions,
-half-resolution foreground,
-and foreground halos at 50% and 30%.
-This is L1 from the [resolution experiment](https://github.com/yan-h/harmonigraph/pull/1270).
-The shared Stars controls expose it in both the spectrogram and lattice background.
-The [production verification](evidence/spectrogram-stars/low-preset-2026-09-28/README.md) compares it with the accepted L1 captures.
-All three presets retain all five layers,
-star geometry,
-and spectrogram color history.
-Medium is the default (#1279);
-High keeps its existing saved `P3` value;
-Low adds a saved enum variant,
-so older binaries cannot parse appearances saved with Low selected.
-Uniform retains its manual halo-resolution override.
-Switching presets changes sampling without resetting retained colors.
+Each depth reads the fewest cells that hold its stars whole:
+one,
+four,
+or nine.
+The nine-cell read is drawn inline in the same pass.
+
+This replaced the High, Medium, Low and Uniform presets.
+Those drew the far three depths and the near two into separately sized images,
+and drew each nine-cell depth's glow into its own reduced halo image so its core could stay sharper than its glow.
+With one resolution for every image,
+the separate near image,
+the halo images and their pass,
+and the native-resolution split for large panes all had nothing left to do.
+At 75% the far depths are drawn finer than Medium's 50%,
+and the nearest glow finer than its 45%.
+Changing the resolution reallocates the image without resetting retained colors.
 
 The four-cell gather starts at `floor(r - 0.5)`.
 Its radial support is `1 - jitter_span / 2` cell widths,
@@ -55,16 +47,6 @@ It defaulted to 0% and was removed in #1356, so the fresh picture never used it.
 It strengthened partial tails and lifetime fades but could not fill a pixel with zero star contribution.
 The [bounded prototype report](https://github.com/yan-h/harmonigraph/tree/e90cca23/docs/evidence/spectrogram-stars/crack-fill-2026-09-28) records the appearance and cost comparison.
 The [slider validation](evidence/spectrogram-stars/far-fill-2026-09-28/README.md) records production parity and measured overhead.
-
-Uniform retains all five wide responses and its adjustable halo resolution.
-At drawn coverage of at least 2560×1440 device pixels in area,
-it composites the farthest three into a native-resolution target and draws the nearest two over an exact texel read.
-Smaller Uniform regions retain the unsplit path.
-High, Medium and Low use their reduced far-three images at every pane size.
-Both policies retain layer order,
-palette mixing,
-motion,
-and color history.
 
 Yan selected the 75% variant after viewing the higher-resolution motion comparison.
 No new persisted shape or quality control was added;
@@ -133,8 +115,7 @@ and visual comparisons.
 | Fewer layers or reduced jitter | Measured appearance changes, not equivalent-look optimizations; the selected design preserves both. |
 | Temporal reuse or caching the star bake | No valid moving-picture cache was established. Drift, life, and sampled light evolve every frame; a frozen diagnostic is not an implementable cache. |
 
-Uniform Full complete-response work is the clearest narrowly scoped remaining measured lead if that override matters in actual use.
-Otherwise profile the selected implementation before reviving older candidates:
+Profile the current implementation before reviving older candidates:
 its cost distribution has changed.
 Adaptive neighbors,
 silent-tile masks,
@@ -187,7 +168,7 @@ life transitions,
 silence,
 fractional scale/origin,
 partial-region edges,
-and profile transitions.
+and resolution changes.
 Sampling/layout changes must preserve color history when its identity is unchanged.
 Future shader changes still owe reviewed goldens and a runner-generated Metal corpus.
 

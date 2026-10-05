@@ -1,5 +1,5 @@
 //! Shared star geometry, allocation and frame transport for colored light fields.
-use crate::uniforms::{uniform_group, Float2, Float4, Int2};
+use crate::uniforms::{uniform_group, Float2, Int2};
 use crate::wgpu;
 #[cfg(doc)]
 use harmonigraph_scene::star_plan::star_profile;
@@ -73,11 +73,10 @@ struct StarSlice {
     base: i32,
     origin: Int2,
     grid: Int2,
-    /// The band a star's centre is drawn from, and how far a star reaches
-    /// inside its own cell wherever its centre is drawn, both in cells: the
-    /// slice's `Position variation`.
+    /// The band a star's centre is drawn from, in cells: the slice's
+    /// `Position variation`.
     width: f32,
-    inner: f32,
+    pad: u32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
     /// How far its stars fade between lives: the plan's. Below 1 a star
@@ -100,10 +99,9 @@ fn star_gather_code(gather: StarGather) -> u32 {
 pub(crate) const STAR_PANE: f32 = 540.0;
 /// The star atlas's texel, one cell's star as the shader's `star_bake` packs it.
 pub(crate) const STAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
-pub(crate) const STAR_FAR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// Below this area the extra pass does not consistently pay for itself.
-/// Apply it to drawn device pixels, independent of display scale and star count.
-pub(crate) const STAR_SPLIT_PIXELS: u64 = 2560 * 1440;
+/// The star image's texel: every slice composited, gamma-coded, before the
+/// consumer filters it up into the pane.
+pub(crate) const STAR_IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The most texels the atlas may take, 64 MB at sixteen bytes each. At the
 /// fresh dials a 16:9 pane takes about 1.2 million and an 8:1 strip about 5.4
 /// million; a pane wider than about 6.3:1, or a finer `Star spacing`, asks
@@ -161,9 +159,8 @@ impl StarLayout {
     ) -> Self {
         let cells = cells.map(|cell| cell.max(floor));
         let pane = [STAR_PANE * aspect, STAR_PANE];
-        // Retain the padded atlas bounds needed by the halo
-        // pass's 3x3 walk around each pixel's nominal cell. An undrawn slice
-        // bakes nothing.
+        // Retain the padded atlas bounds needed by the 3x3 walk around each
+        // pixel's nominal cell. An undrawn slice bakes nothing.
         let grids = std::array::from_fn(|k| {
             pane.map(|span| {
                 let cells =
@@ -286,7 +283,7 @@ pub(crate) fn star_slices(
             origin: Int2(origin),
             grid: Int2(grid.map(|side| side as i32)),
             width: star_jitter_width(jitter),
-            inner: StarGather::Core.bound(jitter),
+            pad: 0,
             gather: if solo && !settings.star_solo[k] { 0 } else { star_gather_code(depth.gather) },
             twinkle: depth.twinkle,
         }
@@ -295,54 +292,28 @@ pub(crate) fn star_slices(
 
 /// The cell at the start of a slice's grid on one axis: the one a pixel at
 /// the pane's leading edge is in, less one conservative neighbor and the
-/// margin. This bounds the three-cell halo walk and its one-cell core.
+/// margin. This bounds the three-cell walk.
 /// `span` is the pane along the axis in star pixels.
 pub(crate) fn star_origin(span: f32, cell: f32, offset: f32) -> i32 {
     let edge = -f64::from(span / 2.0 / cell) - f64::from(offset);
     edge.floor() as i32 - 1 - STAR_GRID_MARGIN as i32
 }
-/// Per-depth halo sampling follows pane pixels and the sanitized resolution
-/// dial. The rounded texture shape is the whole allocation key: jitter, halo
-/// width, drift and color edits refill the same targets.
-pub(crate) fn star_halo_size(pixels: [u32; 2], resolution: f32) -> [u32; 2] {
-    pixels.map(|n| (n as f32 * resolution).ceil().max(1.0) as u32)
-}
-
-/// Whether the far depths are drawn into a reduced image and sampled
-/// filtered: the presets' far image (75%, 50% and a third for High, Medium
-/// and Low). Uniform's is the pane's own, read texel for texel, and drawn
-/// only on a big pane.
-pub(crate) fn star_far_reduced(settings: harmonigraph_scene::StarSettings) -> bool {
-    settings.plan().far < 1.0
-}
-
-/// The far image's size: the pane's own unless [`star_far_reduced`].
-pub(crate) fn star_far_size(
+/// The star image every slice is drawn into: the pane's device pixels at
+/// `Stars resolution`, rounded up. The rounded shape is the whole allocation
+/// key, so dial edits that round to the same image refill the same target.
+pub(crate) fn star_image_size(
     pixels: [u32; 2],
     settings: harmonigraph_scene::StarSettings,
 ) -> [u32; 2] {
-    let far = settings.plan().far;
-    if far < 1.0 {
-        star_halo_size(pixels, far)
-    } else {
-        pixels
-    }
-}
-
-/// Medium and Low shade the foreground over the far image at 75% and 50% dimensions.
-/// Exact rounded dimensions belong to allocation identity, not the preset name.
-/// The near pass composites over a reduced far image, so there is no near
-/// image without one.
-pub(crate) fn star_near_size(
-    pixels: [u32; 2],
-    settings: harmonigraph_scene::StarSettings,
-) -> Option<[u32; 2]> {
-    let plan = settings.plan();
-    (plan.near < 1.0 && plan.far < 1.0).then(|| star_halo_size(pixels, plan.near))
+    pixels.map(|n| (n as f32 * settings.star_resolution).ceil().max(1.0) as u32)
 }
 
 /// Include every bilinear tap at the boundary of a partially covered pane.
-pub(crate) fn star_far_scissor(coverage: [u32; 4], pixels: [u32; 2], target: [u32; 2]) -> [u32; 4] {
+pub(crate) fn star_image_scissor(
+    coverage: [u32; 4],
+    pixels: [u32; 2],
+    target: [u32; 2],
+) -> [u32; 4] {
     if pixels == target {
         return coverage;
     }
@@ -361,152 +332,15 @@ pub(crate) fn star_far_scissor(coverage: [u32; 4], pixels: [u32; 2], target: [u3
     [start[0], start[1], end[0] - start[0], end[1] - start[1]]
 }
 
-pub(crate) const STAR_HALO_GROUPS: usize = 3;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HaloGroup {
-    pub(crate) size: [u32; 2],
-    pub(crate) layers: u32,
-}
-
-/// Allocation identity contains only the actual images and their depth mapping.
-/// Different controls that round to this same layout reuse the same targets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StarHaloLayout {
-    pub(crate) groups: [HaloGroup; STAR_HALO_GROUPS],
-    /// [group, array layer] for each far-to-near depth; zeros for one with
-    /// no halo.
-    pub(crate) layers: [[u32; 2]; STAR_SLICES],
-    /// Which depths own a halo image: those the plan gathers 3x3.
-    pub(crate) active: [bool; STAR_SLICES],
-}
-
-impl StarHaloLayout {
-    pub(crate) fn from_sizes(sizes: [Option<[u32; 2]>; STAR_SLICES]) -> Self {
-        let mut layout = Self {
-            groups: [HaloGroup { size: [1, 1], layers: 0 }; STAR_HALO_GROUPS],
-            layers: [[0, 0]; STAR_SLICES],
-            active: sizes.map(|size| size.is_some()),
-        };
-        for (depth, size) in sizes.into_iter().enumerate() {
-            let Some(size) = size else { continue };
-            let group = layout
-                .groups
-                .iter()
-                .position(|g| g.layers > 0 && g.size == size)
-                .or_else(|| layout.groups.iter().position(|g| g.layers == 0))
-                .expect("a plan's halos come in at most `STAR_HALO_TIERS` sizes");
-            layout.layers[depth] = [group as u32, layout.groups[group].layers];
-            layout.groups[group].size = size;
-            layout.groups[group].layers += 1;
-        }
-        layout
-    }
-
-    pub(crate) fn samples(self) -> [StarHaloSample; STAR_SLICES] {
-        self.layers.map(|[group, layer]| StarHaloSample {
-            size: Float2(self.groups[group as usize].size.map(|n| n as f32)),
-            group,
-            layer,
-        })
-    }
-}
-
-/// A halo image for each depth the plan gathers 3x3, at its tier's
-/// resolution. Material history keeps the same identity across profiles,
-/// independent of their sampling.
-///
-/// From the plan of `settings` exactly as given, like every other reader of
-/// the plan: sanitizing here would clamp the lattice's scaled sizes back into
-/// the stored range and allocate halos for a different set of 3x3 depths
-/// than the one drawn.
-pub(crate) fn star_halo_layout(
-    pixels: [u32; 2],
-    settings: harmonigraph_scene::StarSettings,
-) -> StarHaloLayout {
-    let plan = settings.plan();
-    StarHaloLayout::from_sizes(plan.depths.map(|depth| {
-        (depth.gather == StarGather::Three)
-            .then(|| star_halo_size(pixels, plan.halo_tiers[depth.tier]))
-    }))
-}
-
-// One 16-byte uniform row: the renderer supplies the allocated size and
-// array address directly, without reproducing float rounding in the shader.
-uniform_group! {
-    #[derive(Debug)]
-    struct StarHaloSample {
-        size: Float2,
-        group: u32,
-        layer: u32,
-    }
-}
-
-/// One premultiplied halo image per depth, sampled together only after each
-/// slice's native core has been added. A flattened RGB image would lose the
-/// coverage normalization and depth order.
-pub(crate) struct StarHalos {
-    pub(crate) views: [wgpu::TextureView; STAR_HALO_GROUPS],
-    pub(crate) layers: [Option<wgpu::TextureView>; STAR_SLICES],
-    pub(crate) layout: StarHaloLayout,
-}
-
-impl StarHalos {
-    pub(crate) fn new(device: &wgpu::Device, layout: StarHaloLayout) -> Self {
-        let textures = layout.groups.map(|group| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("spectral_star_halos"),
-                size: wgpu::Extent3d {
-                    width: group.size[0],
-                    height: group.size[1],
-                    // Unused fixed bindings receive a harmless one-texel array.
-                    depth_or_array_layers: group.layers.max(1),
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: STAR_FAR_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        });
-        Self {
-            views: std::array::from_fn(|group| {
-                textures[group].create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2Array),
-                    ..Default::default()
-                })
-            }),
-            layers: std::array::from_fn(|depth| {
-                if !layout.active[depth] {
-                    return None;
-                }
-                let [group, layer] = layout.layers[depth];
-                Some(textures[group as usize].create_view(&wgpu::TextureViewDescriptor {
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                }))
-            }),
-            layout,
-        }
-    }
-}
-
 uniform_group! {
     struct StarUniforms {
-        origin: Float2,
         size: Float2,
-        ppp: f32,
+        star_image: Float2,
         star_randomness: f32,
         star_life: f32,
         star_size_variation: f32,
-        star_far: Float4,
-        star_near: Float4,
+        pad: f32,
         star_slices: [StarSlice; STAR_SLICES],
-        star_halo_samples: [StarHaloSample; STAR_SLICES],
     }
 }
 impl StarUniforms {
@@ -516,26 +350,15 @@ impl StarUniforms {
         now: f64,
         pixels: [u32; 2],
         layout: &StarLayout,
-        halos: StarHaloLayout,
     ) -> Self {
-        let far = star_far_size(pixels, settings);
-        let near = star_near_size(pixels, settings).unwrap_or([0; 2]);
         Self {
-            origin: Float2([0.0; 2]),
             size: Float2(pixels.map(|n| n as f32)),
-            ppp: 1.0,
+            star_image: Float2(star_image_size(pixels, settings).map(|n| n as f32)),
             star_randomness: settings.star_randomness,
             star_life: star_life(settings, now),
             star_size_variation: settings.star_size_variation,
-            star_far: Float4([
-                far[0] as f32,
-                far[1] as f32,
-                f32::from(star_far_reduced(settings)),
-                0.0,
-            ]),
-            star_near: Float4([near[0] as f32, near[1] as f32, 0.0, 0.0]),
+            pad: 0.0,
             star_slices: star_slices(settings, direction, now, layout),
-            star_halo_samples: halos.samples(),
         }
     }
 }
@@ -548,7 +371,7 @@ pub(crate) struct Pass<'a> {
     pub scissor: Option<[u32; 4]>,
 }
 impl Pass<'_> {
-    pub(crate) fn draw(&self, encoder: &mut wgpu::CommandEncoder, layer: u32) {
+    pub(crate) fn draw(&self, encoder: &mut wgpu::CommandEncoder) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("star_material"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -569,35 +392,9 @@ impl Pass<'_> {
         if let Some([x, y, w, h]) = self.scissor {
             pass.set_scissor_rect(x, y, w, h);
         }
-        pass.draw(0..3, layer..layer + 1);
+        pass.draw(0..3, 0..1);
     }
 }
-/// Every profile follows this sequence; only allocated halo layers and optional
-/// far/near images differ. Neither consumer can silently omit a profile's pass.
-pub(crate) fn draw(
-    encoder: &mut wgpu::CommandEncoder,
-    bake: Pass<'_>,
-    halos: &StarHalos,
-    halo_pipeline: &wgpu::RenderPipeline,
-    halo_groups: &[&wgpu::BindGroup],
-    far: Option<Pass<'_>>,
-    near: Option<Pass<'_>>,
-) {
-    bake.draw(encoder, 0);
-    for (layer, view) in halos.layers.iter().enumerate() {
-        if let Some(view) = view {
-            Pass { view, pipeline: halo_pipeline, groups: halo_groups, scissor: None }
-                .draw(encoder, layer as u32);
-        }
-    }
-    if let Some(pass) = far {
-        pass.draw(encoder, 0);
-    }
-    if let Some(pass) = near {
-        pass.draw(encoder, 0);
-    }
-}
-
 pub(crate) fn image(
     device: &wgpu::Device,
     label: &str,

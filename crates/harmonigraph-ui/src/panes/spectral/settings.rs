@@ -117,10 +117,11 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     "Blend the selected texture with the spectrogram. 0% shows the original picture; 100% uses only the texture. Softness above applies to the picture the texture reads.",
                 );
             ui.add_enabled_ui(atmosphere.cloud_depth > 0.0, |ui| {
-                // Stars put their look first: size and spacing matter more
-                // than how they drift, and the rendering profile comes last.
+                // Stars put their resolution first, a choice made once, then
+                // their look: size and spacing matter more than how they drift.
                 let stars = atmosphere.cloud_style == CloudStyle::Stars;
                 if stars {
+                    super::super::material::stars_resolution(ui, &mut atmosphere.stars);
                     block(ui, "Appearance");
                     super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
                 }
@@ -151,10 +152,6 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                     ["Color pickup", "Color release"],
                     1.0,
                 );
-                if stars {
-                    block(ui, "Rendering");
-                    super::super::material::stars_quality(ui, &mut atmosphere.stars);
-                }
             });
         },
     );
