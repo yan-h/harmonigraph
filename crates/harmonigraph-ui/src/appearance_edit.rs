@@ -58,6 +58,7 @@ impl Look {
     }
 }
 
+/// Persisted as a fixed-length array, so changing this refuses older blobs whole.
 pub(crate) const SLOT_COUNT: usize = 4;
 
 /// The comparison slots. The active slot is always the live document, so its
@@ -182,7 +183,8 @@ impl AppearanceEditor {
         self.slots.active = slot;
     }
 
-    /// Overwrites another slot with the current look, undoable from that slot.
+    /// Copies the current look into another slot. Overwriting a stored look is
+    /// undoable from that slot; an empty slot had no look to go back to.
     fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
         if slot == self.slots.active {
             return;
