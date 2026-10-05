@@ -813,14 +813,19 @@ struct MemoryFrame {
 /// Other styles' dials must not erase the active style's carried color.
 /// Stars locate history by absolute cell and life, independent of width and
 /// motion. Keep height here because it changes the material sampling scale;
-/// the actual atlas cell sizes are appended by `update` below.
+/// the starfield's actual atlas cell sizes and slice bands come from its
+/// `layout` and `slices`.
 fn memory_key(
-    s: harmonigraph_scene::SpectralAtmosphere,
+    atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
-    pitch_vertical: bool,
     read: &SpectrogramUniforms,
+    extent: [u32; 2],
+    stars: Option<StarLayout>,
+    slices: &[StarSlice; STAR_SLICES],
 ) -> Vec<u32> {
     use harmonigraph_scene::CloudStyle;
+    let s = atmosphere.settings.sanitized();
+    let pitch_vertical = atmosphere.pitch_vertical;
     let harmonigraph_scene::SpectralAtmosphere {
         pitch_softness,
         time_softness,
@@ -930,7 +935,114 @@ fn memory_key(
             if wash_pool != 0.0 { wash_pool_softness } else { 0.0 },
         ]),
     }
-    values.into_iter().map(f32::to_bits).collect()
+    let mut key: Vec<u32> = values.into_iter().map(f32::to_bits).collect();
+    // A resize changes musical density, hence the light a star samples, but
+    // not the absolute cell that owns its carried color.
+    if stars.is_none() {
+        key.extend([atmosphere.points_per_ms.to_bits(), atmosphere.points_per_cent.to_bits()]);
+    }
+    // Different logical grids can share one allocation. DPI or sampling
+    // changes must still reset history even in the same bucket.
+    key.extend(extent);
+    if let Some(layout) = stars {
+        // Stars carry by absolute cell and life across motion edits and width
+        // changes. At the atlas budget, a wider pane can coarsen cells: the
+        // same integer cell then names a new star. A slice's band moves every
+        // centre in it.
+        key.extend(layout.cells.map(f32::to_bits));
+        key.extend(slices.iter().map(|slice| slice.width.to_bits()));
+    }
+    key
+}
+
+/// The history lattice's whole-texel origin and its sub-texel remainder for a
+/// cloud `offset`, on a history of `extent` over the pane `rect`.
+///
+/// Off the UNREDUCED offset: the lattice has to run on continuously where the
+/// shader's drift jumps a whole repeat, or every wrap would read as a seek and
+/// reset the history.
+fn memory_origin(offset: [f64; 2], rect: egui::Rect, extent: [u32; 2]) -> ([i32; 2], [f32; 2]) {
+    let mut fraction = [0.0; 2];
+    let origin = std::array::from_fn(|a| {
+        let texels = offset[a]
+            * f64::from(rect.height() / CLOUD_UNITS * (extent[a] - 2) as f32 / rect.size()[a]);
+        let integer = texels.floor();
+        fraction[a] = (texels - integer) as f32;
+        integer as i32
+    });
+    (origin, fraction)
+}
+
+/// What the history pass is told about how this frame follows the held one.
+struct MemoryStep {
+    /// Whether the held history carries into this frame. Where it does not,
+    /// both history paths start it from this frame's colour.
+    valid: bool,
+    /// The pickup and release blend weights for the time that passed.
+    alphas: [f32; 2],
+    /// Whole history texels the lattice moved since the held frame.
+    shift: [i32; 2],
+    /// This frame's sub-texel remainder of the lattice origin.
+    fraction: [f32; 2],
+    previous_slices: [StarSlice; STAR_SLICES],
+    previous_life: f32,
+}
+
+impl MemoryStep {
+    /// No held history: nothing carries, and the previous frame's slices and
+    /// life are this frame's own.
+    fn fresh(slices: [StarSlice; STAR_SLICES], life: f32) -> Self {
+        Self {
+            valid: false,
+            alphas: [1.0; 2],
+            shift: [0; 2],
+            fraction: [0.0; 2],
+            previous_slices: slices,
+            previous_life: life,
+        }
+    }
+}
+
+impl MemoryFrame {
+    /// How this frame follows `previous`, with `taus` the pickup and release
+    /// response times.
+    ///
+    /// The history carries only forward in time, within six of the longest
+    /// response time, over source history that has not been seeked back, under
+    /// the same key and the same palette.
+    fn follow(&self, previous: Option<&Self>, fraction: [f32; 2], taus: [f32; 2]) -> MemoryStep {
+        let step = MemoryStep { fraction, ..MemoryStep::fresh(self.slices, self.life) };
+        let Some(previous) = previous else { return step };
+        let dt = self.now - previous.now;
+        // Six maximum time constants leave under 0.25% residual; ordinary
+        // low-rate exports still integrate their actual dt.
+        let horizon = 6.0 * f64::from(harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX);
+        let valid = dt.is_finite()
+            && (0.0..=horizon).contains(&dt)
+            && self.source_end >= previous.source_end
+            && self.key == previous.key
+            && (std::sync::Arc::ptr_eq(&self.palette, &previous.palette)
+                || self.palette == previous.palette);
+        if !valid {
+            return step;
+        }
+        MemoryStep {
+            valid,
+            alphas: taus.map(|tau| {
+                if dt == 0.0 {
+                    0.0
+                } else if tau <= 0.0 {
+                    1.0
+                } else {
+                    -(-(dt as f32) / tau).exp_m1()
+                }
+            }),
+            shift: std::array::from_fn(|a| self.origin[a].saturating_sub(previous.origin[a])),
+            previous_slices: previous.slices,
+            previous_life: previous.life,
+            ..step
+        }
+    }
 }
 
 pub(super) struct Targets {
@@ -1626,84 +1738,33 @@ impl Targets {
             })
             .unwrap_or_default();
         let life = star_life(settings.stars, atmosphere.now);
-        let mut memory_valid = false;
-        let mut alphas = [1.0; 2];
-        let mut previous_slices = slices;
-        let mut previous_life = life;
-        let mut memory_shift = [0; 2];
-        let mut memory_fraction = [0.0; 2];
+        let mut step = MemoryStep::fresh(slices, life);
         if let Some(memory) = self.memory.as_mut() {
             memory.extent = memory_extent.expect("allocated history has a logical extent");
-            // Off the UNREDUCED offset: the history's lattice has to run on
-            // continuously where the shader's drift jumps a whole repeat, or
-            // every wrap would read as a seek and reset it.
-            let origin = std::array::from_fn(|a| {
-                let texels = offset[a]
-                    * f64::from(
-                        rect.height() / CLOUD_UNITS * (memory.extent[a] - 2) as f32
-                            / rect.size()[a],
-                    );
-                let integer = texels.floor();
-                memory_fraction[a] = (texels - integer) as f32;
-                integer as i32
-            });
-            let mut key = memory_key(settings, rect.size().into(), pitch_vertical, &read);
-            // A resize changes musical density, hence the light a star samples,
-            // but not the absolute cell that owns its carried color.
-            if stars.is_none() {
-                key.extend([
-                    atmosphere.points_per_ms.to_bits(),
-                    atmosphere.points_per_cent.to_bits(),
-                ]);
-            }
-            // Different logical grids can now share one allocation. DPI or
-            // sampling changes must still reset history even in the same bucket.
-            key.extend(memory.extent);
-            if let Some(layout) = stars {
-                // Stars carry by absolute cell and life across motion edits
-                // and width changes. At the atlas budget, a wider pane can
-                // coarsen cells: the same integer cell then names a new star.
-                // A slice's band moves every centre in it.
-                key.extend(layout.cells.map(f32::to_bits));
-                key.extend(slices.iter().map(|slice| slice.width.to_bits()));
-            }
-            if let Some(previous) = &memory.frame {
-                let dt = atmosphere.now - previous.now;
-                // Six maximum time constants leave under 0.25% residual;
-                // ordinary low-rate exports still integrate their actual dt.
-                let horizon = 6.0 * f64::from(harmonigraph_scene::atmosphere::COLOR_MEMORY_MAX);
-                memory_valid = dt.is_finite()
-                    && (0.0..=horizon).contains(&dt)
-                    && source_end >= previous.source_end
-                    && key == previous.key
-                    && (std::sync::Arc::ptr_eq(&palette, &previous.palette)
-                        || palette == previous.palette);
-                if memory_valid {
-                    alphas = [settings.color_pickup, settings.color_release].map(|tau| {
-                        if dt == 0.0 {
-                            0.0
-                        } else if tau <= 0.0 {
-                            1.0
-                        } else {
-                            -(-(dt as f32) / tau).exp_m1()
-                        }
-                    });
-                    previous_slices = previous.slices;
-                    previous_life = previous.life;
-                    memory_shift =
-                        std::array::from_fn(|a| origin[a].saturating_sub(previous.origin[a]));
-                }
-            }
-            memory.index = 1 - memory.index;
-            memory.frame = Some(MemoryFrame {
+            let (origin, fraction) = memory_origin(offset, rect, memory.extent);
+            let frame = MemoryFrame {
                 now: atmosphere.now,
                 source_end,
-                key,
+                key: memory_key(
+                    atmosphere,
+                    rect.size().into(),
+                    &read,
+                    memory.extent,
+                    stars,
+                    &slices,
+                ),
                 palette,
                 origin,
                 slices,
                 life,
-            });
+            };
+            step = frame.follow(
+                memory.frame.as_ref(),
+                fraction,
+                [settings.color_pickup, settings.color_release],
+            );
+            memory.index = 1 - memory.index;
+            memory.frame = Some(frame);
         }
         let uniforms = Uniforms {
             velvet: Float4([
@@ -1753,15 +1814,15 @@ impl Targets {
             star_image: Float4([image[0] as f32, image[1] as f32, 0.0, 0.0]),
             star_slices: slices,
             memory_enabled: u32::from(self.memory.is_some()),
-            memory_valid: u32::from(memory_valid),
-            pickup_alpha: alphas[0],
-            release_alpha: alphas[1],
-            memory_shift: Int2(memory_shift),
-            memory_fraction: Float2(memory_fraction),
-            previous_life,
+            memory_valid: u32::from(step.valid),
+            pickup_alpha: step.alphas[0],
+            release_alpha: step.alphas[1],
+            memory_shift: Int2(step.shift),
+            memory_fraction: Float2(step.fraction),
+            previous_life: step.previous_life,
             wash_randomness: settings.material_settings.wash_randomness,
             memory_extent: Float2(memory_extent.unwrap_or([0; 2]).map(|n| n as f32)),
-            previous_slices,
+            previous_slices: step.previous_slices,
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
     }
