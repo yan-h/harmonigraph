@@ -54,4 +54,15 @@ expect foo "'foo' matches multiple branches:
   codex/foo
   codex/foo-2"
 
+# A handoff record the loader cannot read prints '?' rather than ending the
+# loader under `set -euo pipefail` partway through a load.
+mkdir -p "$TMP/unreadable" && echo '{}' > "$TMP/unreadable/handoff.json"
+got=$(set -euo pipefail; . "$ROOT/.claude/build-handoffs.sh"; short="$(build_short "$TMP/unreadable")"; echo "$short")
+if [ "$got" = "?" ]; then
+  echo "✓ unreadable handoff reads '?'"
+else
+  echo "✗ unreadable handoff: expected '?', got '$got'" >&2
+  failures=$((failures + 1))
+fi
+
 exit "$failures"

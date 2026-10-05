@@ -32,6 +32,13 @@ build_commit() {
   fi
 }
 
+# The short form every message prints, or '?' when the source cannot be read:
+# under `set -euo pipefail` a bare failing pipeline would end the loader
+# silently, mid-load, or read as a fresh match for any stamped sha.
+build_short() {
+  build_commit "$1" 2>/dev/null | cut -c1-7 || echo '?'
+}
+
 build_commit_time() {
   if [[ -f "$1/handoff.json" ]]; then
     python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit_time"])' "$1/handoff.json"

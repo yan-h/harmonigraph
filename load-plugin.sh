@@ -122,7 +122,7 @@ build_info() {
     mtime="$(stat -f %m "$dylib")"
     built="$(ago "$mtime")"
     head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
-    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    head_short="$(build_short "$path")"
     tag="$(build_tag "$dylib" "${WT_BRANCH[$1]}")"
     sha="${tag##*@}"
     [[ "$sha" == "$tag" ]] && sha=""   # no tag read; ${..##*@} echoes the input
@@ -335,7 +335,7 @@ load_build() {  # $1 = worktree index
     local offline_mtime head_ct head_short
     offline_mtime="$(stat -f %m "$offline")"
     head_ct="$(build_commit_time "$path" 2>/dev/null || echo 0)"
-    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    head_short="$(build_short "$path")"
     if (( head_ct > offline_mtime )); then
       echo "WARNING: that renderer was built before $head_short ($(ago "$offline_mtime")). Video exports" >&2
       echo "         come out drawn by the older build while the editor shows the new one, and" >&2
@@ -361,7 +361,7 @@ load_build() {  # $1 = worktree index
   local loaded_tag; loaded_tag="$(build_tag "$dylib" "$branch")"
   { echo "worktree=$path"
     echo "branch=$branch"
-    echo "commit=$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    echo "commit=$(build_short "$path")"
     echo "tag=${loaded_tag:-unknown}"
     echo "loaded_at=$(date +%s)"
   } > "$LOADED"
@@ -371,7 +371,7 @@ load_build() {  # $1 = worktree index
   if [[ -n "$loaded_tag" ]]; then
     echo "The performance overlay will read:  build  $loaded_tag"
     local head_short loaded_sha
-    head_short="$(build_commit "$path" 2>/dev/null | cut -c1-7)"
+    head_short="$(build_short "$path")"
     loaded_sha="${loaded_tag##*@}"
     if [[ "$head_short" != '?' \
        && "$head_short" != "$loaded_sha"* && "$loaded_sha" != "$head_short"* ]]; then
