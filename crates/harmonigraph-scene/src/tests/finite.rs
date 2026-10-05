@@ -420,7 +420,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.one("atmosphere.stars.star_solid_far", stars.star_solid_far);
     f.one("atmosphere.stars.star_solid_near", stars.star_solid_near);
     f.one("atmosphere.stars.star_glow_falloff", stars.star_glow_falloff);
-    f.one("atmosphere.stars.star_halo_resolution", stars.star_halo_resolution);
+    f.one("atmosphere.stars.star_resolution", stars.star_resolution);
     f.one("atmosphere.material_amount", *material_amount);
     f.one("atmosphere.material_shadow_pickup", *material_shadow_pickup);
     f.one("atmosphere.material_color_pickup", *material_color_pickup);

@@ -203,9 +203,8 @@ fn atmosphere_costs_by_polyphony() {
             "watercolor",
             "velvet",
             "stars",
-            "stars-medium",
-            "stars-low",
-            "stars-uniform",
+            "stars-100",
+            "stars-50",
         ] {
             if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
                 continue;
@@ -238,14 +237,13 @@ fn atmosphere_costs_by_polyphony() {
                     variant.view.atmosphere.material_style =
                         harmonigraph_scene::LatticeMaterial::VelvetScales
                 }
-                "stars" | "stars-medium" | "stars-low" | "stars-uniform" => {
+                "stars" | "stars-100" | "stars-50" => {
                     variant.view.atmosphere.material_style =
                         harmonigraph_scene::LatticeMaterial::Stars;
-                    variant.view.atmosphere.stars.star_halo_profile = match case {
-                        "stars-medium" => harmonigraph_scene::StarHaloProfile::Medium,
-                        "stars-low" => harmonigraph_scene::StarHaloProfile::Low,
-                        "stars-uniform" => harmonigraph_scene::StarHaloProfile::Uniform,
-                        _ => harmonigraph_scene::StarHaloProfile::P3,
+                    variant.view.atmosphere.stars.star_resolution = match case {
+                        "stars-100" => 1.0,
+                        "stars-50" => 0.5,
+                        _ => harmonigraph_scene::StarSettings::default().star_resolution,
                     };
                 }
                 "no-nebula" => variant.view.atmosphere.texture_depth = 0.0,

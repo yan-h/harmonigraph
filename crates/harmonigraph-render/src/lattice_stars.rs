@@ -1,6 +1,6 @@
 //! Lattice's colored-light adapter for the shared star renderer.
 use super::*;
-use crate::stars::{self, StarHaloLayout, StarHalos, StarUniforms};
+use crate::stars::{self, StarUniforms};
 const SOURCE: &str = concat!(
     include_str!("shaders/common.wgsl"),
     "\n",
@@ -25,10 +25,8 @@ pub(super) struct Pipelines {
     image_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     bake: wgpu::RenderPipeline,
-    halo: wgpu::RenderPipeline,
-    far: wgpu::RenderPipeline,
-    near: wgpu::RenderPipeline,
-    material: [wgpu::RenderPipeline; 2],
+    image: wgpu::RenderPipeline,
+    material: wgpu::RenderPipeline,
 }
 impl Pipelines {
     pub(super) fn new(device: &wgpu::Device, output_layout: &wgpu::BindGroupLayout) -> Self {
@@ -65,10 +63,7 @@ impl Pipelines {
             label: Some("star_images"),
             entries: &[
                 texture(0, wgpu::TextureSampleType::Uint, wgpu::TextureViewDimension::D2),
-                texture(1, float, wgpu::TextureViewDimension::D2Array),
-                texture(2, float, wgpu::TextureViewDimension::D2Array),
-                texture(3, float, wgpu::TextureViewDimension::D2Array),
-                texture(4, float, wgpu::TextureViewDimension::D2),
+                texture(1, float, wgpu::TextureViewDimension::D2),
             ],
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -80,7 +75,7 @@ impl Pipelines {
             bind_group_layouts: &[Some(&source_layout), Some(&image_layout)],
             ..Default::default()
         });
-        let pipeline = |name, format, split| {
+        let pipeline = |name, format| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(name),
                 layout: Some(&layout),
@@ -93,10 +88,7 @@ impl Pipelines {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some(name),
-                    compilation_options: wgpu::PipelineCompilationOptions {
-                        constants: &[("STAR_SPLIT", if split { 1.0 } else { 0.0 })],
-                        ..Default::default()
-                    },
+                    compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
                         blend: None,
@@ -111,12 +103,9 @@ impl Pipelines {
             })
         };
         Self {
-            bake: pipeline("fs_star_bake", stars::STAR_FORMAT, false),
-            halo: pipeline("fs_star_halo", stars::STAR_FAR_FORMAT, false),
-            far: pipeline("fs_star_far", stars::STAR_FAR_FORMAT, false),
-            near: pipeline("fs_star_near", stars::STAR_FAR_FORMAT, true),
-            material: [false, true]
-                .map(|split| pipeline("fs_lattice_stars", LATTICE_COLOR_FORMAT, split)),
+            bake: pipeline("fs_star_bake", stars::STAR_FORMAT),
+            image: pipeline("fs_stars", stars::STAR_IMAGE_FORMAT),
+            material: pipeline("fs_lattice_stars", LATTICE_COLOR_FORMAT),
             output_layout: output_layout.clone(),
             source_layout,
             image_layout,
@@ -140,24 +129,18 @@ pub(super) struct Frame {
 struct Allocation {
     output: [u32; 2],
     atlas: [u32; 2],
-    halos: StarHaloLayout,
-    far: Option<[u32; 2]>,
-    near: Option<[u32; 2]>,
+    image: [u32; 2],
 }
 pub(super) struct Targets {
     output: wgpu::TextureView,
     pub(super) output_group: wgpu::BindGroup,
     allocation: Allocation,
     atlas: wgpu::TextureView,
-    halos: StarHalos,
-    far: Option<wgpu::TextureView>,
-    near: Option<wgpu::TextureView>,
+    image: wgpu::TextureView,
     uniform: wgpu::Buffer,
     source: wgpu::BindGroup,
     bake: wgpu::BindGroup,
-    halo: wgpu::BindGroup,
-    far_group: wgpu::BindGroup,
-    near_group: wgpu::BindGroup,
+    image_group: wgpu::BindGroup,
     material: wgpu::BindGroup,
 }
 impl Targets {
@@ -184,17 +167,10 @@ impl Targets {
             ],
         });
         let atlas = stars::image(device, "star_atlas", allocation.atlas, stars::STAR_FORMAT);
-        let halos = StarHalos::new(device, allocation.halos);
-        let far = allocation
-            .far
-            .map(|size| stars::image(device, "star_far", size, stars::STAR_FAR_FORMAT));
-        let near = allocation
-            .near
-            .map(|size| stars::image(device, "star_near", size, stars::STAR_FAR_FORMAT));
-        let scratch = stars::image(device, "star_scratch", [1; 2], stars::STAR_FAR_FORMAT);
+        let image = stars::image(device, "star_image", allocation.image, stars::STAR_IMAGE_FORMAT);
+        // A pass binds a stand-in for the target it renders into.
+        let scratch = stars::image(device, "star_scratch", [1; 2], stars::STAR_IMAGE_FORMAT);
         let atlas_scratch = stars::image(device, "star_atlas_scratch", [1; 2], stars::STAR_FORMAT);
-        let halo_scratch =
-            StarHalos::new(device, StarHaloLayout::from_sizes([Some([1; 2]); stars::STAR_SLICES]));
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("lattice_star_settings"),
             size: std::mem::size_of::<Settings>() as u64,
@@ -216,11 +192,11 @@ impl Targets {
                 },
             ],
         });
-        let group = |atlas: &wgpu::TextureView, halos: &StarHalos, tone: &wgpu::TextureView| {
+        let group = |atlas: &wgpu::TextureView, tone: &wgpu::TextureView| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("star_images"),
                 layout: &pipelines.image_layout,
-                entries: &[atlas, &halos.views[0], &halos.views[1], &halos.views[2], tone]
+                entries: &[atlas, tone]
                     .into_iter()
                     .enumerate()
                     .map(|(binding, view)| wgpu::BindGroupEntry {
@@ -231,18 +207,14 @@ impl Targets {
             })
         };
         Self {
-            bake: group(&atlas_scratch, &halo_scratch, &scratch),
-            halo: group(&atlas, &halo_scratch, &scratch),
-            far_group: group(&atlas, &halos, &scratch),
-            near_group: group(&atlas, &halos, far.as_ref().unwrap_or(&scratch)),
-            material: group(&atlas, &halos, near.as_ref().or(far.as_ref()).unwrap_or(&scratch)),
+            bake: group(&atlas_scratch, &scratch),
+            image_group: group(&atlas, &scratch),
+            material: group(&atlas, &image),
             output,
             output_group,
             allocation,
             atlas,
-            halos,
-            far,
-            near,
+            image,
             uniform,
             source,
         }
@@ -258,21 +230,17 @@ impl Targets {
     ) {
         let Frame { settings: stars, direction, now, amount } = frame;
         let layout = stars::star_layout(stars, size[0] as f32 / size[1] as f32);
-        let split = stars::star_far_reduced(stars)
-            || u64::from(size[0]) * u64::from(size[1]) >= stars::STAR_SPLIT_PIXELS;
         let allocation = Allocation {
             output: size,
             atlas: stars::star_atlas_size(layout.size(), held.as_ref().map(|t| t.allocation.atlas)),
-            halos: stars::star_halo_layout(size, stars),
-            far: split.then(|| stars::star_far_size(size, stars)),
-            near: stars::star_near_size(size, stars),
+            image: stars::star_image_size(size, stars),
         };
         if held.as_ref().is_none_or(|t| t.allocation != allocation) {
             *held = Some(Self::new(device, pipelines, source, allocation));
         }
         let held = held.as_ref().unwrap();
         let settings = Settings {
-            stars: StarUniforms::new(stars, direction, now, size, &layout, held.allocation.halos),
+            stars: StarUniforms::new(stars, direction, now, size, &layout, held.allocation.image),
             depth: amount,
             _pad0: 0.0,
             _pad1: 0.0,
@@ -303,41 +271,14 @@ impl Targets {
             });
             return;
         }
-        let bake = [&self.source, &self.bake];
-        let halo = [&self.source, &self.halo];
-        let far = [&self.source, &self.far_group];
-        let near = [&self.source, &self.near_group];
-        stars::draw(
-            encoder,
-            stars::Pass {
-                view: &self.atlas,
-                pipeline: &pipelines.bake,
-                groups: &bake,
-                scissor: None,
-            },
-            &self.halos,
-            &pipelines.halo,
-            &halo,
-            self.far.as_ref().map(|view| stars::Pass {
-                view,
-                pipeline: &pipelines.far,
-                groups: &far,
-                scissor: None,
-            }),
-            self.near.as_ref().map(|view| stars::Pass {
-                view,
-                pipeline: &pipelines.near,
-                groups: &near,
-                scissor: None,
-            }),
-        );
-        stars::Pass {
-            view: &self.output,
-            pipeline: &pipelines.material[usize::from(self.far.is_some())],
-            groups: &[&self.source, &self.material],
-            scissor: None,
+        for (view, pipeline, group) in [
+            (&self.atlas, &pipelines.bake, &self.bake),
+            (&self.image, &pipelines.image, &self.image_group),
+            (&self.output, &pipelines.material, &self.material),
+        ] {
+            stars::Pass { view, pipeline, groups: &[&self.source, group], scissor: None }
+                .draw(encoder);
         }
-        .draw(encoder, 0);
     }
 }
 
