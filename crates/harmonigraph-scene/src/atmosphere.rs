@@ -121,11 +121,6 @@ pub const CLOUD_SPEED_MAX: f32 = 20.0;
 const MATERIAL_SPEED_DEFAULT: f32 = 4.242_738_7;
 const MATERIAL_DIRECTION_DEFAULT: f32 = 174.0;
 
-/// Bounds shared by the [`SpectralAtmosphere::cloud_direction`] control and sanitizer.
-pub const CLOUD_DIRECTION_MIN: f32 = 0.0;
-/// See [`CLOUD_DIRECTION_MIN`].
-pub const CLOUD_DIRECTION_MAX: f32 = 360.0;
-
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
 /// bottom is its mirror, where the edge lightens instead.

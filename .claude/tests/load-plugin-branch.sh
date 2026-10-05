@@ -16,6 +16,8 @@ done
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/load-plugin-branch.XXXXXX") || exit 1
+# Git lists worktrees by physical path, and macOS's temp directory is a symlink.
+TMP=$(cd "$TMP" && pwd -P)
 trap 'rm -rf "$TMP"' EXIT
 
 repo="$TMP/main"
@@ -51,20 +53,20 @@ expect codex/foo "codex/foo @$sha"
 expect codex/foo-2 "codex/foo-2 @$sha"
 expect foo-2 "codex/foo-2 @$sha"
 expect foo "'foo' matches multiple branches:
-  codex/foo
-  codex/foo-2"
+  codex/foo  $TMP/codex-foo
+  codex/foo-2  $TMP/codex-foo-2"
 
 # Every detached worktree shares one label, so even an exact match refuses.
 git -C "$repo" worktree add -q --detach "$TMP/detached-a" HEAD
 git -C "$repo" worktree add -q --detach "$TMP/detached-b" HEAD
 expect "(detached)" "'(detached)' matches multiple branches:
-  (detached)
-  (detached)"
+  (detached)  $TMP/detached-a
+  (detached)  $TMP/detached-b"
 
 # A handoff record the loader cannot read prints '?' rather than ending the
 # loader partway through a load, whether or not the caller sets pipefail.
 mkdir -p "$TMP/unreadable" && echo '{}' > "$TMP/unreadable/handoff.json"
-got=$(set -eu; . "$ROOT/.claude/build-handoffs.sh"; short="$(build_short "$TMP/unreadable")"; echo "$short")
+got=$(set -eu +o pipefail; . "$ROOT/.claude/build-handoffs.sh"; short="$(build_short "$TMP/unreadable")"; echo "$short")
 if [ "$got" = "?" ]; then
   echo "✓ unreadable handoff reads '?'"
 else

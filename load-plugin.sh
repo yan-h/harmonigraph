@@ -428,7 +428,7 @@ branch_index() {
     echo "No build branch matching '$1'." >&2; return 1
   elif (( ${#matches[@]} > 1 )); then
     echo "'$1' matches multiple branches:" >&2
-    for i in "${matches[@]}"; do echo "  ${WT_BRANCH[$i]}" >&2; done
+    for i in "${matches[@]}"; do echo "  ${WT_BRANCH[$i]}  ${WT_PATH[$i]}" >&2; done
     return 2
   fi
   echo "${matches[0]}"

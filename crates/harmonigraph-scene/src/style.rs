@@ -466,7 +466,7 @@ impl Gradient {
     pub fn flipped(self) -> Gradient {
         let g = self.sanitized();
         Gradient {
-            hue_start: crate::wrap_degrees(g.hue_start + g.hue_span),
+            hue_start: g.hue_start + g.hue_span,
             hue_span: -g.hue_span,
             // The bend stays: it says where along the RANGE the change is
             // spent, and a flip reverses which hues, not where they change.
