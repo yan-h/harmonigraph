@@ -972,7 +972,7 @@ fn the_persist_blob_carries_exactly_these_top_level_keys() {
         "folded_sections",
         "appearance",
         "camera_presets",
-        "saved_looks",
+        "look_slots",
         "fps_cap",
         "ui_scale",
         "frameless",

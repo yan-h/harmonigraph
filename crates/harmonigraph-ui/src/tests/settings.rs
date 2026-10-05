@@ -272,8 +272,9 @@ fn the_video_pane_starts_with_appearance_actions_before_any_rule() {
     // leads; the standalone cannot, so `record_controls` returns early.
     for (supported, leads) in [(true, "RECORD"), (false, "FRAME")] {
         let (shapes, rule) = video_pane_shapes(supported);
-        let heading = text_y(&shapes, "A").expect("appearance comparison leads the pane");
-        assert_eq!(text_y(&shapes, "B"), Some(heading));
+        let heading = text_y(&shapes, "1").expect("appearance slots lead the pane");
+        assert_eq!(text_y(&shapes, "4"), Some(heading));
+        assert_eq!(text_y(&shapes, "Save to"), Some(heading));
         assert!(text_y(&shapes, "Undo").is_none());
         assert!(text_y(&shapes, "Redo").is_none());
         assert!(text_y(&shapes, leads).unwrap() > heading);

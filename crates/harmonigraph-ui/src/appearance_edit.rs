@@ -58,24 +58,38 @@ impl Look {
     }
 }
 
-/// Project-local library and the inactive comparison snapshot. The active
-/// slot is always the live document; there is no second writable copy.
+pub(crate) const SLOT_COUNT: usize = 4;
+
+/// The comparison slots. The active slot is always the live document, so its
+/// entry is empty; there is no second writable copy. A slot never visited is
+/// empty too, and starts as a copy of the current look when switched to.
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-pub(crate) struct SavedLooks {
-    pub(crate) named: std::collections::BTreeMap<String, Look>,
-    inactive: Option<Look>,
-    active_b: bool,
+pub(crate) struct Slots {
+    stored: [Option<Look>; SLOT_COUNT],
+    active: usize,
 }
 
-impl SavedLooks {
+impl Slots {
     pub(crate) fn sanitize(&mut self) {
-        for look in self.named.values_mut().chain(self.inactive.iter_mut()) {
+        self.active = self.active.min(SLOT_COUNT - 1);
+        self.stored[self.active] = None;
+        for look in self.stored.iter_mut().flatten() {
             look.camera.sanitize();
             look.view.sanitize();
             look.spectrum.sanitize();
         }
     }
+
+    /// The look `slot` holds apart from the live document; `None` means the
+    /// slot shows the current look.
+    pub(crate) fn stored(&self, slot: usize) -> Option<&Look> {
+        self.stored[slot].as_ref()
+    }
+}
+
+pub(crate) fn slot_name(slot: usize) -> String {
+    format!("Slot {}", slot + 1)
 }
 
 const HISTORY_LIMIT: usize = 64;
@@ -138,77 +152,49 @@ impl History {
 }
 
 enum Command {
-    Switch,
-    Recall(String),
-    Save,
+    Switch(usize),
+    SaveTo(usize),
 }
 
+#[derive(Default)]
 pub(crate) struct AppearanceEditor {
     history: History,
-    inactive_history: History,
-    pub(crate) saved: SavedLooks,
-    name: String,
-    selected: Option<String>,
+    /// The inactive slots' histories; the active slot's entry is empty.
+    parked: [History; SLOT_COUNT],
+    pub(crate) slots: Slots,
     // Execute after the body commits any text field losing focus this frame.
     command: Option<Command>,
 }
 
-impl Default for AppearanceEditor {
-    fn default() -> Self {
-        Self::restore(SavedLooks::default())
-    }
-}
-
 impl AppearanceEditor {
-    fn next_name(&self) -> String {
-        let mut number = 1;
-        loop {
-            let name = format!("Look {number}");
-            if !self.saved.named.contains_key(&name) {
-                return name;
-            }
-            number += 1;
+    fn switch(&mut self, slot: usize, appearance: &mut AppearanceDocument) {
+        let active = self.slots.active;
+        if slot == active {
+            return;
         }
-    }
-
-    fn switch(&mut self, appearance: &mut AppearanceDocument) {
         self.history.finish(appearance);
-        let active = Look::capture(appearance);
-        let next = self.saved.inactive.replace(active.clone()).unwrap_or(active);
-        next.apply(appearance);
-        std::mem::swap(&mut self.history, &mut self.inactive_history);
-        self.saved.active_b = !self.saved.active_b;
-    }
-
-    fn recall(&mut self, name: &str, appearance: &mut AppearanceDocument) {
-        self.history.finish(appearance);
-        if let Some(look) = self.saved.named.get(name) {
-            let before = Look::capture(appearance);
+        self.slots.stored[active] = Some(Look::capture(appearance));
+        if let Some(look) = self.slots.stored[slot].take() {
             look.apply(appearance);
-            self.history.push(before, &Look::capture(appearance));
+        }
+        self.parked[active] = std::mem::take(&mut self.history);
+        self.history = std::mem::take(&mut self.parked[slot]);
+        self.slots.active = slot;
+    }
+
+    /// Overwrites another slot with the current look, undoable from that slot.
+    fn save_to(&mut self, slot: usize, appearance: &AppearanceDocument) {
+        if slot == self.slots.active {
+            return;
+        }
+        let look = Look::capture(appearance);
+        if let Some(before) = self.slots.stored[slot].replace(look.clone()) {
+            self.parked[slot].push(before, &look);
         }
     }
 
-    fn save(&mut self, appearance: &AppearanceDocument) {
-        let name = self.name.trim();
-        if !name.is_empty() && !self.saved.named.contains_key(name) {
-            self.saved.named.insert(name.to_owned(), Look::capture(appearance));
-            self.selected = Some(name.to_owned());
-            self.name = self.next_name();
-        }
-    }
-
-    pub(crate) fn restore(saved: SavedLooks) -> Self {
-        let mut editor = Self {
-            history: History::default(),
-            inactive_history: History::default(),
-            saved,
-            name: String::new(),
-            selected: None,
-            command: None,
-        };
-        editor.name = editor.next_name();
-        editor
+    pub(crate) fn restore(slots: Slots) -> Self {
+        Self { slots, ..Default::default() }
     }
 
     pub(crate) fn end_frame(
@@ -256,9 +242,8 @@ impl AppearanceEditor {
         if let Some(command) = self.command.take() {
             self.history.finish(appearance);
             match command {
-                Command::Switch => self.switch(appearance),
-                Command::Recall(name) => self.recall(&name, appearance),
-                Command::Save => self.save(appearance),
+                Command::Switch(slot) => self.switch(slot, appearance),
+                Command::SaveTo(slot) => self.save_to(slot, appearance),
             }
             ctx.request_repaint();
         }
@@ -266,52 +251,27 @@ impl AppearanceEditor {
 
     pub(crate) fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            for (is_b, label) in [(false, "A"), (true, "B")] {
-                if ui.selectable_label(self.saved.active_b == is_b, label).clicked()
-                    && self.saved.active_b != is_b
-                {
-                    self.command = Some(Command::Switch);
+            for slot in 0..SLOT_COUNT {
+                let active = self.slots.active == slot;
+                if ui.selectable_label(active, (slot + 1).to_string()).clicked() && !active {
+                    self.command = Some(Command::Switch(slot));
                 }
             }
-        })
-        .response
-        .on_hover_text("A/B compares appearances. Each slot keeps its own undo history.");
-        egui::CollapsingHeader::new("Looks").show(ui, |ui| {
-            ui.label("Looks keep appearance; camera movement, tuning and output stay as they are.");
-            egui::ComboBox::from_id_salt("saved-look")
-                .selected_text(self.selected.as_deref().unwrap_or("Choose look"))
-                .width(ui.available_width().max(1.0))
-                .truncate()
-                .show_ui(ui, |ui| {
-                    for name in self.saved.named.keys() {
-                        ui.selectable_value(&mut self.selected, Some(name.clone()), name);
+            ui.menu_button("Save to", |ui| {
+                for slot in (0..SLOT_COUNT).filter(|&slot| slot != self.slots.active) {
+                    if ui.button(slot_name(slot)).clicked() {
+                        self.command = Some(Command::SaveTo(slot));
+                        ui.close();
                     }
-                });
-            crate::widgets::button_row(ui, |ui| {
-                let selected =
-                    self.selected.clone().filter(|name| self.saved.named.contains_key(name));
-                if ui.add_enabled(selected.is_some(), egui::Button::new("Recall")).clicked() {
-                    self.command = Some(Command::Recall(selected.clone().unwrap()));
-                }
-                if ui.add_enabled(selected.is_some(), egui::Button::new("Delete")).clicked() {
-                    self.saved.named.remove(selected.as_deref().unwrap());
-                    self.selected = None;
                 }
             });
-            ui.add(
-                egui::TextEdit::singleline(&mut self.name)
-                    .hint_text("New look name")
-                    .desired_width(ui.available_width()),
-            );
-            let name = self.name.trim();
-            let valid = !name.is_empty() && !self.saved.named.contains_key(name);
-            if ui.add_enabled(valid, egui::Button::new("Save current look")).clicked() {
-                self.command = Some(Command::Save);
-            }
-            if !self.name.trim().is_empty() && self.saved.named.contains_key(self.name.trim()) {
-                ui.label("That name is already saved. Choose another name or delete it first.");
-            }
-        });
+        })
+        .response
+        .on_hover_text(
+            "Slots compare appearances; camera movement, tuning and output stay as they are. \
+             Edits land in the active slot, each slot keeps its own undo history, and an \
+             unused slot starts as a copy of the current look.",
+        );
     }
 }
 
@@ -504,49 +464,51 @@ mod tests {
     }
 
     #[test]
-    fn comparison_histories_and_named_recall_share_the_live_document() {
+    fn slots_keep_their_own_histories_and_save_to_is_undoable_in_its_target() {
         let mut appearance = AppearanceDocument::default();
         let mut editor = AppearanceEditor::default();
         let original = Look::capture(&appearance);
-        editor.switch(&mut appearance); // B starts as a snapshot of A.
+        editor.switch(1, &mut appearance); // An unused slot starts as the current look.
+        assert_eq!(Look::capture(&appearance), original);
         let before = Look::capture(&appearance);
         appearance.spectrum.attack = 0.2;
         editor.history.observe(before, &appearance, false);
-        editor.name = "Bright".into();
-        editor.save(&appearance);
         let bright = Look::capture(&appearance);
-        editor.switch(&mut appearance);
+        editor.switch(0, &mut appearance);
         assert_eq!(Look::capture(&appearance), original);
         assert!(editor.history.undo.is_empty());
-        editor.recall("Bright", &mut appearance);
-        assert_eq!(Look::capture(&appearance), bright);
-        editor.history.undo(&mut appearance);
+        editor.save_to(1, &appearance);
+        editor.switch(1, &mut appearance);
         assert_eq!(Look::capture(&appearance), original);
-        editor.switch(&mut appearance);
-        assert_eq!(Look::capture(&appearance), bright);
+        editor.history.undo(&mut appearance);
+        assert_eq!(Look::capture(&appearance), bright, "the overwrite undoes first");
         editor.history.undo(&mut appearance);
         assert_eq!(Look::capture(&appearance), original);
         editor.history.redo(&mut appearance);
         assert_eq!(Look::capture(&appearance), bright);
+        editor.switch(3, &mut appearance);
+        assert_eq!(Look::capture(&appearance), bright);
+        editor.switch(0, &mut appearance);
+        assert_eq!(Look::capture(&appearance), original);
     }
 
     #[test]
-    fn project_restore_retains_looks_and_comparison_but_discards_history() {
+    fn project_restore_retains_slots_but_discards_history() {
         let mut state = crate::tests::probe::fresh();
         let original = Look::capture(&state.picture.appearance);
         let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.switch(&mut state.picture.appearance);
+        editor.switch(1, &mut state.picture.appearance);
         state.picture.appearance.spectrum.attack = 0.2;
         editor.history.observe(original.clone(), &state.picture.appearance, false);
-        editor.name = "Saved B".into();
-        editor.save(&state.picture.appearance);
+        editor.save_to(2, &state.picture.appearance);
         let blob = state.save_persist();
         assert!(state.load_persist(&blob));
         let editor = &mut state.workspace.interaction.appearance_editor;
-        assert!(editor.saved.active_b);
-        assert_eq!(editor.saved.named["Saved B"].spectrum.attack, 0.2);
+        assert_eq!(editor.slots.active, 1);
+        assert!(editor.slots.stored(1).is_none(), "the active slot is the live document");
+        assert_eq!(editor.slots.stored(2).unwrap().spectrum.attack, 0.2);
         assert!(editor.history.undo.is_empty());
-        editor.switch(&mut state.picture.appearance);
+        editor.switch(0, &mut state.picture.appearance);
         assert_eq!(Look::capture(&state.picture.appearance), original);
     }
 
@@ -596,7 +558,7 @@ mod tests {
         assert_eq!(appearance.render.short_edge, 1920);
     }
     #[test]
-    fn queued_look_survives_undo_ab_library_edits_and_incoming_camera() {
+    fn queued_slot_survives_undo_slot_edits_and_incoming_camera() {
         use crate::params::{ParamBackend, ParamKey};
         struct Camera;
         impl ParamBackend for Camera {
@@ -614,11 +576,11 @@ mod tests {
         let original = Look::capture(appearance);
         appearance.spectrum.attack = 0.2;
         editor.history.observe(original.clone(), appearance, false);
-        editor.name = "Soft".into();
-        editor.save(appearance);
+        editor.save_to(1, appearance);
+        editor.history.undo(appearance); // The export must take slot 1, not the current look.
         appearance.sync_camera(&Camera);
         appearance.render.short_edge = 1080;
-        state.workspace.interaction.take.export_look = Some("Soft".into());
+        state.workspace.interaction.take.export_look = Some(1);
         let queued = crate::panes::render::capture_export(
             appearance,
             &state.workspace.interaction,
@@ -626,10 +588,11 @@ mod tests {
         )
         .unwrap();
         let editor = &mut state.workspace.interaction.appearance_editor;
-        editor.history.undo(appearance);
-        editor.switch(appearance);
+        editor.switch(1, appearance);
         appearance.spectrum.attack = 0.8;
-        editor.saved.named.clear();
+        editor.switch(0, appearance);
+        editor.save_to(1, appearance);
+        appearance.spectrum.attack = 0.8;
         appearance.camera.distance = 5.0;
         appearance.render.short_edge = 720;
         let crate::ExportAction::Queue { appearance: blob, render, .. } = queued else {
