@@ -364,9 +364,13 @@ pub(super) fn plan(
             continue;
         }
         let id = (note.key(), note.start.to_bits());
+        // Its standing, read once here rather than in every comparison of the
+        // sort below: with thousands of candidates over a long Span, hashing
+        // `visible` per comparison was most of this pass.
+        let standing = (note.is_live(), thinning.visible.contains(&id));
         candidates.push((
             id,
-            note.is_live(),
+            standing,
             NoteLabel {
                 name,
                 onset: note.start,
@@ -383,7 +387,6 @@ pub(super) fn plan(
     // onset/pitch/voice order. Expression strength never changes priority.
     candidates.sort_by(|a, b| {
         b.1.cmp(&a.1)
-            .then_with(|| thinning.visible.contains(&b.0).cmp(&thinning.visible.contains(&a.0)))
             .then_with(|| a.2.onset.total_cmp(&b.2.onset))
             .then_with(|| a.2.pitch.total_cmp(&b.2.pitch))
             .then_with(|| a.0.cmp(&b.0))
