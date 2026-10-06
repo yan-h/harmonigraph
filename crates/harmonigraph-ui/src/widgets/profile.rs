@@ -124,7 +124,7 @@ pub(crate) fn depth(
     let drawn: Vec<(usize, f32)> =
         (0..STAR_DEPTHS).filter_map(|k| places[k].map(|place| (k, place))).collect();
     ui.push_id(name, |ui| {
-        let plot = Plot::with_fields(ui, &format!("{name} · back → front"), 1);
+        let plot = Plot::without_label(ui, 1);
         // Before the dots, so a press on a dot drags the dot.
         let stroke = plot.stroke(ui);
         if let Some((from, to)) = stroke {
