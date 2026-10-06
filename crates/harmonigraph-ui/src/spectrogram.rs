@@ -820,15 +820,21 @@ impl SlabGrid {
         }
         let fold = &fold;
         let grids: Vec<SlabGrid> = std::thread::scope(|s| {
-            let workers: Vec<_> =
-                cuts[1..].windows(2).map(|w| s.spawn(move || fold(&columns[w[0]..w[1]]))).collect();
+            // This runs on the host's GUI thread, where a panic takes the plugin
+            // down: a run whose thread the OS refuses is folded here instead.
+            let workers: Vec<_> = cuts[1..]
+                .windows(2)
+                .map(|w| {
+                    let run = &columns[w[0]..w[1]];
+                    (run, std::thread::Builder::new().spawn_scoped(s, move || fold(run)).ok())
+                })
+                .collect();
             let first = fold(&columns[..cuts[1]]);
             std::iter::once(first)
-                .chain(
-                    workers
-                        .into_iter()
-                        .map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e))),
-                )
+                .chain(workers.into_iter().map(|(run, worker)| match worker {
+                    Some(w) => w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                    None => fold(run),
+                }))
                 .collect()
         });
         let mut grids = grids.into_iter();
