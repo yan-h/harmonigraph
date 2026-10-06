@@ -74,6 +74,12 @@ struct Locals {
     // distance path, in what was the block's own tail padding.
     shadow_falloff: f32,
     _shadow_pad: f32,
+    /// How many points one pixel of the target being drawn into measures, per
+    /// axis: `viewport_points` over the target's size in pixels. What takes a
+    /// fragment's own pixel back to the surface point it stands on
+    /// ([`on_screen`]).
+    pixel_points: vec2<f32>,
+    _pixel_pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -86,6 +92,15 @@ struct Locals {
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     /// Offset from the note's center in points, along (pitch, depth).
+    ///
+    /// Interpolated from the quad's corners only for the shadow's atlas cell
+    /// (`vs_shadow_cell`), whose texels are not surface pixels. Every pass that
+    /// draws onto the surface or a texture over the roll REPLACES it with the
+    /// offset of the fragment's own pixel center ([`on_screen`]): interpolated,
+    /// it moved with where the rasterizer's sub-pixel grid snapped the quad's
+    /// corners, so a layer's edges shifted by a fraction of a level whenever its
+    /// quad changed size, and a tremolo note's hard step at its leading end
+    /// flipped a whole tone.
     @location(0) local: vec2<f32>,
     /// Half extents of the note's solid body, same two axes.
     @location(1) @interpolate(flat) half_extent: vec2<f32>,
@@ -116,8 +131,10 @@ struct VertexOut {
     @location(8) @interpolate(flat) core: vec4<f32>,
     /// The outline's color at full coverage; the fade takes it from there.
     @location(9) @interpolate(flat) outline: vec4<f32>,
-    /// Surface point and caster index for the Gaussian atlas read.
-    @location(10) at: vec2<f32>,
+    /// The note's center in surface points, which [`on_screen`] measures
+    /// `local` from.
+    @location(10) @interpolate(flat) center: vec2<f32>,
+    /// Caster index for the Gaussian atlas read.
     @location(11) @interpolate(flat) who: u32,
     /// Width of one coverage sample in points. A visible note uses one display
     /// pixel; a Gaussian cell uses one of its own deliberately coarser texels.
@@ -251,7 +268,7 @@ fn note_vertex(
     out.tremolo = tremolo;
     out.core = core;
     out.outline = outline;
-    out.at = pos;
+    out.center = center;
     out.who = who;
     out.feather = locals.feather;
     out.ramp = span_ramp.zw;
@@ -303,7 +320,9 @@ fn vs_shadow_cell(
     out.tremolo = vec2<f32>(0.0);
     out.core = core;
     out.outline = outline;
-    out.at = point;
+    // Unread here: the cell's texels are not surface pixels, so this pass keeps
+    // the interpolated `local` rather than going through [`on_screen`].
+    out.center = center;
     out.who = u32(box_who.x + 0.5);
     out.feather = 1.0 / max(box_meta.x, 1e-6);
     // The cell holds the segment's whole coverage whatever piece it is for,
@@ -323,6 +342,31 @@ fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
     source.local.y += in.outline_reach;
     let coverage = inside(in, d, in.outline_reach) * lead_coverage(source);
     return vec4<f32>(coverage, 0.0, 0.0, 1.0);
+}
+
+/// The surface point, in points, at this fragment's own pixel center: the
+/// inverse of `note_vertex`'s mapping, read off the rasterizer's exact pixel
+/// position rather than interpolated across the quad.
+fn surface_point(in: VertexOut) -> vec2<f32> {
+    return locals.origin_points + in.position.xy * locals.pixel_points;
+}
+
+/// `in`, with `local` measured from the note's center to this fragment's own
+/// pixel center rather than interpolated from the quad's corners.
+///
+/// So what a pixel draws depends on the note and the pixel alone, and not on
+/// how big a quad the layer drew it through: the body's quad is a feather wider
+/// than the body and the outline's a shadow's reach wider, and interpolated
+/// across those two, one pixel read two slightly different coordinates. Every
+/// pass onto the surface or a texture over the roll goes through this, so the
+/// body, its holdout, its bloom and its outline agree to the bit on where the
+/// note is. The axes are unit and perpendicular, so projecting onto them
+/// inverts `center + pitch_dir * local.x + depth_dir * local.y` exactly.
+fn on_screen(in: VertexOut) -> VertexOut {
+    var out = in;
+    let delta = surface_point(in) - in.center;
+    out.local = vec2<f32>(dot(delta, locals.pitch_dir), dot(delta, locals.depth_dir));
+    return out;
 }
 
 /// Coverage of everything on the near side of `edge`: how much of a
@@ -346,7 +390,7 @@ fn outline_coverage(in: VertexOut, d: f32, reach: f32) -> f32 {
     }
     var full = standoff_coverage(d, 2.0 * locals.shadow.x, locals.shadow_falloff);
     if locals.shadow.z < 0.5 * DISTANCE_KIND {
-        full = shadow_kernel(in.who, in.at);
+        full = shadow_kernel(in.who, surface_point(in));
     }
     // The common style owns the profile, while `reach` may still shorten an
     // interior cap when the pane has less room before its now-line. Keep that
@@ -686,7 +730,8 @@ fn outline_color(in: VertexOut) -> vec4<f32> {
 /// This note's share of `body_holdout`: its geometric coverage, as far as a
 /// lead still stands, without its fade. Blended into the union in `prepare`.
 @fragment
-fn fs_body_holdout(in: VertexOut) -> @location(0) vec4<f32> {
+fn fs_body_holdout(fragment: VertexOut) -> @location(0) vec4<f32> {
+    let in = on_screen(fragment);
     if taper_at(in, in.local.y) <= 0.0 { return vec4<f32>(0.0); }
     return vec4<f32>(inside(in, box_distance(in), 0.0) * lead_coverage(in), 0.0, 0.0, 1.0);
 }
@@ -748,22 +793,22 @@ fn linear_from_gamma_rgb(srgb: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_outline_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return outline_color(in);
+    return outline_color(on_screen(in));
 }
 
 @fragment
 fn fs_outline_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = outline_color(in);
+    let gamma = outline_color(on_screen(in));
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
 }
 
 @fragment
 fn fs_core_gamma(in: VertexOut) -> @location(0) vec4<f32> {
-    return core_color(in);
+    return core_color(on_screen(in));
 }
 
 @fragment
 fn fs_core_linear(in: VertexOut) -> @location(0) vec4<f32> {
-    let gamma = core_color(in);
+    let gamma = core_color(on_screen(in));
     return vec4<f32>(linear_from_gamma_rgb(gamma.rgb), gamma.a);
 }
