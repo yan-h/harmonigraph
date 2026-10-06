@@ -80,7 +80,9 @@ struct StarSlice {
     /// pixels, before a star strayed toward its cell's edge is capped at what
     /// the read holds there, which is never less: the wider side of a texel
     /// of the star image, or what a 3x3 read holds of a star strayed to the
-    /// edge of its band where that is less ([`star_slices`]).
+    /// edge of its band where that is less ([`star_slices`]). Only the bake
+    /// reads it: each star's drawn radius and coverage are packed into the
+    /// atlas, so a pixel's read pays for neither.
     inverse_floor: f32,
     /// How the slice is gathered: [`star_gather_code`].
     gather: u32,
