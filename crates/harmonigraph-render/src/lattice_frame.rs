@@ -159,15 +159,22 @@ impl LatticeCallback {
         // went silent would take its whole halo off in one. It ships until the
         // light is over — exactly 0, again rather than nearly, so a shipped
         // instance is always one with something to draw.
+        //
+        // What it ships FOR is the light's own passes alone, which draw every
+        // instance (`fs_ink_strip`, `vs_glow_splat`, `vs_source_shadow`). A node
+        // with no INK left — its Fade run out while its light still releases —
+        // paints nothing in the scene pass and fills its cell with nothing, so
+        // its shadow, its scene draw and its occlusion of the nodes behind it
+        // are all exactly nothing: the walk below gives it none of the three.
+        // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
         let lights = scene.view.glow_reach > 0.0 && scene.view.glow_strength > 0.0;
         let pickup_enabled = lights
             && atmosphere.material_style != harmonigraph_scene::LatticeMaterial::None
             && atmosphere.material_amount > 0.0
             && atmosphere.pigment_reach > 0.0;
-        let paints = |g: &GpuInstance| {
+        let inked = |g: &GpuInstance| {
             (ringing && g.ring > 0.0)
-                || (lights && g.glow[0] > 0.0)
                 || g.params[0] > 0.0
                 || g.params[1] > 0.0
                 || g.params[2] > 0.0
@@ -208,16 +215,19 @@ impl LatticeCallback {
         // that ships, stands under a cross, or carries a name. Every other
         // node emits nothing wherever it sorts, and in a dense window it is
         // most of them. `sort_by` is stable, so the ones kept come out in the
-        // order they held in the full sort. Whether a node ships is asked here,
-        // once, of its packed instance.
-        let mut order: Vec<(f32, f32, usize, bool)> = scene
+        // order they held in the full sort. Whether a node ships, and whether
+        // with ink or for its light alone, is asked here, once, of its packed
+        // instance.
+        let mut order: Vec<(f32, f32, usize, bool, bool)> = scene
             .nodes
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                let ships = paints(&to_gpu(n));
+                let g = to_gpu(n);
+                let inked = inked(&g);
+                let ships = inked || (lights && g.glow[0] > 0.0);
                 (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
-                    .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships))
+                    .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked))
             })
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
@@ -266,7 +276,23 @@ impl LatticeCallback {
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
         let text_spread = text.gaussian_spread_points(text_sigma);
         let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas() + geometry_spread;
-        let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
+        let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance, inked: bool| {
+            let empty = shadow::Caster {
+                rect: [0.0; 4],
+                level: 0.0,
+                sigma_points: geometry_sigma,
+                kernel: geometry.kernel,
+                falloff: geometry.falloff,
+                spread_points: geometry_spread,
+                direct_distance: false,
+                distance_kind: crate::shadow::DistanceKind::Coverage,
+            };
+            // A node shipped for its light alone would fill its cell with
+            // nothing: level 0 packs no cell and keeps it out of the
+            // occluders (`shadow::pack`, `shadow::node_occluders`).
+            if !inked {
+                return empty;
+            }
             // The circle the node's ink fits inside, in its own uv: `node_rim`
             // in lattice.wgsl, widened by the audio ring, which is dialled on
             // radii of its own and may stand outside the ring stack.
@@ -292,16 +318,6 @@ impl LatticeCallback {
             // uv 1 is 1.8 node radii of the node's own sheet (`node_vertex`),
             // which is the one conversion between the bars' unit and the world.
             let reach = rim * scene.node_radius * 1.8 * n.scale.max(0.05);
-            let empty = shadow::Caster {
-                rect: [0.0; 4],
-                level: 0.0,
-                sigma_points: geometry_sigma,
-                kernel: geometry.kernel,
-                falloff: geometry.falloff,
-                spread_points: geometry_spread,
-                direct_distance: false,
-                distance_kind: crate::shadow::DistanceKind::Coverage,
-            };
             let (Some(c), Some(x), Some(y)) = (
                 to_points(n.world_pos),
                 to_points(n.world_pos + right * reach),
@@ -331,8 +347,9 @@ impl LatticeCallback {
                 return empty;
             }
             // LEVEL 1: the coverage the cell is filled with already carries
-            // every layer's own envelope (`node_ink`), so a released node's
-            // shadow fades with its ink and needs no second term here.
+            // every layer's own envelope (`node_ink`), so a releasing node's
+            // shadow fades with its ink and needs no second term here — down
+            // to the frame its ink is gone, when it takes no cell at all.
             shadow::Caster {
                 rect: [min.x, min.y, max.x - min.x, max.y - min.y],
                 level: 1.0,
@@ -378,7 +395,7 @@ impl LatticeCallback {
             && scene.view.glow_strength > 0.0
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
-        for &(_, _, i, ships) in &order {
+        for &(_, _, i, ships, inked) in &order {
             let mut instance = to_gpu(&scene.nodes[i]);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
@@ -388,11 +405,15 @@ impl LatticeCallback {
                 pluses.push(to_plus(&scene.pluses[p]));
             }
             if ships {
-                push_node(&mut draws, instances.len() as u32);
+                // A node shipped for its light alone draws nothing here.
+                if inked {
+                    push_node(&mut draws, instances.len() as u32);
+                }
                 // Its own cell of the atlas, beside it: what this node's shadow
                 // is a blur of, and what it multiplies the frame under it by.
+                // Every instance keeps its box, whether or not one is packed.
                 node_cells.push(casters.len() as u32);
-                casters.push(node_caster(&scene.nodes[i], &instance));
+                casters.push(node_caster(&scene.nodes[i], &instance, inked));
                 // Display modulation is separate from the ink-history level and coefficient.
                 if breathes && instance.glow[0] > 0.0 {
                     instance.glow[3] = atmosphere

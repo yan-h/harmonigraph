@@ -348,18 +348,13 @@ if in_group; then
   echo "  ok — no dependencies"
 fi
 
-# The only gate here that guards a script rather than the crates. Its subjects
-# — which worktrees Claude owns and which of their locks are live — decide
-# whether the tree can delete a directory, and their inputs (a path, a pid, its
-# argv, and the spare pool's sockets) are outside the repo, so no cargo test can
-# reach them. The lock has been wrong in both directions, most recently eagerly
-# enough to make a live session's worktree removable, which is why this is a
-# gate and not a habit.
-run .claude/tests/reclaim-locks.sh
+# The worktree reclaimer and its gate ship with agent-config's
+# session-lifecycle skill, whose own check runs that gate on every change to
+# it; .claude/reclaim-worktrees.sh only wraps the installed copy.
 
-# The other gate that guards a script, and for the same reason: its subjects
-# are Git's registered worktree paths, an inode and an ad-hoc signature, all
-# outside the repo. Getting any one wrong is silent in the worst way: a branch
+# A gate that guards a script rather than the crates: its subjects are Git's
+# registered worktree paths, an inode and an ad-hoc signature, all outside the
+# repo, so no cargo test can reach them. Getting any one wrong is silent in the worst way: a branch
 # build is absent from the menu, or every swap step reports success while the
 # DAW still draws the previous build.
 run .claude/tests/plugin-swap.sh
