@@ -199,6 +199,15 @@ impl StarLayout {
     pub fn size(&self) -> [u32; 2] {
         [STAR_ATLAS_WIDTH, self.texels.div_ceil(u64::from(STAR_ATLAS_WIDTH)).max(1) as u32]
     }
+
+    /// The rows [`size`](Self::size) counts, as a scissor for a pass drawing
+    /// the atlas or a history laid out like it. The allocation rounds rows up
+    /// and holds up to twice them ([`star_atlas_size`]); no slice maps a texel
+    /// past these, and the pass's clear leaves those holding no star.
+    pub(crate) fn scissor(&self) -> [u32; 4] {
+        let [width, rows] = self.size();
+        [0, 0, width, rows]
+    }
 }
 
 /// The starfield's layout for a pane `aspect` wide per unit of height.

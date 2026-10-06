@@ -1550,11 +1550,15 @@ impl Targets {
             self.bake_tile(encoder, pipelines, key);
         }
         let velvet = draw.style == harmonigraph_scene::CloudStyle::VelvetScales;
+        // The atlas, and a Stars history laid out like it, shade only the rows
+        // the layout fills; every other history is its whole extent.
+        let star_scissor = plan.stars.as_ref().map(StarLayout::scissor);
         if !velvet {
-            self.remember(encoder, pipelines);
+            self.remember(encoder, pipelines, star_scissor);
         }
         if let Some(coverage) = draw.star_coverage {
-            self.draw_stars(encoder, pipelines, draw.pixels, coverage);
+            let atlas = star_scissor.expect("star coverage comes only with a star layout");
+            self.draw_stars(encoder, pipelines, draw.pixels, coverage, atlas);
         } else if let Some((tone_view, tone_group)) =
             self.tone.as_ref().zip(self.tone_group.as_ref())
         {
@@ -1572,18 +1576,20 @@ impl Targets {
             pass.draw(0..6, 0..1);
         }
         if velvet {
-            self.remember(encoder, pipelines);
+            self.remember(encoder, pipelines, star_scissor);
         }
     }
 
-    /// The atlas bake, then every slice into the star image, scissored to
-    /// the drawn `coverage` of the pane's `pixels`.
+    /// The atlas bake, scissored to the `atlas` rows the layout fills, then
+    /// every slice into the star image, scissored to the drawn `coverage` of
+    /// the pane's `pixels`.
     fn draw_stars(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
         pixels: [u32; 2],
         coverage: [u32; 4],
+        atlas: [u32; 4],
     ) {
         let stars = self.stars.as_ref().expect("star coverage comes only with star targets");
         let image = self.shape.stars.expect("star targets exist only with a shape").image;
@@ -1596,7 +1602,7 @@ impl Targets {
             view: &stars.atlas,
             pipeline: &pipelines.stars,
             groups: &[&self.source_group, atlas_group],
-            scissor: None,
+            scissor: Some(atlas),
         }
         .draw(encoder);
         crate::stars::Pass {
@@ -1841,17 +1847,26 @@ impl Targets {
         self.memory.as_ref().map_or(&self.composite_group, |m| &m.composite_groups[m.index])
     }
 
-    fn remember(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+    /// `stars` is the Stars layout's atlas rows, where the history is laid out
+    /// like the atlas. `star_memory` reads the previous history only inside
+    /// the previous frame's slice grids, which lay within its own scissor.
+    fn remember(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        stars: Option<[u32; 4]>,
+    ) {
         let Some(memory) = &self.memory else {
             return;
         };
+        let [x, y, width, height] = stars.unwrap_or([0, 0, memory.extent[0], memory.extent[1]]);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("spectral_color_memory"),
             color_attachments: &[Some(cleared(&memory.views[memory.index]))],
             ..Default::default()
         });
         pass.set_viewport(0.0, 0.0, memory.extent[0] as f32, memory.extent[1] as f32, 0.0, 1.0);
-        pass.set_scissor_rect(0, 0, memory.extent[0], memory.extent[1]);
+        pass.set_scissor_rect(x, y, width, height);
         pass.set_pipeline(&pipelines.memory);
         pass.set_bind_group(0, &self.source_group, &[]);
         pass.set_bind_group(1, &memory.groups[memory.index], &[]);
