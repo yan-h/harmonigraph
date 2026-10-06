@@ -121,10 +121,41 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // a blur's reach and a row that reaches further is a shadow clipped flat in
     // the fast pipeline alone — and #508's finding 3 is that `fs_node_cell` has
     // an early-out of its own, which every fixture above compiles on one row.
-    let distance = || {
-        let mut scene = wide_shadow();
+    let distance = |mut scene: Scene| {
         for style in scene.view.shadow.groups_mut() {
+            style.width = 0.6;
             style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
+        scene
+    };
+    // The cell's OTHER analytic kind, a Gaussian grown before its blur
+    // (`GAUSSIAN_SPREAD_KIND`), at about the live picture's own spread.
+    let spread = |mut scene: Scene| {
+        for style in scene.view.shadow.groups_mut() {
+            style.spread = 0.062;
+        }
+        scene
+    };
+    // The audio ring standing OUTSIDE the band, so on the node wearing nothing
+    // else it is the ring and not the rim that says where the ink stops
+    // (`paint_reach`), and a cell's skip is bounded by the ring's own radius.
+    let ring_outside = || {
+        let mut scene = ringing();
+        scene.spectral.inner = 0.9;
+        scene.spectral.outer = 1.1;
+        scene
+    };
+    // Slices still moving in from a pose larger than the one they settle at
+    // (`animated_slice_ink`), at the Offset bar's top: scaled up to nearly
+    // twice their size, they reach past every radius of the settled node, so
+    // only the pose's own term bounds where they stop. A third are home
+    // already, which is what still fills an opaque interior.
+    let moving = |mut scene: Scene| {
+        scene.view.note_animation.radial_start = 1.0;
+        for (i, node) in scene.nodes.iter_mut().enumerate() {
+            for (slot, progress) in node.slice_progress.iter_mut().enumerate() {
+                *progress = [0.15, 0.5, 1.0][(i + slot) % 3];
+            }
         }
         scene
     };
@@ -141,15 +172,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         }
         scene
     };
-    for (name, scene) in [
-        ("lit", parity_scene()),
-        ("shaped slices", shaped(wide_shadow())),
-        ("shaped slices on a distance row", shaped(distance())),
-        ("ringing", ringing()),
-        ("folded", folded()),
-        ("a wide shadow", wide_shadow()),
-        ("a lit field", lit_field()),
-        ("a distance row", distance()),
+    // The last column: whether the node cells are compared too, which every
+    // analytic arm of `cell_reach` has a fixture for.
+    for (name, scene, compare_cells) in [
+        ("lit", parity_scene(), false),
+        ("shaped slices", shaped(wide_shadow()), false),
+        ("shaped slices on a distance row", shaped(distance(parity_scene())), true),
+        ("shaped slices under a spread Gaussian", shaped(spread(wide_shadow())), true),
+        ("ringing", ringing(), false),
+        ("a ring outside the band on a distance row", distance(ring_outside()), true),
+        ("folded", folded(), false),
+        ("a wide shadow", wide_shadow(), false),
+        ("a lit field", lit_field(), false),
+        ("a distance row", distance(parity_scene()), true),
+        ("moving slices on a distance row", moving(distance(parity_scene())), true),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -277,22 +313,40 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         );
 
         // #508's third finding lives in the CELL shader, not either scene
-        // attachment. This fixture reaches its branch with a real angular gap,
-        // a marked sector, and diagonal sector edges; rendering its analytic
-        // distance atlas through both compiled switches makes every texel of
-        // that geometry part of the parity claim.
-        if name == "a distance row" {
+        // attachment. These fixtures reach its branch with a real angular gap,
+        // a marked sector, and diagonal sector edges; rendering their analytic
+        // atlases through both compiled switches makes every texel of that
+        // geometry part of the parity claim — including the ones `fs_node_cell`
+        // skips past the shadow's reach, which only an analytic cell does.
+        if compare_cells {
             let atlas_size = pane
                 .offscreen
                 .as_ref()
                 .and_then(|o| o.shadow.as_ref())
                 .map(|a| a.size)
-                .expect("the distance fixture packed an atlas");
-            assert!(scene.octave_gap > 0.0, "the fixture has no angular gap");
+                .unwrap_or_else(|| panic!("the {name} fixture packed no atlas"));
+            assert!(scene.octave_gap > 0.0, "the {name} fixture has no angular gap");
             assert!(
                 scene.nodes.iter().any(|n| n.melody_slots | n.bass_slots != 0),
-                "the fixture has no marked sector",
+                "the {name} fixture has no marked sector",
             );
+            let cast: Vec<_> = cb
+                .node_cells
+                .iter()
+                .map(|&c| &cb.casters[c as usize])
+                .filter(|c| c.level > 0.0)
+                .collect();
+            assert!(
+                !cast.is_empty()
+                    && cast.iter().all(|c| c.kernel.is_distance() || c.spread_points > 0.0),
+                "the {name} fixture's node cells are not all analytic, so nothing in them skips",
+            );
+            if name.starts_with("moving") {
+                assert!(
+                    cb.instances.iter().any(|g| g.motion[3] & (1 << 31) == 0),
+                    "the {name} fixture has no node still moving",
+                );
+            }
             let draw_cells = |src: &str| {
                 let shader = lattice_module(&device, &with_common(src));
                 let (pipeline, _) =
@@ -320,7 +374,7 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
                     let bits = u16::from_le_bytes([p[0], p[1]]);
                     shadow::tests::half(bits) >= 0.99
                 }),
-                "the Distance fixture wrote no opaque node interior",
+                "the {name} fixture wrote no opaque node interior",
             );
             let differing = cell_fast
                 .chunks_exact(4)
