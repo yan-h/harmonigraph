@@ -13,7 +13,7 @@ use harmonigraph_ui::{
 
 use crate::wav::Audio;
 
-use crate::frames::Renderer;
+use crate::frames::{Renderer, IN_FLIGHT};
 use crate::replay::Replay;
 
 use std::time::{Duration, Instant};
@@ -26,10 +26,16 @@ use std::time::{Duration, Instant};
 /// - `ui` — the replay's advance, the analyzer feed, egui's own pass and
 ///   tessellation. Everything on the CPU before the GPU hears about the frame.
 /// - `submit` — building the frame's command buffers and handing them over
-///   ([`FrameCost::submit`](crate::frames::FrameCost::submit)).
-/// - `readback` — waiting for the GPU and unpadding the result
-///   ([`FrameCost::readback`](crate::frames::FrameCost::readback)).
+///   ([`Renderer::submit`]).
+/// - `readback` — blocked waiting for the GPU, then unpadding the result
+///   ([`Renderer::read`]).
 /// - `emit` — handing the finished bytes to the sink.
+///
+/// The GPU's drawing is none of them. A frame is read back only once the next
+/// one has been submitted ([`IN_FLIGHT`](crate::frames::IN_FLIGHT)), so the
+/// next frame's `ui+tess` and `submit` and this frame's `emit` run while the
+/// GPU draws, and `readback` is only what the GPU still had left after them.
+/// A large `readback` is therefore the GPU being the bottleneck.
 ///
 /// `wall` is the loop's own elapsed time, so the four shares are of something
 /// they can add up to; the export's TOTAL is longer by whatever setup came
@@ -214,9 +220,9 @@ pub fn render(
     // the determinism tests still hold.
     let mut stages = Stages::default();
     let loop_began = Instant::now();
-    // The frame buffer, going round: drawn into here, handed to the sink, and
+    // The frame buffer, going round: read back into, handed to the sink, and
     // back from `emit` for the next frame. Empty to start with — the first
-    // render sizes it, and after the first few the sink is handing back
+    // read sizes it, and after the first few the sink is handing back
     // buffers that are already the right size.
     let mut buffer = Vec::new();
     for frame in 0..frames {
@@ -239,24 +245,41 @@ pub fn render(
         let primitives = context.tessellate(output.shapes, settings.pixels_per_point);
         stages.ui += drawing.elapsed();
 
-        let cost = renderer.render(
-            &mut buffer,
+        stages.submit += renderer.submit(
             &primitives,
             &output.textures_delta,
             settings.pixels_per_point,
             background,
         );
-        stages.submit += cost.submit;
-        stages.readback += cost.readback;
-
-        let handing_over = Instant::now();
-        let returned = emit(std::mem::take(&mut buffer))?;
-        stages.emit += handing_over.elapsed();
-        stages.frames = frame + 1;
-        stages.wall = loop_began.elapsed();
-        buffer = returned;
+        // This frame is with the GPU now, so the one before it is read back
+        // and handed over while it draws. Nothing above reads a frame's pixels
+        // back, so building this one before that changes no byte of either.
+        if renderer.in_flight() == IN_FLIGHT {
+            hand_over(&mut renderer, &mut buffer, &mut emit, &mut stages, loop_began)?;
+        }
     }
+    while hand_over(&mut renderer, &mut buffer, &mut emit, &mut stages, loop_began)? {}
     Ok(stages)
+}
+
+/// Read the oldest frame in flight back into `buffer` and hand it to `emit`,
+/// taking back the buffer the next frame is read into. `false` when there was
+/// no frame left to hand over.
+fn hand_over(
+    renderer: &mut Renderer,
+    buffer: &mut Vec<u8>,
+    emit: &mut impl FnMut(Vec<u8>) -> Result<Vec<u8>, String>,
+    stages: &mut Stages,
+    loop_began: Instant,
+) -> Result<bool, String> {
+    let Some(waited) = renderer.read(buffer) else { return Ok(false) };
+    stages.readback += waited;
+    let handing_over = Instant::now();
+    *buffer = emit(std::mem::take(buffer))?;
+    stages.emit += handing_over.elapsed();
+    stages.frames += 1;
+    stages.wall = loop_began.elapsed();
+    Ok(true)
 }
 
 /// Advance one export frame through the same replay/audio path the renderer

@@ -30,43 +30,51 @@ pub(crate) fn single_pane(pane: harmonigraph_ui::Pane) -> harmonigraph_ui::Layou
     }
 }
 
+/// How many frames can be with the GPU at once: one drawing while the one
+/// before it is copied out and handed to the sink.
+///
+/// Two is the whole of the overlap there is to have. The CPU's share of a
+/// frame — building and submitting the next one, then emitting this one — runs
+/// while the GPU draws, and a third buffer would only let the CPU run further
+/// ahead of a GPU it is already waiting on.
+pub const IN_FLIGHT: usize = 2;
+
 /// Everything needed to render frames, set up once.
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     egui: egui_wgpu::Renderer,
+    /// One target for every frame, though two can be in flight: the queue
+    /// runs in submission order, so a frame's copy out of it is done before
+    /// the next frame's pass clears it.
     target: wgpu::Texture,
     view: wgpu::TextureView,
-    readback: wgpu::Buffer,
+    /// One per frame [`IN_FLIGHT`], taken in turn.
+    readback: [wgpu::Buffer; IN_FLIGHT],
+    /// Submitted and not yet read, oldest first.
+    in_flight: std::collections::VecDeque<InFlight>,
+    /// The `readback` slot the next frame copies into.
+    next: usize,
     size: [u32; 2],
     /// Padded row stride of `readback`; wgpu requires 256-byte alignment,
     /// which an arbitrary width does not give us.
     bytes_per_row: u32,
 }
 
+/// A frame the GPU has been handed and the export has not read back yet.
+struct InFlight {
+    slot: usize,
+    submission: wgpu::SubmissionIndex,
+    /// Where the map callback reports. A channel rather than a panic in the
+    /// callback, because an export that stops early (a dead encoder) drops the
+    /// renderer with this frame's map still pending.
+    mapped: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+}
+
 /// Round `bytes` up to wgpu's copy alignment.
 fn aligned(bytes: u32) -> u32 {
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     bytes.div_ceil(align) * align
-}
-
-/// What one frame cost on this side of the loop.
-///
-/// Two numbers rather than one because they answer different questions. GPU
-/// work is asynchronous: `submit` is the CPU building command buffers and
-/// handing them over, which is the only part a cheaper scene would shorten,
-/// while `readback` is the export waiting for the GPU to have finished and
-/// then unpadding the result. A readback that dominates is an argument for a
-/// deeper readback ring (#660); a submit that dominates is not.
-#[derive(Clone, Copy, Default)]
-pub struct FrameCost {
-    /// Applying texture deltas, running the paint callbacks' `prepare`,
-    /// encoding the pass and the copy, and `queue.submit`.
-    pub submit: std::time::Duration,
-    /// `map_async`, the poll that blocks until it lands, and the unpadding
-    /// copy out of the mapped rows. The whole of it is the render thread doing
-    /// nothing else, which is what makes it worth its own number.
-    pub readback: std::time::Duration,
 }
 
 impl Renderer {
@@ -117,14 +125,32 @@ impl Renderer {
         let view = target.create_view(&Default::default());
 
         let bytes_per_row = aligned(size[0] * 4);
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("offline readback"),
-            size: u64::from(bytes_per_row) * u64::from(size[1]),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
+        let readback = std::array::from_fn(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("offline readback"),
+                size: u64::from(bytes_per_row) * u64::from(size[1]),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            })
         });
 
-        Some(Renderer { device, queue, egui, target, view, readback, size, bytes_per_row })
+        Some(Renderer {
+            device,
+            queue,
+            egui,
+            target,
+            view,
+            readback,
+            in_flight: Default::default(),
+            next: 0,
+            size,
+            bytes_per_row,
+        })
+    }
+
+    /// Frames submitted and not yet [read](Self::read); at most [`IN_FLIGHT`].
+    pub fn in_flight(&self) -> usize {
+        self.in_flight.len()
     }
 
     /// The widest texture this device will take, on either side.
@@ -144,23 +170,23 @@ impl Renderer {
         self.device.limits().max_texture_dimension_2d as usize
     }
 
-    /// Paint one frame's tessellated shapes into `frame` as tightly packed
-    /// RGBA8 (row padding removed), reporting what the two halves cost — see
-    /// [`FrameCost`].
+    /// Hand one frame's tessellated shapes to the GPU, to be collected by a
+    /// later [`Self::read`], and report what that cost the CPU.
     ///
-    /// `frame` is filled rather than returned, and the caller is expected to
-    /// hand back a buffer that has been round the sink: at 1440p a frame is
-    /// 14.7 MB, so allocating one per frame is 880 MB a second of video through
-    /// the allocator for no reason. Whatever is in it is overwritten; only its
-    /// capacity is reused.
-    pub fn render(
+    /// The cost is applying texture deltas, running the paint callbacks'
+    /// `prepare`, encoding the pass and the copy, and `queue.submit` — the
+    /// only part of a frame's GPU side a cheaper scene would shorten. Waiting
+    /// for the GPU is [`Self::read`]'s, which is why the two are apart.
+    ///
+    /// Panics if [`IN_FLIGHT`] frames are already waiting to be read.
+    pub fn submit(
         &mut self,
-        frame: &mut Vec<u8>,
         primitives: &[egui::ClippedPrimitive],
         textures: &egui::TexturesDelta,
         pixels_per_point: f32,
         clear: egui::Color32,
-    ) -> FrameCost {
+    ) -> std::time::Duration {
+        assert!(self.in_flight.len() < IN_FLIGHT, "read a frame back before submitting another");
         let handed_over = std::time::Instant::now();
         for (id, delta) in &textures.set {
             self.egui.update_texture(&self.device, &self.queue, *id, delta);
@@ -213,10 +239,12 @@ impl Renderer {
             self.egui.render(&mut pass, primitives, &descriptor);
         }
 
+        let slot = self.next;
+        let readback = &self.readback[slot];
         encoder.copy_texture_to_buffer(
             self.target.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback,
+                buffer: readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(self.bytes_per_row),
@@ -225,35 +253,70 @@ impl Renderer {
             },
             wgpu::Extent3d { width: self.size[0], height: self.size[1], depth_or_array_layers: 1 },
         );
-        self.queue.submit(callback_commands.into_iter().chain([encoder.finish()]));
+        let submission = self.queue.submit(callback_commands.into_iter().chain([encoder.finish()]));
+        // Asked for now, after the submit that writes the buffer, so the map
+        // lands as soon as this frame's work does.
+        let (report, mapped) = std::sync::mpsc::channel();
+        readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+            let _ = report.send(result);
+        });
+        self.in_flight.push_back(InFlight { slot, submission, mapped });
+        self.next = (slot + 1) % IN_FLIGHT;
         let submit = handed_over.elapsed();
 
+        // The GPU keeps a freed texture alive until the work using it is done.
+        for id in &textures.free {
+            self.egui.free_texture(id);
+        }
+        submit
+    }
+
+    /// Wait for the oldest frame still in flight and copy it into `frame` as
+    /// tightly packed RGBA8 (row padding removed). `None`, touching nothing,
+    /// when no frame is in flight.
+    ///
+    /// The time returned is the render thread blocked on the GPU plus the
+    /// unpadding copy out of the mapped rows — the whole of it the export doing
+    /// nothing else, which is what makes it worth its own number. With a newer
+    /// frame submitted first, the wait is only whatever the GPU still had left
+    /// once the CPU had built that frame.
+    ///
+    /// `frame` is filled rather than returned, and the caller is expected to
+    /// hand back a buffer that has been round the sink: at 1440p a frame is
+    /// 14.7 MB, so allocating one per frame is 880 MB a second of video through
+    /// the allocator for no reason. Whatever is in it is overwritten; only its
+    /// capacity is reused.
+    pub fn read(&mut self, frame: &mut Vec<u8>) -> Option<std::time::Duration> {
+        let InFlight { slot, submission, mapped } = self.in_flight.pop_front()?;
         let waited = std::time::Instant::now();
-        let slice = self.readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map readback buffer"));
-        self.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        // This frame's submission rather than the latest, which would wait out
+        // the newer frame too and give back the overlap.
+        self.device
+            .poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: None })
+            .expect("poll");
+        // The poll that finished the submission has run its map callback.
+        mapped
+            .try_recv()
+            .expect("the readback mapped once its submission finished")
+            .expect("map readback buffer");
+        let readback = &self.readback[slot];
         let row_bytes = (self.size[0] * 4) as usize;
         frame.clear();
         frame.reserve(row_bytes * self.size[1] as usize);
         {
-            let mapped = slice.get_mapped_range();
+            let mapped = readback.slice(..).get_mapped_range();
             for row in 0..self.size[1] as usize {
                 let start = row * self.bytes_per_row as usize;
                 frame.extend_from_slice(&mapped[start..start + row_bytes]);
             }
         }
-        self.readback.unmap();
-        let readback = waited.elapsed();
-
-        for id in &textures.free {
-            self.egui.free_texture(id);
-        }
-        FrameCost { submit, readback }
+        readback.unmap();
+        Some(waited.elapsed())
     }
 
-    /// [`Self::render`] into a fresh buffer, for the probes below — they are
-    /// about what a frame LOOKS like, and neither the recycling nor the cost
-    /// would say anything to them.
+    /// One frame submitted and read straight back into a fresh buffer, for the
+    /// probes below — they are about what a frame LOOKS like, and neither the
+    /// overlap, the recycling nor the cost would say anything to them.
     #[cfg(test)]
     pub fn render_to_vec(
         &mut self,
@@ -262,8 +325,9 @@ impl Renderer {
         pixels_per_point: f32,
         clear: egui::Color32,
     ) -> Vec<u8> {
+        self.submit(primitives, textures, pixels_per_point, clear);
         let mut frame = Vec::new();
-        self.render(&mut frame, primitives, textures, pixels_per_point, clear);
+        self.read(&mut frame).expect("the frame just submitted");
         frame
     }
 }

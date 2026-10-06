@@ -323,7 +323,9 @@ Every export ends with a line saying where that time went:
 timing: a 5442-frame export in 774.6 s, 718.9 s of it drawing at 7.6 fps — ui+tess 5.54 ms/frame (4%), submit 7.20 ms/frame (5%), readback 20.79 ms/frame (16%), emit 98.47 ms/frame (75%)
 ```
 
-`ui+tess` is everything on the CPU before the GPU hears about the frame, `submit` is handing the frame's commands over, `readback` is waiting for the GPU and unpacking the result, and `emit` is handing the pixels to ffmpeg — which blocks once the encoder is behind, so a large `emit` share means the encoder is the bottleneck rather than the picture.
+`ui+tess` is everything on the CPU before the GPU hears about the frame, `submit` is handing the frame's commands over, `readback` is blocked waiting for the GPU and unpacking the result, and `emit` is handing the pixels to ffmpeg — which blocks once the encoder is behind, so a large `emit` share means the encoder is the bottleneck rather than the picture.
+The GPU draws each frame while the CPU builds and submits the next one and emits the one before,
+so `readback` is only the drawing those did not cover, and a large `readback` share means the GPU is the bottleneck.
 The shares are of the drawing clock;
 the gap between it and the total is setup plus the encoder's backlog after the last frame.
 
