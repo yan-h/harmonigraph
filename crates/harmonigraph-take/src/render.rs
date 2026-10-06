@@ -128,20 +128,25 @@ mod trigger_tests {
         assert_eq!(config.stop_at_bar(), Some(64.0), "and it converts to a 0-based bar");
     }
 
-    /// A stop bar out of the field's range, or not a number at all, is repaired
+    /// A stop bar or tail out of its field's range, or not a number at all, is repaired
     /// on load rather than carried.
     ///
     /// NaN is the one that has to be named separately: it is not merely out of
     /// range, it compares false against every bar, so a blob carrying one would
     /// leave the trigger selected and silently unable to fire.
     #[test]
-    fn a_hand_edited_stop_bar_is_repaired_on_load() {
+    fn a_hand_edited_stop_bar_or_tail_is_repaired_on_load() {
         for (given, want) in
             [(f64::NAN, 65.0), (f64::INFINITY, 65.0), (0.0, 2.0), (1e9, 100_000.0), (33.5, 33.5)]
         {
             let mut config = super::RenderConfig { stop_bar: given, ..Default::default() };
             config.sanitize();
             assert_eq!(config.stop_bar, want, "stop_bar {given}");
+        }
+        for (given, want) in [(f64::NAN, 4.0), (-1.0, 0.0), (1e9, 60.0), (0.5, 0.5)] {
+            let mut config = super::RenderConfig { tail: given, ..Default::default() };
+            config.sanitize();
+            assert_eq!(config.tail, want, "tail {given}");
         }
     }
 }
@@ -205,6 +210,17 @@ pub struct RenderConfig {
     /// picture at any size. It rides in a take like the frame does, so a plain
     /// re-render keeps it, and the offline renderer's `--size` overrides it.
     pub short_edge: u32,
+    /// Seconds the video runs past the take's last event, so releases finish
+    /// fading and the roll clears. The Video pane's Tail.
+    ///
+    /// Ignored under [`AtLoopEnd`](RenderTrigger::AtLoopEnd), whose video ends
+    /// with its loop (#1125), and never cuts the soundtrack short: the render
+    /// still runs to the end of the take's audio. So 0 ends an audio export at
+    /// its range end rather than a few silent seconds past it.
+    ///
+    /// The offline renderer reads it from the appearance the take was
+    /// RECORDED with, as it reads the trigger, and its `--tail` overrides it.
+    pub tail: f64,
 }
 
 impl Default for RenderConfig {
@@ -221,6 +237,7 @@ impl Default for RenderConfig {
             // 720 on the short edge — 1280x720 at the default 16:9 frame,
             // as captured from the DAW on 2026-09-26.
             short_edge: 720,
+            tail: 4.0,
         }
     }
 }
@@ -242,6 +259,29 @@ impl RenderConfig {
             self.stop_bar = 65.0;
         }
         self.stop_bar = self.stop_bar.clamp(STOP_BAR_RANGE.0, STOP_BAR_RANGE.1);
+        // The same for the tail: a NaN would reach the render's end and make
+        // its frame count meaningless.
+        if !self.tail.is_finite() {
+            self.tail = RenderConfig::default().tail;
+        }
+        self.tail = self.tail.clamp(TAIL_RANGE.0, TAIL_RANGE.1);
+    }
+
+    /// Seconds the video runs past the take's last event: [`tail`](Self::tail),
+    /// or none for a take that ends with its loop.
+    ///
+    /// Asked here rather than of the field for the same reason as
+    /// [`stop_at_bar`](Self::stop_at_bar): the trigger decides whether the
+    /// number applies, and every reader has to ask both.
+    pub fn tail_after_last_event(&self) -> f64 {
+        match self.trigger {
+            // One pass of a loop meant to be seen as a loop: a fade past its
+            // end is not the performance (#1125).
+            RenderTrigger::AtLoopEnd => 0.0,
+            RenderTrigger::OnDisarm | RenderTrigger::OnTransportStop | RenderTrigger::AtBar => {
+                self.tail
+            }
+        }
     }
 
     /// The bar to end the take at, or `None` when the trigger is not
@@ -274,6 +314,10 @@ impl RenderConfig {
 /// Allowing it would put a settable, plausible-looking value on the dial that
 /// provably never fires.
 pub const STOP_BAR_RANGE: (f64, f64) = (2.0, 100_000.0);
+
+/// What [`RenderConfig::tail`]'s field can produce, in seconds. A minute is
+/// past any release or reverb worth waiting for.
+pub const TAIL_RANGE: (f64, f64) = (0.0, 60.0);
 
 /// Which side of the video frame the lattice takes; the Spectral pane takes
 /// whatever is left.

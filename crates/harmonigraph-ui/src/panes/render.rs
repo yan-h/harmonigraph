@@ -591,6 +591,24 @@ fn record_controls(
                 );
             });
         }
+        // Hidden under Loop end for the same reason: its video ends with the
+        // loop, so a tail beside it would be a dial that does nothing.
+        if state.appearance.render.trigger != crate::RenderTrigger::AtLoopEnd {
+            ui.horizontal_wrapped(|ui| {
+                crate::widgets::label(ui, "Tail").on_hover_text(
+                    "How long the video runs past the last note, so releases finish fading. \
+                     The video always runs to the end of the recorded audio, so 0 ends an \
+                     audio export at its range end.",
+                );
+                ui.add(
+                    egui::DragValue::new(&mut state.appearance.render.tail)
+                        .range(crate::TAIL_RANGE.0..=crate::TAIL_RANGE.1)
+                        .speed(0.05)
+                        .max_decimals(2)
+                        .suffix(" s"),
+                );
+            });
+        }
 
         clear_everything(ui, state);
     });

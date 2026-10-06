@@ -20,7 +20,7 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_take::{RenderProgress, RenderTrigger};
+use harmonigraph_take::{RenderConfig, RenderProgress};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::Layout;
 use render::Settings;
@@ -247,37 +247,34 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
     }
 }
 
-/// How long the picture runs past the last event when `--tail` does not say.
-///
-/// Four seconds, so releases finish fading and the roll clears — except for a
-/// take recorded [`AtLoopEnd`](RenderTrigger::AtLoopEnd), which ends exactly
-/// where its loop does (#1125). That take is one pass of a loop meant to be
-/// seen as a loop, so a fade past its end is not the performance; its
-/// recording runs to the wrap, and [`end_of_render`] still waits for it, so
+/// How long the picture runs past the last event when `--tail` does not say:
+/// the Video pane's Tail, or none for a take recorded
+/// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd), which ends
+/// exactly where its loop does (#1125) — see
+/// [`RenderConfig::tail_after_last_event`]. A loop-end recording runs to the wrap, and [`end_of_render`] still waits for it, so
 /// the file ends at the loop's end rather than at the last note. An explicit
 /// `--tail` still applies to every kind of take.
 ///
-/// `trigger` is the one the take was RECORDED under, not the one a Re-render's
-/// `--appearance` carries: how the take ended is fixed when it was captured,
-/// and a trigger changed since then says nothing about this file.
-fn tail_of_render(explicit: Option<f64>, trigger: RenderTrigger) -> f64 {
-    explicit.unwrap_or(match trigger {
-        RenderTrigger::AtLoopEnd => 0.0,
-        RenderTrigger::OnDisarm | RenderTrigger::OnTransportStop | RenderTrigger::AtBar => 4.0,
-    })
+/// `recorded` is the render config the take was RECORDED under, not the one a
+/// Re-render's `--appearance` carries: how the take ended is fixed when it was
+/// captured, and a trigger changed since then says nothing about this file.
+/// The tail rides with it, so the choice made beside the trigger is the one
+/// that renders.
+fn tail_of_render(explicit: Option<f64>, recorded: &RenderConfig) -> f64 {
+    explicit.unwrap_or_else(|| recorded.tail_after_last_event())
 }
 
-/// The trigger a take was recorded under, read from its own appearance.
+/// The render config a take was recorded under, read from its own appearance.
 ///
 /// A malformed recorded look is only reachable with a valid replacement:
 /// [`render::appearance_for`] refuses it otherwise. Such a take cannot say
 /// how it ended, so an explicit replacement keeps the ordinary tail.
-fn recorded_trigger(take: &harmonigraph_take::Take) -> RenderTrigger {
+fn recorded_render(take: &harmonigraph_take::Take) -> RenderConfig {
     take.header
         .appearance
         .as_deref()
         .and_then(|blob| harmonigraph_ui::AppearanceDocument::parse(blob).ok())
-        .map(|appearance| appearance.render.trigger)
+        .map(|appearance| appearance.render)
         .unwrap_or_default()
 }
 
@@ -427,7 +424,7 @@ fn export(args: Args) -> Result<(), String> {
     let end = end_of_render(
         args.end,
         take.duration(),
-        tail_of_render(args.tail, recorded_trigger(&take)),
+        tail_of_render(args.tail, &recorded_render(&take)),
         audio.as_ref().map(|a| audio_start + a.seconds()),
     );
     let scale = args.scale.unwrap_or_else(|| default_scale(size));
@@ -539,6 +536,7 @@ fn export(args: Args) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harmonigraph_take::RenderTrigger;
 
     #[test]
     fn retired_playhead_flag_is_rejected() {
@@ -778,18 +776,22 @@ mod tests {
         assert_eq!(end_of_render(Some(0.0), 30.0, 2.0, None), 0.0);
     }
 
-    /// A loop-end take ends at its loop's end unless `--tail` was typed (#1125);
-    /// every other take keeps the fade.
+    /// An unasked tail is the one recorded beside the trigger, and none for a
+    /// loop-end take, which ends at its loop's end (#1125); a typed `--tail`
+    /// wins over both.
     #[test]
-    fn only_an_unasked_tail_on_a_loop_end_take_is_zero() {
-        assert_eq!(tail_of_render(None, RenderTrigger::AtLoopEnd), 0.0);
-        assert_eq!(tail_of_render(Some(4.0), RenderTrigger::AtLoopEnd), 4.0);
+    fn an_unasked_tail_is_the_recorded_one() {
+        let mut recorded = RenderConfig { tail: 1.5, ..Default::default() };
         for trigger in
             [RenderTrigger::OnDisarm, RenderTrigger::OnTransportStop, RenderTrigger::AtBar]
         {
-            assert_eq!(tail_of_render(None, trigger), 4.0);
-            assert_eq!(tail_of_render(Some(0.5), trigger), 0.5);
+            recorded.trigger = trigger;
+            assert_eq!(tail_of_render(None, &recorded), 1.5, "{trigger:?}");
+            assert_eq!(tail_of_render(Some(0.5), &recorded), 0.5, "{trigger:?}");
         }
+        recorded.trigger = RenderTrigger::AtLoopEnd;
+        assert_eq!(tail_of_render(None, &recorded), 0.0);
+        assert_eq!(tail_of_render(Some(4.0), &recorded), 4.0);
     }
 
     /// `--start 0` has to survive parsing as a REQUEST, not as the absence of
