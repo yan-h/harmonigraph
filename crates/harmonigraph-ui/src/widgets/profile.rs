@@ -4,7 +4,6 @@ use super::RangeBar;
 use crate::theme;
 use egui::Ui;
 use harmonigraph_scene::star_plan::STAR_DEPTHS;
-use std::ops::RangeInclusive;
 
 /// Which star property a [`depth`] control sets, one value per drawn layer.
 /// A size carries how many times the stored value the pane draws and shows
@@ -15,45 +14,95 @@ pub(crate) enum Depth {
     Size(f32),
     Spacing,
     Speed,
+    Solid,
+    Twinkle,
+}
+
+/// The per-layer star properties in one editor: a row choosing which one the
+/// plot under it shows, then that one's [`depth`] control. The choice is a
+/// view of the settings rather than one of them, held in egui's memory for
+/// the session and never saved.
+pub(crate) fn star_layers(
+    ui: &mut Ui,
+    stars: &mut harmonigraph_scene::StarSettings,
+    size_scale: f32,
+) {
+    let id = ui.make_persistent_id("star layer property");
+    let mut kind = ui.data(|d| d.get_temp::<u8>(id)).unwrap_or(0);
+    super::choice_row(
+        ui,
+        "Per layer",
+        &mut kind,
+        &[
+            (0, "Size", "Each layer's star size"),
+            (1, "Spacing", "How far apart each layer's stars sit"),
+            (2, "Speed", "How fast each layer drifts"),
+            (3, "Solid", "How much of each layer's stars is solid rather than glow"),
+            (4, "Twinkle", "How far each layer's stars fade as one life gives way to the next"),
+        ],
+    );
+    ui.data_mut(|d| d.insert_temp(id, kind));
+    let (values, kind) = match kind {
+        1 => (&mut stars.star_spacing_ratio, Depth::Spacing),
+        2 => (&mut stars.star_speed, Depth::Speed),
+        3 => (&mut stars.star_solid, Depth::Solid),
+        4 => (&mut stars.star_twinkle, Depth::Twinkle),
+        _ => (&mut stars.star_size, Depth::Size(size_scale)),
+    };
+    depth(ui, values, stars.star_layers, kind);
 }
 
 /// Each drawn layer's own value, far to near, in any order: a dot per layer
 /// to drag on its own; a line pressed out from the plot's empty space, which
-/// sets every layer it spans onto it; and a bar under the plot over the drawn
-/// layers' whole range, which stretches and slides them together. A depth
-/// `Star layers` leaves out is not shown and keeps its value.
-pub(crate) fn depth(
-    ui: &mut Ui,
-    values: &mut [f32; STAR_DEPTHS],
-    layers: u32,
-    range: RangeInclusive<f32>,
-    kind: Depth,
-) {
-    const PLOT: &str = "Set each layer on the plot above: drag its dot, or press on empty space and draw a line across the layers to set them all onto it.";
-    let (name, display, hover): (_, fn(f32) -> String, _) = match kind {
+/// sets every layer it spans onto it; and a bar beside the plot over the
+/// drawn layers' whole range, which stretches and slides them together. A
+/// depth `Star layers` leaves out is not shown and keeps its value.
+pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, kind: Depth) {
+    use harmonigraph_scene::{
+        STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SOLID_MAX, STAR_SPACING_MAX, STAR_SPACING_MIN,
+        STAR_SPEED_MAX, STAR_SPEED_MIN,
+    };
+    const PLOT: &str = "Set each layer on the plot: drag its dot, or press on empty space and draw a line across the layers to set them all onto it.";
+    let percent: fn(f32) -> String = |share| format!("{:.0}%", share * 100.0);
+    let (name, range, display, hover): (_, _, fn(f32) -> String, _) = match kind {
         Depth::Size(_) => (
             "Star size",
+            STAR_SIZE_MIN..=STAR_SIZE_MAX,
             |octaves| format!("{:.1} px", octaves.exp2()),
             "How big the stars are across, glow included, from the smallest layer to the largest. Drag an end to stretch every layer's size with it, or the middle to slide them all. Star spacing is a multiple of the size, so bigger stars sit farther apart.",
         ),
         Depth::Spacing => (
             "Star spacing",
+            STAR_SPACING_MIN..=STAR_SPACING_MAX,
             |octaves| format!("{:.2}× size", octaves.exp2()),
             "How far apart the stars are, as a multiple of their layer's Star size, from the closest layer to the widest. Drag an end to stretch every layer's spacing with it, or the middle to slide them all. Every place holds a star, so wider spacing is fewer stars; the closest is as close as a star can sit and still be drawn whole.",
         ),
         Depth::Speed => (
             "Star speed",
-            |speed| format!("{:.0}%", speed * 100.0),
+            STAR_SPEED_MIN..=STAR_SPEED_MAX,
+            percent,
             "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
         ),
+        Depth::Solid => (
+            "Solid share",
+            0.0..=STAR_SOLID_MAX,
+            percent,
+            "The share of each star's radius at full strength, from its centre out, from the least solid layer to the most; the rest is glow, fading to the star's edge as Glow falloff says. Drag an end to stretch every layer's share with it, or the middle to slide them all.",
+        ),
+        Depth::Twinkle => (
+            "Twinkle",
+            0.0..=1.0,
+            percent,
+            "How far each layer's stars fade out when their lifetime ends, from the least to the most. At 100% each star fades to nothing and a new one appears somewhere else nearby. Below 100% each star stays in its place, dims only this far and changes into its next life's brightness and size. At 0% it never dims, so a layer packed tight enough to cover the sky never shows a gap. Drag an end to stretch every layer's twinkle with it, or the middle to slide them all.",
+        ),
     };
-    // Sizes and spacings run in octaves, speed linearly, on the plot and the
-    // bar alike; the bar's octaves are of the value as shown, so its display
-    // stays a plain function of them.
+    // Sizes and spacings run in octaves, the shares linearly, on the plot and
+    // the bar alike; the bar's octaves are of the value as shown, so its
+    // display stays a plain function of them.
     let (octaves, shown) = match kind {
         Depth::Size(shown) => (true, shown),
         Depth::Spacing => (true, 1.0),
-        Depth::Speed => (false, 1.0),
+        Depth::Speed | Depth::Solid | Depth::Twinkle => (false, 1.0),
     };
     let to_bar = |v: f32| if octaves { (v * shown).log2() } else { v };
     let from_bar = |u: f32| if octaves { u.exp2() / shown } else { u };
@@ -126,39 +175,24 @@ pub(crate) fn depth(
     });
 }
 
-/// How a star looks at the farthest and the nearest depth: both drawn with
-/// the real profile ([`harmonigraph_scene::star_plan::star_profile`]),
-/// enlarged to the same size so the shape reads whatever `Star size` is, with
-/// the three bars that set it beside them.
-pub(crate) fn star_profile(
-    ui: &mut Ui,
-    solid_far: &mut f32,
-    solid_near: &mut f32,
-    falloff: &mut f32,
-) {
+/// How a star looks at the farthest and the nearest drawn layer, `solid`
+/// being their solid shares: both drawn with the real profile
+/// ([`harmonigraph_scene::star_plan::star_profile`]), enlarged to the same
+/// size so the shape reads whatever `Star size` is, with the falloff that
+/// bends their glow beside them.
+pub(crate) fn star_profile(ui: &mut Ui, solid: [f32; 2], falloff: &mut f32) {
     use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile};
-    use harmonigraph_scene::STAR_SOLID_MAX;
-    let plot = Plot::with_fields(ui, "Star shape · far, near", 3);
+    let plot = Plot::with_fields(ui, "Star shape · far, near", 1);
     plot.fields(ui, |ui| {
-        let solid = 0.0..=STAR_SOLID_MAX;
-        value_bar(
-            ui,
-            solid_far,
-            solid.clone(),
-            ["Solid share, far stars", "Far solid"],
-            100.0,
-            "%",
-        );
-        value_bar(ui, solid_near, solid, ["Solid share, near stars", "Near solid"], 100.0, "%");
         value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
-        "One star at the farthest depth (left) and the nearest (right), enlarged to the same size: Star size sets how big they really are, and the solid share of the layers between steps evenly from one to the other. Far solid and Near solid are the share of each star's radius at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
+        "One star at the farthest layer (left) and the nearest (right), enlarged to the same size: Star size sets how big they really are, and Solid how much of each is at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
     );
     let bend = star_falloff_bend(*falloff);
     let half = plot.rect.width() * 0.5;
     let radius = (half * 0.9).min(plot.rect.height() * 0.5);
-    for (k, solid) in [*solid_far, *solid_near].into_iter().enumerate() {
+    for (k, solid) in solid.into_iter().enumerate() {
         let centre = egui::pos2(plot.rect.left() + half * (k as f32 + 0.5), plot.rect.center().y);
         star(ui, centre, radius, |t| star_profile(t, solid, bend));
     }

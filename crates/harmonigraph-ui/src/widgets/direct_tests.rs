@@ -145,17 +145,16 @@ fn press_drag(ctx: &egui::Context, draw: &mut impl FnMut(&mut Ui), from: Pos2, t
 }
 #[test]
 fn a_star_layer_dot_moves_its_own_layer_alone_and_idles_exactly() {
-    for (kind, range, initial) in [
-        (Depth::Speed, 0.0..=1.0, [0.1, 0.2, 0.4, 0.6, 0.8]),
-        (Depth::Size(1.0), 0.5..=64.0, [0.7, 1.5, 4.0, 11.0, 32.0]),
-    ] {
+    for (kind, initial) in
+        [(Depth::Speed, [0.1, 0.2, 0.4, 0.6, 0.8]), (Depth::Size(1.0), [0.7, 1.5, 4.0, 11.0, 32.0])]
+    {
         let mut values = initial;
         let ctx = crate::tests::probe::themed_at(1.0);
         for _ in 0..8 {
-            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, range.clone(), kind));
+            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, kind));
         }
         assert_eq!(values, initial);
-        drag(|ui| depth(ui, &mut values, 5, range.clone(), kind), 1, egui::vec2(0.0, -12.0));
+        drag(|ui| depth(ui, &mut values, 5, kind), 1, egui::vec2(0.0, -12.0));
         assert!(values[1] > initial[1]);
         assert_eq!([values[0], values[2], values[3], values[4]], [0, 2, 3, 4].map(|k| initial[k]));
     }
@@ -168,7 +167,7 @@ fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
     let initial = [0.3, 0.4, 0.5, 0.6, 0.7];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, 0.0..=1.0, Depth::Speed);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Speed);
     let output = frame(&ctx, vec![], &mut draw);
     let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
     let outside = egui::vec2(4.0, 4.0);
@@ -184,7 +183,7 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
     let initial = [1.0, 2.0, 4.0, 3.0, 8.0];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, 0.5..=64.0, Depth::Size(1.0));
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size(1.0));
     let output = frame(&ctx, vec![], &mut draw);
     let bar = well(&output, crate::theme::ROW_HEIGHT);
     // The span's middle, 1 to 8 px in octaves on a track of 0.5 to 64.

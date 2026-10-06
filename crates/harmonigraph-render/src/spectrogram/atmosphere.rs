@@ -849,11 +849,9 @@ fn memory_key(
                 star_size: _,           // reaches the key as the cells
                 star_speed: _,          // carried by absolute cell and per-cell life
                 star_lifetime: _,       // carried by absolute cell and per-cell life
-                star_twinkle_far: _,    // only whether a depth holds its stars, below
-                star_twinkle_near: _,   // only whether a depth holds its stars, below
+                star_twinkle: _,        // only whether a depth holds its stars, below
                 star_resolution: _,     // sampling does not change material identity
-                star_solid_far: _,      // response/coverage changes do not change material identity
-                star_solid_near: _,     // response/coverage changes do not change material identity
+                star_solid: _,          // response/coverage changes do not change material identity
                 star_glow_falloff: _,   // response/coverage changes do not change material identity
                 star_solo: _,           // composition only; hidden slices keep their history
             },

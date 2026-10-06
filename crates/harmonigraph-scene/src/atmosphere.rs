@@ -124,8 +124,8 @@ pub const WASH_POOL_WIDTH_MIN: f32 = 0.05;
 /// See [`WASH_POOL_WIDTH_MIN`].
 pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 
-/// The top of [`StarSettings::star_solid_far`] and
-/// [`StarSettings::star_solid_near`], as a share of the star's radius: the
+/// The top of every depth's [`StarSettings::star_solid`], as a share of the
+/// star's radius: the
 /// glow keeps a tenth of the radius at least, so no star has a hard edge to
 /// alias as it drifts.
 pub const STAR_SOLID_MAX: f32 = 0.9;
@@ -458,28 +458,23 @@ pub struct StarSettings {
     pub star_speed: [f32; crate::star_plan::STAR_DEPTHS],
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life, as far as
-    /// [`Self::star_twinkle_far`] says. Runs over
+    /// [`Self::star_twinkle`] says. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
-    /// How far the farthest depth's stars fade out as one life gives way to
-    /// the next, over 0..=1. At 1 each star fades to nothing and the next is
-    /// drawn somewhere new in its cell. Below 1 a cell's star keeps its place
-    /// across lives, dips only this far, and blends into the next life's
-    /// brightness and size, so at 0 a layer dense enough to cover the sky
-    /// never opens a hole. A depth `d` from 0 (far) to 1 (near) takes
-    /// `far + (near - far) d`.
-    pub star_twinkle_far: f32,
-    /// The nearest depth's twinkle. See [`Self::star_twinkle_far`].
-    pub star_twinkle_near: f32,
-    /// How much of the farthest depth's stars is solid: the share of the
-    /// star's radius at full coverage, the rest being glow that falls to
-    /// nothing at the star's edge ([`crate::star_plan::star_profile`]). A depth
-    /// `d` from 0 (far) to 1 (near) takes `far + (near - far) d`, as twinkle
-    /// does, so a dense bed of solid far stars can sit behind near stars that
-    /// are all glow. Runs over `0..=`[`STAR_SOLID_MAX`], either way round.
-    pub star_solid_far: f32,
-    /// The nearest depth's solid share. See [`Self::star_solid_far`].
-    pub star_solid_near: f32,
+    /// How far each depth's stars fade out as one life gives way to the next,
+    /// far (0) to near, over 0..=1. At 1 each star fades to nothing and the
+    /// next is drawn somewhere new in its cell. Below 1 a cell's star keeps
+    /// its place across lives, dips only this far, and blends into the next
+    /// life's brightness and size, so at 0 a layer dense enough to cover the
+    /// sky never opens a hole.
+    pub star_twinkle: [f32; crate::star_plan::STAR_DEPTHS],
+    /// How much of each depth's stars is solid, far (0) to near: the share of
+    /// the star's radius at full coverage, the rest being glow that falls to
+    /// nothing at the star's edge ([`crate::star_plan::star_profile`]), so a
+    /// dense bed of solid far stars can sit behind near stars that are all
+    /// glow. Runs over `0..=`[`STAR_SOLID_MAX`], in any order across the
+    /// depths.
+    pub star_solid: [f32; crate::star_plan::STAR_DEPTHS],
     /// How the glow falls from the solid edge to the star's edge, over 0..=1:
     /// 0 stays bright almost to the edge, 0.5 falls evenly, 1 drops at once
     /// and leaves a long faint tail ([`crate::star_plan::star_falloff_bend`]).
@@ -533,12 +528,11 @@ impl Default for StarSettings {
             star_speed: [0.089_310_82, 0.090_276_6, 0.098_061_62, 0.121_076_34, 0.168_600_56],
             star_lifetime: 2.9719827,
             // Every star fades to nothing and is drawn anew, as before the dial.
-            star_twinkle_far: 1.0,
-            star_twinkle_near: 1.0,
+            star_twinkle: [1.0; crate::star_plan::STAR_DEPTHS],
             // Fitted to the Gaussian-core-and-glow stars this replaced, at their
-            // fresh dials, over the star's area at every depth.
-            star_solid_far: 0.48,
-            star_solid_near: 0.0,
+            // fresh dials, over the star's area at every depth: 48% far to 0%
+            // near, on the size's curve.
+            star_solid: [0.48, 0.460_207_4, 0.382_529_7, 0.232_325, 0.0],
             star_glow_falloff: 0.5,
             // Between the old Medium preset's 50% far and 75% near images:
             // sharper than Medium, cheaper than High.
@@ -568,16 +562,8 @@ impl StarSettings {
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
         self.star_layers =
             self.star_layers.clamp(STAR_LAYERS_MIN, crate::star_plan::STAR_DEPTHS as u32);
-        // Each pair and each per-depth array runs far to near and may run
-        // either way, so its values are clamped one by one and never reordered.
-        let pair = |far: &mut f32,
-                    near: &mut f32,
-                    fresh: [f32; 2],
-                    range: std::ops::RangeInclusive<f32>| {
-            let (low, high) = range.into_inner();
-            *far = clamp(*far, fresh[0], low, high);
-            *near = clamp(*near, fresh[1], low, high);
-        };
+        // Each per-depth array runs far to near and may run either way, so its
+        // values are clamped one by one and never reordered.
         let depths = |values: &mut [f32; crate::star_plan::STAR_DEPTHS],
                       fresh: [f32; crate::star_plan::STAR_DEPTHS],
                       (low, high): (f32, f32)| {
@@ -594,15 +580,8 @@ impl StarSettings {
         depths(&mut self.star_speed, fresh.star_speed, (STAR_SPEED_MIN, STAR_SPEED_MAX));
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        pair(
-            &mut self.star_twinkle_far,
-            &mut self.star_twinkle_near,
-            [fresh.star_twinkle_far, fresh.star_twinkle_near],
-            0.0..=1.0,
-        );
-        self.star_solid_far = clamp(self.star_solid_far, fresh.star_solid_far, 0.0, STAR_SOLID_MAX);
-        self.star_solid_near =
-            clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);
+        depths(&mut self.star_twinkle, fresh.star_twinkle, (0.0, 1.0));
+        depths(&mut self.star_solid, fresh.star_solid, (0.0, STAR_SOLID_MAX));
         self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
         self.star_resolution = (clamp(
             self.star_resolution,

@@ -82,29 +82,14 @@ pub(super) fn stars(
     atmosphere: &mut harmonigraph_scene::StarSettings,
     size_scale: f32,
 ) {
-    use crate::widgets::Depth;
-    use harmonigraph_scene::{STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX, STAR_SPACING_MIN};
-    crate::widgets::depth(
-        ui,
-        &mut atmosphere.star_size,
-        atmosphere.star_layers,
-        STAR_SIZE_MIN..=STAR_SIZE_MAX,
-        Depth::Size(size_scale),
-    );
-    crate::widgets::depth(
-        ui,
-        &mut atmosphere.star_spacing_ratio,
-        atmosphere.star_layers,
-        STAR_SPACING_MIN..=STAR_SPACING_MAX,
-        Depth::Spacing,
-    );
+    // The layer count first: it says which layers the editor below shows.
     let mut layers = atmosphere.star_layers as f32;
     let top = harmonigraph_scene::star_plan::STAR_DEPTHS as f32;
     ValueBar::new(&mut layers, harmonigraph_scene::STAR_LAYERS_MIN as f32..=top, "Star layers")
         .integer()
         .show(ui)
         .on_hover_text(
-            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between. Each keeps its own Star size, spacing and speed, and a layer taken away keeps them for when it comes back; Solid and Twinkle spread evenly over the drawn layers. Fewer layers cost less.",
+            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between. Each keeps its own size, spacing, speed, solid share and twinkle, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
         );
     // Solo is held per depth, and a new layer count puts other depths under
     // the numbers, so a solo left on would come back on a different layer.
@@ -112,13 +97,13 @@ pub(super) fn stars(
         atmosphere.star_solo = Default::default();
     }
     atmosphere.star_layers = layers as u32;
+    crate::widgets::star_layers(ui, atmosphere, size_scale);
     star_solo(ui, atmosphere);
-    crate::widgets::star_profile(
-        ui,
-        &mut atmosphere.star_solid_far,
-        &mut atmosphere.star_solid_near,
-        &mut atmosphere.star_glow_falloff,
-    );
+    let drawn = harmonigraph_scene::star_plan::star_layer_depths(atmosphere.star_layers);
+    let (far, near) =
+        (drawn.iter().position(Option::is_some), drawn.iter().rposition(Option::is_some));
+    let solid = [far, near].map(|k| atmosphere.star_solid[k.unwrap_or(0)]);
+    crate::widgets::star_profile(ui, solid, &mut atmosphere.star_glow_falloff);
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
         .show(ui)
@@ -173,17 +158,10 @@ pub(super) fn stars_resolution(ui: &mut egui::Ui, stars: &mut harmonigraph_scene
     );
 }
 
+/// The stars' one motion control of their own beside `Drift direction`: each
+/// layer's speed and twinkle are set under Per layer, among the look.
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
-    use harmonigraph_scene::{
-        STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_MAX, STAR_SPEED_MIN,
-    };
-    crate::widgets::depth(
-        ui,
-        &mut atmosphere.star_speed,
-        atmosphere.star_layers,
-        STAR_SPEED_MIN..=STAR_SPEED_MAX,
-        crate::widgets::Depth::Speed,
-    );
+    use harmonigraph_scene::{STAR_LIFETIME_MAX, STAR_LIFETIME_MIN};
     ValueBar::new(
         &mut atmosphere.star_lifetime,
         STAR_LIFETIME_MIN..=STAR_LIFETIME_MAX,
@@ -193,16 +171,8 @@ pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scen
     .unit(1.0, " s")
     .show(ui)
     .on_hover_text(
-        "How long each star lives before a new one takes its place, alike at every depth. Twinkle says how it gives way.",
+        "How long each star lives before a new one takes its place, alike at every layer. Twinkle, under Per layer, says how it gives way.",
     );
-    for (value, name, end) in [
-        (&mut atmosphere.star_twinkle_far, "Far twinkle", "farthest"),
-        (&mut atmosphere.star_twinkle_near, "Near twinkle", "nearest"),
-    ] {
-        ValueBar::new(value, 0.0..=1.0, name).percent().show(ui).on_hover_text(format!(
-            "How far the {end} layer's stars fade out when their lifetime ends; the layers between take evenly spaced values. At 100% each star fades to nothing and a new one appears somewhere else nearby. Below 100% each star stays in its place, dims only this far and changes into its next life's brightness and size. At 0% it never dims, so a layer packed tight enough to cover the sky never shows a gap."
-        ));
-    }
 }
 
 /// The S1 body-light material; every body contributes its own sampled light.

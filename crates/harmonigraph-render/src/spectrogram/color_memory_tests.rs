@@ -232,7 +232,7 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         let mut cb = fixture(CloudStyle::Stars);
         if held {
             let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-            (stars.star_twinkle_far, stars.star_twinkle_near) = (0.0, 0.0);
+            stars.star_twinkle = [0.0; STAR_SLICES];
         }
         if wrap {
             let a = cb.atmosphere.as_mut().unwrap();

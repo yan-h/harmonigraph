@@ -411,10 +411,8 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.many("atmosphere.stars.star_size", stars.star_size);
     f.many("atmosphere.stars.star_speed", stars.star_speed);
     f.one("atmosphere.stars.star_lifetime", stars.star_lifetime);
-    f.one("atmosphere.stars.star_twinkle_far", stars.star_twinkle_far);
-    f.one("atmosphere.stars.star_twinkle_near", stars.star_twinkle_near);
-    f.one("atmosphere.stars.star_solid_far", stars.star_solid_far);
-    f.one("atmosphere.stars.star_solid_near", stars.star_solid_near);
+    f.many("atmosphere.stars.star_twinkle", stars.star_twinkle);
+    f.many("atmosphere.stars.star_solid", stars.star_solid);
     f.one("atmosphere.stars.star_glow_falloff", stars.star_glow_falloff);
     f.one("atmosphere.stars.star_resolution", stars.star_resolution);
     f.one("atmosphere.material_amount", *material_amount);
