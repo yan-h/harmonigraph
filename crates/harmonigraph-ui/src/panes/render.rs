@@ -432,6 +432,25 @@ fn render_controls(
                     .suffix(" s"),
             );
         });
+        // A render choice like the Tail: the picture is the same either way,
+        // and a Re-render takes the current one.
+        choice_row(
+            ui,
+            "Encoder",
+            &mut state.appearance.render.encoder,
+            &[
+                (
+                    crate::VideoEncoder::X264,
+                    "x264",
+                    "Software H.264 at the quality YouTube recommends, tuned so the spectrogram's grain does not flicker. The slower of the two: at 1440p the export waits on it.",
+                ),
+                (
+                    crate::VideoEncoder::Hardware,
+                    "Hardware",
+                    "This Mac's hardware H.264 encoder: about twice as fast as x264 at 1440p, for a file nearly twice the size and no grain tuning. An export fails on a machine without one.",
+                ),
+            ],
+        );
         if !interaction.take.supported {
             return;
         }

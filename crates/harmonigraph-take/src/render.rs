@@ -234,6 +234,10 @@ pub struct RenderConfig {
     /// A render choice like [`short_edge`](Self::short_edge): a Re-render's
     /// appearance supplies it, and the offline renderer's `--tail` overrides it.
     pub tail: f64,
+    /// Which H.264 encoder the export runs; see [`VideoEncoder`]. The Video
+    /// pane's Encoder. A render choice like the tail: a Re-render takes the
+    /// current one, and the offline renderer's `--encoder` overrides it.
+    pub encoder: VideoEncoder,
 }
 
 impl Default for RenderConfig {
@@ -251,6 +255,7 @@ impl Default for RenderConfig {
             // as captured from the DAW on 2026-09-26.
             short_edge: 720,
             tail: 4.0,
+            encoder: VideoEncoder::X264,
         }
     }
 }

@@ -66,7 +66,7 @@ pub(crate) use config::{
 };
 pub use harmonigraph_take::{
     LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, SpectrogramRender,
-    STOP_BAR_RANGE, TAIL_RANGE,
+    VideoEncoder, STOP_BAR_RANGE, TAIL_RANGE,
 };
 pub use spectrum::{AudioSpectrum, SpectrogramColumn, SpectrumHistory};
 pub use state::{

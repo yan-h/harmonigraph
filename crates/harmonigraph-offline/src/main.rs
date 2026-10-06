@@ -70,7 +70,7 @@ OPTIONS:
                            at 1440p, a larger file at a bitrate scaled to the
                            frame, and no grain tuning; it fails rather than
                            falling back where there is no hardware encoder.
-                           [default: x264]
+                           [default: the appearance's Encoder (x264 fresh)]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
                            720p; at 4K, lower it to get there. x264 only:
@@ -121,7 +121,8 @@ struct Args {
     /// `tail_of_render`. An explicit `--tail 4` on a loop-end take is NOT the
     /// same thing.
     tail: Option<f64>,
-    /// `None` means x264, which is what `--crf` tunes.
+    /// `None` means "the Encoder of the look this render draws with", as for
+    /// the tail.
     encoder: Option<VideoEncoder>,
     crf: u32,
     appearance: Option<String>,
@@ -495,7 +496,7 @@ fn export(args: Args) -> Result<(), String> {
             fps: args.fps,
             audio: audio_path.as_deref(),
             frames: total,
-            encoder: args.encoder.unwrap_or_default(),
+            encoder: args.encoder.unwrap_or(render_config.encoder),
             crf: args.crf,
             ffmpeg: args.ffmpeg.as_deref(),
             audio_offset,
