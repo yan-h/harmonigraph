@@ -569,7 +569,7 @@ fn record_controls(
                 (
                     crate::RenderTrigger::AtBar,
                     "At bar",
-                    "Finish recording and render when the transport plays through the bar below. The one that works during an audio export, which never loops and never reports itself playing.",
+                    "Finish recording and render when the transport plays through the bar below.",
                 ),
             ],
         );

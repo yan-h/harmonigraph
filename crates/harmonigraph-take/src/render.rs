@@ -57,13 +57,9 @@ pub enum RenderTrigger {
     /// When the transport plays THROUGH [`stop_bar`](RenderConfig::stop_bar):
     /// the take ends at that bar and renders, with nothing to click.
     ///
-    /// This is the trigger an AUDIO EXPORT wants. An export renders the
-    /// arrangement range once and never wraps, so
-    /// [`AtLoopEnd`](Self::AtLoopEnd) has nothing to fire on; and it reports
-    /// `playing = false` throughout while running faster than realtime, which
-    /// is the wrong clock for `OnTransportStop`'s frame-counted debounce. A bar
-    /// the transport crosses is neither — it is decided on the audio thread,
-    /// off a position the host reports either way.
+    /// For ending at a chosen point rather than wherever the transport stops.
+    /// The crossing is decided on the audio thread, off a position the host
+    /// reports whether it is playing or not.
     ///
     /// Unlike the other two it does NOT end at a backward jump
     /// ([`ends_at_rewind`](Self::ends_at_rewind) is false), because it has an
