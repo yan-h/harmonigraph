@@ -230,6 +230,22 @@ The renderer reads the Tail from the look it draws with —
 the recorded one, or the current one on a queued export —
 and `--tail` overrides it.
 
+**Encoder**, under Render, picks the H.264 encoder ffmpeg runs, read the same way and overridden by `--encoder x264|hardware`.
+The picture is the same either way.
+**x264**, the fresh choice, encodes at `--crf` (10) with grain tuning, which keeps the spectrogram's noise floor from flickering at each keyframe.
+**Hardware** is the Mac's VideoToolbox encoder at a bitrate scaled to the frame —
+60 Mb/s at 2560x1440@60, about 34 at 1080p60 and 135 at 4K60 —
+with no B-frames and no grain tuning.
+On the same raw 1440p60 frames it measured 30.47 dB SSIM against x264's 29.93,
+better on luma and worse on chroma (U 28.7 dB against 30.7),
+for a file 1.8x the size.
+A machine with no hardware encoder fails the export and says so rather than falling back to Apple's slower software encoder.
+
+At 1440p the encoder is what an export waits on.
+A 9.9 s take drew in about 2.8 s with nothing encoding it, and took 12-14 s end to end through x264 against about 6 s through the hardware encoder.
+So the overlap of drawing and readback below only shortens an export that goes through the hardware encoder, a PNG sequence or a raw stream;
+under x264 the drawing already finishes well ahead of the encoder.
+
 ffmpeg is found automatically —
 on `PATH`, then in the usual install locations.
 This matters more than it sounds:
@@ -275,6 +291,7 @@ The flags worth knowing (`--help` lists them all):
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
 | `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — the appearance's **Tail**, or none for a *Loop end* take, which ends with its loop |
+| `--encoder` | `x264` or `hardware` — the appearance's **Encoder**, x264 fresh; `--crf` applies to x264 only |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts
@@ -323,7 +340,9 @@ Every export ends with a line saying where that time went:
 timing: a 5442-frame export in 774.6 s, 718.9 s of it drawing at 7.6 fps — ui+tess 5.54 ms/frame (4%), submit 7.20 ms/frame (5%), readback 20.79 ms/frame (16%), emit 98.47 ms/frame (75%)
 ```
 
-`ui+tess` is everything on the CPU before the GPU hears about the frame, `submit` is handing the frame's commands over, `readback` is waiting for the GPU and unpacking the result, and `emit` is handing the pixels to ffmpeg — which blocks once the encoder is behind, so a large `emit` share means the encoder is the bottleneck rather than the picture.
+`ui+tess` is everything on the CPU before the GPU hears about the frame, `submit` is handing the frame's commands over, `readback` is blocked waiting for the GPU and unpacking the result, and `emit` is handing the pixels to ffmpeg — which blocks once the encoder is behind, so a large `emit` share means the encoder is the bottleneck rather than the picture.
+The GPU draws each frame while the CPU builds and submits the next one and emits the one before,
+so `readback` is only the drawing those did not cover, and a large `readback` share means the GPU is the bottleneck.
 The shares are of the drawing clock;
 the gap between it and the total is setup plus the encoder's backlog after the last frame.
 

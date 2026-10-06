@@ -20,7 +20,7 @@ mod replay;
 mod sink;
 mod wav;
 
-use harmonigraph_take::{RenderProgress, RenderTrigger};
+use harmonigraph_take::{RenderProgress, RenderTrigger, VideoEncoder};
 use harmonigraph_ui::layout::export_pixels_per_point as default_scale;
 use harmonigraph_ui::Layout;
 use render::Settings;
@@ -65,9 +65,17 @@ OPTIONS:
                            [default: the appearance's Tail (4 s fresh); 0
                            for a take recorded under the Loop end trigger,
                            which ends with its loop]
+        --encoder <E>      x264 or hardware. hardware is the machine's
+                           H.264 encoder (VideoToolbox): about twice as fast
+                           at 1440p, a larger file at a bitrate scaled to the
+                           frame, and no grain tuning; it fails rather than
+                           falling back where there is no hardware encoder.
+                           [default: the appearance's Encoder (x264 fresh)]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
-                           720p; at 4K, lower it to get there.  [default: 10]
+                           720p; at 4K, lower it to get there. x264 only:
+                           the hardware encoder takes a bitrate instead.
+                           [default: 10]
         --appearance <FILE>  Override the look recorded in the take with a
                            versioned appearance RON (read-plugin-state.py --appearance).
         --ffmpeg <PATH>    ffmpeg to run. Normally found automatically, on
@@ -113,6 +121,9 @@ struct Args {
     /// `tail_of_render`. An explicit `--tail 4` on a loop-end take is NOT the
     /// same thing.
     tail: Option<f64>,
+    /// `None` means "the Encoder of the look this render draws with", as for
+    /// the tail.
+    encoder: Option<VideoEncoder>,
     crf: u32,
     appearance: Option<String>,
     ffmpeg: Option<String>,
@@ -130,6 +141,7 @@ impl Default for Args {
             lead: None,
             end: None,
             tail: None,
+            encoder: None,
             // Sized against YouTube's recommended bitrates: 7.4 Mbps on a
             // 720p60 take, where YouTube asks for 7.5. It re-encodes whatever
             // it is given, so a leaner source is a second generation of loss.
@@ -183,6 +195,7 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
                 }
                 args.tail = Some(tail);
             }
+            "--encoder" => args.encoder = Some(parse_encoder(&value("--encoder")?)?),
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
@@ -193,6 +206,15 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
         }
     }
     Ok(Some(args))
+}
+
+/// The `--encoder` names, which are the Video pane's choices in lower case.
+fn parse_encoder(text: &str) -> Result<VideoEncoder, String> {
+    match text {
+        "x264" => Ok(VideoEncoder::X264),
+        "hardware" => Ok(VideoEncoder::Hardware),
+        _ => Err(format!("--encoder: {text:?} is not x264 or hardware")),
+    }
 }
 
 fn parse_number<T: std::str::FromStr>(name: &str, text: &str) -> Result<T, String> {
@@ -474,6 +496,7 @@ fn export(args: Args) -> Result<(), String> {
             fps: args.fps,
             audio: audio_path.as_deref(),
             frames: total,
+            encoder: args.encoder.unwrap_or(render_config.encoder),
             crf: args.crf,
             ffmpeg: args.ffmpeg.as_deref(),
             audio_offset,
@@ -814,6 +837,17 @@ mod tests {
             assert!(parse(bad).is_err(), "--tail {bad}");
         }
         assert_eq!(parse("0").unwrap().unwrap().tail, Some(0.0));
+    }
+
+    /// `--encoder` takes the two names the help lists and refuses anything
+    /// else, rather than exporting through an encoder nobody asked for.
+    #[test]
+    fn the_encoder_flag_takes_x264_or_hardware() {
+        let parse = |name: &str| parse_args_from(["--encoder".into(), name.to_string()]);
+        assert_eq!(parse("x264").unwrap().unwrap().encoder, Some(VideoEncoder::X264));
+        assert_eq!(parse("hardware").unwrap().unwrap().encoder, Some(VideoEncoder::Hardware));
+        assert!(parse("videotoolbox").is_err());
+        assert_eq!(parse_args_from(Vec::<String>::new()).unwrap().unwrap().encoder, None);
     }
 
     /// `--start 0` has to survive parsing as a REQUEST, not as the absence of

@@ -163,6 +163,23 @@ pub enum SpectrogramRender {
     WholeVideo,
 }
 
+/// Which H.264 encoder a video export runs through ffmpeg.
+///
+/// The picture is the same either way; what differs is how long the export
+/// waits on the encoder and what the file costs. At 2560x1440@60 a 9.9 s take
+/// took 12.7 s end to end through x264 and 5.7 s through VideoToolbox, for a
+/// file 1.8x the size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum VideoEncoder {
+    /// libx264 at the `--crf` quality, tuned for the spectrogram's grain.
+    #[default]
+    X264,
+    /// The machine's hardware H.264 encoder (`h264_videotoolbox`) at a bitrate
+    /// scaled to the frame size and rate. About twice as fast as x264 at
+    /// 1440p, for a larger file and no grain tuning.
+    Hardware,
+}
+
 /// How a finished take gets turned into a video, edited in the Video
 /// pane's Record section and persisted with the UI state.
 ///
@@ -217,6 +234,10 @@ pub struct RenderConfig {
     /// A render choice like [`short_edge`](Self::short_edge): a Re-render's
     /// appearance supplies it, and the offline renderer's `--tail` overrides it.
     pub tail: f64,
+    /// Which H.264 encoder the export runs; see [`VideoEncoder`]. The Video
+    /// pane's Encoder. A render choice like the tail: a Re-render takes the
+    /// current one, and the offline renderer's `--encoder` overrides it.
+    pub encoder: VideoEncoder,
 }
 
 impl Default for RenderConfig {
@@ -234,6 +255,7 @@ impl Default for RenderConfig {
             // as captured from the DAW on 2026-09-26.
             short_edge: 720,
             tail: 4.0,
+            encoder: VideoEncoder::X264,
         }
     }
 }
