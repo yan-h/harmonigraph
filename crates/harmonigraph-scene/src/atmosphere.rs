@@ -509,10 +509,17 @@ impl Default for StarSettings {
             // The captured spacings (1.036..6.597 star pixels, curve 2.118)
             // over the sizes below, fitted within 1% at all five depths, then
             // taken off the fitted curve (far 0.624, near the floor, exponent
-            // 3.5) when each depth got its own ([`fresh_octaves`] has why it
-            // is evaluated rather than written out). The nearest sits at the
-            // floor, as close as its stars ever fit.
-            star_spacing_ratio: fresh_octaves(0.624, STAR_SPACING_MIN, 3.5),
+            // 3.5) when each depth got its own. The nearest sits at the floor,
+            // as close as its stars ever fit: an ulp above STAR_SPACING_MIN,
+            // where the curve left it.
+            //
+            // These per-depth values are the old curves' own f32 results on
+            // Apple's `powf`, printed exactly: star cells key placement, so an
+            // ulp moves stars, and values rounded or worked out on another
+            // platform's `powf` moved the starfield goldens by 1/255. At four
+            // layers the curves were read at thirds, so the second and third
+            // drawn layers differ from before.
+            star_spacing_ratio: [0.624, 0.62203425, 0.602118, 0.53839743, 0.4166667],
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
@@ -524,16 +531,16 @@ impl Default for StarSettings {
             // 5.6/255 from the old one on average. Taken, like the spacing,
             // off the curve it was set as: 1.66 to 15.8 in octaves, exponent
             // 2.3.
-            star_size: fresh_octaves(1.66, 15.8, 2.3),
+            star_size: [1.66, 1.8216218, 2.6231027, 5.309201, 15.799999],
             // The captured 0.0893 to 0.1686, exponent 3.18, per depth.
-            star_speed: fresh_linear(0.08931082, 0.16860056, 3.179647),
+            star_speed: [0.08931082, 0.0902766, 0.09806162, 0.12107633, 0.16860056],
             star_lifetime: 2.9719827,
             // Every star fades to nothing and is drawn anew, as before the dial.
             star_twinkle: [1.0; crate::star_plan::STAR_DEPTHS],
             // Fitted to the Gaussian-core-and-glow stars this replaced, at their
             // fresh dials, over the star's area at every depth: 48% far to 0%
             // near, on the size's curve.
-            star_solid: fresh_linear(0.48, 0.0, 2.3),
+            star_solid: [0.48, 0.46020737, 0.3825297, 0.23232502, 0.0],
             star_glow_falloff: 0.5,
             // Between the old Medium preset's 50% far and 75% near images:
             // sharper than Medium, cheaper than High.
@@ -542,29 +549,6 @@ impl Default for StarSettings {
         }
     }
 }
-/// A fresh per-depth value off the far-to-near curve it was captured as,
-/// `far · (near / far)^(d^curve)` at each depth's place `d` at five layers.
-///
-/// Evaluated rather than written out as numbers: the fresh field was drawn,
-/// and its frames recorded, from this very expression on the platform's own
-/// `powf`, and star cells key placement, so an ulp moves stars. Literals
-/// taken from one platform's `powf` sat an ulp off another's and moved the
-/// starfield goldens by 1/255. At four layers the curves were read at
-/// thirds, so the second and fourth drawn layers differ from before.
-fn fresh_octaves(far: f32, near: f32, curve: f32) -> [f32; crate::star_plan::STAR_DEPTHS] {
-    std::array::from_fn(|k| far * (near / far).powf(fresh_place(k).powf(curve)))
-}
-
-/// As [`fresh_octaves`], linearly: `far + (near - far) d^curve`.
-fn fresh_linear(far: f32, near: f32, curve: f32) -> [f32; crate::star_plan::STAR_DEPTHS] {
-    std::array::from_fn(|k| far + (near - far) * fresh_place(k).powf(curve))
-}
-
-/// Depth `k`'s place from back (0) to front (1) at five layers.
-fn fresh_place(k: usize) -> f32 {
-    k as f32 / (crate::star_plan::STAR_DEPTHS - 1) as f32
-}
-
 impl StarSettings {
     /// These settings with every size `scale` times over, and so every
     /// spacing: what the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
@@ -586,7 +570,7 @@ impl StarSettings {
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
         self.star_layers =
             self.star_layers.clamp(STAR_LAYERS_MIN, crate::star_plan::STAR_DEPTHS as u32);
-        // Each per-depth array runs far to near and may run either way, so its
+        // Each per-depth array runs back to front and may run either way, so its
         // values are clamped one by one and never reordered.
         let depths = |values: &mut [f32; crate::star_plan::STAR_DEPTHS],
                       fresh: [f32; crate::star_plan::STAR_DEPTHS],
