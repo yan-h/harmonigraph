@@ -1579,9 +1579,12 @@ mod tests {
         const SPEED: f32 = harmonigraph_scene::STAR_SPEED_MAX;
         let Some((device, queue)) = headless_device() else { return };
         let fresh = harmonigraph_scene::StarSettings::default();
-        for (spacing_near, three) in
-            [(fresh.star_spacing_ratio_far, false), (fresh.star_spacing_ratio_near, true)]
-        {
+        // Every depth at the far spacing, which 2x2 reads, then the fresh
+        // spacings, whose near depths need 3x3.
+        for (spacing, three) in [
+            ([fresh.star_spacing_ratio[0]; atmosphere::STAR_SLICES], false),
+            (fresh.star_spacing_ratio, true),
+        ] {
             let mut cb = refracted_fixture();
             cb.rect =
                 egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(PANE as f32, PANE as f32));
@@ -1595,18 +1598,17 @@ mod tests {
             s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
             s.cloud_depth = 1.0;
             (s.pitch_softness, s.time_softness) = (0.0, 0.0);
-            (s.stars.star_speed_far, s.stars.star_speed_near, s.cloud_direction) =
-                (SPEED, SPEED, 0.0);
+            (s.stars.star_speed, s.cloud_direction) = ([SPEED; atmosphere::STAR_SLICES], 0.0);
             s.stars.star_lifetime = 20.0;
             // Equal sizes: the smallest stars resample unevenly in the reduced
-            // image under a whole-pixel shift, which is not drift. Far stars
-            // big enough that 2x2 holds the 50% image's floor of 2 star
+            // image under a whole-pixel shift, which is not drift. Every depth's
+            // stars big enough that 2x2 holds the 50% image's floor of 2 star
             // pixels (a size of 3.8 at the fresh jitter and spacing), or the
             // first arm would read them 3x3 too.
             s.stars.star_size_variation = 0.0;
             s.stars.star_resolution = 0.5;
-            s.stars.star_size_far = 4.0;
-            s.stars.star_spacing_ratio_near = spacing_near;
+            s.stars.star_size = fresh.star_size.map(|size| size.max(4.0));
+            s.stars.star_spacing_ratio = spacing;
             let layout = atmosphere::star_layout(s.stars, 1.0);
             let image = atmosphere::star_image_size([PANE, PANE], s.stars);
             let gathers =

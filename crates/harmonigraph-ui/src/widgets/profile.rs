@@ -1,16 +1,15 @@
-//! Spatial profiles edited through their endpoints and curve, with numeric fallbacks.
-use super::plot::{curve, value_bar, Plot};
+//! Spatial profiles edited on a plot, with numeric fallbacks.
+use super::plot::{value_bar, Plot};
 use super::RangeBar;
 use crate::theme;
 use egui::Ui;
+use harmonigraph_scene::star_plan::STAR_DEPTHS;
 use std::ops::RangeInclusive;
 
-/// Which star property a [`depth`] control spreads from far to near, either
-/// way round: the plot's two end handles cross freely, and the bar under it
-/// edits the pair's extent and keeps its direction. A size carries how many
-/// times the stored value the pane draws and shows it: the lattice's
-/// `LATTICE_STAR_SIZE_SCALE`, else 1. A spacing is a multiple of the size,
-/// so it shows as stored.
+/// Which star property a [`depth`] control sets, one value per drawn layer.
+/// A size carries how many times the stored value the pane draws and shows
+/// it: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1. A spacing is a
+/// multiple of the size, so it shows as stored.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Depth {
     Size(f32),
@@ -18,118 +17,112 @@ pub(crate) enum Depth {
     Speed,
 }
 
+/// Each drawn layer's own value, far to near, in any order: a dot per layer
+/// to drag on its own; a line pressed out from the plot's empty space, which
+/// sets every layer it spans onto it; and a bar under the plot over the drawn
+/// layers' whole range, which stretches and slides them together. A depth
+/// `Star layers` leaves out is not shown and keeps its value.
 pub(crate) fn depth(
     ui: &mut Ui,
-    low: &mut f32,
-    high: &mut f32,
-    exponent: &mut f32,
+    values: &mut [f32; STAR_DEPTHS],
+    layers: u32,
     range: RangeInclusive<f32>,
-    curve_range: RangeInclusive<f32>,
     kind: Depth,
 ) {
-    let (name, curve_name) = match kind {
-        Depth::Size(_) => ("Star size", "Size curve"),
-        Depth::Spacing => ("Star spacing", "Spacing curve"),
-        Depth::Speed => ("Star speed", "Speed curve"),
+    const PLOT: &str = "Set each layer on the plot above: drag its dot, or press on empty space and draw a line across the layers to set them all onto it.";
+    let (name, display, hover): (_, fn(f32) -> String, _) = match kind {
+        Depth::Size(_) => (
+            "Star size",
+            |octaves| format!("{:.1} px", octaves.exp2()),
+            "How big the stars are across, glow included, from the smallest layer to the largest. Drag an end to stretch every layer's size with it, or the middle to slide them all. Star spacing is a multiple of the size, so bigger stars sit farther apart.",
+        ),
+        Depth::Spacing => (
+            "Star spacing",
+            |octaves| format!("{:.2}× size", octaves.exp2()),
+            "How far apart the stars are, as a multiple of their layer's Star size, from the closest layer to the widest. Drag an end to stretch every layer's spacing with it, or the middle to slide them all. Every place holds a star, so wider spacing is fewer stars; the closest is as close as a star can sit and still be drawn whole.",
+        ),
+        Depth::Speed => (
+            "Star speed",
+            |speed| format!("{:.0}%", speed * 100.0),
+            "How fast the stars drift, from the slowest layer to the fastest. Drag an end to stretch every layer's speed with it, or the middle to slide them all. A wider spread deepens the parallax; equal speeds move every layer together.",
+        ),
     };
-    // Sizes and spacings run in octaves, speed linearly.
-    let (size, shown) = match kind {
+    // Sizes and spacings run in octaves, speed linearly, on the plot and the
+    // bar alike; the bar's octaves are of the value as shown, so its display
+    // stays a plain function of them.
+    let (octaves, shown) = match kind {
         Depth::Size(shown) => (true, shown),
         Depth::Spacing => (true, 1.0),
         Depth::Speed => (false, 1.0),
     };
+    let to_bar = |v: f32| if octaves { (v * shown).log2() } else { v };
+    let from_bar = |u: f32| if octaves { u.exp2() / shown } else { u };
+    let (low, high) = (to_bar(*range.start()), to_bar(*range.end()));
+    let encode = |v: f32| (to_bar(v) - low) / (high - low);
+    let decode = |p: f32| from_bar(low + p * (high - low)).clamp(*range.start(), *range.end());
+    let places = harmonigraph_scene::star_plan::star_layer_depths(layers);
+    let drawn: Vec<(usize, f32)> =
+        (0..STAR_DEPTHS).filter_map(|k| places[k].map(|place| (k, place))).collect();
     ui.push_id(name, |ui| {
-        let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 2);
-        let encode = |v: f32| {
-            if size {
-                (v.log2() - range.start().log2()) / (range.end().log2() - range.start().log2())
-            } else {
-                (v - range.start()) / (range.end() - range.start())
-            }
-        };
-        let decode = |p: f32| {
-            if size {
-                (range.start().log2() + p * (range.end().log2() - range.start().log2())).exp2()
-            } else {
-                range.start() + p * (range.end() - range.start())
-            }
-        };
-        let (_, next) = plot.handle(ui, "Far depth", 0.0, encode(*low));
-        if let Some(p) = next {
-            *low = decode(p.y);
-        }
-        let (_, next) = plot.handle(ui, "Near depth", 1.0, encode(*high));
-        if let Some(p) = next {
-            *high = decode(p.y);
-        }
-        // The shape is a power of depth. Star sizes interpolate in log space;
-        // speed interpolates linearly. Those are also the plotted units.
-        let a = encode(*low);
-        let b = encode(*high);
-        let (_, next) =
-            plot.handle(ui, "Depth distribution", 0.5, a + (b - a) * 0.5f32.powf(*exponent));
-        if let Some(p) = next {
-            if (b - a).abs() > 1e-6 {
-                *exponent = (((p.y - a) / (b - a)).clamp(0.0001, 0.9999).ln() / 0.5f32.ln())
-                    .clamp(*curve_range.start(), *curve_range.end());
+        let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 1);
+        // Before the dots, so a press on a dot drags the dot.
+        let stroke = plot.stroke(ui);
+        if let Some((from, to)) = stroke {
+            let (left, right) = (from.x.min(to.x), from.x.max(to.x));
+            for &(k, place) in &drawn {
+                if (left..=right).contains(&place) {
+                    // A line straight up a layer sets it to the pointer.
+                    let t = if right > left { (place - from.x) / (to.x - from.x) } else { 1.0 };
+                    values[k] = decode(from.y + (to.y - from.y) * t);
+                }
             }
         }
-        // The bar holds the smaller end on its left whichever depth has it, and
-        // says when that is the near one.
-        let reversed = *low > *high;
-        let label = if reversed { format!("{name}, reversed") } else { name.to_owned() };
-        let (mut small, mut big) = if reversed { (*high, *low) } else { (*low, *high) };
-        let mut put = |small: f32, big: f32| {
-            (*low, *high) = if reversed { (big, small) } else { (small, big) };
-        };
+        for (n, &(k, place)) in drawn.iter().enumerate() {
+            let key = match n {
+                0 => "Layer 1, farthest".to_owned(),
+                n if n + 1 == drawn.len() => format!("Layer {}, nearest", n + 1),
+                n => format!("Layer {}", n + 1),
+            };
+            let (_, next) = plot.handle(ui, &key, place, encode(values[k]));
+            if let Some(p) = next {
+                values[k] = decode(p.y);
+            }
+        }
+        let (small, big) =
+            drawn.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(s, b), &(k, _)| {
+                (s.min(to_bar(values[k])), b.max(to_bar(values[k])))
+            });
+        let (mut a, mut b) = (small, big);
         plot.fields(ui, |ui| {
-            if size {
-                // Dragged in octaves, like the plot, so the small end has room
-                // on the track. Written back only on a change: the round trip
-                // is not exact, and the values key star placement.
-                // The octaves are of the value as shown, so the bar's own
-                // display can stay a plain function of them.
-                let octaves = |v: f32| (v * shown).log2();
-                let (mut a, mut b) = (octaves(small), octaves(big));
-                let response = RangeBar::new(
-                    &mut a,
-                    &mut b,
-                    octaves(*range.start())..=octaves(*range.end()),
-                    &label,
-                )
-                .display(if kind == Depth::Spacing {
-                    |octaves: f32| format!("{:.2}× size", octaves.exp2())
-                } else {
-                    |octaves: f32| format!("{:.1} px", octaves.exp2())
-                })
+            let response = RangeBar::new(&mut a, &mut b, low..=high, name)
+                .display(display)
                 .show(ui)
-                .on_hover_text(if matches!(kind, Depth::Size(_)) {
-                    "How big the stars are across, glow included, from the smallest to the largest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the smallest. One value is one size at every depth, always drawn as set: Star spacing is a multiple of it, so bigger stars sit farther apart."
-                } else {
-                    "How far apart the stars are, as a multiple of their depth's Star size, from the closest to the widest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the densest. Every place holds a star, so wider spacing is fewer stars; one value covers the same share of the sky at any size. The closest is as close as a star can sit and still be drawn whole."
-                });
-                if response.changed() {
-                    put(a.exp2() / shown, b.exp2() / shown);
-                }
-            } else {
-                let response = RangeBar::new(&mut small, &mut big, range.clone(), &label)
-                    .display(|speed| format!("{:.0}%", speed * 100.0))
-                    .show(ui)
-                    .on_hover_text(
-                        "How fast the stars drift, from the slowest to the fastest. The plot above says which depth gets which: drag its near handle below the far one to make the nearest stars the slowest. A wider range deepens the parallax; equal ends move every depth together.",
-                    );
-                if response.changed() {
-                    put(small, big);
+                .on_hover_text(format!("{hover} {PLOT}"));
+            // Written back only on a change: the round trip is not exact, and
+            // the values key star placement. Each layer keeps its share of the
+            // range; when every layer is level they move with the end dragged.
+            if response.changed() {
+                for &(k, _) in &drawn {
+                    let t = if big > small {
+                        (to_bar(values[k]) - small) / (big - small)
+                    } else if a != small {
+                        0.0
+                    } else {
+                        1.0
+                    };
+                    values[k] = from_bar(a + (b - a) * t).clamp(*range.start(), *range.end());
                 }
             }
-            value_bar(ui, exponent, curve_range, [curve_name, "Curve"], 1.0, "");
         });
-        let a = encode(*low);
-        let b = encode(*high);
-        curve(&plot, ui, |p| (p, a + (b - a) * p.powf(*exponent)), theme::accent());
-        plot.dot(ui, 0.0, a);
-        plot.dot(ui, 1.0, b);
-        plot.dot(ui, 0.5, a + (b - a) * 0.5f32.powf(*exponent));
+        let points: Vec<_> =
+            drawn.iter().map(|&(k, place)| plot.point(place, encode(values[k]))).collect();
+        plot.line(ui, points, theme::accent());
+        if let Some((from, to)) = stroke {
+            plot.line(ui, vec![plot.point(from.x, from.y), plot.point(to.x, to.y)], theme::text());
+        }
+        for &(k, place) in &drawn {
+            plot.dot(ui, place, encode(values[k]));
+        }
     });
 }
 
@@ -160,7 +153,7 @@ pub(crate) fn star_profile(
         value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
-        "One star at the farthest depth (left) and the nearest (right), enlarged to the same size: Star size sets how big they really are, and the depths between follow the Star size curve. Far solid and Near solid are the share of each star's radius at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
+        "One star at the farthest depth (left) and the nearest (right), enlarged to the same size: Star size sets how big they really are, and the solid share of the layers between steps evenly from one to the other. Far solid and Near solid are the share of each star's radius at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
     );
     let bend = star_falloff_bend(*falloff);
     let half = plot.rect.width() * 0.5;

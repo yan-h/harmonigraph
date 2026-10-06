@@ -104,6 +104,38 @@ impl Plot {
             .with_clip_rect(self.rect.expand(2.0).intersect(ui.clip_rect()))
             .add(egui::Shape::line(points, Stroke::new(1.5 * theme::ui_scale(ui.ctx()), color)));
     }
+    /// A straight line pressed out on the plot's empty space, as the two
+    /// plot points it runs between, from the press to the pointer, for as long
+    /// as the drag lasts. Registered before the handles, which then take any
+    /// press that lands on one of them. The press point is held in egui's
+    /// memory for the drag alone.
+    pub fn stroke(&self, ui: &mut Ui) -> Option<(Vec2, Vec2)> {
+        let scale = theme::ui_scale(ui.ctx());
+        let id = self.response.id.with("stroke");
+        let response = ui.interact(self.rect.expand(6.0 * scale), id, Sense::drag());
+        let at = |p: Pos2| {
+            egui::vec2(
+                ((p.x - self.rect.left()) / self.rect.width().max(1.0)).clamp(0.0, 1.0),
+                ((self.rect.bottom() - p.y) / self.rect.height().max(1.0)).clamp(0.0, 1.0),
+            )
+        };
+        let line = if response.dragged() {
+            let from = match ui.data(|d| d.get_temp::<Vec2>(id)) {
+                Some(from) => Some(from),
+                None => ui.input(|i| i.pointer.press_origin()).map(|p| {
+                    ui.data_mut(|d| d.insert_temp(id, at(p)));
+                    at(p)
+                }),
+            };
+            from.zip(response.interact_pointer_pos().map(at))
+        } else {
+            None
+        };
+        if response.drag_stopped() {
+            ui.data_mut(|d| d.remove_temp::<Vec2>(id));
+        }
+        line
+    }
     /// Separate handle IDs hold their identity even when values or curves cross.
     /// Arrow keys offer one-axis editing; Shift makes the step finer.
     pub fn handle(&self, ui: &mut Ui, key: &str, x: f32, y: f32) -> (Response, Option<Vec2>) {

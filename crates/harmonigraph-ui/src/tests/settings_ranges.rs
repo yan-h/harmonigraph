@@ -102,9 +102,10 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     for stars in [&mut a.view.atmosphere.stars, &mut a.spectrum.atmosphere.stars] {
         poison!(stars;
         star_randomness, star_size_variation, star_jitter, star_solid_far, star_solid_near, star_glow_falloff,
-        star_resolution, star_speed_far, star_speed_near, star_spacing_ratio_far, star_spacing_ratio_near,
-        star_spacing_ratio_curve, star_size_far, star_size_near, star_size_curve,
-        star_speed_curve, star_lifetime, star_twinkle_far, star_twinkle_near);
+        star_resolution, star_lifetime, star_twinkle_far, star_twinkle_near);
+        for depths in [&mut stars.star_speed, &mut stars.star_spacing_ratio, &mut stars.star_size] {
+            *depths = [v; harmonigraph_scene::star_plan::STAR_DEPTHS];
+        }
     }
     for material in
         [&mut a.view.atmosphere.material_settings, &mut a.spectrum.atmosphere.material_settings]
@@ -320,7 +321,7 @@ fn scenarios() -> Vec<Scenario> {
 
 /// Named inventories retain duplicate labels (two shadow groups, two mapping
 /// targets). A new or missing control fails with its label rather than a count.
-fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
+fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
     use harmonigraph_scene::{CloudStyle, LatticeMaterial};
     use panes::Tab;
     const WATERCOLOR: &[&str] = &[
@@ -519,10 +520,7 @@ fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
         labels.extend([
             "Stars resolution",
             "Star size",
-            "Size curve",
-            // Fresh spacing is reversed; poisoned endpoints load to equal bounds.
-            if edge == Edge::Fresh { "Star spacing, reversed" } else { "Star spacing" },
-            "Spacing curve",
+            "Star spacing",
             "Star layers",
             "Solid share, far stars",
             "Solid share, near stars",
@@ -531,7 +529,6 @@ fn expected_labels(scenario: Scenario, edge: Edge) -> Vec<&'static str> {
             "Size variation",
             "Position variation",
             "Star speed",
-            "Speed curve",
             "Star lifetime",
             "Far twinkle",
             "Near twinkle",
@@ -612,7 +609,7 @@ fn check(edge: Edge) {
             );
         });
         let mut actual: Vec<_> = visits.iter().map(|visit| visit.label.as_str()).collect();
-        let mut expected = expected_labels(scenario, edge);
+        let mut expected = expected_labels(scenario);
         actual.sort_unstable();
         expected.sort_unstable();
         assert_eq!(actual, expected, "{edge:?} {scenario:?}: bar inventory changed");

@@ -845,15 +845,9 @@ fn memory_key(
                 star_size_variation: _, // core sizes do not change a star's colour
                 star_jitter: _,         // each slice's band is appended where the cells are
                 star_layers: _,         // read through the plan's drawn slices below
-                star_spacing_ratio_far: _, // reaches the key as the cells
-                star_spacing_ratio_near: _, // reaches the key as the cells
-                star_spacing_ratio_curve: _, // reaches the key as the cells
-                star_size_far: _,       // reaches the key as the cells
-                star_size_near: _,      // reaches the key as the cells
-                star_size_curve: _,     // reaches the key as the cells
-                star_speed_far: _,      // carried by absolute cell and per-cell life
-                star_speed_near: _,     // carried by absolute cell and per-cell life
-                star_speed_curve: _,    // carried by absolute cell and per-cell life
+                star_spacing_ratio: _,  // reaches the key as the cells
+                star_size: _,           // reaches the key as the cells
+                star_speed: _,          // carried by absolute cell and per-cell life
                 star_lifetime: _,       // carried by absolute cell and per-cell life
                 star_twinkle_far: _,    // only whether a depth holds its stars, below
                 star_twinkle_near: _,   // only whether a depth holds its stars, below
@@ -1924,6 +1918,15 @@ mod tests {
         STAR_LIFE_PERIOD, STAR_PANE, STAR_SLICES, TILE_MAX, TILE_STEP, WASH_CELLS,
     };
 
+    /// Each depth's value off a far-to-near curve, `far · (near / far)^(d^curve)`
+    /// at five layers: the shape the size and spacing dials took before each
+    /// depth had its own, which these fixtures were sized against.
+    fn along(far: f32, near: f32, curve: f32) -> [f32; STAR_SLICES] {
+        std::array::from_fn(|k| {
+            far * (near / far).powf((k as f32 / (STAR_SLICES - 1) as f32).powf(curve))
+        })
+    }
+
     /// Every slice at `now` over a 16:9 pane.
     fn slices(
         settings: harmonigraph_scene::SpectralAtmosphere,
@@ -1945,7 +1948,7 @@ mod tests {
     fn one_star_size_is_one_star_at_every_depth() {
         let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
         for size in [4.0, harmonigraph_scene::STAR_SIZE_MAX] {
-            (settings.stars.star_size_far, settings.stars.star_size_near) = (size, size);
+            settings.stars.star_size = [size; STAR_SLICES];
             let slices = slices(settings, 0.0);
             assert!(slices[0].cell > slices[STAR_SLICES - 1].cell * 1.4, "spacing must vary");
             for slice in &slices {
@@ -2101,7 +2104,7 @@ mod tests {
             for size in [harmonigraph_scene::STAR_SIZE_MIN, harmonigraph_scene::STAR_SIZE_MAX] {
                 let settings = harmonigraph_scene::StarSettings {
                     star_jitter: dial,
-                    star_size_near: size,
+                    star_size: [size; STAR_SLICES],
                     ..Default::default()
                 };
                 for depth in settings.plan().depths {
@@ -2161,8 +2164,8 @@ mod tests {
         let fresh = harmonigraph_scene::SpectralAtmosphere::default();
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_ratio_far: harmonigraph_scene::STAR_SPACING_MIN,
-                star_size_far: harmonigraph_scene::STAR_SIZE_MIN,
+                star_spacing_ratio: [harmonigraph_scene::STAR_SPACING_MIN; STAR_SLICES],
+                star_size: along(harmonigraph_scene::STAR_SIZE_MIN, 15.8, 2.3),
                 ..fresh.stars
             },
 
@@ -2228,9 +2231,7 @@ mod tests {
         // Exercise the below-budget path independently of the current look defaults.
         let coarse = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_ratio_far: 2.5,
-                star_spacing_ratio_near: 1.3,
-                star_spacing_ratio_curve: 1.0,
+                star_spacing_ratio: along(2.5, 1.3, 1.0),
                 ..Default::default()
             },
 
@@ -2242,9 +2243,8 @@ mod tests {
         }
         let fine = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_spacing_ratio_far: harmonigraph_scene::STAR_SPACING_MIN,
-                star_size_far: harmonigraph_scene::STAR_SIZE_MIN,
-                star_spacing_ratio_near: 0.42,
+                star_spacing_ratio: along(harmonigraph_scene::STAR_SPACING_MIN, 0.42, 1.0),
+                star_size: along(harmonigraph_scene::STAR_SIZE_MIN, 15.8, 2.3),
                 ..coarse.stars
             },
 
@@ -2276,8 +2276,7 @@ mod tests {
         // stated against, whatever the fresh far speed is.
         let fresh = harmonigraph_scene::SpectralAtmosphere {
             stars: harmonigraph_scene::StarSettings {
-                star_speed_far: 0.15,
-                star_speed_near: 1.0,
+                star_speed: [0.15, 0.2, 0.35, 0.6, 1.0],
                 ..Default::default()
             },
             cloud_direction: 0.0,
@@ -2297,7 +2296,10 @@ mod tests {
         assert!(moved.windows(2).all(|w| w[0][0] < w[1][0]), "nearer is not faster: {moved:?}");
         let together = travelled(
             harmonigraph_scene::SpectralAtmosphere {
-                stars: harmonigraph_scene::StarSettings { star_speed_far: 1.0, ..fresh.stars },
+                stars: harmonigraph_scene::StarSettings {
+                    star_speed: [1.0; STAR_SLICES],
+                    ..fresh.stars
+                },
                 ..fresh
             },
             10.0,

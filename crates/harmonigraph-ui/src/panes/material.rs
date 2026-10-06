@@ -83,26 +83,19 @@ pub(super) fn stars(
     size_scale: f32,
 ) {
     use crate::widgets::Depth;
-    use harmonigraph_scene::{
-        STAR_DEPTH_CURVE_MAX, STAR_DEPTH_CURVE_MIN, STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX,
-        STAR_SPACING_MIN,
-    };
+    use harmonigraph_scene::{STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SPACING_MAX, STAR_SPACING_MIN};
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_size_far,
-        &mut atmosphere.star_size_near,
-        &mut atmosphere.star_size_curve,
+        &mut atmosphere.star_size,
+        atmosphere.star_layers,
         STAR_SIZE_MIN..=STAR_SIZE_MAX,
-        STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Size(size_scale),
     );
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_spacing_ratio_far,
-        &mut atmosphere.star_spacing_ratio_near,
-        &mut atmosphere.star_spacing_ratio_curve,
+        &mut atmosphere.star_spacing_ratio,
+        atmosphere.star_layers,
         STAR_SPACING_MIN..=STAR_SPACING_MAX,
-        STAR_DEPTH_CURVE_MIN..=STAR_DEPTH_CURVE_MAX,
         Depth::Spacing,
     );
     let mut layers = atmosphere.star_layers as f32;
@@ -111,7 +104,7 @@ pub(super) fn stars(
         .integer()
         .show(ui)
         .on_hover_text(
-            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between; Star size, spacing, speed and solid spread over just these. Fewer layers cost less.",
+            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between. Each keeps its own Star size, spacing and speed, and a layer taken away keeps them for when it comes back; Solid and Twinkle spread evenly over the drawn layers. Fewer layers cost less.",
         );
     // Solo is held per depth, and a new layer count puts other depths under
     // the numbers, so a solo left on would come back on a different layer.
@@ -182,16 +175,13 @@ pub(super) fn stars_resolution(ui: &mut egui::Ui, stars: &mut harmonigraph_scene
 
 pub(super) fn stars_motion(ui: &mut egui::Ui, atmosphere: &mut harmonigraph_scene::StarSettings) {
     use harmonigraph_scene::{
-        STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_CURVE_MAX, STAR_SPEED_CURVE_MIN,
-        STAR_SPEED_MAX, STAR_SPEED_MIN,
+        STAR_LIFETIME_MAX, STAR_LIFETIME_MIN, STAR_SPEED_MAX, STAR_SPEED_MIN,
     };
     crate::widgets::depth(
         ui,
-        &mut atmosphere.star_speed_far,
-        &mut atmosphere.star_speed_near,
-        &mut atmosphere.star_speed_curve,
+        &mut atmosphere.star_speed,
+        atmosphere.star_layers,
         STAR_SPEED_MIN..=STAR_SPEED_MAX,
-        STAR_SPEED_CURVE_MIN..=STAR_SPEED_CURVE_MAX,
         crate::widgets::Depth::Speed,
     );
     ValueBar::new(
