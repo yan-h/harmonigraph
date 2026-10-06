@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 /// - `emit` — handing the finished bytes to the sink.
 ///
 /// The GPU's drawing is none of them. A frame is read back only once the next
-/// one has been submitted ([`IN_FLIGHT`](crate::frames::IN_FLIGHT)), so the
+/// one has been submitted ([`IN_FLIGHT`]), so the
 /// next frame's `ui+tess` and `submit` and this frame's `emit` run while the
 /// GPU draws, and `readback` is only what the GPU still had left after them.
 /// A large `readback` is therefore the GPU being the bottleneck.
