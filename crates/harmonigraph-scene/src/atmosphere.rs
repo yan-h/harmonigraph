@@ -509,9 +509,11 @@ impl Default for StarSettings {
             // The captured spacings (1.036..6.597 star pixels, curve 2.118)
             // over the sizes below, fitted within 1% at all five depths, then
             // taken off the fitted curve (far 0.624, near the floor, exponent
-            // 3.5) when each depth got its own. The nearest sits at the floor,
+            // 3.5) when each depth got its own. Every per-depth fresh value
+            // here is the f32 its curve computed, to the last bit, so the
+            // fresh field kept the very stars it drew before. The nearest sits at the floor,
             // as close as its stars ever fit.
-            star_spacing_ratio: [0.624, 0.622_034_3, 0.602_118, 0.538_397_4, STAR_SPACING_MIN],
+            star_spacing_ratio: [0.624, 0.622_034_25, 0.602_118, 0.538_397_43, STAR_SPACING_MIN],
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
@@ -523,16 +525,16 @@ impl Default for StarSettings {
             // 5.6/255 from the old one on average. Taken, like the spacing,
             // off the curve it was set as: 1.66 to 15.8 in octaves, exponent
             // 2.3.
-            star_size: [1.66, 1.821_621_7, 2.623_102_6, 5.309_201, 15.8],
+            star_size: [1.66, 1.821_621_8, 2.623_102_7, 5.309_201, 15.799_999],
             // The captured 0.0893 to 0.1686, exponent 3.18, per depth.
-            star_speed: [0.089_310_82, 0.090_276_6, 0.098_061_62, 0.121_076_34, 0.168_600_56],
+            star_speed: [0.089_310_82, 0.090_276_6, 0.098_061_62, 0.121_076_33, 0.168_600_56],
             star_lifetime: 2.9719827,
             // Every star fades to nothing and is drawn anew, as before the dial.
             star_twinkle: [1.0; crate::star_plan::STAR_DEPTHS],
             // Fitted to the Gaussian-core-and-glow stars this replaced, at their
             // fresh dials, over the star's area at every depth: 48% far to 0%
             // near, on the size's curve.
-            star_solid: [0.48, 0.460_207_4, 0.382_529_7, 0.232_325, 0.0],
+            star_solid: [0.48, 0.460_207_37, 0.382_529_7, 0.232_325_02, 0.0],
             star_glow_falloff: 0.5,
             // Between the old Medium preset's 50% far and 75% near images:
             // sharper than Medium, cheaper than High.
