@@ -150,6 +150,8 @@ and visual comparisons.
 | Skip unused immediate-color work during memory | Only 0.2–3.3%, nearly tied in the longer 4K repeat. Not selected. |
 | Fewer layers or reduced jitter | Measured appearance changes, not equivalent-look optimizations; the selected design preserves both. |
 | Temporal reuse or caching the star bake | No valid moving-picture cache was established. Drift, life, and sampled light evolve every frame; a frozen diagnostic is not an implementable cache. |
+| Per-star reach cap, floor and cap baked once, base level skipped at full mix, atlas passes scissored (#1456) | Shipped. At 4K and 75% the default Stars frame fell from 9.08 to 7.55 ms (star cost 6.48 to 4.95 ms); 100% from 13.57 to 11.82, 50% from 5.86 to 4.94, with memory from 9.42 to 8.24. The read change alone is 0.83 ms at that size; at `Position variation` 1.0, where the old rule read 45 cells a texel, about 3.3 ms. Small picture change: at the defaults 5% of the second-nearest depth's stars are capped by up to 8%. |
+| Fusing the colour-memory pass into the bake | Not built. The whole memory pass costs 0.34 ms at 4K (9.42 against 9.08), so a multi-target pipeline and a split bake cannot earn their keep. |
 
 Profile the current implementation before reviving older candidates:
 its cost distribution has changed.
@@ -159,6 +161,11 @@ and temporal reuse remain hypotheses rather than demonstrated cost-effective des
 A small static or stale-field speedup is insufficient evidence for their complexity.
 
 ## Measuring the next change
+
+A gather change can be priced before it is built:
+`Position variation` 0.2 and 1.0 give different reads with the same cells and atlas,
+so settings-only probe cases stand in for a candidate's read counts,
+as the #1456 figures above were taken.
 
 The maintained probe is `spectrogram::tests::timing::cloud_costs_by_style_and_dial`.
 A synthetic baseline can be run without the private recording:
