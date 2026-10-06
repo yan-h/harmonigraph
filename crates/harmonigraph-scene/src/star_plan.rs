@@ -6,7 +6,8 @@
 //! nothing in it is ever stale.
 use crate::StarSettings;
 
-/// How many depths the starfield draws, far (0) to near. The renderer's
+/// How many depths the starfield draws, back (0) to front: each is drawn over
+/// the ones before it, which is all a depth's number decides. The renderer's
 /// `STAR_SLICES`.
 pub const STAR_DEPTHS: usize = 5;
 /// Which cells a pixel reads to draw one depth's stars.
@@ -71,10 +72,10 @@ pub fn star_falloff_bend(falloff: f32) -> f32 {
     16f32.powf(2.0 * falloff - 1.0) - 1.0
 }
 
-/// Where each depth sits from far (0) to near (1) at `Star layers` `layers`,
+/// Where each depth sits from back (0) to front (1) at `Star layers` `layers`,
 /// or `None` where it is not drawn. Layer `i` of `n` sits at `i / (n - 1)`,
 /// in the depth whose own place at five layers is nearest: two layers are the
-/// farthest and the nearest, three add the middle.
+/// back and the front, three add the middle.
 pub fn star_layer_depths(layers: u32) -> [Option<f32>; STAR_DEPTHS] {
     let n = (layers as usize).clamp(2, STAR_DEPTHS);
     let mut depths = [None; STAR_DEPTHS];

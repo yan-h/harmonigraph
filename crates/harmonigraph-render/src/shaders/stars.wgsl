@@ -265,7 +265,7 @@ fn star_gather3(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     return result;
 }
 
-// The consumer's floor, then every slice laid over it far to near: within a slice
+// The consumer's floor, then every slice laid over it back to front: within a slice
 // the stars' coverages add and their colours average by coverage, and the slice
 // covers what is under it by its summed coverage, capped at one. The salts
 // (`fs_star_bake`) are three apart: a star hashes at its salt and the one past

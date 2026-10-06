@@ -54,7 +54,7 @@ pub(crate) fn star_layers(
     depth(ui, values, stars.star_layers, kind, size_scale);
 }
 
-/// Each drawn layer's own value, far to near, in any order: a dot per layer
+/// Each drawn layer's own value, back to front, in any order: a dot per layer
 /// to drag on its own; a line pressed out from the plot's empty space, which
 /// sets every layer it spans onto it; and a bar beside the plot over the
 /// drawn layers' whole range, which stretches and slides them together. A
@@ -124,7 +124,7 @@ pub(crate) fn depth(
     let drawn: Vec<(usize, f32)> =
         (0..STAR_DEPTHS).filter_map(|k| places[k].map(|place| (k, place))).collect();
     ui.push_id(name, |ui| {
-        let plot = Plot::with_fields(ui, &format!("{name} · far → near"), 1);
+        let plot = Plot::with_fields(ui, &format!("{name} · back → front"), 1);
         // Before the dots, so a press on a dot drags the dot.
         let stroke = plot.stroke(ui);
         if let Some((from, to)) = stroke {
@@ -139,8 +139,8 @@ pub(crate) fn depth(
         }
         for (n, &(k, place)) in drawn.iter().enumerate() {
             let key = match n {
-                0 => "Layer 1, farthest".to_owned(),
-                n if n + 1 == drawn.len() => format!("Layer {}, nearest", n + 1),
+                0 => "Layer 1, at the back".to_owned(),
+                n if n + 1 == drawn.len() => format!("Layer {}, in front", n + 1),
                 n => format!("Layer {}", n + 1),
             };
             let (_, next) = plot.handle(ui, &key, place, encode(values[k]));
@@ -217,19 +217,19 @@ struct RangeGrab {
     pair: (f32, f32),
 }
 
-/// How a star looks at the farthest and the nearest drawn layer, `solid`
+/// How a star looks at the back and the front drawn layer, `solid`
 /// being their solid shares: both drawn with the real profile
 /// ([`harmonigraph_scene::star_plan::star_profile`]), enlarged to the same
 /// size so the shape reads whatever `Star size` is, with the falloff that
 /// bends their glow beside them.
 pub(crate) fn star_profile(ui: &mut Ui, solid: [f32; 2], falloff: &mut f32) {
     use harmonigraph_scene::star_plan::{star_falloff_bend, star_profile};
-    let plot = Plot::with_fields(ui, "Star shape · far, near", 1);
+    let plot = Plot::with_fields(ui, "Star shape · back, front", 1);
     plot.fields(ui, |ui| {
         value_bar(ui, falloff, 0.0..=1.0, ["Glow falloff", "Glow falloff"], 100.0, "%");
     });
     plot.response.clone().on_hover_text(
-        "One star at the farthest layer (left) and the nearest (right), enlarged to the same size: Star size sets how big they really are, and Solid how much of each is at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
+        "One star from the back layer (left) and the front one (right), enlarged to the same size: Star size sets how big they really are, and Solid how much of each is at full strength, from its centre out; the rest is glow, fading to the star's edge. Glow falloff is the shape of that glow, not its amount: at 0% it stays bright almost to the edge, at 50% it fades evenly, and at 100% it drops at once into a faint haze.",
     );
     let bend = star_falloff_bend(*falloff);
     let half = plot.rect.width() * 0.5;

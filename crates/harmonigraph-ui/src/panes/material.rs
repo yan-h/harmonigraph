@@ -89,7 +89,7 @@ pub(super) fn stars(
         .integer()
         .show(ui)
         .on_hover_text(
-            "How many depths of stars drift at their own speeds. There is always a farthest and a nearest layer, with the rest spaced evenly between. Each keeps its own size, spacing, speed, solid share and twinkle, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
+            "How many depths of stars drift at their own speeds. They are drawn one over another, layer 1 at the back, and there is always a back and a front layer with the rest spaced evenly between. Which looks far is up to their values: smaller, denser, slower stars read as farther away. Each keeps its own size, spacing, speed, solid share and twinkle, set under Per layer, and a layer taken away keeps them for when it comes back. Fewer layers cost less.",
         );
     // Solo is held per depth, and a new layer count puts other depths under
     // the numbers, so a solo left on would come back on a different layer.
@@ -100,9 +100,9 @@ pub(super) fn stars(
     crate::widgets::star_layers(ui, atmosphere, size_scale);
     star_solo(ui, atmosphere);
     let drawn = harmonigraph_scene::star_plan::star_layer_depths(atmosphere.star_layers);
-    let (far, near) =
+    let (back, front) =
         (drawn.iter().position(Option::is_some), drawn.iter().rposition(Option::is_some));
-    let solid = [far, near].map(|k| atmosphere.star_solid[k.unwrap_or(0)]);
+    let solid = [back, front].map(|k| atmosphere.star_solid[k.unwrap_or(0)]);
     crate::widgets::star_profile(ui, solid, &mut atmosphere.star_glow_falloff);
     ValueBar::new(&mut atmosphere.star_randomness, 0.0..=1.0, "Brightness variation")
         .percent()
@@ -124,21 +124,24 @@ pub(super) fn stars(
         );
 }
 
-/// One toggle per drawn layer, numbered far to near as `Star layers` counts
-/// them. While any is on, only the soloed layers are drawn.
+/// One toggle per drawn layer, numbered back to front as `Star layers` counts
+/// them, between a `back` and a `front` caption. While any is on, only the
+/// soloed layers are drawn.
 fn star_solo(ui: &mut egui::Ui, stars: &mut harmonigraph_scene::StarSettings) {
     let layers = harmonigraph_scene::star_plan::star_layer_depths(stars.star_layers);
     ui.horizontal_wrapped(|ui| {
         crate::widgets::label(ui, "Solo");
         ui.spacing_mut().item_spacing.x = crate::theme::button_gap(crate::theme::ui_scale(ui.ctx()));
         let drawn = (0..layers.len()).filter(|&k| layers[k].is_some());
+        crate::widgets::weak(ui, "back");
         for (n, k) in drawn.enumerate() {
             let name = (n + 1).to_string();
             ui.toggle_value(&mut stars.star_solo[k], crate::widgets::option_label(&name))
                 .on_hover_text(format!(
-                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is the farthest). Not saved: every project opens with all layers drawn."
+                    "Draw only the soloed layers, to see what layer {name} looks like on its own (1 is drawn at the back). Not saved: every project opens with all layers drawn."
                 ));
         }
+        crate::widgets::weak(ui, "front");
     });
 }
 

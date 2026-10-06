@@ -430,10 +430,10 @@ pub struct StarSettings {
     pub star_jitter: f32,
     /// How many depths the starfield draws, from
     /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
-    /// farthest and the nearest, with the rest spaced evenly between, each in
+    /// back and the front, with the rest spaced evenly between, each in
     /// the depth nearest its place ([`crate::star_plan::star_layer_depths`]).
     pub star_layers: u32,
-    /// Each depth's star spacing, far (0) to near, as a multiple of its own
+    /// Each depth's star spacing, back (0) to front, as a multiple of its own
     /// [`Self::star_size`]. Every cell holds a star, so at one value a depth's
     /// stars cover the same share of the sky whatever their size. Runs over
     /// [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`], whose low end is what
@@ -443,18 +443,18 @@ pub struct StarSettings {
     /// or not: a depth `Star layers` leaves out keeps its own for when it is
     /// drawn again.
     pub star_spacing_ratio: [f32; crate::star_plan::STAR_DEPTHS],
-    /// Each depth's star size, far (0) to near: the whole star's diameter,
+    /// Each depth's star size, back (0) to front: the whole star's diameter,
     /// glow included, in star pixels, always drawn as set, since the spacing
     /// is a multiple of it ([`Self::star_spacing_ratio`]). Runs over
     /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`] (the lattice draws it
     /// [`LATTICE_STAR_SIZE_SCALE`] times over), in any order across the
     /// depths.
     pub star_size: [f32; crate::star_plan::STAR_DEPTHS],
-    /// Each depth's drift speed, far (0) to near, along the shared `Drift
+    /// Each depth's drift speed, back (0) to front, along the shared `Drift
     /// direction`; the stars never read `cloud_speed`, which is the other
     /// textures' pace. Runs over [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`], in
-    /// any order across the depths, so the near stars can drift slower than
-    /// the far ones.
+    /// any order across the depths, so the front stars can drift slower than
+    /// the back ones.
     pub star_speed: [f32; crate::star_plan::STAR_DEPTHS],
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life, as far as
@@ -462,13 +462,13 @@ pub struct StarSettings {
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
     /// How far each depth's stars fade out as one life gives way to the next,
-    /// far (0) to near, over 0..=1. At 1 each star fades to nothing and the
+    /// back (0) to front, over 0..=1. At 1 each star fades to nothing and the
     /// next is drawn somewhere new in its cell. Below 1 a cell's star keeps
     /// its place across lives, dips only this far, and blends into the next
     /// life's brightness and size, so at 0 a layer dense enough to cover the
     /// sky never opens a hole.
     pub star_twinkle: [f32; crate::star_plan::STAR_DEPTHS],
-    /// How much of each depth's stars is solid, far (0) to near: the share of
+    /// How much of each depth's stars is solid, back (0) to front: the share of
     /// the star's radius at full coverage, the rest being glow that falls to
     /// nothing at the star's edge ([`crate::star_plan::star_profile`]), so a
     /// dense bed of solid far stars can sit behind near stars that are all
@@ -560,7 +560,7 @@ fn fresh_linear(far: f32, near: f32, curve: f32) -> [f32; crate::star_plan::STAR
     std::array::from_fn(|k| far + (near - far) * fresh_place(k).powf(curve))
 }
 
-/// Depth `k`'s place from far (0) to near (1) at five layers.
+/// Depth `k`'s place from back (0) to front (1) at five layers.
 fn fresh_place(k: usize) -> f32 {
     k as f32 / (crate::star_plan::STAR_DEPTHS - 1) as f32
 }
