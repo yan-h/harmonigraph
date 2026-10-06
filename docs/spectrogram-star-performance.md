@@ -16,10 +16,11 @@ and color once per frame.
 Every drawn depth is then composited far to near into one RGBA16Float image at **Stars resolution** of the pane's width and height (75% by default, in quarters from 25 to 100%),
 and the final pass samples it bilinearly,
 keeping Texture mix and the underlying spectrogram at native resolution.
-Each depth reads the fewest cells that hold its stars whole:
+Each depth reads the fewest cells that hold its largest star whole at its cell's centre:
 one,
 four,
 or nine.
+A star its jitter strays toward the cell's edge is drawn smaller where it would overrun that read.
 The nine-cell read is drawn inline in the same pass.
 
 The image evaluates each star at its texel centres,
@@ -27,13 +28,16 @@ so a star narrower than a texel would show only where a centre fell inside it,
 and blink as it drifted past them (#1446).
 Every star is therefore drawn with a radius of at least one texel,
 dimmed by the ratio of the areas so it keeps its light,
-and a depth whose stars that floor widens past its read takes the next read that holds them.
+and a depth whose stars that floor widens takes a read that holds them at that width wherever the jitter strays them,
+so the cap below never draws a star narrower than a texel.
 At the fresh dials the farthest depth moves from four cells to nine on a pane under about 610 device pixels tall over the resolution:
 820 at 75%,
 1,230 at 50% and 2,450 at 25%,
 with the next depths following on smaller panes.
+A 720-pixel pane at 75% reads the far two depths on nine cells,
+35 reads a texel against 25 on a fine image.
 Where even nine cells cannot hold a texel,
-the floor stops at what they hold.
+the floor stops at what they hold of a star strayed to the edge of its band.
 
 This replaced the High, Medium, Low and Uniform presets.
 Those drew the far three depths and the near two into separately sized images,
@@ -46,14 +50,33 @@ At 75% the far depths are drawn finer than Medium's 50%,
 and the nearest glow finer than its 45%.
 Changing the resolution reallocates the image without resetting retained colors.
 
-The four-cell gather starts at `floor(r - 0.5)`.
-Its radial support is `1 - jitter_span / 2` cell widths,
-with a fade over the final 0.15 cells.
-The actual jitter span is `0.6 * Jitter`,
-so support is 0.85 cells at the default dial and 0.7 at maximum jitter.
-Jitter itself is unchanged.
-The previous wide support is 1.2 cells:
-four neighbors cannot reproduce it simply by dropping five reads.
+The four-cell gather starts at `floor(r - 0.5)`,
+so it sees a cell from pixels within one cell of that cell's centre on each axis;
+the one-cell read sees half a cell and the nine-cell read one and a half.
+A depth takes the cheapest read whose half-width holds its largest star at its cell's centre,
+with no allowance for jitter;
+only the texel floor is held wherever a star strays,
+as above.
+The bake then caps each star at its own window:
+its radius is at most the half-width less its centre's larger offset from the cell's centre,
+in cells.
+Only stars jittered toward the cell's edge that would overrun the window shrink,
+never under the texel floor,
+and a capped star is drawn smaller,
+not brightened,
+so no star is ever cut at a cell edge.
+The jitter span is `0.6 * Jitter`.
+At the closest `Star spacing` a star reaches 1.2 cells,
+the nine-cell read's 1.5 less the 0.3 a centre strays at full jitter,
+so a star the texel floor has not widened is never capped in a nine-cell depth.
+The rule before chose the read for the worst-placed star,
+the half-width less half the jitter span,
+so the fresh second-nearest depth,
+whose stars reach 0.93 of a cell,
+read nine cells at the default jitter and every depth did at 0.75 and above.
+At the fresh dials on a fine image the depths now read 25 cells a texel:
+four for each of the far four and nine for the nearest.
+The nearest depth's 1.2 cells is past what four cells hold at any jitter.
 
 A Stars **Far fill** slider (#1259), later renamed Distant gap fill, reduced background leakage through the farthest three layers without adding stars or texture reads.
 It defaulted to 0% and was removed in #1356, so the fresh picture never used it.

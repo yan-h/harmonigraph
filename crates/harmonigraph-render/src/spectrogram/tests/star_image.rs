@@ -55,15 +55,28 @@ fn target(resources: &CallbackResources) -> &atmosphere::Targets {
     resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap().cloud.as_ref().unwrap()
 }
 
-// A reference where every drawn depth is read over its nine cells by a loop
-// written here, independently of production's `star_gather3`, so the cheaper
-// reads are shown to lose nothing and the 3x3 read to index the right cells.
+/// The source this thread's spectrogram pipelines are built from:
+/// production's, or a reference written here.
+#[derive(Clone, Copy, PartialEq)]
+enum Reference {
+    Production,
+    /// Every drawn depth read over its nine cells by a loop written here,
+    /// independently of production's `star_gather3`, so the cheaper reads are
+    /// shown to lose nothing and the 3x3 read to index the right cells.
+    Wide,
+    /// `Wide`, with every star baked as if its depth were read 3x3, which no
+    /// star `Star spacing` allows overruns: drawn uncapped, so what the cap
+    /// took can be measured against it.
+    Uncapped,
+}
+
 thread_local! {
-    static WIDE_REFERENCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static REFERENCE: std::cell::Cell<Reference> = const { std::cell::Cell::new(Reference::Production) };
 }
 
 pub(super) fn reference_source() -> Option<String> {
-    if !WIDE_REFERENCE.get() {
+    let reference = REFERENCE.get();
+    if reference == Reference::Production {
         return None;
     }
     let reads = "if s.gather == 1u {
@@ -74,7 +87,7 @@ pub(super) fn reference_source() -> Option<String> {
             slice = star_gather3(s, f, index);
         }";
     assert_eq!(SPECTROGRAM_SRC.matches(reads).count(), 1, "the Stars reads moved");
-    Some(SPECTROGRAM_SRC.replace(
+    let wide = SPECTROGRAM_SRC.replace(
         reads,
         "if s.gather != 0u {
             for (var y = -1; y <= 1; y += 1) {
@@ -84,19 +97,26 @@ pub(super) fn reference_source() -> Option<String> {
                 }
             }
         }",
-    ))
+    );
+    if reference == Reference::Wide {
+        return Some(wide);
+    }
+    let half_width = "return select(0.5 * f32(gather), 0.5, gather == 0u);";
+    assert_eq!(wide.matches(half_width).count(), 1, "the Stars half-width moved");
+    Some(wide.replace(half_width, "return 1.5;"))
 }
 
-/// Restore the thread's reference even if an assertion panics.
-struct WideReference(bool);
-impl WideReference {
-    fn set(wide: bool) -> Self {
-        Self(WIDE_REFERENCE.replace(wide))
+/// Build this thread's pipelines from `reference` while it lives, and
+/// restore the one before even if an assertion panics.
+struct Using(Reference);
+impl Using {
+    fn set(reference: Reference) -> Self {
+        Self(REFERENCE.replace(reference))
     }
 }
-impl Drop for WideReference {
+impl Drop for Using {
     fn drop(&mut self) {
-        WIDE_REFERENCE.set(self.0);
+        REFERENCE.set(self.0);
     }
 }
 
@@ -129,9 +149,10 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
             settings.stars.star_resolution = resolution;
             settings.cloud_depth = 0.65;
             settings.stars.star_solid = [harmonigraph_scene::STAR_SOLID_MAX; 5];
-            // Far stars spaced so 2x2 holds them at every jitter: its bound
-            // shrinks to 0.7 cells at 1, where the fresh spacing needs 3x3 and
-            // the wide reference would compare the frame with itself. Every
+            // Far stars spaced so 2x2 holds them uncapped at every jitter, at
+            // 0.63 of a cell under its half-width of one less the 0.3 a
+            // centre strays at 1; the cap is
+            // `a_capped_depth_draws_what_a_wide_read_draws`'s. Every
             // depth's stars are wider than a texel of the 25% image (17 star
             // pixels), or the texel floor would read them all 3x3; size
             // variation still floors the smallest.
@@ -158,7 +179,7 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
                 // The wider gather changes subtraction order at cell boundaries,
                 // so permit one quantization level, separately from exact clipping.
                 let wide = {
-                    let _wide = WideReference::set(true);
+                    let _wide = Using::set(Reference::Wide);
                     frame_at_ppp(&device, &queue, &mut wide_reference, &cb, PPP)
                 };
                 let errors: Vec<_> = a.iter().zip(&wide).map(|(a, b)| a.abs_diff(*b)).collect();
@@ -273,7 +294,8 @@ fn a_drawn_star_follows_the_cpu_profile() {
 }
 
 /// A depth whose stars fit their own cell reads that cell alone and loses
-/// nothing a 3x3 read would see, at stars a hair inside the 1x1 bound.
+/// nothing a 3x3 read would see, at stars a hair inside the 1x1 read's
+/// half-width, so that any `Position variation` caps a strayed star.
 #[test]
 fn a_core_depth_draws_its_stars_whole() {
     let Some((device, queue)) = headless_device() else { return };
@@ -282,20 +304,21 @@ fn a_core_depth_draws_its_stars_whole() {
     for jitter in [0.0, 0.5, 1.0] {
         let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
         stars.star_jitter = jitter;
-        let core = harmonigraph_scene::star_plan::StarGather::Core.bound(jitter);
+        let core = harmonigraph_scene::star_plan::StarGather::Core.half_width();
         let spacing = 1.001 * 0.5 / core;
         stars.star_spacing_ratio = [spacing; 5];
-        // Wider than a texel of the 75% image (6 star pixels), or the texel
-        // floor would read them 3x3.
-        stars.star_size = [16.0; 5];
+        // Wide enough that 1x1 holds a texel of the 75% image (6 star
+        // pixels) at the edge of the band at full variation, or the texel
+        // floor would read them 2x2.
+        stars.star_size = [32.0; 5];
         let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
         let image = atmosphere::star_image_size([161, 121], *stars);
         let slices = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image);
         assert_eq!(slices.map(|s| s.gather), [1; 5], "jitter={jitter}");
-        let frames: Vec<_> = [false, true]
+        let frames: Vec<_> = [Reference::Production, Reference::Wide]
             .into_iter()
-            .map(|wide| {
-                let _wide = WideReference::set(wide);
+            .map(|reference| {
+                let _reference = Using::set(reference);
                 frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.25)
             })
             .collect();
@@ -307,6 +330,57 @@ fn a_core_depth_draws_its_stars_whole() {
         let worst = frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
         assert!(worst <= 1, "jitter={jitter}: the 1x1 read cut a star ({worst}/255)");
     }
+}
+
+/// A depth whose largest star 2x2 holds only at its cell's centre is read
+/// 2x2, where the worst-case reach it replaced read it 3x3, and draws what a
+/// 3x3 read draws: every star strayed past what 2x2 holds is drawn smaller
+/// to stay inside it, not cut, and no brighter. Every star is 0.9 of a cell
+/// at full `Position variation`, so most are capped.
+#[test]
+fn a_capped_depth_draws_what_a_wide_read_draws() {
+    use harmonigraph_scene::star_plan::{star_jitter_width, StarGather};
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = star_fixture([129, 97], egui::pos2(7.2, 11.6));
+    cb.grid.fill(200);
+    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+    (stars.star_jitter, stars.star_size_variation) = (1.0, 0.0);
+    stars.star_solo = [false, false, false, false, true];
+    stars.star_spacing_ratio = [0.5 / 0.9; 5];
+    // Wider than a texel of the 75% image (6 star pixels), or the texel
+    // floor would decide the read.
+    stars.star_size = [16.0; 5];
+    let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
+    let image = atmosphere::star_image_size([161, 121], *stars);
+    let nearest = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[4];
+    assert_eq!(nearest.gather, 2);
+    let worst = StarGather::Two.half_width() - 0.5 * star_jitter_width(1.0);
+    assert!(nearest.radius > worst * nearest.cell, "the old rule read 2x2 too");
+    let frames: Vec<_> = [Reference::Production, Reference::Wide, Reference::Uncapped]
+        .into_iter()
+        .map(|reference| {
+            let _reference = Using::set(reference);
+            frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.25)
+        })
+        .collect();
+    // The reference's own summation order moves a channel by one at most; a
+    // cut star loses whole levels.
+    let errors: Vec<_> = frames[0].iter().zip(&frames[1]).map(|(a, b)| a.abs_diff(*b)).collect();
+    let mean = errors.iter().map(|e| f64::from(*e)).sum::<f64>() / errors.len() as f64;
+    let worst = errors.iter().copied().max().unwrap();
+    assert!(worst <= 1 && mean < 0.01, "the 2x2 read cut a star: worst {worst}/255, mean {mean}");
+    // A capped star is smaller and no brighter, so the field holds less light
+    // over the floor than uncapped: measured 0.85 of it. Brightened to keep
+    // its light, a capped star kept 0.96.
+    let floor = cb.shades.lut[0];
+    let light = |frame: &[u8]| -> f64 {
+        let over = |px: &[u8]| -> f64 {
+            px[..3].iter().zip(&floor).map(|(&c, &f)| f64::from(c.abs_diff(f))).sum()
+        };
+        frame.chunks_exact(4).map(over).sum()
+    };
+    let kept = light(&frames[0]) / light(&frames[2]);
+    assert!(kept < 0.92, "capping kept {kept} of the uncapped field's light");
 }
 
 /// At `Twinkle` 0 a layer at the closest `Star spacing` covers the sky at
@@ -366,57 +440,89 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
 }
 
 /// Every star narrower than a texel of the star image still shows (#1446).
-/// The far stars sit one to a cell on a grid, alike and steady, 2 star
-/// pixels in radius under a 25% texel of 7.2, so a texel centre lands inside
-/// only some of them. Each cell's light over the floor is its star's; drawn
-/// at its centres alone, the dimmest of them measured 0 of the mean.
+/// The far stars sit one to a cell, alike and steady, 2 star pixels in
+/// radius under a 25% texel of 7.2, so a texel centre lands inside only some
+/// of them. Each cell's light over the floor is mostly its star's; drawn at
+/// its centres alone, the dimmest of them measured 0 of the mean.
+///
+/// Once on a grid of cells four texels wide, where each cell's light is its
+/// star's alone. Then in cells hardly wider than a texel, at the fresh and
+/// at full `Position variation`, where its neighbours' light spills into each
+/// cell: the floor widens every star to a texel, and the read must hold that
+/// wherever a star strays, so the cap never draws one narrower. Read 2x2
+/// instead, which holds the floor only at a cell's centre, the cap drew them
+/// down to 0.85 and 0.7 of a cell, and the dimmest cell measured 0.46 and
+/// 0.24 of the mean.
 #[test]
 fn stars_narrower_than_a_texel_all_show() {
+    use harmonigraph_scene::star_plan::star_jitter_width;
     let Some((device, queue)) = headless_device() else { return };
     let (width, height) = (400, 300);
-    let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
-    cb.grid.fill(220);
-    let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-    stars.star_solo = [true, false, false, false, false];
-    stars.star_resolution = 0.25;
-    (stars.star_size[0], stars.star_spacing_ratio[0], stars.star_jitter) = (4.0, 8.0, 0.0);
-    (stars.star_size_variation, stars.star_randomness) = (0.0, 0.0);
-    stars.star_twinkle = [0.0; 5];
-    let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
-    let image = atmosphere::star_image_size([width, height], *stars);
-    let slice = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[0];
-    assert!(slice.radius < 0.5 * crate::stars::STAR_PANE / image[1] as f32);
-    let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
-    // Each pixel's cell, as `star_layers` finds it, and its light.
-    let floor = cb.shades.lut[0];
-    let size = [width as f32, height as f32];
-    let star_px = crate::stars::STAR_PANE / size[1];
-    let mut cells = std::collections::HashMap::<[i32; 2], f64>::new();
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let at = [x as f32 + 0.5, y as f32 + 0.5];
-            let key: [i32; 2] = std::array::from_fn(|axis| {
-                let sp = (at[axis] - size[axis] * 0.5) * star_px;
-                (sp / slice.cell - slice.offset.0[axis].fract()).floor() as i32
-            });
-            let pixel = &frame[(y * (width as usize + 1) + x) * 4..][..3];
-            *cells.entry(key).or_default() +=
-                pixel.iter().zip(&floor).map(|(&c, &f)| f64::from(c) - f64::from(f)).sum::<f64>();
+    // Measured 0.64, 0.50 and 0.44: the last two as the same stars drawn
+    // whole by 3x3 with no cap at all.
+    for (spacing, jitter, gather, bound) in
+        [(8.0, 0.0, 1, 0.5), (1.85, 0.5, 3, 0.45), (1.85, 1.0, 3, 0.38)]
+    {
+        let mut cb = star_fixture([width, height], egui::Pos2::ZERO);
+        cb.grid.fill(220);
+        let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
+        stars.star_solo = [true, false, false, false, false];
+        stars.star_resolution = 0.25;
+        (stars.star_size[0], stars.star_spacing_ratio[0], stars.star_jitter) =
+            (4.0, spacing, jitter);
+        (stars.star_size_variation, stars.star_randomness) = (0.0, 0.0);
+        stars.star_twinkle = [0.0; 5];
+        let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
+        let image = atmosphere::star_image_size([width, height], *stars);
+        let slice = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[0];
+        let texel = crate::stars::STAR_PANE / image[1] as f32;
+        assert!(slice.radius < 0.5 * texel && slice.inverse_floor == 1.0 / texel);
+        let mut plan = *stars;
+        plan.star_solo = [false; 5];
+        let read = atmosphere::star_slices(plan, 0.0, 0.0, &layout, image)[0].gather;
+        assert_eq!(read, gather, "spacing {spacing}");
+        // The read holds the floor even for the worst-placed star, though
+        // 2x2 would hold it at a cell's centre.
+        let half_width = 0.5 * gather as f32;
+        let held = (half_width - 0.5 * star_jitter_width(jitter)) * slice.cell;
+        assert!(held >= texel && (jitter == 0.0 || texel <= slice.cell), "holds {held}");
+        let frame = frame_at_ppp(&device, &queue, &mut CallbackResources::default(), &cb, 1.0);
+        // Each pixel's cell, as `star_layers` finds it, and its light.
+        let floor = cb.shades.lut[0];
+        let size = [width as f32, height as f32];
+        let star_px = crate::stars::STAR_PANE / size[1];
+        let mut cells = std::collections::HashMap::<[i32; 2], f64>::new();
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let at = [x as f32 + 0.5, y as f32 + 0.5];
+                let key: [i32; 2] = std::array::from_fn(|axis| {
+                    let sp = (at[axis] - size[axis] * 0.5) * star_px;
+                    (sp / slice.cell - slice.offset.0[axis].fract()).floor() as i32
+                });
+                let pixel = &frame[(y * (width as usize + 1) + x) * 4..][..3];
+                *cells.entry(key).or_default() += pixel
+                    .iter()
+                    .zip(&floor)
+                    .map(|(&c, &f)| f64::from(c) - f64::from(f))
+                    .sum::<f64>();
+            }
         }
+        // Only cells whole inside the pane.
+        let span = size.map(|side| side * star_px / slice.cell);
+        let whole = |key: [i32; 2]| {
+            (0..2).all(|axis| {
+                let edge = (span[axis] / 2.0) as i32;
+                (-edge + 1..edge - 1).contains(&key[axis])
+            })
+        };
+        let light: Vec<f64> =
+            cells.into_iter().filter(|&(key, _)| whole(key)).map(|(_, l)| l).collect();
+        let mean = light.iter().sum::<f64>() / light.len() as f64;
+        assert!(light.len() > 100 && mean > 50.0, "fixture: {} stars, {mean}", light.len());
+        let dimmest = light.iter().copied().fold(f64::INFINITY, f64::min) / mean;
+        assert!(
+            dimmest > bound,
+            "jitter {jitter}: a star went missing: the dimmest held {dimmest} of the mean"
+        );
     }
-    // Only cells whole inside the pane.
-    let span = size.map(|side| side * star_px / slice.cell);
-    let whole = |key: [i32; 2]| {
-        (0..2).all(|axis| {
-            let edge = (span[axis] / 2.0) as i32;
-            (-edge + 1..edge - 1).contains(&key[axis])
-        })
-    };
-    let light: Vec<f64> =
-        cells.into_iter().filter(|&(key, _)| whole(key)).map(|(_, l)| l).collect();
-    let mean = light.iter().sum::<f64>() / light.len() as f64;
-    assert!(light.len() > 100 && mean > 50.0, "fixture: {} stars, {mean}", light.len());
-    // Measured 0.64.
-    let dimmest = light.iter().copied().fold(f64::INFINITY, f64::min) / mean;
-    assert!(dimmest > 0.5, "a star went missing: the dimmest held {dimmest} of the mean");
 }
