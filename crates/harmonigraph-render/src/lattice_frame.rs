@@ -514,6 +514,7 @@ impl LatticeCallback {
                     span: scene.octave_layout.span as f32,
                     center: scene.octave_layout.center,
                     padding: Float2([0.0; 2]),
+                    turns: OctaveParams::turns(scene.octave_layout.span),
                 },
                 spectral: SpectralParams {
                     inner: scene.spectral.inner,

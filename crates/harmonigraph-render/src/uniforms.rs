@@ -99,6 +99,24 @@ uniform_group! {
         span: f32,
         center: f32,
         padding: Float2,
+        /// Slice `i`'s turn back from its ring's seam, see [`OctaveParams::turns`].
+        turns: [Float4; harmonigraph_scene::MAX_SPAN as usize + 1],
+    }
+}
+impl OctaveParams {
+    /// Every slice's turn off its ring's seam as (cos, sin), for `span` slices
+    /// to the turn: the first edge's, TAU * i / span, in xy and the middle's,
+    /// half a slice on, in zw. The angles are the same for every ring, so the
+    /// shader rotates each ring's seam by these rather than taking a sine per
+    /// slot of every fragment (`oct_sector`). Held to the span the shader
+    /// clamps to, so the two tables cannot disagree.
+    pub(super) fn turns(span: u32) -> [Float4; harmonigraph_scene::MAX_SPAN as usize + 1] {
+        let span = f64::from(span.clamp(1, harmonigraph_scene::MAX_SPAN));
+        std::array::from_fn(|i| {
+            let edge = std::f64::consts::TAU * i as f64 / span;
+            let mid = std::f64::consts::TAU * (i as f64 + 0.5) / span;
+            Float4([edge.cos(), edge.sin(), mid.cos(), mid.sin()].map(|v| v as f32))
+        })
     }
 }
 uniform_group! {

@@ -1,0 +1,533 @@
+// language: metal3.2
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using metal::uint;
+
+struct _mslBufferSizes {
+    uint size4;
+};
+
+struct ShadowCaster {
+    metal::float4 rect;
+    metal::float4 cell;
+    metal::float4 map;
+    metal::float4 shade;
+};
+typedef ShadowCaster type_6[1];
+struct SplitOut {
+    metal::float4 other;
+    metal::float4 ink;
+    metal::float4 transmission;
+};
+struct CompositeParams {
+    float darkest_pitch;
+    float brightest_pitch;
+    float render_scale;
+    float bloom_strength;
+    metal::float4 background;
+    float edge_softness_pixels;
+    float padding;
+    metal::float2 padding2_;
+};
+struct CameraParams {
+    metal::float4x4 view_proj;
+    metal::float4 right;
+    metal::float4 up;
+};
+struct NodeParams {
+    float radius;
+    float band_inner;
+    float band_outer;
+    float rings_outer;
+    float mark_inner;
+    float angular_gap;
+    float mark_thickness;
+    float animation;
+    metal::float4 pose;
+};
+struct MarkerParams {
+    float half_width;
+    float taper_start;
+    float world_unit;
+    float padding;
+};
+struct type_10 {
+    metal::float4 inner[12];
+};
+struct OctaveParams {
+    float span;
+    float center;
+    metal::float2 padding;
+    type_10 turns;
+};
+struct SpectralParams {
+    float inner;
+    float outer;
+    float range_cents;
+    float folded;
+};
+struct GlowParams {
+    float reach;
+    float strength;
+    float padding;
+    float curve;
+    float wash;
+    float row_capacity;
+    float lit;
+    float accumulation;
+};
+struct TextureParams {
+    float depth;
+    float scale;
+    metal::float2 drift;
+    metal::float2 target_size;
+    metal::float2 glow_size;
+};
+struct PickupParams {
+    float intensity;
+    float width;
+    float softness;
+    float color;
+};
+struct ShadowParams {
+    float width;
+    float reach_sigmas;
+    float depth;
+    float occlusion;
+};
+struct ShadowTargetParams {
+    metal::float2 pane_points;
+    metal::float2 atlas_texels;
+};
+struct MarkerCellParams {
+    metal::float4 rect;
+    metal::float4 cell;
+    float points_to_texels;
+    float aa_scale;
+    float arm_points;
+    float spread_points;
+};
+struct type_11 {
+    metal::float4 inner[64];
+};
+struct type_13 {
+    metal::uint4 inner[240];
+};
+struct type_14 {
+    metal::float4 inner[16];
+};
+struct Uniforms {
+    CompositeParams composite;
+    CameraParams camera;
+    NodeParams node;
+    MarkerParams marker;
+    OctaveParams octave;
+    SpectralParams spectral;
+    GlowParams glow;
+    TextureParams texture;
+    PickupParams pickup;
+    ShadowParams geometry_shadow;
+    ShadowParams marker_shadow;
+    ShadowTargetParams shadow_target;
+    MarkerCellParams marker_cell;
+    metal::float4 lattice_ground;
+    metal::float4 lut_spacing;
+    type_11 pitch_lut;
+    type_11 spectral_lut;
+    type_13 spectrum_color;
+    type_14 ink_kernel;
+};
+struct Painted {
+    metal::packed_float3 rgb;
+    float seen;
+    float ink_alpha;
+    char _pad3[12];
+};
+struct PlusVsOut {
+    metal::float4 clip_pos;
+    metal::float2 uv;
+    char _pad2[8];
+    metal::float4 color;
+    metal::float4 shadow_box;
+    metal::float4 shadow_at;
+};
+constant float DISTANCE_KIND = 1.0;
+constant float DISTANCE_COVERAGE_KIND = 2.0;
+constant uint OCCLUDER_HEADER = 5u;
+constant float GAUSSIAN_GAIN = 2.5;
+constant float SHADOW_STOP = 1.0;
+constant float SHADOW_FALLOFF_MIN = -6.0;
+constant float SHADOW_FALLOFF_MAX = 6.0;
+constant float SHADOW_KEEP_FLOOR = 0.0009765625;
+constant float GLOW_BASE = 0.8;
+constant float TAU = 6.2831855;
+constant float QUAD_MARGIN = 1.6;
+constant float GLYPH_FADE_LIMIT = 1.3;
+constant float SHADOW_REACH_SIGMAS = 3.0;
+constant uint INK_STRIP_N = 64u;
+constant bool EARLY_OUT = true;
+constant float GAUSSIAN_SPREAD_KIND = 3.0;
+constant float INK_FLOOR = 0.01;
+constant uint OCTAVE_SLOTS = 11u;
+constant float THICKNESS_STEPS = 64.0;
+constant uint MAX_SPAN = 11u;
+constant uint PITCH_LUT_N = 64u;
+constant float BEND_ROUNDING = 0.4;
+constant uint SPECTRUM_BUCKETS = 3828u;
+constant float BUCKETS_PER_SEMITONE = 32.0;
+constant float SPECTRUM_MIN_MIDI = 15.48682;
+constant float OCT_UP = -4.712389;
+constant float DISTANCE_LEVEL_FLOOR = 0.5;
+constant float EMPTY_DISTANCE = 65504.0;
+constant float PLUS_QUAD_MARGIN = 1.6;
+constant metal::float3 GLOW_LUMINANCE = metal::float3(0.2126, 0.7152, 0.0722);
+constant metal::float2 NEBULA_DETAIL_FADE = metal::float2(0.3, 1.1);
+
+metal::float4 glow_light(
+    metal::float2 uv,
+    metal::texture2d<float, metal::access::sample> glow_tex,
+    metal::sampler glow_sampler
+) {
+    metal::float4 _e4 = glow_tex.sample(glow_sampler, uv, metal::level(0.0));
+    return _e4;
+}
+
+metal::float3 wash_over(
+    metal::float3 ink,
+    float alpha,
+    metal::float3 light,
+    float share
+) {
+    metal::float3 w_2 = light * share;
+    return (w_2 * alpha) + (ink * (metal::float3(1.0) - w_2));
+}
+
+bool cell_packed(
+    metal::float4 cell
+) {
+    bool local = {};
+    if (cell.z > 0.0) {
+        local = cell.w > 0.0;
+    } else {
+        local = false;
+    }
+    bool _e10 = local;
+    return _e10;
+}
+
+float standoff_coverage(
+    float d,
+    float w,
+    float falloff
+) {
+    float u_1 = metal::clamp((metal::max(d, 0.0) / metal::max(w, 0.000001)) / SHADOW_STOP, 0.0, 1.0);
+    float remaining = 1.0 - u_1;
+    float shape = -(metal::clamp(falloff, SHADOW_FALLOFF_MIN, SHADOW_FALLOFF_MAX));
+    if (metal::abs(shape) < 0.05) {
+        return remaining * ((1.0 - ((shape * u_1) * 0.5)) + ((((shape * shape) * u_1) * ((2.0 * u_1) - 1.0)) / 12.0));
+    }
+    return (metal::exp(shape * remaining) - 1.0) / (metal::exp(shape) - 1.0);
+}
+
+metal::float2 shadow_profile(
+    uint who,
+    metal::float2 points,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    if (who >= (1 + (_buffer_sizes.size4 - 0 - 64) / 64)) {
+        return metal::float2(0.0);
+    }
+    metal::float4 cell_1 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].cell;
+    bool _e11 = cell_packed(cell_1);
+    if (!(_e11)) {
+        return metal::float2(0.0);
+    }
+    metal::float2 atlas = static_cast<metal::float2>(metal::uint2(shadow_atlas.get_width(), shadow_atlas.get_height()));
+    metal::float4 map = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].map;
+    metal::float2 texel = metal::clamp(map.xy + (points * map.z), cell_1.xy + metal::float2(0.5), (cell_1.xy + cell_1.zw) - metal::float2(0.5));
+    metal::float4 _e41 = shadow_atlas.sample(shadow_sampler, texel / atlas, metal::level(0.0));
+    metal::float2 held = _e41.xy;
+    float _e47 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.y;
+    if (_e47 == DISTANCE_COVERAGE_KIND) {
+        return metal::float2(metal::clamp(held.x, 0.0, 1.0));
+    }
+    float _e59 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.y;
+    if (_e59 >= 0.5) {
+        float _e67 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.z;
+        float _e74 = shadow_casters[metal::min(unsigned(who), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.w;
+        float _e75 = standoff_coverage(held.x, 2.0 * _e67, _e74);
+        return metal::float2(metal::clamp(_e75, 0.0, 1.0));
+    }
+    return metal::float2(metal::min(GAUSSIAN_GAIN * metal::clamp(held.x, 0.0, 1.0), 1.0), held.y);
+}
+
+float shadow_kernel(
+    uint who_1,
+    metal::float2 points_1,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    metal::float2 _e2 = shadow_profile(who_1, points_1, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    return _e2.x;
+}
+
+float local_shadow_transmittance(
+    float full,
+    float depth,
+    float level
+) {
+    return 1.0 - ((metal::clamp(full, 0.0, 1.0) * metal::clamp(depth, 0.0, 1.0)) * metal::clamp(level, 0.0, 1.0));
+}
+
+float plus_shadow_depth(
+    constant Uniforms& u
+) {
+    float _e3 = u.marker_shadow.depth;
+    return metal::clamp(_e3, 0.0, 1.0);
+}
+
+uint naga_f2u32(float value) {
+    return static_cast<uint>(metal::clamp(value, 0.0, 4294967000.0));
+}
+
+float shadow_through(
+    float who_2,
+    metal::float2 points_2,
+    float level_1,
+    float depth_1,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    if (level_1 <= 0.0) {
+        return 1.0;
+    }
+    float _e10 = shadow_kernel(naga_f2u32(metal::max(who_2, 0.0)), points_2, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+    float _e11 = local_shadow_transmittance(_e10, depth_1, level_1);
+    return _e11;
+}
+
+bool shadow_is_distance(
+    float who_3,
+    device type_6 const& shadow_casters,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    uint caster = naga_f2u32(metal::max(who_3, 0.0));
+    if (caster >= (1 + (_buffer_sizes.size4 - 0 - 64) / 64)) {
+        return false;
+    }
+    float _e12 = shadow_casters[metal::min(unsigned(caster), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.y;
+    return _e12 >= 0.5;
+}
+
+float plus_shadow_through(
+    float who_4,
+    float d_points,
+    metal::float2 points_3,
+    float level_2,
+    float distance_level,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant Uniforms& u,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    if (level_2 <= 0.0) {
+        return 1.0;
+    }
+    uint caster_1 = naga_f2u32(metal::max(who_4, 0.0));
+    bool _e11 = shadow_is_distance(who_4, shadow_casters, _buffer_sizes);
+    if (!(_e11)) {
+        float _e13 = plus_shadow_depth(u);
+        float _e14 = shadow_through(who_4, points_3, level_2, _e13, shadow_atlas, shadow_sampler, shadow_casters, _buffer_sizes);
+        return _e14;
+    }
+    float _e19 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.z;
+    float _e26 = shadow_casters[metal::min(unsigned(caster_1), (_buffer_sizes.size4 - 0 - 64) / 64)].shade.w;
+    float _e27 = standoff_coverage(d_points, 2.0 * _e19, _e26);
+    float _e28 = plus_shadow_depth(u);
+    float _e29 = local_shadow_transmittance(_e27, _e28, distance_level);
+    return _e29;
+}
+
+float aa_width(
+    float coord_fwidth,
+    float surface_scale,
+    constant Uniforms& u
+) {
+    float _e5 = u.composite.edge_softness_pixels;
+    float _e9 = u.composite.render_scale;
+    float knob = (_e5 * metal::max(_e9, 0.01)) * metal::clamp(surface_scale, 0.0, 1.0);
+    return metal::max(coord_fwidth, 0.0001) * metal::max(knob, 1.0);
+}
+
+float aa_inside(
+    float edge,
+    float x,
+    float w_1
+) {
+    return 1.0 - metal::smoothstep(edge - w_1, edge + w_1, x);
+}
+
+metal::float4 seen_of(
+    Painted paint
+) {
+    return metal::float4(paint.rgb, paint.seen);
+}
+
+metal::float2 light_coord(
+    metal::float2 frag_pos,
+    constant Uniforms& u
+) {
+    metal::float2 _e4 = u.texture.target_size;
+    return frag_pos / metal::max(_e4, metal::float2(1.0));
+}
+
+float plus_box_sd(
+    metal::float2 uv_1,
+    float end,
+    constant Uniforms& u
+) {
+    metal::float2 p = metal::abs(uv_1);
+    metal::float2 q = metal::float2(metal::max(p.x, p.y), metal::min(p.x, p.y));
+    float _e16 = u.marker.half_width;
+    metal::float2 corner = metal::float2(q.x - end, q.y - _e16);
+    return metal::length(metal::max(corner, metal::float2(0.0))) + metal::min(metal::max(corner.x, corner.y), 0.0);
+}
+
+float plus_sd(
+    metal::float2 uv_2,
+    constant Uniforms& u
+) {
+    float _e2 = plus_box_sd(uv_2, 1.0, u);
+    return _e2;
+}
+
+float plus_taper(
+    metal::float2 uv_3,
+    constant Uniforms& u
+) {
+    metal::float2 p_1 = metal::abs(uv_3);
+    metal::float2 q_1 = metal::float2(metal::max(p_1.x, p_1.y), metal::min(p_1.x, p_1.y));
+    float _e12 = u.marker.taper_start;
+    float start = metal::min(_e12, 0.999);
+    float fade = metal::smoothstep(start, 1.0, metal::clamp(q_1.x, 0.0, 1.0));
+    return 1.0 - fade;
+}
+
+float plus_shadow_taper(
+    metal::float2 uv_4,
+    constant Uniforms& u
+) {
+    float _e1 = plus_taper(uv_4, u);
+    float _e5 = u.marker.taper_start;
+    return (_e5 >= 0.999) ? 1.0 : _e1;
+}
+
+float plus_body_coverage(
+    metal::float2 uv_5,
+    float aa,
+    constant Uniforms& u
+) {
+    float _e3 = plus_sd(uv_5, u);
+    float _e4 = aa_inside(0.0, _e3, aa);
+    return _e4;
+}
+
+float plus_coverage(
+    metal::float2 uv_6,
+    float aa_1,
+    constant Uniforms& u
+) {
+    float _e2 = plus_body_coverage(uv_6, aa_1, u);
+    float _e3 = plus_taper(uv_6, u);
+    return _e2 * _e3;
+}
+
+Painted plus_paint(
+    PlusVsOut in_1,
+    metal::texture2d<float, metal::access::sample> glow_tex,
+    metal::sampler glow_sampler,
+    metal::texture2d<float, metal::access::sample> shadow_atlas,
+    metal::sampler shadow_sampler,
+    device type_6 const& shadow_casters,
+    constant Uniforms& u,
+    constant _mslBufferSizes& _buffer_sizes
+) {
+    metal::float2 shadow_uv = {};
+    bool local_1 = {};
+    float _e3 = metal::fwidth(in_1.uv.x);
+    float _e6 = aa_width(_e3, in_1.shadow_at.w, u);
+    float aa_2 = metal::min(_e6, 0.6);
+    float _e10 = plus_body_coverage(in_1.uv, aa_2, u);
+    float _e14 = plus_coverage(in_1.uv, aa_2, u);
+    float alpha_1 = in_1.color.w * _e14;
+    float _e17 = plus_sd(in_1.uv, u);
+    float d_points_1 = _e17 * in_1.shadow_box.y;
+    float distance_level_1 = in_1.shadow_at.z;
+    float _e29 = plus_shadow_through(in_1.shadow_box.x, d_points_1, in_1.shadow_at.xy, in_1.shadow_at.z, distance_level_1, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
+    shadow_uv = in_1.uv;
+    bool _e34 = shadow_is_distance(in_1.shadow_box.x, shadow_casters, _buffer_sizes);
+    if (!(_e34)) {
+        float _e41 = u.marker_cell.spread_points;
+        local_1 = _e41 > 0.0;
+    } else {
+        local_1 = false;
+    }
+    bool _e45 = local_1;
+    if (_e45) {
+        float _e49 = u.marker_cell.spread_points;
+        float _e53 = u.marker_cell.arm_points;
+        float spread = _e49 / metal::max(_e53, 0.000001);
+        shadow_uv = metal::max(metal::abs(in_1.uv) - metal::float2(spread), metal::float2(0.0));
+    }
+    metal::float2 _e66 = shadow_uv;
+    float _e67 = plus_shadow_taper(_e66, u);
+    float shadow_exposure = (1.0 - _e10) * _e67;
+    float seen_through = 1.0 - ((1.0 - _e29) * shadow_exposure);
+    float final_alpha = 1.0 - ((1.0 - alpha_1) * seen_through);
+    if (final_alpha <= 0.0) {
+        metal::discard_fragment();
+    }
+    metal::float3 ink_1 = in_1.color.xyz * alpha_1;
+    metal::float2 _e86 = light_coord(in_1.clip_pos.xy, u);
+    metal::float4 _e87 = glow_light(_e86, glow_tex, glow_sampler);
+    metal::float3 _e90 = wash_over(ink_1, alpha_1, _e87.xyz, 1.0);
+    return Painted {_e90, final_alpha, alpha_1};
+}
+
+struct fs_plus_splitInput {
+    metal::float2 uv [[user(loc0), center_perspective]];
+    metal::float4 color [[user(loc1), center_perspective]];
+    metal::float4 shadow_box [[user(loc3), flat]];
+    metal::float4 shadow_at [[user(loc4), center_no_perspective]];
+};
+struct fs_plus_splitOutput {
+    metal::float4 other [[color(0)]];
+    metal::float4 ink [[color(1)]];
+    metal::float4 transmission [[color(2)]];
+};
+fragment fs_plus_splitOutput fs_plus_split(
+  fs_plus_splitInput varyings [[stage_in]]
+, metal::float4 clip_pos [[position]]
+, metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
+, metal::sampler glow_sampler [[sampler(0)]]
+, metal::texture2d<float, metal::access::sample> shadow_atlas [[texture(1)]]
+, metal::sampler shadow_sampler [[sampler(1)]]
+, device type_6 const& shadow_casters [[buffer(1)]]
+, constant Uniforms& u [[buffer(0)]]
+, constant _mslBufferSizes& _buffer_sizes [[buffer(3)]]
+) {
+    const PlusVsOut in = { clip_pos, varyings.uv, {}, varyings.color, varyings.shadow_box, varyings.shadow_at };
+    Painted _e1 = plus_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, u, _buffer_sizes);
+    metal::float4 _e2 = seen_of(_e1);
+    const auto _tmp = SplitOut {_e2, metal::float4(0.0, 0.0, 0.0, _e1.seen), metal::float4(_e1.ink_alpha, 0.0, 0.0, _e1.seen)};
+    return fs_plus_splitOutput { _tmp.other, _tmp.ink, _tmp.transmission };
+}

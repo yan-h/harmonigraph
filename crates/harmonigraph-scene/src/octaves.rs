@@ -9,8 +9,9 @@
 //! Octaves outside MIDI's reach remain as backdrop. Notes beyond either end
 //! fold onto that end's slice.
 //!
-//! The walk round a ring is the closed form `TAU * x / span`, which the
-//! renderer repeats rather than reading a table.
+//! The walk round a ring is the closed form `TAU * x / span`. The renderer
+//! repeats it for a slice's width and turns each ring's seam by a per-span
+//! table of the same angles for the slices' directions (`OctaveParams::turns`).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -190,7 +191,7 @@ impl OctaveLayout {
 
     /// The two edge angles of slot `slot`'s indicator on a node whose pitch
     /// class is `cents` — the counter-clockwise one first. The shader's
-    /// `oct_sector` is this.
+    /// `oct_sector` points its edges in these directions.
     ///
     /// Exactly one octave wide, at every slot and every node: the ring holds
     /// whole octaves of the node's own class and nothing is cut to fit, so the
