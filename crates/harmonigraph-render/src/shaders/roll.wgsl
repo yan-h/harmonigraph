@@ -74,12 +74,12 @@ struct Locals {
     // distance path, in what was the block's own tail padding.
     shadow_falloff: f32,
     _shadow_pad: f32,
-    /// How many points one pixel of the target being drawn into measures, per
-    /// axis: `viewport_points` over the target's size in pixels. What takes a
-    /// fragment's own pixel back to the surface point it stands on
-    /// ([`on_screen`]).
+    /// Where the target being drawn into starts, in its own pixels, and how
+    /// many points one of them measures, per axis. What takes a fragment's own
+    /// pixel back to the surface point it stands on ([`surface_point`]); set
+    /// with the viewport above by `RollUniforms::drawn_into`.
+    origin_pixels: vec2<f32>,
     pixel_points: vec2<f32>,
-    _pixel_pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> locals: Locals;
@@ -347,8 +347,13 @@ fn fs_shadow_coverage(in: VertexOut) -> @location(0) vec4<f32> {
 /// The surface point, in points, at this fragment's own pixel center: the
 /// inverse of `note_vertex`'s mapping, read off the rasterizer's exact pixel
 /// position rather than interpolated across the quad.
+///
+/// Summed in pixels and scaled once. A pixel center and a whole-pixel origin
+/// add exactly in f32, so two targets over the same surface pixel — the
+/// surface and the body holdout, each scaled by exactly `1 / ppp` — reach the
+/// same bits, at fractional pixels-per-point too.
 fn surface_point(in: VertexOut) -> vec2<f32> {
-    return locals.origin_points + in.position.xy * locals.pixel_points;
+    return (locals.origin_pixels + in.position.xy) * locals.pixel_points;
 }
 
 /// `in`, with `local` measured from the note's center to this fragment's own
@@ -359,9 +364,10 @@ fn surface_point(in: VertexOut) -> vec2<f32> {
 /// than the body and the outline's a shadow's reach wider, and interpolated
 /// across those two, one pixel read two slightly different coordinates. Every
 /// pass onto the surface or a texture over the roll goes through this, so the
-/// body, its holdout, its bloom and its outline agree to the bit on where the
-/// note is. The axes are unit and perpendicular, so projecting onto them
-/// inverts `center + pitch_dir * local.x + depth_dir * local.y` exactly.
+/// body, its holdout and its outline agree to the bit on where the note is
+/// ([`surface_point`]); the bloom's half-size notes read their own coarser
+/// pixels the same way. The axes are unit and perpendicular, so projecting onto
+/// them inverts `center + pitch_dir * local.x + depth_dir * local.y` exactly.
 fn on_screen(in: VertexOut) -> VertexOut {
     var out = in;
     let delta = surface_point(in) - in.center;

@@ -339,19 +339,49 @@ struct RollUniforms {
     /// stage never reads.
     shadow_falloff: f32,
     _shadow_pad: f32,
-    /// Points per pixel of the target drawn into, per axis: `viewport_points`
-    /// over that target's size in pixels. The fragment stage maps its own
-    /// pixel back to the note through it (`on_screen` in roll.wgsl). Per axis
-    /// because the bloom's half-size target rounds each side up on its own.
+    /// Where the target drawn into starts, in its own pixels, and how many
+    /// points one of them measures, per axis: the fragment stage maps its own
+    /// pixel back to the note through the pair (`surface_point` in
+    /// roll.wgsl). Set only by [`drawn_into`](Self::drawn_into), with the
+    /// viewport above.
+    origin_pixels: Float2,
     pixel_points: Float2,
-    _pixel_pad: Float2,
 }
 }
 
-/// [`RollUniforms::pixel_points`] for a viewport of `points` drawn into a
-/// target `pixels` across.
-fn pixel_points(points: [f32; 2], pixels: [u32; 2]) -> Float2 {
-    Float2([points[0] / pixels[0].max(1) as f32, points[1] / pixels[1].max(1) as f32])
+impl RollUniforms {
+    /// These uniforms drawing into a target `target_px` pixels across that
+    /// covers the surface's device pixels from `origin_px`, `size_px` across:
+    /// the viewport the vertex stage maps onto (`origin_points`,
+    /// `viewport_points`), and the pair the fragment stage maps back through
+    /// (`origin_pixels`, `pixel_points`). One function for all four, so the
+    /// two mappings cannot drift apart.
+    ///
+    /// A target the size of what it covers — the surface itself, and the body
+    /// holdout over the roll's rect — measures a pixel by exactly `1 / ppp`
+    /// from an origin in whole device pixels. Its pixel sums are exact in
+    /// f32, so every such target lands on the same bits for one surface
+    /// pixel at any pixels-per-point, where a scale derived per target
+    /// (`viewport_points / size`) rounds differently for each size unless
+    /// `ppp` is a power of two. The bloom's half-size target, each side rounded
+    /// up on its own, takes the per-axis scale its own pixels measure.
+    fn drawn_into(
+        self,
+        ppp: f32,
+        origin_px: [i32; 2],
+        size_px: [u32; 2],
+        target_px: [u32; 2],
+    ) -> Self {
+        // Exactly 1 for a target the size of what it covers.
+        let shrink = |axis: usize| target_px[axis].max(1) as f32 / size_px[axis].max(1) as f32;
+        Self {
+            origin_points: Float2(origin_px.map(|v| v as f32 / ppp)),
+            viewport_points: Float2(size_px.map(|v| v as f32 / ppp)),
+            origin_pixels: Float2([0, 1].map(|axis| origin_px[axis] as f32 * shrink(axis))),
+            pixel_points: Float2([0, 1].map(|axis| 1.0 / (shrink(axis) * ppp))),
+            ..self
+        }
+    }
 }
 
 /// The bloom's notes texture for a roll `size` device pixels across: half of
@@ -1081,11 +1111,14 @@ impl CallbackTrait for RollCallback {
         );
         let roll_size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
         let has_area = !self.instances.is_empty() && roll_size.iter().all(|&d| d > 0);
-        let surface_points = screen_descriptor.size_in_pixels.map(|v| v as f32 / ppp);
+        let surface = screen_descriptor.size_in_pixels;
         let uniforms = RollUniforms {
-            // The whole surface, which is the viewport `paint` draws into.
-            origin_points: Float2([0.0, 0.0]),
-            viewport_points: Float2(surface_points),
+            // The whole surface, which is the viewport `paint` draws into
+            // (`drawn_into` below).
+            origin_points: Float2([0.0; 2]),
+            viewport_points: Float2([0.0; 2]),
+            origin_pixels: Float2([0.0; 2]),
+            pixel_points: Float2([0.0; 2]),
             // One physical pixel, expressed in the points the geometry is
             // in. Derived rather than sampled from the fragment's
             // derivatives so coverage is a pure function of the uniforms,
@@ -1102,28 +1135,25 @@ impl CallbackTrait for RollCallback {
             shadow_atlas_size: Float2([1.0; 2]),
             shadow_falloff: style.falloff,
             _shadow_pad: 0.0,
-            pixel_points: pixel_points(surface_points, screen_descriptor.size_in_pixels),
-            _pixel_pad: Float2([0.0; 2]),
-        };
+        }
+        .drawn_into(ppp, [0, 0], surface, surface);
 
-        // The viewport's own edges, back in points: a texture over the roll's
-        // rect covers exactly the pixels `paint` will lay it over, so the
-        // notes in it stand where the notes under it do.
-        let roll_points = roll_size.map(|v| v as f32 / ppp);
-        let roll_uniforms = RollUniforms {
-            origin_points: Float2([viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp]),
-            viewport_points: Float2(roll_points),
-            pixel_points: pixel_points(roll_points, roll_size),
-            ..uniforms
-        };
+        // The viewport's own edges: a texture over the roll's rect covers
+        // exactly the pixels `paint` will lay it over, so the notes in it
+        // stand where the notes under it do.
+        let roll_origin = [viewport.left_px, viewport.top_px];
+        let roll_uniforms = uniforms.drawn_into(ppp, roll_origin, roll_size, roll_size);
         // Half the roll's size for the bloom's notes, so this is what one
         // pixel of THAT target measures in points — twice the display's, and
         // the ramp has to follow it to conserve a hairline ribbon's weight.
         let half_ppp = ppp * 0.5;
-        let bloom_pass = (self.bloom > 0.0 && has_area).then(|| RollUniforms {
-            feather: 1.0 / half_ppp,
-            pixel_points: pixel_points(roll_points, bloom_notes_size(roll_size)),
-            ..roll_uniforms
+        let bloom_pass = (self.bloom > 0.0 && has_area).then(|| {
+            RollUniforms { feather: 1.0 / half_ppp, ..uniforms }.drawn_into(
+                ppp,
+                roll_origin,
+                roll_size,
+                bloom_notes_size(roll_size),
+            )
         });
         // Only a roll that casts draws the outline layer that reads it.
         let wants_holdout = sigma > 0.0 && has_area;
