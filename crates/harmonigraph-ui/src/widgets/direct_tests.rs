@@ -176,6 +176,27 @@ fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
         assert!((values[k] - want).abs() < 1e-5, "layer {k}: {values:?}");
     }
 }
+/// A line let go of while the plot is not drawn leaves no press point
+/// behind: the next line runs from its own press.
+#[test]
+fn a_line_lost_mid_drag_does_not_anchor_the_next_one() {
+    let values = std::cell::RefCell::new([0.5; 5]);
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 3, Depth::Speed, 1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
+    let top_left = inner.left_top() - egui::vec2(4.0, 4.0);
+    frame(&ctx, vec![Event::PointerMoved(top_left)], &mut draw);
+    frame(&ctx, vec![press(top_left, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(inner.center())], &mut draw);
+    frame(&ctx, vec![press(inner.center(), false)], &mut |_: &mut Ui| {});
+    frame(&ctx, vec![], &mut draw);
+    let low = |p: Pos2| p + egui::vec2(0.0, 4.0);
+    let (from, to) = (low(inner.left_bottom()) - egui::vec2(4.0, 0.0), low(inner.right_bottom()));
+    press_drag(&ctx, &mut draw, from, to + egui::vec2(4.0, 0.0));
+    let after = *values.borrow();
+    assert!([0, 2, 4].iter().all(|&k| after[k].abs() < 1e-5), "{after:?}");
+}
 /// The bar under the plot slides every drawn layer together, by the same
 /// octaves for a size, and leaves a layer that is not drawn where it was.
 #[test]
