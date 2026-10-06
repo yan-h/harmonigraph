@@ -25,6 +25,12 @@
 //! `PROBE_TIMER=1` arms the production preparation timer and reports its samples.
 //! Compare with `PROBE_TIMER=0` to measure its overhead with no overlay drawn.
 //! `PROBE_OCTAVES=1` bounds the cost of the default seven-slot shader walks.
+//! `PROBE_PPP` is the pixels per point, 2 by default: the Retina displays the
+//! plugin runs on. Anything sized in points — a Distance cell's texel floor,
+//! the names, the pane the camera frames — is a quarter of the pixels at 2
+//! that it is at 1, so figures from before this default (#1458) were taken at
+//! 1 and overstate those costs: the Distance cell fill was 9.1 ms at 1 and
+//! 2.6 ms at 2 over the same 2048x2048 pixels.
 //! Probe scenes now use `scrolled()` at the rendered default camera and square
 //! aspect. Historical `reach()` figures over-counted off-pane instances (#1182).
 //! Synthetic audio-ring and dense-animation grids remain explicitly synthetic.
@@ -393,9 +399,13 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     }))
     .expect("a device with timestamps");
 
-    let pane = glam::Vec2::new(size[0] as f32, size[1] as f32);
+    let ppp: f32 = std::env::var("PROBE_PPP")
+        .map(|v| v.parse().expect("PROBE_PPP is pixels per point"))
+        .unwrap_or(2.0);
+    // The pane in points, as egui hands it to the callback.
+    let pane = glam::Vec2::new(size[0] as f32, size[1] as f32) / ppp;
     let projector = scene.projector(pane);
-    let unit = scene.node_radius * scene.camera.points_per_world(size[1] as f32);
+    let unit = scene.node_radius * scene.camera.points_per_world(pane.y);
     // Three strokes per lit node on the pane, about a name's size.
     let (w, h, gap) = (0.22 * unit, 0.55 * unit, 0.12 * unit);
     let runs: Vec<(u32, Vec<GlyphInstance>)> = scene
@@ -489,7 +499,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let period = f64::from(queue.get_timestamp_period());
     let mut resources = CallbackResources::default();
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(pane.x, pane.y));
-    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: 1.0 };
+    let screen = ScreenDescriptor { size_in_pixels: size, pixels_per_point: ppp };
     let frames: usize =
         std::env::var("PROBE_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(FRAMES);
     let mut samples = Vec::with_capacity(frames);
@@ -545,7 +555,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
                 egui::PaintCallbackInfo {
                     viewport: rect,
                     clip_rect: rect,
-                    pixels_per_point: 1.0,
+                    pixels_per_point: ppp,
                     screen_size_px: size,
                 },
                 &mut pass,
@@ -604,7 +614,7 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let median = samples[samples.len() / 2];
     let (lo, hi) = (samples[samples.len() / 10], samples[samples.len() * 9 / 10]);
     eprintln!(
-        "{what}: {named} names on {} lit nodes at {}x{}: prepare + composite GPU \
+        "{what}: {named} names on {} lit nodes at {}x{} px, {ppp} px/pt: prepare + composite GPU \
          {median:.3} ms/frame (p10 {lo:.3}, p90 {hi:.3}, {} frames); prepare CPU {cpu_median:.3} ms median",
         scene.nodes.iter().filter(|n| n.activation > 0.0).count(),
         size[0],
