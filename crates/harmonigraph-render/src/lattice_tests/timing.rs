@@ -205,6 +205,8 @@ fn atmosphere_costs_by_polyphony() {
             "stars",
             "stars-100",
             "stars-50",
+            "released",
+            "6-pcs-held",
         ] {
             if std::env::var("PROBE_CASE").ok().is_some_and(|v| v != case) {
                 continue;
@@ -250,6 +252,24 @@ fn atmosphere_costs_by_polyphony() {
                 "no-breath" => variant.view.atmosphere.breath_amount = 0.0,
                 "half-scale" => variant.view.render_scale *= 0.5,
                 "no-glow" => variant.view.glow_strength = 0.0,
+                // Notes let go with their light still releasing: every lit
+                // node, or those outside pitch classes C to F, keeps only
+                // its glow, which is what ships an ink-less instance.
+                "released" | "6-pcs-held" => {
+                    for node in variant.nodes.iter_mut().filter(|n| n.activation > 0.0) {
+                        let pc = (node.cents / 100.0).round() as u32 % 12;
+                        if case == "released" || pc >= 6 {
+                            node.activation = 0.0;
+                            node.octaves.fill(0.0);
+                            node.melody_level = 0.0;
+                            node.bass_level = 0.0;
+                            node.melody_slots = 0;
+                            node.bass_slots = 0;
+                            node.audio_ring = 0.0;
+                            node.glow.level = 0.5;
+                        }
+                    }
+                }
                 _ => {}
             }
             time_a_frame_of_names(variant, &format!("{count} MIDI notes / {case}"));

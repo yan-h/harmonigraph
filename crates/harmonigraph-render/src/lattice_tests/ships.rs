@@ -682,6 +682,57 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
     }
 }
 
+/// A node whose ink has faded while its light still releases ships for the
+/// light's passes alone: no scene draw, and a caster that lands nothing — so no
+/// cell and no occluder entry. The same node with ink is the control, so the
+/// fixture is one that would draw and cast at all.
+#[test]
+fn a_released_node_ships_for_its_light_alone() {
+    let scene = |inked: bool| {
+        let mut scene = idle_scene();
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.0;
+        for style in scene.view.shadow.groups_mut() {
+            style.width = 0.3;
+            style.depth = 1.0;
+        }
+        for node in &mut scene.nodes {
+            node.trail = 0.0;
+            node.glow.level = 0.0;
+        }
+        let node = &mut scene.nodes[0];
+        node.glow = harmonigraph_scene::GlowStep { incarnation: 1, level: 0.5, row: 0 };
+        if inked {
+            node.activation = 1.0;
+            node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+        }
+        scene
+    };
+    let cb = |inked: bool| {
+        LatticeCallback::from_scene(
+            &scene(inked),
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            34,
+            None,
+        )
+    };
+    let node_draws =
+        |cb: &LatticeCallback| cb.draws.iter().filter(|d| matches!(d, Draw::Nodes(..))).count();
+    let level = |cb: &LatticeCallback| cb.casters[cb.node_cells[0] as usize].level;
+
+    let held = cb(true);
+    assert_eq!(held.instances.len(), 1, "the control has to ship its node");
+    assert_eq!(node_draws(&held), 1, "the control has to draw its node");
+    assert!(level(&held) > 0.0, "the control has to cast");
+
+    let released = cb(false);
+    assert_eq!(released.instances.len(), 1, "a released node's light needs its instance");
+    assert_eq!(node_draws(&released), 0, "a released node has no ink to draw");
+    assert_eq!(level(&released), 0.0, "a released node has no ink to cast");
+}
+
 /// A node culled behind the home sheet moves no marker: the markers still go
 /// over the sheets behind home and under the home sheet itself.
 ///
