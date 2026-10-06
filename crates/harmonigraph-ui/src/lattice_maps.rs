@@ -201,8 +201,10 @@ impl MapDocument {
 pub struct MapEditor {
     pub restore_id: u64,
     pub edit_shape: bool,
-    /// Each shape edit's slot and the shape it replaced, newest last.
-    pub undo: Vec<(usize, LatticeMap)>,
+    /// Each shape edit's slot and the shape it replaced, newest last. Undo
+    /// takes only the selected slot's entries, so it never rewrites a map
+    /// that is not on screen.
+    undo: Vec<(usize, LatticeMap)>,
     /// Memo of [`MapDocument::names`] and the document state it was read from.
     ///
     /// It lives here rather than in the document because the document is
@@ -242,6 +244,14 @@ impl MapEditor {
             self.undo.remove(0);
         }
         self.undo.push((id, replaced));
+    }
+    pub fn can_undo(&self, id: usize) -> bool {
+        self.undo.iter().any(|&(slot, _)| slot == id)
+    }
+    /// Remove and return `id`'s newest replaced shape.
+    pub fn undo(&mut self, id: usize) -> Option<LatticeMap> {
+        let index = self.undo.iter().rposition(|&(slot, _)| slot == id)?;
+        Some(self.undo.remove(index).1)
     }
 }
 

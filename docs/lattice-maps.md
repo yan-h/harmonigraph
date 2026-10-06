@@ -24,8 +24,13 @@ Hover previews the full correction and pitch change;
 a camera drag never commits an edit.
 When host automation switches Map,
 clicks edit whichever map is selected at that moment — the one the lattice's dots show.
-Undo shape edit steps back through the last 64 edits,
-each restoring the map it was made on.
+Undo shape edit steps back through the selected map's own edits,
+so it never rewrites a map that is not on screen.
+All maps share one history of the last 64 edits,
+so heavy editing of one map can push out another's oldest steps.
+An edit that changes nothing,
+such as clicking a node a note already occupies,
+is not recorded and does not mark the project modified.
 Closing the editor keeps that history;
 loading project state clears it,
 because its entries name slots of the document that was replaced.

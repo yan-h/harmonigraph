@@ -64,7 +64,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         pending: playback != adopted,
         names: editor.names(&document),
         edit_shape: editor.edit_shape,
-        can_undo: !editor.undo.is_empty(),
+        can_undo: playback.map.is_some() && editor.can_undo(selected),
         full: document.is_full(),
     }
 }
@@ -83,51 +83,64 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
         (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
     };
-    let document_edit = matches!(
-        &edit,
-        MapEdit::Replace(_)
-            | MapEdit::Undo
-            | MapEdit::Duplicate
-            | MapEdit::Rename(..)
-            | MapEdit::MoveEarlier(_)
-            | MapEdit::Delete(_)
-    );
     let selected = params.map.value().clamp(0, 127) as usize;
-    match edit {
-        MapEdit::Engine(mode) => set(
-            &params.tuning_engine,
-            match mode {
+    // Whether the saved document changed, decided by each arm from what it
+    // did rather than by its variant: a no-op edit must not mark the host
+    // project modified.
+    let document_changed = match edit {
+        MapEdit::Engine(mode) => {
+            let value = match mode {
                 TuningEngine::Off => 0,
                 TuningEngine::Adaptive => 1,
                 TuningEngine::LatticeMap => 2,
-            },
-        ),
-        MapEdit::Select(id) if id < MAP_CAPACITY => set(&params.map, id as i32),
-        MapEdit::Select(_) => {}
-        MapEdit::EditShape(on) => params.map_editor.lock().edit_shape = on,
+            };
+            set(&params.tuning_engine, value);
+            false
+        }
+        MapEdit::Select(id) => {
+            if id < MAP_CAPACITY {
+                set(&params.map, id as i32);
+            }
+            false
+        }
+        MapEdit::EditShape(on) => {
+            params.map_editor.lock().edit_shape = on;
+            false
+        }
         // The document lock is taken before the editor's, in the order `view`
         // takes them.
         MapEdit::Undo => {
             let mut document = params.maps.write();
-            if let Some((id, map)) = params.map_editor.lock().undo.pop() {
-                document.reshape(id, map);
-            }
+            let undone = params.map_editor.lock().undo(selected);
+            undone.is_some_and(|map| document.reshape(selected, map))
         }
-        MapEdit::BeginOffset(axis, lane) => setter.begin_set_parameter(axis_param(axis, lane)),
-        MapEdit::Offset(axis, lane, value) => setter.set_parameter(axis_param(axis, lane), value),
-        MapEdit::EndOffset(axis, lane) => setter.end_set_parameter(axis_param(axis, lane)),
+        MapEdit::BeginOffset(axis, lane) => {
+            setter.begin_set_parameter(axis_param(axis, lane));
+            false
+        }
+        MapEdit::Offset(axis, lane, value) => {
+            setter.set_parameter(axis_param(axis, lane), value);
+            false
+        }
+        MapEdit::EndOffset(axis, lane) => {
+            setter.end_set_parameter(axis_param(axis, lane));
+            false
+        }
         MapEdit::Replace(destination) => {
             let mut document = params.maps.write();
             let mut editor = params.map_editor.lock();
-            if let Some(old) = document.map(selected).filter(|_| editor.edit_shape) {
+            let old = document.map(selected).filter(|_| editor.edit_shape);
+            let reshaped = old.is_some_and(|old| {
                 let mut map = translated(old, offset(params));
-                if map.replace(destination) {
+                map.replace(destination) && {
                     map.position = LatticePos::ORIGIN;
-                    if document.reshape(selected, map) {
-                        editor.record(selected, old);
-                    }
+                    document.reshape(selected, map)
                 }
+            });
+            if let Some(old) = old.filter(|_| reshaped) {
+                editor.record(selected, old);
             }
+            reshaped
         }
         MapEdit::Duplicate => {
             let mut document = params.maps.write();
@@ -138,15 +151,25 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             if let Some(id) = id {
                 set(&params.map, id as i32);
             }
+            id.is_some()
         }
         // Every document mutation goes through a `MapDocument` method, because
         // each one has to move the revision two derived values are keyed on:
         // `MapEditor::names` here, and `AudioMaps::bank` on the audio thread.
-        MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
-        MapEdit::Delete(id) => params.maps.write().delete(id),
-        MapEdit::MoveEarlier(id) => params.maps.write().move_earlier(id),
-    }
-    if document_edit {
+        MapEdit::Rename(id, name) => {
+            params.maps.write().rename(id, name);
+            true
+        }
+        MapEdit::Delete(id) => {
+            params.maps.write().delete(id);
+            true
+        }
+        MapEdit::MoveEarlier(id) => {
+            params.maps.write().move_earlier(id);
+            true
+        }
+    };
+    if document_changed {
         if let Some(mailbox) = params.configuration.get() {
             mailbox.dirty.store(true, std::sync::atomic::Ordering::Release);
         }

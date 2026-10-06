@@ -2334,8 +2334,17 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     device.wrapper().test_inspect_plugin(|plugin| {
         assert!(!crate::lattice_maps::view(&plugin.params).pending);
         let edit = |action| crate::lattice_maps::edit(&plugin.params, &setter, action);
+        let mailbox = plugin.params.configuration.get().unwrap();
+        mailbox.dirty.store(false, std::sync::atomic::Ordering::Release);
         edit(MapEdit::EditShape(true));
+        edit(MapEdit::Replace(map.node(64)));
+        edit(MapEdit::Undo);
+        assert!(
+            !mailbox.dirty.load(std::sync::atomic::Ordering::Acquire),
+            "an edit that changes nothing must not mark the project modified"
+        );
         edit(MapEdit::Replace(destination));
+        assert!(mailbox.dirty.load(std::sync::atomic::Ordering::Acquire));
         let preview = crate::lattice_maps::view(&plugin.params);
         assert!(preview.editing() && preview.can_undo);
         assert_eq!(preview.playback.map, Some(changed));
@@ -2359,6 +2368,10 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let playback = *plugin.params.map_playback.lock();
         assert_eq!(playback.selected, 2, "a duplicate is selected for further edits");
         assert_eq!(playback.map, Some(changed));
+        assert!(
+            !crate::lattice_maps::view(&plugin.params).can_undo,
+            "undo never reaches past the selected map to slot 1's edits"
+        );
     });
     device.load(saved, false);
     device.wrapper().test_inspect_plugin(|plugin| {
