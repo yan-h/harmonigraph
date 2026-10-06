@@ -124,8 +124,8 @@ pub const WASH_POOL_WIDTH_MIN: f32 = 0.05;
 /// See [`WASH_POOL_WIDTH_MIN`].
 pub const WASH_POOL_WIDTH_MAX: f32 = 1.0;
 
-/// The top of [`StarSettings::star_solid_far`] and
-/// [`StarSettings::star_solid_near`], as a share of the star's radius: the
+/// The top of every depth's [`StarSettings::star_solid`], as a share of the
+/// star's radius: the
 /// glow keeps a tenth of the radius at least, so no star has a hard edge to
 /// alias as it drifts.
 pub const STAR_SOLID_MAX: f32 = 0.9;
@@ -149,9 +149,8 @@ pub const STAR_RESOLUTION_MAX: f32 = 1.0;
 /// more of a 4K frame.
 pub const STAR_RESOLUTION_STEP: f32 = 0.25;
 
-/// Bounds shared by the two ends of the `Star spacing` control
-/// ([`StarSettings::star_spacing_ratio_far`], [`StarSettings::star_spacing_ratio_near`])
-/// and their sanitizer, in multiples of the depth's star size.
+/// Bounds of every depth's `Star spacing` ([`StarSettings::star_spacing_ratio`])
+/// and its sanitizer, in multiples of the depth's star size.
 ///
 /// The low end is the closest a star of any size can sit and still be read
 /// whole by the widest gather at full `Position variation`:
@@ -161,10 +160,8 @@ pub const STAR_RESOLUTION_STEP: f32 = 0.25;
 pub const STAR_SPACING_MIN: f32 = 5.0 / 12.0;
 /// See [`STAR_SPACING_MIN`].
 pub const STAR_SPACING_MAX: f32 = 32.0;
-/// Bounds shared by the two ends of the `Star size` control
-/// ([`StarSettings::star_size_far`], [`StarSettings::star_size_near`])
-/// and their sanitizer: a star's whole diameter, glow included, in star
-/// pixels.
+/// Bounds of every depth's `Star size` ([`StarSettings::star_size`]) and its
+/// sanitizer: a star's whole diameter, glow included, in star pixels.
 pub const STAR_SIZE_MIN: f32 = 0.5;
 /// See [`STAR_SIZE_MIN`].
 pub const STAR_SIZE_MAX: f32 = 64.0;
@@ -174,25 +171,14 @@ pub const STAR_SIZE_MAX: f32 = 64.0;
 /// stored, so both panes share one [`StarSettings::default`] and a key a blob
 /// lacks takes the right fresh value in either.
 pub const LATTICE_STAR_SIZE_SCALE: f32 = 5.0;
-/// Bounds shared by the two depth curves, [`StarSettings::star_spacing_ratio_curve`]
-/// and [`StarSettings::star_size_curve`], and their sanitizer.
-pub const STAR_DEPTH_CURVE_MIN: f32 = 0.5;
-/// See [`STAR_DEPTH_CURVE_MIN`].
-pub const STAR_DEPTH_CURVE_MAX: f32 = 4.0;
-/// Bounds shared by the two ends of the `Star speed` control
-/// ([`StarSettings::star_speed_far`], [`StarSettings::star_speed_near`])
-/// and their sanitizer, as a share of the prototype's pace: at the top a depth
+/// Bounds of every depth's `Star speed` ([`StarSettings::star_speed`]) and
+/// its sanitizer, as a share of the prototype's pace: at the top a depth
 /// crosses the pane's height in about nine seconds. The top was once 5, and
 /// everything past 1 was too fast to use while it crowded the useful range
 /// into a fifth of the track.
 pub const STAR_SPEED_MIN: f32 = 0.0;
 /// See [`STAR_SPEED_MIN`].
 pub const STAR_SPEED_MAX: f32 = 1.0;
-/// Bounds shared by the [`StarSettings::star_speed_curve`] control and
-/// sanitizer.
-pub const STAR_SPEED_CURVE_MIN: f32 = 0.25;
-/// See [`STAR_SPEED_CURVE_MIN`].
-pub const STAR_SPEED_CURVE_MAX: f32 = 4.0;
 /// Longest color-memory time constant in seconds.
 pub const COLOR_MEMORY_MAX: f32 = 5.0;
 
@@ -444,77 +430,51 @@ pub struct StarSettings {
     pub star_jitter: f32,
     /// How many depths the starfield draws, from
     /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
-    /// farthest and the nearest, with the rest spaced evenly between, so every
-    /// far-to-near control spreads over just these
-    /// ([`crate::star_plan::star_layer_depths`]).
+    /// back and the front, with the rest spaced evenly between, each in
+    /// the depth nearest its place ([`crate::star_plan::star_layer_depths`]).
     pub star_layers: u32,
-    /// The farthest depth's star spacing, as a multiple of its star size. A
-    /// depth `d` from 0 (far) to 1 (near) spaces its stars at
-    /// `far · (near / far)^(d^curve)` times its own [`Self::star_size_far`]
-    /// curve's size. Every cell holds a star, so at one value a depth's stars
-    /// cover the same share of the sky whatever their size. Runs over
+    /// Each depth's star spacing, back (0) to front, as a multiple of its own
+    /// [`Self::star_size`]. Every cell holds a star, so at one value a depth's
+    /// stars cover the same share of the sky whatever their size. Runs over
     /// [`STAR_SPACING_MIN`]..=[`STAR_SPACING_MAX`], whose low end is what
-    /// holds every star whole. Either end may be the larger, so the near
-    /// stars can be the denser ones.
-    pub star_spacing_ratio_far: f32,
-    /// The nearest depth's star spacing. See [`Self::star_spacing_ratio_far`].
-    pub star_spacing_ratio_near: f32,
-    /// The exponent on depth in the spacing: 1 spreads it evenly over the
-    /// depths, higher puts most depths in the fine dust. Runs over
-    /// [`STAR_DEPTH_CURVE_MIN`]..=[`STAR_DEPTH_CURVE_MAX`].
-    pub star_spacing_ratio_curve: f32,
-    /// The farthest depth's star size: the whole star's diameter, glow
-    /// included, in star pixels. A depth `d` spreads it like the spacing,
-    /// `far · (near / far)^(d^curve)`, and the size is a function of that value
-    /// alone, so one value on the control is one star size at every depth,
-    /// always drawn as set: the spacing is a multiple of it
-    /// ([`Self::star_spacing_ratio_far`]). Runs over
+    /// holds every star whole, in any order across the depths.
+    ///
+    /// This and the other per-depth arrays hold a value for every depth, drawn
+    /// or not: a depth `Star layers` leaves out keeps its own for when it is
+    /// drawn again.
+    pub star_spacing_ratio: [f32; crate::star_plan::STAR_DEPTHS],
+    /// Each depth's star size, back (0) to front: the whole star's diameter,
+    /// glow included, in star pixels, always drawn as set, since the spacing
+    /// is a multiple of it ([`Self::star_spacing_ratio`]). Runs over
     /// [`STAR_SIZE_MIN`]..=[`STAR_SIZE_MAX`] (the lattice draws it
-    /// [`LATTICE_STAR_SIZE_SCALE`] times over). Either end may be the larger,
-    /// so the near stars can be the smaller ones.
-    pub star_size_far: f32,
-    /// The nearest depth's star size. See [`Self::star_size_far`].
-    pub star_size_near: f32,
-    /// The exponent on depth in the size, as [`Self::star_spacing_ratio_curve`].
-    pub star_size_curve: f32,
-    /// The farthest depth's drift speed. A depth `d` from 0 (far) to 1 (near)
-    /// drifts at `far + (near - far) d^curve`, along the
-    /// shared `Drift direction`; the stars never read `cloud_speed`, which is
-    /// the other textures' pace. Runs over
-    /// [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`]. Either end may be the faster,
-    /// so the near stars can drift slower than the far ones.
-    pub star_speed_far: f32,
-    /// The nearest depth's drift speed. See
-    /// [`Self::star_speed_far`].
-    pub star_speed_near: f32,
-    /// The exponent on depth in the parallax, between the two ends of
-    /// [`Self::star_speed_far`]. 1 steps the speeds evenly. Runs over
-    /// [`STAR_SPEED_CURVE_MIN`]..=[`STAR_SPEED_CURVE_MAX`].
-    pub star_speed_curve: f32,
+    /// [`LATTICE_STAR_SIZE_SCALE`] times over), in any order across the
+    /// depths.
+    pub star_size: [f32; crate::star_plan::STAR_DEPTHS],
+    /// Each depth's drift speed, back (0) to front, along the shared `Drift
+    /// direction`; the stars never read `cloud_speed`, which is the other
+    /// textures' pace. Runs over [`STAR_SPEED_MIN`]..=[`STAR_SPEED_MAX`], in
+    /// any order across the depths, so the front stars can drift slower than
+    /// the back ones.
+    pub star_speed: [f32; crate::star_plan::STAR_DEPTHS],
     /// How long one star lives, in seconds, before its cell draws a new one,
     /// alike at every depth. Each fades in and out over its life, as far as
-    /// [`Self::star_twinkle_far`] says. Runs over
+    /// [`Self::star_twinkle`] says. Runs over
     /// [`STAR_LIFETIME_MIN`]..=[`STAR_LIFETIME_MAX`].
     pub star_lifetime: f32,
-    /// How far the farthest depth's stars fade out as one life gives way to
-    /// the next, over 0..=1. At 1 each star fades to nothing and the next is
-    /// drawn somewhere new in its cell. Below 1 a cell's star keeps its place
-    /// across lives, dips only this far, and blends into the next life's
-    /// brightness and size, so at 0 a layer dense enough to cover the sky
-    /// never opens a hole. A depth `d` from 0 (far) to 1 (near) takes
-    /// `far + (near - far) d`.
-    pub star_twinkle_far: f32,
-    /// The nearest depth's twinkle. See [`Self::star_twinkle_far`].
-    pub star_twinkle_near: f32,
-    /// How much of the farthest depth's stars is solid: the share of the
-    /// star's radius at full coverage, the rest being glow that falls to
-    /// nothing at the star's edge ([`crate::star_plan::star_profile`]). A depth
-    /// `d` takes `far + (near - far) d^curve` on the `Star size` curve, so a
+    /// How far each depth's stars fade out as one life gives way to the next,
+    /// back (0) to front, over 0..=1. At 1 each star fades to nothing and the
+    /// next is drawn somewhere new in its cell. Below 1 a cell's star keeps
+    /// its place across lives, dips only this far, and blends into the next
+    /// life's brightness and size, so at 0 a layer dense enough to cover the
+    /// sky never opens a hole.
+    pub star_twinkle: [f32; crate::star_plan::STAR_DEPTHS],
+    /// How much of each depth's stars is solid, back (0) to front: the share of
+    /// the star's radius at full coverage, the rest being glow that falls to
+    /// nothing at the star's edge ([`crate::star_plan::star_profile`]), so a
     /// dense bed of solid far stars can sit behind near stars that are all
-    /// glow. Runs over `0..=`[`STAR_SOLID_MAX`], either way round.
-    pub star_solid_far: f32,
-    /// The nearest depth's solid share. See [`Self::star_solid_far`].
-    pub star_solid_near: f32,
+    /// glow. Runs over `0..=`[`STAR_SOLID_MAX`], in any order across the
+    /// depths.
+    pub star_solid: [f32; crate::star_plan::STAR_DEPTHS],
     /// How the glow falls from the solid edge to the star's edge, over 0..=1:
     /// 0 stays bright almost to the edge, 0.5 falls evenly, 1 drops at once
     /// and leaves a long faint tail ([`crate::star_plan::star_falloff_bend`]).
@@ -547,11 +507,19 @@ impl Default for StarSettings {
             star_jitter: 0.5,
             star_layers: crate::star_plan::STAR_DEPTHS as u32,
             // The captured spacings (1.036..6.597 star pixels, curve 2.118)
-            // over the sizes below, fitted within 1% at all five depths. The
-            // nearest sits at the floor, as close as its stars ever fit.
-            star_spacing_ratio_far: 0.624,
-            star_spacing_ratio_near: STAR_SPACING_MIN,
-            star_spacing_ratio_curve: 3.5,
+            // over the sizes below, fitted within 1% at all five depths, then
+            // taken off the fitted curve (far 0.624, near the floor, exponent
+            // 3.5) when each depth got its own. The nearest sits at the floor,
+            // as close as its stars ever fit: an ulp above STAR_SPACING_MIN,
+            // where the curve left it.
+            //
+            // These per-depth values are the old curves' own f32 results on
+            // Apple's `powf`, printed exactly: star cells key placement, so an
+            // ulp moves stars, and values rounded or worked out on another
+            // platform's `powf` moved the starfield goldens by 1/255. At four
+            // layers the curves were read at thirds, so the second and third
+            // drawn layers differ from before.
+            star_spacing_ratio: [0.624, 0.62203425, 0.602118, 0.53839743, 0.4166667],
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
             // three just inside the 2x2 read (0.80-0.82 of a cell) so they
@@ -560,21 +528,19 @@ impl Default for StarSettings {
             // core is the old one's share. The gentle falloff holds the far
             // stars near full coverage out to half a cell, as the old fringe
             // on a wide core did; at 0.7 the fresh frame of the time sat
-            // 5.6/255 from the old one on average.
-            star_size_far: 1.66,
-            star_size_near: 15.8,
-            star_size_curve: 2.3,
-            star_speed_far: 0.08931082,
-            star_speed_near: 0.16860056,
-            star_speed_curve: 3.179647,
+            // 5.6/255 from the old one on average. Taken, like the spacing,
+            // off the curve it was set as: 1.66 to 15.8 in octaves, exponent
+            // 2.3.
+            star_size: [1.66, 1.8216218, 2.6231027, 5.309201, 15.799999],
+            // The captured 0.0893 to 0.1686, exponent 3.18, per depth.
+            star_speed: [0.08931082, 0.0902766, 0.09806162, 0.12107633, 0.16860056],
             star_lifetime: 2.9719827,
             // Every star fades to nothing and is drawn anew, as before the dial.
-            star_twinkle_far: 1.0,
-            star_twinkle_near: 1.0,
+            star_twinkle: [1.0; crate::star_plan::STAR_DEPTHS],
             // Fitted to the Gaussian-core-and-glow stars this replaced, at their
-            // fresh dials, over the star's area at every depth.
-            star_solid_far: 0.48,
-            star_solid_near: 0.0,
+            // fresh dials, over the star's area at every depth: 48% far to 0%
+            // near, on the size's curve.
+            star_solid: [0.48, 0.46020737, 0.3825297, 0.23232502, 0.0],
             star_glow_falloff: 0.5,
             // Between the old Medium preset's 50% far and 75% near images:
             // sharper than Medium, cheaper than High.
@@ -587,11 +553,7 @@ impl StarSettings {
     /// These settings with every size `scale` times over, and so every
     /// spacing: what the lattice draws, at [`LATTICE_STAR_SIZE_SCALE`].
     pub fn scaled(self, scale: f32) -> Self {
-        Self {
-            star_size_far: self.star_size_far * scale,
-            star_size_near: self.star_size_near * scale,
-            ..self
-        }
+        Self { star_size: self.star_size.map(|size| size * scale), ..self }
     }
     pub fn sanitized(mut self) -> Self {
         let fresh = Self::default();
@@ -608,63 +570,26 @@ impl StarSettings {
         self.star_jitter = clamp(self.star_jitter, fresh.star_jitter, 0.0, 1.0);
         self.star_layers =
             self.star_layers.clamp(STAR_LAYERS_MIN, crate::star_plan::STAR_DEPTHS as u32);
-        // Each pair runs far to near and may run either way, so its ends are
-        // clamped apart and never reordered.
-        let pair = |far: &mut f32,
-                    near: &mut f32,
-                    fresh: [f32; 2],
-                    range: std::ops::RangeInclusive<f32>| {
-            let (low, high) = range.into_inner();
-            *far = clamp(*far, fresh[0], low, high);
-            *near = clamp(*near, fresh[1], low, high);
+        // Each per-depth array runs back to front and may run either way, so its
+        // values are clamped one by one and never reordered.
+        let depths = |values: &mut [f32; crate::star_plan::STAR_DEPTHS],
+                      fresh: [f32; crate::star_plan::STAR_DEPTHS],
+                      (low, high): (f32, f32)| {
+            for (value, fresh) in values.iter_mut().zip(fresh) {
+                *value = clamp(*value, fresh, low, high);
+            }
         };
-        pair(
-            &mut self.star_spacing_ratio_far,
-            &mut self.star_spacing_ratio_near,
-            [fresh.star_spacing_ratio_far, fresh.star_spacing_ratio_near],
-            STAR_SPACING_MIN..=STAR_SPACING_MAX,
+        depths(
+            &mut self.star_spacing_ratio,
+            fresh.star_spacing_ratio,
+            (STAR_SPACING_MIN, STAR_SPACING_MAX),
         );
-        pair(
-            &mut self.star_size_far,
-            &mut self.star_size_near,
-            [fresh.star_size_far, fresh.star_size_near],
-            STAR_SIZE_MIN..=STAR_SIZE_MAX,
-        );
-        self.star_spacing_ratio_curve = clamp(
-            self.star_spacing_ratio_curve,
-            fresh.star_spacing_ratio_curve,
-            STAR_DEPTH_CURVE_MIN,
-            STAR_DEPTH_CURVE_MAX,
-        );
-        self.star_size_curve = clamp(
-            self.star_size_curve,
-            fresh.star_size_curve,
-            STAR_DEPTH_CURVE_MIN,
-            STAR_DEPTH_CURVE_MAX,
-        );
-        pair(
-            &mut self.star_speed_far,
-            &mut self.star_speed_near,
-            [fresh.star_speed_far, fresh.star_speed_near],
-            STAR_SPEED_MIN..=STAR_SPEED_MAX,
-        );
-        self.star_speed_curve = clamp(
-            self.star_speed_curve,
-            fresh.star_speed_curve,
-            STAR_SPEED_CURVE_MIN,
-            STAR_SPEED_CURVE_MAX,
-        );
+        depths(&mut self.star_size, fresh.star_size, (STAR_SIZE_MIN, STAR_SIZE_MAX));
+        depths(&mut self.star_speed, fresh.star_speed, (STAR_SPEED_MIN, STAR_SPEED_MAX));
         self.star_lifetime =
             clamp(self.star_lifetime, fresh.star_lifetime, STAR_LIFETIME_MIN, STAR_LIFETIME_MAX);
-        pair(
-            &mut self.star_twinkle_far,
-            &mut self.star_twinkle_near,
-            [fresh.star_twinkle_far, fresh.star_twinkle_near],
-            0.0..=1.0,
-        );
-        self.star_solid_far = clamp(self.star_solid_far, fresh.star_solid_far, 0.0, STAR_SOLID_MAX);
-        self.star_solid_near =
-            clamp(self.star_solid_near, fresh.star_solid_near, 0.0, STAR_SOLID_MAX);
+        depths(&mut self.star_twinkle, fresh.star_twinkle, (0.0, 1.0));
+        depths(&mut self.star_solid, fresh.star_solid, (0.0, STAR_SOLID_MAX));
         self.star_glow_falloff = clamp(self.star_glow_falloff, fresh.star_glow_falloff, 0.0, 1.0);
         self.star_resolution = (clamp(
             self.star_resolution,

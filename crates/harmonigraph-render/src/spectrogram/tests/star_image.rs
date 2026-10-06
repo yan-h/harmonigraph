@@ -128,16 +128,15 @@ fn star_images_cover_partial_panes_at_fractional_scale() {
             settings.stars.star_jitter = jitter;
             settings.stars.star_resolution = resolution;
             settings.cloud_depth = 0.65;
-            (settings.stars.star_solid_far, settings.stars.star_solid_near) =
-                (harmonigraph_scene::STAR_SOLID_MAX, harmonigraph_scene::STAR_SOLID_MAX);
+            settings.stars.star_solid = [harmonigraph_scene::STAR_SOLID_MAX; 5];
             // Far stars spaced so 2x2 holds them at every jitter: its bound
             // shrinks to 0.7 cells at 1, where the fresh spacing needs 3x3 and
             // the wide reference would compare the frame with itself. Every
             // depth's stars are wider than a texel of the 25% image (17 star
             // pixels), or the texel floor would read them all 3x3; size
             // variation still floors the smallest.
-            settings.stars.star_spacing_ratio_far = 0.8;
-            (settings.stars.star_size_far, settings.stars.star_size_near) = (40.0, 40.0);
+            settings.stars.star_spacing_ratio[..3].fill(0.8);
+            settings.stars.star_size = [40.0; 5];
             let layout = atmosphere::star_layout(settings.stars, cb.rect.aspect_ratio());
             let image = atmosphere::star_image_size([161, 121], settings.stars);
             let slices = atmosphere::star_slices(settings.stars, 0.0, 0.0, &layout, image);
@@ -226,11 +225,10 @@ fn a_drawn_star_follows_the_cpu_profile() {
         // neighbour's light adds in.
         stars.star_solo = [false, false, false, false, true];
         stars.star_resolution = 1.0;
-        (stars.star_size_far, stars.star_size_near) = (64.0, 64.0);
-        (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (2.0, 2.0);
-        (stars.star_speed_far, stars.star_speed_near) = (0.0, 0.0);
+        (stars.star_size, stars.star_spacing_ratio) = ([64.0; 5], [2.0; 5]);
+        stars.star_speed = [0.0; 5];
         (stars.star_jitter, stars.star_size_variation) = (0.0, 0.0);
-        (stars.star_solid_far, stars.star_solid_near) = (solid, solid);
+        stars.star_solid = [solid; 5];
         stars.star_glow_falloff = falloff;
         let depth = stars.plan().depths[4];
         assert_eq!(depth.gather, StarGather::Core);
@@ -286,10 +284,10 @@ fn a_core_depth_draws_its_stars_whole() {
         stars.star_jitter = jitter;
         let core = harmonigraph_scene::star_plan::StarGather::Core.bound(jitter);
         let spacing = 1.001 * 0.5 / core;
-        (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (spacing, spacing);
+        stars.star_spacing_ratio = [spacing; 5];
         // Wider than a texel of the 75% image (6 star pixels), or the texel
         // floor would read them 3x3.
-        (stars.star_size_far, stars.star_size_near) = (16.0, 16.0);
+        stars.star_size = [16.0; 5];
         let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
         let image = atmosphere::star_image_size([161, 121], *stars);
         let slices = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image);
@@ -327,15 +325,14 @@ fn a_layer_that_does_not_twinkle_never_shows_a_gap() {
     let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
     stars.star_solo = [false, false, false, false, true];
     stars.star_resolution = 1.0;
-    (stars.star_size_far, stars.star_size_near) = (30.0, 30.0);
-    let closest = harmonigraph_scene::STAR_SPACING_MIN;
-    (stars.star_spacing_ratio_far, stars.star_spacing_ratio_near) = (closest, closest);
+    stars.star_size = [30.0; 5];
+    stars.star_spacing_ratio = [harmonigraph_scene::STAR_SPACING_MIN; 5];
     (stars.star_jitter, stars.star_size_variation, stars.star_randomness) = (1.0, 0.0, 0.0);
-    (stars.star_solid_far, stars.star_solid_near, stars.star_glow_falloff) = (0.9, 0.9, 0.0);
+    (stars.star_solid, stars.star_glow_falloff) = ([0.9; 5], 0.0);
     let mut darkest = Vec::new();
     for twinkle in [0.0, 1.0] {
         let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
-        (stars.star_twinkle_far, stars.star_twinkle_near) = (twinkle, twinkle);
+        stars.star_twinkle = [twinkle; 5];
         let mut resources = CallbackResources::default();
         let mut sums = Vec::new();
         // A dozen moments over four lives, so every cell turns over.
@@ -382,9 +379,9 @@ fn stars_narrower_than_a_texel_all_show() {
     let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
     stars.star_solo = [true, false, false, false, false];
     stars.star_resolution = 0.25;
-    (stars.star_size_far, stars.star_spacing_ratio_far, stars.star_jitter) = (4.0, 8.0, 0.0);
+    (stars.star_size[0], stars.star_spacing_ratio[0], stars.star_jitter) = (4.0, 8.0, 0.0);
     (stars.star_size_variation, stars.star_randomness) = (0.0, 0.0);
-    (stars.star_twinkle_far, stars.star_twinkle_near) = (0.0, 0.0);
+    stars.star_twinkle = [0.0; 5];
     let layout = atmosphere::star_layout(*stars, cb.rect.aspect_ratio());
     let image = atmosphere::star_image_size([width, height], *stars);
     let slice = atmosphere::star_slices(*stars, 0.0, 0.0, &layout, image)[0];

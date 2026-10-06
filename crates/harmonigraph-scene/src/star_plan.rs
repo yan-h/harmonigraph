@@ -6,7 +6,8 @@
 //! nothing in it is ever stale.
 use crate::StarSettings;
 
-/// How many depths the starfield draws, far (0) to near. The renderer's
+/// How many depths the starfield draws, back (0) to front: each is drawn over
+/// the ones before it, which is all a depth's number decides. The renderer's
 /// `STAR_SLICES`.
 pub const STAR_DEPTHS: usize = 5;
 /// Which cells a pixel reads to draw one depth's stars.
@@ -71,10 +72,10 @@ pub fn star_falloff_bend(falloff: f32) -> f32 {
     16f32.powf(2.0 * falloff - 1.0) - 1.0
 }
 
-/// Where each depth sits from far (0) to near (1) at `Star layers` `layers`,
+/// Where each depth sits from back (0) to front (1) at `Star layers` `layers`,
 /// or `None` where it is not drawn. Layer `i` of `n` sits at `i / (n - 1)`,
 /// in the depth whose own place at five layers is nearest: two layers are the
-/// farthest and the nearest, three add the middle.
+/// back and the front, three add the middle.
 pub fn star_layer_depths(layers: u32) -> [Option<f32>; STAR_DEPTHS] {
     let n = (layers as usize).clamp(2, STAR_DEPTHS);
     let mut depths = [None; STAR_DEPTHS];
@@ -99,12 +100,8 @@ pub struct StarDepthPlan {
     /// atlas gives it, with the stars widened to the star image's texel
     /// (`star_slices`), so the read drawn may differ either way.
     pub gather: StarGather,
-    /// Where the depth sits from far (0) to near (1): its layer's place among
-    /// `Star layers` ([`star_layer_depths`]), or its own place at five layers
-    /// where it is not drawn. Every far-to-near control is read here.
-    pub depth: f32,
     /// How fast the depth drifts, as a multiple of the renderer's star pixels
-    /// a second: `far + (near - far) d^curve` over `Star speed`.
+    /// a second: its own `Star speed`.
     pub speed: f32,
     /// The cell one star is hashed into, in star pixels, before the atlas's
     /// floor: the depth's star size times its `Star spacing`.
@@ -114,12 +111,10 @@ pub struct StarDepthPlan {
     /// [`Self::gather`], because `Star spacing` never runs below
     /// [`crate::STAR_SPACING_MIN`].
     pub radius: f32,
-    /// The star's solid share ([`star_profile`]), between
-    /// [`StarSettings::star_solid_far`] and [`StarSettings::star_solid_near`].
+    /// The star's solid share ([`star_profile`]): its own `Solid`.
     pub solid: f32,
-    /// How far its stars fade as one life gives way to the next, between
-    /// [`StarSettings::star_twinkle_far`] and [`StarSettings::star_twinkle_near`]
-    /// evenly in depth. Below 1 a star keeps its place across its lives.
+    /// How far its stars fade as one life gives way to the next: its own
+    /// `Twinkle`. Below 1 a star keeps its place across its lives.
     pub twinkle: f32,
 }
 
@@ -135,35 +130,19 @@ impl StarSettings {
     pub fn plan(self) -> StarPlan {
         let layers = star_layer_depths(self.star_layers);
         let drawn = |k: usize| layers[k].is_some();
-        let place = |k: usize| layers[k].unwrap_or(k as f32 / (STAR_DEPTHS - 1) as f32);
-        let depth = |k: usize, curve: f32| place(k).powf(curve);
-        let along = |k, small: f32, big: f32, curve| small * (big / small).powf(depth(k, curve));
         let jitter = self.star_jitter;
         let depths = std::array::from_fn(|k| {
-            let (spacing, size) = (self.star_spacing_ratio_curve, self.star_size_curve);
-            let diameter = along(k, self.star_size_far, self.star_size_near, size);
-            let ratio =
-                along(k, self.star_spacing_ratio_far, self.star_spacing_ratio_near, spacing);
-            let (cell, radius) = (ratio * diameter, 0.5 * diameter);
+            let diameter = self.star_size[k];
+            let (cell, radius) = (self.star_spacing_ratio[k] * diameter, 0.5 * diameter);
             let gather =
                 if !drawn(k) { StarGather::Off } else { StarGather::holding(radius, cell, jitter) };
             StarDepthPlan {
                 gather,
-                depth: place(k),
-                speed: {
-                    let (far, near) = (self.star_speed_far, self.star_speed_near);
-                    far + (near - far) * depth(k, self.star_speed_curve)
-                },
+                speed: self.star_speed[k],
                 cell,
                 radius,
-                solid: {
-                    let (far, near) = (self.star_solid_far, self.star_solid_near);
-                    far + (near - far) * depth(k, size)
-                },
-                twinkle: {
-                    let (far, near) = (self.star_twinkle_far, self.star_twinkle_near);
-                    far + (near - far) * place(k)
-                },
+                solid: self.star_solid[k],
+                twinkle: self.star_twinkle[k],
             }
         });
         StarPlan { depths }
@@ -183,11 +162,7 @@ mod tests {
         use StarGather::{Three, Two};
         assert_eq!(gathers, [Two, Two, Two, Three, Three]);
 
-        let sparse = StarSettings {
-            star_spacing_ratio_far: 2.0,
-            star_spacing_ratio_near: 2.0,
-            ..Default::default()
-        };
+        let sparse = StarSettings { star_spacing_ratio: [2.0; STAR_DEPTHS], ..Default::default() };
         assert!(sparse.plan().depths.iter().all(|depth| depth.gather == StarGather::Core));
     }
 
@@ -199,10 +174,8 @@ mod tests {
     fn a_star_is_drawn_at_its_size_and_held_whole_by_its_spacing() {
         for size in [crate::STAR_SIZE_MIN, 15.8, crate::STAR_SIZE_MAX] {
             let tight = StarSettings {
-                star_size_far: size,
-                star_size_near: size,
-                star_spacing_ratio_far: crate::STAR_SPACING_MIN,
-                star_spacing_ratio_near: crate::STAR_SPACING_MIN,
+                star_size: [size; STAR_DEPTHS],
+                star_spacing_ratio: [crate::STAR_SPACING_MIN; STAR_DEPTHS],
                 star_jitter: 1.0,
                 ..Default::default()
             };
@@ -216,32 +189,37 @@ mod tests {
         }
     }
 
-    /// Every far-to-near pair runs either way: a reversed one survives the
-    /// load boundary as it was set, and the far depth then gets the bigger
+    /// Every far-to-near control runs either way: a reversed one survives
+    /// the load boundary as it was set, and the far depth then gets the bigger
     /// end.
     #[test]
-    fn a_reversed_pair_is_kept_and_drawn_reversed() {
+    fn a_reversed_control_is_kept_and_drawn_reversed() {
         let fresh = StarSettings::default();
+        let reversed = |mut values: [f32; STAR_DEPTHS]| {
+            values.reverse();
+            values
+        };
         let reversed = StarSettings {
-            star_spacing_ratio_far: fresh.star_spacing_ratio_near,
-            star_spacing_ratio_near: fresh.star_spacing_ratio_far,
-            star_size_far: fresh.star_size_near,
-            star_size_near: fresh.star_size_far,
-            star_speed_far: fresh.star_speed_near,
-            star_speed_near: fresh.star_speed_far,
+            star_spacing_ratio: reversed(fresh.star_spacing_ratio),
+            star_size: reversed(fresh.star_size),
+            star_speed: reversed(fresh.star_speed),
             ..fresh
         };
         assert_eq!(reversed.sanitized(), reversed);
         let [far, .., near] = reversed.plan().depths;
-        assert!(far.cell > near.cell && far.radius > near.radius);
+        assert!(far.cell > near.cell && far.radius > near.radius && far.speed > near.speed);
     }
 
     /// Fewer layers keep the farthest and the nearest and space the rest
-    /// evenly between, each in the depth nearest its place, and every
-    /// far-to-near control spreads over just the drawn ones.
+    /// evenly between, each in the depth nearest its place, and each drawn
+    /// one takes that depth's own size, spacing, speed, solid and twinkle.
     #[test]
     fn star_layers_keep_both_ends_and_spread_the_rest() {
-        let fresh = StarSettings::default();
+        let fresh = StarSettings {
+            star_solid: [0.1, 0.2, 0.3, 0.4, 0.5],
+            star_twinkle: [0.9, 0.8, 0.7, 0.6, 0.5],
+            ..Default::default()
+        };
         for (layers, drawn) in [
             (2, vec![(0, 0.0), (4, 1.0)]),
             (3, vec![(0, 0.0), (2, 0.5), (4, 1.0)]),
@@ -249,42 +227,20 @@ mod tests {
             (5, vec![(0, 0.0), (1, 0.25), (2, 0.5), (3, 0.75), (4, 1.0)]),
         ] {
             let plan = StarSettings { star_layers: layers, ..fresh }.plan();
-            let got: Vec<_> = (0..STAR_DEPTHS)
-                .filter(|&k| plan.depths[k].gather != StarGather::Off)
-                .map(|k| (k, plan.depths[k].depth))
-                .collect();
+            let places = star_layer_depths(layers);
+            let got: Vec<_> = (0..STAR_DEPTHS).filter_map(|k| places[k].map(|d| (k, d))).collect();
             assert_eq!(got, drawn, "{layers} layers");
-            let [far, .., near] = plan.depths;
-            let cells =
-                |far: f32, near: f32| (far * fresh.star_size_far, near * fresh.star_size_near);
-            let want = cells(fresh.star_spacing_ratio_far, fresh.star_spacing_ratio_near);
-            assert_eq!((far.cell, near.cell), want);
-            assert_eq!((far.speed, near.speed), (fresh.star_speed_far, fresh.star_speed_near));
+            for (k, (depth, place)) in plan.depths.into_iter().zip(places).enumerate() {
+                assert_eq!(depth.gather == StarGather::Off, place.is_none(), "{layers}: {k}");
+                let size = fresh.star_size[k];
+                assert_eq!(depth.cell, fresh.star_spacing_ratio[k] * size, "{layers} layers");
+                assert_eq!((depth.radius, depth.speed), (0.5 * size, fresh.star_speed[k]));
+                assert_eq!(
+                    (depth.solid, depth.twinkle),
+                    (fresh.star_solid[k], fresh.star_twinkle[k])
+                );
+            }
         }
-        let middle = StarSettings { star_layers: 3, ..fresh }.plan().depths[2];
-        let half = |far: f32, near: f32, curve: f32| far * (near / far).powf(0.5f32.powf(curve));
-        let ratio = half(
-            fresh.star_spacing_ratio_far,
-            fresh.star_spacing_ratio_near,
-            fresh.star_spacing_ratio_curve,
-        );
-        let want = ratio * half(fresh.star_size_far, fresh.star_size_near, fresh.star_size_curve);
-        assert!((middle.cell - want).abs() < 1e-5 * want, "{} vs {want}", middle.cell);
-    }
-
-    /// Twinkle runs evenly in depth over the drawn layers, whatever the Star
-    /// size curve, and a 100% end draws that layer as before the dial.
-    #[test]
-    fn twinkle_runs_evenly_in_depth() {
-        let three = StarSettings {
-            star_layers: 3,
-            star_twinkle_far: 0.3,
-            star_twinkle_near: 1.0,
-            ..Default::default()
-        };
-        let [far, _, middle, _, near] = three.plan().depths;
-        assert_eq!((far.twinkle, near.twinkle), (0.3, 1.0));
-        assert!((middle.twinkle - 0.65).abs() < 1e-6, "{}", middle.twinkle);
     }
 
     /// A star is full out to its solid share and nothing at its edge, its glow

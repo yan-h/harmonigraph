@@ -382,7 +382,10 @@ pub(super) fn paint_thumbs<const N: usize>(
 ///
 /// Letting go forgets the grab: egui's temp store has no expiry, so a grab left
 /// behind is inherited by the next press
-/// (`a_second_gesture_on_the_strip_chooses_for_itself`). The `Default` bound is
+/// (`a_second_gesture_on_the_strip_chooses_for_itself`). A gesture let go of
+/// while its control was not drawn never sees its own `drag_stopped`, so a
+/// drag's first frame decides afresh whatever it finds
+/// (`a_line_lost_mid_drag_does_not_anchor_the_next_one`). The `Default` bound is
 /// egui's, asked of anything `remove_temp` can remove, and is the whole reason
 /// each grab type derives one.
 ///
@@ -400,7 +403,8 @@ where
     let id = response.id.with("grab");
     let held = if response.dragged() {
         response.interact_pointer_pos().map(|live| {
-            let grab = match ui.data(|d| d.get_temp::<G>(id)) {
+            let held = ui.data(|d| d.get_temp::<G>(id)).filter(|_| !response.drag_started());
+            let grab = match held {
                 Some(grab) => grab,
                 None => {
                     let grab = decide(aimed_at(ui, live));
