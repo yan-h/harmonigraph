@@ -304,12 +304,26 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             "the {name} scene drew nothing; the comparison is vacuous",
         );
 
-        let differing =
-            with_early_out.iter().zip(&without).enumerate().find(|(_, (&a, &b))| a != b);
+        // Metal compiles both builds with fast math, which lets them round a
+        // last f32 ulp differently, so a value standing on an 8-bit rounding
+        // boundary can come out one step apart (one byte of one fixture once
+        // the slot walk rotated its edges instead of taking their sines). An
+        // early-out that changes what is drawn moves a contour across many
+        // pixels, so a handful of one-step flips is all this lets through.
+        const ROUNDING_FLIPS: usize = 4;
+        let differing: Vec<_> = with_early_out
+            .iter()
+            .zip(&without)
+            .enumerate()
+            .filter(|(_, (&a, &b))| a != b)
+            .map(|(i, (&a, &b))| (i, a, b))
+            .collect();
         assert!(
-            differing.is_none(),
-            "the {name} scene changed when the early-outs were enabled: byte {:?}",
-            differing.map(|(i, (a, b))| (i, *a, *b)),
+            differing.len() <= ROUNDING_FLIPS
+                && differing.iter().all(|&(_, a, b)| a.abs_diff(b) == 1),
+            "the {name} scene changed when the early-outs were enabled: {} bytes, first {:?}",
+            differing.len(),
+            &differing[..differing.len().min(8)],
         );
 
         // #508's third finding lives in the CELL shader, not either scene

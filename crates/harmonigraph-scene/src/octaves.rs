@@ -190,7 +190,7 @@ impl OctaveLayout {
 
     /// The two edge angles of slot `slot`'s indicator on a node whose pitch
     /// class is `cents` — the counter-clockwise one first. The shader's
-    /// `oct_sector` is this.
+    /// `oct_sector` edges are this.
     ///
     /// Exactly one octave wide, at every slot and every node: the ring holds
     /// whole octaves of the node's own class and nothing is cut to fit, so the

@@ -47,6 +47,10 @@ struct OctaveParams {
     @align(16) span: f32,
     center: f32,
     padding: vec2<f32>,
+    // Slice i's turn back from its ring's seam as (cos, sin): its first edge's
+    // in xy, TAU * i / span, and its middle's in zw, half a slice further
+    // (`oct_sector`).
+    turns: array<vec4<f32>, 12>,
 };
 
 struct SpectralParams {
@@ -943,6 +947,9 @@ fn oct_slot_pitch(s: i32, cents: f32) -> f32 {
 struct OctRing {
     base: i32,
     seam: f32,
+    // The seam's direction, (cos, sin) of `seam`: the one turn a fragment takes
+    // a sine of. Every slice's edges are this turned back by a table entry.
+    seam_dir: vec2<f32>,
 }
 // Derived per node (harmonigraph_scene's `ring`) — where its class falls
 // against the center is what decides both which octaves it draws and how far
@@ -970,22 +977,40 @@ fn oct_ring(cents: f32) -> OctRing {
     // Turn the ring so the center pitch lands straight up.
     let along = (oct_center() - oct_slot_pitch(ring.base, cents)) / 12.0 + 0.5;
     ring.seam = OCT_UP + oct_walk(along);
+    ring.seam_dir = vec2<f32>(cos(ring.seam), sin(ring.seam));
     return ring;
 }
-// The two angular edges of slot `s`'s indicator, in the order the wedge tests
-// below want them: x the counter-clockwise edge, y the clockwise one. Exactly
-// its own octave's ends, at every slot — nothing is cut to fit, which is what
-// keeps the indicators meeting edge to edge and closing the ring.
-fn oct_sector(s: i32, ring: OctRing) -> vec2<f32> {
-    let i = u32(clamp(s - ring.base, 0, i32(oct_span()) - 1));
-    return vec2<f32>(ring.seam - oct_walk(f32(i)), ring.seam - oct_walk(f32(i + 1u)));
+// One slot's indicator wedge.
+struct OctSector {
+    // Its two angular edges, in the order the wedge tests below want them: x
+    // the counter-clockwise edge, y the clockwise one. Exactly its own
+    // octave's ends, at every slot — nothing is cut to fit, which is what
+    // keeps the indicators meeting edge to edge and closing the ring.
+    edges: vec2<f32>,
+    // The directions of those two edges, and of the middle between them: the
+    // angle of the slot's own pitch, where the indicator "points".
+    b1: vec2<f32>,
+    b2: vec2<f32>,
+    mid: vec2<f32>,
 }
-// Where an indicator "points": the angle of its own pitch, which is the middle
-// of its wedge — for anything that needs one angle for the whole of it rather
-// than its two edges.
-fn oct_mid(s: i32, ring: OctRing) -> f32 {
-    let e = oct_sector(s, ring);
-    return 0.5 * (e.x + e.y);
+// `dir` turned clockwise by the angle whose (cos, sin) is `turn`.
+fn oct_turned(dir: vec2<f32>, turn: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(dir.x * turn.x + dir.y * turn.y, dir.y * turn.x - dir.x * turn.y);
+}
+// Slot `s`'s wedge. The directions come off the seam's through the span's
+// own table (`u.octave.turns`, built on the CPU), so a walk over the slots
+// takes no sine per slot: every slice is one span-th of the turn, and only the
+// seam differs from node to node.
+fn oct_sector(s: i32, ring: OctRing) -> OctSector {
+    let i = u32(clamp(s - ring.base, 0, i32(oct_span()) - 1));
+    let first = u.octave.turns[i];
+    let next = u.octave.turns[i + 1u];
+    return OctSector(
+        vec2<f32>(ring.seam - oct_walk(f32(i)), ring.seam - oct_walk(f32(i + 1u))),
+        oct_turned(ring.seam_dir, first.xy),
+        oct_turned(ring.seam_dir, next.xy),
+        oct_turned(ring.seam_dir, first.zw),
+    );
 }
 // The level of slot `s`, or nothing when the ring names an octave the packing
 // has no room for: a ring near the pitch limits draws octaves no note can
@@ -1006,14 +1031,12 @@ fn oct_slot_level(octaves: vec3<u32>, s: i32) -> f32 {
 // PAST a half turn is their union, and reading it as an intersection would
 // empty the sector instead of filling it — see `outer_glyph`'s own note on
 // `an_indicator_can_pass_a_half_turn_but_never_a_whole_one`.
-fn oct_arc_coverage(edges: vec2<f32>, uv: vec2<f32>, aa: f32) -> f32 {
-    let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
-    let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
-    let c1 = uv.x * b1.y - uv.y * b1.x;
-    let c2 = uv.x * b2.y - uv.y * b2.x;
+fn oct_arc_coverage(sector: OctSector, uv: vec2<f32>, aa: f32) -> f32 {
+    let c1 = uv.x * sector.b1.y - uv.y * sector.b1.x;
+    let c2 = uv.x * sector.b2.y - uv.y * sector.b2.x;
     let s1 = smoothstep(-aa, aa, c1);
     let s2 = smoothstep(-aa, aa, -c2);
-    return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), edges.x - edges.y > TAU * 0.5);
+    return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), sector.edges.x - sector.edges.y > TAU * 0.5);
 }
 
 // ---- Outer octave layer ----------------------------------------------------
@@ -1357,8 +1380,9 @@ fn outer_glyph(
     s: i32, ring: OctRing,
     uv: vec2<f32>, band: NodeLayer, inner: f32, outer: f32, aa: f32,
 ) -> NodeLayer {
-    let edges = oct_sector(s, ring);
-    let fold = sector_fold(uv, edges);
+    let sector = oct_sector(s, ring);
+    let edges = sector.edges;
+    let fold = sector_fold(uv, sector.mid, oct_half_turn());
     // The gap offsets the edge only along its forward ray. Extending the line
     // through the node would cut a second slit across a sector wider than half
     // a turn, where that far half-line is not a boundary at all.
@@ -1376,11 +1400,11 @@ fn outer_glyph(
     // ownership and two forward-ray gap cuts, multiplied by the radial band.
     // These are the same constraints the signed field above carries, read at
     // the surface's AA width rather than used as a second geometry.
-    let b1 = vec2<f32>(cos(edges.x), sin(edges.x));
-    let b2 = vec2<f32>(cos(edges.y), sin(edges.y));
+    let b1 = sector.b1;
+    let b2 = sector.b2;
     let c1 = uv.x * b1.y - uv.y * b1.x;
     let c2 = uv.x * b2.y - uv.y * b2.x;
-    let own = oct_arc_coverage(edges, uv, aa);
+    let own = oct_arc_coverage(sector, uv, aa);
     let gap_half = slice_gap_half();
     let gaps =
         (1.0 - aa_inside(gap_half, abs(c1), aa) * smoothstep(-aa, aa, dot(uv, b1)))
@@ -1557,15 +1581,15 @@ fn spectrum_color_at(pitch: f32) -> f32 {
 // an atan2 against a fixed zero, so nothing here has a seam: a wedge is under
 // a whole turn by construction (MIN_SPAN), so every point inside it is within
 // half a turn of its middle and the wrap below never reaches one.
-fn wedge_fraction(edges: vec2<f32>, uv: vec2<f32>) -> f32 {
-    let mid = 0.5 * (edges.x + edges.y);
+fn wedge_fraction(sector: OctSector, uv: vec2<f32>) -> f32 {
+    let mid = sector.mid;
     // Half the wedge, always positive: the sector's edges are given
     // counter-clockwise first and the walk from one to the other is clockwise,
     // which is decreasing angle.
-    let half = max(0.5 * (edges.x - edges.y), 1e-5);
+    let half = max(0.5 * (sector.edges.x - sector.edges.y), 1e-5);
     // The fragment's angle about that middle, brought onto (-pi, pi].
-    let c = uv.x * cos(mid) + uv.y * sin(mid);
-    let s = -uv.x * sin(mid) + uv.y * cos(mid);
+    let c = dot(uv, mid);
+    let s = uv.y * mid.x - uv.x * mid.y;
     let delta = atan2(s, c);
     return clamp(0.5 - delta / (2.0 * half), 0.0, 1.0);
 }
@@ -1837,24 +1861,24 @@ struct SectorFold {
     e: vec2<f32>,
 }
 
-// `uv` into the wedge's own frame — its middle up the y axis — folded onto one
-// side of that middle, which turns its two edges into one edge lying `half` off
-// the fold. The wedge's edges arrive counter-clockwise first and the walk
-// between them is clockwise, so their difference is its width.
+// `uv` into the wedge's own frame — its middle, direction `mid`, up the y axis —
+// folded onto one side of that middle, which turns its two edges into one edge
+// lying half the wedge off the fold. `half` is that half-width's (sin, cos),
+// which is the fold's edge direction as it stands.
 //
 // A step of its own because a mark asks TWO questions of one wedge — how far its
 // pie is, and how far its gap-cut sides are — and a fold each would be two
-// constructions to keep in step as well as a second `sin`/`cos` pair per marked
-// slot per fragment.
-fn sector_fold(uv: vec2<f32>, edges: vec2<f32>) -> SectorFold {
-    let mid = 0.5 * (edges.x + edges.y);
-    let half = clamp(0.5 * (edges.x - edges.y), 0.0, TAU * 0.5);
-    let c = cos(mid);
-    let s = sin(mid);
-    return SectorFold(
-        vec2<f32>(abs(uv.y * c - uv.x * s), uv.x * c + uv.y * s),
-        vec2<f32>(sin(half), cos(half)),
-    );
+// constructions to keep in step.
+fn sector_fold(uv: vec2<f32>, mid: vec2<f32>, half: vec2<f32>) -> SectorFold {
+    return SectorFold(vec2<f32>(abs(uv.y * mid.x - uv.x * mid.y), dot(uv, mid)), half);
+}
+
+// Half of every slice's width, as `sector_fold` takes it: one span-th of the
+// turn, so the same for every slot of every ring. Never past a half turn, since
+// the span is at least one.
+fn oct_half_turn() -> vec2<f32> {
+    let mid = u.octave.turns[0].zw;
+    return vec2<f32>(mid.y, mid.x);
 }
 
 // Distance out of the pie `f` folds, out to radius `r`.
@@ -1962,7 +1986,7 @@ fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
     // and in uniform control flow, as its comment requires; from here on the
     // shader is free to leave.
     if EARLY_OUT && !analytic && d > paint_reach(in, aa) {
-        return NodeGeom(d, aa, OctRing(0, 0.0), false);
+        return NodeGeom(d, aa, OctRing(0, 0.0, vec2<f32>(1.0, 0.0)), false);
     }
 
     // An idle node paints NOTHING but its audio ring — no glyphs (a ghost needs
@@ -2002,7 +2026,7 @@ fn node_geom(src: VsOut, analytic: bool) -> NodeGeom {
         && in.params.z <= 0.0
         && (in.octaves.x | in.octaves.y | in.octaves.z) == 0u
     {
-        return NodeGeom(d, aa, OctRing(0, 0.0), false);
+        return NodeGeom(d, aa, OctRing(0, 0.0, vec2<f32>(1.0, 0.0)), false);
     }
 
     // Where THIS node's ring sits — which octaves it draws and how far it is
@@ -2378,8 +2402,7 @@ fn animated_slice_ink(in: VsOut, aa: f32, oct: OctRing) -> AnimatedInk {
         let opacity = p;
         if opacity < INK_FLOOR { continue; }
         if scale <= 0.001 { continue; }
-        let angle = oct_mid(slot, oct);
-        let anchor = anchor_radius * vec2<f32>(cos(angle), sin(angle));
+        let anchor = anchor_radius * oct_sector(slot, oct).mid;
         let start = anchor * (1.0 + u.node.pose.y * (1.0 - p));
         let uv = anchor + (in.uv - start) / scale;
         let d = length(uv);
@@ -2927,8 +2950,8 @@ fn vs_source_shadow(@builtin(vertex_index) vertex: u32, inst: Instance) -> Picku
 // Euclidean distance to a finite circular arc, including rounded endpoints.
 // The shared sector fold also handles arcs wider than half a turn. No angle-owned
 // wedge survives outside the arc: a point past an end measures to that end.
-fn pickup_arc_distance(p: vec2<f32>, edges: vec2<f32>, radius: f32) -> f32 {
-    let folded = sector_fold(p, edges);
+fn pickup_arc_distance(p: vec2<f32>, sector: OctSector, radius: f32) -> f32 {
+    let folded = sector_fold(p, sector.mid, oct_half_turn());
     if sector_side(folded) <= 0.0 {
         return abs(length(folded.q) - radius);
     }
