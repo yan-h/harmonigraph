@@ -136,6 +136,9 @@ pub(super) struct Targets {
     pub(super) output_group: wgpu::BindGroup,
     allocation: Allocation,
     atlas: wgpu::TextureView,
+    /// The atlas rows this frame's layout fills ([`stars::StarLayout::scissor`]):
+    /// the allocation outlives the layout it was sized for.
+    atlas_scissor: [u32; 4],
     image: wgpu::TextureView,
     uniform: wgpu::Buffer,
     source: wgpu::BindGroup,
@@ -214,6 +217,7 @@ impl Targets {
             output_group,
             allocation,
             atlas,
+            atlas_scissor: [0; 4],
             image,
             uniform,
             source,
@@ -238,7 +242,8 @@ impl Targets {
         if held.as_ref().is_none_or(|t| t.allocation != allocation) {
             *held = Some(Self::new(device, pipelines, source, allocation));
         }
-        let held = held.as_ref().unwrap();
+        let held = held.as_mut().unwrap();
+        held.atlas_scissor = layout.scissor();
         let settings = Settings {
             stars: StarUniforms::new(stars, direction, now, size, &layout, held.allocation.image),
             depth: amount,
@@ -271,12 +276,18 @@ impl Targets {
             });
             return;
         }
-        for (label, view, pipeline, group) in [
-            ("lattice_star_atlas", &self.atlas, &pipelines.bake, &self.bake),
-            ("lattice_star_image", &self.image, &pipelines.image, &self.image_group),
-            ("lattice_star_material", &self.output, &pipelines.material, &self.material),
+        for (label, view, pipeline, group, scissor) in [
+            (
+                "lattice_star_atlas",
+                &self.atlas,
+                &pipelines.bake,
+                &self.bake,
+                Some(self.atlas_scissor),
+            ),
+            ("lattice_star_image", &self.image, &pipelines.image, &self.image_group, None),
+            ("lattice_star_material", &self.output, &pipelines.material, &self.material, None),
         ] {
-            stars::Pass { label, view, pipeline, groups: &[&self.source, group], scissor: None }
+            stars::Pass { label, view, pipeline, groups: &[&self.source, group], scissor }
                 .draw(encoder);
         }
     }

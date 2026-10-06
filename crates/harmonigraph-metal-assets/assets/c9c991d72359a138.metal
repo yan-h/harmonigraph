@@ -174,6 +174,21 @@ StarDraw star_draw(
     return _e106;
 }
 
+float star_half_width(
+    uint gather
+) {
+    return (gather == 0u) ? 0.5 : (0.5 * static_cast<float>(gather));
+}
+
+float star_reach(
+    StarSlice s_1,
+    metal::float2 centre
+) {
+    metal::float2 stray = metal::abs(centre - metal::float2(0.5));
+    float _e7 = star_half_width(s_1.gather);
+    return (_e7 - metal::max(stray.x, stray.y)) * s_1.cell;
+}
+
 metal::float2 star_size(
     constant Settings& settings
 ) {
@@ -213,7 +228,7 @@ metal::uint3 naga_f2u32(metal::float3 value) {
 }
 
 metal::uint4 star_bake(
-    StarSlice s_1,
+    StarSlice s_2,
     metal::int2 cell_1,
     uint salt_2,
     int index_1,
@@ -225,10 +240,10 @@ metal::uint4 star_bake(
     float radius = {};
     metal::uint3 tens = {};
     metal::int2 hashed_1 = cell_1 & metal::int2(65535);
-    StarDraw _e7 = star_draw(s_1, hashed_1, salt_2, settings);
+    StarDraw _e7 = star_draw(s_2, hashed_1, salt_2, settings);
     metal::float2 _e15 = star_size(settings);
     metal::float2 _e20 = star_size(settings);
-    metal::float2 at = ((((static_cast<metal::float2>(cell_1) + _e7.centre) + s_1.offset) * s_1.cell) * (_e15.y / STAR_PANE)) + (_e20 * 0.5);
+    metal::float2 at = ((((static_cast<metal::float2>(cell_1) + _e7.centre) + s_2.offset) * s_2.cell) * (_e15.y / STAR_PANE)) + (_e20 * 0.5);
     float _e26 = star_rank(_e7.own.x, settings);
     metal::float4 _e27 = star_source(at, _e26, index_1, settings, source, light_sampler);
     if (_e27.w <= 0.0) {
@@ -236,7 +251,7 @@ metal::uint4 star_bake(
     }
     colour = _e27.xyz;
     float _e36 = star_size_variation(settings);
-    radius = s_1.radius * metal::exp((-2.4 * _e36) * _e7.own.y);
+    radius = s_2.radius * metal::exp((-2.4 * _e36) * _e7.own.y);
     if (_e7.blend > 0.0) {
         metal::float3 _e48 = colour;
         float _e51 = star_rank(_e7.other.x, settings);
@@ -244,15 +259,20 @@ metal::uint4 star_bake(
         colour = metal::mix(_e48, _e52.xyz, _e7.blend);
         float _e56 = radius;
         float _e58 = star_size_variation(settings);
-        radius = metal::mix(_e56, s_1.radius * metal::exp((-2.4 * _e58) * _e7.other.y), _e7.blend);
+        radius = metal::mix(_e56, s_2.radius * metal::exp((-2.4 * _e58) * _e7.other.y), _e7.blend);
     }
-    metal::float3 _e68 = colour;
-    tens = naga_f2u32(metal::rint(metal::clamp(_e68, metal::float3(0.0), metal::float3(1.0)) * 1023.0));
-    uint _e86 = tens.x;
-    uint _e90 = tens.y;
-    uint _e95 = tens.z;
-    float _e97 = radius;
-    return metal::uint4(as_type<uint>(_e7.centre.x), as_type<uint>(_e7.centre.y), ((_e86 << 20u) | (_e90 << 10u)) | _e95, as_type<uint>(half2(metal::float2(1.0 / _e97, _e7.fade))));
+    float _e68 = radius;
+    float _e74 = star_reach(s_2, _e7.centre);
+    float drawn = metal::min(metal::max(_e68, 1.0 / s_2.inverse_floor), _e74);
+    float _e77 = radius;
+    float _e79 = radius;
+    float gain = _e7.fade * metal::min(1.0, (_e77 / drawn) * (_e79 / drawn));
+    metal::float3 _e85 = colour;
+    tens = naga_f2u32(metal::rint(metal::clamp(_e85, metal::float3(0.0), metal::float3(1.0)) * 1023.0));
+    uint _e103 = tens.x;
+    uint _e107 = tens.y;
+    uint _e112 = tens.z;
+    return metal::uint4(as_type<uint>(_e7.centre.x), as_type<uint>(_e7.centre.y), ((_e103 << 20u) | (_e107 << 10u)) | _e112, as_type<uint>(half2(metal::float2(1.0 / drawn, gain))));
 }
 
 StarSlice star_slice(

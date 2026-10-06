@@ -29,7 +29,21 @@ fn allocated(memory: &Memory) -> [u32; 2] {
 }
 
 fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, memory: &Memory) -> Vec<[f32; 4]> {
-    let [width, height] = memory.extent;
+    let texture = memory.views[memory.index].texture();
+    texels(device, queue, texture, memory.extent)
+        .into_iter()
+        .map(|texel| texel.map(f32::from_bits))
+        .collect()
+}
+
+/// The first `extent` texels of a sixteen-byte-texel `texture`, as raw words.
+fn texels(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    extent: [u32; 2],
+) -> Vec<[u32; 4]> {
+    let [width, height] = extent;
     let stride = (width * 16).next_multiple_of(256);
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("color_memory_readback"),
@@ -39,7 +53,7 @@ fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, memory: &Memory) -> Vec<[f
     });
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
-        memory.views[memory.index].texture().as_image_copy(),
+        texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
             layout: wgpu::TexelCopyBufferLayout {
@@ -60,7 +74,7 @@ fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, memory: &Memory) -> Vec<[f
         .flat_map(|row| {
             row[..width as usize * 16].chunks_exact(16).map(|rgba| {
                 std::array::from_fn(|c| {
-                    f32::from_le_bytes(rgba[c * 4..c * 4 + 4].try_into().unwrap())
+                    u32::from_le_bytes(rgba[c * 4..c * 4 + 4].try_into().unwrap())
                 })
             })
         })
@@ -439,6 +453,58 @@ fn star_memory_resets_when_star_layers_change_at_equal_spacing() {
     let fresh = pixels(&device, &queue, memory(&fresh));
     assert!(current.len() > fresh.len(), "fixture did not drop a layer's cells");
     assert!(current[..fresh.len()] == fresh[..], "a dropped layer's stars kept their color");
+}
+
+/// The atlas bake and the Stars history pass shade only the rows the layout
+/// fills ([`StarLayout::scissor`]), inside an allocation rounded up to whole
+/// steps of 64 rows. The fixture's layout takes 679,123 texels, 332 rows,
+/// under a 384-row allocation, so the scissor cuts 52 rows. The last row it
+/// keeps holds 1,235 of the last slice's cells; they are still baked, drawn
+/// into the history and carried into the next frame, and nothing past them is.
+#[test]
+fn star_passes_shade_the_layouts_rows_and_carry_its_last_one() {
+    let Some((device, queue)) = headless_device() else { return };
+    let mut cb = fixture(CloudStyle::Stars);
+    let a = cb.atmosphere.as_mut().unwrap();
+    // Every star keeps its place, and with it its colour across its lives.
+    a.settings.stars.star_speed = [0.0; STAR_SLICES];
+    a.settings.stars.star_twinkle = [0.0; STAR_SLICES];
+    let layout = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height());
+    let mut resources = CallbackResources::default();
+    cb.grid.fill(255);
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let rows = layout.size()[1];
+    let allocation = allocated(memory(&resources));
+    assert!(rows < allocation[1], "fixture left no atlas rows past the layout");
+    let cells = layout.texels as usize;
+    let last_row = (rows as usize - 1) * STAR_ATLAS_WIDTH as usize;
+    assert!(cells > last_row, "the layout's last row holds no cell");
+    let atlas = {
+        let cloud = resources.get::<SpectrogramResources>().unwrap().panes.get(0).unwrap();
+        let atlas = cloud.cloud.as_ref().unwrap().stars.as_ref().unwrap().atlas.texture();
+        texels(&device, &queue, atlas, allocation)
+    };
+    let lit = pixels(&device, &queue, memory(&resources));
+    let star_count = atlas[last_row..cells].iter().filter(|t| **t != [0; 4]).count();
+    let lit_count = lit[last_row..cells].iter().filter(|p| p[3] > 0.1).count();
+    assert!(star_count * 2 > cells - last_row, "the last row's stars were not baked");
+    assert!(lit_count * 2 > cells - last_row, "the last row's history was not drawn");
+    assert!(atlas[cells..].iter().all(|t| *t == [0; 4]), "the atlas holds texels past its cells");
+    assert!(lit[cells..].iter().all(|p| *p == [0.0; 4]), "the history holds texels past its cells");
+    cb.grid.fill(0);
+    cb.atmosphere.as_mut().unwrap().now += 0.1;
+    prepare_once(&device, &queue, &mut resources, &cb);
+    let held = pixels(&device, &queue, memory(&resources));
+    let carried = held[last_row..cells]
+        .iter()
+        .zip(&lit[last_row..cells])
+        .filter(|(now, before)| before[3] > 0.1 && now[3] > 0.1 && now[3] < before[3])
+        .count();
+    assert_eq!(carried, lit_count, "the last row's colour did not carry");
+    assert!(
+        held[cells..].iter().all(|p| *p == [0.0; 4]),
+        "the history holds texels past its cells"
+    );
 }
 
 /// Hidden layers keep updating their held colour, and both Solo transitions

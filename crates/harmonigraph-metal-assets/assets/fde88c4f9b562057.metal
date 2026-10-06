@@ -106,10 +106,8 @@ metal::float4 star_texel(
     }
     float dist = metal::length(f - metal::float2(as_type<float>(t_1.x), as_type<float>(t_1.y))) * s_1.cell;
     metal::float2 shape = float2(as_type<half2>(t_1.w));
-    float inverse = metal::min(shape.x, s_1.inverse_floor);
-    float dim = inverse / shape.x;
-    float _e29 = star_profile(s_1, dist * inverse);
-    float cover = ((_e29 * shape.y) * dim) * dim;
+    float _e25 = star_profile(s_1, dist * shape.x);
+    float cover = _e25 * shape.y;
     if (cover <= 0.0) {
         return metal::float4(0.0);
     }

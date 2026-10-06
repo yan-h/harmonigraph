@@ -774,6 +774,11 @@ fn clouded_base(level: f32, position: vec2<f32>) -> vec4<f32> {
     // The starfield is colour, not a level: `Texture mix` blends the plain
     // picture toward it rather than feeding the palette a mixed level.
     if cloud.cloud_style == 2u {
+        // At full mix the plain picture is weighted zero, so its palette lookup
+        // is skipped (and `base_level_unused` skips its level).
+        if cloud.cloud_depth >= 1.0 {
+            return vec4<f32>(star_color(pt).rgb, 1.0);
+        }
         return vec4<f32>(mix(palette_color(level), star_color(pt).rgb, cloud.cloud_depth), 1.0);
     }
     if cloud.memory_enabled != 0u {
@@ -820,16 +825,18 @@ fn clouded(level: f32, position: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(gamma_from_linear_rgb(varied), color.a);
 }
 
-// Full material memory replaces the base level, so neither its grid walk nor
-// its blurred sample contributes. Stars keep their separate color composite.
-fn full_material_memory() -> bool {
-    return cloud.memory_enabled != 0u && cloud.cloud_depth >= 1.0 && cloud.cloud_style != 2u;
+// At full `Texture mix` the base level is weighted zero wherever the texture
+// replaces it outright: Stars always (their colour is the whole picture), and
+// the other styles under material memory. Neither its grid walk nor its blurred
+// sample is then worth reading.
+fn base_level_unused() -> bool {
+    return cloud.cloud_depth >= 1.0 && (cloud.cloud_style == 2u || cloud.memory_enabled != 0u);
 }
 
 // Empty history uses the same field and palette with a zero measured core.
 // This quad never samples the grid, so the oldest column cannot be smeared.
 fn backdrop_color(position: vec2<f32>) -> vec4<f32> {
-    if full_material_memory() { return clouded(0.0, position); }
+    if base_level_unused() { return clouded(0.0, position); }
     var level = 0.0;
     if softened() { level = baked_density(position); }
     return clouded(level, position);
@@ -848,7 +855,7 @@ fn fs_cloud_backdrop_linear(in: VertexOut) -> @location(0) vec4<f32> {
 // rather than blending with it, so reading both and keeping one paid for the
 // walk on every softened frame — which is nearly every frame drawn here.
 fn cloud_color(in: VertexOut) -> vec4<f32> {
-    if full_material_memory() { return clouded(0.0, in.position.xy); }
+    if base_level_unused() { return clouded(0.0, in.position.xy); }
     var level: f32;
     if softened() {
         level = baked_density(in.position.xy);

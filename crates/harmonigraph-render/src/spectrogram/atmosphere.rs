@@ -1550,11 +1550,15 @@ impl Targets {
             self.bake_tile(encoder, pipelines, key);
         }
         let velvet = draw.style == harmonigraph_scene::CloudStyle::VelvetScales;
+        // The atlas, and a Stars history laid out like it, shade only the rows
+        // the layout fills; every other history is its whole extent.
+        let star_scissor = plan.stars.as_ref().map(StarLayout::scissor);
         if !velvet {
-            self.remember(encoder, pipelines);
+            self.remember(encoder, pipelines, star_scissor);
         }
         if let Some(coverage) = draw.star_coverage {
-            self.draw_stars(encoder, pipelines, draw.pixels, coverage);
+            let atlas = star_scissor.expect("star coverage comes only with a star layout");
+            self.draw_stars(encoder, pipelines, draw.pixels, coverage, atlas);
         } else if let Some((tone_view, tone_group)) =
             self.tone.as_ref().zip(self.tone_group.as_ref())
         {
@@ -1572,18 +1576,20 @@ impl Targets {
             pass.draw(0..6, 0..1);
         }
         if velvet {
-            self.remember(encoder, pipelines);
+            self.remember(encoder, pipelines, star_scissor);
         }
     }
 
-    /// The atlas bake, then every slice into the star image, scissored to
-    /// the drawn `coverage` of the pane's `pixels`.
+    /// The atlas bake, scissored to the `atlas` rows the layout fills, then
+    /// every slice into the star image, scissored to the drawn `coverage` of
+    /// the pane's `pixels`.
     fn draw_stars(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &Pipelines,
         pixels: [u32; 2],
         coverage: [u32; 4],
+        atlas: [u32; 4],
     ) {
         let stars = self.stars.as_ref().expect("star coverage comes only with star targets");
         let image = self.shape.stars.expect("star targets exist only with a shape").image;
@@ -1596,7 +1602,7 @@ impl Targets {
             view: &stars.atlas,
             pipeline: &pipelines.stars,
             groups: &[&self.source_group, atlas_group],
-            scissor: None,
+            scissor: Some(atlas),
         }
         .draw(encoder);
         crate::stars::Pass {
@@ -1841,17 +1847,26 @@ impl Targets {
         self.memory.as_ref().map_or(&self.composite_group, |m| &m.composite_groups[m.index])
     }
 
-    fn remember(&self, encoder: &mut wgpu::CommandEncoder, pipelines: &Pipelines) {
+    /// `stars` is the Stars layout's atlas rows, where the history is laid out
+    /// like the atlas. `star_memory` reads the previous history only inside
+    /// the previous frame's slice grids, which lay within its own scissor.
+    fn remember(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        stars: Option<[u32; 4]>,
+    ) {
         let Some(memory) = &self.memory else {
             return;
         };
+        let [x, y, width, height] = stars.unwrap_or([0, 0, memory.extent[0], memory.extent[1]]);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("spectral_color_memory"),
             color_attachments: &[Some(cleared(&memory.views[memory.index]))],
             ..Default::default()
         });
         pass.set_viewport(0.0, 0.0, memory.extent[0] as f32, memory.extent[1] as f32, 0.0, 1.0);
-        pass.set_scissor_rect(0, 0, memory.extent[0], memory.extent[1]);
+        pass.set_scissor_rect(x, y, width, height);
         pass.set_pipeline(&pipelines.memory);
         pass.set_bind_group(0, &self.source_group, &[]);
         pass.set_bind_group(1, &memory.groups[memory.index], &[]);
@@ -2029,34 +2044,64 @@ mod tests {
     }
 
     /// A star is drawn with a radius of at least a texel of the star image,
-    /// the wider of its sides, so a depth whose stars that floor widens past
-    /// its planned read takes the next that holds them; a fine image leaves
-    /// the plan as it was.
+    /// the wider of its sides, and the cap at its read's window never takes
+    /// it under that: a depth takes a read that holds the floor wherever
+    /// `Position variation` strays a star, so a depth whose floor-widened
+    /// stars overrun its planned read takes the next that holds them. A fine
+    /// image leaves the plan as it was.
     #[test]
     fn the_texel_floor_picks_the_read_that_holds_it() {
-        use harmonigraph_scene::star_plan::StarGather;
+        use harmonigraph_scene::star_plan::{star_jitter_width, StarGather};
         let fresh = harmonigraph_scene::StarSettings::default();
         let layout = star_layout(fresh, 4.0 / 3.0);
         let plan = fresh.plan().depths.map(|depth| depth.gather);
         let codes = |slices: [super::StarSlice; STAR_SLICES]| slices.map(|slice| slice.gather);
         use StarGather::{Three, Two};
-        assert_eq!(plan, [Two, Two, Two, Three, Three]);
+        assert_eq!(plan, [Two, Two, Two, Two, Three]);
         let fine = star_slices(fresh, 0.0, 0.0, &layout, [2880, 2160]);
-        assert_eq!(codes(fine), [2, 2, 2, 3, 3]);
+        assert_eq!(codes(fine), [2, 2, 2, 2, 3]);
         assert!(fine.iter().all(|slice| slice.inverse_floor == 2160.0 / STAR_PANE));
+        // A 75% image of a 720-pixel pane: a texel of one star pixel, which
+        // the far two's stars (0.83 and 0.91) are widened to. 2x2 holds that
+        // at their cells' centres but not strayed 0.15 of a cell, so they
+        // read 3x3.
+        let live = star_slices(fresh, 0.0, 0.0, &layout, [720, 540]);
+        assert_eq!(codes(live), [3, 3, 2, 2, 3]);
+        assert!(live[..2].iter().all(|slice| slice.radius < 1.0 && slice.inverse_floor == 1.0));
         // A 25% image of a 300-pixel pane: a texel of 7.2 star pixels, past
-        // what the far depths' 2x2 holds.
+        // what the far depths' 2x2 holds; the floor stops at what 3x3 holds
+        // of a star strayed to the edge of its band.
+        let edge = |jitter: f32| Three.half_width() - star_jitter_width(jitter) / 2.0;
         let coarse = star_slices(fresh, 0.0, 0.0, &layout, [100, 75]);
         assert_eq!(codes(coarse), [3; STAR_SLICES]);
         for slice in coarse {
-            let holds = Three.bound(fresh.star_jitter) * slice.cell;
+            let holds = edge(fresh.star_jitter) * slice.cell;
             assert_eq!(slice.inverse_floor, 1.0 / (STAR_PANE / 75.0).min(holds));
         }
         // An image rounded wider across than down: the floor is the wider
         // side, 8 star pixels against 7.2.
         for slice in star_slices(fresh, 0.0, 0.0, &layout, [90, 75]) {
-            let holds = Three.bound(fresh.star_jitter) * slice.cell;
+            let holds = edge(fresh.star_jitter) * slice.cell;
             assert_eq!(slice.inverse_floor, 1.0 / (layout.pane[0] / 90.0).min(holds));
+        }
+        // At full variation every drawn read holds its floor at the edge of
+        // the band, so the cap never takes a star under it: the fine image
+        // reads as the plan does, the far two read 3x3 on the live-sized
+        // one, and everything does on the coarse.
+        let full = harmonigraph_scene::StarSettings { star_jitter: 1.0, ..fresh };
+        let half_band = star_jitter_width(1.0) / 2.0;
+        for (image, want) in [
+            ([2880, 2160], [2, 2, 2, 2, 3]),
+            ([720, 540], [3, 3, 2, 2, 3]),
+            ([100, 75], [3; STAR_SLICES]),
+        ] {
+            let slices = star_slices(full, 0.0, 0.0, &layout, image);
+            assert_eq!(codes(slices), want, "{image:?}");
+            for slice in slices {
+                let half_width = 0.5 * slice.gather as f32;
+                let needs = 1.0 / slice.inverse_floor + half_band * slice.cell;
+                assert!(half_width * slice.cell >= needs * (1.0 - 1e-6), "{image:?}: {slice:?}");
+            }
         }
     }
 
@@ -2081,10 +2126,11 @@ mod tests {
         }
     }
 
-    /// Both walks include every star that can reach the pixel: one nominal
-    /// cell for a star the plan holds inside it, and a 3x3 ring for the whole
-    /// star. Every plan holds its stars inside its gather's bound, however
-    /// big the dials ask for them.
+    /// Every read includes every star that can reach the pixel: a star the
+    /// read leaves out is never drawn as far as the pixel, at the radius
+    /// `star_reach` caps it to wherever its `Position variation` puts it. And
+    /// every plan holds its largest star at its cell's centre inside its
+    /// read's half-width, however big the dials ask for them.
     #[test]
     fn the_star_ring_holds_every_star_that_reaches_a_pixel() {
         use harmonigraph_scene::star_plan::{star_jitter_width, StarGather};
@@ -2092,12 +2138,13 @@ mod tests {
         assert_eq!(STAR_HASH_PERIOD, shader_number("STAR_HASH_PERIOD"));
         assert_eq!(STAR_LIFE_PERIOD, shader_number("STAR_LIFE_PERIOD"));
         for dial in [0.0, 0.25, 0.5, 0.75, 1.0] {
-            let jitter = star_jitter_width(dial);
-            let core = StarGather::Core.bound(dial);
-            for (radius, reach) in [(0, core), (1, StarGather::Three.bound(dial))] {
-                let nearest = nearest_outside_the_ring(jitter / 2.0, radius);
-                assert!(nearest >= reach - 1e-5,
-                    "jitter={dial}, ring={radius}: excluded star at {nearest}, inside reach {reach}");
+            let stray = star_jitter_width(dial) / 2.0;
+            for read in StarGather::DRAWN {
+                let room = least_room_outside_the_read(read, stray);
+                assert!(
+                    room >= -1e-5,
+                    "jitter={dial}, {read:?}: an excluded star reaches {room} past a pixel"
+                );
             }
             for size in [harmonigraph_scene::STAR_SIZE_MIN, harmonigraph_scene::STAR_SIZE_MAX] {
                 let settings = harmonigraph_scene::StarSettings {
@@ -2106,40 +2153,55 @@ mod tests {
                     ..Default::default()
                 };
                 for depth in settings.plan().depths {
-                    let bound = depth.gather.bound(dial) * depth.cell;
-                    assert!(depth.radius <= bound, "{depth:?}");
+                    assert!(depth.radius <= depth.gather.half_width() * depth.cell, "{depth:?}");
                 }
             }
         }
     }
 
-    /// Scan a full cell and both sides of its selection boundaries. A centre
-    /// strays `stray` on each axis; the walk is centred on floor(pixel).
-    fn nearest_outside_the_ring(stray: f32, radius: i32) -> f32 {
-        let mut nearest = f32::INFINITY;
-        for step in 0..=64 {
-            for other in 0..=64 {
-                let pixel = [step as f32 / 64.0, other as f32 / 64.0];
-                let centre = pixel.map(|p| p.floor() as i32);
-                for cx in -2i32..=3 {
-                    for cy in -2i32..=3 {
-                        if (centre[0] - radius..=centre[0] + radius).contains(&cx)
-                            && (centre[1] - radius..=centre[1] + radius).contains(&cy)
-                        {
+    /// The least room any star a read leaves out is left short of the pixel,
+    /// in cells: over pixels across a whole cell and both sides of the read's
+    /// cell boundaries, each left-out star centred anywhere `stray` lets it
+    /// stray on each axis, its distance from the pixel less the radius
+    /// `star_reach` caps it to there. The read's cells are found as the
+    /// shader's walks find them: 2x2 from `floor(r - 0.5)`, 1x1 and 3x3
+    /// around `floor(r)`.
+    fn least_room_outside_the_read(
+        read: harmonigraph_scene::star_plan::StarGather,
+        stray: f32,
+    ) -> f32 {
+        use harmonigraph_scene::star_plan::StarGather;
+        let half = read.half_width();
+        let mut least = f32::INFINITY;
+        for step in 0..=32 {
+            for other in 0..=32 {
+                let pixel = [step as f32 / 32.0, other as f32 / 32.0];
+                let (first, span) = match read {
+                    StarGather::Two => (pixel.map(|p| (p - 0.5).floor() as i32), 2),
+                    _ => {
+                        (pixel.map(|p| p.floor() as i32 - (half - 0.5) as i32), (2.0 * half) as i32)
+                    }
+                };
+                let seen = |c: i32, axis: usize| (first[axis]..first[axis] + span).contains(&c);
+                for cx in -3i32..=4 {
+                    for cy in -3i32..=4 {
+                        if seen(cx, 0) && seen(cy, 1) {
                             continue;
                         }
-                        let toward = |c: i32, p: f32| {
-                            (c as f32 + 0.5 - stray).max(p).min(c as f32 + 0.5 + stray)
-                        };
-                        let star = [toward(cx, pixel[0]), toward(cy, pixel[1])];
-                        nearest = nearest.min(
-                            ((star[0] - pixel[0]).powi(2) + (star[1] - pixel[1]).powi(2)).sqrt(),
-                        );
+                        for i in -2..=2 {
+                            for j in -2..=2 {
+                                let d = [i, j].map(|n| stray * n as f32 / 2.0);
+                                let star = [cx as f32 + 0.5 + d[0], cy as f32 + 0.5 + d[1]];
+                                let reach = half - d[0].abs().max(d[1].abs());
+                                let dist = (star[0] - pixel[0]).hypot(star[1] - pixel[1]);
+                                least = least.min(dist - reach);
+                            }
+                        }
                     }
                 }
             }
         }
-        nearest
+        least
     }
 
     /// The shader reads a cell by its index in its slice's grid with no bounds

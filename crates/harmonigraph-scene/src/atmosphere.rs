@@ -153,10 +153,13 @@ pub const STAR_RESOLUTION_STEP: f32 = 0.25;
 /// and its sanitizer, in multiples of the depth's star size.
 ///
 /// The low end is the closest a star of any size can sit and still be read
-/// whole by the widest gather at full `Position variation`:
-/// [`crate::star_plan::StarGather::Three`]'s reach of 1.2 cells holds a
-/// radius of half the star's size in a cell of 5/12 of it. So `Star size` is
-/// always drawn as set, and no star is ever cut off at a cell edge.
+/// whole by the widest gather wherever `Position variation` puts it: a radius
+/// of half the star's size in a cell of 5/12 of it is 1.2 cells, exactly
+/// [`crate::star_plan::StarGather::Three`]'s half-width of 1.5 less the 0.3 a
+/// centre strays at full variation. So a depth read 3x3 draws every star
+/// uncapped at every setting, and no spacing asks for a wider read. A
+/// cheaper read caps a star strayed toward its cell's edge rather than cut
+/// it, so no star is ever cut off at a cell edge.
 pub const STAR_SPACING_MIN: f32 = 5.0 / 12.0;
 /// See [`STAR_SPACING_MIN`].
 pub const STAR_SPACING_MAX: f32 = 32.0;
@@ -425,8 +428,10 @@ pub struct StarSettings {
     /// its depth's read holds. Runs over 0..=1.
     pub star_size_variation: f32,
     /// Positional variation within each cell, from regular centers at 0 to
-    /// the original 0.6-cell jitter width at 1. More variation shortens how
-    /// far each read holds a star whole ([`crate::star_plan::StarGather::bound`]).
+    /// the original 0.6-cell jitter width at 1. A star it strays toward its
+    /// cell's edge is drawn smaller where it would overrun its depth's read
+    /// ([`crate::star_plan::StarGather::half_width`]); it widens a read only
+    /// where the renderer's texel floor widens the depth's stars.
     pub star_jitter: f32,
     /// How many depths the starfield draws, from
     /// [`STAR_LAYERS_MIN`]..=[`crate::star_plan::STAR_DEPTHS`]: always the
@@ -521,9 +526,9 @@ impl Default for StarSettings {
             // drawn layers differ from before.
             star_spacing_ratio: [0.624, 0.62203425, 0.602118, 0.53839743, 0.4166667],
             // A rough fit of the core-and-fringe stars this replaced: the
-            // near two at the 1.2-cell reach they were drawn to, the far
-            // three just inside the 2x2 read (0.80-0.82 of a cell) so they
-            // keep its cost. The far cores fill their stars, as the old capped
+            // nearest at the 1.2-cell reach it was drawn to, the second
+            // nearest at 0.93 of a cell and the far three at 0.80-0.82, all
+            // inside the 2x2 read so they keep its cost. The far cores fill their stars, as the old capped
             // cores did, which is what made the far bed dense; the nearest
             // core is the old one's share. The gentle falloff holds the far
             // stars near full coverage out to half a cell, as the old fringe

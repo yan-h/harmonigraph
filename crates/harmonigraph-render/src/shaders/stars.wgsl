@@ -19,8 +19,10 @@ struct StarSlice {
     grid: vec2<i32>,
     // The band a centre is drawn from, in cells.
     width: f32,
-    // The inverse of the narrowest radius a star is drawn at: a texel of the
-    // star image, or what a 3x3 read holds where that is less (`star_slices`).
+    // The inverse of the narrowest radius a star is drawn at, which
+    // `star_reach` never caps it under: a texel of the star image, or what a
+    // 3x3 read holds of a star strayed to the edge of its band where that is
+    // less (`star_slices`). Read by the bake alone.
     inverse_floor: f32,
     // 0 not drawn, 1 the whole star from its own cell, 2 from a 2x2 read, 3
     // from a 3x3 read.
@@ -151,17 +153,36 @@ fn star_draw(s: StarSlice, hashed: vec2<i32>, salt: u32) -> StarDraw {
     return d;
 }
 
+// How far from a cell's centre, in cells on each axis, the slice's read sees
+// that cell: `StarGather::half_width`, 0.5, 1 or 1.5 for gathers 1 to 3. A
+// slice not drawn (0) still bakes, and takes 1x1's 0.5, which a centre
+// straying at most 0.3 never reaches, so no reach is ever zero.
+fn star_half_width(gather: u32) -> f32 {
+    return select(0.5 * f32(gather), 0.5, gather == 0u);
+}
+
+// The widest a star centred at `centre`, from its cell's corner in cells, is
+// drawn, in star pixels: what the slice's read still holds of it there. The
+// read is chosen to hold the depth's largest star at its cell's centre
+// (`StarGather::holding`), so only a star strayed toward the cell's edge is
+// capped, and it is drawn smaller, not cut.
+fn star_reach(s: StarSlice, centre: vec2<f32>) -> f32 {
+    let stray = abs(centre - 0.5);
+    return (star_half_width(s.gather) - max(stray.x, stray.y)) * s.cell;
+}
+
 // One cell's star this frame, packed for `star_atlas`, or zero where the cell
 // holds none. `cell` is the slice's cell, `salt` the slice's.
 //
 // x and y: the centre, from the cell's corner, in cells, as f32 bits — a
 // near cell can be hundreds of pixels wide, too wide for a half float's
 // thousandth of one to hold still. z: the colour, ten bits a channel, which
-// is finer than any target this draws into. w: the inverse of the star's
-// outer radius in star pixels and its life fade as two half floats. A source
-// gives a star whole or not at all. The reciprocal is baked once per
-// star rather than divided out at every pixel in reach. It is never zero,
-// so w is zero exactly where there is no star.
+// is finer than any target this draws into. w: the inverse of the outer
+// radius the star is drawn at, in star pixels, and its coverage, as two half
+// floats. A source gives a star whole or not at all. Both depend on the star
+// alone, so they are worked out once per star rather than at every pixel in
+// reach. The reciprocal is never zero, so w is zero exactly where there is
+// no star.
 fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> {
     // The period is a power of two, so a mask IS the Euclidean wrap, negative
     // cells included, without `wrap_cell`'s integer divisions.
@@ -181,12 +202,19 @@ fn star_bake(s: StarSlice, cell: vec2<i32>, salt: u32, index: i32) -> vec4<u32> 
         colour = mix(colour, star_source(at, star_rank(d.other.x), index).rgb, d.blend);
         radius = mix(radius, s.radius * exp(-2.4 * star_size_variation() * d.other.y), d.blend);
     }
+    // A star narrower than a texel would show only where a texel centre fell
+    // inside it, so one under the floor's radius is drawn at it instead,
+    // dimmed by the ratio of the areas so it keeps its light, and then no
+    // wider than its read holds where it sits. A star capped under its own
+    // radius is not brightened.
+    let drawn = min(max(radius, 1.0 / s.inverse_floor), star_reach(s, d.centre));
+    let gain = d.fade * min(1.0, (radius / drawn) * (radius / drawn));
     var tens = vec3<u32>(round(clamp(colour, vec3<f32>(0.0), vec3<f32>(1.0)) * 1023.0));
     return vec4<u32>(
         bitcast<u32>(d.centre.x),
         bitcast<u32>(d.centre.y),
         (tens.r << 20u) | (tens.g << 10u) | tens.b,
-        pack2x16float(vec2<f32>(1.0 / radius, d.fade)),
+        pack2x16float(vec2<f32>(1.0 / drawn, gain)),
     );
 }
 
@@ -226,19 +254,15 @@ fn star_texel(s: StarSlice, f: vec2<f32>, index: i32) -> vec4<f32> {
     if t.w == 0u { return vec4<f32>(0.0); }
     let dist = length(f - vec2<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y))) * s.cell;
     let shape = unpack2x16float(t.w);
-    // A star narrower than a texel would show only where a texel centre fell
-    // inside it: one under the floor's radius is drawn at it instead, dimmed
-    // by the ratio of the areas so it keeps its light.
-    let inverse = min(shape.x, s.inverse_floor);
-    let dim = inverse / shape.x;
-    let cover = star_profile(s, dist * inverse) * shape.y * dim * dim;
+    let cover = star_profile(s, dist * shape.x) * shape.y;
     if cover <= 0.0 { return vec4<f32>(0.0); }
     let colour = vec3<f32>(vec3<u32>(t.z >> 20u, t.z >> 10u, t.z) & vec3<u32>(1023u)) / 1023.0;
     return vec4<f32>(colour * cover, cover);
 }
 
-// The four cells whose centres surround the pixel. A read sees every centre
-// within its bound, so a star the plan holds to it is never cut.
+// The four cells whose centres surround the pixel. A read sees every cell
+// from within its half-width of the cell's centre, and `star_reach` holds
+// every star inside that, so none is ever cut.
 fn star_gather2(s: StarSlice, r: vec2<f32>) -> vec4<f32> {
     let o = floor(r - 0.5);
     let f = r - o;

@@ -1580,7 +1580,7 @@ mod tests {
         let Some((device, queue)) = headless_device() else { return };
         let fresh = harmonigraph_scene::StarSettings::default();
         // Every depth at the far spacing, which 2x2 reads, then the fresh
-        // spacings, whose near depths need 3x3.
+        // spacings, whose nearest depth needs 3x3.
         for (spacing, three) in [
             ([fresh.star_spacing_ratio[0]; atmosphere::STAR_SLICES], false),
             (fresh.star_spacing_ratio, true),
