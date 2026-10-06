@@ -121,44 +121,132 @@ fn response_times_are_independent_and_zero_is_reachable() {
     assert_eq!(rise, 0.0);
     assert_eq!(fall, 0.7);
 }
+/// The first rect of `height` filled with the well colour: a plot's well or a
+/// bar's track.
+fn well(output: &egui::FullOutput, height: f32) -> egui::Rect {
+    output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Rect(r)
+                if r.fill == crate::theme::well() && (r.rect.height() - height).abs() < 0.1 =>
+            {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+fn press_drag(ctx: &egui::Context, draw: &mut impl FnMut(&mut Ui), from: Pos2, to: Pos2) {
+    frame(ctx, vec![Event::PointerMoved(from)], draw);
+    frame(ctx, vec![press(from, true)], draw);
+    frame(ctx, vec![Event::PointerMoved(to)], draw);
+    frame(ctx, vec![press(to, false)], draw);
+}
 #[test]
-fn star_depth_endpoints_and_curve_edit_without_idle_round_trips() {
-    for kind in [Depth::Speed, Depth::Size(1.0)] {
-        let size = kind != Depth::Speed;
-        let (mut a, mut b, mut exponent) = if size { (0.7, 32.0, 2.0) } else { (0.1, 0.8, 2.0) };
-        let range = if size { 0.5..=64.0 } else { 0.0..=1.0 };
-        let initial = (a, b, exponent);
+fn a_star_layer_dot_moves_its_own_layer_alone_and_idles_exactly() {
+    for (kind, initial) in
+        [(Depth::Speed, [0.1, 0.2, 0.4, 0.6, 0.8]), (Depth::Size, [0.7, 1.5, 4.0, 11.0, 32.0])]
+    {
+        let mut values = initial;
         let ctx = crate::tests::probe::themed_at(1.0);
         for _ in 0..8 {
-            frame(&ctx, vec![], &mut |ui| {
-                depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind)
-            });
+            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, kind, 1.0));
         }
-        assert_eq!((a, b, exponent), initial);
-        drag(
-            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind),
-            0,
-            egui::vec2(0.0, -12.0),
-        );
-        assert!(a > initial.0);
-        assert_eq!((b, exponent), (initial.1, initial.2));
-        let far = a;
-        drag(
-            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind),
-            1,
-            egui::vec2(0.0, 12.0),
-        );
-        assert!(b < initial.1);
-        assert_eq!((a, exponent), (far, initial.2));
-        let ends = (a, b);
-        drag(
-            |ui| depth(ui, &mut a, &mut b, &mut exponent, range.clone(), 0.5..=4.0, kind),
-            2,
-            egui::vec2(0.0, -12.0),
-        );
-        assert_eq!((a, b), ends);
-        assert!(exponent < initial.2);
+        assert_eq!(values, initial);
+        drag(|ui| depth(ui, &mut values, 5, kind, 1.0), 1, egui::vec2(0.0, -12.0));
+        assert!(values[1] > initial[1]);
+        assert_eq!([values[0], values[2], values[3], values[4]], [0, 2, 3, 4].map(|k| initial[k]));
     }
+}
+/// A line pressed out on the plot's empty space, top left to bottom right,
+/// sets every drawn layer onto it, and a depth `Star layers` leaves out keeps
+/// its own value.
+#[test]
+fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
+    let initial = [0.3, 0.4, 0.5, 0.6, 0.7];
+    let mut values = initial;
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Speed, 1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
+    let outside = egui::vec2(4.0, 4.0);
+    press_drag(&ctx, &mut draw, inner.left_top() - outside, inner.right_bottom() + outside);
+    for (k, want) in [(0, 1.0), (1, initial[1]), (2, 0.5), (3, initial[3]), (4, 0.0)] {
+        assert!((values[k] - want).abs() < 1e-5, "layer {k}: {values:?}");
+    }
+}
+/// A line let go of while the plot is not drawn leaves no press point
+/// behind: the next line runs from its own press.
+#[test]
+fn a_line_lost_mid_drag_does_not_anchor_the_next_one() {
+    let values = std::cell::RefCell::new([0.5; 5]);
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 3, Depth::Speed, 1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
+    let top_left = inner.left_top() - egui::vec2(4.0, 4.0);
+    frame(&ctx, vec![Event::PointerMoved(top_left)], &mut draw);
+    frame(&ctx, vec![press(top_left, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(inner.center())], &mut draw);
+    frame(&ctx, vec![press(inner.center(), false)], &mut |_: &mut Ui| {});
+    frame(&ctx, vec![], &mut draw);
+    let low = |p: Pos2| p + egui::vec2(0.0, 4.0);
+    let (from, to) = (low(inner.left_bottom()) - egui::vec2(4.0, 0.0), low(inner.right_bottom()));
+    press_drag(&ctx, &mut draw, from, to + egui::vec2(4.0, 0.0));
+    let after = *values.borrow();
+    assert!([0, 2, 4].iter().all(|&k| after[k].abs() < 1e-5), "{after:?}");
+}
+/// The bar under the plot slides every drawn layer together, by the same
+/// octaves for a size, and leaves a layer that is not drawn where it was.
+#[test]
+fn the_star_range_bar_moves_every_drawn_layer_together() {
+    let initial = [1.0, 2.0, 4.0, 3.0, 8.0];
+    let mut values = initial;
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size, 1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let bar = well(&output, crate::theme::ROW_HEIGHT);
+    // The span's middle, 1 to 8 px in octaves on a track of 0.5 to 64.
+    let x = |octaves: f32| bar.left() + bar.width() * (octaves + 1.0) / 7.0;
+    let from = egui::pos2(x(1.5), bar.center().y);
+    press_drag(&ctx, &mut draw, from, from + egui::vec2(15.0, 0.0));
+    let shift = (values[0] / initial[0]).log2();
+    assert!(shift > 0.1, "{values:?}");
+    for k in [2, 4] {
+        assert!(((values[k] / initial[k]).log2() - shift).abs() < 1e-4, "{values:?}");
+    }
+    assert_eq!((values[1], values[3]), (initial[1], initial[3]));
+}
+/// The bar keeps its own pair through a drag: an end dragged off level
+/// layers comes back the way it went, rather than clamping against the end
+/// that followed it, and a double click, which resets a range bar to its
+/// whole axis, spreads no layer across it.
+#[test]
+fn the_star_range_bar_drags_level_layers_both_ways_and_ignores_a_double_click() {
+    let values = std::cell::RefCell::new([0.5; 5]);
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 5, Depth::Speed, 1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let bar = well(&output, crate::theme::ROW_HEIGHT);
+    // Just left of the level pair, which a closed span gives its low end.
+    let at = egui::pos2(bar.center().x - 3.0, bar.center().y);
+    let to = |dx: f32| at - egui::vec2(dx, 0.0);
+    frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
+    frame(&ctx, vec![press(at, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(to(40.0))], &mut draw);
+    let out = values.borrow()[0];
+    frame(&ctx, vec![Event::PointerMoved(to(20.0))], &mut draw);
+    frame(&ctx, vec![press(to(20.0), false)], &mut draw);
+    let back = *values.borrow();
+    assert!(out < back[0] && back[0] < 0.5, "out to {out}, back to {back:?}");
+    assert!(back.iter().all(|v| *v == back[0]), "{back:?}");
+    frame(&ctx, vec![Event::PointerMoved(to(30.0))], &mut draw);
+    for _ in 0..2 {
+        frame(&ctx, vec![press(to(30.0), true)], &mut draw);
+        frame(&ctx, vec![press(to(30.0), false)], &mut draw);
+    }
+    assert_eq!(*values.borrow(), back);
 }
 #[test]
 fn shadow_sliders_update_the_preview_without_switching_kernel() {

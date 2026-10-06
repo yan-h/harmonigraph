@@ -67,25 +67,10 @@ Use the shared `session-lifecycle` skill for completion.
 `./session-lifecycle.sh run -- <command>` holds the workspace lock for builds and tests;
 `./ci.sh` uses it automatically when the shared tool is installed.
 After committing, pushing and opening the draft PR, run `./session-lifecycle.sh handoff` as the final build step.
-It runs the build declared in `.agent-lifecycle.json`, preserves the loadable deliverables outside every worktree, and removes compilation intermediates.
 The binaries still remain under `target/release`, so the existing handover command works during rollout.
-Use `handoff --keep-cache` while still iterating, or the ordinary build command for a pause with uncommitted source.
-For changes that require no new plugin build, `finish --source-only` reclaims caches after verification.
 Neither completion nor cache pruning authorizes a merge or swaps the DAW slot.
 
-`./load-plugin.sh <branch>` also finds verified preserved builds after the worktree is removed.
-Preserved builds live in the common Git directory's `agent-lifecycle/builds/`;
-the shared tool owns their checksums, retention and loader lock.
-Install agent-config's session-lifecycle skill before using them.
-Pin a comparison by adding `PIN` in its publication directory;
-the selected preserved build is also protected from automatic retention.
-
 After a confirmed merge or explicit abandonment, release the worktree through its owner.
-Claude uses the existing reclaimer; Codex uses its app archive tools.
-If an app-owned checkout cannot be archived from the current chat, report owner release pending and leave its source in place.
-Never make a hand-written permanent Git worktree lock.
-The installed hourly fallback retries completed cache cleanup and runs the owner reclaimer;
-unknown locks and unsupported ownership remain protected.
 
 ## A shader-affecting edit owes a regenerated Metal corpus in the SAME commit
 
