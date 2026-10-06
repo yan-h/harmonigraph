@@ -41,13 +41,15 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
-/// Entry points the roll shader must provide: the vertex stage, and each of
-/// the two layers in each of the two shadings [`create_roll_pipeline`] picks
-/// between. Its entry point is assembled from those two words, so a rename in
-/// the WGSL is a panic at pipeline creation and nothing sooner.
+/// Entry points the roll shader must provide: the two vertex stages (the
+/// outline's quad and the bodies'), and each of the two layers in each of the
+/// two shadings [`create_roll_pipeline`] picks between. Its entry point is
+/// assembled from those two words, so a rename in the WGSL is a panic at
+/// pipeline creation and nothing sooner.
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
     "vs_note",
+    "vs_note_body",
     "fs_outline_gamma",
     "fs_outline_linear",
     "fs_core_gamma",
@@ -171,7 +173,7 @@ pub struct RollInstance {
     /// and no piece has an end of its own for an outline to wrap — exactly,
     /// while the width holds still, and near a cut to within what a piece can
     /// see of its neighbours when it does not (see
-    /// [`taper_depth`](Self::taper_depth)). `vs_note` cuts the quad at the
+    /// [`taper_depth`](Self::taper_depth)). `note_vertex` cuts the quad at the
     /// span, so two pieces meet on one shared edge and every pixel is drawn by
     /// one of them.
     pub span: [f32; 2],
@@ -842,11 +844,15 @@ fn create_roll_pipeline(
     casters: &wgpu::BindGroupLayout,
     layer: &str,
 ) -> wgpu::RenderPipeline {
-    let bind_group_layouts = if layer == "outline" {
+    let outline = layer == "outline";
+    let bind_group_layouts = if outline {
         vec![Some(layout), Some(holdout), Some(shadow), Some(casters)]
     } else {
         vec![Some(layout)]
     };
+    // Only the outline reaches past its note by the shadow's reach; the body,
+    // here and in the bloom's notes, takes a quad one feather wider than itself.
+    let vertex = if outline { "vs_note" } else { "vs_note_body" };
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("roll_pipeline_layout"),
         bind_group_layouts: &bind_group_layouts,
@@ -861,7 +867,7 @@ fn create_roll_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_note"),
+            entry_point: Some(vertex),
             compilation_options: Default::default(),
             buffers: &[RollInstance::LAYOUT],
         },
@@ -908,7 +914,8 @@ fn create_holdout_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_note"),
+            // Body coverage alone, so the body's quad.
+            entry_point: Some("vs_note_body"),
             compilation_options: Default::default(),
             buffers: &[RollInstance::LAYOUT],
         },
@@ -3571,3 +3578,7 @@ pub(super) fn asset_catalog(
 ) {
     drop(RollResources::new(device, format, layouts));
 }
+
+#[cfg(test)]
+#[path = "roll_timing.rs"]
+mod timing;

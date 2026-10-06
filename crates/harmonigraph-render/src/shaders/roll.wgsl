@@ -8,7 +8,9 @@
 // TWO LAYERS, drawn as two passes over the same instances rather than
 // composited per note: every note's outline (`fs_outline_*`), then every
 // note's body (`fs_core_*`). Both use ordinary over, and a note's opacity (its
-// `fade`) takes the two out together. One quad's worth of geometry drawn twice.
+// `fade`) takes the two out together. The same instances drawn twice, each
+// layer through a quad as big as its own ink: the outline's grown by the
+// shadow's reach (`vs_note`), the body's by one feather (`vs_note_body`).
 //
 // The order is the whole point. The outline is at its darkest where it meets
 // its own note — as dark as the Shadow darkness makes it — so an outline
@@ -126,6 +128,12 @@ struct VertexOut {
     @location(14) @interpolate(flat) fade: vec2<f32>,
 };
 
+/// The outline layer's quad: the note's box grown by everything
+/// `outline_color` can reach to.
+///
+/// The outline wraps the note, so it is owed room on BOTH axes: ink runs out
+/// wherever the box distance passes `outline_reach`, which is the shadow's
+/// reach past every edge and every corner, and half a feather past that.
 @vertex
 fn vs_note(
     @builtin(vertex_index) vertex: u32,
@@ -144,6 +152,59 @@ fn vs_note(
     @location(6) taper: vec4<f32>,
     @location(7) tremolo: vec2<f32>,
 ) -> VertexOut {
+    let margin = locals.shadow.w + locals.feather;
+    return note_vertex(
+        vertex, who, center, half_extent, shear, lead, core, outline, span_ramp, fade,
+        taper_depth, taper, tremolo, margin,
+    );
+}
+
+/// The BODY layers' quad — the core layer, the body holdout and the bloom's
+/// notes: the note's box grown by one feather. A body's ink is
+/// `inside(in, d, 0.0)`, which is 0 from half a feather past its edge, so the
+/// shadow's reach would only be fragments that compute 0. At long spans that
+/// reach is most of the quad: a note a couple of points across drawn through a
+/// box some fifteen points wider.
+@vertex
+fn vs_note_body(
+    @builtin(vertex_index) vertex: u32,
+    @builtin(instance_index) who: u32,
+    @location(0) center: vec2<f32>,
+    @location(1) half_extent: vec2<f32>,
+    @location(2) shear: f32,
+    @location(4) lead: vec4<f32>,
+    @location(8) core: vec4<f32>,
+    @location(9) outline: vec4<f32>,
+    @location(14) span_ramp: vec4<f32>,
+    @location(15) fade: vec2<f32>,
+    @location(5) taper_depth: vec4<f32>,
+    @location(6) taper: vec4<f32>,
+    @location(7) tremolo: vec2<f32>,
+) -> VertexOut {
+    return note_vertex(
+        vertex, who, center, half_extent, shear, lead, core, outline, span_ramp, fade,
+        taper_depth, taper, tremolo, locals.feather,
+    );
+}
+
+/// One corner of a note's quad: its bounding box grown by `margin` points on
+/// both axes, which is what the layer drawing it can reach to.
+fn note_vertex(
+    vertex: u32,
+    who: u32,
+    center: vec2<f32>,
+    half_extent: vec2<f32>,
+    shear: f32,
+    lead: vec4<f32>,
+    core: vec4<f32>,
+    outline: vec4<f32>,
+    span_ramp: vec4<f32>,
+    fade: vec2<f32>,
+    taper_depth: vec4<f32>,
+    taper: vec4<f32>,
+    tremolo: vec2<f32>,
+    margin: f32,
+) -> VertexOut {
     // Triangle-strip corners: (-1,-1) (1,-1) (-1,1) (1,1).
     let corner = vec2<f32>(
         select(-1.0, 1.0, (vertex & 1u) == 1u),
@@ -151,21 +212,13 @@ fn vs_note(
     );
 
     let slope = shear;
-    // How far outside its own box a note can paint, per axis. The quad is its
-    // bounding box grown by that, and a shortfall here CLIPS ink rather than
-    // costing a little fill rate, so each term is the exact one
-    // `outline_color` and `core_color` can reach to.
-    //
-    // The outline wraps the note, so it is owed room on BOTH axes: ink runs out
-    // wherever the box distance passes `outline_reach`, which is `reach` past
-    // every edge and every corner.
+    // A shortfall in the margin CLIPS ink rather than costing a little fill
+    // rate, so each caller passes the exact reach of its own layer.
     //
     // The distance is Euclidean (see [`box_distance_trimmed`]), so the grown
     // box is the note's own bounding box — its ribbon's half width plus the
     // center line's drift over the note's half-length — with the same margin
     // on both axes, however steep the glide.
-    let reach = locals.shadow.w + 0.5 * locals.feather;
-    let margin = reach + 0.5 * locals.feather;
     let extent = vec2<f32>(
         half_extent.x + abs(slope) * half_extent.y + margin,
         half_extent.y + margin,
