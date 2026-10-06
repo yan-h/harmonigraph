@@ -1,4 +1,4 @@
-//! Half-resolution directional halo quads and hardware-blended overlap statistics.
+//! Reduced-resolution directional halo quads and hardware-blended overlap statistics.
 
 use super::*;
 
