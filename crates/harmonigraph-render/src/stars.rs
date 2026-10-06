@@ -1,9 +1,11 @@
 //! Shared star geometry, allocation and frame transport for colored light fields.
 use crate::uniforms::{uniform_group, Float2, Int2};
 use crate::wgpu;
+use harmonigraph_scene::star_plan::{
+    star_falloff_bend, star_jitter_width, star_read_need, StarGather,
+};
 #[cfg(doc)]
-use harmonigraph_scene::star_plan::star_profile;
-use harmonigraph_scene::star_plan::{star_falloff_bend, star_jitter_width, StarGather};
+use harmonigraph_scene::star_plan::{star_profile, STAR_CAP_SHARE};
 
 /// How many depth slices the starfield walks, from the farthest (0) to the
 /// nearest. The shader's `STAR_SLICES`, held to this by
@@ -267,10 +269,11 @@ pub(crate) fn star_life(settings: harmonigraph_scene::StarSettings, now: f64) ->
 /// the areas so it keeps its light: any point is within 0.71 texels of a
 /// centre, and a radius of one reaches the centres around it as far as the
 /// bilinear filter that draws the image up does. Each slice takes the
-/// cheapest read that holds its largest star whole at its cell's centre
-/// ([`StarGather::holding`]); a star its `Position variation` strays toward
+/// cheapest read that holds its largest star whole at its cell's centre and,
+/// wherever its `Position variation` strays it, both the floor and
+/// [`STAR_CAP_SHARE`] of that star ([`star_read_need`]); a star strayed toward
 /// the cell's edge is drawn smaller where it would overrun that read, but
-/// never under the floor, so a floor-widened star is held wherever it strays.
+/// never under either, so a floor-widened star is held wherever it strays.
 /// The floor stops at what a 3x3 read holds of every star wherever it
 /// strays: those cells are finer than a texel, so their stars were never told
 /// apart at this resolution.
@@ -307,18 +310,20 @@ pub(crate) fn star_slices(
         // works it out, with the original conservative neighbor and margin.
         let origin: [i32; 2] =
             std::array::from_fn(|axis| star_origin(layout.pane[axis], cell, offset[axis]));
-        // The cap never takes a star under the floor. The bake caps a star
+        // The cap never takes a star under the floor, nor under
+        // `STAR_CAP_SHARE` of the depth's largest star. The bake caps a star
         // strayed `m` cells from its cell's centre at `(h - m) * cell`, which
-        // is at least `(h - half_band) * cell`; so the floor is read by a
-        // half-width holding it plus the half-band, and stops at what 3x3
-        // holds of the worst-placed star. The plan's radius always fits that
-        // (`Star spacing` never runs below `STAR_SPACING_MIN`). The layout's
-        // cell, which the atlas may have raised past the plan's.
+        // is at least `(h - half_band) * cell`; so the read is one whose
+        // half-width holds both plus the half-band (`star_read_need`), and
+        // the floor stops at what 3x3 holds of the worst-placed star. The
+        // plan's radius always fits that (`Star spacing` never runs below
+        // `STAR_SPACING_MIN`). The layout's cell, which the atlas may have
+        // raised past the plan's.
         let half_band = star_jitter_width(jitter) * 0.5;
         let floor = texel.min((StarGather::Three.half_width() - half_band) * cell);
         let gather = match depth.gather {
             StarGather::Off => StarGather::Off,
-            _ => StarGather::holding(depth.radius.max(floor + half_band * cell), cell),
+            _ => StarGather::holding(star_read_need(depth.radius, floor, cell, jitter), cell),
         };
         StarSlice {
             offset: Float2(offset),

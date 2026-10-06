@@ -44,15 +44,32 @@ impl StarGather {
     }
 
     /// The cheapest read that holds a star of radius `radius` star pixels
-    /// whole at the centre of a cell `cell` wide; 3x3 where none does. The
-    /// plan's choice for its stars, and the renderer's for the floor it
-    /// widens them to, with the band a centre strays in added so the floor
-    /// holds wherever it strays. A star its `Position variation` strays
-    /// toward the cell's edge may overrun the read's window, and is drawn
-    /// smaller to stay inside it ([`Self::half_width`]).
+    /// whole at the centre of a cell `cell` wide; 3x3 where none does. Asked
+    /// for [`star_read_need`], it is the plan's choice for its stars and the
+    /// renderer's for the floor it widens them to. A star its `Position
+    /// variation` strays toward the cell's edge may overrun the read's
+    /// window, and is drawn smaller to stay inside it
+    /// ([`Self::half_width`]), but never under [`STAR_CAP_SHARE`] of its
+    /// depth's largest star or under the floor.
     pub fn holding(radius: f32, cell: f32) -> Self {
         Self::DRAWN.into_iter().find(|g| radius <= g.half_width() * cell).unwrap_or(Self::Three)
     }
+}
+
+/// The least of its depth's largest star a star is ever drawn at by the cap
+/// at its read's window, wherever `Position variation` strays it: so the cap
+/// stays inside the 0.47 to 1 of it `Size variation` itself draws.
+pub const STAR_CAP_SHARE: f32 = 0.75;
+
+/// The least a read must hold, in star pixels from a cell's centre, for a
+/// depth whose largest star is `radius` wide and whose floor is `floor`, in
+/// cells `cell` wide at `Position variation` `jitter`: the star at its cell's
+/// centre, and at the edge of the band a centre strays in both the floor and
+/// [`STAR_CAP_SHARE`] of the star. Given to [`StarGather::holding`], it
+/// picks the read.
+pub fn star_read_need(radius: f32, floor: f32, cell: f32, jitter: f32) -> f32 {
+    let half_band = star_jitter_width(jitter) * 0.5;
+    radius.max((STAR_CAP_SHARE * radius).max(floor) + half_band * cell)
 }
 
 /// One star's coverage at `t`, its distance over its own outer radius: full
@@ -101,9 +118,10 @@ pub fn star_jitter_width(jitter: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StarDepthPlan {
     /// Whether the depth is drawn, and the cheapest read that holds its
-    /// largest star whole at its cell's centre; a star strayed toward the
-    /// cell's edge is drawn smaller where it would overrun the read
-    /// ([`StarGather::half_width`]). The renderer reads it again over the
+    /// largest star whole at its cell's centre and [`STAR_CAP_SHARE`] of it
+    /// wherever `Position variation` strays it ([`star_read_need`]); a star
+    /// strayed toward the cell's edge is drawn smaller where it would overrun
+    /// the read ([`StarGather::half_width`]). The renderer reads it again over the
     /// cell the atlas gives it, with the stars widened to the star image's
     /// texel (`star_slices`), so the read drawn may differ either way.
     pub gather: StarGather,
@@ -143,8 +161,11 @@ impl StarSettings {
         let depths = std::array::from_fn(|k| {
             let diameter = self.star_size[k];
             let (cell, radius) = (self.star_spacing_ratio[k] * diameter, 0.5 * diameter);
-            let gather =
-                if !drawn(k) { StarGather::Off } else { StarGather::holding(radius, cell) };
+            let gather = if !drawn(k) {
+                StarGather::Off
+            } else {
+                StarGather::holding(star_read_need(radius, 0.0, cell, self.star_jitter), cell)
+            };
             StarDepthPlan {
                 gather,
                 speed: self.star_speed[k],
@@ -163,9 +184,10 @@ mod tests {
     use super::*;
 
     /// Each depth is read by the cheapest gather that holds its largest star
-    /// whole at its cell's centre, whatever `Position variation` is. At the
-    /// fresh dials the far four fit 2x2 (the second-nearest at 0.93 of a
-    /// cell) and the nearest, at 1.2, needs 3x3.
+    /// whole at its cell's centre, and three quarters of it wherever
+    /// `Position variation` strays it. At the fresh dials the far four fit
+    /// 2x2 at any variation (the second-nearest at 0.93 of a cell) and the
+    /// nearest, at 1.2, needs 3x3.
     #[test]
     fn each_depth_takes_the_cheapest_gather_that_holds_its_stars() {
         use StarGather::{Three, Two};
@@ -177,6 +199,25 @@ mod tests {
 
         let sparse = StarSettings { star_spacing_ratio: [2.0; STAR_DEPTHS], ..Default::default() };
         assert!(sparse.plan().depths.iter().all(|depth| depth.gather == StarGather::Core));
+
+        // A star half a cell wide fills 1x1 at its cell's centre. Strayed to
+        // the edge of the band at full variation, 1x1 would cap it to 0.4 of
+        // itself, so it reads 2x2, which holds three quarters of it there.
+        for (star_jitter, read) in [(0.0, StarGather::Core), (1.0, Two)] {
+            let edge = StarSettings {
+                star_spacing_ratio: [1.0; STAR_DEPTHS],
+                star_jitter,
+                ..Default::default()
+            };
+            for depth in edge.plan().depths {
+                assert_eq!(depth.gather, read, "jitter={star_jitter}");
+                let held = depth.gather.half_width() * depth.cell;
+                assert!(held >= star_read_need(depth.radius, 0.0, depth.cell, star_jitter));
+                let half_band = 0.5 * star_jitter_width(star_jitter);
+                let worst = held - half_band * depth.cell;
+                assert!(worst >= STAR_CAP_SHARE * depth.radius, "{depth:?}");
+            }
+        }
     }
 
     /// The closest `Star spacing` is a hair inside what the widest read holds

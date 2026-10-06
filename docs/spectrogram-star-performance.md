@@ -53,10 +53,11 @@ Changing the resolution reallocates the image without resetting retained colors.
 The four-cell gather starts at `floor(r - 0.5)`,
 so it sees a cell from pixels within one cell of that cell's centre on each axis;
 the one-cell read sees half a cell and the nine-cell read one and a half.
-A depth takes the cheapest read whose half-width holds its largest star at its cell's centre,
-with no allowance for jitter;
-only the texel floor is held wherever a star strays,
-as above.
+A depth takes the cheapest read whose half-width holds its largest star at its cell's centre;
+wherever a star strays,
+the read also holds the texel floor,
+as above,
+and three quarters of the largest star.
 The bake then caps each star at its own window:
 its radius is at most the half-width less its centre's larger offset from the cell's centre,
 in cells.

@@ -294,8 +294,8 @@ fn a_drawn_star_follows_the_cpu_profile() {
 }
 
 /// A depth whose stars fit their own cell reads that cell alone and loses
-/// nothing a 3x3 read would see, at stars a hair inside the 1x1 read's
-/// half-width, so that any `Position variation` caps a strayed star.
+/// nothing a 3x3 read would see, at stars a hair inside the largest the 1x1
+/// read takes, so that any `Position variation` caps a strayed star.
 #[test]
 fn a_core_depth_draws_its_stars_whole() {
     let Some((device, queue)) = headless_device() else { return };
@@ -304,7 +304,11 @@ fn a_core_depth_draws_its_stars_whole() {
     for jitter in [0.0, 0.5, 1.0] {
         let stars = &mut cb.atmosphere.as_mut().unwrap().settings.stars;
         stars.star_jitter = jitter;
-        let core = harmonigraph_scene::star_plan::StarGather::Core.half_width();
+        // The widest star over its cell 1x1 takes: one it holds at its
+        // cell's centre, and three quarters of at the edge of the band.
+        use harmonigraph_scene::star_plan::{star_jitter_width, StarGather, STAR_CAP_SHARE};
+        let edge = StarGather::Core.half_width() - star_jitter_width(jitter) / 2.0;
+        let core = StarGather::Core.half_width().min(edge / STAR_CAP_SHARE);
         let spacing = 1.001 * 0.5 / core;
         stars.star_spacing_ratio = [spacing; 5];
         // Wide enough that 1x1 holds a texel of the 75% image (6 star
