@@ -65,12 +65,12 @@ drag a bar or double-click it to type in the displayed units.
 | Control | What the handles change |
 | --- | --- |
 | Ring threshold | The upper handle sets the opening threshold; the lower sets hysteresis. The white marker shows the effective closing threshold, including the small floor that prevents silent rings from staying latched. A zero opening threshold deliberately shows silent rings. |
-| Drift | Point the vector along the direction of travel and drag outward for speed. Stars use a direction compass and retain their independent depth-dependent speed profile. |
+| Drift | Point the vector along the direction of travel and drag outward for speed. Stars use a direction compass and keep their per-layer speeds. |
 | Note fade | Move the endpoint horizontally for duration and the midpoint vertically for curve shape. Duration remains host-automatable. |
 | Cabinet depth axis | Point the endpoint along the depth axis; its distance from the origin sets the depth-step scale. |
 | Softness | Move the bounding corner of the blur footprint: horizontally for time, vertically for pitch. |
 | Response | The rising and falling curves have independent time handles. Zero is immediate; otherwise each handle marks one time constant, at 63% risen or 37% remaining. |
-| Star size, spacing and speed | Move the far and near endpoints vertically, or the midpoint to redistribute change across depth. Size and spacing use a logarithmic vertical scale; speed is linear. |
+| Star layers (Per layer) | Choose Size, Spacing, Speed, Solid or Twinkle above the plot. Drag one layer's dot vertically, or press on the plot's empty space and drag a line across the layers to set every layer it spans onto it. The bar beside it spans the drawn layers: drag an end to stretch them all, or its middle to slide them. Size and spacing use a logarithmic vertical scale; the rest are linear. A layer that Star layers leaves out keeps its values. |
 | Shadows | Width, Darkness, and Falloff (Contour) or Spread (Blur) bars sit beside a rendered shadow around a sample shape. The sample is scaled to fit; the shadow on each drawn shape depends on its size and outline. |
 | Interface tint and accent | Click the swatch button for a hue/amount picker using the interface's own color model. |
 | Spectrum edge | Click one of four buttons forming a compact rectangle: Left and Right span both rows, with Top and Bottom stacked between them. |

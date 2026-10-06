@@ -17,7 +17,7 @@ Replace its combined enable/material controls with two independently selectable 
 - Texture: Clouds; depth (Pattern contrast, where zero turns it off), size and speed.
 - Material: None, Watercolor, Stars, Scales; amount and drift direction.
 Watercolor and Scales use Drift speed;
-Stars uses its depth-dependent Star speed range.
+Stars uses its per-layer Star speed.
 - Watercolor: patch size, edge feathering, shape warp, refraction, random brightness and fine layer mix.
 - Scales: cell size, size variation, edge softness, irregularity and scale shape.
 - Breathing: depth and speed in the Background glow controls, independent of either stage.

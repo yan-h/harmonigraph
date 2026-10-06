@@ -2261,9 +2261,9 @@ mod tests {
         assert_eq!(layout.cells[STAR_SLICES - 1], wanted[STAR_SLICES - 1]);
     }
 
-    /// Every depth drifts along `Drift direction` at its own speed between
-    /// `Star speed`'s ends, and a depth at 1 at the prototype's pace: about a
-    /// ninth of the pane's height a second. Equal ends are no parallax at all,
+    /// Every depth drifts along `Drift direction` at its own `Star speed`, and
+    /// a depth at 1 at the prototype's pace: about a ninth of the pane's
+    /// height a second. Equal speeds are no parallax at all,
     /// and the other textures' `Drift speed` moves no star.
     ///
     /// Read as SCREEN travel, `offset * cell`, which is what the eye sees —

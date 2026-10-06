@@ -510,9 +510,11 @@ impl Default for StarSettings {
             // over the sizes below, fitted within 1% at all five depths, then
             // taken off the fitted curve (far 0.624, near the floor, exponent
             // 3.5) when each depth got its own. Every per-depth fresh value
-            // here is the f32 its curve computed, to the last bit, so the
-            // fresh field kept the very stars it drew before. The nearest sits at the floor,
-            // as close as its stars ever fit.
+            // here is the f32 its curve computed at five layers, to the last
+            // bit, so the fresh field kept the very stars it drew before; at
+            // four layers the curves were read at thirds, so the second and
+            // fourth layers now differ. The nearest sits at the floor, as
+            // close as its stars ever fit.
             star_spacing_ratio: [0.624, 0.622_034_25, 0.602_118, 0.538_397_43, STAR_SPACING_MIN],
             // A rough fit of the core-and-fringe stars this replaced: the
             // near two at the 1.2-cell reach they were drawn to, the far
