@@ -99,20 +99,6 @@ pub(crate) fn spectrogram_section(ui: &mut egui::Ui, cfg: &mut crate::SpectrumCo
                 let stars = atmosphere.cloud_style == CloudStyle::Stars;
                 if stars {
                     super::super::material::stars_resolution(ui, &mut atmosphere.stars);
-                    // Greyed below full mix, where the light field is on
-                    // screen and the renderer ignores it.
-                    ui.add_enabled_ui(atmosphere.cloud_depth >= 1.0, |ui| {
-                        crate::widgets::checkbox(
-                            ui,
-                            &mut atmosphere.star_pitch_floor,
-                            "Star colour: cell-sized pitch",
-                        )
-                        .on_hover_text(
-                            "Store the light the stars take their colour from at one sample per \
-                             finest star cell along pitch, averaging the sound across each cell, \
-                             to save GPU time. Applies only at 100% Texture mix.",
-                        );
-                    });
                     block(ui, "Appearance");
                     super::super::material::stars(ui, &mut atmosphere.stars, 1.0);
                 }

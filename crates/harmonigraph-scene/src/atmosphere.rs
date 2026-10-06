@@ -410,14 +410,6 @@ pub struct SpectralAtmosphere {
     /// [`Self::material_settings`], and [`Self::stars`] for `Stars`.
     pub cloud_style: CloudStyle,
     pub stars: StarSettings,
-    /// Under Stars at full `Texture mix`, store the light field's PITCH axis
-    /// at about one texel per finest drawn star cell rather than at the pane's
-    /// resolution. A PERFORMANCE switch, off by default while it is judged by
-    /// eye (#1458): there the field is read only at star centres, so the
-    /// source's own box average over a cell stands in for the pixels between
-    /// them, stacked under the pitch Gaussian rather than widening it. Below
-    /// full mix the field itself is on screen, so it does nothing there.
-    pub star_pitch_floor: bool,
 }
 
 /// Shared star geometry and rendering controls. Each pane owns its own values.
@@ -660,7 +652,6 @@ impl Default for SpectralAtmosphere {
             cloud_style: CloudStyle::Stars,
             material_settings: MaterialSettings::default(),
             stars: StarSettings::default(),
-            star_pitch_floor: false,
         }
     }
 }
