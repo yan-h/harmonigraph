@@ -12,11 +12,12 @@
 //! their peaks, the stage table, and the memory read — is
 //! `harmonigraph-perf`. The shell supplies its build tag when it draws.
 //!
-//! What a frame COSTS lives one checkbox further in, under `show_perf_detail`
-//! (see [`draw_overlay`]). The headline list carries the frame interval and
-//! its worst recent frame, but the interval's mean is the rate in another
-//! unit — `fps` is literally its reciprocal — so the only cost reading the
-//! HUD gives without the breakdown is that peak.
+//! Where a frame's CPU time goes lives one checkbox further in, under
+//! `show_perf_detail` (see [`draw_overlay`]). The headline list carries the
+//! frame interval and its worst recent frame, but the interval's mean is the
+//! rate in another unit — `fps` is literally its reciprocal — so the cost
+//! readings the HUD gives without the breakdown are that peak and the `gpu`
+//! row.
 //!
 //! Interactive only. [`root_ui`](crate::root_ui) times the frame, folds the
 //! numbers in through [`PerfStats::record`], and draws the overlay; the
@@ -62,47 +63,48 @@ fn overlay_rows(perf: &PerfStats, detail: bool) -> Vec<(u8, &'static str, String
     // of them must not look like it does.
     //
     // Without `detail` the list is what you read to NOTICE something is wrong:
-    // the rate, its worst recent frame, and the workload behind them. A row
-    // that only answers WHERE the frame went belongs to the breakdown —
-    // `tick` and everything nested under it, and the GPU passes beside them —
-    // because that is the question the breakdown exists to answer, and until
-    // it is asked the rows are scaffolding sitting over the picture.
+    // the rate, its worst recent frame, the GPU's share, and the workload
+    // behind them. A row that only answers WHERE the CPU frame went belongs to
+    // the breakdown — `tick` and everything nested under it — because that is
+    // the question the breakdown exists to answer, and until it is asked the
+    // rows are scaffolding sitting over the picture.
     //
-    // Note what that leaves: `frame`'s MEAN is the header's `fps` in another
-    // unit (`fps()` is its reciprocal), so the peak column is the only thing
-    // the headline list says about cost. Reading a rising cost off the basic
-    // HUD means watching that peak, or turning the breakdown on.
+    // `frame`'s MEAN is the header's `fps` in another unit (`fps()` is its
+    // reciprocal), so the cost readings the headline list carries are that
+    // peak and the `gpu` row, which is the one question the CPU stages cannot
+    // answer: whether the GPU is what is holding the frame up.
+    // The GPU's share of the frame, on one line: the draw interval, and inside
+    // it the 3D passes, so the reader can attribute GPU cost without adding
+    // two readings together.
+    //
+    // Means only. Two peaks as well would be four numbers on one row, and the
+    // row would stop being readable long before it became more useful.
+    let gpu_row = || {
+        let gpu = &STAGES[Stage::Gpu as usize];
+        let lattice = if !perf.gpu_supported {
+            "n/a".to_owned()
+        } else if perf.have_gpu {
+            format!("{:.1}", perf.window(Stage::Gpu).shown_mean)
+        } else {
+            "—".to_owned()
+        };
+        let value = format!("{:.1} draw · {lattice} 3d", perf.window(Stage::DrawGpu).shown_mean);
+        (gpu.depth, gpu.label, value, None)
+    };
     let mut rows: Vec<(u8, &str, String, Option<String>)> = vec![timed(Stage::Frame as usize)];
-    if detail {
+    if !detail {
+        // The GPU line is the one cost reading the headline list carries beside
+        // the frame: the CPU stages say where the frame went, but not whether
+        // the GPU is what is holding it up.
+        rows.push(gpu_row());
+    } else {
         // Every stage the table says to print, in its order — `tick` and
         // everything nested under it. Filtered out of the table rather than
         // named by a range, so a stage appears in the breakdown by having been
         // added to [`STAGES`], and cannot be measured every frame and then
         // left off the list.
         rows.extend(STAGES.iter().enumerate().filter(|(_, s)| s.breakdown).map(|(i, _)| timed(i)));
-        let gpu = &STAGES[Stage::Gpu as usize];
-        rows.push((
-            gpu.depth,
-            gpu.label,
-            {
-                // The 3D time is a subset of the draw interval, shown on one
-                // line so the reader can attribute GPU cost without adding the
-                // two readings together.
-                //
-                // Means only. Two peaks as well would be four numbers on one row,
-                // and the row would stop being readable long before it became more
-                // useful.
-                let lattice = if !perf.gpu_supported {
-                    "n/a".to_owned()
-                } else if perf.have_gpu {
-                    format!("{:.1}", perf.window(Stage::Gpu).shown_mean)
-                } else {
-                    "—".to_owned()
-                };
-                format!("{:.1} draw · {lattice} 3d", perf.window(Stage::DrawGpu).shown_mean)
-            },
-            None,
-        ));
+        rows.push(gpu_row());
         rows.push((0, "verts", format!("{}k in {} prims", perf.verts / 1000, perf.prims), None));
         // The roll's geometry, which `verts` does not see: it goes to the
         // GPU as instances on the roll's own buffer, four vertices a note.
@@ -386,7 +388,9 @@ mod tests {
 
     /// The basic overlay answers "is something wrong", the breakdown answers
     /// "where did the frame go" — so every row that only serves the second
-    /// question waits for `detail`, `tick` and `gpu` included. The breakdown
+    /// question waits for `detail`, `tick` included. The GPU line is the
+    /// exception: the CPU stages cannot say whether the GPU is the bottleneck,
+    /// so it is a headline row and the breakdown carries it too. The breakdown
     /// EXPANDS the headline list rather than replacing it: the headline rows
     /// keep their order and their place, so a glance at one mode transfers
     /// to the other.
@@ -404,8 +408,9 @@ mod tests {
         let basic = label_of(&overlay_rows(&perf, false));
         assert_eq!(
             basic,
-            ["frame", "memory", "voices", "nodes"],
-            "the basic overlay is the rate, its worst frame, and the workload behind them",
+            ["frame", "gpu", "memory", "voices", "nodes"],
+            "the basic overlay is the rate, its worst frame, the GPU's share, and the workload \
+             behind them",
         );
 
         // WHICH rows the breakdown adds, and at what depth, is
@@ -419,10 +424,11 @@ mod tests {
         // subsequence let the whole breakdown move to the end of the HUD and
         // still pass, which is exactly the glance that stops transferring.
         assert_eq!(detail.first(), basic.first(), "the breakdown must still open on `frame`");
-        let tail = basic.len() - 1;
+        assert!(detail.contains(&"gpu"), "the breakdown carries the GPU line too");
+        let tail = basic.len() - 2;
         assert_eq!(
             detail[detail.len() - tail..],
-            basic[1..],
+            basic[2..],
             "the workload rows belong at the foot of both lists",
         );
     }
