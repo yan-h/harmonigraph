@@ -180,7 +180,6 @@ impl LatticeCallback {
                 || g.params[2] > 0.0
                 || (g.octaves[0] | g.octaves[1] | g.octaves[2]) != 0
         };
-        let paints = |g: &GpuInstance| inked(g) || (lights && g.glow[0] > 0.0);
         let mut plus_of = vec![None; scene.nodes.len()];
         for (p, plus) in scene.pluses.iter().enumerate() {
             debug_assert!(scene.nodes[plus.node].on_home, "markers belong to home nodes");
@@ -216,16 +215,19 @@ impl LatticeCallback {
         // that ships, stands under a cross, or carries a name. Every other
         // node emits nothing wherever it sorts, and in a dense window it is
         // most of them. `sort_by` is stable, so the ones kept come out in the
-        // order they held in the full sort. Whether a node ships is asked here,
-        // once, of its packed instance.
-        let mut order: Vec<(f32, f32, usize, bool)> = scene
+        // order they held in the full sort. Whether a node ships, and whether
+        // with ink or for its light alone, is asked here, once, of its packed
+        // instance.
+        let mut order: Vec<(f32, f32, usize, bool, bool)> = scene
             .nodes
             .iter()
             .enumerate()
             .filter_map(|(i, n)| {
-                let ships = paints(&to_gpu(n));
+                let g = to_gpu(n);
+                let inked = inked(&g);
+                let ships = inked || (lights && g.glow[0] > 0.0);
                 (ships || plus_of[i].is_some() || glyphs_of[i].1 > 0)
-                    .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships))
+                    .then(|| (sheet_depth(n), (n.world_pos - eye).dot(forward), i, ships, inked))
             })
             .collect();
         order.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.total_cmp(&a.1)));
@@ -274,7 +276,7 @@ impl LatticeCallback {
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
         let text_spread = text.gaussian_spread_points(text_sigma);
         let shadow_reach = geometry_sigma * geometry.kernel.reach_sigmas() + geometry_spread;
-        let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance| {
+        let node_caster = |n: &harmonigraph_scene::NodeInstance, g: &GpuInstance, inked: bool| {
             let empty = shadow::Caster {
                 rect: [0.0; 4],
                 level: 0.0,
@@ -288,7 +290,7 @@ impl LatticeCallback {
             // A node shipped for its light alone would fill its cell with
             // nothing: level 0 packs no cell and keeps it out of the
             // occluders (`shadow::pack`, `shadow::node_occluders`).
-            if !inked(g) {
+            if !inked {
                 return empty;
             }
             // The circle the node's ink fits inside, in its own uv: `node_rim`
@@ -393,7 +395,7 @@ impl LatticeCallback {
             && scene.view.glow_strength > 0.0
             && atmosphere.breath_amount > 0.0
             && atmosphere.breath_speed > 0.0;
-        for &(_, _, i, ships) in &order {
+        for &(_, _, i, ships, inked) in &order {
             let mut instance = to_gpu(&scene.nodes[i]);
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
@@ -404,14 +406,14 @@ impl LatticeCallback {
             }
             if ships {
                 // A node shipped for its light alone draws nothing here.
-                if inked(&instance) {
+                if inked {
                     push_node(&mut draws, instances.len() as u32);
                 }
                 // Its own cell of the atlas, beside it: what this node's shadow
                 // is a blur of, and what it multiplies the frame under it by.
                 // Every instance keeps its box, whether or not one is packed.
                 node_cells.push(casters.len() as u32);
-                casters.push(node_caster(&scene.nodes[i], &instance));
+                casters.push(node_caster(&scene.nodes[i], &instance, inked));
                 // Display modulation is separate from the ink-history level and coefficient.
                 if breathes && instance.glow[0] > 0.0 {
                     instance.glow[3] = atmosphere
