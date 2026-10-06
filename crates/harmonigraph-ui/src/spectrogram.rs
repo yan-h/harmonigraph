@@ -712,25 +712,7 @@ impl SlabGrid {
             // ring for a window's worth of samples), and that band was the
             // result. Silence is what the analyzer actually had.
             Some(k) if key > k => {
-                let empty = key - k - 1;
-                // The live owner admits only its retained interval. Keep the
-                // original gap length for the hold decision: clipping a long
-                // gap down to one empty slab must not turn silence into a hold.
-                for slot in (k + 1).max(min_key.unwrap_or(i64::MIN))..key {
-                    self.centers.push((slot as f64 + 0.5) * bucket);
-                    if empty <= JITTER_SLABS {
-                        // Hold the previous column: a gap this short is a seam
-                        // in the sample stream (see `JITTER_SLABS`), and
-                        // painting it silent would leave a stripe of false
-                        // silence scrolling across the display for the rest
-                        // of the window. The held slab is already final, so
-                        // the copy shares it.
-                        let held = self.power.last().expect("a current slab").clone();
-                        self.power.push(held);
-                    } else {
-                        self.power.push(silent_slab());
-                    }
-                }
+                self.fill_gap(k, key, bucket, min_key);
                 self.centers.push((key as f64 + 0.5) * bucket);
                 self.power.push(silent_slab());
                 self.cur_key = Some(key);
@@ -752,6 +734,115 @@ impl SlabGrid {
             self.retain_from(min_key, bucket);
         }
         forward
+    }
+
+    /// The rows for the empty slabs strictly between finished slab `from` and
+    /// slab `to`.
+    fn fill_gap(&mut self, from: i64, to: i64, bucket: f64, min_key: Option<i64>) {
+        let empty = to - from - 1;
+        // The live owner admits only its retained interval. Keep the
+        // original gap length for the hold decision: clipping a long
+        // gap down to one empty slab must not turn silence into a hold.
+        for slot in (from + 1).max(min_key.unwrap_or(i64::MIN))..to {
+            self.centers.push((slot as f64 + 0.5) * bucket);
+            if empty <= JITTER_SLABS {
+                // Hold the previous column: a gap this short is a seam
+                // in the sample stream (see `JITTER_SLABS`), and
+                // painting it silent would leave a stripe of false
+                // silence scrolling across the display for the rest
+                // of the window. The held slab is already final, so
+                // the copy shares it.
+                let held = self.power.last().expect("a current slab").clone();
+                self.power.push(held);
+            } else {
+                self.power.push(silent_slab());
+            }
+        }
+    }
+
+    /// Continue with `next`, a grid folded from the columns that follow this
+    /// one's, starting at a LATER slab: what folding those columns here would
+    /// have built. Folding a column touches only its own slab, so the
+    /// one thing that crosses the seam is the gap between the two — its rows,
+    /// and the hold that copies this grid's last slab into them.
+    fn append(&mut self, mut next: SlabGrid, bucket: f64, min_key: Option<i64>) {
+        self.finish();
+        let first = next.centers.first().map(|&c| (c / bucket).floor() as i64);
+        if let (Some(k), Some(first)) = (self.cur_key, first) {
+            self.fill_gap(k, first, bucket, min_key);
+        }
+        self.centers.append(&mut next.centers);
+        self.power.append(&mut next.power);
+        self.cur_key = next.cur_key;
+        self.mean = next.mean;
+        self.dirty = next.dirty;
+        if let Some(min_key) = min_key {
+            self.retain_from(min_key, bucket);
+        }
+    }
+
+    /// Fold `columns` in order into a fresh grid — exactly the grid
+    /// [`fold`](Self::fold) builds from them one by one — cut into up to
+    /// `runs` runs of whole slabs that are folded in parallel and then
+    /// [appended](Self::append). The bytes are identical because a slab's sums
+    /// start from zero and take its own columns in the same order either way.
+    fn fold_runs(
+        columns: &[&crate::SpectrogramColumn],
+        bucket: f64,
+        min_key: Option<i64>,
+        runs: usize,
+    ) -> SlabGrid {
+        let fold = |run: &[&crate::SpectrogramColumn]| {
+            let mut grid = SlabGrid::default();
+            for col in run {
+                grid.fold(col, bucket, min_key);
+            }
+            // Quantizing is the other half of the cost; do it on the worker.
+            grid.finish();
+            grid
+        };
+        let key = |i: usize| (columns[i].time / bucket).floor() as i64;
+        // Cut near each equal share, moved forward onto a step to a later slab
+        // (a backward step, which the store never makes, is never a seam).
+        let mut cuts = vec![0];
+        for r in 1..runs {
+            let mut cut = (columns.len() * r / runs).max(cuts[cuts.len() - 1] + 1);
+            while cut < columns.len() && key(cut) <= key(cut - 1) {
+                cut += 1;
+            }
+            if cut < columns.len() {
+                cuts.push(cut);
+            }
+        }
+        cuts.push(columns.len());
+        if cuts.len() <= 2 {
+            return fold(columns);
+        }
+        let fold = &fold;
+        let grids: Vec<SlabGrid> = std::thread::scope(|s| {
+            // This runs on the host's GUI thread, where a panic takes the plugin
+            // down: a run whose thread the OS refuses is folded here instead.
+            let workers: Vec<_> = cuts[1..]
+                .windows(2)
+                .map(|w| {
+                    let run = &columns[w[0]..w[1]];
+                    (run, std::thread::Builder::new().spawn_scoped(s, move || fold(run)).ok())
+                })
+                .collect();
+            let first = fold(&columns[..cuts[1]]);
+            std::iter::once(first)
+                .chain(workers.into_iter().map(|(run, worker)| match worker {
+                    Some(w) => w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                    None => fold(run),
+                }))
+                .collect()
+        });
+        let mut grids = grids.into_iter();
+        let mut grid = grids.next().expect("at least two runs");
+        for next in grids {
+            grid.append(next, bucket, min_key);
+        }
+        grid
     }
 
     fn finish(&mut self) {
@@ -850,6 +941,33 @@ pub(crate) struct SpectrogramAgg {
     rebuilds: u32,
 }
 
+/// The columns a full refold folds: the retention and one complete
+/// predecessor slab. The seed supplies a clipped hold, or proves the silent
+/// leading interval when the source jumped. No skipped prefix is ever expanded
+/// into rows.
+fn refold_columns(
+    history: &crate::SpectrumHistory,
+    bucket: f64,
+    min_key: Option<i64>,
+) -> Vec<&crate::SpectrogramColumn> {
+    let mut start = min_key
+        .map_or(0, |min| history.partition_point(|c| ((c.time / bucket).floor() as i64) < min));
+    if let Some(previous) = start.checked_sub(1).and_then(|i| history.get(i)) {
+        let seed = (previous.time / bucket).floor() as i64;
+        start = history.partition_point(|c| ((c.time / bucket).floor() as i64) < seed);
+    }
+    history.iter_from(start).collect()
+}
+
+/// Most threads a full refold splits across. The add is memory-bound: on an
+/// M1 Pro one thread streams a full-cap history (7,168 columns, 110 MB) in
+/// about 7 ms, four in about 3, and more buy little.
+const REFOLD_THREADS: usize = 4;
+
+/// Fewest columns worth a refold thread of their own: a thread costs tens of
+/// microseconds to start, a column a microsecond or so to fold.
+const REFOLD_RUN_COLUMNS: usize = 256;
+
 impl SpectrogramAgg {
     /// Full rebuilds taken since this aggregator was made — see the field.
     pub(crate) fn rebuilds(&self) -> u32 {
@@ -877,19 +995,12 @@ impl SpectrogramAgg {
     /// refold rate pinned at the frame rate for the length of the drag.
     fn rebuild(&mut self, history: &crate::SpectrumHistory, bucket: f64, min_key: Option<i64>) {
         self.rebuilds += 1;
-        self.grid = SlabGrid::default();
-        // Admit the retention and one complete predecessor slab. The seed
-        // supplies a clipped hold, or proves the silent leading interval when
-        // the source jumped. No skipped prefix is ever expanded into rows.
-        let mut start = min_key
-            .map_or(0, |min| history.partition_point(|c| ((c.time / bucket).floor() as i64) < min));
-        if let Some(previous) = start.checked_sub(1).and_then(|i| history.get(i)) {
-            let seed = (previous.time / bucket).floor() as i64;
-            start = history.partition_point(|c| ((c.time / bucket).floor() as i64) < seed);
-        }
-        for col in history.iter_from(start) {
-            self.grid.fold(col, bucket, min_key);
-        }
+        let columns = refold_columns(history, bucket, min_key);
+        let runs = (columns.len() / REFOLD_RUN_COLUMNS).clamp(
+            1,
+            std::thread::available_parallelism().map_or(1, |n| n.get()).min(REFOLD_THREADS),
+        );
+        self.grid = SlabGrid::fold_runs(&columns, bucket, min_key, runs);
         self.bucket_bits = bucket.to_bits();
         self.last_time = history.back().map_or(f64::NEG_INFINITY, |c| c.time);
     }
@@ -1729,6 +1840,69 @@ mod tests {
         assert_eq!(power[0][5], q((sum / n as f64) as f32));
         assert_eq!(power[0][6], q(1e-7), "quiet content uses the same count");
         assert_eq!(power[0][7], 0);
+    }
+
+    /// A refold split across threads must build the grid one thread builds,
+    /// down to which rows share a held slab and the open slab's sums, which the
+    /// incremental fold goes on adding to. Every run count up to one per
+    /// column puts a seam at every slab step, so each kind of gap — a held
+    /// slab, a silent stretch, one clipped at the retention bound — is crossed
+    /// by a seam under some count.
+    #[test]
+    fn a_refold_split_into_runs_builds_the_grid_one_fold_builds() {
+        let times = [
+            1.1, 1.6, 3.2, 4.1, 4.5, 4.9, 7.3, 8.0, 8.5, 10.4, 11.5, 12.2, 12.7, 13.3, 15.6, 18.1,
+            19.4, 19.9, 20.5, 22.2,
+        ];
+        let column = |i: usize, t: f64| {
+            col(t, &[(i % 40, 1e-6 * (i + 1) as f32), ((i * 97) % SPECTRUM_BINS, 1e-3)])
+        };
+        let mut history = crate::SpectrumHistory::default();
+        for (i, &t) in times.iter().enumerate() {
+            history.push(column(i, t));
+        }
+        // Folded after the refold: one into its open slab, one past a held gap.
+        let later = [column(90, 22.8), column(91, 24.1)];
+        let bucket = 1.0;
+        let same = |a: &SlabGrid, b: &SlabGrid, at: &str| {
+            assert_eq!(a.centers, b.centers, "{at}: centers");
+            let bytes = |g: &SlabGrid| g.power.iter().map(|s| s.to_vec()).collect::<Vec<_>>();
+            assert_eq!(bytes(a), bytes(b), "{at}: bytes");
+            let held = |g: &SlabGrid| {
+                g.power.windows(2).map(|w| Arc::ptr_eq(&w[0], &w[1])).collect::<Vec<_>>()
+            };
+            assert_eq!(held(a), held(b), "{at}: held rows");
+            assert_eq!(a.cur_key, b.cur_key, "{at}: open slab");
+            assert_eq!(a.mean.sum[..], b.mean.sum[..], "{at}: open sums");
+            assert_eq!(a.mean.count, b.mean.count, "{at}: open count");
+        };
+        for min_key in [None, Some(2), Some(3), Some(9), Some(10), Some(17)] {
+            let columns = refold_columns(&history, bucket, min_key);
+            let mut one = SlabGrid::default();
+            for c in &columns {
+                one.fold(c, bucket, min_key);
+            }
+            one.finish();
+            let mut one_later = one.clone();
+            for c in &later {
+                one_later.fold(c, bucket, min_key);
+            }
+            one_later.finish();
+            for runs in 1..=columns.len() {
+                let at = format!("min_key {min_key:?}, {runs} runs");
+                let mut split = SlabGrid::fold_runs(&columns, bucket, min_key, runs);
+                same(&split, &one, &at);
+                for c in &later {
+                    split.fold(c, bucket, min_key);
+                }
+                split.finish();
+                same(&split, &one_later, &format!("{at}, then folding on"));
+            }
+        }
+        // The fixture holds what the seams have to cross.
+        let one = SlabGrid::fold_runs(&refold_columns(&history, bucket, None), bucket, None, 1);
+        assert!(one.power.windows(2).any(|w| Arc::ptr_eq(&w[0], &w[1])), "a held slab");
+        assert!(one.power.iter().any(|s| s.iter().all(|&b| b == 0)), "a silent slab");
     }
 
     /// The bug this guards: a Span LONGER than the finest tier's ~16 s reach
