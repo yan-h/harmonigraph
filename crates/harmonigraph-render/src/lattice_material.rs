@@ -400,7 +400,7 @@ pub(super) fn prepare(
         return;
     }
     // The glow target's own size: the source is owned by that target and
-    // replaced with it whenever the scene size or the divisor moves.
+    // replaced with it whenever the scene size moves.
     let size = glow.size;
     if starfield {
         pane.material_tile = None;

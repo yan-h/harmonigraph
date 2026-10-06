@@ -862,9 +862,6 @@ struct LatticeCallback {
     size_points: [f32; 2],
     /// From the scene (a view setting), clamped to [`RENDER_SCALE_RANGE`].
     render_scale: f32,
-    /// The glow target's divisor of the offscreen size
-    /// (`ViewConfig::glow_resolution`), clamped to its range.
-    glow_resolution: u32,
     /// Where to publish this pane's own measurements.
     stats: Option<std::sync::Arc<LatticeStats>>,
 }
@@ -1425,10 +1422,19 @@ struct LatticeBloom {
     chain: BloomChain,
 }
 
+/// The glow target's share of the scene's width and height, as a divisor.
+///
+/// The glow is a smooth, low-frequency field, and everything sharp beside it
+/// (rims, wedges, names, star cores) is drawn at full resolution on top, so a
+/// quarter-size target reconstructs it within what is visible. Against half
+/// size it saved about 1.3 ms at 6 notes and 2.5 ms at 24 notes at 2048²,
+/// with no difference to see in the DAW (#1458).
+const GLOW_DIVISOR: u32 = 4;
+
 /// Where a frame's node light is assembled before any of it reaches the
-/// picture: one transparent premultiplied colour texture at a half, third or
-/// quarter of the scene's width and height (`ViewConfig::glow_resolution`),
-/// plus the bind group its readers take it through.
+/// picture: one transparent premultiplied colour texture at a quarter of the
+/// scene's width and height ([`GLOW_DIVISOR`]), plus the bind group its
+/// readers take it through.
 /// Stars keeps this source resolution but supplies a scene-resolution material
 /// output through the same reader interface, preserving its compact cores.
 ///
@@ -1444,10 +1450,8 @@ struct LatticeBloom {
 /// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
-    /// The divisor of the scene's size this target was built at, and `size`
-    /// the texels that came to. Every texture below, and the material source,
-    /// is this size, so the target is replaced whole when either moves.
-    divisor: u32,
+    /// The texels the scene's size over [`GLOW_DIVISOR`] came to. Every
+    /// texture below, and the material source, is this size.
     size: [u32; 2],
     material_source: Option<lattice_material::Source>,
     statistics: [wgpu::TextureView; 3],
@@ -1932,24 +1936,15 @@ impl Offscreen {
         );
     }
 
-    /// Make this pane's light target exist while `want` says so, at the
-    /// divisor it names; a new divisor replaces the target, and with it the
-    /// material source it owns. The separate pane history is maintained by the
-    /// caller under the same guard; recreating this image never allocates or
-    /// transfers a strip.
-    fn ensure_glow(
-        &mut self,
-        device: &wgpu::Device,
-        shared: &OffscreenShared<'_>,
-        want: Option<u32>,
-    ) {
-        match want {
-            Some(divisor) if self.glow.as_ref().is_none_or(|g| g.divisor != divisor) => {
-                self.glow = None;
-                self.glow = Some(GlowTarget::new(device, shared, self.size, divisor));
-            }
-            Some(_) => {}
-            None => self.glow = None,
+    /// Make this pane's quarter-resolution light target exist while `want`
+    /// says so. The separate pane history is maintained by the caller under
+    /// the same guard; recreating this image never allocates or transfers a
+    /// strip.
+    fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
+        match (want, self.glow.is_some()) {
+            (true, false) => self.glow = Some(GlowTarget::new(device, shared, self.size)),
+            (false, true) => self.glow = None,
+            _ => {}
         }
     }
 
@@ -1994,23 +1989,18 @@ impl Offscreen {
 }
 
 impl GlowTarget {
-    /// Stars preserve native scene-resolution cores; all other materials read the glow-resolution light.
+    /// Stars preserve native scene-resolution cores; all other materials read the quarter-resolution light.
     fn binding(&self) -> &wgpu::BindGroup {
         self.material_source
             .as_ref()
             .and_then(|source| source.star_output())
             .unwrap_or(&self.bind_group)
     }
-    /// The scene's width and height over `divisor`, rounded up for panes that
-    /// do not divide evenly. All readers reconstruct the same filtered field in
-    /// normalized coordinates.
-    fn new(
-        device: &wgpu::Device,
-        shared: &OffscreenShared<'_>,
-        scene: [u32; 2],
-        divisor: u32,
-    ) -> Self {
-        let size = scene.map(|n| n.div_ceil(divisor.max(1)).max(1));
+    /// The scene's width and height over [`GLOW_DIVISOR`], rounded up for
+    /// panes that do not divide evenly. All readers reconstruct the same
+    /// filtered field in normalized coordinates.
+    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, scene: [u32; 2]) -> Self {
+        let size = scene.map(|n| n.div_ceil(GLOW_DIVISOR).max(1));
         let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
         let view = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2042,7 +2032,6 @@ impl GlowTarget {
         let (statistics, statistics_bind_group) =
             lattice_node_glow::statistics(device, shared.glow_statistics_layout, size);
         GlowTarget {
-            divisor,
             size,
             material_source: None,
             statistics,
@@ -3193,12 +3182,7 @@ impl LatticeResources {
             }
             // Empty geometry skips both decisions, as before: this is target
             // maintenance, not a hidden-view lifecycle or retirement policy.
-            pane.ensure_ink_history(
-                device,
-                &self.compiled.strip_layout,
-                wants.glow.is_some(),
-                wants.rows,
-            );
+            pane.ensure_ink_history(device, &self.compiled.strip_layout, wants.glow, wants.rows);
             if let Some(offscreen) = pane.offscreen.as_mut() {
                 offscreen.ensure_glow(device, &shared, wants.glow);
                 offscreen.ensure_shadow(device, &shared, wants.shadow, wants.blurs);
@@ -3256,9 +3240,8 @@ const INITIAL_OCCLUDER_CAPACITY: usize = 4096;
 /// (`offscreen_size`, `screen_size`) are a different question and stay separate.
 struct PaneTargets {
     bloom: bool,
-    /// The node light, which the Reach bar switches (`Offscreen::ensure_glow`),
-    /// as the divisor of the offscreen size its target is held at.
-    glow: Option<u32>,
+    /// The node light, which the Reach bar switches (`Offscreen::ensure_glow`).
+    glow: bool,
     /// The names' shadow atlas, at the size this frame's cells pack to, or
     /// none where no name casts one (`Offscreen::ensure_shadow`).
     shadow: Option<[u32; 2]>,

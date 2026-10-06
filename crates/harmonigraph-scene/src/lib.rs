@@ -274,11 +274,6 @@ pub const PLUS_WIDTH_PER_LABEL_SCALE: f32 = 0.054;
 /// one the far end of this bar is for.
 pub const GLOW_REACH_MAX: f32 = 8.0;
 
-/// The divisors [`ViewConfig::glow_resolution`] offers: the node glow's
-/// target at a half, a third or a quarter of the lattice scene's width and
-/// height. The bar and the load clamp are this one range.
-pub const GLOW_RESOLUTION_RANGE: std::ops::RangeInclusive<u32> = 2..=4;
-
 /// Limits of the signed exponent that shapes the glow's normalized falloff
 /// (see [`GlowCurve::shape`]). Zero is linear, positive values fall quickly
 /// and negative values hold their brightness before falling. Eight already

@@ -104,7 +104,7 @@ impl CallbackTrait for LatticeCallback {
             frame.screen_size,
             PaneTargets {
                 bloom: self.uniforms.composite.bloom_strength > 0.0,
-                glow: frame.glow.then_some(self.glow_resolution),
+                glow: frame.glow,
                 shadow: frame.shadow_wanted,
                 blurs: frame.blurs,
                 // The strip's height is the row map's CAPACITY, which the

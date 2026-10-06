@@ -111,7 +111,6 @@ fn poisoned_view() -> ViewConfig {
         render_scale: nan,
         spiral_bloom: nan,
         glow_reach: nan,
-        glow_resolution: base.glow_resolution,
         atmosphere: AtmosphereSettings {
             material_style: base.atmosphere.material_style,
             material_amount: nan,

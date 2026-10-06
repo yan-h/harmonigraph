@@ -48,7 +48,7 @@ dim effect controls when glow reach or gain is zero.
 Preserve the existing glow-statistics and resolve passes.
 The resolve applies only the chosen texture to combined note light.
 The material pass consumes that resolved texture using the existing optional source target and geometry tiles.
-Segment pickup adds one half-resolution node-quad draw into the existing source target when enabled;
+Segment pickup adds one quarter-resolution node-quad draw into the existing source target when enabled;
 it allocates no extra texture.
 Compute texture and material drift independently from the existing decorative clock.
 Keep texture uniforms distinct from material uniforms so neither stage borrows the other's depth, scale or clock.
@@ -137,7 +137,7 @@ Reset material restores all three controls.
 A nonzero dark pickup saved from the earlier circular-band draft now fades in lit sectors;
 appearances without pickup retain zero for both strengths.
 
-One half-resolution quad per active node blends pigment into the resolved light before the material pass.
+One quarter-resolution quad per active node blends pigment into the resolved light before the material pass.
 The analytic band needs only node instances and uniforms,
 with no shadow atlas or caster dependency and no new texture allocation.
 Its own quad covers the full width, feather and antialiasing margin,
@@ -201,12 +201,12 @@ The spectrogram supplies its palette/color-memory adapter;
 `lattice_stars` supplies the colored-light adapter and pane-specific resource bindings.
 Color history remains spectrogram-owned.
 
-The raw lattice light remains half resolution.
+The raw lattice light remains quarter resolution.
 Stars draws every depth into one image at **Stars resolution** of the full scene,
 the same policy as the spectrogram.
 `GlowTarget::binding` selects the finished material image for background composition and every node/label light reader,
 so normal shadows and bloom see the same picture.
-Other materials retain their existing half-resolution output.
+Other materials retain the quarter-resolution output.
 
 The lattice star allocation key contains actual output,
 atlas and star image shapes.

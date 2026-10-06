@@ -596,10 +596,6 @@ impl LatticeCallback {
             pane_id,
             size_points: [size_points.x, size_points.y],
             render_scale,
-            glow_resolution: scene.view.glow_resolution.clamp(
-                *harmonigraph_scene::GLOW_RESOLUTION_RANGE.start(),
-                *harmonigraph_scene::GLOW_RESOLUTION_RANGE.end(),
-            ),
             stats,
         }
     }
