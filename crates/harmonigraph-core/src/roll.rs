@@ -207,6 +207,16 @@ impl RollNote {
         self.end.is_none() && self.observed_until.is_none()
     }
 
+    /// The latest moment the note is known to have stopped at: its release or
+    /// the end of its observation, whichever is LATER when it has both. What
+    /// `past` is ordered by.
+    fn retired(&self) -> Option<Time> {
+        match (self.end, self.observed_until) {
+            (Some(end), Some(until)) => Some(end.max(until)),
+            (end, until) => end.or(until),
+        }
+    }
+
     /// When this note stops: its release, or `now` while it is still
     /// sounding (a held note's segment reaches the present moment).
     pub fn stop(&self, now: Time) -> Time {
@@ -273,7 +283,10 @@ impl RollNote {
 /// Every note press the roll still remembers, in time order.
 #[derive(Clone, Default)]
 pub struct NoteRoll {
-    /// Finished notes, oldest release first.
+    /// Finished notes, oldest release first ([`RollNote::retired`]), held so by
+    /// [`retire`](Self::retire) whatever order the releases arrive in — sources
+    /// are mapped onto the clock by their own offsets, so one source's release
+    /// can arrive after a later one's.
     past: VecDeque<RollNote>,
     /// Still-sounding notes, keyed and ORDERED the way the tracker keys and
     /// orders its held voices (see [`NoteTracker`](crate::NoteTracker), and
@@ -348,16 +361,20 @@ impl NoteRoll {
                 && note.observed_until.is_some()
         }) {
             let mut note = self.past.remove(index).unwrap();
-            let end = at.max(note.start);
-            note.end = Some(end);
+            note.end = Some(at.max(note.start));
             // A recovered off can follow neighbors that ended after the gap.
-            // Restore the ordering used by trim/activity at this rare mutation,
-            // rather than making every display frame scan or sort the history.
-            let index = self.past.partition_point(|other| {
-                other.end.or(other.observed_until).is_none_or(|at| at <= end)
-            });
-            self.past.insert(index, note);
+            self.retire(note);
         }
+    }
+
+    /// File a finished note into `past` at its place in release order: almost
+    /// always the end, but kept sorted on every insert rather than assumed,
+    /// because trim, activity and the note cap all read the order. Equal
+    /// releases keep their arrival order.
+    fn retire(&mut self, note: RollNote) {
+        let at = note.retired();
+        let index = self.past.partition_point(|other| other.retired() <= at);
+        self.past.insert(index, note);
     }
 
     pub(crate) fn gap(&mut self, source: Option<SourceId>, at: Time) {
@@ -371,7 +388,7 @@ impl NoteRoll {
             let mut note = self.live.remove(&key).unwrap();
             note.observed_until = Some(at.max(note.start));
             note.history_complete = false;
-            self.past.push_back(note);
+            self.retire(note);
         }
         self.enforce_cap();
     }
@@ -405,7 +422,7 @@ impl NoteRoll {
         for key in removed {
             let mut note = self.live.remove(&key).unwrap();
             note.observed_until = Some(at.max(note.start));
-            self.past.push_back(note);
+            self.retire(note);
         }
         for row in voices {
             if !self.live.contains_key(&row.key(source)) {
@@ -476,7 +493,7 @@ impl NoteRoll {
     pub fn all_off(&mut self, at: Time) {
         for mut note in std::mem::take(&mut self.live).into_values() {
             note.end = Some(at.max(note.start));
-            self.past.push_back(note);
+            self.retire(note);
         }
         self.enforce_cap();
     }
@@ -488,7 +505,7 @@ impl NoteRoll {
         for key in keys {
             let mut note = self.live.remove(&key).expect("collected live key");
             note.end = Some(at.max(note.start));
-            self.past.push_back(note);
+            self.retire(note);
         }
         self.enforce_cap();
     }
@@ -523,7 +540,7 @@ impl NoteRoll {
                 return;
             }
             note.end = Some(at);
-            self.past.push_back(note);
+            self.retire(note);
             self.enforce_cap();
         }
     }
@@ -538,11 +555,7 @@ impl NoteRoll {
     /// Cheap: `past` is release-ordered, so this stops at the first keeper.
     pub fn trim(&mut self, now: Time) {
         let cutoff = now - Self::MAX_AGE;
-        while self
-            .past
-            .front()
-            .is_some_and(|n| n.end.or(n.observed_until).is_some_and(|e| e < cutoff))
-        {
+        while self.past.front().is_some_and(|n| n.retired().is_some_and(|e| e < cutoff)) {
             self.past.pop_front();
         }
     }
@@ -573,7 +586,7 @@ impl NoteRoll {
             .iter()
             .rev()
             .find(|n| !self.hidden_sources.contains(&n.source))
-            .and_then(|note| note.end.or(note.observed_until))
+            .and_then(RollNote::retired)
     }
 
     pub fn len(&self) -> usize {
@@ -981,5 +994,23 @@ mod tests {
         assert!(!tracker.roll().is_empty());
         tracker.clear_roll();
         assert!(tracker.roll().is_empty());
+    }
+
+    /// Two sources mapped onto the clock by their own offsets: one's release
+    /// can ARRIVE after a later release of the other's. The roll still reads
+    /// as release order — the latest release is the latest activity, and the
+    /// older release ages out on time rather than waiting behind the newer.
+    #[test]
+    fn releases_arriving_out_of_clock_order_keep_release_order() {
+        let key = |source: u64| VoiceKey { source: SourceId(source), channel: 0, note: 60 };
+        let mut roll = NoteRoll::default();
+        roll.note_on(key(0), 0.8, 60.0, 0.0);
+        roll.note_on(key(1), 0.8, 60.0, 0.0);
+        roll.note_off(key(0), 10.0);
+        roll.note_off(key(1), 2.0); // arrives last, released first
+        assert_eq!(roll.latest_activity(20.0), Some(10.0));
+        roll.trim(2.0 + NoteRoll::MAX_AGE + 1.0);
+        let left: Vec<_> = roll.notes().map(|n| n.end).collect();
+        assert_eq!(left, [Some(10.0)], "the older release is forgotten on time");
     }
 }
