@@ -13,13 +13,31 @@ Mode is saved but is not automatable in this prototype.
 
 ## Compose passages
 
-Choose Lattice Map in Tuning.
-Audition working copy makes a separate copy of the currently selected saved map.
-Its shape edits remain active through loops and Map selection automation until Return to arrangement.
-All six fine and coarse automation lanes remain live during audition.
-Closing the editor does not end audition;
-loading project state does.
-Audition and its bounded 64-edit undo history are transient and are not saved.
+Choose Lattice Map in Tuning,
+pick a Saved map,
+and tick Edit shape on lattice.
+Each lattice click then edits the selected saved map itself:
+the destination's fixed-generator MIDI class determines which assignment moves,
+and the edit is saved at once,
+so every passage whose Map automation selects that map plays the new shape from its next attack.
+Hover previews the full correction and pitch change;
+a camera drag never commits an edit.
+When host automation switches Map,
+clicks edit whichever map is selected at that moment — the one the lattice's dots show.
+Undo shape edit steps back through the selected map's own edits,
+so it never rewrites a map that is not on screen.
+All maps share one history of the last 64 edits,
+so heavy editing of one map can push out another's oldest steps.
+An edit that changes nothing,
+such as clicking a node a note already occupies,
+is not recorded and does not mark the project modified.
+Closing the editor keeps that history;
+loading project state clears it,
+because its entries name slots of the document that was replaced.
+Duplicate as new map copies the selected shape into a new slot named after it,
+then selects the copy through an ordinary Map parameter gesture,
+so a variant is one click and the original stays as it was.
+Editing is suspended outside Lattice Map mode.
 
 Saved maps define shape only.
 Use the independent Map Fifths,
@@ -28,23 +46,14 @@ Each axis also has a Coarse lane that adds multiples of 10 without changing exis
 The coarse parameters are named Map Fifths x10,
 Map Thirds x10 and Map Sevenths x10;
 the editor labels the two columns Fine and Coarse.
-The same controls are always available in Lattice Map mode without entering audition or capturing a map.
+These controls sit in the Map offsets fold.
 Positive values move along the corresponding generator;
 negative values move back.
 Zero on all six lanes places the shape at its origin.
 Recalling a map changes shape and leaves these offsets unchanged.
-Edit shape enables one destination click on the lattice:
-the destination's fixed-generator MIDI class determines which assignment moves.
-Hover previews the full correction and pitch change;
-a camera drag never commits an edit.
-Undo restores the previous shape;
+Editing and duplicating never record or change the offsets;
 offset changes are host parameter gestures.
-Editing is suspended outside Lattice Map mode.
 
-Capture new map appends the working shape under a name.
-It never captures the three live offsets.
-It does not select that map or emit Map automation.
-Return to arrangement resumes the host-selected map.
 Select a saved map to report an ordinary host parameter gesture,
 or draw discrete held values for Map in Bitwig.
 Use held segments:
@@ -77,8 +86,8 @@ no slot is ever recycled.
 An unused,
 deleted or invalid slot adds no correction and the UI reports it as unavailable.
 Capturing fails visibly at capacity.
-Saved maps cannot be overwritten in place in this prototype;
-revisions are captured as new identities.
+Editing a shape rewrites its slot in place and keeps its identity;
+Duplicate as new map is how a revision gets an identity of its own.
 
 The musical `lattice-maps` document is a plugin-persisted parameter field,
 independent of editor appearance and layout.
@@ -183,7 +192,8 @@ Hub assignment,
 then editor controls and annotations.
 There are no parallel mutating streams.
 
-The UI owns the map document and audition working copy behind separate locks.
+The UI owns the map document and the editor's edit mode and undo history behind separate locks;
+the audio thread reads only the document.
 At callback adoption audio takes bounded nonblocking reads and copies only fixed geometry into its own bank.
 A contended edit waits for a later callback;
 audio never waits or copies names.

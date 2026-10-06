@@ -346,8 +346,6 @@ fn draw_map_overlay(
             )
         } else if maps.playback.map.is_none() {
             "Map unavailable · new attacks pass through".into()
-        } else if maps.playback.audition {
-            "Audition · next attacks use working map".into()
         } else {
             String::new()
         }
@@ -729,7 +727,6 @@ mod tests {
             playback: MapPlayback {
                 engine: TuningEngine::LatticeMap,
                 map: Some(map),
-                audition: true,
                 selected: 0,
                 offset: harmonigraph_core::LatticePos::ORIGIN,
             },
@@ -823,7 +820,6 @@ mod tests {
             playback: MapPlayback {
                 engine: TuningEngine::LatticeMap,
                 map: Some(map),
-                audition: true,
                 selected: 0,
                 offset: LatticePos::ORIGIN,
             },

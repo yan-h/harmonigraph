@@ -56,11 +56,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         engine: engine(params.tuning_engine.value()),
         selected,
         offset,
-        map: editor
-            .working
-            .or_else(|| document.map(selected))
-            .map(|shape| translated(shape, offset)),
-        audition: editor.working.is_some(),
+        map: document.map(selected).map(|shape| translated(shape, offset)),
     };
     MapView {
         playback,
@@ -68,7 +64,7 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         pending: playback != adopted,
         names: editor.names(&document),
         edit_shape: editor.edit_shape,
-        can_undo: !editor.undo.is_empty(),
+        can_undo: playback.map.is_some() && editor.can_undo(selected),
         full: document.is_full(),
     }
 }
@@ -87,65 +83,93 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
         (MapAxis::Thirds, MapOffsetLane::Extension) => &params.map_thirds_extension,
         (MapAxis::Sevenths, MapOffsetLane::Extension) => &params.map_sevenths_extension,
     };
-    let document_edit = matches!(
-        &edit,
-        MapEdit::Capture(_) | MapEdit::Rename(..) | MapEdit::MoveEarlier(_) | MapEdit::Delete(_)
-    );
-    match edit {
-        MapEdit::Engine(mode) => set(
-            &params.tuning_engine,
-            match mode {
+    let selected = params.map.value().clamp(0, 127) as usize;
+    // Whether the saved document changed, decided by each arm from what it
+    // did rather than by its variant: a no-op edit must not mark the host
+    // project modified.
+    let document_changed = match edit {
+        MapEdit::Engine(mode) => {
+            let value = match mode {
                 TuningEngine::Off => 0,
                 TuningEngine::Adaptive => 1,
                 TuningEngine::LatticeMap => 2,
-            },
-        ),
-        MapEdit::Select(id) if id < MAP_CAPACITY => set(&params.map, id as i32),
-        MapEdit::Select(_) => {}
-        MapEdit::Audition => {
-            let map = params.maps.read().map(params.map.value() as usize).unwrap_or_default();
-            let mut editor = params.map_editor.lock();
-            if editor.working.is_none() {
-                editor.working = Some(map);
-                editor.undo.clear();
-            }
+            };
+            set(&params.tuning_engine, value);
+            false
         }
-        MapEdit::Return => *params.map_editor.lock() = MapEditor::default(),
-        MapEdit::EditShape(on) => params.map_editor.lock().edit_shape = on,
+        MapEdit::Select(id) => {
+            if id < MAP_CAPACITY {
+                set(&params.map, id as i32);
+            }
+            false
+        }
+        MapEdit::EditShape(on) => {
+            params.map_editor.lock().edit_shape = on;
+            false
+        }
+        // The document lock is taken before the editor's, in the order `view`
+        // takes them.
         MapEdit::Undo => {
-            let mut editor = params.map_editor.lock();
-            if let Some(map) = editor.undo.pop() {
-                editor.working = Some(map);
-            }
+            let mut document = params.maps.write();
+            let undone = params.map_editor.lock().undo(selected);
+            undone.is_some_and(|map| document.reshape(selected, map))
         }
-        MapEdit::BeginOffset(axis, lane) => setter.begin_set_parameter(axis_param(axis, lane)),
-        MapEdit::Offset(axis, lane, value) => setter.set_parameter(axis_param(axis, lane), value),
-        MapEdit::EndOffset(axis, lane) => setter.end_set_parameter(axis_param(axis, lane)),
+        MapEdit::BeginOffset(axis, lane) => {
+            setter.begin_set_parameter(axis_param(axis, lane));
+            false
+        }
+        MapEdit::Offset(axis, lane, value) => {
+            setter.set_parameter(axis_param(axis, lane), value);
+            false
+        }
+        MapEdit::EndOffset(axis, lane) => {
+            setter.end_set_parameter(axis_param(axis, lane));
+            false
+        }
         MapEdit::Replace(destination) => {
+            let mut document = params.maps.write();
             let mut editor = params.map_editor.lock();
-            if editor.edit_shape {
-                if let Some(mut map) = editor.working {
-                    map.position = offset(params);
-                    map.replace(destination);
+            let old = document.map(selected).filter(|_| editor.edit_shape);
+            let reshaped = old.is_some_and(|old| {
+                let mut map = translated(old, offset(params));
+                map.replace(destination) && {
                     map.position = LatticePos::ORIGIN;
-                    editor.change(map);
+                    document.reshape(selected, map)
                 }
+            });
+            if let Some(old) = old.filter(|_| reshaped) {
+                editor.record(selected, old);
             }
+            reshaped
         }
-        MapEdit::Capture(name) => {
-            let map = params.map_editor.lock().working;
-            if let Some(map) = map {
-                params.maps.write().capture(map, name);
+        MapEdit::Duplicate => {
+            let mut document = params.maps.write();
+            let copy =
+                document.map(selected).zip(document.name(selected).map(|n| format!("{n} copy")));
+            let id = copy.and_then(|(map, name)| document.capture(map, name));
+            drop(document);
+            if let Some(id) = id {
+                set(&params.map, id as i32);
             }
+            id.is_some()
         }
         // Every document mutation goes through a `MapDocument` method, because
         // each one has to move the revision two derived values are keyed on:
         // `MapEditor::names` here, and `AudioMaps::bank` on the audio thread.
-        MapEdit::Rename(id, name) => params.maps.write().rename(id, name),
-        MapEdit::Delete(id) => params.maps.write().delete(id),
-        MapEdit::MoveEarlier(id) => params.maps.write().move_earlier(id),
-    }
-    if document_edit {
+        MapEdit::Rename(id, name) => {
+            params.maps.write().rename(id, name);
+            true
+        }
+        MapEdit::Delete(id) => {
+            params.maps.write().delete(id);
+            true
+        }
+        MapEdit::MoveEarlier(id) => {
+            params.maps.write().move_earlier(id);
+            true
+        }
+    };
+    if document_changed {
         if let Some(mailbox) = params.configuration.get() {
             mailbox.dirty.store(true, std::sync::atomic::Ordering::Release);
         }
@@ -170,19 +194,16 @@ const HISTORY: usize = 8192;
 
 pub struct AudioMaps {
     document: Arc<RwLock<MapDocument>>,
-    editor: Arc<Mutex<MapEditor>>,
     published: Arc<Mutex<MapPlayback>>,
     bank: [Option<LatticeMap>; MAP_CAPACITY],
     /// Which document state `bank` was built from, or `None` before the first
     /// read — see [`AudioMaps::adopt`] for what that key does and does not say.
     bank_revision: Option<Revision>,
-    working: Option<LatticeMap>,
     pub playback: MapPlayback,
     history: VecDeque<Entry>,
     pub boundary: ConfigurationBoundary,
     adopted: bool,
     engine_revision: u64,
-    restore_id: u64,
     seed_mode: i32,
     seed_map: i32,
     seed_offset: MapOffsets,
@@ -192,11 +213,9 @@ impl AudioMaps {
     pub fn new(params: &crate::HarmonigraphParams) -> Self {
         Self {
             document: params.maps.clone(),
-            editor: params.map_editor.clone(),
             published: params.map_playback.clone(),
             bank: [None; MAP_CAPACITY],
             bank_revision: None,
-            working: None,
             playback: MapPlayback::default(),
             history: VecDeque::with_capacity(HISTORY),
             boundary: ConfigurationBoundary {
@@ -208,15 +227,13 @@ impl AudioMaps {
             },
             adopted: false,
             engine_revision: 0,
-            restore_id: 0,
             seed_mode: 1,
             seed_map: 0,
             seed_offset: MapOffsets::default(),
             offsets: MapOffsets::default(),
         }
     }
-    pub fn seed(&mut self, mode: i32, map: i32, offset: MapOffsets, restore_id: u64) {
-        self.restore_id = restore_id;
+    pub fn seed(&mut self, mode: i32, map: i32, offset: MapOffsets) {
         self.seed_mode = mode;
         self.seed_map = map;
         self.seed_offset = offset;
@@ -235,8 +252,9 @@ impl AudioMaps {
         // The key is [`MapDocument::revision`], the same ticket
         // `MapEditor::names` memoizes against, rather than a second counter
         // beside it. Nothing that decides a slot's geometry can move without
-        // moving it: geometry reaches a slot only through `capture`, a slot
-        // leaves only through `delete`, both bump it, and a document LOADED
+        // moving it: geometry reaches a slot only through `capture` and
+        // `reshape`, a slot leaves only through `delete`, all bump it, and a
+        // document LOADED
         // from saved state is a whole new value whose revision is minted at
         // deserialization. What the key carries beyond this value is a rename
         // and a reorder, neither of which decides any `map(id)`; each costs one
@@ -248,10 +266,6 @@ impl AudioMaps {
                 self.bank = std::array::from_fn(|id| doc.map(id));
                 self.bank_revision = Some(revision);
             }
-        }
-        if let Some(mut editor) = self.editor.try_lock() {
-            editor.restore(self.restore_id);
-            self.working = editor.working;
         }
         self.set_engine(engine(self.seed_mode));
         self.playback.selected = self.seed_map.clamp(0, 127) as usize;
@@ -268,11 +282,8 @@ impl AudioMaps {
         }
     }
     fn resolve(&mut self) {
-        self.playback.audition = self.working.is_some();
-        self.playback.map = self
-            .working
-            .or(self.bank[self.playback.selected])
-            .map(|shape| translated(shape, self.playback.offset));
+        self.playback.map =
+            self.bank[self.playback.selected].map(|shape| translated(shape, self.playback.offset));
         if let Some(mut published) = self.published.try_lock() {
             *published = self.playback;
         }
@@ -348,9 +359,6 @@ impl AudioMaps {
         let first = self.history.partition_point(|entry| entry.sample <= start);
         let last = self.history.partition_point(|entry| entry.sample < end).max(first);
         self.history.range(first..last).map(|entry| (entry.sample, entry.state))
-    }
-    pub fn restored(&mut self) {
-        self.working = None;
     }
     pub fn reset(&mut self) {
         self.history.clear();
