@@ -478,38 +478,36 @@ const INK_FLOOR: f32 = 0.01;
 // and blends nothing. On a zoomed-in lattice, where one node can cover the
 // pane, that is the frame's dominant cost.
 //
-// Every term here is the radius at which the corresponding layer's own
-// smoothstep has reached zero, so the bound is exact rather than generous:
+// Every term here is a radius the corresponding layer's own SHAPE lies
+// inside, plus the soft band that closes it (`aa_inside` is exactly 0 a band
+// past its edge), so the bound is exact rather than generous:
 //
-//   - the octave glyphs (and their eased-off fringe) end at
-//     GLYPH_FADE_LIMIT;
-//   - the marks taper off at QUAD_MARGIN, but only exist while a slot
-//     is marked;
-//   - every RING the node draws ends at its own outer radius plus the soft
-//     band that closes it: the outermost the stack ended on (`node_rim`, which
-//     the mark strip is inside) and the audio ring, which is dialled on radii
-//     of its own and may stand outside that;
+//   - the rim (`node_vertex`): the outermost ring the stack ended on
+//     (`node_rim`), widened by a slice swelled past it and by a worn mark's
+//     strip, carried out with that swell. The octave glyphs and the marks all
+//     end inside it, whatever their tapers (GLYPH_FADE_LIMIT, QUAD_MARGIN),
+//     which only ease off a layer reaching the billboard's edge and are no
+//     bound on one that stops short of it;
+//   - the audio ring, which is dialled on radii of its own and may stand
+//     outside that;
 //   - a slice or mark still moving into place (`animated_slice_ink`) is its
 //     settled shape scaled about the node's centre by `mix(pose.x, 1, p)`,
 //     never more than `pose.z`, so it ends inside the rim scaled by that.
 //
-// Each of those radii is outside its layer's own SHAPE as well as its soft
-// edge, so a layer's signed distance is never less than `d` minus this: what
-// `fs_node_cell` measures the shadow's own stop from.
+// Because each radius bounds a SHAPE and not only its soft edge, a layer's
+// signed distance is never less than `d` minus this: what `fs_node_cell`
+// measures the shadow's own stop from.
 //
 // The SHADOW is not in it. It is a multiply on what is already in the frame
 // rather than ink of the node's, and it reaches further than any of these —
 // `node_paint` lays it over the whole quad and takes this bound as where the
 // ink stops.
 fn paint_reach(in: VsOut, aa: f32) -> f32 {
-    var reach = GLYPH_FADE_LIMIT;
-    if in.marks.x != 0u || in.marks.y != 0u {
-        reach = max(reach, QUAD_MARGIN);
-    }
+    var reach = max(in.rim, spectral_radii().y);
     if u.node.animation != 0.0 {
-        reach = max(reach, in.rim * u.node.pose.z + aa);
+        reach = max(reach, in.rim * u.node.pose.z);
     }
-    return max(reach, max(in.rim, spectral_radii().y) + aa);
+    return reach + aa;
 }
 
 struct Instance {

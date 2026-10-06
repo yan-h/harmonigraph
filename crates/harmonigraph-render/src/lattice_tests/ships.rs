@@ -172,9 +172,9 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         }
         scene
     };
-    // The last column: whether the node cells are compared too, which every
-    // analytic arm of `cell_reach` has a fixture for.
-    for (name, scene, compare_cells) in [
+    // The last column: whether the node cells are ANALYTIC, the only ones
+    // `cell_reach` skips in, which each of its arms has a fixture for.
+    for (name, scene, analytic) in [
         ("lit", parity_scene(), false),
         ("shaped slices", shaped(wide_shadow()), false),
         ("shaped slices on a distance row", shaped(distance(parity_scene())), true),
@@ -314,81 +314,81 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
 
         // #508's third finding lives in the CELL shader, not either scene
         // attachment. These fixtures reach its branch with a real angular gap,
-        // a marked sector, and diagonal sector edges; rendering their analytic
-        // atlases through both compiled switches makes every texel of that
-        // geometry part of the parity claim — including the ones `fs_node_cell`
-        // skips past the shadow's reach, which only an analytic cell does.
-        if compare_cells {
-            let atlas_size = pane
-                .offscreen
-                .as_ref()
-                .and_then(|o| o.shadow.as_ref())
-                .map(|a| a.size)
-                .unwrap_or_else(|| panic!("the {name} fixture packed no atlas"));
-            assert!(scene.octave_gap > 0.0, "the {name} fixture has no angular gap");
+        // a marked sector, and diagonal sector edges; rendering their atlases
+        // through both compiled switches makes every texel of that geometry
+        // part of the parity claim — including the ones `fs_node_cell` skips
+        // past where the ink stops, and on an analytic cell past the shadow's
+        // own reach too.
+        let atlas_size = pane
+            .offscreen
+            .as_ref()
+            .and_then(|o| o.shadow.as_ref())
+            .map(|a| a.size)
+            .unwrap_or_else(|| panic!("the {name} fixture packed no atlas"));
+        assert!(scene.octave_gap > 0.0, "the {name} fixture has no angular gap");
+        assert!(
+            scene.nodes.iter().any(|n| n.melody_slots | n.bass_slots != 0),
+            "the {name} fixture has no marked sector",
+        );
+        let cast: Vec<_> = cb
+            .node_cells
+            .iter()
+            .map(|&c| &cb.casters[c as usize])
+            .filter(|c| c.level > 0.0)
+            .collect();
+        assert!(!cast.is_empty(), "the {name} fixture cast no node cell");
+        assert_eq!(
+            cast.iter().all(|c| c.kernel.is_distance() || c.spread_points > 0.0),
+            analytic,
+            "the {name} fixture's node cells are not the kind it is listed with",
+        );
+        if name.starts_with("moving") {
             assert!(
-                scene.nodes.iter().any(|n| n.melody_slots | n.bass_slots != 0),
-                "the {name} fixture has no marked sector",
-            );
-            let cast: Vec<_> = cb
-                .node_cells
-                .iter()
-                .map(|&c| &cb.casters[c as usize])
-                .filter(|c| c.level > 0.0)
-                .collect();
-            assert!(
-                !cast.is_empty()
-                    && cast.iter().all(|c| c.kernel.is_distance() || c.spread_points > 0.0),
-                "the {name} fixture's node cells are not all analytic, so nothing in them skips",
-            );
-            if name.starts_with("moving") {
-                assert!(
-                    cb.instances.iter().any(|g| g.motion[3] & (1 << 31) == 0),
-                    "the {name} fixture has no node still moving",
-                );
-            }
-            let draw_cells = |src: &str| {
-                let shader = lattice_module(&device, &with_common(src));
-                let (pipeline, _) =
-                    create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
-                let target = render_to_texture(
-                    &device,
-                    &queue,
-                    atlas_size,
-                    shadow::ATLAS_FORMAT,
-                    wgpu::Color::TRANSPARENT,
-                    |pass| {
-                        pass.set_pipeline(&pipeline);
-                        pass.set_bind_group(0, &pane.bind_group, &[]);
-                        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                        pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
-                        pass.draw(0..4, 0..pane.instance_count);
-                    },
-                );
-                readback(&device, &queue, &target, atlas_size)
-            };
-            let cell_fast = draw_cells(SHADER_SRC);
-            let cell_slow = draw_cells(&reference_src);
-            assert!(
-                cell_slow.chunks_exact(4).any(|p| {
-                    let bits = u16::from_le_bytes([p[0], p[1]]);
-                    shadow::tests::half(bits) >= 0.99
-                }),
-                "the {name} fixture wrote no opaque node interior",
-            );
-            let differing = cell_fast
-                .chunks_exact(4)
-                .zip(cell_slow.chunks_exact(4))
-                .enumerate()
-                .find(|(_, (a, b))| a != b)
-                .map(|(i, (a, b))| {
-                    (i, u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([b[0], b[1]]))
-                });
-            assert!(
-                differing.is_none(),
-                "the node cell changed when the early-outs were enabled: texel {differing:?}",
+                cb.instances.iter().any(|g| g.motion[3] & (1 << 31) == 0),
+                "the {name} fixture has no node still moving",
             );
         }
+        let draw_cells = |src: &str| {
+            let shader = lattice_module(&device, &with_common(src));
+            let (pipeline, _) =
+                create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
+            let target = render_to_texture(
+                &device,
+                &queue,
+                atlas_size,
+                shadow::ATLAS_FORMAT,
+                wgpu::Color::TRANSPARENT,
+                |pass| {
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
+                    pass.draw(0..4, 0..pane.instance_count);
+                },
+            );
+            readback(&device, &queue, &target, atlas_size)
+        };
+        let cell_fast = draw_cells(SHADER_SRC);
+        let cell_slow = draw_cells(&reference_src);
+        assert!(
+            cell_slow.chunks_exact(4).any(|p| {
+                let bits = u16::from_le_bytes([p[0], p[1]]);
+                shadow::tests::half(bits) >= 0.99
+            }),
+            "the {name} fixture wrote no opaque node interior",
+        );
+        let differing = cell_fast
+            .chunks_exact(4)
+            .zip(cell_slow.chunks_exact(4))
+            .enumerate()
+            .find(|(_, (a, b))| a != b)
+            .map(|(i, (a, b))| {
+                (i, u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([b[0], b[1]]))
+            });
+        assert!(
+            differing.is_none(),
+            "the node cell changed when the early-outs were enabled: texel {differing:?}",
+        );
     }
 }
 
