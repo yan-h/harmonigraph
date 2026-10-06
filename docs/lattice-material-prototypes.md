@@ -49,7 +49,7 @@ There are no aliases or migration passes.
 
 The renderer property test `materials_texture_the_combined_light_without_creating_or_recoloring_it` exercises Clouds, Contours and Interference with one note, two separated notes, and 32 overlapping notes.
 It checks spatial variation, distinct selector results, color/coverage bounds, motion, freeze, and disabled equivalence.
-The fixture uses a broad texture so the half-resolution glow target actually resolves its fringes.
+The fixture uses a broad texture so the quarter-resolution glow target actually resolves its fringes.
 Clouds remains the default, and all original lattice and offline reference images remain unchanged.
 The existing atmosphere persistence sweep uses a non-default material to check missing-key defaults and round trips.
 
@@ -104,7 +104,7 @@ Roughness 0%, 50% and 100% show a continuous transition from broad blended washe
 This is a structural port, not a pixel match.
 The original prototype used Gaussian sources, guessed flat colors and black node cutouts.
 Production keeps the configured falloff, directional note colors, overlap rule and native node illumination, so light remains visible inside node outlines.
-The tiled geometry is filtered at half the scene resolution, whereas the prototype evaluated the geometry directly per pixel.
+The tiled geometry is filtered at a quarter of the scene resolution, whereas the prototype evaluated the geometry directly per pixel.
 The local comparison images remain outside the repository.
 
 GPU times below bracket production preparation through the final composite on Apple M1 Pro at 1536×1536.
@@ -129,7 +129,7 @@ Cold first-frame GPU brackets measured 24.069–26.415 ms for Watercolor, includ
 Those brackets include the rest of the first frame and do not isolate bake time.
 Selecting Watercolor or crossing a quantized texture-density boundary can therefore cause a brief one-frame cost increase even though the warm path never walks the glob grid.
 At this size the two geometry tiles use 1280² half-float RGBA texels each, about 25 MiB together;
-the cap is 64 MiB per live pane, plus the half-resolution source image.
+the cap is 64 MiB per live pane, plus the quarter-resolution source image.
 
 The new GPU behavior test reaches the material pass and all three roughness values, verifies premultiplied and peak bounds, and checks motion, freeze, depth-zero equivalence, disabled equivalence and silence after a lit frame.
 Two focused regression tests hold the lone-node source ceiling and prevent source identity from being interpreted as a Gaussian shadow kind.

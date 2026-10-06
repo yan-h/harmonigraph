@@ -76,7 +76,7 @@ struct TextureParams {
     scale: f32,
     drift: vec2<f32>,
     target_size: vec2<f32>,
-    padding: vec2<f32>,
+    glow_size: vec2<f32>,
 };
 
 struct PickupParams {
@@ -198,7 +198,7 @@ const INK_STRIP_N: u32 = 64u;
 // second, empty binding.
 @group(1) @binding(0) var ink_strip: texture_2d<f32>;
 
-// Half-resolution statistics, read only by the resolve entry point.
+// Glow-resolution statistics, read only by the resolve entry point.
 // Bindings overlap the ink strip's group in other entry points.
 @group(1) @binding(0) var glow_sum: texture_2d<f32>;
 @group(1) @binding(1) var glow_screen: texture_2d<f32>;
@@ -2936,7 +2936,7 @@ fn vs_source_shadow(@builtin(vertex_index) vertex: u32, inst: Instance) -> Picku
     let radius = u.node.radius * 1.8 * max(inst.scale, 0.05);
     let center = u.camera.view_proj * vec4<f32>(inst.world_pos, 1.0);
     let edge = u.camera.view_proj * vec4<f32>(inst.world_pos + u.camera.right.xyz * radius, 1.0);
-    let source_size = ceil(u.texture.target_size * 0.5);
+    let source_size = max(u.texture.glow_size, vec2<f32>(1.0));
     let radius_px = length((edge.xy / edge.w - center.xy / center.w) * source_size * 0.5);
     let aa = 1.0 / max(radius_px, 1e-3);
     let span = node_rim(false) + (0.5 * u.pickup.width + u.pickup.softness) / 1.8 + aa;
@@ -3008,7 +3008,7 @@ fn fs_source_shadow(in: PickupOut) -> @location(0) vec4<f32> {
 // the node once per frame and kept as a strip (see The ink strip below), and
 // the light's draw samples it.
 //
-// Halo quads blend three half-resolution statistics textures. The resolve
+// Halo quads blend three glow-resolution statistics textures. The resolve
 // combines linear luminance using screen normalized to a FIXED full-strength peak. An overlap
 // may rise above either tail, but not above that ceiling. Unlike the p-norm,
 // this does not preserve a narrow valley between neighbouring notes.

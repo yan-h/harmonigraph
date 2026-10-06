@@ -149,7 +149,9 @@ uniform_group! {
         scale: f32,
         drift: Float2,
         target_size: Float2,
-        padding: Float2,
+        /// The glow target's own texels, which `vs_source_shadow` pads its
+        /// quad by; 1x1 where there is no target, which nothing then reads.
+        glow_size: Float2,
     }
 }
 uniform_group! {

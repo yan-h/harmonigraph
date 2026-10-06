@@ -545,7 +545,7 @@ impl LatticeCallback {
                         (texture_time * 0.053).cos() as f32 * 0.9,
                     ]),
                     target_size: Float2([1.0; 2]),
-                    padding: Float2([0.0; 2]),
+                    glow_size: Float2([1.0; 2]),
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },

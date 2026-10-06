@@ -82,7 +82,7 @@ fn the_glow_curve_can_hold_a_long_tail_without_moving_the_peak_or_edge() {
         scene.view.glow_reach = 0.8;
         scene.view.glow_strength = 1.0;
         scene.view.glow_curve = curve;
-        // An odd scene and odd half-resolution glow share a center texel.
+        // An odd scene and odd quarter-resolution glow share a center texel.
         // Align the node there so this tests the exact curve endpoint rather
         // than an interpolation of neighbors with different curve values.
         let pixel_center = glam::Vec2::new(SIZE[0] as f32 * 0.5, SIZE[1] as f32 * 0.5);

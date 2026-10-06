@@ -119,7 +119,7 @@ fn textures_shape_the_combined_light_without_creating_or_recoloring_it() {
             pitch: 0.0,
             ..Default::default()
         };
-        // The glow target is half-resolution: resolve the clouds rather
+        // The glow target is quarter-resolution: resolve the clouds rather
         // than testing their subpixel average at this small size.
         scene.view.atmosphere.texture_scale = 4.0;
         scene.view.atmosphere.breath_amount = 0.0;
@@ -856,9 +856,10 @@ fn a_lone_glow_keeps_its_colour_profile_and_fade() {
     let Some(mut shooter) = Shooter::new(SIZE) else { return };
     for (gain, level) in [(0.15, 1.0), (1.0, 0.25), (2.0, 1.0)] {
         let mut scene = scene(&[level], gain, false);
-        // Read a 256-square glow directly: the scene stays at twice that
-        // resolution. This checks the analytic profile before reconstruction.
-        scene.view.render_scale = 2.0;
+        // Read a 256-square glow directly: the scene renders at four times
+        // that resolution, the quarter-size target's divisor. This checks the
+        // analytic profile before reconstruction.
+        scene.view.render_scale = 4.0;
         let colour = [0.8, 0.4, 0.1];
         scene.pitch_lut = [glam::Vec4::new(colour[0], colour[1], colour[2], 1.0);
             harmonigraph_scene::PITCH_LUT_N];

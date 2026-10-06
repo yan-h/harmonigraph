@@ -993,7 +993,7 @@ struct CompiledLatticeResources {
     /// 1 by the node, marker and label pipelines, whose washes read the same field.
     ///
     /// Glow and bloom share linear filtering with ClampToEdge. Every glow
-    /// reader uses normalized coordinates to reconstruct the half-resolution
+    /// reader uses normalized coordinates to reconstruct the reduced-resolution
     /// field, so changing this sampler also changes the washes and their edges.
     filter_layout: wgpu::BindGroupLayout,
     /// A 1x1 transparent texture in [`filter_layout`](Self::filter_layout),
@@ -1422,9 +1422,19 @@ struct LatticeBloom {
     chain: BloomChain,
 }
 
+/// The glow target's share of the scene's width and height, as a divisor.
+///
+/// The glow is a smooth, low-frequency field, and everything sharp beside it
+/// (rims, wedges, names, star cores) is drawn at full resolution on top, so a
+/// quarter-size target reconstructs it within what is visible. Against half
+/// size it saved about 1.3 ms at 6 notes and 2.5 ms at 24 notes at 2048²,
+/// with no difference to see in the DAW (#1458).
+const GLOW_DIVISOR: u32 = 4;
+
 /// Where a frame's node light is assembled before any of it reaches the
-/// picture: one transparent premultiplied colour texture at half the scene's
-/// width and height, plus the bind group its readers take it through.
+/// picture: one transparent premultiplied colour texture at a quarter of the
+/// scene's width and height ([`GLOW_DIVISOR`]), plus the bind group its
+/// readers take it through.
 /// Stars keeps this source resolution but supplies a scene-resolution material
 /// output through the same reader interface, preserving its compact cores.
 ///
@@ -1440,6 +1450,9 @@ struct LatticeBloom {
 /// each other, and a target left allocated at reach 0 is a glow-sized texture
 /// held for a feature that is off.
 struct GlowTarget {
+    /// The texels the scene's size over [`GLOW_DIVISOR`] came to. Every
+    /// texture below, and the material source, is this size.
+    size: [u32; 2],
     material_source: Option<lattice_material::Source>,
     statistics: [wgpu::TextureView; 3],
     statistics_bind_group: wgpu::BindGroup,
@@ -1923,9 +1936,10 @@ impl Offscreen {
         );
     }
 
-    /// Make this pane's half-resolution light target exist while `want` says
-    /// so. The separate pane history is maintained by the caller under the
-    /// same guard; recreating this image never allocates or transfers a strip.
+    /// Make this pane's quarter-resolution light target exist while `want`
+    /// says so. The separate pane history is maintained by the caller under
+    /// the same guard; recreating this image never allocates or transfers a
+    /// strip.
     fn ensure_glow(&mut self, device: &wgpu::Device, shared: &OffscreenShared<'_>, want: bool) {
         match (want, self.glow.is_some()) {
             (true, false) => self.glow = Some(GlowTarget::new(device, shared, self.size)),
@@ -1975,17 +1989,18 @@ impl Offscreen {
 }
 
 impl GlowTarget {
-    /// Stars preserve native scene-resolution cores; all other materials read the half-resolution light.
+    /// Stars preserve native scene-resolution cores; all other materials read the quarter-resolution light.
     fn binding(&self) -> &wgpu::BindGroup {
         self.material_source
             .as_ref()
             .and_then(|source| source.star_output())
             .unwrap_or(&self.bind_group)
     }
-    /// Half the scene's width and height, rounded up for odd-sized panes.
-    /// All readers reconstruct the same filtered field in normalized coordinates.
-    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, size: [u32; 2]) -> Self {
-        let size = size.map(|n| n.div_ceil(2).max(1));
+    /// The scene's width and height over [`GLOW_DIVISOR`], rounded up for
+    /// panes that do not divide evenly. All readers reconstruct the same
+    /// filtered field in normalized coordinates.
+    fn new(device: &wgpu::Device, shared: &OffscreenShared<'_>, scene: [u32; 2]) -> Self {
+        let size = scene.map(|n| n.div_ceil(GLOW_DIVISOR).max(1));
         let OffscreenShared { format, filter_layout, sampler, .. } = *shared;
         let view = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -2017,6 +2032,7 @@ impl GlowTarget {
         let (statistics, statistics_bind_group) =
             lattice_node_glow::statistics(device, shared.glow_statistics_layout, size);
         GlowTarget {
+            size,
             material_source: None,
             statistics,
             statistics_bind_group,

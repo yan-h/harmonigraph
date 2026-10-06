@@ -174,6 +174,8 @@ fn release(scene: &mut Scene) {
 /// Each resized release is compared byte-exact with a separate pane seeded
 /// at that viewport. A third pane carries a different colour and advances its
 /// own parity. Constructor counts include any temporary strip before adoption.
+/// The glow target and its statistics are a quarter of the scene, rounded up
+/// on odd panes, and a last step under a material checks its source is too.
 #[test]
 fn viewport_changes_keep_history_without_allocating_a_strip() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
@@ -212,7 +214,8 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         let creations = super::INK_STRIP_CREATIONS.get();
         let resized = shooter.shot_again(&scene);
         let offscreen = target(&shooter);
-        let expected = offscreen.size.map(|n| n.div_ceil(2));
+        let expected = offscreen.size.map(|n| n.div_ceil(4));
+        assert_ne!(expected, offscreen.size.map(|n| n.div_ceil(2)), "fixture tells 1/4 from 1/2");
         let glow = offscreen.glow.as_ref().unwrap();
         for view in std::iter::once(&glow.view).chain(&glow.statistics) {
             assert_eq!([view.texture().width(), view.texture().height()], expected);
@@ -251,7 +254,19 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         shooter.pane = 10;
         assert_eq!(history(&shooter).parity, parity, "another pane cannot advance this one");
     }
-    eprintln!("history viewport fixture: 4 target recreations, 0 strip creations; 4 byte-exact controls, independent red/green panes");
+
+    // Under a material that reads the light, its source is the glow
+    // target's quarter size too.
+    shooter.pane = 10;
+    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+    shooter.shot_again(&scene);
+    let offscreen = target(&shooter);
+    let quarter = offscreen.size.map(|n| n.div_ceil(4));
+    let glow = offscreen.glow.as_ref().unwrap();
+    let source = glow.material_source.as_ref().expect("fixture reaches a material source");
+    assert_eq!([source.view.texture().width(), source.view.texture().height()], quarter);
+    assert_eq!(glow.size, quarter);
+    eprintln!("history viewport fixture: 4 target recreations at quarter-size glow, then a quarter-size material source; 0 strip creations; 4 byte-exact controls, independent red/green panes");
 }
 
 /// This directly supplies renderer inputs, not an execution of the CPU row
