@@ -13,11 +13,12 @@
 //! - a **raw stream** (`.rgba` or `.raw`) — the escape hatch when ffmpeg
 //!   isn't there; pipe it in later with the geometry printed at the end.
 
+use harmonigraph_take::VideoEncoder;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
 pub enum Sink {
-    Video { child: Child, writer: Writer, encoded: Encoded, frames: u64 },
+    Video { child: Child, writer: Writer, encoded: Encoded, frames: u64, encoder: VideoEncoder },
     Pngs { dir: std::path::PathBuf, stem: String, index: u32, size: [u32; 2] },
     Raw { file: std::fs::File },
 }
@@ -196,7 +197,10 @@ pub struct VideoOptions<'a> {
     pub frames: u64,
     /// The take's recorded audio to mux in, if any.
     pub audio: Option<&'a std::path::Path>,
-    /// x264 constant-rate-factor: lower is better and bigger.
+    /// Which encoder ffmpeg runs; see [`video_args`].
+    pub encoder: VideoEncoder,
+    /// x264 constant-rate-factor: lower is better and bigger. The hardware
+    /// encoder has no CRF and ignores it.
     pub crf: u32,
     /// Explicit ffmpeg path (`--ffmpeg`), overriding the search.
     pub ffmpeg: Option<&'a str>,
@@ -263,6 +267,7 @@ impl Sink {
             writer: Writer::spawn(stdin),
             encoded: Encoded::spawn(stdout),
             frames: options.frames,
+            encoder: options.encoder,
         })
     }
 
@@ -306,7 +311,7 @@ impl Sink {
     /// half-written video can't be mistaken for a finished one.
     pub fn finish(self, mut progress: impl FnMut(u64)) -> Result<(), String> {
         match self {
-            Sink::Video { mut child, mut writer, mut encoded, frames } => {
+            Sink::Video { mut child, mut writer, mut encoded, frames, encoder } => {
                 // Close the queue without waiting on it: the writer drains
                 // what is queued — part of the video — and then drops the pipe,
                 // which is ffmpeg's EOF. ffmpeg closing its stdout on exit is
@@ -323,9 +328,20 @@ impl Sink {
                 // from both ends, and ffmpeg's end is the one that says what
                 // happened — a broken pipe here only says the far end is gone.
                 if !status.success() {
+                    // The hardware encoder is the one failure a person can
+                    // act on without reading ffmpeg's log: a machine with no
+                    // VideoToolbox encoder (a VM, say) refuses it at the first
+                    // frame, and x264 is the way round that.
+                    let encoder = match encoder {
+                        VideoEncoder::X264 => "",
+                        VideoEncoder::Hardware => {
+                            " (hardware encoder h264_videotoolbox; if this machine has none, \
+                             export with x264)"
+                        }
+                    };
                     return Err(match written {
-                        Err(error) => format!("ffmpeg exited with {status}; {error}"),
-                        Ok(()) => format!("ffmpeg exited with {status}"),
+                        Err(error) => format!("ffmpeg exited with {status}{encoder}; {error}"),
+                        Ok(()) => format!("ffmpeg exited with {status}{encoder}"),
                     });
                 }
                 // Whereas a write that failed against an encoder that exited
@@ -343,6 +359,22 @@ impl Sink {
             Sink::Pngs { .. } => Ok(()),
         }
     }
+}
+
+/// What the hardware encoder spends per pixel per frame, in bits: 60 Mb/s at
+/// 2560x1440@60, so about 0.27.
+///
+/// VideoToolbox has no constant-quality mode to match x264's CRF, so it gets a
+/// bitrate, and a bitrate has to scale with what it covers. 60 Mb/s at 1440p60
+/// measured 30.47 dB SSIM over a real take against x264's 29.93 at CRF 10
+/// (luma better, chroma U 28.7 dB against 30.7), for a file 1.8x the size. The
+/// same density is about 34 Mb/s at 1080p60 and 134 Mb/s at 4K60.
+const HARDWARE_BITS_PER_PIXEL: f64 = 60e6 / (2560.0 * 1440.0 * 60.0);
+
+/// The hardware encoder's bitrate for this output, in kb/s.
+fn hardware_kbps(options: &VideoOptions) -> u64 {
+    let [w, h] = options.size;
+    (HARDWARE_BITS_PER_PIXEL * f64::from(w) * f64::from(h) * options.fps / 1000.0).round() as u64
 }
 
 /// Every argument ffmpeg is started with, bar the program itself.
@@ -385,23 +417,49 @@ fn video_args(options: &VideoOptions, path: &std::path::Path) -> Vec<String> {
     // B-frames, a closed GOP of half the frame rate (x264 closes its GOPs
     // by default), 4:2:0, BT.709.
     let gop = ((options.fps / 2.0).round() as u32).max(1);
-    // `medium`, not `slow`: the encoder, not the picture, is what an export
-    // waits on. One second of a real take at 2560x1440@60 encoded in 4.6-5.2 s
-    // against 10.8-11.3 s, for a file 1% larger and SSIM 0.99771 against
-    // 0.99784. The keyframe pop below barely moves: at 720p60 a keyframe
-    // changes 0.81 grey levels against 0.78, the frames between 0.59 against
-    // 0.58, for 4.5% more bytes.
-    args.extend(["-c:v", "libx264", "-preset", "medium", "-profile:v", "high"].map(String::from));
-    args.extend(["-crf".to_string(), options.crf.to_string()]);
-    // The spectrogram's noise floor is grain to an encoder, and half a
-    // second of GOP puts a keyframe in front of it twice a second.
-    // Each re-draws the grain afresh, which reads as a flicker; grain
-    // tuning narrows how differently I, P and B frames draw it. On a
-    // 720p60 take at the default CRF, the keyframe jump fell from 0.77
-    // to 0.59 grey levels for 5.0 -> 7.4 Mbps — where YouTube puts
-    // 720p60.
-    args.extend(["-tune", "grain"].map(String::from));
-    args.extend(["-bf".to_string(), "2".to_string(), "-g".to_string(), gop.to_string()]);
+    match options.encoder {
+        VideoEncoder::X264 => {
+            // `medium`, not `slow`: the encoder, not the picture, is what an
+            // export waits on. One second of a real take at 2560x1440@60
+            // encoded in 4.6-5.2 s against 10.8-11.3 s, for a file 1% larger
+            // and SSIM 0.99771 against 0.99784. The keyframe pop below barely
+            // moves: at 720p60 a keyframe changes 0.81 grey levels against
+            // 0.78, the frames between 0.59 against 0.58, for 4.5% more bytes.
+            args.extend(
+                ["-c:v", "libx264", "-preset", "medium", "-profile:v", "high"].map(String::from),
+            );
+            args.extend(["-crf".to_string(), options.crf.to_string()]);
+            // The spectrogram's noise floor is grain to an encoder, and half a
+            // second of GOP puts a keyframe in front of it twice a second.
+            // Each re-draws the grain afresh, which reads as a flicker; grain
+            // tuning narrows how differently I, P and B frames draw it. On a
+            // 720p60 take at the default CRF, the keyframe jump fell from 0.77
+            // to 0.59 grey levels for 5.0 -> 7.4 Mbps — where YouTube puts
+            // 720p60.
+            args.extend(["-tune", "grain"].map(String::from));
+            args.extend(["-bf".to_string(), "2".to_string()]);
+        }
+        VideoEncoder::Hardware => {
+            // `-allow_sw 0` (VideoToolbox's own default, stated so it reads as
+            // a choice): a machine with no hardware H.264 encoder fails the
+            // export, which `Sink::finish` names, rather than falling back to
+            // Apple's software encoder — slower than x264 and worse, so the
+            // choice would quietly mean the opposite of what it says.
+            args.extend(
+                ["-c:v", "h264_videotoolbox", "-profile:v", "high", "-allow_sw", "0"]
+                    .map(String::from),
+            );
+            args.extend(["-b:v".to_string(), format!("{}k", hardware_kbps(options))]);
+            // No B-frames. Asked for two, VideoToolbox reorders three deep
+            // behind a reported delay of two, and ffmpeg 7 "replaces by guess"
+            // the decode stamps that come out invalid — a frame's presentation
+            // nudged a tick late and the stream 17 ms short on a 2 s clip.
+            // Without them every stamp is exact, and the signed-offset reasoning
+            // at the muxer flags below has no reorder delay to answer for.
+            args.extend(["-bf".to_string(), "0".to_string()]);
+        }
+    }
+    args.extend(["-g".to_string(), gop.to_string()]);
     // Converted AND tagged. ffmpeg's default conversion is BT.601 and
     // writes no tag, which YouTube reads as BT.709 — every saturated
     // colour shifted. A tag without the conversion is the same shift
@@ -540,6 +598,7 @@ mod tests {
                 fps: 30.0,
                 frames: 64,
                 audio: None,
+                encoder: VideoEncoder::X264,
                 crf: 20,
                 ffmpeg: Some(dir.join("ffmpeg.sh").to_str().expect("utf-8 path")),
                 audio_offset: 0.0,
@@ -759,6 +818,7 @@ mod tests {
                 fps,
                 frames,
                 audio: seconds.map(|_| wav.as_path()),
+                encoder: VideoEncoder::X264,
                 crf: 20,
                 ffmpeg: ffmpeg.to_str(),
                 audio_offset: offset,
@@ -798,6 +858,7 @@ mod tests {
                 fps,
                 frames: 1,
                 audio: Some(&wav),
+                encoder: VideoEncoder::X264,
                 crf: 20,
                 ffmpeg: ffmpeg.to_str(),
                 audio_offset: 0.0,
@@ -832,6 +893,7 @@ mod tests {
                         fps: f64::from(fps),
                         frames: u64::from(fps),
                         audio: Some(&wav),
+                        encoder: VideoEncoder::X264,
                         crf: 20,
                         ffmpeg: ffmpeg.to_str(),
                         audio_offset: offset,
@@ -872,6 +934,77 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A 1440p60 export with a soundtrack, which reaches every branch of
+    /// [`video_args`] but the delayed-audio one.
+    fn export_at_1440p(encoder: VideoEncoder) -> Vec<String> {
+        video_args(
+            &VideoOptions {
+                size: [2560, 1440],
+                fps: 60.0,
+                frames: 600,
+                audio: Some(std::path::Path::new("/takes/take.wav")),
+                encoder,
+                crf: 10,
+                ffmpeg: None,
+                audio_offset: 0.0,
+            },
+            std::path::Path::new("/takes/take.mp4"),
+        )
+    }
+
+    /// The default encoder is x264 with exactly the arguments it had before
+    /// there was a choice: every export made since is reproducible.
+    #[test]
+    fn the_default_export_is_x264_with_its_arguments_unchanged() {
+        assert_eq!(VideoEncoder::default(), VideoEncoder::X264);
+        let expected = "-hide_banner -loglevel warning -y -progress pipe:1 -f rawvideo \
+             -pix_fmt rgba -s 2560x1440 -r 60 -i - -ss 0.021333 -i /takes/take.wav \
+             -c:v libx264 -preset medium -profile:v high -crf 10 -tune grain -bf 2 -g 30 \
+             -vf scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,\
+             setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv \
+             -r 60 -af aresample=48000,apad,atrim=end_sample=478976 -c:a aac -b:a 384k \
+             -ar 48000 -movflags +faststart+negative_cts_offsets -use_editlist 0 \
+             /takes/take.mp4";
+        assert_eq!(export_at_1440p(VideoEncoder::X264).join(" "), expected);
+    }
+
+    /// The hardware encoder changes the encoder's own arguments and nothing
+    /// else: the colour conversion and tags, the soundtrack and the muxer
+    /// flags are x264's, and nothing x264-only rides along.
+    #[test]
+    fn the_hardware_export_swaps_only_the_encoder() {
+        let x264 = export_at_1440p(VideoEncoder::X264);
+        let hardware = export_at_1440p(VideoEncoder::Hardware);
+        let span = |args: &[String]| {
+            let at = |flag: &str| args.iter().position(|a| a == flag).expect(flag);
+            (at("-c:v"), at("-g"))
+        };
+        let (x_from, x_to) = span(&x264);
+        let (h_from, h_to) = span(&hardware);
+        assert_eq!(x264[..x_from], hardware[..h_from], "the input and soundtrack moved");
+        assert_eq!(x264[x_to..], hardware[h_to..], "the GOP, colour, audio or muxer moved");
+        assert_eq!(
+            hardware[h_from..h_to].join(" "),
+            "-c:v h264_videotoolbox -profile:v high -allow_sw 0 -b:v 60000k -bf 0",
+        );
+        // The bitrate keeps 1440p60's density at other sizes and rates.
+        let kbps = |size, fps| {
+            hardware_kbps(&VideoOptions {
+                size,
+                fps,
+                frames: 1,
+                audio: None,
+                encoder: VideoEncoder::Hardware,
+                crf: 10,
+                ffmpeg: None,
+                audio_offset: 0.0,
+            })
+        };
+        assert_eq!(kbps([1920, 1080], 60.0), 33_750);
+        assert_eq!(kbps([3840, 2160], 60.0), 135_000);
+        assert_eq!(kbps([2560, 1440], 30.0), 30_000);
     }
 
     #[test]
