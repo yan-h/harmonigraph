@@ -980,15 +980,13 @@ fn oct_ring(cents: f32) -> OctRing {
     ring.seam_dir = vec2<f32>(cos(ring.seam), sin(ring.seam));
     return ring;
 }
-// One slot's indicator wedge.
+// One slot's indicator wedge, as directions: `b1` its counter-clockwise edge,
+// `b2` its clockwise one, and `mid` the middle between them, the angle of the
+// slot's own pitch, where the indicator "points". Exactly its own octave's
+// ends, at every slot — nothing is cut to fit, which is what keeps the
+// indicators meeting edge to edge and closing the ring. Its width is the
+// span's alone (`oct_slice_width`).
 struct OctSector {
-    // Its two angular edges, in the order the wedge tests below want them: x
-    // the counter-clockwise edge, y the clockwise one. Exactly its own
-    // octave's ends, at every slot — nothing is cut to fit, which is what
-    // keeps the indicators meeting edge to edge and closing the ring.
-    edges: vec2<f32>,
-    // The directions of those two edges, and of the middle between them: the
-    // angle of the slot's own pitch, where the indicator "points".
     b1: vec2<f32>,
     b2: vec2<f32>,
     mid: vec2<f32>,
@@ -1006,11 +1004,14 @@ fn oct_sector(s: i32, ring: OctRing) -> OctSector {
     let first = u.octave.turns[i];
     let next = u.octave.turns[i + 1u];
     return OctSector(
-        vec2<f32>(ring.seam - oct_walk(f32(i)), ring.seam - oct_walk(f32(i + 1u))),
         oct_turned(ring.seam_dir, first.xy),
         oct_turned(ring.seam_dir, next.xy),
         oct_turned(ring.seam_dir, first.zw),
     );
+}
+// The angle every slice spans: one span-th of the turn.
+fn oct_slice_width() -> f32 {
+    return oct_walk(1.0);
 }
 // The level of slot `s`, or nothing when the ring names an octave the packing
 // has no room for: a ring near the pitch limits draws octaves no note can
@@ -1021,7 +1022,7 @@ fn oct_slot_level(octaves: vec3<u32>, s: i32) -> f32 {
     }
     return octave_level(octaves, u32(s));
 }
-// Whether a pixel's angle falls inside sector `edges`'s own arc (between its
+// Whether a pixel's angle falls inside `sector`'s own arc (between its
 // two boundaries), 0..1 with a soft edge over `aa`. `outer_glyph`'s test for
 // which wedge owns a pixel, and so — through it — the octave indicator's arc
 // and its mark extension's alike, which is what makes them one wedge rather
@@ -1029,14 +1030,15 @@ fn oct_slot_level(octaves: vec3<u32>, s: i32) -> f32 {
 //
 // A wedge under a half turn is the INTERSECTION of its two half-planes; one
 // PAST a half turn is their union, and reading it as an intersection would
-// empty the sector instead of filling it — see `outer_glyph`'s own note on
-// `an_indicator_can_pass_a_half_turn_but_never_a_whole_one`.
+// empty the sector instead of filling it. Only a span of one is past a half
+// turn, which the CPU never sends (`MIN_SPAN`); a span of two is exactly a
+// half turn and reads as the intersection.
 fn oct_arc_coverage(sector: OctSector, uv: vec2<f32>, aa: f32) -> f32 {
     let c1 = uv.x * sector.b1.y - uv.y * sector.b1.x;
     let c2 = uv.x * sector.b2.y - uv.y * sector.b2.x;
     let s1 = smoothstep(-aa, aa, c1);
     let s2 = smoothstep(-aa, aa, -c2);
-    return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), sector.edges.x - sector.edges.y > TAU * 0.5);
+    return select(s1 * s2, 1.0 - (1.0 - s1) * (1.0 - s2), oct_slice_width() > TAU * 0.5);
 }
 
 // ---- Outer octave layer ----------------------------------------------------
@@ -1381,7 +1383,6 @@ fn outer_glyph(
     uv: vec2<f32>, band: NodeLayer, inner: f32, outer: f32, aa: f32,
 ) -> NodeLayer {
     let sector = oct_sector(s, ring);
-    let edges = sector.edges;
     let fold = sector_fold(uv, sector.mid, oct_half_turn());
     // The gap offsets the edge only along its forward ray. Extending the line
     // through the node would cut a second slit across a sector wider than half
@@ -1389,7 +1390,7 @@ fn outer_glyph(
     let gap = select(0.0, slice_gap_half(), dot(fold.q, fold.e) > 0.0);
     let side = sector_side(fold) + gap;
     let pie = sector_pie(fold, outer);
-    let width = edges.x - edges.y;
+    let width = oct_slice_width();
     var sd: f32;
     if width > TAU * 0.5 {
         sd = max(max(band.sd, pie), side);
@@ -1583,10 +1584,8 @@ fn spectrum_color_at(pitch: f32) -> f32 {
 // half a turn of its middle and the wrap below never reaches one.
 fn wedge_fraction(sector: OctSector, uv: vec2<f32>) -> f32 {
     let mid = sector.mid;
-    // Half the wedge, always positive: the sector's edges are given
-    // counter-clockwise first and the walk from one to the other is clockwise,
-    // which is decreasing angle.
-    let half = max(0.5 * (sector.edges.x - sector.edges.y), 1e-5);
+    // Half the wedge, always positive.
+    let half = max(0.5 * oct_slice_width(), 1e-5);
     // The fragment's angle about that middle, brought onto (-pi, pi].
     let c = dot(uv, mid);
     let s = uv.y * mid.x - uv.x * mid.y;

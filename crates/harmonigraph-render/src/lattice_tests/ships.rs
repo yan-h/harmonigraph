@@ -304,10 +304,12 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
             "the {name} scene drew nothing; the comparison is vacuous",
         );
 
-        // Metal compiles both builds with fast math, which lets them round a
-        // last f32 ulp differently, so a value standing on an 8-bit rounding
-        // boundary can come out one step apart (one byte of one fixture once
-        // the slot walk rotated its edges instead of taking their sines). An
+        // The two builds are different programs, Metal compiles both with fast
+        // math, and only the production one can come from the precompiled
+        // corpus, so their last f32 ulp may round differently and a value on
+        // an 8-bit rounding boundary come out one step apart. It did, in one
+        // byte of one fixture, once the slot walk rotated its edges instead of
+        // taking their sines, with both builds compiled from source. An
         // early-out that changes what is drawn moves a contour across many
         // pixels, so a handful of one-step flips is all this lets through.
         const ROUNDING_FLIPS: usize = 4;
