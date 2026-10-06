@@ -126,14 +126,21 @@ pub(super) fn stars(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Opti
 /// **What decides this size, both directions.** The pane's pixels and `ppp`,
 /// the two softnesses through `points_per_cent`/`points_per_ms`, and now
 /// [`harmonigraph_scene::SpectralAtmosphere::blur_time_step`] with
-/// [`SpectrogramAtmosphere::points_per_slab`]. Nothing else reaches the
-/// picture's needed resolution, so nothing else may serve a stale one. The
-/// input that CHURNS is the slab width: `points_per_slab` moves continuously
-/// through a Span drag, since the window moves while the rung holds. That does
-/// not reallocate per frame, because a capped axis is a REDUCED axis and
-/// [`retained_size`] gives those a 10% band — a drag refreshes pixels until it
-/// has moved the requested size a tenth, and a rung crossing (the slab width
-/// doubling) costs exactly one reallocation.
+/// [`SpectrogramAtmosphere::points_per_slab`], and — where
+/// [`harmonigraph_scene::SpectralAtmosphere::star_pitch_floor`] is on —
+/// whether Stars are drawn at full `Texture mix` and the finest drawn star
+/// cell ([`star_pitch_cell`]), which is the dials' `Star layers`, `Star size`
+/// and `Star spacing` with the pane's height and aspect. Nothing else reaches
+/// the picture's needed resolution, so nothing else may serve a stale one.
+/// Not the clock: drift, twinkle and lifetime move stars within a layout that
+/// is fixed by those dials, and solo does not change which depths are drawn.
+/// The input that CHURNS is the slab width: `points_per_slab` moves
+/// continuously through a Span drag, since the window moves while the rung
+/// holds. That does not reallocate per frame, because a capped axis is a
+/// REDUCED axis and [`retained_size`] gives those a 10% band — a drag refreshes
+/// pixels until it has moved the requested size a tenth, and a rung crossing
+/// (the slab width doubling) costs exactly one reallocation. The star cap
+/// moves only on a star-dial drag or a resize, and takes the same band.
 pub(super) fn source_size(
     pixels: [u32; 2],
     ppp: f32,
@@ -154,14 +161,43 @@ pub(super) fn source_size(
     // with no run to measure, and any nonsense either could carry.
     let per_texel = settings.blur_time_step * atmosphere.points_per_slab * ppp;
     let bounded = per_texel.is_finite() && per_texel > 0.0;
+    let per_star = star_pitch_cell(pixels, atmosphere);
     std::array::from_fn(|axis| {
         let base = pixels[axis];
         let mut texels = pixels[axis] as f32 / (sigma[axis] * 0.5).max(1.0);
         if axis == time_axis && bounded {
             texels = texels.min(pixels[axis] as f32 / per_texel);
         }
+        if let Some(cell) = per_star.filter(|_| axis != time_axis) {
+            texels = texels.min(pixels[axis] as f32 / cell);
+        }
         (texels.ceil() as u32).max(8).min(base)
     })
+}
+
+/// Device pixels per light-field texel the pitch axis may take under
+/// [`harmonigraph_scene::SpectralAtmosphere::star_pitch_floor`]: the finest
+/// drawn star cell, or `None` where the switch is off, no starfield is drawn,
+/// or `Texture mix` is below full and the field itself is on screen.
+///
+/// The finest of the depths the starfield DRAWS — the ones `Star layers`
+/// keeps — at the layout's cell, which the atlas may have raised past the
+/// dials'. Solo does not narrow it: a soloed depth is drawn as it is in the
+/// whole field, and hidden depths keep baking their colour off this field.
+/// A star pixel is a 540th of the pane's height on both axes, so the cell is
+/// the same number of device pixels whichever axis pitch is on.
+fn star_pitch_cell(pixels: [u32; 2], atmosphere: SpectrogramAtmosphere) -> Option<f32> {
+    let settings = atmosphere.settings.sanitized();
+    if !settings.star_pitch_floor || settings.cloud_depth < 1.0 {
+        return None;
+    }
+    let layout = stars(pixels, atmosphere)?;
+    let finest = (0..STAR_SLICES)
+        .filter(|&k| layout.grids[k] != [0, 0])
+        .map(|k| layout.cells[k])
+        .fold(f32::INFINITY, f32::min);
+    let cell = finest * pixels[1] as f32 / STAR_PANE;
+    (cell.is_finite() && cell > 1.0).then_some(cell)
 }
 
 /// Small zoom and Span changes refresh pixels, not GPU allocations. Keep the
@@ -337,6 +373,7 @@ pub(super) fn tile_key(
         wash_pool_softness: _, // the tile holds the distance, the dials shape it after
         cloud_style: _,        // only the wash reaches here; the rest returned above
         stars: _,              // Stars do not use a displacement tile.
+        star_pitch_floor: _,   // sizes the light field, applied after the tile bake
         material_settings:
             harmonigraph_scene::MaterialSettings {
                 velvet_size: _,
@@ -830,6 +867,7 @@ fn memory_key(
         pitch_softness,
         time_softness,
         blur_time_step: _, // response/coverage changes do not change material identity
+        star_pitch_floor: _, // like the time step, how coarse the field the stars read is
         cloud_depth: _,    // response/coverage changes do not change material identity
         color_pickup: _,   // response/coverage changes do not change material identity
         color_release: _,  // response/coverage changes do not change material identity
@@ -2650,6 +2688,59 @@ mod tests {
         assert_eq!(at(0.5), [512, off[1]]);
         // A caller with no run to measure is the dial's own zero: no bound.
         assert_eq!(sized(1.0, 0.0), off);
+    }
+
+    /// `star_pitch_floor` takes the PITCH axis to one texel per finest drawn
+    /// star cell under Stars at full `Texture mix`, and nowhere else.
+    ///
+    /// Both softnesses and the time step are zero, so without the switch both
+    /// axes are at full resolution and every texel removed is the switch's.
+    #[test]
+    fn the_star_pitch_floor_reduces_pitch_to_the_finest_star_cell() {
+        // About a 4K pane's height, where the issue measured a ~4 px cell.
+        let pixels = [2048, 2048];
+        let sized = |pitch_vertical, edit: &dyn Fn(&mut harmonigraph_scene::SpectralAtmosphere)| {
+            let mut settings = harmonigraph_scene::SpectralAtmosphere {
+                pitch_softness: 0.0,
+                time_softness: 0.0,
+                blur_time_step: 0.0,
+                star_pitch_floor: true,
+                ..Default::default()
+            };
+            edit(&mut settings);
+            source_size(
+                pixels,
+                2.0,
+                SpectrogramAtmosphere {
+                    settings,
+                    region: egui::Rect::ZERO,
+                    pitch_vertical,
+                    points_per_cent: 0.05,
+                    points_per_ms: 0.01,
+                    points_per_slab: 4.0,
+                    now: 0.0,
+                },
+            )
+        };
+        let fresh = harmonigraph_scene::SpectralAtmosphere::default();
+        assert_eq!(fresh.cloud_style, harmonigraph_scene::CloudStyle::Stars);
+        let layout = star_layout(fresh.stars, 1.0);
+        let finest = (0..STAR_SLICES)
+            .filter(|&k| layout.grids[k] != [0, 0])
+            .map(|k| layout.cells[k])
+            .fold(f32::INFINITY, f32::min);
+        let cell = finest * pixels[1] as f32 / STAR_PANE;
+        assert!((2.0..8.0).contains(&cell), "the fresh finest cell is {cell} device px");
+        let reduced = (pixels[1] as f32 / cell).ceil() as u32;
+        assert_eq!(sized(true, &|_| ()), [2048, reduced]);
+        assert_eq!(sized(false, &|_| ()), [reduced, 2048]);
+        // Off, below full mix, or not Stars: today's full-resolution field.
+        assert_eq!(sized(true, &|s| s.star_pitch_floor = false), pixels);
+        assert_eq!(sized(true, &|s| s.cloud_depth = 0.99), pixels);
+        assert_eq!(
+            sized(true, &|s| s.cloud_style = harmonigraph_scene::CloudStyle::Watercolor),
+            pixels
+        );
     }
 
     #[test]
