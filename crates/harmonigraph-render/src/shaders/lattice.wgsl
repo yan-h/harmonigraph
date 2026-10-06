@@ -416,6 +416,60 @@ fn quad_margin(rim: f32, g: f32) -> f32 {
 // are an optimization, and the test is what keeps them one.
 const EARLY_OUT: bool = true;
 
+// How far past a layer's own shape an ANALYTIC node cell can still hold any
+// coverage, in node uv; negative on every other draw, where nothing skips.
+//
+// The analytic early-outs are off (`node_geom`, `spectral_ring`, the band and
+// mark walks) because a cell texel outside every layer's INK is still inside
+// its shadow — but the shadow ends too. Both node cell kinds write only
+// `clamp(-sd, 0, 1)` of the layers' union (`layer_distance`), and a layer adds
+// nothing to it once its coverage is exactly 0:
+//
+//   - Distance coverage is `standoff_coverage(sd * uv_points, 2σ, falloff)`,
+//     exactly 0 at `u >= 1` for every falloff — `(e^0 - 1) / …` and the linear
+//     branch's `remaining = 0` are both 0 — that is, once
+//     `sd * uv_points >= max(2σ, 1e-6) * SHADOW_STOP`. The profile's own stop,
+//     inside the cell's pad (`ShadowKernel::reach_sigmas`).
+//   - Expanded Gaussian coverage is `aa_inside(spread, sd, aa)`, a smoothstep
+//     that is exactly 0 once `sd >= spread + aa`.
+//
+// An early-out like the others, so `EARLY_OUT` off is its reference too.
+fn cell_reach(in: VsOut) -> f32 {
+    if !EARLY_OUT || in.shadow_at.z >= 0.0 {
+        return -1.0;
+    }
+    if in.params.w > GAUSSIAN_SPREAD_KIND - 0.5 {
+        return in.ink_carry + aa_width(in.strip_row, in.shadow_at.w);
+    }
+    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
+        return max(2.0 * in.strip_row, 1.0e-6) * SHADOW_STOP / abs(in.shadow_at.z);
+    }
+    return -1.0;
+}
+
+// Whether `bound`, a lower bound on a layer's signed distance, lies past
+// `reach`. The margins (a thousandth, and 1e-4 uv against field rounding near
+// 1e-6 uv) keep a skipped layer's own computed field past the stop as well, so
+// a skip changes no texel rather than nearly none.
+fn beyond_reach(bound: f32, reach: f32) -> bool {
+    return reach >= 0.0 && bound >= reach * 1.001 + 1.0e-4;
+}
+
+// A radius every shape `base_node_ink` draws lies inside: the band and any
+// swelled slice (`slices_outer`), the audio ring, and the mark strips, which
+// `base_node_ink` and `mark_radii` cap at QUAD_MARGIN - 0.02.
+fn node_extent(in: VsOut) -> f32 {
+    var r = max(u.node.band_outer, in.swell);
+    let audio = spectral_radii();
+    if audio.y > audio.x {
+        r = max(r, audio.y);
+    }
+    if (in.marks.x | in.marks.y) != 0u {
+        r = max(r, QUAD_MARGIN - 0.02);
+    }
+    return r;
+}
+
 // The least ink a node paints at all, as a coverage of one fragment.
 //
 // What makes the early-outs EXACT rather than nearly so: they answer "this
@@ -1588,6 +1642,11 @@ fn spectral_ring(
     if EARLY_OUT && !analytic && layer_coverage(band) <= 0.0 {
         return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
     }
+    // A cell texel past the shadow's reach (`cell_reach`): every wedge lies
+    // inside the annulus `band.sd` measures, so none can reach it either.
+    if beyond_reach(band.sd, cell_reach(in)) {
+        return RingInk(vec3<f32>(0.0), 0.0, 0.0, NodeLayer(EMPTY_DISTANCE, 0.0, 0.0));
+    }
     // Which wedge owns this pixel, and how much of it. The color is settled
     // AFTER the walk rather than inside it: one fragment is one reading of the
     // spectrum, and taking it per candidate slot would sample the grid `span`
@@ -1760,6 +1819,7 @@ fn drawn_marks(
     let top = ring.base + i32(oct_span()) - 1;
     var sd = EMPTY_DISTANCE;
     var coverage = 0.0;
+    let reach = cell_reach(in);
     for (var i = 0u; i < OCTAVE_SLOTS; i = i + 1u) {
         let s = i32(i);
         if (slots & (1u << i)) == 0u || s < ring.base || s > top {
@@ -1772,6 +1832,10 @@ fn drawn_marks(
                 continue;
             }
             own = glyph_band(d, r.x, r.y, 1.0, aa);
+        }
+        // The slot's sector lies inside the strip `own.sd` measures.
+        if beyond_reach(own.sd, reach) {
+            continue;
         }
         // Off this slot's strip is `mark_extension`'s own early-out, per slot.
         if EARLY_OUT && !analytic && layer_coverage(own) <= 0.0 {
@@ -2120,8 +2184,18 @@ fn base_node_ink(
     let swell_out = in.swell;
     let swells = swell_out > band_out;
     let in_swell = swells && d < swell_out + aa;
+    // A cell texel past the shadow's reach of every slice skips the walk: a
+    // slice, thinned or swelled (`slice_zones`), lies inside the annulus from
+    // the band's inner edge to the farther of its outer edge and the swell, and
+    // an annular sector is never nearer than the annulus it is cut from.
+    let slices_hi = max(band_out, swell_out);
+    let slices_far = beyond_reach(
+        abs(d - 0.5 * (band_in + slices_hi)) - 0.5 * (slices_hi - band_in),
+        cell_reach(in),
+    );
     for (var i = 0u;
-        i < oct_span() && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0 || in_swell);
+        i < oct_span() && !slices_far
+            && (!EARLY_OUT || analytic || layer_coverage(band) > 0.0 || in_swell);
         i = i + 1u) {
         let slot = oct.base + i32(i);
         let level = oct_slot_level(in.octaves, slot);
@@ -2543,6 +2617,18 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     let analytic = in.shadow_at.z < 0.0;
     let g = node_geom(in, analytic);
     if !g.paints {
+        return vec4<f32>(0.0);
+    }
+    // Past every shape the settled path draws by more than the shadow's reach
+    // (`cell_reach`), every layer is exactly 0 and both node coverage kinds
+    // write `clamp(-sd, 0, 1) = 0`: most of a cell, whose pad is the cell's
+    // reach and not the profile's. The layer walks above skip the same way
+    // nearer in. The animated path draws in displaced coordinates
+    // (`animated_slice_ink`), which `node_extent` does not bound.
+    let settled = u.node.animation == 0.0
+        || (in.motion.w & 0x80000000u) != 0u
+        || (u.node.band_outer <= u.node.band_inner && u.node.mark_thickness <= 0.0);
+    if settled && beyond_reach(g.d - node_extent(in), cell_reach(in)) {
         return vec4<f32>(0.0);
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);
