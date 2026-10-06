@@ -170,6 +170,9 @@ The loader intentionally preserves that process's old file instead of changing m
 Release builds land in `<that-worktree>/target/release/libharmonigraph_plugin.dylib`.
 Completed `session-lifecycle` handoffs preserve both binaries outside the checkout;
 `./load-plugin.sh <branch>` finds the latest preserved build when no local binary remains.
+Preserved builds live in the common Git directory's `agent-lifecycle/builds/`;
+the shared tool owns their checksums, retention and loader lock.
+Install agent-config's session-lifecycle skill before using them.
 Match the dylib's mtime to the branch's last commit time to identify it, then swap it back with `./load-plugin.sh <branch>` —
 which is the whole recovery, and the only recipe here that gets the swap's ORDER right.
 To rebuild one without cd'ing into the branch's own worktree:
