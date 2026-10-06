@@ -620,42 +620,47 @@ metal::float4 clouded_base(
     metal::float2 pt_6 = (position_1 / metal::float2(_e12)) - _e17;
     uint _e21 = cloud.cloud_style;
     if (_e21 == 2u) {
-        metal::float3 _e24 = palette_color(level_3, lut);
-        metal::float4 _e25 = star_color(pt_6, cloud, cloud_sampler, cloud_image);
-        float _e29 = cloud.cloud_depth;
-        return metal::float4(metal::mix(_e24, _e25.xyz, _e29), 1.0);
-    }
-    uint _e35 = cloud.memory_enabled;
-    if (_e35 != 0u) {
-        metal::float2 dimensions = cloud.memory_extent;
-        metal::float2 _e43 = cloud.size;
-        metal::float2 _e54 = cloud.memory_fraction;
-        metal::float2 uv_3 = ((((pt_6 / _e43) * (dimensions - metal::float2(2.0))) + metal::float2(1.0)) + _e54) / dimensions;
-        metal::float3 _e57 = memory_color(uv_3, cloud, color_memory);
-        float _e60 = cloud.cloud_depth;
-        if (_e60 >= 1.0) {
-            metal::float3 _e63 = gamma_from_linear_rgb(_e57);
-            return metal::float4(_e63, 1.0);
+        float _e26 = cloud.cloud_depth;
+        if (_e26 >= 1.0) {
+            metal::float4 _e29 = star_color(pt_6, cloud, cloud_sampler, cloud_image);
+            return metal::float4(_e29.xyz, 1.0);
         }
-        metal::float3 _e66 = palette_color(level_3, lut);
-        metal::float3 _e67 = linear_from_gamma_rgb(_e66);
-        float _e70 = cloud.cloud_depth;
-        metal::float3 _e72 = gamma_from_linear_rgb(metal::mix(_e67, _e57, _e70));
-        return metal::float4(_e72, 1.0);
+        metal::float3 _e33 = palette_color(level_3, lut);
+        metal::float4 _e34 = star_color(pt_6, cloud, cloud_sampler, cloud_image);
+        float _e38 = cloud.cloud_depth;
+        return metal::float4(metal::mix(_e33, _e34.xyz, _e38), 1.0);
     }
-    uint _e78 = cloud.tone_baked;
-    if (_e78 == 1u) {
-        metal::float2 _e85 = cloud.size;
-        metal::float4 _e88 = cloud_image.sample(cloud_sampler, pt_6 / _e85, metal::level(0.0));
-        tone = _e88.x;
+    uint _e44 = cloud.memory_enabled;
+    if (_e44 != 0u) {
+        metal::float2 dimensions = cloud.memory_extent;
+        metal::float2 _e52 = cloud.size;
+        metal::float2 _e63 = cloud.memory_fraction;
+        metal::float2 uv_3 = ((((pt_6 / _e52) * (dimensions - metal::float2(2.0))) + metal::float2(1.0)) + _e63) / dimensions;
+        metal::float3 _e66 = memory_color(uv_3, cloud, color_memory);
+        float _e69 = cloud.cloud_depth;
+        if (_e69 >= 1.0) {
+            metal::float3 _e72 = gamma_from_linear_rgb(_e66);
+            return metal::float4(_e72, 1.0);
+        }
+        metal::float3 _e75 = palette_color(level_3, lut);
+        metal::float3 _e76 = linear_from_gamma_rgb(_e75);
+        float _e79 = cloud.cloud_depth;
+        metal::float3 _e81 = gamma_from_linear_rgb(metal::mix(_e76, _e66, _e79));
+        return metal::float4(_e81, 1.0);
+    }
+    uint _e87 = cloud.tone_baked;
+    if (_e87 == 1u) {
+        metal::float2 _e94 = cloud.size;
+        metal::float4 _e97 = cloud_image.sample(cloud_sampler, pt_6 / _e94, metal::level(0.0));
+        tone = _e97.x;
     } else {
-        float _e90 = cloud_tone_at(pt_6, cloud, close_light, cloud_sampler, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
-        tone = _e90;
+        float _e99 = cloud_tone_at(pt_6, cloud, close_light, cloud_sampler, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
+        tone = _e99;
     }
-    float _e91 = tone;
-    float _e94 = cloud.cloud_depth;
-    metal::float3 _e96 = palette_color(metal::mix(level_3, _e91, _e94), lut);
-    return metal::float4(_e96, 1.0);
+    float _e100 = tone;
+    float _e103 = cloud.cloud_depth;
+    metal::float3 _e105 = palette_color(metal::mix(level_3, _e100, _e103), lut);
+    return metal::float4(_e105, 1.0);
 }
 
 metal::float4 clouded(
@@ -708,27 +713,27 @@ metal::float4 clouded(
     return metal::float4(_e60, _e2.w);
 }
 
-bool full_material_memory(
+bool base_level_unused(
     constant Cloud& cloud
 ) {
     bool local_2 = {};
     bool local_3 = {};
-    uint _e2 = cloud.memory_enabled;
-    if (_e2 != 0u) {
-        float _e9 = cloud.cloud_depth;
-        local_2 = _e9 >= 1.0;
+    float _e2 = cloud.cloud_depth;
+    if (_e2 >= 1.0) {
+        uint _e9 = cloud.cloud_style;
+        if (!((_e9 == 2u))) {
+            uint _e17 = cloud.memory_enabled;
+            local_3 = _e17 != 0u;
+        } else {
+            local_3 = true;
+        }
+        bool _e21 = local_3;
+        local_2 = _e21;
     } else {
         local_2 = false;
     }
-    bool _e13 = local_2;
-    if (_e13) {
-        uint _e18 = cloud.cloud_style;
-        local_3 = _e18 != 2u;
-    } else {
-        local_3 = false;
-    }
-    bool _e22 = local_3;
-    return _e22;
+    bool _e23 = local_2;
+    return _e23;
 }
 
 metal::float4 cloud_color(
@@ -748,7 +753,7 @@ metal::float4 cloud_color(
     constant _mslBufferSizes& _buffer_sizes
 ) {
     float level_5 = {};
-    bool _e1 = full_material_memory(cloud);
+    bool _e1 = base_level_unused(cloud);
     if (_e1) {
         metal::float4 _e5 = clouded(0.0, in_3.position.xy, cloud, close_light, cloud_sampler, color_memory, lut, cloud_image, cloud_tile_a, cloud_tile_b, cloud_tile_c, tile_sampler);
         return _e5;
