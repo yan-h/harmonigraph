@@ -45,7 +45,7 @@ pub mod render;
 pub use params::{ParamKey, MAX_TUNING_OFFSET};
 pub use render::{
     LatticeSide, RenderConfig, RenderFrame, RenderProgress, RenderTrigger, SpectrogramRender,
-    STOP_BAR_RANGE,
+    STOP_BAR_RANGE, TAIL_RANGE,
 };
 
 use std::io::{BufRead, Write};

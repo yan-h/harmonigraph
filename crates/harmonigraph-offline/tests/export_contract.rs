@@ -3,9 +3,13 @@ use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RenderTrigger, Wav
 use std::path::Path;
 use std::process::Command;
 
-fn take(path: &Path, seconds: f64, trigger: RenderTrigger) {
+/// `tail: None` leaves the fresh Tail, so those rows hold the default too.
+fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     let mut appearance = harmonigraph_ui::AppearanceDocument::default();
     appearance.render.trigger = trigger;
+    if let Some(tail) = tail {
+        appearance.render.tail = tail;
+    }
     let mut wav = WavWriter::create(path.with_extension("wav"), 48_000.0, 1).unwrap();
     wav.write(&vec![0.0; (seconds * 48_000.0) as usize]).unwrap();
     wav.finish().unwrap();
@@ -60,18 +64,52 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     let dir =
         std::env::temp_dir().join(format!("harmonigraph-cli-duration-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for (name, seconds, trigger, extra, frames) in [
-        ("default-tail", 0.25, RenderTrigger::OnDisarm, vec![], 85),
-        ("explicit-end", 10.0, RenderTrigger::OnDisarm, vec!["--end", "1"], 20),
-        ("late-start", 0.25, RenderTrigger::OnDisarm, vec!["--start", "3", "--end", "4"], 20),
+    // A Re-render's current look, with Tail turned down after recording.
+    let tail_zero = dir.join("tail-zero.ron");
+    let mut replacement = harmonigraph_ui::AppearanceDocument::default();
+    replacement.render.tail = 0.0;
+    std::fs::write(&tail_zero, replacement.serialize()).unwrap();
+    let tail_zero = tail_zero.to_str().unwrap();
+    // A Re-render's current look on a different trigger, with the fresh Tail.
+    let fresh = dir.join("fresh.ron");
+    std::fs::write(&fresh, harmonigraph_ui::AppearanceDocument::default().serialize()).unwrap();
+    let fresh = fresh.to_str().unwrap();
+    for (name, seconds, trigger, tail, extra, frames) in [
+        ("default-tail", 0.25, RenderTrigger::OnDisarm, None, vec![], 85),
+        ("explicit-end", 10.0, RenderTrigger::OnDisarm, None, vec!["--end", "1"], 20),
+        ("late-start", 0.25, RenderTrigger::OnDisarm, None, vec!["--start", "3", "--end", "4"], 20),
         // A loop-end take ends where its recording, and so its loop, does:
         // at 1 s, past the last note at 0.25 s but with no tail (#1125).
-        ("loop-end", 1.0, RenderTrigger::AtLoopEnd, vec![], 20),
+        ("loop-end", 1.0, RenderTrigger::AtLoopEnd, None, vec![], 20),
         // A typed --tail still runs past it.
-        ("loop-explicit-tail", 1.0, RenderTrigger::AtLoopEnd, vec!["--tail", "4"], 85),
+        ("loop-explicit-tail", 1.0, RenderTrigger::AtLoopEnd, None, vec!["--tail", "4"], 85),
+        // An audio export's shape: the last note well before the audio ends.
+        // The recorded Tail of 0 ends the video with the audio at 1 s rather
+        // than 4.25 s.
+        ("recorded-tail", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
+        // A Re-render takes the Tail from the look it draws with, so the same
+        // take recorded with the fresh 4 s still ends with its audio.
+        (
+            "replacement-tail",
+            1.0,
+            RenderTrigger::OnTransportStop,
+            None,
+            vec!["--appearance", tail_zero],
+            20,
+        ),
+        // But whether it applies is the RECORDING's: a loop-end take re-rendered
+        // with a Manually look and its 4 s Tail still ends with its loop.
+        (
+            "loop-end-replacement",
+            1.0,
+            RenderTrigger::AtLoopEnd,
+            None,
+            vec!["--appearance", fresh],
+            20,
+        ),
     ] {
         let path = dir.join(format!("{name}.take"));
-        take(&path, seconds, trigger);
+        take(&path, seconds, trigger, tail);
         let out = path.with_extension("mp4");
         let result = render(&path, &out, &extra);
         let stderr = String::from_utf8_lossy(&result.stderr);
@@ -115,7 +153,7 @@ fn cli_finalizes_the_encoder_after_a_render_write_error() {
     let dir = std::env::temp_dir().join(format!("harmonigraph-cli-failure-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("take.take");
-    take(&path, 0.25, RenderTrigger::OnDisarm);
+    take(&path, 0.25, RenderTrigger::OnDisarm, None);
     for exit in [0, 7] {
         let encoder = dir.join("ffmpeg.sh");
         // Closing stdin forces the >64KiB frame through the broken-pipe path.

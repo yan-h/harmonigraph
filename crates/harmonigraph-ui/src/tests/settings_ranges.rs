@@ -128,6 +128,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
     saved.workspace.interaction.spiral.zoom = v;
     saved.workspace.interaction.spiral.look = glam::Vec2::splat(v);
     a.render.stop_bar = v as f64;
+    a.render.tail = v as f64;
     a.render.frame.split = v;
 }
 
@@ -152,6 +153,7 @@ fn loaded(edge: Edge) -> SharedState {
     assert!(
         (STOP_BAR_RANGE.0..=STOP_BAR_RANGE.1).contains(&state.picture.appearance.render.stop_bar)
     );
+    assert!((TAIL_RANGE.0..=TAIL_RANGE.1).contains(&state.picture.appearance.render.tail));
     assert!((0.05..=0.95).contains(&state.picture.appearance.render.frame.split));
     // The zoom, for the same reason: no bar, but `Camera::sanitize` is the one
     // door holding it to the range `zoom`/`zoom_by` hold a drag to.

@@ -414,6 +414,24 @@ fn render_controls(
         if state.appearance.render.spectrogram == SpectrogramRender::WholeVideo {
             crate::widgets::weak(ui, "The preview still uses live History duration; export fits the take up to 10 minutes.");
         }
+        // Here rather than beside Finish recording: a render choice like Output
+        // size, which a Re-render takes from the current look. Always shown,
+        // because whether it applies turns on the trigger a take was RECORDED
+        // under, not the one selected now.
+        ui.horizontal_wrapped(|ui| {
+            crate::widgets::label(ui, "Tail").on_hover_text(
+                "How long the video runs past the last recorded note or automation, so releases finish fading. \
+                 The video always runs to the end of the recorded audio, so 0 ends an audio export at its \
+                 range end. A take recorded under Loop end ends with its loop and ignores this.",
+            );
+            ui.add(
+                egui::DragValue::new(&mut state.appearance.render.tail)
+                    .range(crate::TAIL_RANGE.0..=crate::TAIL_RANGE.1)
+                    .speed(0.05)
+                    .max_decimals(2)
+                    .suffix(" s"),
+            );
+        });
         if !interaction.take.supported {
             return;
         }
@@ -591,7 +609,6 @@ fn record_controls(
                 );
             });
         }
-
         clear_everything(ui, state);
     });
 }
