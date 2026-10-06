@@ -213,13 +213,13 @@ pub struct RenderConfig {
     /// Seconds the video runs past the take's last event, so releases finish
     /// fading and the roll clears. The Video pane's Tail.
     ///
-    /// Ignored under [`AtLoopEnd`](RenderTrigger::AtLoopEnd), whose video ends
-    /// with its loop (#1125), and never cuts the soundtrack short: the render
-    /// still runs to the end of the take's audio. So 0 ends an audio export at
-    /// its range end rather than a few silent seconds past it.
+    /// Ignored for a take RECORDED under [`AtLoopEnd`](RenderTrigger::AtLoopEnd),
+    /// whose video ends with its loop (#1125), and never cuts the soundtrack
+    /// short: the render still runs to the end of the take's audio. So 0 ends an
+    /// audio export at its range end rather than a few silent seconds past it.
     ///
-    /// The offline renderer reads it from the appearance the take was
-    /// RECORDED with, as it reads the trigger, and its `--tail` overrides it.
+    /// A render choice like [`short_edge`](Self::short_edge): a Re-render's
+    /// appearance supplies it, and the offline renderer's `--tail` overrides it.
     pub tail: f64,
 }
 
@@ -265,23 +265,6 @@ impl RenderConfig {
             self.tail = RenderConfig::default().tail;
         }
         self.tail = self.tail.clamp(TAIL_RANGE.0, TAIL_RANGE.1);
-    }
-
-    /// Seconds the video runs past the take's last event: [`tail`](Self::tail),
-    /// or none for a take that ends with its loop.
-    ///
-    /// Asked here rather than of the field for the same reason as
-    /// [`stop_at_bar`](Self::stop_at_bar): the trigger decides whether the
-    /// number applies, and every reader has to ask both.
-    pub fn tail_after_last_event(&self) -> f64 {
-        match self.trigger {
-            // One pass of a loop meant to be seen as a loop: a fade past its
-            // end is not the performance (#1125).
-            RenderTrigger::AtLoopEnd => 0.0,
-            RenderTrigger::OnDisarm | RenderTrigger::OnTransportStop | RenderTrigger::AtBar => {
-                self.tail
-            }
-        }
     }
 
     /// The bar to end the take at, or `None` when the trigger is not

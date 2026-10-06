@@ -226,7 +226,9 @@ arm Record take, export, and both files land together.
 The video never ends before the recorded audio does,
 so a Tail of 0 ends an export's video at its range end rather than a few silent seconds past it.
 *Loop end* hides the row: that video ends with its loop.
-The renderer reads the Tail the take was recorded with, and `--tail` overrides it.
+The renderer reads the Tail from the look it draws with —
+the recorded one, or the current one on a queued export —
+and `--tail` overrides it.
 
 ffmpeg is found automatically —
 on `PATH`, then in the usual install locations.
@@ -272,7 +274,7 @@ The flags worth knowing (`--help` lists them all):
 | `--scale` | pixels per point — the UI's *zoom*, not just its sharpness |
 | `--fps` | default 60 |
 | `--lead` | extra empty frame before the recording starts; default 0 |
-| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — the take's recorded **Tail**, or none for a *Loop end* take, which ends with its loop |
+| `--start` / `--end` / `--tail` | trim; `--start` is an absolute song position, `--tail` the run-out after the last note — the appearance's **Tail**, or none for a *Loop end* take, which ends with its loop |
 | `--appearance` | use a different look than the one in the take |
 
 ### Where the video starts

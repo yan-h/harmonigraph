@@ -64,6 +64,12 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     let dir =
         std::env::temp_dir().join(format!("harmonigraph-cli-duration-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
+    // A Re-render's current look, with Tail turned down after recording.
+    let tail_zero = dir.join("tail-zero.ron");
+    let mut replacement = harmonigraph_ui::AppearanceDocument::default();
+    replacement.render.tail = 0.0;
+    std::fs::write(&tail_zero, replacement.serialize()).unwrap();
+    let tail_zero = tail_zero.to_str().unwrap();
     for (name, seconds, trigger, tail, extra, frames) in [
         ("default-tail", 0.25, RenderTrigger::OnDisarm, None, vec![], 85),
         ("explicit-end", 10.0, RenderTrigger::OnDisarm, None, vec!["--end", "1"], 20),
@@ -77,6 +83,16 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         // The recorded Tail of 0 ends the video with the audio at 1 s rather
         // than 4.25 s.
         ("recorded-tail", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
+        // A Re-render takes the Tail from the look it draws with, so the same
+        // take recorded with the fresh 4 s still ends with its audio.
+        (
+            "replacement-tail",
+            1.0,
+            RenderTrigger::OnTransportStop,
+            None,
+            vec!["--appearance", tail_zero],
+            20,
+        ),
     ] {
         let path = dir.join(format!("{name}.take"));
         take(&path, seconds, trigger, tail);
