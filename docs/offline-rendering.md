@@ -222,10 +222,10 @@ it does not need to draw every video frame to preserve those proportions.
 *Transport stop* is what makes **exporting audio produce a video with nothing further to click**:
 arm Record take, export, and both files land together.
 
-**Tail**, beside it, is how long the video runs past the last note so releases finish fading — 4 s fresh.
+**Tail**, under Render, is how long the video runs past the last recorded note or automation so releases finish fading — 4 s fresh.
 The video never ends before the recorded audio does,
 so a Tail of 0 ends an export's video at its range end rather than a few silent seconds past it.
-*Loop end* hides the row: that video ends with its loop.
+A take recorded under *Loop end* ignores it: that video ends with its loop.
 The renderer reads the Tail from the look it draws with —
 the recorded one, or the current one on a queued export —
 and `--tail` overrides it.

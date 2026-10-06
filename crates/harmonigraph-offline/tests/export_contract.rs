@@ -70,6 +70,10 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     replacement.render.tail = 0.0;
     std::fs::write(&tail_zero, replacement.serialize()).unwrap();
     let tail_zero = tail_zero.to_str().unwrap();
+    // A Re-render's current look on a different trigger, with the fresh Tail.
+    let fresh = dir.join("fresh.ron");
+    std::fs::write(&fresh, harmonigraph_ui::AppearanceDocument::default().serialize()).unwrap();
+    let fresh = fresh.to_str().unwrap();
     for (name, seconds, trigger, tail, extra, frames) in [
         ("default-tail", 0.25, RenderTrigger::OnDisarm, None, vec![], 85),
         ("explicit-end", 10.0, RenderTrigger::OnDisarm, None, vec!["--end", "1"], 20),
@@ -91,6 +95,16 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
             RenderTrigger::OnTransportStop,
             None,
             vec!["--appearance", tail_zero],
+            20,
+        ),
+        // But whether it applies is the RECORDING's: a loop-end take re-rendered
+        // with a Manually look and its 4 s Tail still ends with its loop.
+        (
+            "loop-end-replacement",
+            1.0,
+            RenderTrigger::AtLoopEnd,
+            None,
+            vec!["--appearance", fresh],
             20,
         ),
     ] {

@@ -62,8 +62,9 @@ OPTIONS:
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear; short audio pads with silence.
-                           [default: 4; 0 for a take recorded under the
-                           Loop end trigger, which ends with its loop]
+                           [default: the appearance's Tail (4 s fresh); 0
+                           for a take recorded under the Loop end trigger,
+                           which ends with its loop]
         --crf <N>          x264 quality, lower is better and bigger. The
                            default meets YouTube's recommended bitrate at
                            720p; at 4K, lower it to get there.  [default: 10]
@@ -108,8 +109,9 @@ struct Args {
     /// was captured.
     lead: Option<f64>,
     end: Option<f64>,
-    /// `None` means "the take's own default" — see `tail_of_render`. An
-    /// explicit `--tail 4` on a loop-end take is NOT the same thing.
+    /// `None` means "the Tail of the look this render draws with" — see
+    /// `tail_of_render`. An explicit `--tail 4` on a loop-end take is NOT the
+    /// same thing.
     tail: Option<f64>,
     crf: u32,
     appearance: Option<String>,
@@ -172,7 +174,15 @@ fn parse_args_from(raw: impl IntoIterator<Item = String>) -> Result<Option<Args>
             "--start" => args.start = Some(parse_number("--start", &value("--start")?)?),
             "--lead" => args.lead = Some(parse_number("--lead", &value("--lead")?)?),
             "--end" => args.end = Some(parse_number("--end", &value("--end")?)?),
-            "--tail" => args.tail = Some(parse_number("--tail", &value("--tail")?)?),
+            "--tail" => {
+                let tail: f64 = parse_number("--tail", &value("--tail")?)?;
+                // A NaN or negative tail would reach the render's end and make
+                // its frame count meaningless, as the Tail field's sanitize says.
+                if !(tail.is_finite() && tail >= 0.0) {
+                    return Err(format!("--tail: {tail} is not a length of time"));
+                }
+                args.tail = Some(tail);
+            }
             "--crf" => args.crf = parse_number::<f64>("--crf", &value("--crf")?)? as u32,
             "--appearance" => args.appearance = Some(value("--appearance")?),
             "--ffmpeg" => args.ffmpeg = Some(value("--ffmpeg")?),
@@ -792,6 +802,18 @@ mod tests {
         }
         assert_eq!(tail_of_render(None, RenderTrigger::AtLoopEnd, 1.5), 0.0);
         assert_eq!(tail_of_render(Some(4.0), RenderTrigger::AtLoopEnd, 1.5), 4.0);
+    }
+
+    /// A tail that is not a length of time is refused at the flag rather than
+    /// reaching the render's end as a NaN frame count or a cut before the last
+    /// note.
+    #[test]
+    fn a_tail_that_is_not_a_length_is_refused() {
+        let parse = |tail: &str| parse_args_from(["--tail".into(), tail.to_string()]);
+        for bad in ["NaN", "inf", "-1"] {
+            assert!(parse(bad).is_err(), "--tail {bad}");
+        }
+        assert_eq!(parse("0").unwrap().unwrap().tail, Some(0.0));
     }
 
     /// `--start 0` has to survive parsing as a REQUEST, not as the absence of
