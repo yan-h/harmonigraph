@@ -941,23 +941,36 @@ fn map_controls(
         if view.playback.map.is_none() {
             crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
         }
-        // Audition overrides Saved map even after the editor reopens with its
-        // detail folds closed. Keep the active mode and its exit by the selector.
-        if view.playback.audition {
-            crate::widgets::label(ui, egui::RichText::new("Audition shape · Map selection paused; offset automation remains live").color(theme::armed()));
-            crate::widgets::button_row(ui, |ui| {
-                if ui.button("Return to arrangement").clicked() {
-                    params.edit_lattice_map(MapEdit::Return);
-                }
-            });
+        // Shape editing sits beside the selector, outside every fold: it is the
+        // control a passage is composed with, and it edits the map shown above.
+        let mut editing = view.edit_shape;
+        if crate::widgets::checkbox(ui, &mut editing, "Edit shape on lattice")
+            .on_hover_text(
+                "Click a lattice node to move its note there. Edits save to the selected \
+                 map, so its Map automation plays the new shape from the next attack.",
+            )
+            .changed()
+        {
+            params.edit_lattice_map(MapEdit::EditShape(editing));
         }
-        subsection(ui, "Map editing", |ui| {
         crate::widgets::button_row(ui, |ui| {
-            if ui.button("Audition working copy").clicked() {
-                params.edit_lattice_map(MapEdit::Audition);
+            if ui.add_enabled(view.can_undo, egui::Button::new("Undo shape edit")).clicked() {
+                params.edit_lattice_map(MapEdit::Undo);
+            }
+            let duplicate = egui::Button::new("Duplicate as new map");
+            if ui
+                .add_enabled(!view.full && view.playback.map.is_some(), duplicate)
+                .on_hover_text("Copy this shape to a new saved map and select it.")
+                .clicked()
+            {
+                params.edit_lattice_map(MapEdit::Duplicate);
             }
         });
-        crate::widgets::weak(ui, "Automate Fine for single steps and Coarse for steps of 10. Their ranges stay fixed; the two lanes add together.");
+        if view.full {
+            crate::widgets::label(ui, egui::RichText::new("All 128 stable map identities have been used.").color(theme::armed()));
+        }
+        subsection(ui, "Map offsets", |ui| {
+        crate::widgets::weak(ui, "Maps save shape only; these move it. Automate Fine for single steps and Coarse for steps of 10. The two lanes add together.");
         let mut fine = view.offsets.fine;
         let mut extension = view.offsets.extension;
         egui::Grid::new("map-offsets").show(ui, |ui| {
@@ -1003,29 +1016,7 @@ fn map_controls(
                 ui.end_row();
             }
         });
-        if view.playback.audition {
-            let mut editing = view.edit_shape;
-            if crate::widgets::checkbox(ui, &mut editing, "Edit shape · click destination on lattice").changed() {
-                params.edit_lattice_map(MapEdit::EditShape(editing));
-            }
-            if ui.add_enabled(view.can_undo, egui::Button::new("Undo map edit")).clicked() {
-                params.edit_lattice_map(MapEdit::Undo);
-            }
-            let key = ui.id().with("capture-map-name");
-            let mut name =
-                ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| "Passage".into());
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
-                if ui.add_enabled(!view.full, egui::Button::new("Capture new map")).clicked() {
-                    params.edit_lattice_map(MapEdit::Capture(name.clone()));
-                }
-            });
-            ui.data_mut(|data| data.insert_temp(key, name));
-            crate::widgets::weak(ui, "Capture saves shape only. Map selection leaves the three offsets unchanged.");
-            if view.full {
-                crate::widgets::label(ui, egui::RichText::new("All 128 stable map identities have been used.").color(theme::armed()));
-            }
-        }
+        });
         subsection(ui, "Manage selected saved map", |ui| {
             let key = ui.id().with(("rename-map", selected));
             let mut renamed = ui.data(|data| data.get_temp::<String>(key)).unwrap_or_else(|| name.into());
@@ -1069,7 +1060,6 @@ fn map_controls(
                     ));
                 }
             }
-        });
         });
         mode
     })

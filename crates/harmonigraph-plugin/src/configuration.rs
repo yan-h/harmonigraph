@@ -264,9 +264,6 @@ impl Owner {
         if self.snapshot.status & 2 != 0 {
             return None;
         }
-        if command.edit.payload[0] == RESTORE {
-            self.maps.restored();
-        }
         let raw = tuning(commit.raw);
         let mutation = match command.edit.payload[0] {
             RESTORE => ConfigMutation::Restore {

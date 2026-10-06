@@ -105,11 +105,10 @@ impl MapDocument {
     /// existence, its name, its deleted flag, its GEOMETRY, and `order` —
     /// moves this.
     ///
-    /// Geometry is the entry the methods below cover by their shape rather
-    /// than by a bump of their own: it reaches a slot only through
-    /// [`capture`](Self::capture), and nothing rewrites an existing slot's.
-    /// A method that ever does has to move this too, or the bank goes stale
-    /// where the names would not — the one direction this key can be wrong in.
+    /// Geometry reaches a slot only through [`capture`](Self::capture) and
+    /// [`reshape`](Self::reshape), and both move this: a write that skipped it
+    /// would leave the bank stale where the names would not — the one
+    /// direction this key can be wrong in.
     pub fn revision(&self) -> Revision {
         self.revision
     }
@@ -135,6 +134,18 @@ impl MapDocument {
         self.order.push(id);
         self.touch();
         Some(id)
+    }
+    /// Rewrite a live slot's shape in place, keeping its identity, so host
+    /// automation that selects `id` plays the new shape from the next attack.
+    /// Refuses a deleted, unused or invalid slot rather than reviving it.
+    pub fn reshape(&mut self, id: usize, map: LatticeMap) -> bool {
+        let Some(slot) = self.slots.get_mut(id).filter(|m| !m.deleted) else { return false };
+        if !map.valid() {
+            return false;
+        }
+        slot.geometry = map.into();
+        self.touch();
+        true
     }
     pub fn rename(&mut self, id: usize, name: String) {
         if let Some(slot) = self.slots.get_mut(id) {
@@ -189,9 +200,11 @@ impl MapDocument {
 #[derive(Clone, Debug, Default)]
 pub struct MapEditor {
     pub restore_id: u64,
-    pub working: Option<LatticeMap>,
     pub edit_shape: bool,
-    pub undo: Vec<LatticeMap>,
+    /// Each shape edit's slot and the shape it replaced, newest last. Undo
+    /// takes only the selected slot's entries, so it never rewrites a map
+    /// that is not on screen.
+    undo: Vec<(usize, LatticeMap)>,
     /// Memo of [`MapDocument::names`] and the document state it was read from.
     ///
     /// It lives here rather than in the document because the document is
@@ -204,7 +217,7 @@ pub struct MapEditor {
 impl MapEditor {
     /// `document`'s names, rebuilt only when the document is a state this memo
     /// has not seen. The key carries the document's revision and nothing else:
-    /// the rest of a [`MapView`] — selection, offsets, the working copy — is
+    /// the rest of a [`MapView`] — selection, offsets, edit mode — is
     /// rebuilt by its caller every frame, because none of it decides this value.
     pub fn names(&mut self, document: &MapDocument) -> MapNames {
         let revision = document.revision();
@@ -217,25 +230,28 @@ impl MapEditor {
             }
         }
     }
+    /// A restored project is a different document: undo entries name its
+    /// slots by identity and would write old shapes into the new ones.
     pub fn restore(&mut self, id: u64) {
         if self.restore_id != id {
             self.restore_id = id;
-            self.working = None;
             self.edit_shape = false;
             self.undo.clear();
         }
     }
-    pub fn change(&mut self, map: LatticeMap) {
-        if self.working == Some(map) || !map.valid() {
-            return;
+    pub fn record(&mut self, id: usize, replaced: LatticeMap) {
+        if self.undo.len() == 64 {
+            self.undo.remove(0);
         }
-        if let Some(old) = self.working {
-            if self.undo.len() == 64 {
-                self.undo.remove(0);
-            }
-            self.undo.push(old);
-        }
-        self.working = Some(map);
+        self.undo.push((id, replaced));
+    }
+    pub fn can_undo(&self, id: usize) -> bool {
+        self.undo.iter().any(|&(slot, _)| slot == id)
+    }
+    /// Remove and return `id`'s newest replaced shape.
+    pub fn undo(&mut self, id: usize) -> Option<LatticeMap> {
+        let index = self.undo.iter().rposition(|&(slot, _)| slot == id)?;
+        Some(self.undo.remove(index).1)
     }
 }
 
@@ -245,18 +261,11 @@ pub struct MapPlayback {
     pub selected: usize,
     pub offset: LatticePos,
     pub map: Option<LatticeMap>,
-    pub audition: bool,
 }
 
 impl Default for MapPlayback {
     fn default() -> Self {
-        Self {
-            engine: TuningEngine::default(),
-            selected: 0,
-            offset: LatticePos::ORIGIN,
-            map: None,
-            audition: false,
-        }
+        Self { engine: TuningEngine::default(), selected: 0, offset: LatticePos::ORIGIN, map: None }
     }
 }
 
@@ -303,10 +312,11 @@ pub struct MapView {
     pub full: bool,
 }
 impl MapView {
+    /// Lattice clicks edit the selected saved map, so there must be one.
     pub fn editing(&self) -> bool {
         self.playback.engine == TuningEngine::LatticeMap
             && self.edit_shape
-            && self.playback.audition
+            && self.playback.map.is_some()
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -320,15 +330,14 @@ pub enum MapAxis {
 pub enum MapEdit {
     Engine(TuningEngine),
     Select(usize),
-    Audition,
-    Return,
     EditShape(bool),
     Replace(LatticePos),
     BeginOffset(MapAxis, MapOffsetLane),
     Offset(MapAxis, MapOffsetLane, i32),
     EndOffset(MapAxis, MapOffsetLane),
     Undo,
-    Capture(String),
+    /// Copy the selected shape into a new slot and select it.
+    Duplicate,
     Rename(usize, String),
     MoveEarlier(usize),
     Delete(usize),
@@ -344,6 +353,7 @@ mod tests {
         map.replace(LatticePos::new(54, 0, 0));
         assert_eq!(doc.capture(map, "Passage".into()), Some(1));
         doc.delete(0);
+        assert!(!doc.reshape(0, LatticeMap::default()), "a tombstone is never revived");
         doc.rename(1, "Renamed".into());
         doc.move_earlier(1);
         let saved = ron::to_string(&doc).unwrap();
@@ -378,12 +388,22 @@ mod tests {
         let held = editor.names(&doc);
         assert!(Arc::ptr_eq(&held, &first), "an unchanged document must not rebuild");
 
-        // Each of the four mutations the editor can make, in turn.
+        // Each of the five mutations the editor can make, in turn.
         let mut previous = first;
         // What was done, how, and the names it must leave visible.
         type Mutation<'a> = (&'a str, &'a dyn Fn(&mut MapDocument), &'a [&'a str]);
-        let mutations: [Mutation; 4] = [
+        let mutations: [Mutation; 5] = [
             ("rename", &|doc| doc.rename(1, "Renamed".into()), &["C · 3×4", "Renamed"]),
+            (
+                "reshape",
+                &|doc| {
+                    let mut map = LatticeMap::default();
+                    assert!(map.replace(LatticePos::new(4, 0, 0)));
+                    assert!(doc.reshape(1, map));
+                    assert_eq!(doc.map(1), Some(map));
+                },
+                &["C · 3×4", "Renamed"],
+            ),
             (
                 "capture",
                 &|doc| {
