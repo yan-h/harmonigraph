@@ -1045,7 +1045,6 @@ impl ClapPlugin for Harmonigraph {
             self.params.tuning_engine.value(),
             self.params.map.unmodulated_plain_value(),
             lattice_maps::offsets(&self.params),
-            self.params.configuration.get().unwrap().accepted_restore.load(Ordering::Acquire),
         );
         owner.begin(boundary, &self.take, self.presentation_seconds);
     }

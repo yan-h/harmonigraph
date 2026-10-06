@@ -197,7 +197,7 @@ fn lattice_map_tunes_a_pre_tuned_keyboard_to_its_rounded_key_rather_than_twice()
 }
 
 #[test]
-fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
+fn lattice_map_shared_axes_and_shape_edits_apply_to_new_attacks_only() {
     use nice_plug::prelude::Param;
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
@@ -223,7 +223,7 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
         (voice(&hub, crate::tuning::DIRECT, 79).frozen_offset_microcents + 1_000_000).abs() < 100
     );
     hub_wrapper(&hub)
-        .test_inspect_plugin(|plugin| plugin.params.map_editor.lock().working = Some(second));
+        .test_inspect_plugin(|plugin| assert!(plugin.params.maps.write().reshape(0, second)));
     hub.run(
         1024,
         vec![
@@ -235,14 +235,12 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
         ],
         None,
     );
-    // Keep label rotation zero so the auditioned shape differs at MIDI E.
+    // Keep label rotation zero so the edited shape differs at MIDI E.
     let offset = LatticePos::new(-4, 3, -2);
-    let auditioned = voice(&hub, crate::tuning::DIRECT, 64);
-    assert_eq!(auditioned.attack_node, Some(LatticeMap { position: offset, ..second }.node(64)));
-    hub_wrapper(&hub).test_inspect_plugin(|plugin| {
-        assert_eq!(plugin.params.maps.read().map(0), Some(first));
-        plugin.params.map_editor.lock().working = None;
-    });
+    let edited = voice(&hub, crate::tuning::DIRECT, 64);
+    assert_eq!(edited.attack_node, Some(LatticeMap { position: offset, ..second }.node(64)));
+    hub_wrapper(&hub)
+        .test_inspect_plugin(|plugin| assert!(plugin.params.maps.write().reshape(0, first)));
     hub.run(1536, vec![note(4, 0, 76, 0, true)], None);
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 76).attack_node,
@@ -250,7 +248,7 @@ fn lattice_map_shared_axes_and_audition_apply_to_new_attacks_only() {
     );
     assert_eq!(
         voice(&hub, crate::tuning::DIRECT, 64).frozen_offset_microcents,
-        auditioned.frozen_offset_microcents
+        edited.frozen_offset_microcents
     );
     // Map is an automatable stepped state selector, never additive modulation.
     let params = hub.params();

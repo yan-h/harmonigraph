@@ -49,7 +49,7 @@ Both use seconds, with zero responding immediately.
 
 Renamed sections start unfolded when opening older projects;
 visual values and their saved keys are unchanged.
-Detail folds such as **Map editing** reopen closed with the editor.
+Detail folds such as **Map offsets** reopen closed with the editor.
 
 ## Combined controls
 
@@ -282,11 +282,11 @@ Saved links and recorded configurations are restored as saved,
 without running recognition again.
 **Keyboard** and **Context** are expandable parts of Adaptive tuning.
 In Lattice Map mode,
-**Saved map** stays visible above the **Map editing** fold,
-which holds audition setup, offsets, assignments and map management.
-While auditioning,
-the active-mode notice and **Return to arrangement** stay beside **Saved map**,
-even when **Map editing** is closed.
+**Saved map**,
+**Edit shape on lattice**,
+**Undo shape edit** and **Duplicate as new map** are always visible;
+offsets,
+map management and assignments are folds below them.
 **Tuning sources** appears only when connected tuning sources are available.
 Host map-offset parameters explicitly name whole generator steps rather than tuning intervals.
 

@@ -2321,7 +2321,6 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         assert_eq!(playback.engine, TuningEngine::LatticeMap);
         assert_eq!(playback.selected, 1);
         assert_eq!(playback.map, Some(map));
-        assert!(!playback.audition);
         assert_eq!(
             plugin.configuration.as_ref().unwrap().reducer.resolved().tuning.three,
             696_500_000
@@ -2329,40 +2328,47 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     });
     let (context, _) = device.wrapper().test_gui_context("lattice-map");
     let setter = nice_plug::prelude::ParamSetter::new(context.as_ref());
+    let destination = map.position + harmonigraph_core::LatticePos::new(-3, 0, 0);
+    let mut changed = map;
+    assert!(changed.replace(destination), "the edit must change the captured geometry");
     device.wrapper().test_inspect_plugin(|plugin| {
-        let before = crate::lattice_maps::view(&plugin.params);
-        assert!(!before.pending);
+        assert!(!crate::lattice_maps::view(&plugin.params).pending);
         let edit = |action| crate::lattice_maps::edit(&plugin.params, &setter, action);
-        edit(MapEdit::Audition);
         edit(MapEdit::EditShape(true));
-        let destination = map.position + harmonigraph_core::LatticePos::new(-3, 0, 0);
-        let mut changed = map;
-        assert!(changed.replace(destination), "the edit must change the captured geometry");
         edit(MapEdit::Replace(destination));
         let preview = crate::lattice_maps::view(&plugin.params);
-        assert!(preview.playback.audition && preview.editing() && preview.can_undo);
-        assert!(preview.pending, "editing follows intent before audio adopts audition");
-        assert!(!plugin.params.map_playback.lock().audition);
+        assert!(preview.editing() && preview.can_undo);
         assert_eq!(preview.playback.map, Some(changed));
-        assert!(Arc::ptr_eq(&before.names, &preview.names), "edits do not change saved names");
+        assert_eq!(
+            plugin.params.maps.read().map(1),
+            Some(LatticeMap { position: harmonigraph_core::LatticePos::ORIGIN, ..changed }),
+            "an edit is saved to the selected map itself"
+        );
+        assert!(preview.pending, "editing follows intent before audio adopts the shape");
         edit(MapEdit::Undo);
         let undone = crate::lattice_maps::view(&plugin.params);
         assert_eq!(undone.playback.map, Some(map));
         assert!(!undone.can_undo);
         edit(MapEdit::Replace(destination));
+        edit(MapEdit::Duplicate);
+        let copied = crate::lattice_maps::view(&plugin.params);
+        assert_eq!(&copied.names[2], &(2, "Distant passage copy".into()));
     });
     device.run(64, vec![], false);
+    device.wrapper().test_inspect_plugin(|plugin| {
+        let playback = *plugin.params.map_playback.lock();
+        assert_eq!(playback.selected, 2, "a duplicate is selected for further edits");
+        assert_eq!(playback.map, Some(changed));
+    });
     device.load(saved, false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let preview = crate::lattice_maps::view(&plugin.params);
-        assert!(!preview.playback.audition, "restore exits audition before audio resumes");
-        assert!(!preview.editing() && !preview.can_undo);
+        assert!(!preview.editing() && !preview.can_undo, "undo never reaches a restored project");
         assert_eq!(preview.playback.map, Some(map));
-        assert!(preview.pending, "audio still holds the edited audition until its next callback");
+        assert!(preview.pending, "audio still holds the edited shape until its next callback");
     });
     device.run(128, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
-        assert!(!plugin.params.map_playback.lock().audition, "restore exits transient audition");
         assert_eq!(plugin.params.map_playback.lock().map, Some(map));
     });
     // Old or partial presets must not retain lanes from the current preset,
