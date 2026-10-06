@@ -596,7 +596,7 @@ fn record_controls(
         if state.appearance.render.trigger != crate::RenderTrigger::AtLoopEnd {
             ui.horizontal_wrapped(|ui| {
                 crate::widgets::label(ui, "Tail").on_hover_text(
-                    "How long the video runs past the last note, so releases finish fading. \
+                    "How long the video runs past the last recorded note or automation, so releases finish fading. \
                      The video always runs to the end of the recorded audio, so 0 ends an \
                      audio export at its range end.",
                 );

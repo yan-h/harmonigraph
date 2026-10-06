@@ -251,9 +251,10 @@ fn start_of_render(explicit: Option<f64>, capture_start: Option<f64>, lead: f64)
 /// the Video pane's Tail, or none for a take recorded
 /// [`AtLoopEnd`](harmonigraph_take::RenderTrigger::AtLoopEnd), which ends
 /// exactly where its loop does (#1125) — see
-/// [`RenderConfig::tail_after_last_event`]. A loop-end recording runs to the wrap, and [`end_of_render`] still waits for it, so
-/// the file ends at the loop's end rather than at the last note. An explicit
-/// `--tail` still applies to every kind of take.
+/// [`RenderConfig::tail_after_last_event`]. A loop-end recording runs to the
+/// wrap, and [`end_of_render`] still waits for it, so the file ends at the
+/// loop's end rather than at the last note. An explicit `--tail` still applies
+/// to every kind of take.
 ///
 /// `recorded` is the render config the take was RECORDED under, not the one a
 /// Re-render's `--appearance` carries: how the take ended is fixed when it was
