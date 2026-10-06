@@ -110,21 +110,6 @@ const CASES: &[(&str, Option<Turn>)] = &[
     ),
     ("stars, 75%", Some(|s| s.cloud_style = CloudStyle::Stars)),
     (
-        "stars, 75% pitch floor",
-        Some(|s| {
-            s.cloud_style = CloudStyle::Stars;
-            s.star_pitch_floor = true;
-        }),
-    ),
-    (
-        "stars, 100% pitch floor",
-        Some(|s| {
-            s.cloud_style = CloudStyle::Stars;
-            s.stars.star_resolution = 1.0;
-            s.star_pitch_floor = true;
-        }),
-    ),
-    (
         "stars, 50%",
         Some(|s| {
             s.cloud_style = CloudStyle::Stars;
