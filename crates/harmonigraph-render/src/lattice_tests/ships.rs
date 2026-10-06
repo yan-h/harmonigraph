@@ -121,10 +121,41 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
     // a blur's reach and a row that reaches further is a shadow clipped flat in
     // the fast pipeline alone — and #508's finding 3 is that `fs_node_cell` has
     // an early-out of its own, which every fixture above compiles on one row.
-    let distance = || {
-        let mut scene = wide_shadow();
+    let distance = |mut scene: Scene| {
         for style in scene.view.shadow.groups_mut() {
+            style.width = 0.6;
             style.kernel = harmonigraph_scene::ShadowKernel::Distance;
+        }
+        scene
+    };
+    // The cell's OTHER analytic kind, a Gaussian grown before its blur
+    // (`GAUSSIAN_SPREAD_KIND`), at about the live picture's own spread.
+    let spread = |mut scene: Scene| {
+        for style in scene.view.shadow.groups_mut() {
+            style.spread = 0.062;
+        }
+        scene
+    };
+    // The audio ring standing OUTSIDE the band, so on the node wearing nothing
+    // else it is the ring and not the rim that says where the ink stops
+    // (`paint_reach`), and a cell's skip is bounded by the ring's own radius.
+    let ring_outside = || {
+        let mut scene = ringing();
+        scene.spectral.inner = 0.9;
+        scene.spectral.outer = 1.1;
+        scene
+    };
+    // Slices still moving in from a pose larger than the one they settle at
+    // (`animated_slice_ink`), at the Offset bar's top: scaled up to nearly
+    // twice their size, they reach past every radius of the settled node, so
+    // only the pose's own term bounds where they stop. A third are home
+    // already, which is what still fills an opaque interior.
+    let moving = |mut scene: Scene| {
+        scene.view.note_animation.radial_start = 1.0;
+        for (i, node) in scene.nodes.iter_mut().enumerate() {
+            for (slot, progress) in node.slice_progress.iter_mut().enumerate() {
+                *progress = [0.15, 0.5, 1.0][(i + slot) % 3];
+            }
         }
         scene
     };
@@ -141,15 +172,20 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         }
         scene
     };
-    for (name, scene) in [
-        ("lit", parity_scene()),
-        ("shaped slices", shaped(wide_shadow())),
-        ("shaped slices on a distance row", shaped(distance())),
-        ("ringing", ringing()),
-        ("folded", folded()),
-        ("a wide shadow", wide_shadow()),
-        ("a lit field", lit_field()),
-        ("a distance row", distance()),
+    // The last column: whether the node cells are ANALYTIC, the only ones
+    // `cell_reach` skips in, which each of its arms has a fixture for.
+    for (name, scene, analytic) in [
+        ("lit", parity_scene(), false),
+        ("shaped slices", shaped(wide_shadow()), false),
+        ("shaped slices on a distance row", shaped(distance(parity_scene())), true),
+        ("shaped slices under a spread Gaussian", shaped(spread(wide_shadow())), true),
+        ("ringing", ringing(), false),
+        ("a ring outside the band on a distance row", distance(ring_outside()), true),
+        ("folded", folded(), false),
+        ("a wide shadow", wide_shadow(), false),
+        ("a lit field", lit_field(), false),
+        ("a distance row", distance(parity_scene()), true),
+        ("moving slices on a distance row", moving(distance(parity_scene())), true),
     ] {
         let cb = LatticeCallback::from_scene(
             &scene,
@@ -277,64 +313,82 @@ fn the_fragment_early_outs_do_not_change_a_pixel() {
         );
 
         // #508's third finding lives in the CELL shader, not either scene
-        // attachment. This fixture reaches its branch with a real angular gap,
-        // a marked sector, and diagonal sector edges; rendering its analytic
-        // distance atlas through both compiled switches makes every texel of
-        // that geometry part of the parity claim.
-        if name == "a distance row" {
-            let atlas_size = pane
-                .offscreen
-                .as_ref()
-                .and_then(|o| o.shadow.as_ref())
-                .map(|a| a.size)
-                .expect("the distance fixture packed an atlas");
-            assert!(scene.octave_gap > 0.0, "the fixture has no angular gap");
+        // attachment. These fixtures reach its branch with a real angular gap,
+        // a marked sector, and diagonal sector edges; rendering their atlases
+        // through both compiled switches makes every texel of that geometry
+        // part of the parity claim — including the ones `fs_node_cell` skips
+        // past where the ink stops, and on an analytic cell past the shadow's
+        // own reach too.
+        let atlas_size = pane
+            .offscreen
+            .as_ref()
+            .and_then(|o| o.shadow.as_ref())
+            .map(|a| a.size)
+            .unwrap_or_else(|| panic!("the {name} fixture packed no atlas"));
+        assert!(scene.octave_gap > 0.0, "the {name} fixture has no angular gap");
+        assert!(
+            scene.nodes.iter().any(|n| n.melody_slots | n.bass_slots != 0),
+            "the {name} fixture has no marked sector",
+        );
+        let cast: Vec<_> = cb
+            .node_cells
+            .iter()
+            .map(|&c| &cb.casters[c as usize])
+            .filter(|c| c.level > 0.0)
+            .collect();
+        assert!(!cast.is_empty(), "the {name} fixture cast no node cell");
+        assert_eq!(
+            cast.iter().all(|c| c.kernel.is_distance() || c.spread_points > 0.0),
+            analytic,
+            "the {name} fixture's node cells are not the kind it is listed with",
+        );
+        if name.starts_with("moving") {
             assert!(
-                scene.nodes.iter().any(|n| n.melody_slots | n.bass_slots != 0),
-                "the fixture has no marked sector",
-            );
-            let draw_cells = |src: &str| {
-                let shader = lattice_module(&device, &with_common(src));
-                let (pipeline, _) =
-                    create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
-                let target = render_to_texture(
-                    &device,
-                    &queue,
-                    atlas_size,
-                    shadow::ATLAS_FORMAT,
-                    wgpu::Color::TRANSPARENT,
-                    |pass| {
-                        pass.set_pipeline(&pipeline);
-                        pass.set_bind_group(0, &pane.bind_group, &[]);
-                        pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
-                        pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
-                        pass.draw(0..4, 0..pane.instance_count);
-                    },
-                );
-                readback(&device, &queue, &target, atlas_size)
-            };
-            let cell_fast = draw_cells(SHADER_SRC);
-            let cell_slow = draw_cells(&reference_src);
-            assert!(
-                cell_slow.chunks_exact(4).any(|p| {
-                    let bits = u16::from_le_bytes([p[0], p[1]]);
-                    shadow::tests::half(bits) >= 0.99
-                }),
-                "the Distance fixture wrote no opaque node interior",
-            );
-            let differing = cell_fast
-                .chunks_exact(4)
-                .zip(cell_slow.chunks_exact(4))
-                .enumerate()
-                .find(|(_, (a, b))| a != b)
-                .map(|(i, (a, b))| {
-                    (i, u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([b[0], b[1]]))
-                });
-            assert!(
-                differing.is_none(),
-                "the node cell changed when the early-outs were enabled: texel {differing:?}",
+                cb.instances.iter().any(|g| g.motion[3] & (1 << 31) == 0),
+                "the {name} fixture has no node still moving",
             );
         }
+        let draw_cells = |src: &str| {
+            let shader = lattice_module(&device, &with_common(src));
+            let (pipeline, _) =
+                create_cell_pipelines(&device, &shader, &res.compiled.bind_group_layout);
+            let target = render_to_texture(
+                &device,
+                &queue,
+                atlas_size,
+                shadow::ATLAS_FORMAT,
+                wgpu::Color::TRANSPARENT,
+                |pass| {
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &pane.bind_group, &[]);
+                    pass.set_vertex_buffer(0, pane.instance_buffer.slice(..));
+                    pass.set_vertex_buffer(1, pane.node_cell_buffer.slice(..));
+                    pass.draw(0..4, 0..pane.instance_count);
+                },
+            );
+            readback(&device, &queue, &target, atlas_size)
+        };
+        let cell_fast = draw_cells(SHADER_SRC);
+        let cell_slow = draw_cells(&reference_src);
+        assert!(
+            cell_slow.chunks_exact(4).any(|p| {
+                let bits = u16::from_le_bytes([p[0], p[1]]);
+                shadow::tests::half(bits) >= 0.99
+            }),
+            "the {name} fixture wrote no opaque node interior",
+        );
+        let differing = cell_fast
+            .chunks_exact(4)
+            .zip(cell_slow.chunks_exact(4))
+            .enumerate()
+            .find(|(_, (a, b))| a != b)
+            .map(|(i, (a, b))| {
+                (i, u16::from_le_bytes([a[0], a[1]]), u16::from_le_bytes([b[0], b[1]]))
+            });
+        assert!(
+            differing.is_none(),
+            "the node cell changed when the early-outs were enabled: texel {differing:?}",
+        );
     }
 }
 
@@ -680,6 +734,57 @@ fn each_thing_that_makes_a_node_sounding_keeps_it_alone() {
         spread.nodes[0].octaves[b] = 1.0;
         assert_eq!(ships(&spread), 1, "octaves {a} and {b} held at one level keep their node",);
     }
+}
+
+/// A node whose ink has faded while its light still releases ships for the
+/// light's passes alone: no scene draw, and a caster that lands nothing — so no
+/// cell and no occluder entry. The same node with ink is the control, so the
+/// fixture is one that would draw and cast at all.
+#[test]
+fn a_released_node_ships_for_its_light_alone() {
+    let scene = |inked: bool| {
+        let mut scene = idle_scene();
+        scene.view.glow_reach = 0.8;
+        scene.view.glow_strength = 1.0;
+        for style in scene.view.shadow.groups_mut() {
+            style.width = 0.3;
+            style.depth = 1.0;
+        }
+        for node in &mut scene.nodes {
+            node.trail = 0.0;
+            node.glow.level = 0.0;
+        }
+        let node = &mut scene.nodes[0];
+        node.glow = harmonigraph_scene::GlowStep { incarnation: 1, level: 0.5, row: 0 };
+        if inked {
+            node.activation = 1.0;
+            node.octaves[harmonigraph_scene::MIDDLE_C_SLOT] = 1.0;
+        }
+        scene
+    };
+    let cb = |inked: bool| {
+        LatticeCallback::from_scene(
+            &scene(inked),
+            LatticeLabels::default(),
+            egui::vec2(256.0, 256.0),
+            wgpu::TextureFormat::Rgba8Unorm,
+            34,
+            None,
+        )
+    };
+    let node_draws =
+        |cb: &LatticeCallback| cb.draws.iter().filter(|d| matches!(d, Draw::Nodes(..))).count();
+    let level = |cb: &LatticeCallback| cb.casters[cb.node_cells[0] as usize].level;
+
+    let held = cb(true);
+    assert_eq!(held.instances.len(), 1, "the control has to ship its node");
+    assert_eq!(node_draws(&held), 1, "the control has to draw its node");
+    assert!(level(&held) > 0.0, "the control has to cast");
+
+    let released = cb(false);
+    assert_eq!(released.instances.len(), 1, "a released node's light needs its instance");
+    assert_eq!(node_draws(&released), 0, "a released node has no ink to draw");
+    assert_eq!(level(&released), 0.0, "a released node has no ink to cast");
 }
 
 /// A node culled behind the home sheet moves no marker: the markers still go

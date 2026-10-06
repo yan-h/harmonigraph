@@ -416,6 +416,45 @@ fn quad_margin(rim: f32, g: f32) -> f32 {
 // are an optimization, and the test is what keeps them one.
 const EARLY_OUT: bool = true;
 
+// How far past a layer's own shape an ANALYTIC node cell can still hold any
+// coverage, in node uv; negative on every other draw, where nothing skips.
+//
+// The analytic early-outs are off (`node_geom`, `spectral_ring`, the band and
+// mark walks) because a cell texel outside every layer's INK is still inside
+// its shadow — but the shadow ends too. Both node cell kinds write only
+// `clamp(-sd, 0, 1)` of the layers' union (`layer_distance`), and a layer adds
+// nothing to it once its coverage is exactly 0:
+//
+//   - Distance coverage is `standoff_coverage(sd * uv_points, 2σ, falloff)`,
+//     exactly 0 at `u >= 1` for every falloff — `(e^0 - 1) / …` and the linear
+//     branch's `remaining = 0` are both 0 — that is, once
+//     `sd * uv_points >= max(2σ, 1e-6) * SHADOW_STOP`. The profile's own stop,
+//     inside the cell's pad (`ShadowKernel::reach_sigmas`).
+//   - Expanded Gaussian coverage is `aa_inside(spread, sd, aa)`, a smoothstep
+//     that is exactly 0 once `sd >= spread + aa`.
+//
+// An early-out like the others, so `EARLY_OUT` off is its reference too.
+fn cell_reach(in: VsOut) -> f32 {
+    if !EARLY_OUT || in.shadow_at.z >= 0.0 {
+        return -1.0;
+    }
+    if in.params.w > GAUSSIAN_SPREAD_KIND - 0.5 {
+        return in.ink_carry + aa_width(in.strip_row, in.shadow_at.w);
+    }
+    if in.params.w > DISTANCE_COVERAGE_KIND - 0.5 {
+        return max(2.0 * in.strip_row, 1.0e-6) * SHADOW_STOP / abs(in.shadow_at.z);
+    }
+    return -1.0;
+}
+
+// Whether `bound`, a lower bound on a layer's signed distance, lies past
+// `reach`. The margins (a thousandth, and 1e-4 uv against field rounding near
+// 1e-6 uv) keep a skipped layer's own computed field past the stop as well, so
+// a skip changes no texel rather than nearly none.
+fn beyond_reach(bound: f32, reach: f32) -> bool {
+    return reach >= 0.0 && bound >= reach * 1.001 + 1.0e-4;
+}
+
 // The least ink a node paints at all, as a coverage of one fragment.
 //
 // What makes the early-outs EXACT rather than nearly so: they answer "this
@@ -439,31 +478,36 @@ const INK_FLOOR: f32 = 0.01;
 // and blends nothing. On a zoomed-in lattice, where one node can cover the
 // pane, that is the frame's dominant cost.
 //
-// Every term here is the radius at which the corresponding layer's own
-// smoothstep has reached zero, so the bound is exact rather than generous:
+// Every term here is a radius the corresponding layer's own SHAPE lies
+// inside, plus the soft band that closes it (`aa_inside` is exactly 0 a band
+// past its edge), so the bound is exact rather than generous:
 //
-//   - the octave glyphs (and their eased-off fringe) end at
-//     GLYPH_FADE_LIMIT;
-//   - the marks taper off at QUAD_MARGIN, but only exist while a slot
-//     is marked;
-//   - every RING the node draws ends at its own outer radius plus the soft
-//     band that closes it: the outermost the stack ended on (`node_rim`, which
-//     the mark strip is inside) and the audio ring, which is dialled on radii
-//     of its own and may stand outside that.
+//   - the rim (`node_vertex`): the outermost ring the stack ended on
+//     (`node_rim`), widened by a slice swelled past it and by a worn mark's
+//     strip, carried out with that swell. The octave glyphs and the marks all
+//     end inside it, whatever their tapers (GLYPH_FADE_LIMIT, QUAD_MARGIN),
+//     which only ease off a layer reaching the billboard's edge and are no
+//     bound on one that stops short of it;
+//   - the audio ring, which is dialled on radii of its own and may stand
+//     outside that;
+//   - a slice or mark still moving into place (`animated_slice_ink`) is its
+//     settled shape scaled about the node's centre by `mix(pose.x, 1, p)`,
+//     never more than `pose.z`, so it ends inside the rim scaled by that.
+//
+// Because each radius bounds a SHAPE and not only its soft edge, a layer's
+// signed distance is never less than `d` minus this: what `fs_node_cell`
+// measures the shadow's own stop from.
 //
 // The SHADOW is not in it. It is a multiply on what is already in the frame
 // rather than ink of the node's, and it reaches further than any of these —
 // `node_paint` lays it over the whole quad and takes this bound as where the
 // ink stops.
 fn paint_reach(in: VsOut, aa: f32) -> f32 {
-    var reach = GLYPH_FADE_LIMIT;
-    if in.marks.x != 0u || in.marks.y != 0u {
-        reach = max(reach, QUAD_MARGIN);
-    }
+    var reach = max(in.rim, spectral_radii().y);
     if u.node.animation != 0.0 {
-        reach = max(reach, in.rim * u.node.pose.z + aa);
+        reach = max(reach, in.rim * u.node.pose.z);
     }
-    return max(reach, max(in.rim, spectral_radii().y) + aa);
+    return reach + aa;
 }
 
 struct Instance {
@@ -2543,6 +2587,14 @@ fn fs_node_cell(in: VsOut) -> @location(0) vec4<f32> {
     let analytic = in.shadow_at.z < 0.0;
     let g = node_geom(in, analytic);
     if !g.paints {
+        return vec4<f32>(0.0);
+    }
+    // Past where the node's ink stops (`paint_reach`, which every shape it
+    // draws lies inside, moving or settled) by more than the shadow's reach
+    // (`cell_reach`), every layer is exactly 0 and both node coverage kinds
+    // write `clamp(-sd, 0, 1) = 0`: most of a cell, whose pad is the cell's
+    // reach and not the profile's.
+    if beyond_reach(g.d - paint_reach(in, g.aa), cell_reach(in)) {
         return vec4<f32>(0.0);
     }
     let ink = node_ink(in, g.d, g.aa, g.oct, analytic);

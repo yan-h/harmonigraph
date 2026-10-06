@@ -41,13 +41,15 @@ use crate::{create_vertex_buffer, wgpu, EGUI_BLEND};
 
 pub(crate) const ROLL_SRC: &str = include_str!("shaders/roll.wgsl");
 
-/// Entry points the roll shader must provide: the vertex stage, and each of
-/// the two layers in each of the two shadings [`create_roll_pipeline`] picks
-/// between. Its entry point is assembled from those two words, so a rename in
-/// the WGSL is a panic at pipeline creation and nothing sooner.
+/// Entry points the roll shader must provide: the two vertex stages (the
+/// outline's quad and the bodies'), and each of the two layers in each of the
+/// two shadings [`create_roll_pipeline`] picks between. Its entry point is
+/// assembled from those two words, so a rename in the WGSL is a panic at
+/// pipeline creation and nothing sooner.
 #[cfg(any(test, feature = "hot-reload"))]
 pub(crate) const ROLL_ENTRY_POINTS: &[&str] = &[
     "vs_note",
+    "vs_note_body",
     "fs_outline_gamma",
     "fs_outline_linear",
     "fs_core_gamma",
@@ -171,7 +173,7 @@ pub struct RollInstance {
     /// and no piece has an end of its own for an outline to wrap — exactly,
     /// while the width holds still, and near a cut to within what a piece can
     /// see of its neighbours when it does not (see
-    /// [`taper_depth`](Self::taper_depth)). `vs_note` cuts the quad at the
+    /// [`taper_depth`](Self::taper_depth)). `note_vertex` cuts the quad at the
     /// span, so two pieces meet on one shared edge and every pixel is drawn by
     /// one of them.
     pub span: [f32; 2],
@@ -337,7 +339,55 @@ struct RollUniforms {
     /// stage never reads.
     shadow_falloff: f32,
     _shadow_pad: f32,
+    /// Where the target drawn into starts, in its own pixels, and how many
+    /// points one of them measures, per axis: the fragment stage maps its own
+    /// pixel back to the note through the pair (`surface_point` in
+    /// roll.wgsl). Set only by [`drawn_into`](Self::drawn_into), with the
+    /// viewport above.
+    origin_pixels: Float2,
+    pixel_points: Float2,
 }
+}
+
+impl RollUniforms {
+    /// These uniforms drawing into a target `target_px` pixels across that
+    /// covers the surface's device pixels from `origin_px`, `size_px` across:
+    /// the viewport the vertex stage maps onto (`origin_points`,
+    /// `viewport_points`), and the pair the fragment stage maps back through
+    /// (`origin_pixels`, `pixel_points`). One function for all four, so the
+    /// two mappings cannot drift apart.
+    ///
+    /// A target the size of what it covers — the surface itself, and the body
+    /// holdout over the roll's rect — measures a pixel by exactly `1 / ppp`
+    /// from an origin in whole device pixels. Its pixel sums are exact in
+    /// f32, so every such target lands on the same bits for one surface
+    /// pixel at any pixels-per-point, where a scale derived per target
+    /// (`viewport_points / size`) rounds differently for each size unless
+    /// `ppp` is a power of two. The bloom's half-size target, each side rounded
+    /// up on its own, takes the per-axis scale its own pixels measure.
+    fn drawn_into(
+        self,
+        ppp: f32,
+        origin_px: [i32; 2],
+        size_px: [u32; 2],
+        target_px: [u32; 2],
+    ) -> Self {
+        // Exactly 1 for a target the size of what it covers.
+        let shrink = |axis: usize| target_px[axis].max(1) as f32 / size_px[axis].max(1) as f32;
+        Self {
+            origin_points: Float2(origin_px.map(|v| v as f32 / ppp)),
+            viewport_points: Float2(size_px.map(|v| v as f32 / ppp)),
+            origin_pixels: Float2([0, 1].map(|axis| origin_px[axis] as f32 * shrink(axis))),
+            pixel_points: Float2([0, 1].map(|axis| 1.0 / (shrink(axis) * ppp))),
+            ..self
+        }
+    }
+}
+
+/// The bloom's notes texture for a roll `size` device pixels across: half of
+/// it, each side rounded up.
+fn bloom_notes_size(size: [u32; 2]) -> [u32; 2] {
+    size.map(|v| v.div_ceil(2).max(1))
 }
 
 fn shadow_uniform(style: harmonigraph_scene::ShadowStyle, point_scale: f32) -> [f32; 4] {
@@ -753,7 +803,7 @@ impl RollBloom {
     /// quarter of THAT, so the halo is a constant share of the roll's own
     /// screen size — the same rule the lattice's chain follows.
     fn new(device: &wgpu::Device, shared: &RollBloomShared<'_>, size: [u32; 2]) -> Self {
-        let (hw, hh) = (size[0].div_ceil(2).max(1), size[1].div_ceil(2).max(1));
+        let [hw, hh] = bloom_notes_size(size);
         let notes_view = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("roll_bloom_notes"),
@@ -842,11 +892,15 @@ fn create_roll_pipeline(
     casters: &wgpu::BindGroupLayout,
     layer: &str,
 ) -> wgpu::RenderPipeline {
-    let bind_group_layouts = if layer == "outline" {
+    let outline = layer == "outline";
+    let bind_group_layouts = if outline {
         vec![Some(layout), Some(holdout), Some(shadow), Some(casters)]
     } else {
         vec![Some(layout)]
     };
+    // Only the outline reaches past its note by the shadow's reach; the body,
+    // here and in the bloom's notes, takes a quad one feather wider than itself.
+    let vertex = if outline { "vs_note" } else { "vs_note_body" };
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("roll_pipeline_layout"),
         bind_group_layouts: &bind_group_layouts,
@@ -861,7 +915,7 @@ fn create_roll_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_note"),
+            entry_point: Some(vertex),
             compilation_options: Default::default(),
             buffers: &[RollInstance::LAYOUT],
         },
@@ -908,7 +962,8 @@ fn create_holdout_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_note"),
+            // Body coverage alone, so the body's quad.
+            entry_point: Some("vs_note_body"),
             compilation_options: Default::default(),
             buffers: &[RollInstance::LAYOUT],
         },
@@ -1056,13 +1111,14 @@ impl CallbackTrait for RollCallback {
         );
         let roll_size = [viewport.width_px.max(0) as u32, viewport.height_px.max(0) as u32];
         let has_area = !self.instances.is_empty() && roll_size.iter().all(|&d| d > 0);
+        let surface = screen_descriptor.size_in_pixels;
         let uniforms = RollUniforms {
-            // The whole surface, which is the viewport `paint` draws into.
-            origin_points: Float2([0.0, 0.0]),
-            viewport_points: Float2([
-                screen_descriptor.size_in_pixels[0] as f32 / ppp,
-                screen_descriptor.size_in_pixels[1] as f32 / ppp,
-            ]),
+            // The whole surface, which is the viewport `paint` draws into
+            // (`drawn_into` below).
+            origin_points: Float2([0.0; 2]),
+            viewport_points: Float2([0.0; 2]),
+            origin_pixels: Float2([0.0; 2]),
+            pixel_points: Float2([0.0; 2]),
             // One physical pixel, expressed in the points the geometry is
             // in. Derived rather than sampled from the fragment's
             // derivatives so coverage is a pure function of the uniforms,
@@ -1079,22 +1135,26 @@ impl CallbackTrait for RollCallback {
             shadow_atlas_size: Float2([1.0; 2]),
             shadow_falloff: style.falloff,
             _shadow_pad: 0.0,
-        };
+        }
+        .drawn_into(ppp, [0, 0], surface, surface);
 
-        // The viewport's own edges, back in points: a texture over the roll's
-        // rect covers exactly the pixels `paint` will lay it over, so the
-        // notes in it stand where the notes under it do.
-        let roll_uniforms = RollUniforms {
-            origin_points: Float2([viewport.left_px as f32 / ppp, viewport.top_px as f32 / ppp]),
-            viewport_points: Float2([roll_size[0] as f32 / ppp, roll_size[1] as f32 / ppp]),
-            ..uniforms
-        };
+        // The viewport's own edges: a texture over the roll's rect covers
+        // exactly the pixels `paint` will lay it over, so the notes in it
+        // stand where the notes under it do.
+        let roll_origin = [viewport.left_px, viewport.top_px];
+        let roll_uniforms = uniforms.drawn_into(ppp, roll_origin, roll_size, roll_size);
         // Half the roll's size for the bloom's notes, so this is what one
         // pixel of THAT target measures in points — twice the display's, and
         // the ramp has to follow it to conserve a hairline ribbon's weight.
         let half_ppp = ppp * 0.5;
-        let bloom_pass = (self.bloom > 0.0 && has_area)
-            .then(|| RollUniforms { feather: 1.0 / half_ppp, ..roll_uniforms });
+        let bloom_pass = (self.bloom > 0.0 && has_area).then(|| {
+            RollUniforms { feather: 1.0 / half_ppp, ..uniforms }.drawn_into(
+                ppp,
+                roll_origin,
+                roll_size,
+                bloom_notes_size(roll_size),
+            )
+        });
         // Only a roll that casts draws the outline layer that reads it.
         let wants_holdout = sigma > 0.0 && has_area;
 
@@ -3571,3 +3631,7 @@ pub(super) fn asset_catalog(
 ) {
     drop(RollResources::new(device, format, layouts));
 }
+
+#[cfg(test)]
+#[path = "roll_timing.rs"]
+mod timing;
