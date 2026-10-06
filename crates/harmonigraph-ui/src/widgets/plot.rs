@@ -120,7 +120,10 @@ impl Plot {
             )
         };
         let line = if response.dragged() {
-            let from = match ui.data(|d| d.get_temp::<Vec2>(id)) {
+            // Seeded afresh at every drag's start, so no anchor a lost drag
+            // left behind is ever read.
+            let held = ui.data(|d| d.get_temp::<Vec2>(id)).filter(|_| !response.drag_started());
+            let from = match held {
                 Some(from) => Some(from),
                 None => ui.input(|i| i.pointer.press_origin()).map(|p| {
                     ui.data_mut(|d| d.insert_temp(id, at(p)));

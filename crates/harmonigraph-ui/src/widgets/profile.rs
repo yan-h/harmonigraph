@@ -6,12 +6,10 @@ use egui::Ui;
 use harmonigraph_scene::star_plan::STAR_DEPTHS;
 
 /// Which star property a [`depth`] control sets, one value per drawn layer.
-/// A size carries how many times the stored value the pane draws and shows
-/// it: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1. A spacing is a
-/// multiple of the size, so it shows as stored.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) enum Depth {
-    Size(f32),
+    #[default]
+    Size,
     Spacing,
     Speed,
     Solid,
@@ -28,28 +26,32 @@ pub(crate) fn star_layers(
     size_scale: f32,
 ) {
     let id = ui.make_persistent_id("star layer property");
-    let mut kind = ui.data(|d| d.get_temp::<u8>(id)).unwrap_or(0);
+    let mut kind = ui.data(|d| d.get_temp::<Depth>(id)).unwrap_or_default();
     super::choice_row(
         ui,
         "Per layer",
         &mut kind,
         &[
-            (0, "Size", "Each layer's star size"),
-            (1, "Spacing", "How far apart each layer's stars sit"),
-            (2, "Speed", "How fast each layer drifts"),
-            (3, "Solid", "How much of each layer's stars is solid rather than glow"),
-            (4, "Twinkle", "How far each layer's stars fade as one life gives way to the next"),
+            (Depth::Size, "Size", "Each layer's star size"),
+            (Depth::Spacing, "Spacing", "How far apart each layer's stars sit"),
+            (Depth::Speed, "Speed", "How fast each layer drifts"),
+            (Depth::Solid, "Solid", "How much of each layer's stars is solid rather than glow"),
+            (
+                Depth::Twinkle,
+                "Twinkle",
+                "How far each layer's stars fade as one life gives way to the next",
+            ),
         ],
     );
     ui.data_mut(|d| d.insert_temp(id, kind));
-    let (values, kind) = match kind {
-        1 => (&mut stars.star_spacing_ratio, Depth::Spacing),
-        2 => (&mut stars.star_speed, Depth::Speed),
-        3 => (&mut stars.star_solid, Depth::Solid),
-        4 => (&mut stars.star_twinkle, Depth::Twinkle),
-        _ => (&mut stars.star_size, Depth::Size(size_scale)),
+    let values = match kind {
+        Depth::Size => &mut stars.star_size,
+        Depth::Spacing => &mut stars.star_spacing_ratio,
+        Depth::Speed => &mut stars.star_speed,
+        Depth::Solid => &mut stars.star_solid,
+        Depth::Twinkle => &mut stars.star_twinkle,
     };
-    depth(ui, values, stars.star_layers, kind);
+    depth(ui, values, stars.star_layers, kind, size_scale);
 }
 
 /// Each drawn layer's own value, far to near, in any order: a dot per layer
@@ -57,7 +59,16 @@ pub(crate) fn star_layers(
 /// sets every layer it spans onto it; and a bar beside the plot over the
 /// drawn layers' whole range, which stretches and slides them together. A
 /// depth `Star layers` leaves out is not shown and keeps its value.
-pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, kind: Depth) {
+/// `size_scale` is how many times its stored size the pane draws and shows a
+/// star: the lattice's `LATTICE_STAR_SIZE_SCALE`, else 1. A spacing is a
+/// multiple of the size, so it shows as stored.
+pub(crate) fn depth(
+    ui: &mut Ui,
+    values: &mut [f32; STAR_DEPTHS],
+    layers: u32,
+    kind: Depth,
+    size_scale: f32,
+) {
     use harmonigraph_scene::{
         STAR_SIZE_MAX, STAR_SIZE_MIN, STAR_SOLID_MAX, STAR_SPACING_MAX, STAR_SPACING_MIN,
         STAR_SPEED_MAX, STAR_SPEED_MIN,
@@ -65,7 +76,7 @@ pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, k
     const PLOT: &str = "Set each layer on the plot: drag its dot, or press on empty space and draw a line across the layers to set them all onto it.";
     let percent: fn(f32) -> String = |share| format!("{:.0}%", share * 100.0);
     let (name, range, display, hover): (_, _, fn(f32) -> String, _) = match kind {
-        Depth::Size(_) => (
+        Depth::Size => (
             "Star size",
             STAR_SIZE_MIN..=STAR_SIZE_MAX,
             |octaves| format!("{:.1} px", octaves.exp2()),
@@ -100,7 +111,7 @@ pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, k
     // the bar alike; the bar's octaves are of the value as shown, so its
     // display stays a plain function of them.
     let (octaves, shown) = match kind {
-        Depth::Size(shown) => (true, shown),
+        Depth::Size => (true, size_scale),
         Depth::Spacing => (true, 1.0),
         Depth::Speed | Depth::Solid | Depth::Twinkle => (false, 1.0),
     };
@@ -137,11 +148,24 @@ pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, k
                 values[k] = decode(p.y);
             }
         }
-        let (small, big) =
-            drawn.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(s, b), &(k, _)| {
-                (s.min(to_bar(values[k])), b.max(to_bar(values[k])))
-            });
-        let (mut a, mut b) = (small, big);
+        // A drag on the bar remaps from the layers and the pair as they stood
+        // when it began, and the bar is handed the pair it produced rather
+        // than one read back off the layers: read back, an end dragged past
+        // the other would flatten the layers for good, and an end dragged
+        // off a level set would be clamped against the end that followed it.
+        let grab = ui.id().with("range grab");
+        let held = ui.data(|d| d.get_temp::<RangeGrab>(grab));
+        let (from, small, big) = held.map_or_else(
+            || {
+                let (small, big) =
+                    drawn.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(s, b), &(k, _)| {
+                        (s.min(to_bar(values[k])), b.max(to_bar(values[k])))
+                    });
+                (*values, small, big)
+            },
+            |held| (held.from, held.small, held.big),
+        );
+        let (mut a, mut b) = held.map_or((small, big), |held| held.pair);
         plot.fields(ui, |ui| {
             let response = RangeBar::new(&mut a, &mut b, low..=high, name)
                 .display(display)
@@ -150,10 +174,12 @@ pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, k
             // Written back only on a change: the round trip is not exact, and
             // the values key star placement. Each layer keeps its share of the
             // range; when every layer is level they move with the end dragged.
-            if response.changed() {
+            // A double click resets a range bar to the whole axis, which here
+            // would spread every layer across it, so it does nothing.
+            if response.changed() && !response.double_clicked() {
                 for &(k, _) in &drawn {
                     let t = if big > small {
-                        (to_bar(values[k]) - small) / (big - small)
+                        (to_bar(from[k]) - small) / (big - small)
                     } else if a != small {
                         0.0
                     } else {
@@ -161,6 +187,12 @@ pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, k
                     };
                     values[k] = from_bar(a + (b - a) * t).clamp(*range.start(), *range.end());
                 }
+            }
+            if response.dragged() {
+                let held = RangeGrab { from, small, big, pair: (a, b) };
+                ui.data_mut(|d| d.insert_temp(grab, held));
+            } else {
+                ui.data_mut(|d| d.remove_temp::<RangeGrab>(grab));
             }
         });
         let points: Vec<_> =
@@ -173,6 +205,16 @@ pub(crate) fn depth(ui: &mut Ui, values: &mut [f32; STAR_DEPTHS], layers: u32, k
             plot.dot(ui, place, encode(values[k]));
         }
     });
+}
+
+/// A drag on a [`depth`] control's bar: the layers and their range in bar
+/// units as the drag found them, and the pair the bar last produced.
+#[derive(Clone, Copy, Default)]
+struct RangeGrab {
+    from: [f32; STAR_DEPTHS],
+    small: f32,
+    big: f32,
+    pair: (f32, f32),
 }
 
 /// How a star looks at the farthest and the nearest drawn layer, `solid`

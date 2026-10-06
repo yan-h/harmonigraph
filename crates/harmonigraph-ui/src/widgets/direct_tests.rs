@@ -146,15 +146,15 @@ fn press_drag(ctx: &egui::Context, draw: &mut impl FnMut(&mut Ui), from: Pos2, t
 #[test]
 fn a_star_layer_dot_moves_its_own_layer_alone_and_idles_exactly() {
     for (kind, initial) in
-        [(Depth::Speed, [0.1, 0.2, 0.4, 0.6, 0.8]), (Depth::Size(1.0), [0.7, 1.5, 4.0, 11.0, 32.0])]
+        [(Depth::Speed, [0.1, 0.2, 0.4, 0.6, 0.8]), (Depth::Size, [0.7, 1.5, 4.0, 11.0, 32.0])]
     {
         let mut values = initial;
         let ctx = crate::tests::probe::themed_at(1.0);
         for _ in 0..8 {
-            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, kind));
+            frame(&ctx, vec![], &mut |ui| depth(ui, &mut values, 5, kind, 1.0));
         }
         assert_eq!(values, initial);
-        drag(|ui| depth(ui, &mut values, 5, kind), 1, egui::vec2(0.0, -12.0));
+        drag(|ui| depth(ui, &mut values, 5, kind, 1.0), 1, egui::vec2(0.0, -12.0));
         assert!(values[1] > initial[1]);
         assert_eq!([values[0], values[2], values[3], values[4]], [0, 2, 3, 4].map(|k| initial[k]));
     }
@@ -167,7 +167,7 @@ fn a_line_across_the_star_plot_sets_every_drawn_layer_onto_it() {
     let initial = [0.3, 0.4, 0.5, 0.6, 0.7];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Speed);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Speed, 1.0);
     let output = frame(&ctx, vec![], &mut draw);
     let inner = well(&output, super::plot::height(1.0)).shrink(6.0);
     let outside = egui::vec2(4.0, 4.0);
@@ -183,7 +183,7 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
     let initial = [1.0, 2.0, 4.0, 3.0, 8.0];
     let mut values = initial;
     let ctx = crate::tests::probe::themed_at(1.0);
-    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size(1.0));
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values, 3, Depth::Size, 1.0);
     let output = frame(&ctx, vec![], &mut draw);
     let bar = well(&output, crate::theme::ROW_HEIGHT);
     // The span's middle, 1 to 8 px in octaves on a track of 0.5 to 64.
@@ -196,6 +196,36 @@ fn the_star_range_bar_moves_every_drawn_layer_together() {
         assert!(((values[k] / initial[k]).log2() - shift).abs() < 1e-4, "{values:?}");
     }
     assert_eq!((values[1], values[3]), (initial[1], initial[3]));
+}
+/// The bar keeps its own pair through a drag: an end dragged off level
+/// layers comes back the way it went, rather than clamping against the end
+/// that followed it, and a double click, which resets a range bar to its
+/// whole axis, spreads no layer across it.
+#[test]
+fn the_star_range_bar_drags_level_layers_both_ways_and_ignores_a_double_click() {
+    let values = std::cell::RefCell::new([0.5; 5]);
+    let ctx = crate::tests::probe::themed_at(1.0);
+    let mut draw = |ui: &mut Ui| depth(ui, &mut values.borrow_mut(), 5, Depth::Speed, 1.0);
+    let output = frame(&ctx, vec![], &mut draw);
+    let bar = well(&output, crate::theme::ROW_HEIGHT);
+    // Just left of the level pair, which a closed span gives its low end.
+    let at = egui::pos2(bar.center().x - 3.0, bar.center().y);
+    let to = |dx: f32| at - egui::vec2(dx, 0.0);
+    frame(&ctx, vec![Event::PointerMoved(at)], &mut draw);
+    frame(&ctx, vec![press(at, true)], &mut draw);
+    frame(&ctx, vec![Event::PointerMoved(to(40.0))], &mut draw);
+    let out = values.borrow()[0];
+    frame(&ctx, vec![Event::PointerMoved(to(20.0))], &mut draw);
+    frame(&ctx, vec![press(to(20.0), false)], &mut draw);
+    let back = *values.borrow();
+    assert!(out < back[0] && back[0] < 0.5, "out to {out}, back to {back:?}");
+    assert!(back.iter().all(|v| *v == back[0]), "{back:?}");
+    frame(&ctx, vec![Event::PointerMoved(to(30.0))], &mut draw);
+    for _ in 0..2 {
+        frame(&ctx, vec![press(to(30.0), true)], &mut draw);
+        frame(&ctx, vec![press(to(30.0), false)], &mut draw);
+    }
+    assert_eq!(*values.borrow(), back);
 }
 #[test]
 fn shadow_sliders_update_the_preview_without_switching_kernel() {
