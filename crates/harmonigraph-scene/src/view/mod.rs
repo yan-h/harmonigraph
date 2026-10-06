@@ -775,6 +775,12 @@ pub struct ViewConfig {
     /// bright end blooms. This strength belongs to the lattice. Glow is a layer
     /// of the lattice's nodes, drawn from the colours of their own ink.
     pub glow_reach: f32,
+    /// The node glow's target resolution, as a divisor of the lattice scene's
+    /// width and height: 2 is half (the fresh picture), 3 a third, 4 a
+    /// quarter ([`GLOW_RESOLUTION_RANGE`](crate::GLOW_RESOLUTION_RANGE)).
+    /// The glow's statistics and the material source that reads it share the
+    /// same size. A coarser target costs less GPU time and softens the halo.
+    pub glow_resolution: u32,
     /// Glow texture, material and breathing, shared by editor and exports.
     pub atmosphere: AtmosphereSettings,
     /// How much light the node glow lays down. Inert while
@@ -1214,6 +1220,9 @@ impl ViewConfig {
         // a corrupt Reach opens with the fresh glow like every other repaired
         // value, rather than with the light switched off.
         self.glow_reach = finite_or(self.glow_reach, fresh.glow_reach).clamp(0.0, GLOW_REACH_MAX);
+        self.glow_resolution = self
+            .glow_resolution
+            .clamp(*crate::GLOW_RESOLUTION_RANGE.start(), *crate::GLOW_RESOLUTION_RANGE.end());
         self.glow_strength =
             finite_or(self.glow_strength, fresh.glow_strength).clamp(0.0, GLOW_STRENGTH_MAX);
         self.glow_curve = self.glow_curve.sanitized();
@@ -1490,6 +1499,7 @@ impl Default for ViewConfig {
             // into a shared field, at just over half strength as captured
             // from the DAW on 2026-09-26.
             glow_reach: 6.001_968_4,
+            glow_resolution: 2,
             atmosphere: AtmosphereSettings::default(),
             glow_strength: 0.570_992_95,
             glow_curve: GlowCurve::default(),

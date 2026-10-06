@@ -101,6 +101,18 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
                      0% turns the background glow off.",
         );
     ui.add_enabled_ui(view.glow_reach > 0.0, |ui| {
+        // The glow target's share of the lattice's resolution. A lower one is
+        // cheaper on the GPU and softens the halo, which is the trade to judge.
+        choice_row(
+            ui,
+            "Glow resolution",
+            &mut view.glow_resolution,
+            &[
+                (2, "1/2", "Glow drawn at half the lattice's resolution: the sharpest halo, at the most GPU time."),
+                (3, "1/3", "A third of the lattice's resolution: less GPU time and a softer halo."),
+                (4, "1/4", "A quarter of the lattice's resolution: the least GPU time and the softest halo."),
+            ],
+        );
         ValueBar::new(&mut view.glow_strength, 0.0..=GLOW_STRENGTH_MAX, "Background glow gain")
             .unit(1.0, "×")
             .show(ui)

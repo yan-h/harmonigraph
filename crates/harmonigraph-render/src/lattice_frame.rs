@@ -523,7 +523,7 @@ impl LatticeCallback {
                         (texture_time * 0.053).cos() as f32 * 0.9,
                     ]),
                     target_size: Float2([1.0; 2]),
-                    padding: Float2([0.0; 2]),
+                    glow_size: Float2([1.0; 2]),
                 },
                 pickup: PickupParams {
                     intensity: if pickup_enabled { atmosphere.material_shadow_pickup } else { 0.0 },
@@ -575,6 +575,10 @@ impl LatticeCallback {
             pane_id,
             size_points: [size_points.x, size_points.y],
             render_scale,
+            glow_resolution: scene.view.glow_resolution.clamp(
+                *harmonigraph_scene::GLOW_RESOLUTION_RANGE.start(),
+                *harmonigraph_scene::GLOW_RESOLUTION_RANGE.end(),
+            ),
             stats,
         }
     }

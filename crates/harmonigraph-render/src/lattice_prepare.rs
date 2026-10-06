@@ -104,7 +104,7 @@ impl CallbackTrait for LatticeCallback {
             frame.screen_size,
             PaneTargets {
                 bloom: self.uniforms.composite.bloom_strength > 0.0,
-                glow: frame.glow,
+                glow: frame.glow.then_some(self.glow_resolution),
                 shadow: frame.shadow_wanted,
                 blurs: frame.blurs,
                 // The strip's height is the row map's CAPACITY, which the
@@ -491,6 +491,9 @@ impl LatticeCallback {
         uniforms.glow.lit = f32::from(*has_light);
         if let Some(target) = &pane.offscreen {
             uniforms.texture.target_size = Float2(target.size.map(|v| v as f32));
+            if let Some(glow) = &target.glow {
+                uniforms.texture.glow_size = Float2(glow.size.map(|v| v as f32));
+            }
         }
         if let Some(atlas) = pane.offscreen.as_ref().and_then(|o| o.shadow.as_ref()) {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));

@@ -399,7 +399,9 @@ pub(super) fn prepare(
         pane.material_tile = None;
         return;
     }
-    let size = offscreen.size.map(|n| n.div_ceil(2).max(1));
+    // The glow target's own size: the source is owned by that target and
+    // replaced with it whenever the scene size or the divisor moves.
+    let size = glow.size;
     if starfield {
         pane.material_tile = None;
         let source =

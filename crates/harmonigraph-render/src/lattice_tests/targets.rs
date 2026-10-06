@@ -174,6 +174,9 @@ fn release(scene: &mut Scene) {
 /// Each resized release is compared byte-exact with a separate pane seeded
 /// at that viewport. A third pane carries a different colour and advances its
 /// own parity. Constructor counts include any temporary strip before adoption.
+/// Every step also moves the Glow resolution, and a last step moves it alone,
+/// under a material: the glow target and its material source are replaced at
+/// the new divisor while the scene target is kept.
 #[test]
 fn viewport_changes_keep_history_without_allocating_a_strip() {
     let Some(mut shooter) = Shooter::new([256, 256]) else { return };
@@ -201,18 +204,19 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
     assert_ne!(preview_raw, raw);
     let mut preview_parity = history(&shooter).parity;
 
-    for (i, (size, scale)) in
-        [([257, 261], 1.0), ([257, 261], 1.5), ([256, 256], 2.0), ([256, 256], 1.0)]
+    for (i, (size, scale, divisor)) in
+        [([257, 261], 1.0, 3), ([257, 261], 1.5, 4), ([256, 256], 2.0, 2), ([256, 256], 1.0, 4)]
             .into_iter()
             .enumerate()
     {
         shooter.pane = 10;
         shooter.size = size;
         scene.view.render_scale = scale;
+        scene.view.glow_resolution = divisor;
         let creations = super::INK_STRIP_CREATIONS.get();
         let resized = shooter.shot_again(&scene);
         let offscreen = target(&shooter);
-        let expected = offscreen.size.map(|n| n.div_ceil(2));
+        let expected = offscreen.size.map(|n| n.div_ceil(divisor));
         let glow = offscreen.glow.as_ref().unwrap();
         for view in std::iter::once(&glow.view).chain(&glow.statistics) {
             assert_eq!([view.texture().width(), view.texture().height()], expected);
@@ -238,6 +242,7 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         shooter.pane = 100 + i as u64;
         let mut control = history_scene();
         control.view.render_scale = scale;
+        control.view.glow_resolution = divisor;
         shooter.shot_again(&control);
         release(&mut control);
         assert_eq!(resized, shooter.shot_again(&control));
@@ -251,7 +256,37 @@ fn viewport_changes_keep_history_without_allocating_a_strip() {
         shooter.pane = 10;
         assert_eq!(history(&shooter).parity, parity, "another pane cannot advance this one");
     }
-    eprintln!("history viewport fixture: 4 target recreations, 0 strip creations; 4 byte-exact controls, independent red/green panes");
+
+    // The divisor alone, at an unchanged viewport, under a material that
+    // reads the light: the glow target and its source follow it, the scene
+    // target stays, and the strip is neither rebuilt nor reseeded.
+    shooter.pane = 10;
+    scene.view.atmosphere.material_style = harmonigraph_scene::LatticeMaterial::Watercolor;
+    shooter.shot_again(&scene);
+    let before = target(&shooter).glow.as_ref().unwrap();
+    let source = before.material_source.as_ref().expect("fixture reaches a material source");
+    let quarter = target(&shooter).size.map(|n| n.div_ceil(4));
+    assert_eq!([source.view.texture().width(), source.view.texture().height()], quarter);
+    let (color, light, source) =
+        (target(&shooter).color_view.clone(), before.view.clone(), source.view.clone());
+    let creations = super::INK_STRIP_CREATIONS.get();
+    scene.view.glow_resolution = 3;
+    shooter.shot_again(&scene);
+    let offscreen = target(&shooter);
+    let third = offscreen.size.map(|n| n.div_ceil(3));
+    assert_ne!(third, quarter, "fixture must tell the two divisors apart");
+    let glow = offscreen.glow.as_ref().unwrap();
+    let rebuilt = &glow.material_source.as_ref().unwrap().view;
+    for view in [&glow.view, rebuilt].into_iter().chain(&glow.statistics) {
+        assert_eq!([view.texture().width(), view.texture().height()], third);
+    }
+    assert_eq!(glow.size, third);
+    assert_eq!(offscreen.color_view, color, "a divisor change keeps the scene target");
+    assert_ne!(glow.view, light);
+    assert_ne!(*rebuilt, source, "the material source is rebuilt with its target");
+    assert_eq!(super::INK_STRIP_CREATIONS.get(), creations, "no strip on a divisor change");
+    assert_eq!(history(&shooter).raw_views, raw);
+    eprintln!("history viewport fixture: 4 target recreations at divisors 3/4/2/4, then 4 -> 3 alone; 0 strip creations; 4 byte-exact controls, independent red/green panes");
 }
 
 /// This directly supplies renderer inputs, not an execution of the CPU row
