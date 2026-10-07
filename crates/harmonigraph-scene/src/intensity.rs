@@ -87,14 +87,14 @@ pub struct IntensitySettings {
 impl Default for IntensitySettings {
     fn default() -> Self {
         Self {
-            // Velocity and gain both reach opacity from a rest of about a
-            // third, as captured from the DAW on 2026-09-26.
-            velocity: IntensitySource { opacity: Some(0.606_835_6), thickness: None },
-            gain: IntensitySource { opacity: Some(0.511_064_47), thickness: None },
+            // No source routed: every note drawn at full opacity and one
+            // width, as captured from the DAW on 2026-10-07.
+            velocity: IntensitySource::default(),
+            gain: IntensitySource::default(),
             pressure: IntensitySource::default(),
             timbre: IntensitySource::default(),
-            opacity_rest: 0.302_850_54,
-            thickness_base: 1.0,
+            opacity_rest: 1.0,
+            thickness_base: 0.989_259_2,
             thickness_max: 2.0,
         }
     }

@@ -839,44 +839,45 @@ impl Default for ShadowSettings {
     /// a group PRESENT with one field missing fills that field from
     /// [`ShadowStyle::default`] instead, which is written out there.
     ///
-    /// The picture captured from the DAW on 2026-09-26: a distance shadow
-    /// under the lattice's geometry and Gaussian shadows everywhere else.
+    /// The picture captured from the DAW on 2026-10-07: Gaussian shadows in
+    /// all four groups.
     /// Falloff uses an early normalized exponential since the signed-curve
     /// redesign.
     fn default() -> ShadowSettings {
         ShadowSettings {
-            // Broad and shallow: the node's rings and marks stand in a wide
-            // shadow that stays light.
+            // Shallow, with a gentler falloff than the notation's: the node's
+            // rings and marks stand in a shadow that stays light.
             lattice_geometry: ShadowStyle {
-                kernel: ShadowKernel::Distance,
-                width: 0.832_587_7,
-                spread: 0.062_359_527,
-                depth: 0.227_815_96,
-                falloff: -3.813_926_2,
+                kernel: ShadowKernel::Gaussian,
+                width: 0.568_847_66,
+                spread: 0.0,
+                depth: 0.284_129_17,
+                falloff: -2.130_040_2,
             },
             // A light, slightly spread shadow under the lattice's notation.
             lattice_text: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
-                width: 0.258_763_4,
+                width: 0.185_866_79,
                 spread: 0.129_441_13,
-                depth: 0.180_271,
+                depth: 0.261_179_95,
                 falloff: -4.0,
             },
-            // Nine tenths deep under the roll's ribbons and the spiral's dots,
+            // Nearly nine tenths deep under the roll's ribbons and the spiral's dots,
             // and wide enough to lift them off the heatmap.
             spectral_geometry: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
-                width: 1.192_405_8,
-                spread: 0.0,
-                depth: 0.912_995_6,
-                falloff: -4.0,
+                width: 1.363_921,
+                spread: 0.116_850_756,
+                depth: 0.880_792,
+                falloff: 1.637_190_3,
             },
-            // Nearly full depth under the spectral pane's names and axis labels.
+            // About two thirds deep, slightly spread, under the spectral pane's
+            // names and axis labels.
             spectral_text: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
                 width: 0.642_857_13,
-                spread: 0.0,
-                depth: 0.962_187_95,
+                spread: 0.135_809_54,
+                depth: 0.632_661,
                 falloff: -4.0,
             },
         }

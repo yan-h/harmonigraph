@@ -108,8 +108,6 @@ pub const TIME_SOFTNESS_MAX: f32 = 2000.0;
 pub const CLOUD_SPEED_MIN: f32 = 0.0;
 /// See [`CLOUD_SPEED_MIN`].
 pub const CLOUD_SPEED_MAX: f32 = 20.0;
-const MATERIAL_SPEED_DEFAULT: f32 = 4.242_738_7;
-const MATERIAL_DIRECTION_DEFAULT: f32 = 174.0;
 
 /// Top of the [`SpectralAtmosphere::wash_pool`] control and sanitizer: four times
 /// the strength #909 shipped as its whole range, where 0.5 is its default. The
@@ -632,26 +630,58 @@ impl SpectralEffects {
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
-            // The Stars look captured from the DAW on 2026-09-26: a sharp
-            // field with no time blur, and the Wash and Scales
+            // The Stars look captured from the DAW on 2026-10-07: a sharp
+            // field with no pitch or time blur, and the Wash and Scales
             // controls below riding inert at their captured values.
-            pitch_softness: 6.726_529_6,
+            pitch_softness: 0.0,
             time_softness: 0.0,
             // One texel a slab: Yan judged it live at a 600 s Span (2026-09-20),
             // where it takes the pane from about 100 fps back to 144 and reads
             // the same. It binds only where the pane is finer than the data.
             blur_time_step: 1.0,
             cloud_depth: 1.0,
-            color_pickup: 0.043_984_346,
-            color_release: 0.711_714_74,
-            cloud_speed: MATERIAL_SPEED_DEFAULT,
-            cloud_direction: MATERIAL_DIRECTION_DEFAULT,
+            color_pickup: 0.197_773_75,
+            color_release: 0.207_913_31,
+            cloud_speed: 2.711_340_4,
+            cloud_direction: 187.846_47,
             wash_pool: 0.0,
             wash_pool_width: 0.55,
             wash_pool_softness: 0.75,
             cloud_style: CloudStyle::Stars,
-            material_settings: MaterialSettings::default(),
-            stars: StarSettings::default(),
+            material_settings: MaterialSettings {
+                velvet_size: 0.0625,
+                velvet_variety: 1.0,
+                velvet_edge: 0.646_271_65,
+                velvet_irregularity: 1.0,
+                velvet_square: 0.222_504_93,
+                velvet_tilt: 0.0,
+                wash_size: 0.138_325_5,
+                wash_fuzz: 0.0,
+                wash_refract: 0.571_941_9,
+                wash_randomness: 0.592_832_8,
+                ..MaterialSettings::default()
+            },
+            // Large far stars thinning to small near ones, the far three
+            // layers packed at the spacing floor and steady, twinkling more
+            // toward the near layer. Resolution stays at the type's 75%
+            // rather than the 100% it was dialled to, at Yan's word.
+            stars: StarSettings {
+                star_randomness: 0.136_416_58,
+                star_size_variation: 0.101_771_27,
+                star_jitter: 1.0,
+                star_spacing_ratio: [
+                    0.416_666_66,
+                    0.416_666_66,
+                    0.416_666_66,
+                    0.673_546_14,
+                    2.391_195_3,
+                ],
+                star_size: [7.680_750_4, 6.114_797, 4.190_219, 3.112_796_5, 2.220_784_4],
+                star_lifetime: 0.984_566_4,
+                star_twinkle: [0.0, 0.325_125_55, 0.585_016_3, 0.792_508_2, 1.0],
+                star_glow_falloff: 0.680_821_24,
+                ..StarSettings::default()
+            },
         }
     }
 }
@@ -779,18 +809,33 @@ pub struct AtmosphereSettings {
 impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
-            material_style: LatticeMaterial::None,
+            // A Watercolor glow at full material, picking up a little under half
+            // its colour, as captured from the DAW on 2026-10-07 (the amount
+            // kept at full rather than the dialled 36%, at Yan's word).
+            material_style: LatticeMaterial::Watercolor,
             material_amount: 1.0,
             material_shadow_pickup: 0.0,
-            material_color_pickup: 0.0,
+            material_color_pickup: 0.447_641_97,
             pigment_reach: 2.75,
-            material_settings: MaterialSettings::default(),
-            stars: StarSettings::default(),
-            material_speed: MATERIAL_SPEED_DEFAULT,
-            material_direction: MATERIAL_DIRECTION_DEFAULT,
-            texture_depth: 0.134_627_85,
-            texture_scale: 0.840_435_3,
-            texture_speed: 6.077_757_4,
+            material_settings: MaterialSettings {
+                wash_size: 1.459_047_9,
+                wash_refract: 0.640_725_85,
+                wash_layers: 0.581_831_34,
+                wash_randomness: 0.384_269_62,
+                ..MaterialSettings::default()
+            },
+            stars: StarSettings {
+                star_randomness: 0.086_385_85,
+                star_jitter: 1.0,
+                star_layers: 4,
+                star_glow_falloff: 0.624_109_57,
+                ..StarSettings::default()
+            },
+            material_speed: 3.136_019_5,
+            material_direction: 203.0,
+            texture_depth: 0.104_140_51,
+            texture_scale: 0.239_558_98,
+            texture_speed: 5.970_565,
             breath_amount: 0.429_406_55,
             breath_speed: 1.813_457_6,
         }

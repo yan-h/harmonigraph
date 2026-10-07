@@ -243,7 +243,9 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         RenderConfig {
-            trigger: RenderTrigger::OnDisarm,
+            // Transport stop, the trigger that also ends a take during an
+            // arrangement export (see docs/intent/video-export.md).
+            trigger: RenderTrigger::OnTransportStop,
             // Off-trigger by default, so this only ever matters once `AtBar`
             // is chosen. 65 rather than 1: a stop bar equal to the song start
             // can never be crossed from below, so the take would simply never
@@ -251,11 +253,13 @@ impl Default for RenderConfig {
             stop_bar: 65.0,
             spectrogram: SpectrogramRender::WholeVideo,
             frame: RenderFrame::default(),
-            // 720 on the short edge — 1280x720 at the default 16:9 frame,
-            // as captured from the DAW on 2026-09-26.
-            short_edge: 720,
+            // 1440 on the short edge — 2560x1440 at the default 16:9 frame,
+            // as captured from the DAW on 2026-10-07.
+            short_edge: 1440,
             tail: 0.0,
-            encoder: VideoEncoder::X264,
+            // VideoToolbox: the same picture in under half the export time at
+            // 1440p, for a larger file (see [`VideoEncoder`]).
+            encoder: VideoEncoder::Hardware,
         }
     }
 }
@@ -454,13 +458,13 @@ impl Default for RenderFrame {
         RenderFrame {
             aspect_w: 16,
             aspect_h: 9,
-            // Over a quarter of the frame to the lattice, on the right, the
+            // Over a third of the frame to the lattice, on the right, the
             // rest to the spectral pane — as captured from the DAW on
-            // 2026-09-10. The two are not competing for the same job: the
+            // 2026-10-07. The two are not competing for the same job: the
             // lattice reads at whatever size it is given (it is a handful of
             // nodes, and the camera frames them), while the spectrogram's width
             // IS its time axis, so width buys it seconds on screen.
-            split: 0.277_261_67,
+            split: 0.363_348_75,
             lattice: LatticeSide::Right,
         }
     }
