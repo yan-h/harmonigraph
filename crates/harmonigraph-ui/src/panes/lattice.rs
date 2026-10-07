@@ -171,9 +171,9 @@ fn arrow_translation(
     for ((_, arrow), count) in arrows.iter().zip(presses) {
         let (step, along) =
             directions.iter().max_by(|(_, a), (_, b)| a.dot(*arrow).total_cmp(&b.dot(*arrow)))?;
-        // An axis seen edge-on points nowhere; an arrow with no axis its way
-        // moves nothing rather than whichever came last.
-        if along.dot(*arrow) <= 0.0 {
+        // An arrow with no axis within 60° of its way on screen — both seen
+        // nearly edge-on or across it — moves nothing rather than sideways.
+        if along.dot(*arrow) < 0.5 {
             continue;
         }
         for _ in 0..count {

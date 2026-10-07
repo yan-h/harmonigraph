@@ -59,6 +59,7 @@ the arrow keys move the map one step at a time.
 Each arrow takes whichever of the fifths and thirds axes points most nearly its way on screen,
 so the assignment dots follow the arrow however the camera is turned;
 in the default Cabinet view Right and Left move along thirds and Up and Down along fifths.
+An arrow with neither axis within 60° of its way on screen moves nothing.
 A plain arrow steps the Fine lane and carries into Coarse past ±9,
 so the total moves by exactly one;
 Shift with an arrow steps Coarse alone.

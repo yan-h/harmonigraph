@@ -457,3 +457,43 @@ fn lattice_map_follow_keeps_a_just_released_note_at_its_pitch() {
         assert_eq!(node(&hub, key), Some(back.node(key.into())));
     }
 }
+
+#[test]
+fn lattice_map_follow_scores_a_retriggered_note_without_its_predecessor() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    install(&hub);
+    let map = LatticeMap::default();
+    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
+    // A lone high D moves nothing. Struck again with F and A on one sample
+    // it takes over the held D rather than being weighed against it, so the
+    // triad mends its wolf as it would from rest. It sorts after F, whose
+    // onset decides for the group, so only forgetting it with the whole
+    // group keeps the old 9/8 D from pulling the triad onto its own spelling.
+    hub.run(512, vec![note(1, 0, 74, 0, true)], None);
+    hub.run(
+        1024,
+        vec![note(2, 0, 65, 0, true), note(3, 0, 69, 0, true), note(4, 0, 74, 0, true)],
+        None,
+    );
+    let down = LatticeMap { position: LatticePos::new(-1, 0, 0), ..map };
+    for key in [65, 69, 74] {
+        assert_eq!(node(&hub, key), Some(down.node(key.into())));
+    }
+}
+
+#[test]
+fn map_follow_changes_leave_adaptive_context_alone() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    install(&hub);
+    // Adaptive, with a note held; Map Follow decides nothing here, so moving
+    // it must not restart the context the next note is scored against.
+    hub.run(0, vec![note(1, 0, 60, 0, true)], None);
+    hub.run(512, vec![parameter("map-follow", 2.0, 0)], None);
+    hub.run(1024, vec![note(2, 0, 64, 0, true)], None);
+    assert_eq!(inspect_hub(&hub, |hub| hub.test_context()), 2, "the held C is still context");
+}

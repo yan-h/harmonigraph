@@ -193,19 +193,19 @@ impl LatticeMap {
         for key in keys {
             classes[key.rem_euclid(12) as usize] = true;
         }
-        // Each context node once, at its strongest weight.
-        let strongest = |i: usize, c: &ContextPitch| {
-            let node = c.node?;
-            let first = context.iter().position(|o| o.node == Some(node)) == Some(i);
-            first.then(|| {
-                let weight = context
-                    .iter()
-                    .filter(|o| o.node == Some(node))
-                    .map(|o| o.weight)
-                    .fold(f64::NEG_INFINITY, f64::max);
-                (node, weight)
-            })
-        };
+        // Each context node once, at its strongest weight, gathered before the
+        // candidates so their loop reads each node once.
+        let mut anchors =
+            [(LatticePos::ORIGIN, 0.0); crate::policy::MAX_CONTEXT + crate::policy::MAX_MEMORY];
+        let mut anchored = 0;
+        for (node, weight) in context.iter().filter_map(|c| c.node.map(|node| (node, c.weight))) {
+            if let Some(anchor) = anchors[..anchored].iter_mut().find(|a| a.0 == node) {
+                anchor.1 = f64::max(anchor.1, weight);
+            } else if anchored < anchors.len() {
+                anchors[anchored] = (node, weight);
+                anchored += 1;
+            }
+        }
         let mut best = (f64::INFINITY, f64::NEG_INFINITY, current);
         for &df in fifths {
             for dt in [0, -1, 1] {
@@ -224,11 +224,9 @@ impl LatticeMap {
                 for (i, &node) in nodes[..count].iter().enumerate() {
                     cost +=
                         nodes[i + 1..count].iter().map(|&other| excess(other - node)).sum::<f64>();
-                    cost += context
+                    cost += anchors[..anchored]
                         .iter()
-                        .enumerate()
-                        .filter_map(|(i, c)| strongest(i, c))
-                        .map(|(other, weight)| weight * excess(other - node))
+                        .map(|&(other, weight)| weight * excess(other - node))
                         .sum::<f64>();
                 }
                 // The current place wins every tie it is part of.
@@ -362,6 +360,11 @@ mod tests {
         let released = context(chord(moved, &d_minor));
         assert_eq!(map.follow(both, moved, &released, &[67, 71, 74]), drifted);
         assert_eq!(map.follow(both, moved, &[], &[67, 71, 74]), drifted);
+        // A released G# an octave doubled weighs as one G#: once, it is not
+        // worth a thirds step for C major; counted twice, it would be.
+        let g_sharp = ContextPitch { pitch: 0, node: Some(map.node(68)), weight: 0.6 };
+        let doubled = [g_sharp, ContextPitch { pitch: 1_200_000_000, ..g_sharp }];
+        assert_eq!(map.follow(both, LatticePos::ORIGIN, &doubled, &c_major), LatticePos::ORIGIN);
     }
 
     #[test]

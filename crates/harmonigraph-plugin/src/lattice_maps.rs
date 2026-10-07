@@ -35,10 +35,17 @@ pub fn unpack(word: u64) -> LatticePos {
 }
 
 /// Where following has moved the map, as the Hub last published it. The Hub
-/// alone decides whether it is following: it publishes nothing moved while
-/// following is off or a mode change has yet to reach an attack.
+/// publishes nothing moved while following is off or a mode change has yet to
+/// reach an attack; the parameters mask it as well, because with no process
+/// callbacks running the Hub publishes nothing at all.
 fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
-    unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
+    let following = engine(params.tuning_engine.value()) == TuningEngine::LatticeMap
+        && follow(params.map_follow.value()) != Follow::Off;
+    if following {
+        unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
+    } else {
+        LatticePos::ORIGIN
+    }
 }
 
 pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
@@ -72,6 +79,12 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         editor.restore(mailbox.accepted_restore.load(std::sync::atomic::Ordering::Acquire));
     }
     let adopted = *params.map_playback.lock();
+    // An arrow press that has landed, or any other change to the lanes,
+    // retires the memo of what the last press sent.
+    let lanes = offsets(params);
+    if editor.translated.is_some_and(|(read, _)| read != lanes) {
+        editor.translated = None;
+    }
     let selected = params.map.value().clamp(0, 127) as usize;
     let offsets = offsets(params);
     let offset = offsets.total();
@@ -352,11 +365,15 @@ impl AudioMaps {
             self.playback.engine = engine;
         }
     }
-    /// A follow mode is a retuning mode for this purpose: changing it starts
-    /// the Hub's context, and so its follow offset, over at the next attack.
+    /// Under Lattice Map a follow mode is a retuning mode for this purpose:
+    /// changing it starts the Hub's context, and so its follow offset, over at
+    /// the next attack. Under any other engine it decides nothing, and must
+    /// not reset Adaptive's context; entering Lattice Map resets it anyway.
     fn set_follow(&mut self, follow: Follow) {
         if self.playback.follow != follow {
-            self.engine_revision = self.engine_revision.saturating_add(1);
+            if self.playback.engine == TuningEngine::LatticeMap {
+                self.engine_revision = self.engine_revision.saturating_add(1);
+            }
             self.playback.follow = follow;
         }
     }
