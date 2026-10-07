@@ -347,9 +347,10 @@ fn star_memory_resets_when_the_pane_resizes_zooms_or_clears() {
             "zoom" => a.points_per_ms *= 0.9,
             "clear" => a.history_epoch += 1,
             _ => {
-                // Wider spacing needs fewer atlas rows, so the held history
-                // allocation stays and only the cells say these are new stars.
-                a.settings.stars.star_spacing_ratio[0] *= 1.05;
+                // Small enough that a fresh pane still allocates the held
+                // atlas (5% wider drops it a row bucket), so only the cells
+                // say these are new stars.
+                a.settings.stars.star_spacing_ratio[0] *= 1.02;
                 assert_ne!(
                     old_cells,
                     star_layout(a.settings.stars, cb.rect.width() / cb.rect.height()).cells,
@@ -390,6 +391,11 @@ fn star_memory_resets_when_the_pane_resizes_zooms_or_clears() {
         assert!(overlap > 1000, "{case}: fixture could not have carried stale cells");
         let mut fresh = CallbackResources::default();
         prepare_once(&device, &queue, &mut fresh, &cb);
+        assert_eq!(
+            allocated(memory(&fresh)),
+            allocated(current),
+            "{case}: fixture compares histories of different sizes"
+        );
         assert!(
             pixels(&device, &queue, current) == pixels(&device, &queue, memory(&fresh)),
             "{case}: retained stale color"
