@@ -724,7 +724,9 @@ pub struct ShadowStyle {
     /// whole width. Contour shadows ignore this stored setting.
     pub spread: f32,
     /// How dark the shadow lands where it is whole, 0..=1. 1 takes the frame
-    /// under wide ink to black; 0 is this group's second off switch.
+    /// under wide ink to black; 0 is this group's second off switch — except
+    /// that the lattice's node group still packs its field at 0 while
+    /// [`ViewConfig::hide_behind`](crate::ViewConfig::hide_behind) spends it.
     ///
     /// The two families spend it differently. A spectral group spends it in
     /// STOPS across the width above (`shadow_transmittance` in common.wgsl),
@@ -780,6 +782,13 @@ impl ShadowStyle {
     /// cell packed, no atlas area, no taps, and every draw multiplying by
     /// exactly 1. The two are separate switches because they answer separate
     /// questions, and a picture is entitled to reach the off state from either.
+    ///
+    /// This is the VISIBLE shadow. The lattice's node group also spends its
+    /// field on hiding the nodes behind it, so it packs a cell whenever Width
+    /// is open and either Darkness or
+    /// [`ViewConfig::hide_behind`](crate::ViewConfig::hide_behind) is above 0
+    /// (`lattice_frame`'s `geometry_packs`); `casts()` alone still decides
+    /// every quad grown and every tap the visible shadow spends.
     pub fn casts(self) -> bool {
         self.width > 0.0 && self.depth > 0.0
     }

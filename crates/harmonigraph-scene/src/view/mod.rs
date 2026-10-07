@@ -851,6 +851,10 @@ pub struct ViewConfig {
     /// The field is packed whenever this or the Darkness is above 0, so a node
     /// hides what is behind it with no visible shadow at all. Width 0 is still
     /// the whole group off, this included: the field IS the shadow's shape.
+    /// While the front ink is opaque nothing is lost there, since that ink
+    /// covers the rear ink anyway; under a translucent front node (an
+    /// `IntensitySettings::opacity_rest` below 1) the rear ring shows through at Width 0 and is
+    /// hidden at the first step of Width, a jump this bar does not smooth.
     ///
     /// Here rather than on [`ShadowStyle`](crate::ShadowStyle), which all four
     /// groups share and where it would mean nothing for three of them.

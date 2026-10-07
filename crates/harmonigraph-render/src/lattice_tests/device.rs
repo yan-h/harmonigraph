@@ -308,7 +308,9 @@ fn offscreen_composite_matches_direct_draw() {
     };
     const SIZE: [u32; 2] = [256, 256];
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let scene = parity_scene();
+    let mut scene = parity_scene();
+    // The whole bar, so occlusion moves the pixels this test sets apart.
+    scene.view.hide_behind = 1.0;
     let callback = || {
         LatticeCallback::from_scene(
             &scene,
@@ -347,10 +349,6 @@ fn offscreen_composite_matches_direct_draw() {
     };
 
     // Path A: the offscreen composite, occlusion as shipped.
-    assert_eq!(
-        cb.uniforms.geometry_shadow.occlusion, 1.0,
-        "the fresh Hide behind is the whole bar"
-    );
     let mut resources = CallbackResources::default();
     let composite_tex = composite(&cb, &mut resources);
     // The same path with Hide behind at 0, only to find the pixels it moves.

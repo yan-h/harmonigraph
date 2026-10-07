@@ -286,6 +286,8 @@ fn capacity_growth_reseeds_current_ink_and_row_reuse_keeps_identity() {
     for style in scene.view.shadow.groups_mut() {
         style.depth = 0.0;
     }
+    // Hide behind packs the node group's cells at Darkness 0 too.
+    scene.view.hide_behind = 0.0;
     scene.nodes[0].world_pos.x = -1.2;
     shooter.shot_again(&scene);
     release(&mut scene);

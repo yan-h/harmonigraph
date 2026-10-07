@@ -268,7 +268,8 @@ impl LatticeCallback {
         // behind bar, `node_visibility`). Either above 0 packs it, so a node
         // at Darkness 0 still hides what it covers. Width 0 packs nothing
         // for either: the field occlusion spends IS the shadow's shape, and
-        // a field of no width would hide only what the node's own ink covers.
+        // a field of no width would hide only what the node's own ink covers
+        // (all of it while that ink is opaque).
         let geometry = scene.view.shadow.lattice_geometry;
         let text = scene.view.shadow.lattice_text;
         let hide_behind = scene.view.hide_behind.clamp(0.0, 1.0);
@@ -279,8 +280,8 @@ impl LatticeCallback {
                 0.0
             }
         };
-        let geometry_sigma =
-            sigma_of(geometry, geometry.width > 0.0 && (geometry.depth > 0.0 || hide_behind > 0.0));
+        let geometry_packs = geometry.width > 0.0 && (geometry.depth > 0.0 || hide_behind > 0.0);
+        let geometry_sigma = sigma_of(geometry, geometry_packs);
         let text_sigma = sigma_of(text, text.casts());
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
