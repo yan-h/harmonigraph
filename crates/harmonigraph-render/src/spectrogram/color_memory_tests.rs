@@ -322,14 +322,16 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
 
 /// A resize, a zoom or a cleared history moves the sound under every star, so
 /// the stars take the new picture's colour at once rather than fading to it —
-/// even where the integer cells still name the same stars.
+/// even where the integer cells still name the same stars. Each case moves one
+/// key entry alone; `spacing` is the cells, which name different stars.
 #[test]
 fn star_memory_resets_when_the_pane_resizes_zooms_or_clears() {
     let Some((device, queue)) = headless_device() else { return };
-    for case in ["height", "width", "zoom", "clear"] {
+    for case in ["height", "width", "zoom", "clear", "spacing"] {
         let mut cb = fixture(CloudStyle::Stars);
         let a = cb.atmosphere.as_mut().unwrap();
         a.settings.stars.star_speed = [0.0; STAR_SLICES];
+        let old_cells = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height()).cells;
         let mut resources = CallbackResources::default();
         cb.grid.fill(255);
         prepare_once(&device, &queue, &mut resources, &cb);
@@ -341,14 +343,19 @@ fn star_memory_resets_when_the_pane_resizes_zooms_or_clears() {
         let a = cb.atmosphere.as_mut().unwrap();
         match case {
             "height" => cb.rect.max.y += 1.0,
-            "width" => {
-                // The UI keeps the time window fixed while the analyzer grows.
-                let previous_width = cb.rect.width();
-                cb.rect.max.x -= 2.0;
-                a.points_per_ms *= cb.rect.width() / previous_width;
-            }
+            "width" => cb.rect.max.x -= 2.0,
             "zoom" => a.points_per_ms *= 0.9,
-            _ => a.history_epoch += 1,
+            "clear" => a.history_epoch += 1,
+            _ => {
+                // Wider spacing needs fewer atlas rows, so the held history
+                // allocation stays and only the cells say these are new stars.
+                a.settings.stars.star_spacing_ratio[0] *= 1.05;
+                assert_ne!(
+                    old_cells,
+                    star_layout(a.settings.stars, cb.rect.width() / cb.rect.height()).cells,
+                    "spacing fixture did not change the cells"
+                );
+            }
         }
         a.now += 1.0 / 60.0;
         cb.grid.fill(0);

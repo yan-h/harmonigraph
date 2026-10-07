@@ -811,8 +811,10 @@ struct MemoryFrame {
     life: f32,
 }
 
-/// Only coordinate and color interpretation belong to the history key. Sound,
-/// time, response times and Texture mix change the response, not its identity.
+/// Only coordinate and color interpretation, and which history the colour came
+/// from ([`SpectrogramAtmosphere::history_epoch`]), belong to the history key.
+/// Sound, time, response times and Texture mix change the response, not its
+/// identity.
 /// Other styles' dials must not erase the active style's carried color.
 /// Stars locate history by absolute cell and life, independent of motion; the
 /// starfield's actual atlas cell sizes and slice bands come from its `layout`
@@ -934,6 +936,8 @@ fn memory_key(
         ]),
     }
     let mut key: Vec<u32> = values.into_iter().map(f32::to_bits).collect();
+    // Points per cent follows from the size and span above; points per ms adds
+    // the window and the divider, which move the time axis at a fixed size.
     key.extend([
         atmosphere.points_per_ms.to_bits(),
         atmosphere.points_per_cent.to_bits(),
