@@ -916,9 +916,9 @@ impl Default for SpectrumConfig {
             // Most of the pane to the roll, as captured from the DAW on
             // 2026-10-07; the analyzer's own display keeps the rest.
             roll_fraction: 0.806_582_03,
-            // About fifty seconds of history, as captured from the DAW on
-            // 2026-10-07: the last phrase or two, drawn wide enough to read.
-            roll_seconds: 50.070_08,
+            // Nearly three minutes of history, as captured from the DAW on
+            // 2026-10-07: most of a song on screen at once.
+            roll_seconds: 163.330_38,
             // About half a semitone: a note is a line through the spectrogram
             // at its own pitch, not a slab over it, and a gap as wide as the
             // line still separates two neighbouring keys, which is what makes

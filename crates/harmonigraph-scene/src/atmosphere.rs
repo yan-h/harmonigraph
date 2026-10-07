@@ -630,9 +630,10 @@ impl SpectralEffects {
 impl Default for SpectralAtmosphere {
     fn default() -> Self {
         Self {
-            // The Stars look captured from the DAW on 2026-10-07: a sharp
-            // field with no pitch or time blur, and the Wash and Scales
-            // controls below riding inert at their captured values.
+            // The Watercolor look captured from the DAW on 2026-10-07: a sharp
+            // field with no pitch or time blur under a wash pooled at full
+            // strength, with the Scales and Stars controls below riding inert
+            // at their captured values.
             pitch_softness: 0.0,
             time_softness: 0.0,
             // One texel a slab: Yan judged it live at a 600 s Span (2026-09-20),
@@ -644,10 +645,10 @@ impl Default for SpectralAtmosphere {
             color_release: 0.207_913_31,
             cloud_speed: 2.711_340_4,
             cloud_direction: 187.846_47,
-            wash_pool: 0.0,
+            wash_pool: 4.0,
             wash_pool_width: 0.55,
-            wash_pool_softness: 0.75,
-            cloud_style: CloudStyle::Stars,
+            wash_pool_softness: 0.535_810_05,
+            cloud_style: CloudStyle::Watercolor,
             material_settings: MaterialSettings {
                 velvet_size: 0.0625,
                 velvet_variety: 1.0,
@@ -655,16 +656,14 @@ impl Default for SpectralAtmosphere {
                 velvet_irregularity: 1.0,
                 velvet_square: 0.222_504_93,
                 velvet_tilt: 0.0,
-                wash_size: 0.138_325_5,
-                wash_fuzz: 0.0,
-                wash_refract: 0.571_941_9,
-                wash_randomness: 0.592_832_8,
+                wash_size: 0.163_324_39,
+                wash_refract: 1.0,
+                wash_layers: 0.484_902_4,
                 ..MaterialSettings::default()
             },
             // Large far stars thinning to small near ones, the far three
             // layers packed at the spacing floor and steady, twinkling more
-            // toward the near layer. Resolution stays at the type's 75%
-            // rather than the 100% it was dialled to, at Yan's word.
+            // toward the near layer.
             stars: StarSettings {
                 star_randomness: 0.136_416_58,
                 star_size_variation: 0.101_771_27,
@@ -677,6 +676,7 @@ impl Default for SpectralAtmosphere {
                     2.391_195_3,
                 ],
                 star_size: [7.680_750_4, 6.114_797, 4.190_219, 3.112_796_5, 2.220_784_4],
+                star_speed: [0.162_222_3, 0.162_964_21, 0.168_944_7, 0.186_624_7, 0.223_133_03],
                 star_lifetime: 0.984_566_4,
                 star_twinkle: [0.0, 0.325_125_55, 0.585_016_3, 0.792_508_2, 1.0],
                 star_glow_falloff: 0.680_821_24,
@@ -810,8 +810,7 @@ impl Default for AtmosphereSettings {
     fn default() -> Self {
         Self {
             // A Watercolor glow at full material, picking up a little under half
-            // its colour, as captured from the DAW on 2026-10-07 (the amount
-            // kept at full rather than the dialled 36%, at Yan's word).
+            // its colour, as captured from the DAW on 2026-10-07.
             material_style: LatticeMaterial::Watercolor,
             material_amount: 1.0,
             material_shadow_pickup: 0.0,

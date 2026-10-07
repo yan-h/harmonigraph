@@ -862,14 +862,14 @@ impl Default for ShadowSettings {
                 depth: 0.261_179_95,
                 falloff: -4.0,
             },
-            // Nearly nine tenths deep under the roll's ribbons and the spiral's dots,
-            // and wide enough to lift them off the heatmap.
+            // Over four fifths deep under the roll's ribbons and the spiral's
+            // dots, and wide enough to lift them off the heatmap.
             spectral_geometry: ShadowStyle {
                 kernel: ShadowKernel::Gaussian,
-                width: 1.363_921,
-                spread: 0.116_850_756,
-                depth: 0.880_792,
-                falloff: 1.637_190_3,
+                width: 1.873_678_9,
+                spread: 0.119_161_01,
+                depth: 0.825_221_84,
+                falloff: -2.619_324_2,
             },
             // About two thirds deep, slightly spread, under the spectral pane's
             // names and axis labels.
