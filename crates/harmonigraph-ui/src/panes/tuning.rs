@@ -867,7 +867,7 @@ fn map_controls(
     use crate::lattice_maps::{
         MapAxis, MapEdit, MapOffsetLane, EXTENSION_STEP, MIDI_LABELS, OFFSET_LIMIT,
     };
-    use harmonigraph_core::lattice_map::TuningEngine;
+    use harmonigraph_core::lattice_map::{Follow, TuningEngine};
     let Some(view) = params.lattice_maps() else {
         return TuningEngine::Adaptive;
     };
@@ -940,6 +940,41 @@ fn map_controls(
         );
         if view.playback.map.is_none() {
             crate::widgets::label(ui, egui::RichText::new("Map unavailable: new attacks pass through.").color(theme::armed()));
+        }
+        crate::widgets::label(ui, "Follow harmony");
+        let mut follow = view.playback.follow;
+        crate::widgets::choice_buttons(
+            ui,
+            "map follow",
+            &mut follow,
+            &[
+                (Follow::Off, "Off", "The map stays where its offsets put it."),
+                (
+                    Follow::Thirds,
+                    "Thirds",
+                    "Move the map a step along thirds when that spells a chord more simply, \
+                     such as Ab major taking C as a major third rather than a diminished fourth.",
+                ),
+                (
+                    Follow::ThirdsAndFifths,
+                    "Thirds and fifths",
+                    "Also step along fifths when that clearly helps, such as D F A taking a \
+                     10/9 D instead of a wolf fifth. Held notes keep their tuning, so the map \
+                     can drift by a comma when a held note forces it.",
+                ),
+            ],
+        );
+        if follow != view.playback.follow {
+            params.edit_lattice_map(MapEdit::Follow(follow));
+        }
+        if view.followed != harmonigraph_core::LatticePos::ORIGIN {
+            crate::widgets::weak(
+                ui,
+                format!(
+                    "Following: fifths {:+}, thirds {:+} beyond the offsets",
+                    view.followed.threes, view.followed.fives
+                ),
+            );
         }
         // Shape editing sits beside the selector, outside every fold: it is the
         // control a passage is composed with, and it edits the map shown above.

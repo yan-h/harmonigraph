@@ -1,6 +1,6 @@
 //! Musical map document and the editor/backend seam. This is project musical
 //! state, independent of appearance and of the lifetime of an editor window.
-use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -261,11 +261,18 @@ pub struct MapPlayback {
     pub selected: usize,
     pub offset: LatticePos,
     pub map: Option<LatticeMap>,
+    pub follow: Follow,
 }
 
 impl Default for MapPlayback {
     fn default() -> Self {
-        Self { engine: TuningEngine::default(), selected: 0, offset: LatticePos::ORIGIN, map: None }
+        Self {
+            engine: TuningEngine::default(),
+            selected: 0,
+            offset: LatticePos::ORIGIN,
+            map: None,
+            follow: Follow::Off,
+        }
     }
 }
 
@@ -329,6 +336,9 @@ pub struct MapView {
     /// Current host/document intent; pending distinguishes it from audio adoption.
     pub playback: MapPlayback,
     pub offsets: MapOffsets,
+    /// Where following has moved the map beyond `offsets`, as the Hub last
+    /// left it. Already included in `playback.map`, which is what sounds.
+    pub followed: LatticePos,
     pub pending: bool,
     /// Shared with the editor's memo (see [`MapEditor::names`]).
     pub names: MapNames,
@@ -363,6 +373,7 @@ pub enum MapEdit {
     /// Move the map from the lattice by whole lane steps (see
     /// [`MapOffsets::translated`]), each changed lane as one host gesture.
     Translate(LatticePos, MapOffsetLane),
+    Follow(Follow),
     Undo,
     /// Copy the selected shape into a new slot and select it.
     Duplicate,

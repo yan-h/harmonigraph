@@ -12,6 +12,70 @@ pub enum TuningEngine {
     LatticeMap,
 }
 
+/// Whether Lattice Map moves the selected map by itself, and along which axes.
+///
+/// A prototype of adaptive tuning from the map's side: the map keeps its
+/// shape and the Hub slides it one step at a time so that a chord's intervals
+/// take their simplest spellings. A thirds step moves one column of the default
+/// shape by a diesis, which is almost never a spelling anyone means; a fifths
+/// step moves one row by a syntonic comma, which is the classic ambiguity, so
+/// it costs more and is taken only when it clearly helps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Follow {
+    #[default]
+    Off,
+    Thirds,
+    ThirdsAndFifths,
+}
+
+/// The distinct pitch classes of one attack group (all twelve), and the most
+/// distinct held nodes, a follow decision weighs. Both are fixed so the
+/// decision runs on the audio thread without allocating.
+pub const FOLLOW_GROUP: usize = 12;
+pub const FOLLOW_CONTEXT: usize = 32;
+
+/// What each step costs a follow decision, in the bits [`excess`] counts.
+/// A wolf fifth is about 5.5 bits and a Pythagorean third 4, so a fifths step
+/// pays for itself only against an error of that kind.
+const FIFTH_STEP: f64 = 1.0;
+const THIRD_STEP: f64 = 0.25;
+/// Breaks ties toward the automated position, so a progression that may either
+/// return or drift returns. Small enough never to outweigh a step.
+const PULL: f64 = 0.01;
+
+/// The simplest 5-limit spelling of each 12-TET class, as (fifths, thirds).
+const SIMPLEST: [(i32, i32); 12] = [
+    (0, 0),
+    (-1, -1),
+    (2, 0),
+    (1, -1),
+    (0, 1),
+    (-1, 0),
+    (2, 1),
+    (1, 0),
+    (0, -1),
+    (-1, 1),
+    (-2, 0),
+    (1, 1),
+];
+
+/// Tenney height without the twos: `log2` of the odd part of the ratio.
+fn height(v: LatticePos) -> f64 {
+    const LOG2_3: f64 = 1.584_962_500_721_156;
+    const LOG2_5: f64 = 2.321_928_094_887_362;
+    const LOG2_7: f64 = 2.807_354_922_057_604;
+    f64::from(v.threes.unsigned_abs()) * LOG2_3
+        + f64::from(v.fives.unsigned_abs()) * LOG2_5
+        + f64::from(v.sevens.unsigned_abs()) * LOG2_7
+}
+
+/// How many bits more complex an interval is spelled than its 12-TET class
+/// needs: zero for a 3/2 or a 5/4, about 5.5 for the wolf fifth 40/27.
+pub fn excess(v: LatticePos) -> f64 {
+    let (fifths, thirds) = SIMPLEST[LatticeMap::midi_class(v)];
+    height(v) - height(LatticePos::new(fifths, thirds, 0))
+}
+
 /// `Copy` here is load-bearing rather than a convenience: the AUDIO thread
 /// copies whole maps into `AudioMaps`' fixed bank and into every timestamped
 /// attack state, and `Copy` is what guarantees no owned field (a `String`, a
@@ -94,6 +158,61 @@ impl LatticeMap {
         (self.node(key), key * 100_000_000 + self.correction(key, tuning) - pitch)
     }
 
+    /// Where a follow decision moves the map for a group of keys struck
+    /// together, as the next follow offset on top of `self.position`.
+    ///
+    /// Candidates are one step either way along each axis `follow` allows,
+    /// from `current`. Each is scored by the [`excess`] of every interval the
+    /// group's nodes would make among themselves and against `held`, the nodes
+    /// already sounding, whose tuning is frozen; a step adds its own cost, so
+    /// the map stays put unless moving makes the chord simpler. Ties keep the
+    /// current place, then favour the automated one.
+    pub fn follow(
+        &self,
+        follow: Follow,
+        current: LatticePos,
+        held: &[LatticePos],
+        keys: &[i64],
+    ) -> LatticePos {
+        let fifths: &[i32] = match follow {
+            Follow::Off => return LatticePos::ORIGIN,
+            Follow::Thirds => &[0],
+            Follow::ThirdsAndFifths => &[0, -1, 1],
+        };
+        let mut classes = [false; 12];
+        for key in keys {
+            classes[key.rem_euclid(12) as usize] = true;
+        }
+        let mut best = (f64::INFINITY, current);
+        for &df in fifths {
+            for dt in [0, -1, 1] {
+                let offset = current + LatticePos::new(df, dt, 0);
+                let map = LatticeMap { position: self.position + offset, ..*self };
+                if !map.valid() {
+                    continue;
+                }
+                let mut nodes = [LatticePos::ORIGIN; 12];
+                let mut count = 0;
+                for (class, _) in classes.iter().enumerate().filter(|(_, struck)| **struck) {
+                    nodes[count] = map.node(class as i64);
+                    count += 1;
+                }
+                let mut cost = FIFTH_STEP * f64::from(df.abs())
+                    + THIRD_STEP * f64::from(dt.abs())
+                    + PULL * height(offset);
+                for (i, &node) in nodes[..count].iter().enumerate() {
+                    cost +=
+                        nodes[i + 1..count].iter().map(|&other| excess(other - node)).sum::<f64>();
+                    cost += held.iter().map(|&other| excess(other - node)).sum::<f64>();
+                }
+                if cost < best.0 - 1e-9 {
+                    best = (cost, offset);
+                }
+            }
+        }
+        best.1
+    }
+
     /// The exact destination determines the replaced slot. No source-selection
     /// or temperament canonicalization is involved.
     pub fn replace(&mut self, destination: LatticePos) -> bool {
@@ -153,6 +272,58 @@ mod tests {
         assert_eq!(map.node(1), destination);
         assert!(!map.replace(destination));
         assert!(map.valid());
+    }
+
+    /// The table [`excess`] measures against is the brute-force answer.
+    #[test]
+    fn simplest_spellings_are_the_least_complex_of_each_class() {
+        for (class, &(f, t)) in SIMPLEST.iter().enumerate() {
+            let least = (-8..=8)
+                .flat_map(|f| (-4..=4).map(move |t| LatticePos::new(f, t, 0)))
+                .filter(|&v| LatticeMap::midi_class(v) == class)
+                .map(height)
+                .fold(f64::INFINITY, f64::min);
+            assert!((height(LatticePos::new(f, t, 0)) - least).abs() < 1e-9, "class {class}");
+        }
+    }
+
+    #[test]
+    fn follow_mends_an_obvious_wolf_and_keeps_still_otherwise() {
+        let map = LatticeMap::default();
+        let both = Follow::ThirdsAndFifths;
+        let chord = |offset: LatticePos, keys: &[i64]| {
+            let map = LatticeMap { position: map.position + offset, ..map };
+            keys.iter().map(|&k| map.node(k)).collect::<Vec<_>>()
+        };
+        let pure = |nodes: &[LatticePos]| {
+            nodes.iter().all(|&a| nodes.iter().all(|&b| excess(b - a) < 1e-9 || a == b))
+        };
+        let (d_minor, c_major, a_flat) = ([62, 65, 69], [60, 64, 67], [68, 72, 75]);
+        assert!(!pure(&chord(LatticePos::ORIGIN, &d_minor)), "the fixture must hold the wolf");
+        // D F A from rest: one fifths step makes D 10/9 and the triad pure.
+        let moved = map.follow(both, LatticePos::ORIGIN, &[], &d_minor);
+        assert_eq!(moved, LatticePos::new(-1, 0, 0));
+        assert!(pure(&chord(moved, &d_minor)));
+        assert_eq!(
+            map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &d_minor),
+            LatticePos::ORIGIN
+        );
+        assert_eq!(map.follow(Follow::Off, moved, &[], &c_major), LatticePos::ORIGIN);
+        // A chord already pure, and a lone note, never move the map.
+        assert_eq!(map.follow(both, LatticePos::ORIGIN, &[], &c_major), LatticePos::ORIGIN);
+        assert_eq!(map.follow(both, moved, &[], &[61]), moved);
+        // Ab major takes a thirds step rather than a diminished fourth.
+        let flat = map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &a_flat);
+        assert_eq!(flat, LatticePos::new(0, -1, 0));
+        assert!(pure(&chord(flat, &a_flat)));
+        // G B D after the moved D minor, released: returning and drifting tie,
+        // and the pull toward the automated place returns.
+        assert_eq!(map.follow(both, moved, &[], &[67, 71, 74]), LatticePos::ORIGIN);
+        // With that D (10/9) still held, G B D follows it down a comma instead.
+        let held = chord(moved, &[62]);
+        let drifted = map.follow(both, moved, &held, &[67, 71]);
+        assert_eq!(drifted, LatticePos::new(-2, 0, 0));
+        assert!(pure(&[chord(drifted, &[67, 71]), held].concat()));
     }
 
     #[test]

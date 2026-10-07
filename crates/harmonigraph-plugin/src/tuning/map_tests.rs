@@ -362,3 +362,45 @@ fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
         }
     }
 }
+
+#[test]
+fn lattice_map_follow_moves_the_map_for_a_chord_and_keeps_held_notes_frozen() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    install(&hub);
+    let map = LatticeMap::default();
+    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
+    let at = |offset: LatticePos, key: u8| LatticeMap { position: offset, ..map }.node(key.into());
+    let on = |id, key| note(id, 0, key, 0, true);
+    let off = |id, key| note(id, 0, key, 0, false);
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
+    // D F A on one sample: the map steps down a fifth, so D is 10/9 and the
+    // triad has no wolf.
+    hub.run(512, vec![on(1, 62), on(2, 65), on(3, 69)], None);
+    let down = LatticePos::new(-1, 0, 0);
+    for key in [62, 65, 69] {
+        assert_eq!(node(&hub, key), Some(at(down, key)));
+    }
+    // F and A end on the sample G and B start, and the D held across pulls
+    // them a comma down with it rather than sounding a wolf against it.
+    hub.run(1024, vec![off(2, 65), off(3, 69), on(4, 67), on(5, 71)], None);
+    let drifted = LatticePos::new(-2, 0, 0);
+    for key in [67, 71] {
+        assert_eq!(node(&hub, key), Some(at(drifted, key)));
+    }
+    assert_eq!(node(&hub, 62), Some(at(down, 62)), "a held note keeps its onset tuning");
+    hub.run(1536, vec![], None);
+    hub_wrapper(&hub).test_inspect_plugin(|plugin| {
+        let view = crate::lattice_maps::view(&plugin.params);
+        assert_eq!(view.followed, drifted, "the editor draws the map where it sounds");
+        assert_eq!(view.playback.map, Some(LatticeMap { position: drifted, ..map }));
+    });
+    // Turned off, the next attack lands on the automated map, wolf and all.
+    hub.run(
+        2048,
+        vec![off(1, 62), off(4, 67), off(5, 71), parameter("map-follow", 0.0, 0), on(6, 62)],
+        None,
+    );
+    assert_eq!(node(&hub, 62), Some(map.node(62)), "the map no longer follows");
+}

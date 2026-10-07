@@ -88,6 +88,77 @@ with a pending-audio indication until adoption.
 Assignment dots and edit previews are editor-only;
 Render preview and offline output exclude them explicitly.
 
+## Follow harmony (prototype)
+
+Follow harmony lets the Hub slide the selected map by itself,
+one generator step at a time,
+so a chord's intervals take their simplest spellings.
+It approaches adaptive tuning from the map's side:
+the shape stays what you drew,
+and only its place on the lattice moves.
+Off is the default;
+Thirds moves along thirds only;
+Thirds and fifths also moves along fifths.
+The parameter is `map-follow`,
+named Map Follow,
+with values 0–2;
+it is automatable,
+so a passage can switch following on and off,
+and it is timestamped with the other map lanes.
+
+With the default shape a thirds step moves one column by a diesis,
+which is the error behind Ab–C sounding as a diminished fourth,
+and almost never a spelling anyone means.
+A fifths step moves one row by a syntonic comma,
+the classic ambiguity,
+so it costs more and is taken only when it clearly helps:
+D F A struck together steps down a fifth,
+which turns the 9/8 D into 10/9 and removes the wolf fifth against A.
+
+The first onset of each attack group decides for the whole group.
+An attack group is every onset on one input sample,
+so a sequenced chord is decided as a chord,
+while a chord played by hand arrives one note at a time and is decided note by note.
+Releases on that sample apply first,
+so a chord change on one sample is weighed against what is actually still held.
+Each candidate is the current place or one step either way along each allowed axis.
+Its score is how much more complex,
+in bits of Tenney height,
+each interval the group would make is spelled than its 12-TET class needs,
+among the group's own notes and against every held note,
+plus the cost of the step.
+The lowest score wins;
+ties keep the current place,
+then favour the place the offset parameters set.
+
+Held notes keep the tuning they started with,
+so following can only move what has not started yet.
+A note held across a change can therefore pull the map a comma away:
+D held from D minor into G major takes G and B a comma down with it rather than sounding a wolf against it.
+With nothing held,
+a progression that could either return or drift returns.
+A chain of major-third relations drifts a diesis per lap,
+as it does in any adaptive just tuning.
+
+The follow offset adds to the offset parameters and never writes them,
+so it neither fights nor records into their automation.
+It returns to zero when following is off,
+when the retuning mode changes,
+and wherever Adaptive clears its released memory:
+after the silence timeout,
+at Stop and loop resets when those are enabled,
+and at an explicit session reset.
+The lattice and the assignments list show the map where it sounds,
+including the follow offset,
+and the Tuning pane reports how far following has moved it.
+Shape edits are made against that same placement.
+
+This is a prototype.
+The score judges 5-limit consonance only,
+so a septimal interval in a shape always counts as complex.
+Following reads held notes only from the moment Lattice Map started tracking them,
+so notes held since before the mode changed are not weighed.
+
 ## Saved identity and geometry
 
 The host parameter ID is `lattice-map`,
