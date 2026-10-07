@@ -149,6 +149,7 @@ fn poisoned_view() -> ViewConfig {
             spectral_geometry: shadow,
             spectral_text: shadow,
         },
+        hide_behind: nan,
         glow_wash: nan,
         glow_blend: nan,
         glow_accumulation: nan,
@@ -240,6 +241,7 @@ fn scene_floats(scene: &Scene) -> Floats {
         glow_strength,
         glow_curve,
         shadow,
+        hide_behind,
         glow_wash,
         glow_blend,
         glow_accumulation,
@@ -368,6 +370,7 @@ fn scene_floats(scene: &Scene) -> Floats {
     f.shadow("shadow.spectral_geometry", spectral_geometry);
     f.shadow("shadow.spectral_text", spectral_text);
 
+    f.one("hide_behind", *hide_behind);
     f.one("glow_wash", *glow_wash);
     f.one("marker_unit", *marker_unit);
     f.one("glow_blend", *glow_blend);

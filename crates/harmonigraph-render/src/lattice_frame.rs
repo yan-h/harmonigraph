@@ -164,7 +164,7 @@ impl LatticeCallback {
         // instance (`fs_ink_strip`, `vs_glow_splat`, `vs_source_shadow`). A node
         // with no INK left — its Fade run out while its light still releases —
         // paints nothing in the scene pass and fills its cell with nothing, so
-        // its shadow, its scene draw and its occlusion of the nodes behind it
+        // its shadow, its scene draw and its occlusion of what stands behind it
         // are all exactly nothing: the walk below gives it none of the three.
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
@@ -189,6 +189,8 @@ impl LatticeCallback {
         let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
+            // Settled once the walk has passed the cross's own position.
+            place: 0,
         };
         // Where each name's glyphs sit in what the caller handed over, per
         // node, so the walk below can put a name at its own node's place in the
@@ -259,18 +261,30 @@ impl LatticeCallback {
         let node_points = scene.node_radius * camera.points_per_world(size_points.y);
         // Each group's own σ in POINTS, read once: a caster carries it and the
         // packer needs no second conversion (`shadow::sigma_points`). A group
-        // with either bar at the bottom hands over a σ of nothing, which is the
-        // group's off switch all the way down — no cell, no atlas, no taps.
+        // with nothing to spend its field on hands over a σ of nothing, which
+        // is the group's off switch all the way down — no cell, no atlas, no
+        // taps.
+        //
+        // The geometry group spends its field twice: on its visible shadow
+        // (its Darkness) and on hiding the ink behind it — rings, marks, names
+        // and resting crosses (the Hide behind bar, `node_visibility`). Either above 0 packs it, so a node
+        // at Darkness 0 still hides what it covers. Width 0 packs nothing
+        // for either: the field occlusion spends IS the shadow's shape, and
+        // a field of no width would hide only what the node's own ink covers
+        // (all of it while that ink is opaque).
         let geometry = scene.view.shadow.lattice_geometry;
         let text = scene.view.shadow.lattice_text;
-        let sigma_of = |style: harmonigraph_scene::ShadowStyle| {
-            if style.casts() {
+        let hide_behind = scene.view.hide_behind.clamp(0.0, 1.0);
+        let sigma_of = |style: harmonigraph_scene::ShadowStyle, packs: bool| {
+            if packs {
                 shadow::sigma_points(style.width, node_points)
             } else {
                 0.0
             }
         };
-        let (geometry_sigma, text_sigma) = (sigma_of(geometry), sigma_of(text));
+        let geometry_packs = geometry.width > 0.0 && (geometry.depth > 0.0 || hide_behind > 0.0);
+        let geometry_sigma = sigma_of(geometry, geometry_packs);
+        let text_sigma = sigma_of(text, text.casts());
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
@@ -400,10 +414,11 @@ impl LatticeCallback {
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
-            if let Some(p) = plus_of[i] {
+            let cross = plus_of[i].map(|p| {
                 push_plus(&mut draws, pluses.len() as u32);
                 pluses.push(to_plus(&scene.pluses[p]));
-            }
+                pluses.len() - 1
+            });
             if ships {
                 // A node shipped for its light alone draws nothing here.
                 if inked {
@@ -439,6 +454,12 @@ impl LatticeCallback {
                     text.falloff,
                     text_spread,
                 ));
+            }
+            // The cross stands at this position under its node and name, so
+            // what hides it is what stands past all three: every caster from
+            // here on. Its own node's ring never hides it.
+            if let Some(cross) = cross {
+                pluses[cross].place = casters.len().saturating_sub(1) as u32;
             }
         }
         LatticeCallback {
@@ -555,14 +576,16 @@ impl LatticeCallback {
                 },
                 // Every shadow still casts with the glow disabled. Markers
                 // inherit notation's style even though this pipeline draws them.
-                // A group that casts nothing packs no width either, so no quad
-                // is grown for a shadow no draw spends (`glow_shadow`).
+                // A group that casts no visible shadow packs no width either, so
+                // no quad is grown for a shadow no draw spends (`glow_shadow`) —
+                // even where its field is packed for `occlusion` alone, which is
+                // read under the receiver's own ink and needs no quad grown.
                 geometry_shadow: ShadowParams {
                     width: if geometry.casts() { geometry.width } else { 0.0 },
                     reach_sigmas: geometry.kernel.reach_sigmas()
                         + if geometry.casts() { geometry.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: geometry.depth,
-                    occlusion: 1.0,
+                    occlusion: hide_behind,
                 },
                 marker_shadow: ShadowParams {
                     width: if text.casts() { text.width } else { 0.0 },

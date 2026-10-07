@@ -168,7 +168,11 @@ uniform_group! {
         width: f32,
         reach_sigmas: f32,
         depth: f32,
-        /// Prototype receiver coverage loss; lattice nodes only, no saved dial.
+        /// How much a caster of this group hides the lattice ink behind it —
+        /// rings, marks, names and resting crosses — 0..=1: the Hide behind bar
+        /// (`ViewConfig::hide_behind`) for the geometry group, and 0 for the
+        /// markers, which hide nothing (a cross is hidden at the geometry
+        /// row's strength).
         occlusion: f32,
     }
 }

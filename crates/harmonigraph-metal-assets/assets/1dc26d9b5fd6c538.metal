@@ -140,12 +140,16 @@ struct type_13 {
 struct PlusInstance {
     metal::float4 pos_radius;
     metal::float4 color;
+    uint place;
+    char _pad3[12];
 };
 struct PlusVsOut {
     metal::float4 clip_pos;
     metal::float2 uv;
     char _pad2[8];
     metal::float4 color;
+    metal::float2 points;
+    char _pad4[8];
     metal::float4 shadow_box;
     metal::float4 shadow_at;
 };
@@ -182,6 +186,9 @@ constant metal::float3 GLOW_LUMINANCE = metal::float3(0.2126, 0.7152, 0.0722);
 constant metal::float2 NEBULA_DETAIL_FADE = metal::float2(0.3, 1.1);
 metal::float4 unpackFloat32x4_(uint b0, uint b1, uint b2, uint b3, uint b4, uint b5, uint b6, uint b7, uint b8, uint b9, uint b10, uint b11, uint b12, uint b13, uint b14, uint b15) {
     return metal::float4(as_type<float>(b3 << 24 | b2 << 16 | b1 << 8 | b0), as_type<float>(b7 << 24 | b6 << 16 | b5 << 8 | b4), as_type<float>(b11 << 24 | b10 << 16 | b9 << 8 | b8), as_type<float>(b15 << 24 | b14 << 16 | b13 << 8 | b12));
+}
+uint unpackUint32_(uint b0, uint b1, uint b2, uint b3) {
+    return (b3 << 24 | b2 << 16 | b1 << 8 | b0);
 }
 
 float plus_shadow_width(
@@ -236,10 +243,11 @@ struct vs_plusOutput {
     metal::float4 clip_pos [[position]];
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 color [[user(loc1), center_perspective]];
+    metal::float2 points [[user(loc2), center_no_perspective]];
     metal::float4 shadow_box [[user(loc3), flat]];
     metal::float4 shadow_at [[user(loc4), center_no_perspective]];
 };
-struct vb_15_type { metal::uchar data[32]; };
+struct vb_15_type { metal::uchar data[36]; };
 vertex vs_plusOutput vs_plus(
   uint vertex_index [[vertex_id]]
 , device type_4 const& shadow_casters [[buffer(1)]]
@@ -250,12 +258,14 @@ vertex vs_plusOutput vs_plus(
 ) {
     metal::float4 pos_radius = {};
     metal::float4 color = {};
-    if (i_id < (_buffer_sizes.buffer_size15 / 32)) {
+    uint place = {};
+    if (i_id < (_buffer_sizes.buffer_size15 / 36)) {
         const vb_15_type vb_15_elem = vb_15_in[i_id];
         pos_radius = unpackFloat32x4_(vb_15_elem.data[0], vb_15_elem.data[1], vb_15_elem.data[2], vb_15_elem.data[3], vb_15_elem.data[4], vb_15_elem.data[5], vb_15_elem.data[6], vb_15_elem.data[7], vb_15_elem.data[8], vb_15_elem.data[9], vb_15_elem.data[10], vb_15_elem.data[11], vb_15_elem.data[12], vb_15_elem.data[13], vb_15_elem.data[14], vb_15_elem.data[15]);
         color = unpackFloat32x4_(vb_15_elem.data[16], vb_15_elem.data[17], vb_15_elem.data[18], vb_15_elem.data[19], vb_15_elem.data[20], vb_15_elem.data[21], vb_15_elem.data[22], vb_15_elem.data[23], vb_15_elem.data[24], vb_15_elem.data[25], vb_15_elem.data[26], vb_15_elem.data[27], vb_15_elem.data[28], vb_15_elem.data[29], vb_15_elem.data[30], vb_15_elem.data[31]);
+        place = unpackUint32_(vb_15_elem.data[32], vb_15_elem.data[33], vb_15_elem.data[34], vb_15_elem.data[35]);
     }
-    const PlusInstance inst = { pos_radius, color };
+    const PlusInstance inst = { pos_radius, color, place };
     type_13 corners = type_13 {{metal::float2(-1.0, -1.0), metal::float2(1.0, -1.0), metal::float2(-1.0, 1.0), metal::float2(1.0, 1.0)}};
     float stand = {};
     PlusVsOut out = {};
@@ -291,11 +301,14 @@ vertex vs_plusOutput vs_plus(
     out.clip_pos = _e117 * metal::float4(world, 1.0);
     out.uv = corner * margin;
     out.color = inst.color;
-    out.shadow_box = metal::float4(0.0, arm_points, 0.0, 0.0);
+    out.shadow_box = metal::float4(0.0, arm_points, static_cast<float>(inst.place), 0.0);
+    metal::float4 _e133 = out.clip_pos;
+    metal::float2 _e134 = pane_points(_e133, u);
+    out.points = _e134;
     float shared_arm_points = u.marker_cell.arm_points;
-    metal::float2 _e136 = out.uv;
-    out.shadow_at = metal::float4(_e136 * shared_arm_points, inst.color.w, 1.0);
-    PlusVsOut _e142 = out;
-    const auto _tmp = _e142;
-    return vs_plusOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.shadow_box, _tmp.shadow_at };
+    metal::float2 _e141 = out.uv;
+    out.shadow_at = metal::float4(_e141 * shared_arm_points, inst.color.w, 1.0);
+    PlusVsOut _e147 = out;
+    const auto _tmp = _e147;
+    return vs_plusOutput { _tmp.clip_pos, _tmp.uv, _tmp.color, _tmp.points, _tmp.shadow_box, _tmp.shadow_at };
 }

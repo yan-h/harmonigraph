@@ -290,7 +290,7 @@ fn a_second_lattice_view_in_the_same_frame_does_not_break_the_submit() {
 /// the same scene through both paths and compares pixels; tolerance 3
 /// covers the final dither and the half-float working target's rounding.
 ///
-/// With node occlusion on, as the renderer always ships it. Where a front
+/// With node occlusion at the fresh Hide behind, the whole bar. Where a front
 /// node fades the ink of one behind it the two paths part BY DESIGN: the
 /// offscreen path keeps ink apart from the background its shadow darkens and
 /// restores that background under the faded ink, which one target cannot do
@@ -308,7 +308,9 @@ fn offscreen_composite_matches_direct_draw() {
     };
     const SIZE: [u32; 2] = [256, 256];
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let scene = parity_scene();
+    let mut scene = parity_scene();
+    // The whole bar, so occlusion moves the pixels this test sets apart.
+    scene.view.hide_behind = 1.0;
     let callback = || {
         LatticeCallback::from_scene(
             &scene,
@@ -347,10 +349,9 @@ fn offscreen_composite_matches_direct_draw() {
     };
 
     // Path A: the offscreen composite, occlusion as shipped.
-    assert_eq!(cb.uniforms.geometry_shadow.occlusion, 1.0, "the renderer ships occlusion on");
     let mut resources = CallbackResources::default();
     let composite_tex = composite(&cb, &mut resources);
-    // The same path with occlusion off, only to find the pixels it moves.
+    // The same path with Hide behind at 0, only to find the pixels it moves.
     let mut unoccluded = callback();
     unoccluded.uniforms.geometry_shadow.occlusion = 0.0;
     let unoccluded_tex = composite(&unoccluded, &mut CallbackResources::default());

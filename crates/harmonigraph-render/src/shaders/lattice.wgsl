@@ -216,8 +216,10 @@ const INK_STRIP_N: u32 = 64u;
 // rather than a share of each item.
 //
 // Zero is the geometry group off — its nodes pack no cells and each multiplies
-// by 1. The CPU also packs 0 here for a group at Darkness 0, which casts
-// nothing either, so its quads are not grown for a shadow no draw spends.
+// by 1. The CPU also packs 0 here for a group at Darkness 0, which casts no
+// visible shadow, so its quads are not grown for a shadow no draw spends. Its
+// cells may still be packed for the Hide behind bar (`node_occlusion`), which
+// is read under a receiver's own ink and needs no quad grown for it.
 // NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
 // a shadow being cast with no light in the picture at all.
 fn glow_shadow() -> f32 {
@@ -225,17 +227,19 @@ fn glow_shadow() -> f32 {
 }
 
 // The amplitude of a node's shadow. Width and falloff shape the shared mask;
-// darkness scales it without broadening its tail. At 0 the CPU packs no cell.
+// darkness scales it without broadening its tail. At 0 every draw multiplies
+// by exactly 1, even where the CPU packs a cell for `node_occlusion` alone.
 fn glow_shadow_depth() -> f32 {
     return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
 
-// How strongly a node in front hides the ink of the nodes behind it: the
-// occlusion switch scaled by the same Darkness as the visible shadow, so 1%
-// hides next to nothing and 0 is a continuous end rather than a jump (#1288).
-// Names receive the same product through `node_occlusion` in text.wgsl.
+// How strongly a node in front hides the ink of the nodes, names and resting
+// crosses behind it: the Hide behind bar (`ViewConfig::hide_behind`),
+// independent of the visible shadow's Darkness. Spent linearly, so 1% hides
+// next to nothing and 0 is a continuous end rather than a jump (#1288). Names
+// receive the same strength through `node_occlusion` in text.wgsl.
 fn node_occlusion() -> f32 {
-    return clamp(u.geometry_shadow.occlusion, 0.0, 1.0) * glow_shadow_depth();
+    return clamp(u.geometry_shadow.occlusion, 0.0, 1.0);
 }
 
 // How far this frame's renderer reaches past a caster's ink in the picture's own
@@ -306,11 +310,11 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> f32 {
 }
 
 // Node shadows interpret the field as coverage, so changing darkness cannot
-// broaden the normalized shadow profile. Gaussian receiver occlusion spends
-// that field separately (`node_visibility`), scaled by the same darkness
-// (`node_occlusion`). Like every other
-// shadow, it leaves the bright pass's copy whole, so the Shadow darkness bar
-// is the whole of how dark it lands.
+// broaden the normalized shadow profile. Receiver occlusion spends that field
+// separately (`node_visibility`), at the Hide behind bar's strength
+// (`node_occlusion`) rather than this darkness. Like every other shadow, it
+// leaves the bright pass's copy whole, so the Shadow darkness bar is the
+// whole of how dark it lands.
 fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> f32 {
     if level <= 0.0 {
         return 1.0;
@@ -2576,8 +2580,9 @@ fn node_paint(in: VsOut) -> Painted {
     //
     // The RAW light, and that is right in this model rather than a
     // compromise: a node's own shadow does not darken the light it is washed
-    // with. Foreground nodes reduce the washed ink's visibility; markers and
-    // labels retain their ordinary shadowing of it.
+    // with. Foreground nodes reduce the washed ink's visibility, as they do a
+    // marker's and a label's; markers and labels retain their ordinary
+    // shadowing of it.
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink.rgb, ink.alpha, light.rgb, mix(1.0, glow_wash(), ink.lit));
@@ -2658,6 +2663,9 @@ struct PlusInstance {
     // rgb: the marker's own ink, a: this marker's opacity — which is also what
     // its pool and its shadow are worth (`PlusInstance::strength`).
     @location(1) color: vec4<f32>,
+    // The last caster at this cross's own position in the walk: the rings that
+    // hide it are the node casters past it (`node_visibility`).
+    @location(2) place: u32,
 };
 
 struct PlusVsOut {
@@ -2670,11 +2678,15 @@ struct PlusVsOut {
     // is drawn at.
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    // This fragment's place on the pane, in points: where the rings in front
+    // of the cross are read (`node_visibility`). Zero on the cell's draw.
+    @location(2) @interpolate(linear) points: vec2<f32>,
     // x: which caster this marker's shadow is, in `shadow_casters` — 0, the
     // marker field being one caster and the first the frame packs; y: one arm's
     // on-screen length in points, which turns the exact field into the distance
-    // profile's units. Zero on the draw that FILLS the cells, which reads no
-    // atlas and no array. z/w unused.
+    // profile's units; z: the cross's place in the walk (`PlusInstance::place`).
+    // Zero on the draw that FILLS the cells, which reads no atlas and no array.
+    // w unused.
     @location(3) @interpolate(flat) shadow_box: vec4<f32>,
     // Where this fragment reads that cell (xy, in atlas texels), how much of
     // the shadow this marker lands (z, its own opacity), and the surface this
@@ -2834,7 +2846,8 @@ fn vs_plus(@builtin(vertex_index) vertex_index: u32, inst: PlusInstance) -> Plus
     out.color = inst.color;
     // The whole marker field is ONE caster, and it is the first the frame packs
     // (`from_scene`), so its entry sits at index 0 of the array.
-    out.shadow_box = vec4<f32>(0.0, arm_points, 0.0, 0.0);
+    out.shadow_box = vec4<f32>(0.0, arm_points, f32(inst.place), 0.0);
+    out.points = pane_points(out.clip_pos);
     // The Gaussian's shared cell is a picture of one cross CENTRED in its box,
     // so the "pane point" a marker reads it at is its own place on that cross
     // rather than its place on the pane. A distance has no cell and uses the
@@ -2875,6 +2888,7 @@ fn vs_plus_cell(@builtin(vertex_index) vertex_index: u32) -> PlusVsOut {
     // the pane's.
     out.shadow_box = vec4<f32>(u.marker_cell.spread_points / arm_points, 0.0, 0.0, 0.0);
     out.shadow_at = vec4<f32>(0.0, 0.0, 0.0, u.marker_cell.aa_scale);
+    out.points = vec2<f32>(0.0);
     return out;
 }
 
@@ -2888,10 +2902,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 // blended. The ink component then takes only foreground ink coverage, while
 // the other component still takes every ordinary shadow. This restores the
 // background under fading ink without applying a second darkening to it.
+//
+// Whatever the Hide behind bar says, at 0 included: the ordinary shadow never
+// darkens the ink of a node behind its caster, so how much of that ink a
+// front node takes is the bar's alone. (The prototype's reference path, which
+// let the shadow's coverage into this component, is gone with its switch.)
 fn node_split(paint: Painted, shadow_alpha: f32) -> SplitOut {
-    // Zero keeps the pre-prototype reference available to GPU A/B probes.
-    let alpha = mix(shadow_alpha, paint.ink_alpha, clamp(u.geometry_shadow.occlusion, 0.0, 1.0));
-    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
+    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, paint.ink_alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
 }
 
 @fragment
@@ -3709,6 +3726,13 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let aa = min(aa_width(fwidth(in.uv.x), in.shadow_at.w), PLUS_QUAD_MARGIN - 1.0);
     let body = plus_body_coverage(in.uv, aa);
     let alpha = in.color.a * plus_coverage(in.uv, aa);
+    // A ring in front hides this cross's ink as it hides a ring's or a name's
+    // (`node_visibility`), at the Hide behind bar; its own shadow is untouched.
+    var visibility = 1.0;
+    if alpha > 0.0 {
+        visibility = node_visibility(in.shadow_box.z, in.points, node_occlusion());
+    }
+    let visible_alpha = alpha * visibility;
     // The SHADOW, multiplied into everything already in the frame under it. A
     // Gaussian reads the field's shared cell; a distance spends this fragment's
     // exact folded-box distance, measured by this marker's own arm on screen. A
@@ -3737,7 +3761,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     }
     let shadow_exposure = (1.0 - body) * plus_shadow_taper(shadow_uv);
     let seen_through = 1.0 - (1.0 - t) * shadow_exposure;
-    let final_alpha = 1.0 - (1.0 - alpha) * seen_through;
+    let final_alpha = 1.0 - (1.0 - visible_alpha) * seen_through;
     if final_alpha <= 0.0 {
         discard;
     }
@@ -3761,7 +3785,7 @@ fn plus_paint(in: PlusVsOut) -> Painted {
     let coord = light_coord(in.clip_pos.xy);
     let light = glow_light(coord);
     let washed = wash_over(ink, alpha, light.rgb, 1.0);
-    return Painted(washed, final_alpha, alpha);
+    return Painted(washed * visibility, final_alpha, visible_alpha);
 }
 
 /// One cross's coverage, into the markers' shared BLUR cell of the shadow

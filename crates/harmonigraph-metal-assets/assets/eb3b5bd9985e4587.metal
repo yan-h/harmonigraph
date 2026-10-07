@@ -22,6 +22,13 @@ struct SplitOut {
     metal::float4 ink;
     metal::float4 transmission;
 };
+struct SceneOut {
+    metal::float4 other;
+    metal::float4 ink;
+    metal::float4 transmission;
+    metal::float4 bloom_other;
+    metal::float4 bloom_ink;
+};
 struct CompositeParams {
     float darkest_pitch;
     float brightest_pitch;
@@ -487,8 +494,7 @@ float node_occlusion(
     constant Uniforms& u
 ) {
     float _e3 = u.geometry_shadow.occlusion;
-    float _e7 = glow_shadow_depth(u);
-    return metal::clamp(_e3, 0.0, 1.0) * _e7;
+    return metal::clamp(_e3, 0.0, 1.0);
 }
 
 float node_shadow_through(
@@ -2056,15 +2062,12 @@ Painted node_paint(
 
 SplitOut node_split(
     Painted paint,
-    float shadow_alpha,
-    constant Uniforms& u
+    float shadow_alpha
 ) {
-    float _e6 = u.geometry_shadow.occlusion;
-    float alpha_1 = metal::mix(shadow_alpha, paint.ink_alpha, metal::clamp(_e6, 0.0, 1.0));
-    return SplitOut {metal::float4(0.0, 0.0, 0.0, shadow_alpha), metal::float4(paint.rgb, alpha_1), metal::float4(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha)};
+    return SplitOut {metal::float4(0.0, 0.0, 0.0, shadow_alpha), metal::float4(paint.rgb, paint.ink_alpha), metal::float4(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha)};
 }
 
-struct fs_main_splitInput {
+struct fs_main_sceneInput {
     metal::float2 uv [[user(loc0), center_perspective]];
     metal::float4 params [[user(loc2), center_perspective]];
     metal::uint3 octaves [[user(loc3), flat]];
@@ -2082,13 +2085,15 @@ struct fs_main_splitInput {
     metal::float4 shadow_box [[user(loc10), flat]];
     metal::float4 shadow_at [[user(loc12), center_no_perspective]];
 };
-struct fs_main_splitOutput {
+struct fs_main_sceneOutput {
     metal::float4 other [[color(0)]];
     metal::float4 ink [[color(1)]];
     metal::float4 transmission [[color(2)]];
+    metal::float4 bloom_other [[color(3)]];
+    metal::float4 bloom_ink [[color(4)]];
 };
-fragment fs_main_splitOutput fs_main_split(
-  fs_main_splitInput varyings [[stage_in]]
+fragment fs_main_sceneOutput fs_main_scene(
+  fs_main_sceneInput varyings [[stage_in]]
 , metal::float4 clip_pos [[position]]
 , metal::texture2d<float, metal::access::sample> glow_tex [[texture(0)]]
 , metal::sampler glow_sampler [[sampler(0)]]
@@ -2101,7 +2106,8 @@ fragment fs_main_splitOutput fs_main_split(
 ) {
     const VsOut in = { clip_pos, varyings.uv, {}, varyings.params, varyings.octaves, varyings.thickness, varyings.motion, varyings.cents, varyings.strip_row, varyings.marks, varyings.melody_color, varyings.bass_color, varyings.rim, varyings.swell, varyings.ring, varyings.ink_carry, varyings.shadow_box, varyings.shadow_at };
     Painted _e1 = node_paint(in, glow_tex, glow_sampler, shadow_atlas, shadow_sampler, shadow_casters, node_occluders, u, _buffer_sizes);
-    SplitOut _e3 = node_split(_e1, _e1.seen, u);
-    const auto _tmp = _e3;
-    return fs_main_splitOutput { _tmp.other, _tmp.ink, _tmp.transmission };
+    SplitOut _e3 = node_split(_e1, _e1.seen);
+    SplitOut _e5 = node_split(_e1, _e1.ink_alpha);
+    const auto _tmp = SceneOut {_e3.other, _e3.ink, _e3.transmission, _e5.other, _e5.ink};
+    return fs_main_sceneOutput { _tmp.other, _tmp.ink, _tmp.transmission, _tmp.bloom_other, _tmp.bloom_ink };
 }
