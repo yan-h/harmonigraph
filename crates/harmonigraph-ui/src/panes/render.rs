@@ -1255,6 +1255,12 @@ mod tests {
         use harmonigraph_scene::ShadowKernel;
 
         let mut state = PictureState::new(harmonigraph_render::wgpu::TextureFormat::Rgba8Unorm);
+        // The split of 2026-09-26, whose seam the spectral pane's child Ui
+        // rounds INTO its own side. egui snaps that rect to its 1/32-point
+        // grid and leaves the lattice's alone, so at a split whose seam rounds
+        // outward the two overlap by a sliver of a point and the guard below
+        // cannot tell the panes apart.
+        state.appearance.render.frame.split = 0.277_261_67;
         for aspect in [(16, 9), (9, 16)] {
             state.appearance.render.frame.aspect_w = aspect.0;
             state.appearance.render.frame.aspect_h = aspect.1;

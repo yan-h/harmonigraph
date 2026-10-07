@@ -715,9 +715,9 @@ fn a_look_turned_off_holds_no_color_history() {
     assert!(held(&resources), "drawing again started no history");
 }
 
-/// What switching away from the fresh Stars gives: Watercolor under
-/// the fresh colour response (Pickup 0.04 s, Release 0.71 s), at both ends of
-/// the production cloud sample spacing.
+/// The fresh Watercolor under the fresh colour response (Pickup 0.20 s,
+/// Release 0.21 s), at both ends of the production cloud sample spacing, with
+/// its tide line off.
 ///
 /// The history takes the reduced tone target's place — its grid is the
 /// reduced size, and no tone target is allocated — and it is a response in
@@ -727,9 +727,16 @@ fn a_look_turned_off_holds_no_color_history() {
 /// `Release × speed` behind the texture by design (measured at the fresh
 /// drift: a mean of 3.7/255, a quarter of this fixture's pixels past 8).
 ///
-/// Measured held still: a mean of 0.10/255 natively, 0.1% of pixels past 8;
-/// at the reduced spacing 0.94/255 and 4.4%, the band edges where the history
+/// Measured held still: a mean of 0.11/255 natively, 0.1% of pixels past 8;
+/// at the reduced spacing 0.77/255 and 3.2%, the band edges where the history
 /// interpolates colour and the immediate path interpolates level.
+///
+/// The fresh `Edge pooling` of 4 is held at 0 because its tide line is the
+/// sharpest thing in the wash, and the history's resampled lattice softens it
+/// in the same way: with it on, held still measured 2.0/255 and 11% natively,
+/// 7.3/255 and 48% at the reduced spacing, growing with the pool's strength
+/// and hardness. The history keeps the pool itself (its frame stands 7.8/255
+/// from a pool-free one, as the immediate frame does).
 #[test]
 fn fresh_colour_memory_under_watercolor_settles_then_fades() {
     use crate::spectrogram::tests::{frame_with, relay_quad};
@@ -755,7 +762,8 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
         let a = cb.atmosphere.as_mut().unwrap();
         a.region = cb.rect;
         a.settings =
-            harmonigraph_scene::SpectralAtmosphere { cloud_style: style, ..Default::default() };
+            harmonigraph_scene::SpectralAtmosphere { wash_pool: 0.0, ..Default::default() };
+        assert_eq!(a.settings.cloud_style, style, "the fresh cloud is not {style:?}");
         let sampling = CloudSampling { pixel_points, ..Default::default() };
         let fresh = || {
             let mut resources = CallbackResources::default();
@@ -770,7 +778,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
             cb.atmosphere.as_mut().unwrap().settings = held;
             frame
         };
-        // Five seconds of the same sound, seven Releases.
+        // Five seconds of the same sound, two dozen Releases.
         let hold = |cb: &mut SpectrogramCallback, resources: &mut CallbackResources| {
             (0..=20)
                 .map(|i| {
@@ -814,7 +822,7 @@ fn fresh_colour_memory_under_watercolor_settles_then_fades() {
             (0.3 * frame..0.6 * frame).contains(&faded),
             "{case}: one Release left {faded:.1} of {frame:.1}"
         );
-        assert_eq!(after(5.0), (0.0, 0.0), "{case}: seven Releases on, silence is not the floor");
+        assert_eq!(after(5.0), (0.0, 0.0), "{case}: five seconds on, silence is not the floor");
     }
 }
 

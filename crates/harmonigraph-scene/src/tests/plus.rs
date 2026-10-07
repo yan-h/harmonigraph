@@ -767,8 +767,16 @@ fn a_markers_shadow_fades_in_with_its_cross() {
 /// crossing.
 #[test]
 fn a_soft_notes_name_and_cross_hold_still_at_key_up() {
-    let view = ViewConfig { note_names: NoteNames::Past, ..plus_view() };
-    assert!(view.intensity.routes_to(IntensityTarget::Opacity), "Opacity must be routed");
+    // Velocity and gain on Opacity over a rest of about a third (the fresh
+    // routes captured on 2026-09-26), which holds this soft note near four
+    // fifths opaque.
+    let intensity = IntensitySettings {
+        velocity: IntensitySource { opacity: Some(0.606_835_6), thickness: None },
+        gain: IntensitySource { opacity: Some(0.511_064_47), thickness: None },
+        opacity_rest: 0.302_850_54,
+        ..IntensitySettings::unrouted()
+    };
+    let view = ViewConfig { note_names: NoteNames::Past, intensity, ..plus_view() };
     let frame = FrameParams { fade_time: 1.0, ..FrameParams::default() };
     let env = view.envelope(&frame);
     let tuning = Tuning::default();

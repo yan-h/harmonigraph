@@ -1082,6 +1082,18 @@ mod tests {
     /// [`MIN_LENGTH_PT`] comes to one point.
     const PPP: f32 = 2.0;
 
+    /// The outline the time- and pitch-cull fixtures below are sized against:
+    /// the spectral geometry shadow of 2026-09-26. Their notes are placed a
+    /// set number of points from an edge, so a wider default outline would
+    /// move them across the boundary they are there to stand either side of.
+    const OUTLINE: harmonigraph_scene::ShadowStyle = harmonigraph_scene::ShadowStyle {
+        kernel: harmonigraph_scene::ShadowKernel::Gaussian,
+        width: 1.192_405_8,
+        spread: 0.0,
+        depth: 0.912_995_6,
+        falloff: -4.0,
+    };
+
     /// The roll's geometry for `state`, derived exactly the way
     /// [`spectral_pane`](super::super::spectral_pane) derives it
     /// before handing over — same axes, same pitch scale, same split.
@@ -1159,6 +1171,7 @@ mod tests {
         state.appearance.spectrum.roll_seconds = 10.0;
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
+        state.appearance.view.shadow.spectral_geometry = OUTLINE;
         state.runtime.tracker.handle_event(NoteEvent::on(1.0, SourceId::DIRECT, 0, 60, 1.0));
         state.runtime.tracker.handle_event(NoteEvent::off(1.5, SourceId::DIRECT, 0, 60));
 
@@ -1285,7 +1298,10 @@ mod tests {
                 })
                 .fold(0.0, f32::max)
         };
-        assert!(sample_width(2.0) >= MIN_RIBBON_PT - 1e-3);
+        // Each interval is read at its middle: its ends are the step itself,
+        // and which side of it a sample on the edge lands is float rounding
+        // at whatever the Span makes a second.
+        assert!(sample_width(2.5) >= MIN_RIBBON_PT - 1e-3);
         assert_eq!(sample_width(3.5), 0.0, "zero interval filled in");
         assert!(sample_width(5.5) >= MIN_RIBBON_PT - 1e-3);
     }
@@ -1547,6 +1563,8 @@ mod tests {
                 thickness: fade.pressure.opacity,
                 ..Default::default()
             },
+            // From the Ribbon width itself, which is what "twice that" is of.
+            thickness_base: 1.0,
             ..Default::default()
         };
         let thick = instances(&state, 1.0);
@@ -1572,6 +1590,7 @@ mod tests {
         state.appearance.spectrum.low_midi = 54.0;
         state.appearance.spectrum.high_midi = 78.0;
         state.appearance.spectrum.roll_thickness = 2.0;
+        state.appearance.view.shadow.spectral_geometry = OUTLINE;
         state.appearance.view.intensity = harmonigraph_scene::IntensitySettings {
             pressure: harmonigraph_scene::IntensitySource {
                 thickness: Some(2.0),
@@ -1971,6 +1990,10 @@ mod tests {
         let mut state = fresh();
         state.appearance.spectrum.orientation = SpectralOrientation::Left;
         state.appearance.spectrum.roll_seconds = 60.0;
+        // Lead at 0: a released note keeps its spent lead on the box while its
+        // end is within an outline of the now-line, which lengthens the box by
+        // the lead rather than by anything the floor did.
+        state.appearance.spectrum.roll_lead = 0.0;
         state.appearance.spectrum.low_midi = 48.0;
         state.appearance.spectrum.high_midi = 84.0;
         state.runtime.tracker.handle_event(NoteEvent::on(2.0, SourceId::DIRECT, 0, 60, 1.0));

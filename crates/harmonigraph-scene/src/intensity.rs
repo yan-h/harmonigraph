@@ -229,6 +229,7 @@ impl IntensitySettings {
             pressure: IntensitySource::default(),
             timbre: IntensitySource::default(),
             opacity_rest: 1.0,
+            thickness_base: 1.0,
             ..Self::default()
         }
     }
@@ -248,24 +249,21 @@ mod tests {
         source
     }
 
-    /// Fresh, velocity and gain lift opacity from a rest of about a third, and
-    /// the common case is a host sending unity gain for a note with no gain
-    /// lane. That adds gain's whole weight, so every note starts about four
-    /// fifths opaque and velocity separates only the softest ones: anything
-    /// above about 39/127 draws in full. Thickness stays at one note width.
+    /// Fresh, no source is routed: every note draws fully opaque at the
+    /// captured width of just under one note, whatever its velocity or gain,
+    /// including the unity gain a host sends for a note with no gain lane.
     #[test]
-    fn fresh_settings_at_unity_gain_start_every_note_four_fifths_opaque() {
+    fn fresh_settings_draw_every_note_fully_opaque_at_one_shared_width() {
         let fresh = IntensitySettings::default();
-        let unity = Expressions::NEUTRAL;
-        assert_eq!(unity.gain, 1.0);
-        assert!((fresh.opacity_rest - 0.3).abs() < 0.01, "{fresh:?}");
-        let softest = fresh.read(0.0, unity);
-        assert!((softest.opacity - 0.81).abs() < 0.01, "{softest:?}");
-        assert_eq!(softest.thickness, 1.0);
-        assert!(fresh.read(38.0 / 127.0, unity).opacity < 1.0);
-        assert_eq!(fresh.read(40.0 / 127.0, unity), IntensityReading::REST);
-        assert!(fresh.routes_to(IntensityTarget::Opacity));
-        assert!(!fresh.routes_to(IntensityTarget::Thickness));
+        assert!(!fresh.routes_to(IntensityTarget::Opacity), "{fresh:?}");
+        assert!(!fresh.routes_to(IntensityTarget::Thickness), "{fresh:?}");
+        assert!((fresh.thickness_base - 0.99).abs() < 0.01, "{fresh:?}");
+        let expected = IntensityReading { opacity: 1.0, thickness: fresh.thickness_base };
+        for velocity in [0.0, 40.0 / 127.0, 1.0] {
+            for expressions in [Expressions::NEUTRAL, gain(0.0), gain(2.0)] {
+                assert_eq!(fresh.read(velocity, expressions), expected);
+            }
+        }
     }
 
     #[test]

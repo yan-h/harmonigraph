@@ -1693,9 +1693,11 @@ fn atmosphere_keys_default_individually_and_normalize_on_load() {
     assert_eq!(restored.view.atmosphere.texture_depth, AtmosphereSettings::default().texture_depth);
     assert_eq!(restored.view.atmosphere.breath_amount, 1.0);
     assert_eq!(restored.view.atmosphere.material_amount, 1.0);
+    // A nested group repairs a field from its OWN bare default, as it fills a
+    // missing one, and not from the lattice atmosphere's captured settings.
     assert_eq!(
         restored.view.atmosphere.material_settings.wash_size,
-        AtmosphereSettings::default().material_settings.wash_size
+        harmonigraph_scene::MaterialSettings::default().wash_size
     );
     assert_eq!(restored.view.atmosphere.material_speed, 0.0);
 }
