@@ -2469,7 +2469,11 @@ fn camera_automation_is_captured_mid_song_and_rebased_for_each_pass() {
         );
         // A stale appearance snapshot must never own the recorded movement.
         shared.ui.picture.appearance.camera.distance = 20.0;
+        // A trigger that splits on the rewind below, so the take has a second
+        // pass to rebase onto; the fresh Transport stop ends at it instead.
+        shared.ui.picture.appearance.render.trigger = harmonigraph_ui::RenderTrigger::OnDisarm;
         shared.take.start(48_000.0, shared.ui.picture.appearance.serialize());
+        shared.poll_take_end();
         probe
     };
     let dt = 64.0 / 48_000.0;
