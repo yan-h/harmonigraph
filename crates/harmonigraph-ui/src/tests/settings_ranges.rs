@@ -49,7 +49,7 @@ fn poison(saved: &mut SharedState, edge: Edge) {
         spectral_width, spectral_ring_range, spectral_ring_width, ring_gap,
         ring_inner, band_width, mark_thickness, lattice_ground, marker_ink,
         plus_arm, plus_taper, glow_reach, glow_strength, glow_accumulation,
-        glow_blend, glow_wash, glow_attack, glow_release);
+        glow_blend, glow_wash, glow_attack, glow_release, hide_behind);
     a.view.glow_curve.shape = v;
     poison!(a.view.note_animation; radial_start, stagger_spread);
     poison!(a.view.intensity; opacity_rest, thickness_base, thickness_max);
@@ -509,6 +509,10 @@ fn expected_labels(scenario: Scenario) -> Vec<&'static str> {
         ]),
         Tab::Video | Tab::Console => (),
         _ => panic!("add the new settings page's bar inventory"),
+    }
+    if scenario.pane == Tab::LatticeSettings {
+        // The ring and mark shadows' own bar, beside their Darkness.
+        labels.push("Hide behind");
     }
     if scenario.pane == Tab::LatticeSettings || scenario.pane == Tab::AnalyzerSettings {
         for _ in 0..2 {

@@ -12,20 +12,23 @@ use harmonigraph_scene::{
     GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
 use harmonigraph_scene::{
-    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, NOTE_BLOOM_RANGE,
-    SPIRAL_BLOOM_RANGE,
+    GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
+    NOTE_BLOOM_RANGE, SPIRAL_BLOOM_RANGE,
 };
 
 /// The shadows under the lattice's ink, in their own section. They stay
 /// editable with glow off: they also darken the picture behind ink.
 pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
     let shadow = &mut view.shadow;
+    // Hide behind sits with the ring and mark shadows, by their Darkness: it
+    // spends the same field that group's Width shapes.
     shadow_group(
         ui,
         "Ring and mark shadows",
         "Audio rings, MIDI rings, melody and bass marks",
         true,
         &mut shadow.lattice_geometry,
+        Some(&mut view.hide_behind),
     );
     shadow_group(
         ui,
@@ -33,6 +36,7 @@ pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
         "Note names, tuning marks and idle crosses",
         true,
         &mut shadow.lattice_text,
+        None,
     );
 }
 
@@ -57,6 +61,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             "MIDI ribbons and Spiral note dots",
             false,
             &mut shadow.spectral_geometry,
+            None,
         );
         shadow_group(
             ui,
@@ -64,6 +69,7 @@ pub(super) fn analyzer_lighting(ui: &mut egui::Ui, appearance: &mut AppearanceDo
             "Analyzer note names and axis labels, and Spiral note names",
             false,
             &mut shadow.spectral_text,
+            None,
         );
     });
 }
@@ -198,6 +204,7 @@ fn shadow_group(
     casters: &str,
     lattice: bool,
     style: &mut ShadowStyle,
+    hide_behind: Option<&mut f32>,
 ) {
     crate::widgets::label(ui, egui::RichText::new(name).strong()).on_hover_text(casters);
     choice_row(ui, "Shadow shape", &mut style.kernel, &[
@@ -206,4 +213,19 @@ fn shadow_group(
     ]);
     let width_max = if lattice { GLOW_SHADOW_MAX } else { SPECTRAL_SHADOW_MAX };
     crate::widgets::shadow(ui, style, width_max, lattice);
+    // Under the diagram rather than in its value column: the preview draws the
+    // visible shadow, which this does not move, and the column holds three rows.
+    // Greyed at Width 0, which packs no field for it to spend.
+    if let Some(hide_behind) = hide_behind {
+        ui.add_enabled_ui(style.width > 0.0, |ui| {
+            ValueBar::new(hide_behind, HIDE_BEHIND_RANGE, "Hide behind")
+                .percent()
+                .show(ui)
+                .on_hover_text(
+                    "How much a node in front hides the rings, marks and name of a node behind \
+                     it, whatever the shadow's Darkness. 0% hides nothing; a Width of 0 turns \
+                     it off with the shadow.",
+                );
+        });
+    }
 }
