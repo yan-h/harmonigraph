@@ -996,10 +996,11 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-/// Where takes go. `LATTICE_TAKE_DIR` overrides; the default is a fixed,
-/// findable place, because a DAW's environment usually has neither the
-/// variable nor a useful working directory.
-fn take_dir() -> std::path::PathBuf {
+/// Where takes go, and so where their videos land. `LATTICE_TAKE_DIR`
+/// overrides; the default is a fixed, findable place, because a DAW's
+/// environment usually has neither the variable nor a useful working
+/// directory.
+pub fn take_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("LATTICE_TAKE_DIR") {
         return std::path::PathBuf::from(dir);
     }

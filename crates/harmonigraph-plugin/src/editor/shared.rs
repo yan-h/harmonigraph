@@ -114,6 +114,10 @@ impl EditorShared {
                 harmonigraph_ui::ExportAction::Cancel(id) => self.take.cancel_export(id),
                 harmonigraph_ui::ExportAction::Retry(id) => self.take.retry_export(id),
                 harmonigraph_ui::ExportAction::ClearFinished => self.take.clear_finished_exports(),
+                harmonigraph_ui::ExportAction::OpenTakeFolder => {
+                    open_folder(&harmonigraph_record::take_dir())
+                }
+                harmonigraph_ui::ExportAction::Reveal(video) => reveal_file(&video),
             }
         }
 
@@ -208,6 +212,33 @@ impl EditorShared {
                 .log(format!("frame stall: {:.0} ms between updates", gap * 1000.0));
         }
     }
+}
+
+/// Open `dir` in the file browser, creating it first: before the first take
+/// it does not exist yet, and it is where that take will go anyway.
+fn open_folder(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+    browse(&[], dir);
+}
+
+/// Show `file` selected in its folder. One deleted since it was written opens
+/// the folder instead, as does a Linux build, whose `xdg-open` cannot select.
+fn reveal_file(file: &std::path::Path) {
+    if cfg!(target_os = "macos") && file.is_file() {
+        browse(&["-R"], file);
+    } else if let Some(dir) = file.parent() {
+        browse(&[], dir);
+    }
+}
+
+/// Fire-and-forget on a thread of its own, so the GUI never waits on the file
+/// browser. A failure has nowhere useful to be shown and is dropped.
+fn browse(flags: &'static [&'static str], path: &std::path::Path) {
+    let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let path = path.to_owned();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(program).args(flags).arg(path).status();
+    });
 }
 
 #[cfg(test)]

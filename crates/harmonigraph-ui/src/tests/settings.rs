@@ -799,6 +799,50 @@ fn the_cancel_stands_with_the_render_bar_and_asks_for_the_stop() {
     );
 }
 
+/// Both folder buttons reach the shell through the real dock: the folder one
+/// always, and Show in Finder only on a video that exists, naming that video.
+#[test]
+fn the_folder_buttons_ask_the_shell_to_show_the_videos() {
+    let mut state = fresh();
+    state.workspace.interaction.take.supported = true;
+    state.workspace.layout = workspace::Layout::solo(panes::Tab::Video);
+    let mut h = DockHarness::at(egui::vec2(420.0, 1200.0));
+    let find = |shapes: &[egui::epaint::ClippedShape], label: &str| {
+        shapes.iter().find_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == label => Some(t.pos),
+            _ => None,
+        })
+    };
+    let mut click = |state: &mut crate::SharedState, label: &str| {
+        h.frame(state, vec![]);
+        let shapes = h.frame(state, vec![]).shapes;
+        let at = find(&shapes, label)? + egui::vec2(4.0, 4.0);
+        h.frame(state, vec![egui::Event::PointerMoved(at)]);
+        h.frame(state, vec![egui::Event::PointerMoved(at), press(at, true)]);
+        h.frame(state, vec![press(at, false)]);
+        state.workspace.interaction.take.export_actions.pop()
+    };
+
+    assert!(
+        matches!(click(&mut state, "Open video folder"), Some(crate::ExportAction::OpenTakeFolder)),
+        "the folder press never reached the shell"
+    );
+
+    // Still rendering: there is no video yet to show.
+    state.workspace.interaction.take.exports = vec![fixture_export()];
+    assert!(click(&mut state, "Show in Finder").is_none(), "a video shown before it exists");
+
+    state.workspace.interaction.take.exports[0].state =
+        harmonigraph_take::render::ExportStatus::Completed;
+    assert!(
+        matches!(
+            click(&mut state, "Show in Finder"),
+            Some(crate::ExportAction::Reveal(video)) if video == std::path::Path::new("music.mp4")
+        ),
+        "the finished video's press never reached the shell"
+    );
+}
+
 /// Before the renderer has said how many frames it is composing there is no
 /// share to draw, and an empty track says "starting" where a track filled to
 /// zero would say "none of it done yet" — a claim nothing has made.

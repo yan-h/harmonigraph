@@ -81,10 +81,18 @@ pub struct TakeState {
 
 /// Settings are captured at the button press, before the shell's next frame.
 pub enum ExportAction {
-    Queue { take: std::path::PathBuf, appearance: String, render: crate::RenderConfig },
+    Queue {
+        take: std::path::PathBuf,
+        appearance: String,
+        render: crate::RenderConfig,
+    },
     Cancel(u64),
     Retry(u64),
     ClearFinished,
+    /// Open the folder recorded takes, and so their videos, are written to.
+    OpenTakeFolder,
+    /// Show this finished video in the file browser.
+    Reveal(std::path::PathBuf),
 }
 
 /// Shell aggregate. Drawing and runtime code borrow its domains independently.
