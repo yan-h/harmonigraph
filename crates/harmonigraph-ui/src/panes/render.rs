@@ -641,6 +641,15 @@ fn export_queue(
     use crate::appearance_edit::{slot_name, SLOT_COUNT};
     use crate::ExportAction;
     use harmonigraph_take::render::ExportStatus;
+    if ui
+        .button("Open video folder")
+        .on_hover_text(
+            "Open the folder takes are recorded to in Finder. Each take's video is saved beside it.",
+        )
+        .clicked()
+    {
+        interaction.take.export_actions.push(ExportAction::OpenTakeFolder);
+    }
     egui::CollapsingHeader::new("Exports").show(ui, |ui| {
         crate::widgets::weak(ui, "One take path per line. Videos are saved beside each take; existing videos get a numbered variant.");
         ui.add(egui::TextEdit::multiline(&mut interaction.take.export_paths).desired_width(ui.available_width()).desired_rows(2).hint_text("/path/to/music.take"));
@@ -712,6 +721,9 @@ fn export_queue(
                     && ui.button("Retry").clicked()
                 {
                     interaction.take.export_actions.push(ExportAction::Retry(job.id));
+                }
+                if job.state == ExportStatus::Completed && ui.button("Show in Finder").clicked() {
+                    interaction.take.export_actions.push(ExportAction::Reveal(job.output.clone()));
                 }
             });
         });

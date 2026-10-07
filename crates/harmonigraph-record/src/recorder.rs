@@ -996,12 +996,53 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-/// Where takes go. `LATTICE_TAKE_DIR` overrides; the default is a fixed,
-/// findable place, because a DAW's environment usually has neither the
-/// variable nor a useful working directory.
-fn take_dir() -> std::path::PathBuf {
+/// Where takes go, and so where their videos land. `LATTICE_TAKE_DIR`
+/// overrides; the default is a fixed, findable place, because a DAW's
+/// environment usually has neither the variable nor a useful working
+/// directory.
+pub fn take_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("LATTICE_TAKE_DIR") {
         return std::path::PathBuf::from(dir);
     }
     home_dir().join("Music").join("Harmonigraph Takes")
+}
+
+/// Open `dir` in the system file browser, creating it first: before the first
+/// take it does not exist yet, and it is where that take will go anyway.
+pub fn open_folder(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+    browse(None, dir);
+}
+
+/// Show `file` selected in its folder. One deleted since it was written opens
+/// the folder instead, as does a platform with no way to select a file.
+pub fn reveal_file(file: &std::path::Path) {
+    let select = if cfg!(target_os = "macos") {
+        Some("-R")
+    } else if cfg!(windows) {
+        Some("/select,")
+    } else {
+        None
+    };
+    match (select, file.parent()) {
+        (Some(flag), _) if file.is_file() => browse(Some(flag), file),
+        (_, Some(dir)) => browse(None, dir),
+        (_, None) => {}
+    }
+}
+
+/// Fire-and-forget on a thread of its own, so the GUI never waits on the file
+/// browser. A failure has nowhere useful to be shown and is dropped.
+fn browse(flag: Option<&'static str>, path: &std::path::Path) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    let path = path.to_owned();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(program).args(flag).arg(path).status();
+    });
 }

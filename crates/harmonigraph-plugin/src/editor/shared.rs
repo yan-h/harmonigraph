@@ -114,6 +114,12 @@ impl EditorShared {
                 harmonigraph_ui::ExportAction::Cancel(id) => self.take.cancel_export(id),
                 harmonigraph_ui::ExportAction::Retry(id) => self.take.retry_export(id),
                 harmonigraph_ui::ExportAction::ClearFinished => self.take.clear_finished_exports(),
+                harmonigraph_ui::ExportAction::OpenTakeFolder => {
+                    harmonigraph_record::open_folder(&harmonigraph_record::take_dir())
+                }
+                harmonigraph_ui::ExportAction::Reveal(video) => {
+                    harmonigraph_record::reveal_file(&video)
+                }
             }
         }
 
