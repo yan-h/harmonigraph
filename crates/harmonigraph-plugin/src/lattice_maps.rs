@@ -34,15 +34,11 @@ pub fn unpack(word: u64) -> LatticePos {
     LatticePos::new((word >> 32) as u32 as i32, word as u32 as i32, 0)
 }
 
-/// Where following has moved the map, or nothing while it is not following.
+/// Where following has moved the map, as the Hub last published it. The Hub
+/// alone decides whether it is following: it publishes nothing moved while
+/// following is off or a mode change has yet to reach an attack.
 fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
-    let following = engine(params.tuning_engine.value()) == TuningEngine::LatticeMap
-        && follow(params.map_follow.value()) != Follow::Off;
-    if following {
-        unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
-    } else {
-        LatticePos::ORIGIN
-    }
+    unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
 }
 
 pub fn offsets(params: &crate::HarmonigraphParams) -> MapOffsets {
@@ -164,27 +160,20 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             false
         }
         MapEdit::Translate(step, lane) => {
-            let from = offsets(params);
+            let seen = offsets(params);
+            let from = match params.map_editor.lock().translated {
+                Some((read, sent)) if read == seen => sent,
+                _ => seen,
+            };
             if let Some(to) = from.translated(step, lane) {
-                let lanes = |o: MapOffsets| {
-                    let (f, e) = (o.fine, o.extension);
-                    [f.threes, f.fives, f.sevens, e.threes, e.fives, e.sevens]
-                };
-                let targets = [
-                    (MapAxis::Fifths, MapOffsetLane::Fine),
-                    (MapAxis::Thirds, MapOffsetLane::Fine),
-                    (MapAxis::Sevenths, MapOffsetLane::Fine),
-                    (MapAxis::Fifths, MapOffsetLane::Extension),
-                    (MapAxis::Thirds, MapOffsetLane::Extension),
-                    (MapAxis::Sevenths, MapOffsetLane::Extension),
-                ];
-                for ((before, after), (axis, lane)) in
-                    lanes(from).into_iter().zip(lanes(to)).zip(targets)
+                for ((axis, lane, before), (_, _, after)) in
+                    from.lanes().into_iter().zip(to.lanes())
                 {
                     if before != after {
                         set(axis_param(axis, lane), after);
                     }
                 }
+                params.map_editor.lock().translated = Some((seen, to));
             }
             false
         }
@@ -352,7 +341,7 @@ impl AudioMaps {
         self.playback.selected = self.seed_map.clamp(0, 127) as usize;
         self.offsets = self.seed_offset;
         self.playback.offset = self.offsets.total();
-        self.playback.follow = follow(self.seed_follow);
+        self.set_follow(follow(self.seed_follow));
         self.resolve();
         self.adopted = true;
         self.push(self.boundary.steady_time, config);
@@ -362,6 +351,19 @@ impl AudioMaps {
             self.engine_revision = self.engine_revision.saturating_add(1);
             self.playback.engine = engine;
         }
+    }
+    /// A follow mode is a retuning mode for this purpose: changing it starts
+    /// the Hub's context, and so its follow offset, over at the next attack.
+    fn set_follow(&mut self, follow: Follow) {
+        if self.playback.follow != follow {
+            self.engine_revision = self.engine_revision.saturating_add(1);
+            self.playback.follow = follow;
+        }
+    }
+    /// The retuning-mode revision the latest observed state carries, which the
+    /// Hub compares against the one its context was built under.
+    pub fn engine_revision(&self) -> u64 {
+        self.engine_revision
     }
     fn resolve(&mut self) {
         self.playback.map =
@@ -380,7 +382,7 @@ impl AudioMaps {
             } else if id == nice_plug::wrapper::hash_param_id("tuning-engine") {
                 self.set_engine(engine(value.round() as i32));
             } else if id == nice_plug::wrapper::hash_param_id("map-follow") {
-                self.playback.follow = follow(value.round() as i32);
+                self.set_follow(follow(value.round() as i32));
             } else {
                 // CLAP stepped values are indices from zero, unlike saved/plain params.
                 let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;

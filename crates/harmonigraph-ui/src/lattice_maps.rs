@@ -213,6 +213,12 @@ pub struct MapEditor {
     /// read. The editor's own `Mutex` is already held by the one caller that
     /// builds a [`MapView`], and the audio thread never reads this field.
     names: Option<(Revision, MapNames)>,
+    /// The offsets the last arrow press read and the ones it sent. A host
+    /// applies a set at its next process call, so a second press before then
+    /// still reads the first one's starting lanes; keyed on those lanes, it
+    /// builds on what was sent instead, and any other change to the lanes —
+    /// the press landing, or automation — retires the entry.
+    pub translated: Option<(MapOffsets, MapOffsets)>,
 }
 impl MapEditor {
     /// `document`'s names, rebuilt only when the document is a state this memo
@@ -297,6 +303,19 @@ impl MapOffsets {
             self.fine.fives + EXTENSION_STEP * self.extension.fives,
             self.fine.sevens + EXTENSION_STEP * self.extension.sevens,
         )
+    }
+
+    /// Every lane with the value it holds, in one fixed order.
+    pub fn lanes(self) -> [(MapAxis, MapOffsetLane, i32); 6] {
+        let (f, e) = (self.fine, self.extension);
+        [
+            (MapAxis::Fifths, MapOffsetLane::Fine, f.threes),
+            (MapAxis::Thirds, MapOffsetLane::Fine, f.fives),
+            (MapAxis::Sevenths, MapOffsetLane::Fine, f.sevens),
+            (MapAxis::Fifths, MapOffsetLane::Extension, e.threes),
+            (MapAxis::Thirds, MapOffsetLane::Extension, e.fives),
+            (MapAxis::Sevenths, MapOffsetLane::Extension, e.sevens),
+        ]
     }
 
     /// The lanes after `step` units of `lane` on each axis, or `None` when any

@@ -2363,8 +2363,11 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         let copied = crate::lattice_maps::view(&plugin.params);
         assert_eq!(&copied.names[2], &(2, "Distant passage copy".into()));
         // Thirds stand at fine 8, coarse −1: two arrow presses carry into
-        // Coarse rather than stopping at the end of Fine.
-        edit(MapEdit::Translate(harmonigraph_core::LatticePos::new(0, 2, 0), MapOffsetLane::Fine));
+        // Coarse rather than stopping at the end of Fine, and the second,
+        // pressed before the host has applied the first, still counts.
+        let right = harmonigraph_core::LatticePos::new(0, 1, 0);
+        edit(MapEdit::Translate(right, MapOffsetLane::Fine));
+        edit(MapEdit::Translate(right, MapOffsetLane::Fine));
     });
     device.run(64, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {

@@ -405,10 +405,22 @@ fn lattice_map_follow_moves_the_map_for_a_chord_and_drifts_with_what_it_heard() 
         assert_eq!(view.followed, further, "the editor draws the map where it sounds");
         assert_eq!(view.playback.map, Some(LatticeMap { position: further, ..map }));
     });
+    // Off and on again with nothing played starts over from the automated
+    // place, so D F A steps from there rather than from three fifths down.
+    hub.run(3072, vec![off(6, 60), off(7, 64), off(8, 67), parameter("map-follow", 0.0, 0)], None);
+    hub.run(3584, vec![parameter("map-follow", 2.0, 0)], None);
+    hub.run(4096, vec![], None);
+    hub_wrapper(&hub).test_inspect_plugin(|plugin| {
+        assert_eq!(crate::lattice_maps::view(&plugin.params).followed, LatticePos::ORIGIN);
+    });
+    hub.run(4608, vec![on(9, 62), on(10, 65), on(11, 69)], None);
+    for key in [62, 65, 69] {
+        assert_eq!(node(&hub, key), Some(at(down, key)));
+    }
     // Turned off, the next attack lands on the automated map, wolf and all.
     hub.run(
-        3072,
-        vec![off(6, 60), off(7, 64), off(8, 67), parameter("map-follow", 0.0, 0), on(9, 62)],
+        5120,
+        vec![off(9, 62), off(10, 65), off(11, 69), parameter("map-follow", 0.0, 0), on(12, 62)],
         None,
     );
     assert_eq!(node(&hub, 62), Some(map.node(62)), "the map no longer follows");

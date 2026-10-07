@@ -175,6 +175,22 @@ impl Sequencer {
         self.last_release = None;
         self.followed = LatticePos::ORIGIN;
     }
+    /// The next attack after a loop or seek clears the history, if the control
+    /// says so. Held notes keep their frozen assignments either way.
+    fn take_loop(&mut self) {
+        if self.loop_pending {
+            if self.config.policy.reset_loop {
+                self.forget_history();
+            }
+            self.loop_pending = false;
+        }
+    }
+    /// A newly assigned voice joins the context, or `false` when the context
+    /// has no cell left for it.
+    fn hold(&mut self, voice: Voice) -> bool {
+        let cell = self.context.iter_mut().find(|cell| cell.is_none());
+        cell.map(|cell| *cell = Some(voice)).is_some()
+    }
     /// Participation ends without releasing anything onto the wire or into
     /// musical memory. The moving reference must not retain this source either.
     fn forget_source(&mut self, source: u8) {
@@ -543,8 +559,14 @@ impl Hub {
     /// controllers, assign onsets, reply. It runs to completion here.
     pub fn input_boundary(&mut self, owner: &mut Owner) {
         // Every callback, so a silence or Stop reset reaches the editor too;
-        // what this pass decides is drawn from the next one.
-        owner.maps.publish_followed(self.sequencer.followed);
+        // what this pass decides is drawn from the next one. A mode change not
+        // yet reached by an attack has already reset following in effect.
+        let current = owner.maps.engine_revision() == self.sequencer.engine_revision;
+        owner.maps.publish_followed(if current {
+            self.sequencer.followed
+        } else {
+            LatticePos::ORIGIN
+        });
         self.collect();
         if self.batch.is_empty() {
             return;
@@ -844,8 +866,8 @@ impl Hub {
                     decision,
                     onset: record.sample,
                 };
-                if let Some(cell) = self.sequencer.context.iter_mut().find(|cell| cell.is_none()) {
-                    *cell = Some(voice);
+                if !self.sequencer.hold(voice) {
+                    self.status |= session::POLICY;
                 }
             }
             return Some(Assigned {
@@ -857,13 +879,7 @@ impl Hub {
                 configuration: config,
             });
         }
-        if self.sequencer.loop_pending {
-            if config.policy.reset_loop {
-                self.sequencer.memory.clear();
-                self.sequencer.last_release = None;
-            }
-            self.sequencer.loop_pending = false;
-        }
+        self.sequencer.take_loop();
         self.sequencer.fill(self.rate);
         let onset = policy::OrderedOnset { pitch: incoming };
         let count = self.sequencer.working.len();
@@ -910,9 +926,7 @@ impl Hub {
             decision,
             onset: struck,
         };
-        if let Some(cell) = self.sequencer.context.iter_mut().find(|cell| cell.is_none()) {
-            *cell = Some(voice);
-        } else {
+        if !self.sequencer.hold(voice) {
             self.status |= session::POLICY;
         }
         Some(Assigned { correction, node, decision, player, channel_pitch, configuration: config })
@@ -937,45 +951,52 @@ impl Hub {
     fn follow(&mut self, position: usize, map: LatticeMap) -> LatticeMap {
         let sample = self.batch[position].sample;
         if self.sequencer.followed_at != Some(sample) {
-            let mut keys = [0i64; FOLLOW_GROUP];
-            let mut struck = 0;
-            for record in self.batch[position..].iter().take_while(|r| r.sample == sample) {
-                let Some((_, channel, key, _)) = record.event.attack() else { continue };
-                let retune = self.rows[usize::from(record.source)].retune;
-                if record.retune & 1 == 0 || record.retune != retune {
-                    continue;
-                }
-                // One per pitch class, so octave doublings never crowd a class out.
-                let key = LatticeMap::rounded_key(self.arriving(*record, channel, key));
-                if !keys[..struck].iter().any(|k| (k - key).rem_euclid(12) == 0) {
-                    keys[struck] = key;
-                    struck += 1;
-                }
-            }
-            let sequencer = &mut self.sequencer;
-            sequencer.followed_at = Some(sample);
-            if sequencer.loop_pending {
-                if sequencer.config.policy.reset_loop {
-                    sequencer.forget_history();
-                }
-                sequencer.loop_pending = false;
-            }
-            // Adaptive's own context: the held voices, or with nothing held the
-            // released ones, each decayed on the half-life.
-            sequencer.fill(self.rate);
-            if sequencer.context.iter().all(Option::is_none) {
-                for pitch in sequencer.working.iter_mut() {
-                    pitch.weight *= FOLLOW_RELEASED;
-                }
-            }
-            sequencer.followed = map.follow(
-                sequencer.follow,
-                sequencer.followed,
-                &sequencer.working,
-                &keys[..struck],
-            );
+            self.sequencer.followed_at = Some(sample);
+            self.sequencer.take_loop();
+            self.sequencer.followed = if self.sequencer.follow == Follow::Off {
+                LatticePos::ORIGIN
+            } else {
+                self.decide_follow(position, map)
+            };
         }
         LatticeMap { position: map.position + self.sequencer.followed, ..map }
+    }
+
+    /// The follow offset for the attack group starting at `position`.
+    fn decide_follow(&mut self, position: usize, map: LatticeMap) -> LatticePos {
+        let sample = self.batch[position].sample;
+        let mut keys = [0i64; FOLLOW_GROUP];
+        let mut struck = 0;
+        let mut index = position;
+        while index < self.batch.len() && self.batch[index].sample == sample {
+            let record = self.batch[index];
+            index += 1;
+            let Some((_, channel, key, _)) = record.event.attack() else { continue };
+            // What a same-key onset displaces leaves the context before the
+            // group is scored, as `assign` does before it scores one onset:
+            // otherwise the pitch being decided is weighed against itself.
+            self.forget_replaced(record.source, channel, key);
+            let retune = self.rows[usize::from(record.source)].retune;
+            if record.retune & 1 == 0 || record.retune != retune {
+                continue;
+            }
+            // One per pitch class, so octave doublings never crowd a class out.
+            let key = LatticeMap::rounded_key(self.arriving(record, channel, key));
+            if !keys[..struck].iter().any(|k| (k - key).rem_euclid(12) == 0) {
+                keys[struck] = key;
+                struck += 1;
+            }
+        }
+        // Adaptive's own context: the held voices, or with nothing held the
+        // released ones, each decayed on the half-life.
+        let sequencer = &mut self.sequencer;
+        sequencer.fill(self.rate);
+        if sequencer.context.iter().all(Option::is_none) {
+            for pitch in sequencer.working.iter_mut() {
+                pitch.weight *= FOLLOW_RELEASED;
+            }
+        }
+        map.follow(sequencer.follow, sequencer.followed, &sequencer.working, &keys[..struck])
     }
 
     fn reply(&mut self, record: Record, correction: i64) {

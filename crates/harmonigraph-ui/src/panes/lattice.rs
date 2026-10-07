@@ -56,6 +56,16 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
         && response.hovered()
         && ui.memory(|m| m.focused().is_none_or(|id| id == response.id))
     {
+        // A focused lattice claims the arrows, or egui would spend each one
+        // moving focus to a neighbouring widget as well.
+        if response.has_focus() {
+            let arrows = egui::EventFilter {
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                ..Default::default()
+            };
+            ui.memory_mut(|m| m.set_focus_lock_filter(response.id, arrows));
+        }
         state.runtime.map_translation = arrow_translation(ui, &state.appearance.camera, rect);
     }
     if response.double_clicked()
@@ -159,8 +169,13 @@ fn arrow_translation(
     ];
     let mut total = LatticePos::ORIGIN;
     for ((_, arrow), count) in arrows.iter().zip(presses) {
-        let (step, _) =
+        let (step, along) =
             directions.iter().max_by(|(_, a), (_, b)| a.dot(*arrow).total_cmp(&b.dot(*arrow)))?;
+        // An axis seen edge-on points nowhere; an arrow with no axis its way
+        // moves nothing rather than whichever came last.
+        if along.dot(*arrow) <= 0.0 {
+            continue;
+        }
         for _ in 0..count {
             total = total + *step;
         }

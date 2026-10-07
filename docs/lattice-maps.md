@@ -152,22 +152,33 @@ G major straight after C major keeps the G just heard rather than stepping on.
 
 The follow offset adds to the offset parameters and never writes them,
 so it neither fights nor records into their automation.
-It returns to zero when following is off,
-when the retuning mode changes,
+It returns to zero when following is turned off,
+when the retuning mode or the follow mode changes,
 and wherever Adaptive clears its released memory:
 after the silence timeout,
 at Stop and loop resets when those are enabled,
 and at an explicit session reset.
+A mode change takes effect at the next attack,
+which starts from the automated place with an empty context,
+so switching following off and on again with nothing played starts over.
+Selecting another saved map keeps the offset,
+so a passage that switches shapes keeps its place on the lattice.
 The lattice and the assignments list show the map where it sounds,
 including the follow offset,
 and the Tuning pane reports how far following has moved it.
 Shape edits are made against that same placement.
 
 This is a prototype.
-The score judges 5-limit consonance only,
-so a septimal interval in a shape always counts as complex.
-Changing the retuning mode clears the context,
-so notes held or heard before Lattice Map was selected are not weighed.
+The score judges 5-limit consonance only:
+a septimal interval in a shape counts as its excess over the simplest 5-limit spelling of its class,
+or as zero when it is simpler,
+so following neither seeks out nor avoids sevens.
+A node in the context counts once,
+at its strongest weight,
+so an octave doubling adds nothing.
+Changing either mode clears the context,
+so notes held or heard before the change are not weighed.
+In Lattice Map mode the Hub's diagnostic count of context voices now counts mapped voices too.
 
 ## Saved identity and geometry
 

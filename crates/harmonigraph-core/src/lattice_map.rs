@@ -74,9 +74,11 @@ fn height(v: LatticePos) -> f64 {
 
 /// How many bits more complex an interval is spelled than its 12-TET class
 /// needs: zero for a 3/2 or a 5/4, about 5.5 for the wolf fifth 40/27.
+/// Never negative: a septimal interval simpler than the class's 5-limit
+/// spelling, such as 7/4 against 16/9, counts as zero rather than as a reward.
 pub fn excess(v: LatticePos) -> f64 {
     let (fifths, thirds) = SIMPLEST[LatticeMap::midi_class(v)];
-    height(v) - height(LatticePos::new(fifths, thirds, 0))
+    (height(v) - height(LatticePos::new(fifths, thirds, 0))).max(0.0)
 }
 
 /// `Copy` here is load-bearing rather than a convenience: the AUDIO thread
@@ -171,8 +173,10 @@ impl LatticeMap {
     /// its own cost, so the map stays put unless moving makes the chord
     /// simpler. The context is Adaptive's too: the held notes, or with nothing
     /// held the released ones, so a common tone keeps its pitch and the map
-    /// drifts rather than snapping back. Ties keep the current place, and
-    /// otherwise go to the candidate farther from the automated place.
+    /// drifts rather than snapping back. A node in the context counts once,
+    /// at its strongest weight, as in Adaptive, so an octave doubling adds
+    /// nothing. Ties keep the current place, and otherwise go to the candidate
+    /// farther from the automated place.
     pub fn follow(
         &self,
         follow: Follow,
@@ -189,6 +193,19 @@ impl LatticeMap {
         for key in keys {
             classes[key.rem_euclid(12) as usize] = true;
         }
+        // Each context node once, at its strongest weight.
+        let strongest = |i: usize, c: &ContextPitch| {
+            let node = c.node?;
+            let first = context.iter().position(|o| o.node == Some(node)) == Some(i);
+            first.then(|| {
+                let weight = context
+                    .iter()
+                    .filter(|o| o.node == Some(node))
+                    .map(|o| o.weight)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                (node, weight)
+            })
+        };
         let mut best = (f64::INFINITY, f64::NEG_INFINITY, current);
         for &df in fifths {
             for dt in [0, -1, 1] {
@@ -209,10 +226,13 @@ impl LatticeMap {
                         nodes[i + 1..count].iter().map(|&other| excess(other - node)).sum::<f64>();
                     cost += context
                         .iter()
-                        .filter_map(|c| c.node.map(|other| c.weight * excess(other - node)))
+                        .enumerate()
+                        .filter_map(|(i, c)| strongest(i, c))
+                        .map(|(other, weight)| weight * excess(other - node))
                         .sum::<f64>();
                 }
-                let distance = height(offset);
+                // The current place wins every tie it is part of.
+                let distance = if offset == current { f64::INFINITY } else { height(offset) };
                 let tied = (cost - best.0).abs() <= 1e-9;
                 if cost < best.0 - 1e-9 || (tied && distance > best.1) {
                     best = (cost, distance, offset);
@@ -294,6 +314,7 @@ mod tests {
                 .fold(f64::INFINITY, f64::min);
             assert!((height(LatticePos::new(f, t, 0)) - least).abs() < 1e-9, "class {class}");
         }
+        assert_eq!(excess(LatticePos::new(0, 0, 1)), 0.0, "7/4 is not a reward over 16/9");
     }
 
     #[test]
