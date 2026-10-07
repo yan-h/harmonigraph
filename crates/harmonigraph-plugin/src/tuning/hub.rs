@@ -13,7 +13,7 @@ use std::sync::Arc;
 use harmonigraph_core::canonical::{ClockId, EventTiming, NoteDelta, VoiceBaseline};
 use harmonigraph_core::configuration::ResolvedConfig;
 use harmonigraph_core::lattice_map::{
-    Follow, LatticeMap, TuningEngine, FOLLOW_CONTEXT, FOLLOW_GROUP,
+    Follow, LatticeMap, TuningEngine, FOLLOW_GROUP, FOLLOW_RELEASED,
 };
 use harmonigraph_core::{policy, LatticePos, SourceId};
 use harmonigraph_record::{publication, Recorder};
@@ -833,7 +833,8 @@ impl Hub {
                 0
             };
             self.reply(record, correction);
-            // A mapped voice is context too: following weighs what is held.
+            // A mapped voice is context too: following weighs what is held, and
+            // what was released, through the same memory Adaptive keeps.
             if let Some(node) = node {
                 let voice = Voice {
                     source: record.source,
@@ -959,16 +960,20 @@ impl Hub {
                 }
                 sequencer.loop_pending = false;
             }
-            let mut held = [LatticePos::ORIGIN; FOLLOW_CONTEXT];
-            let mut count = 0;
-            for node in sequencer.context.iter().flatten().filter_map(|voice| voice.node) {
-                if count < FOLLOW_CONTEXT && !held[..count].contains(&node) {
-                    held[count] = node;
-                    count += 1;
+            // Adaptive's own context: the held voices, or with nothing held the
+            // released ones, each decayed on the half-life.
+            sequencer.fill(self.rate);
+            if sequencer.context.iter().all(Option::is_none) {
+                for pitch in sequencer.working.iter_mut() {
+                    pitch.weight *= FOLLOW_RELEASED;
                 }
             }
-            sequencer.followed =
-                map.follow(sequencer.follow, sequencer.followed, &held[..count], &keys[..struck]);
+            sequencer.followed = map.follow(
+                sequencer.follow,
+                sequencer.followed,
+                &sequencer.working,
+                &keys[..struck],
+            );
         }
         LatticeMap { position: map.position + self.sequencer.followed, ..map }
     }

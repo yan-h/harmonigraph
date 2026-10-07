@@ -125,20 +125,30 @@ Each candidate is the current place or one step either way along each allowed ax
 Its score is how much more complex,
 in bits of Tenney height,
 each interval the group would make is spelled than its 12-TET class needs,
-among the group's own notes and against every held note,
+among the group's own notes and against the context,
 plus the cost of the step.
+The context is the one Adaptive uses:
+the held notes,
+or with nothing held the released ones,
+each decayed on the Adaptive half-life.
+A released note weighs half what a note in the chord does,
+so it decides between spellings the chord leaves open,
+but it cannot make the chord keep a wolf of its own.
 The lowest score wins;
 ties keep the current place,
-then favour the place the offset parameters set.
+then go to the candidate farther from the place the offset parameters set.
 
+Following prefers drift.
 Held notes keep the tuning they started with,
-so following can only move what has not started yet.
-A note held across a change can therefore pull the map a comma away:
-D held from D minor into G major takes G and B a comma down with it rather than sounding a wolf against it.
-With nothing held,
-a progression that could either return or drift returns.
-A chain of major-third relations drifts a diesis per lap,
-as it does in any adaptive just tuning.
+and a note just heard keeps its pitch where the chord allows,
+so a common tone holds still and the map moves around it rather than snapping back.
+D held from D minor into G major takes G and B a comma down with it rather than sounding a wolf against it,
+and the same happens with that D just released.
+I–vi–ii–V–I therefore ends a syntonic comma below where it started,
+and a chain of major-third relations drifts a diesis per lap,
+as in any adaptive just tuning.
+The map returns only when the context asks for it:
+G major straight after C major keeps the G just heard rather than stepping on.
 
 The follow offset adds to the offset parameters and never writes them,
 so it neither fights nor records into their automation.
@@ -156,8 +166,8 @@ Shape edits are made against that same placement.
 This is a prototype.
 The score judges 5-limit consonance only,
 so a septimal interval in a shape always counts as complex.
-Following reads held notes only from the moment Lattice Map started tracking them,
-so notes held since before the mode changed are not weighed.
+Changing the retuning mode clears the context,
+so notes held or heard before Lattice Map was selected are not weighed.
 
 ## Saved identity and geometry
 

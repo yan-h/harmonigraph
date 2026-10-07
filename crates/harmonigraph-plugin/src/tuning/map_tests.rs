@@ -364,7 +364,7 @@ fn a_locate_that_outruns_a_retained_onset_refuses_only_in_lattice_map() {
 }
 
 #[test]
-fn lattice_map_follow_moves_the_map_for_a_chord_and_keeps_held_notes_frozen() {
+fn lattice_map_follow_moves_the_map_for_a_chord_and_drifts_with_what_it_heard() {
     let _scope = crate::test_scope::enter();
     let mut hub = Device::new(false);
     hub.activate();
@@ -390,17 +390,58 @@ fn lattice_map_follow_moves_the_map_for_a_chord_and_keeps_held_notes_frozen() {
         assert_eq!(node(&hub, key), Some(at(drifted, key)));
     }
     assert_eq!(node(&hub, 62), Some(at(down, 62)), "a held note keeps its onset tuning");
-    hub.run(1536, vec![], None);
+    // Everything released, C E G keeps the G just heard rather than snapping
+    // back to the automated place: the map prefers to drift.
+    hub.run(1536, vec![off(1, 62), off(4, 67), off(5, 71)], None);
+    hub.run(2048, vec![on(6, 60), on(7, 64), on(8, 67)], None);
+    let further = LatticePos::new(-3, 0, 0);
+    assert_eq!(node(&hub, 67), Some(at(drifted, 67)), "the released G keeps its pitch");
+    for key in [60, 64, 67] {
+        assert_eq!(node(&hub, key), Some(at(further, key)));
+    }
+    hub.run(2560, vec![], None);
     hub_wrapper(&hub).test_inspect_plugin(|plugin| {
         let view = crate::lattice_maps::view(&plugin.params);
-        assert_eq!(view.followed, drifted, "the editor draws the map where it sounds");
-        assert_eq!(view.playback.map, Some(LatticeMap { position: drifted, ..map }));
+        assert_eq!(view.followed, further, "the editor draws the map where it sounds");
+        assert_eq!(view.playback.map, Some(LatticeMap { position: further, ..map }));
     });
     // Turned off, the next attack lands on the automated map, wolf and all.
     hub.run(
-        2048,
-        vec![off(1, 62), off(4, 67), off(5, 71), parameter("map-follow", 0.0, 0), on(6, 62)],
+        3072,
+        vec![off(6, 60), off(7, 64), off(8, 67), parameter("map-follow", 0.0, 0), on(9, 62)],
         None,
     );
     assert_eq!(node(&hub, 62), Some(map.node(62)), "the map no longer follows");
+}
+
+#[test]
+fn lattice_map_follow_keeps_a_just_released_note_at_its_pitch() {
+    let _scope = crate::test_scope::enter();
+    let mut hub = Device::new(false);
+    hub.activate();
+    install(&hub);
+    let map = LatticeMap::default();
+    let node = |hub: &Device, key| voice(hub, crate::tuning::DIRECT, key).attack_node;
+    hub.run(0, vec![parameter("tuning-engine", 2.0, 0), parameter("map-follow", 2.0, 0)], None);
+    // Bb F C G, a chord a second, each released before the next. Bb major
+    // needs a 10/9 D, so the map steps down a fifth and stays for F and C.
+    let second = 48_000;
+    let chords: [&[i16]; 4] = [&[58, 62, 65], &[65, 69, 72], &[60, 64, 67], &[67, 71, 74]];
+    for (index, chord) in chords.iter().enumerate() {
+        // Each chord's notes share the note id of its own index plus one.
+        let id = index as i32 + 1;
+        let mut input = Vec::new();
+        if index > 0 {
+            input.extend(chords[index - 1].iter().map(|&key| note(id - 1, 0, key, 0, false)));
+        }
+        input.extend(chord.iter().map(|&key| note(id, 0, key, 0, true)));
+        hub.run(index as i64 * second, input, None);
+    }
+    // G B D sounds a wolf where the map stands. Stepping on down would tie with
+    // stepping back, and a drift-first tie-break would go down; the G of the
+    // C major just released is what decides, and it keeps its pitch.
+    let back = LatticeMap { position: LatticePos::ORIGIN, ..map };
+    for key in [67, 71, 74] {
+        assert_eq!(node(&hub, key), Some(back.node(key.into())));
+    }
 }

@@ -1,5 +1,6 @@
 //! Explicit MIDI assignments. Geometry and fixed generator labels never depend
 //! on acoustic proximity, temperament spelling, or earlier notes.
+use crate::policy::ContextPitch;
 use crate::{LatticePos, Tuning};
 
 pub const COORDINATE_LIMIT: i32 = 4096;
@@ -28,20 +29,22 @@ pub enum Follow {
     ThirdsAndFifths,
 }
 
-/// The distinct pitch classes of one attack group (all twelve), and the most
-/// distinct held nodes, a follow decision weighs. Both are fixed so the
-/// decision runs on the audio thread without allocating.
+/// The distinct pitch classes of one attack group a follow decision weighs:
+/// all twelve, fixed so the decision runs on the audio thread without
+/// allocating.
 pub const FOLLOW_GROUP: usize = 12;
-pub const FOLLOW_CONTEXT: usize = 32;
 
 /// What each step costs a follow decision, in the bits [`excess`] counts.
 /// A wolf fifth is about 5.5 bits and a Pythagorean third 4, so a fifths step
 /// pays for itself only against an error of that kind.
 const FIFTH_STEP: f64 = 1.0;
 const THIRD_STEP: f64 = 0.25;
-/// Breaks ties toward the automated position, so a progression that may either
-/// return or drift returns. Small enough never to outweigh a step.
-const PULL: f64 = 0.01;
+/// What a released note weighs against one sounding in the same chord. A note
+/// just heard keeps its pitch when nothing else decides, which is what makes
+/// the map drift rather than snap back; but it must not outvote the chord's own
+/// intervals, or C E G followed by D F A would keep D's wolf to stay level with
+/// the G before it.
+pub const FOLLOW_RELEASED: f64 = 0.5;
 
 /// The simplest 5-limit spelling of each 12-TET class, as (fifths, thirds).
 const SIMPLEST: [(i32, i32); 12] = [
@@ -163,15 +166,18 @@ impl LatticeMap {
     ///
     /// Candidates are one step either way along each axis `follow` allows,
     /// from `current`. Each is scored by the [`excess`] of every interval the
-    /// group's nodes would make among themselves and against `held`, the nodes
-    /// already sounding, whose tuning is frozen; a step adds its own cost, so
-    /// the map stays put unless moving makes the chord simpler. Ties keep the
-    /// current place, then favour the automated one.
+    /// group's nodes would make among themselves and against `context`, each
+    /// interval to a context node weighted as Adaptive weighs it; a step adds
+    /// its own cost, so the map stays put unless moving makes the chord
+    /// simpler. The context is Adaptive's too: the held notes, or with nothing
+    /// held the released ones, so a common tone keeps its pitch and the map
+    /// drifts rather than snapping back. Ties keep the current place, and
+    /// otherwise go to the candidate farther from the automated place.
     pub fn follow(
         &self,
         follow: Follow,
         current: LatticePos,
-        held: &[LatticePos],
+        context: &[ContextPitch],
         keys: &[i64],
     ) -> LatticePos {
         let fifths: &[i32] = match follow {
@@ -183,7 +189,7 @@ impl LatticeMap {
         for key in keys {
             classes[key.rem_euclid(12) as usize] = true;
         }
-        let mut best = (f64::INFINITY, current);
+        let mut best = (f64::INFINITY, f64::NEG_INFINITY, current);
         for &df in fifths {
             for dt in [0, -1, 1] {
                 let offset = current + LatticePos::new(df, dt, 0);
@@ -197,20 +203,23 @@ impl LatticeMap {
                     nodes[count] = map.node(class as i64);
                     count += 1;
                 }
-                let mut cost = FIFTH_STEP * f64::from(df.abs())
-                    + THIRD_STEP * f64::from(dt.abs())
-                    + PULL * height(offset);
+                let mut cost = FIFTH_STEP * f64::from(df.abs()) + THIRD_STEP * f64::from(dt.abs());
                 for (i, &node) in nodes[..count].iter().enumerate() {
                     cost +=
                         nodes[i + 1..count].iter().map(|&other| excess(other - node)).sum::<f64>();
-                    cost += held.iter().map(|&other| excess(other - node)).sum::<f64>();
+                    cost += context
+                        .iter()
+                        .filter_map(|c| c.node.map(|other| c.weight * excess(other - node)))
+                        .sum::<f64>();
                 }
-                if cost < best.0 - 1e-9 {
-                    best = (cost, offset);
+                let distance = height(offset);
+                let tied = (cost - best.0).abs() <= 1e-9;
+                if cost < best.0 - 1e-9 || (tied && distance > best.1) {
+                    best = (cost, distance, offset);
                 }
             }
         }
-        best.1
+        best.2
     }
 
     /// The exact destination determines the replaced slot. No source-selection
@@ -316,14 +325,22 @@ mod tests {
         let flat = map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &a_flat);
         assert_eq!(flat, LatticePos::new(0, -1, 0));
         assert!(pure(&chord(flat, &a_flat)));
-        // G B D after the moved D minor, released: returning and drifting tie,
-        // and the pull toward the automated place returns.
-        assert_eq!(map.follow(both, moved, &[], &[67, 71, 74]), LatticePos::ORIGIN);
-        // With that D (10/9) still held, G B D follows it down a comma instead.
+        // G B D after the moved D minor follows its 10/9 D down a comma rather
+        // than returning, whether that D is still held or was just released,
+        // and with no context at all returning and drifting tie and it drifts.
+        let context = |nodes: Vec<LatticePos>| {
+            nodes
+                .into_iter()
+                .map(|node| ContextPitch { pitch: 0, node: Some(node), weight: 1.0 })
+                .collect::<Vec<_>>()
+        };
+        let drifted = LatticePos::new(-2, 0, 0);
         let held = chord(moved, &[62]);
-        let drifted = map.follow(both, moved, &held, &[67, 71]);
-        assert_eq!(drifted, LatticePos::new(-2, 0, 0));
+        assert_eq!(map.follow(both, moved, &context(held.clone()), &[67, 71]), drifted);
         assert!(pure(&[chord(drifted, &[67, 71]), held].concat()));
+        let released = context(chord(moved, &d_minor));
+        assert_eq!(map.follow(both, moved, &released, &[67, 71, 74]), drifted);
+        assert_eq!(map.follow(both, moved, &[], &[67, 71, 74]), drifted);
     }
 
     #[test]
