@@ -309,7 +309,6 @@ fn frame_controls(ui: &mut egui::Ui, state: &mut PictureState) {
                 ((16, 9), "16:9", "Landscape"),
                 ((9, 16), "9:16", "Portrait"),
                 ((1, 1), "1:1", "Square"),
-                ((4, 5), "4:5", "Portrait"),
                 ((21, 9), "21:9", "Ultrawide"),
             ],
         );

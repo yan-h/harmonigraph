@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn a_size_at_the_frames_own_aspect_is_not_a_mismatch() {
         for short in [1080, 1440, 2160] {
-            for (w, h) in [(16, 9), (9, 16), (1, 1), (4, 5), (21, 9)] {
+            for (w, h) in [(16, 9), (9, 16), (1, 1), (21, 9)] {
                 let f = frame(w, h);
                 let size = f.pixels(short);
                 assert!(size_matches_frame(size, &f), "{w}:{h} at {short} read as a mismatch");
