@@ -139,7 +139,7 @@ mod trigger_tests {
             config.sanitize();
             assert_eq!(config.stop_bar, want, "stop_bar {given}");
         }
-        for (given, want) in [(f64::NAN, 4.0), (-1.0, 0.0), (1e9, 60.0), (0.5, 0.5)] {
+        for (given, want) in [(f64::NAN, 0.0), (-1.0, 0.0), (1e9, 60.0), (0.5, 0.5)] {
             let mut config = super::RenderConfig { tail: given, ..Default::default() };
             config.sanitize();
             assert_eq!(config.tail, want, "tail {given}");
@@ -254,7 +254,7 @@ impl Default for RenderConfig {
             // 720 on the short edge — 1280x720 at the default 16:9 frame,
             // as captured from the DAW on 2026-09-26.
             short_edge: 720,
-            tail: 4.0,
+            tail: 0.0,
             encoder: VideoEncoder::X264,
         }
     }

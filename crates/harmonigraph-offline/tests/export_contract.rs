@@ -3,7 +3,7 @@ use harmonigraph_take::{Header, NoteKind, NoteRecord, Record, RenderTrigger, Wav
 use std::path::Path;
 use std::process::Command;
 
-/// `tail: None` leaves the fresh Tail, so those rows hold the default too.
+/// `tail: None` leaves the fresh Tail, so those rows hold the default (0 s) too.
 fn take(path: &Path, seconds: f64, trigger: RenderTrigger, tail: Option<f64>) {
     let mut appearance = harmonigraph_ui::AppearanceDocument::default();
     appearance.render.trigger = trigger;
@@ -70,12 +70,16 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
     replacement.render.tail = 0.0;
     std::fs::write(&tail_zero, replacement.serialize()).unwrap();
     let tail_zero = tail_zero.to_str().unwrap();
-    // A Re-render's current look on a different trigger, with the fresh Tail.
+    // A Re-render's current look on a different trigger, with a 4 s Tail.
     let fresh = dir.join("fresh.ron");
-    std::fs::write(&fresh, harmonigraph_ui::AppearanceDocument::default().serialize()).unwrap();
+    let mut with_tail = harmonigraph_ui::AppearanceDocument::default();
+    with_tail.render.tail = 4.0;
+    std::fs::write(&fresh, with_tail.serialize()).unwrap();
     let fresh = fresh.to_str().unwrap();
     for (name, seconds, trigger, tail, extra, frames) in [
-        ("default-tail", 0.25, RenderTrigger::OnDisarm, None, vec![], 85),
+        // The fresh Tail is 0: the video ends with the last note.
+        ("default-tail", 0.25, RenderTrigger::OnDisarm, None, vec![], 5),
+        ("recorded-tail", 0.25, RenderTrigger::OnDisarm, Some(4.0), vec![], 85),
         ("explicit-end", 10.0, RenderTrigger::OnDisarm, None, vec!["--end", "1"], 20),
         ("late-start", 0.25, RenderTrigger::OnDisarm, None, vec!["--start", "3", "--end", "4"], 20),
         // A loop-end take ends where its recording, and so its loop, does:
@@ -85,15 +89,15 @@ fn cli_preserves_default_tail_explicit_end_late_start_and_loop_end() {
         ("loop-explicit-tail", 1.0, RenderTrigger::AtLoopEnd, None, vec!["--tail", "4"], 85),
         // An audio export's shape: the last note well before the audio ends.
         // The recorded Tail of 0 ends the video with the audio at 1 s rather
-        // than 4.25 s.
-        ("recorded-tail", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
+        // than at the last note plus a longer Tail.
+        ("recorded-tail-zero", 1.0, RenderTrigger::OnTransportStop, Some(0.0), vec![], 20),
         // A Re-render takes the Tail from the look it draws with, so the same
-        // take recorded with the fresh 4 s still ends with its audio.
+        // take recorded with a 4 s Tail still ends with its audio.
         (
             "replacement-tail",
             1.0,
             RenderTrigger::OnTransportStop,
-            None,
+            Some(4.0),
             vec!["--appearance", tail_zero],
             20,
         ),
@@ -153,7 +157,7 @@ fn cli_finalizes_the_encoder_after_a_render_write_error() {
     let dir = std::env::temp_dir().join(format!("harmonigraph-cli-failure-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("take.take");
-    take(&path, 0.25, RenderTrigger::OnDisarm, None);
+    take(&path, 0.25, RenderTrigger::OnDisarm, Some(4.0));
     for exit in [0, 7] {
         let encoder = dir.join("ffmpeg.sh");
         // Closing stdin forces the >64KiB frame through the broken-pipe path.
