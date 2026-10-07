@@ -62,7 +62,7 @@ OPTIONS:
         --end <SEC>        Stop here.  [default: the take plus its tail]
         --tail <SEC>       Extra time after the last event, for fades and
                            the roll to clear; short audio pads with silence.
-                           [default: the appearance's Tail (4 s fresh); 0
+                           [default: the appearance's Tail (0 s fresh); 0
                            for a take recorded under the Loop end trigger,
                            which ends with its loop]
         --encoder <E>      x264 or hardware. hardware is the machine's
