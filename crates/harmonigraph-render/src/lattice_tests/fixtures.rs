@@ -410,29 +410,6 @@ impl Shooter {
     }
 }
 
-/// Where a frame moves LINEARLY in the Shadow darkness — occlusion fades
-/// rear ink by `1 - d * hidden` — the shot at half a Darkness is the mean of
-/// the shots at its two ends, and anything else stacked on it (the ordinary
-/// shadow multiplied over the faded ink, `(1 - d * f)²`) bows away from it.
-///
-/// Over the pixels whose ends part by more than `moved` codes in some
-/// channel, returns how many there are and the farthest any channel of the
-/// middle shot sits from the mean of the ends, in codes.
-pub(super) fn off_the_midpoint(none: &[u8], half: &[u8], full: &[u8], moved: u8) -> (usize, f32) {
-    let (mut probed, mut worst) = (0, 0.0f32);
-    for ((a, b), c) in none.chunks_exact(4).zip(half.chunks_exact(4)).zip(full.chunks_exact(4)) {
-        if (0..3).all(|k| a[k].abs_diff(c[k]) <= moved) {
-            continue;
-        }
-        probed += 1;
-        for k in 0..3 {
-            let mean = 0.5 * (f32::from(a[k]) + f32::from(c[k]));
-            worst = worst.max((f32::from(b[k]) - mean).abs());
-        }
-    }
-    (probed, worst)
-}
-
 /// How many pixels of two shots of one size differ at all.
 pub(super) fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
     a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count()

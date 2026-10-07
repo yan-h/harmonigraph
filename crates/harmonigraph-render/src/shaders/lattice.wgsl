@@ -216,8 +216,10 @@ const INK_STRIP_N: u32 = 64u;
 // rather than a share of each item.
 //
 // Zero is the geometry group off — its nodes pack no cells and each multiplies
-// by 1. The CPU also packs 0 here for a group at Darkness 0, which casts
-// nothing either, so its quads are not grown for a shadow no draw spends.
+// by 1. The CPU also packs 0 here for a group at Darkness 0, which casts no
+// visible shadow, so its quads are not grown for a shadow no draw spends. Its
+// cells may still be packed for the Hide behind bar (`node_occlusion`), which
+// is read under a receiver's own ink and needs no quad grown for it.
 // NOT zeroed with the glow: `u.geometry_shadow` is packed whatever `glow` says,
 // a shadow being cast with no light in the picture at all.
 fn glow_shadow() -> f32 {
@@ -225,17 +227,19 @@ fn glow_shadow() -> f32 {
 }
 
 // The amplitude of a node's shadow. Width and falloff shape the shared mask;
-// darkness scales it without broadening its tail. At 0 the CPU packs no cell.
+// darkness scales it without broadening its tail. At 0 every draw multiplies
+// by exactly 1, even where the CPU packs a cell for `node_occlusion` alone.
 fn glow_shadow_depth() -> f32 {
     return clamp(u.geometry_shadow.depth, 0.0, 1.0);
 }
 
-// How strongly a node in front hides the ink of the nodes behind it: the
-// occlusion switch scaled by the same Darkness as the visible shadow, so 1%
-// hides next to nothing and 0 is a continuous end rather than a jump (#1288).
-// Names receive the same product through `node_occlusion` in text.wgsl.
+// How strongly a node in front hides the ink of the nodes behind it: the Hide
+// behind bar (`ViewConfig::hide_behind`), independent of the visible shadow's
+// Darkness. Spent linearly, so 1% hides next to nothing and 0 is a continuous
+// end rather than a jump (#1288). Names receive the same strength through
+// `node_occlusion` in text.wgsl.
 fn node_occlusion() -> f32 {
-    return clamp(u.geometry_shadow.occlusion, 0.0, 1.0) * glow_shadow_depth();
+    return clamp(u.geometry_shadow.occlusion, 0.0, 1.0);
 }
 
 // How far this frame's renderer reaches past a caster's ink in the picture's own
@@ -306,11 +310,11 @@ fn shadow_through(who: f32, points: vec2<f32>, level: f32, depth: f32) -> f32 {
 }
 
 // Node shadows interpret the field as coverage, so changing darkness cannot
-// broaden the normalized shadow profile. Gaussian receiver occlusion spends
-// that field separately (`node_visibility`), scaled by the same darkness
-// (`node_occlusion`). Like every other
-// shadow, it leaves the bright pass's copy whole, so the Shadow darkness bar
-// is the whole of how dark it lands.
+// broaden the normalized shadow profile. Receiver occlusion spends that field
+// separately (`node_visibility`), at the Hide behind bar's strength
+// (`node_occlusion`) rather than this darkness. Like every other shadow, it
+// leaves the bright pass's copy whole, so the Shadow darkness bar is the
+// whole of how dark it lands.
 fn node_shadow_through(who: f32, points: vec2<f32>, level: f32) -> f32 {
     if level <= 0.0 {
         return 1.0;
@@ -2888,10 +2892,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 // blended. The ink component then takes only foreground ink coverage, while
 // the other component still takes every ordinary shadow. This restores the
 // background under fading ink without applying a second darkening to it.
+//
+// Whatever the Hide behind bar says, at 0 included: the ordinary shadow never
+// darkens the ink of a node behind its caster, so how much of that ink a
+// front node takes is the bar's alone. (The prototype's reference path, which
+// let the shadow's coverage into this component, is gone with its switch.)
 fn node_split(paint: Painted, shadow_alpha: f32) -> SplitOut {
-    // Zero keeps the pre-prototype reference available to GPU A/B probes.
-    let alpha = mix(shadow_alpha, paint.ink_alpha, clamp(u.geometry_shadow.occlusion, 0.0, 1.0));
-    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
+    return SplitOut(vec4<f32>(0.0, 0.0, 0.0, shadow_alpha), vec4<f32>(paint.rgb, paint.ink_alpha), vec4<f32>(paint.ink_alpha, 0.0, 0.0, paint.ink_alpha));
 }
 
 @fragment

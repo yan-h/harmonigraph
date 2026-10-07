@@ -282,7 +282,8 @@ pub(crate) struct TextUniforms {
     /// depth and this size sit together so the struct needs no pad of its own.
     pub(crate) shadow_atlas_size: [f32; 2],
     /// Foreground lattice nodes fade label coverage by this strength: the
-    /// occlusion switch times the geometry group's Darkness.
+    /// Hide behind bar (`ViewConfig::hide_behind`), whatever the geometry
+    /// group's Darkness.
     pub(crate) node_occlusion: f32,
     pub(crate) _pad: [f32; 3],
 }

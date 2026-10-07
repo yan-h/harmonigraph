@@ -1136,8 +1136,9 @@ fn a_subfloor_mark_does_not_mask_a_gaussian_shadow_before_it_is_visible() {
 /// The vacuity the whole atlas rests on, asked of a frame carrying one of
 /// everything that casts: a node, a cross and a name. A width of 0 packs no
 /// cell because σ is 0, and a depth of 0 packs none because the multiply would
-/// be 1 everywhere; the two are different tests in `prepare` and have to reach
-/// the same picture. The pair at a width the bar does open is the other half —
+/// be 1 everywhere — with the Hide behind bar at 0 too, since it spends the
+/// node group's field on its own; the two are different tests in `prepare` and
+/// have to reach the same picture. The pair at a width the bar does open is the other half —
 /// a frame that allocates and does move pixels, so the equalities above are
 /// not two ways of drawing nothing.
 #[test]
@@ -1148,6 +1149,7 @@ fn neither_shadow_bar_at_its_bottom_casts_or_allocates() {
     shooter.clear = over_ground();
     let scene_of = |shadow: f32, depth: f32| -> Scene {
         let mut scene = on_ground(shadow, depth);
+        scene.view.hide_behind = 0.0;
         scene.pluses = vec![standalone_marker(
             &mut scene.nodes,
             glam::Vec3::new(1.6, 0.0, 0.0),

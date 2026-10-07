@@ -121,6 +121,9 @@ pub const GLOW_BLEND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 /// Shared bar and load range for [`ViewConfig::glow_accumulation`].
 pub const GLOW_ACCUMULATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
+/// Shared bar and load range for [`ViewConfig::hide_behind`].
+pub const HIDE_BEHIND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
+
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -833,6 +836,25 @@ pub struct ViewConfig {
     /// light in the picture at all, onto the ground and onto whatever ink
     /// stands behind it.
     pub shadow: ShadowSettings,
+    /// How much a lattice node in front hides the ink of the nodes behind it,
+    /// and their names, 0..=1: the "Hide behind" bar, beside the ring and mark
+    /// shadows' Darkness.
+    ///
+    /// A bar of its own and not the Darkness, which it followed after #1288:
+    /// a shadow dialled light for the ground left a ring in front fading only
+    /// that share of the ring behind it. The two now part, so a light shadow
+    /// can stand beside a front node that still hides what it covers.
+    ///
+    /// Spent on the caster field the geometry group's Width, kernel and spread
+    /// shape (`node_visibility` in common.wgsl), linearly, so 0 is no hiding
+    /// at all and a hundredth hides next to nothing — no jump at either end.
+    /// The field is packed whenever this or the Darkness is above 0, so a node
+    /// hides what is behind it with no visible shadow at all. Width 0 is still
+    /// the whole group off, this included: the field IS the shadow's shape.
+    ///
+    /// Here rather than on [`ShadowStyle`](crate::ShadowStyle), which all four
+    /// groups share and where it would mean nothing for three of them.
+    pub hide_behind: f32,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -1230,6 +1252,8 @@ impl ViewConfig {
             style.falloff = finite_or(style.falloff, fresh.falloff);
         }
         self.shadow = self.shadow.clamped();
+        self.hide_behind = finite_or(self.hide_behind, fresh.hide_behind)
+            .clamp(*HIDE_BEHIND_RANGE.start(), *HIDE_BEHIND_RANGE.end());
         // The SHARES — of the light a lit slice stands in, of the light's own
         // peak, of a whole turn — so their range is the unit interval.
         self.glow_wash = finite_or(self.glow_wash, fresh.glow_wash)
@@ -1499,6 +1523,9 @@ impl Default for ViewConfig {
             // ShadowSettings`, that being the one source of a persisted
             // group's fallback.
             shadow: ShadowSettings::default(),
+            // A node in front hides all of what its field covers behind it,
+            // whatever its visible shadow's Darkness.
+            hide_behind: 1.0,
             // About a third of the field, where the picture opened on the
             // whole of it: a sounding slice is pulled back out of its own halo
             // and reads as ink rather than as light, while the resting grey
