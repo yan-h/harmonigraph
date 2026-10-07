@@ -7,9 +7,9 @@ use super::section;
 use crate::widgets::{choice_row, ValueBar};
 use crate::AppearanceDocument;
 use harmonigraph_scene::{
-    AtmosphereSettings, GlowCurve, ShadowKernel, ShadowStyle, ViewConfig, BREATH_SPEED_MAX,
-    BREATH_SPEED_MIN, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX, GLOW_CURVE_SHAPE_MIN,
-    GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
+    AtmosphereSettings, GlowCurve, OcclusionTestBed, ShadowKernel, ShadowStyle, ViewConfig,
+    BREATH_SPEED_MAX, BREATH_SPEED_MIN, GLOW_BALLISTICS_MAX, GLOW_CURVE_SHAPE_MAX,
+    GLOW_CURVE_SHAPE_MIN, GLOW_REACH_MAX, GLOW_SHADOW_MAX, GLOW_STRENGTH_MAX, SPECTRAL_SHADOW_MAX,
 };
 use harmonigraph_scene::{
     GLOW_ACCUMULATION_RANGE, GLOW_BLEND_RANGE, GLOW_WASH_RANGE, HIDE_BEHIND_RANGE,
@@ -20,15 +20,18 @@ use harmonigraph_scene::{
 /// editable with glow off: they also darken the picture behind ink.
 pub(super) fn lattice_shadows(ui: &mut egui::Ui, view: &mut ViewConfig) {
     let shadow = &mut view.shadow;
-    // Hide behind sits with the ring and mark shadows, by their Darkness: it
-    // spends the same field that group's Width shapes.
+    // Hide behind sits with the ring and mark shadows, by their Darkness, with
+    // the occlusion test bed under it. It spends both groups' fields — a ring
+    // hides through its own group's Width, a cross or a name through the
+    // notation's — so it is greyed only once neither group packs one.
+    let fielded = shadow.lattice_geometry.width > 0.0 || shadow.lattice_text.width > 0.0;
     shadow_group(
         ui,
         "Ring and mark shadows",
         "Audio rings, MIDI rings, melody and bass marks",
         true,
         &mut shadow.lattice_geometry,
-        Some(&mut view.hide_behind),
+        Some((&mut view.hide_behind, &mut view.occlusion_test, fielded)),
     );
     shadow_group(
         ui,
@@ -198,13 +201,36 @@ pub(super) fn glow(ui: &mut egui::Ui, view: &mut ViewConfig) {
     });
 }
 
+/// The occlusion test bed's six switches under the Hide behind bar: which
+/// kinds of lattice item hide what stands behind them and which can be hidden.
+/// A test bed for deciding the rule live, never saved
+/// (`ViewConfig::occlusion_test`).
+fn occlusion_test_bed(ui: &mut egui::Ui, bed: &mut OcclusionTestBed) {
+    crate::widgets::label(ui, "Occlusion test bed").on_hover_text(
+        "Trying out which items hide what stands behind them and which can be hidden. Not \
+         saved: a reopened project starts from the defaults again.",
+    );
+    // One under another, each named by what it sets, which is what fits the
+    // narrowest settings column.
+    for (on, name) in [
+        (&mut bed.hides.rings, "Rings hide"),
+        (&mut bed.hides.names, "Names hide"),
+        (&mut bed.hides.crosses, "Crosses hide"),
+        (&mut bed.hidden.rings, "Rings can be hidden"),
+        (&mut bed.hidden.names, "Names can be hidden"),
+        (&mut bed.hidden.crosses, "Crosses can be hidden"),
+    ] {
+        crate::widgets::checkbox(ui, on, name);
+    }
+}
+
 fn shadow_group(
     ui: &mut egui::Ui,
     name: &str,
     casters: &str,
     lattice: bool,
     style: &mut ShadowStyle,
-    hide_behind: Option<&mut f32>,
+    hide_behind: Option<(&mut f32, &mut OcclusionTestBed, bool)>,
 ) {
     crate::widgets::label(ui, egui::RichText::new(name).strong()).on_hover_text(casters);
     choice_row(ui, "Shadow shape", &mut style.kernel, &[
@@ -215,17 +241,20 @@ fn shadow_group(
     crate::widgets::shadow(ui, style, width_max, lattice);
     // Under the diagram rather than in its value column: the preview draws the
     // visible shadow, which this does not move, and the column holds three rows.
-    // Greyed at Width 0, which packs no field for it to spend.
-    if let Some(hide_behind) = hide_behind {
-        ui.add_enabled_ui(style.width > 0.0, |ui| {
+    // Greyed while no group has a field for it to spend (`fielded`).
+    if let Some((hide_behind, bed, fielded)) = hide_behind {
+        ui.add_enabled_ui(fielded, |ui| {
             ValueBar::new(hide_behind, HIDE_BEHIND_RANGE, "Hide behind")
                 .percent()
                 .show(ui)
                 .on_hover_text(
-                    "How much a node in front hides the rings, marks and name of a node behind \
-                     it, whatever the shadow's Darkness. 0% hides nothing; a Width of 0 turns \
-                     it off with the shadow.",
+                    "How much whatever stands in front hides what stands behind it, whatever \
+                     either shadow's Darkness: which of the lattice's rings, names and crosses \
+                     hide and which are hidden is the test bed's below. Each hides through its \
+                     own shadow's shape. 0% hides nothing; a shadow Width of 0 turns it off for \
+                     that shadow's items.",
                 );
+            occlusion_test_bed(ui, bed);
         });
     }
 }
