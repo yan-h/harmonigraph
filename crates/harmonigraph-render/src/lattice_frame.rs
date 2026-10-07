@@ -164,7 +164,7 @@ impl LatticeCallback {
         // instance (`fs_ink_strip`, `vs_glow_splat`, `vs_source_shadow`). A node
         // with no INK left — its Fade run out while its light still releases —
         // paints nothing in the scene pass and fills its cell with nothing, so
-        // its shadow, its scene draw and its occlusion of what stands behind it
+        // its shadow, its scene draw and its occlusion of the nodes behind it
         // are all exactly nothing: the walk below gives it none of the three.
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
@@ -186,10 +186,9 @@ impl LatticeCallback {
             debug_assert!(plus_of[plus.node].is_none(), "one marker per node");
             plus_of[plus.node] = Some(p);
         }
-        let to_plus = |d: &harmonigraph_scene::PlusInstance, caster: u32| GpuPlus {
+        let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
-            caster,
         };
         // Where each name's glyphs sit in what the caller handed over, per
         // node, so the walk below can put a name at its own node's place in the
@@ -264,33 +263,26 @@ impl LatticeCallback {
         // is the group's off switch all the way down — no cell, no atlas, no
         // taps.
         //
-        // Both groups can spend their field twice: on its visible shadow (its
-        // Darkness) and on hiding the ink of whatever stands behind it — a
-        // node's rings and marks through the geometry group's, a name or a
-        // resting cross through the text group's — at the one Hide behind bar
-        // (`ink_visibility`), for each kind of item the test bed lets hide
-        // (`ViewConfig::occlusion_test`). Either use packs it, so a caster at
-        // Darkness 0 still hides what it covers. Width 0 packs nothing for
-        // either: the field occlusion spends IS the shadow's shape, and a
-        // field of no width would hide only what the caster's own ink covers
+        // The geometry group spends its field twice: on its visible shadow
+        // (its Darkness) and on hiding the ink of nodes behind it (the Hide
+        // behind bar, `node_visibility`). Either above 0 packs it, so a node
+        // at Darkness 0 still hides what it covers. Width 0 packs nothing
+        // for either: the field occlusion spends IS the shadow's shape, and
+        // a field of no width would hide only what the node's own ink covers
         // (all of it while that ink is opaque).
         let geometry = scene.view.shadow.lattice_geometry;
         let text = scene.view.shadow.lattice_text;
         let hide_behind = scene.view.hide_behind.clamp(0.0, 1.0);
-        let bed = scene.view.occlusion_test;
-        // Which kinds of item hide anything this frame: none at all at 0.
-        let hides = |kind: bool| kind && hide_behind > 0.0;
-        let (rings_hide, names_hide, crosses_hide) =
-            (hides(bed.hides.rings), hides(bed.hides.names), hides(bed.hides.crosses));
-        let sigma_of = |style: harmonigraph_scene::ShadowStyle, hiding: bool| {
-            if style.width > 0.0 && (style.depth > 0.0 || hiding) {
+        let sigma_of = |style: harmonigraph_scene::ShadowStyle, packs: bool| {
+            if packs {
                 shadow::sigma_points(style.width, node_points)
             } else {
                 0.0
             }
         };
-        let geometry_sigma = sigma_of(geometry, rings_hide);
-        let text_sigma = sigma_of(text, names_hide || crosses_hide);
+        let geometry_packs = geometry.width > 0.0 && (geometry.depth > 0.0 || hide_behind > 0.0);
+        let geometry_sigma = sigma_of(geometry, geometry_packs);
+        let text_sigma = sigma_of(text, text.casts());
         // How far the GEOMETRY group's shadow reaches past its own ink, in
         // points — what a node's box is clipped to the pane by.
         let geometry_spread = geometry.gaussian_spread_points(geometry_sigma);
@@ -309,7 +301,7 @@ impl LatticeCallback {
             };
             // A node shipped for its light alone would fill its cell with
             // nothing: level 0 packs no cell and keeps it out of the
-            // occluders (`shadow::pack`, `shadow::occluders`).
+            // occluders (`shadow::pack`, `shadow::node_occluders`).
             if !inked {
                 return empty;
             }
@@ -391,14 +383,11 @@ impl LatticeCallback {
         let mut glyphs = Vec::with_capacity(labels.glyphs.len());
         let mut casters: Vec<shadow::Caster> = Vec::new();
         let mut node_cells: Vec<u32> = Vec::with_capacity(order.len());
-        let mut crosses: Vec<shadow::Cross> = Vec::with_capacity(scene.pluses.len());
         // The marker field's caster, ahead of everything the walk pushes. Its
         // style is the TEXT group's, which is what a marker turns into and out
         // of as a name appears. A Gaussian gives it one shared cell centred on
-        // a crossing. A distance evaluates the exact field in `plus_paint` for
-        // the cross's own shadow, and packs a cell of the evaluated profile
-        // only while the crosses hide what is behind them, which is where that
-        // field is read away from a cross's own draw (`shadow::place_crosses`).
+        // a crossing; a distance keeps only the profile metadata and evaluates
+        // the exact field in `plus_paint`.
         if marker_arm_points > 0.0 {
             let a = marker_arm_points;
             casters.push(shadow::Caster {
@@ -408,33 +397,10 @@ impl LatticeCallback {
                 kernel: text.kernel,
                 falloff: text.falloff,
                 spread_points: text_spread,
-                direct_distance: !crosses_hide,
-                distance_kind: if crosses_hide {
-                    crate::shadow::DistanceKind::Coverage
-                } else {
-                    crate::shadow::DistanceKind::Signed
-                },
+                direct_distance: true,
+                distance_kind: crate::shadow::DistanceKind::Signed,
             });
         }
-        // An entry for each cross while crosses hide or can be hidden, written
-        // after packing from the field's (`shadow::place_crosses`): the walk
-        // holds its place in the order and packs no cell for it.
-        let cross_entries = crosses_hide || bed.hidden.crosses;
-        let cross_entry = shadow::Caster {
-            rect: [0.0; 4],
-            level: 0.0,
-            sigma_points: 0.0,
-            kernel: text.kernel,
-            falloff: text.falloff,
-            spread_points: 0.0,
-            direct_distance: false,
-            distance_kind: crate::shadow::DistanceKind::Coverage,
-        };
-        // For each caster, the last caster standing at its own place in the
-        // walk (`shadow::rank_places`): the field is a place of its own.
-        let mut last_of_place: Vec<u32> = vec![0; casters.len()];
-        // The casters that hide what stands behind them (`shadow::occluders`).
-        let mut hiders: Vec<u32> = Vec::new();
         let mut draws: Vec<Draw> = Vec::with_capacity(order.len());
         let breathes = scene.glow_timing.is_some()
             && scene.view.glow_reach > 0.0
@@ -446,27 +412,9 @@ impl LatticeCallback {
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
-            //
-            // Its own entry among the casters, first at its place, so it can
-            // hide what stands behind it and be hidden by what stands in front.
             if let Some(p) = plus_of[i] {
-                let plus = &scene.pluses[p];
-                let at = casters.len() as u32;
                 push_plus(&mut draws, pluses.len() as u32);
-                // No entry, no place: a cross that is neither hidden nor hides
-                // never reads one, and names the field's.
-                pluses.push(to_plus(plus, if cross_entries { at } else { 0 }));
-                if cross_entries {
-                    casters.push(cross_entry);
-                }
-                let centre = to_points(plus.pos);
-                let tip = to_points(plus.pos + right * plus.radius);
-                if let (true, Some(centre), Some(tip)) = (crosses_hide, centre, tip) {
-                    let arm_points = glam::Vec2::from(tip).distance(glam::Vec2::from(centre));
-                    let level = plus.strength;
-                    crosses.push(shadow::Cross { at, centre, arm_points, level });
-                    hiders.push(at);
-                }
+                pluses.push(to_plus(&scene.pluses[p]));
             }
             if ships {
                 // A node shipped for its light alone draws nothing here.
@@ -477,9 +425,6 @@ impl LatticeCallback {
                 // is a blur of, and what it multiplies the frame under it by.
                 // Every instance keeps its box, whether or not one is packed.
                 node_cells.push(casters.len() as u32);
-                if rings_hide && inked {
-                    hiders.push(casters.len() as u32);
-                }
                 casters.push(node_caster(&scene.nodes[i], &instance, inked));
                 // Display modulation is separate from the ink-history level and coefficient.
                 if breathes && instance.glow[0] > 0.0 {
@@ -499,9 +444,6 @@ impl LatticeCallback {
                 let run = &labels.glyphs[start as usize..(start + count) as usize];
                 glyphs.extend_from_slice(run);
                 draws.push(Draw::Label(at, at + count, casters.len() as u32));
-                if names_hide {
-                    hiders.push(casters.len() as u32);
-                }
                 casters.push(shadow::caster_of(
                     run,
                     text_sigma,
@@ -510,10 +452,6 @@ impl LatticeCallback {
                     text_spread,
                 ));
             }
-            // Whatever this position pushed is one place: its cross, its node
-            // and its name never hide one another.
-            let last = casters.len().saturating_sub(1) as u32;
-            last_of_place.resize(casters.len(), last);
         }
         LatticeCallback {
             pipeline_cache: None,
@@ -532,10 +470,6 @@ impl LatticeCallback {
             glyphs,
             casters,
             node_cells,
-            crosses,
-            last_of_place,
-            hiders,
-            name_occlusion: if bed.hidden.names { hide_behind } else { 0.0 },
             shadow: scene.view.shadow,
             marker_arm_points,
             draws,
@@ -642,14 +576,14 @@ impl LatticeCallback {
                     reach_sigmas: geometry.kernel.reach_sigmas()
                         + if geometry.casts() { geometry.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: geometry.depth,
-                    occlusion: if bed.hidden.rings { hide_behind } else { 0.0 },
+                    occlusion: hide_behind,
                 },
                 marker_shadow: ShadowParams {
                     width: if text.casts() { text.width } else { 0.0 },
                     reach_sigmas: text.kernel.reach_sigmas()
                         + if text.casts() { text.gaussian_spread_points(1.0) } else { 0.0 },
                     depth: text.depth,
-                    occlusion: if bed.hidden.crosses { hide_behind } else { 0.0 },
+                    occlusion: 0.0,
                 },
                 shadow_target: ShadowTargetParams {
                     pane_points: Float2([size_points.x, size_points.y]),

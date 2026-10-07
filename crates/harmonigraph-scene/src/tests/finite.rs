@@ -150,8 +150,6 @@ fn poisoned_view() -> ViewConfig {
             spectral_text: shadow,
         },
         hide_behind: nan,
-        // Switches, with no number in them for a NaN to poison.
-        occlusion_test: crate::OcclusionTestBed::default(),
         glow_wash: nan,
         glow_blend: nan,
         glow_accumulation: nan,

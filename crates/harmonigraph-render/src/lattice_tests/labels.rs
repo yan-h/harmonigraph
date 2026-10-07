@@ -1507,7 +1507,7 @@ fn a_foreground_node_occludes_rear_text_without_self_occlusion_or_extra_shadow()
             let labels =
                 owner.map_or_else(LatticeLabels::default, |node| names(vec![(node, vec![glyph])]));
             shooter.draw_modified(scene, labels, |cb| {
-                cb.name_occlusion = hide_behind;
+                cb.uniforms.geometry_shadow.occlusion = hide_behind;
                 cb.uniforms.geometry_shadow.depth = depth;
             })
         };

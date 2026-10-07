@@ -10,8 +10,8 @@ struct PreparedFrame {
     glow: bool,
     has_light: bool,
     packed: shadow::Packed,
-    /// Which casters can cover each part of the pane (`shadow::occluders`),
-    /// for the receivers' occlusion.
+    /// Which node casters can cover each part of the pane
+    /// (`shadow::node_occluders`), for the receivers' occlusion.
     occluders: Vec<u32>,
     shadow_wanted: Option<[u32; 2]>,
     blurs: bool,
@@ -450,10 +450,10 @@ impl LatticeCallback {
                         // The atlas the cells are drawn into, which may be
                         // larger than this frame's layout (`ensure_shadow`).
                         shadow_atlas_size: atlas_size,
-                        // How strongly whatever stands in front of a name
-                        // hides it: the Hide behind bar where the test bed
-                        // lets names be hidden (`name_occlusion`).
-                        hide_behind: self.name_occlusion.clamp(0.0, 1.0),
+                        // The lattice's own `node_occlusion`: the Hide behind
+                        // bar, which a name takes from the node in front of it
+                        // exactly as a ring does.
+                        node_occlusion: self.uniforms.geometry_shadow.occlusion.clamp(0.0, 1.0),
                         _pad: [0.0; 3],
                     }),
                 );
@@ -499,22 +499,13 @@ impl LatticeCallback {
             uniforms.shadow_target.atlas_texels = Float2(atlas.size.map(|v| v as f32));
         }
         if let Some(cell) = packed.boxes.first().filter(|_| self.marker_arm_points > 0.0) {
-            // An evaluated distance profile's box carries its σ in points and
-            // its falloff where a Gaussian's carries texels and its spread
-            // (`shadow::ShadowBox`).
-            let profile = cell.who[1] >= 0.5 * shadow::DISTANCE_KIND;
             uniforms.marker_cell = MarkerCellParams {
                 rect: Float4(cell.rect),
                 cell: Float4(cell.cell),
                 points_to_texels: cell.cell_map[0],
                 aa_scale: cell.cell_map[3],
                 arm_points: self.marker_arm_points,
-                spread_points: if profile { 0.0 } else { cell.who[3] },
-                field: Float4(if profile {
-                    [cell.who[1], cell.cell_map[1], cell.who[3], 0.0]
-                } else {
-                    [0.0; 4]
-                }),
+                spread_points: cell.who[3],
             };
         }
         queue.write_buffer(&pane.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -553,33 +544,27 @@ impl LatticeCallback {
         let glow = self.glow_draws();
         let has_light = glow && self.instances.iter().any(|node| node.glow[0] > 0.0);
         // Every caster's cell, packed for this frame (`shadow::pack`): the
-        // markers' one shared cross, one per node and one per name, each at
-        // the resolution its own σ asks for; a resting cross's own entry takes
-        // none. A caster whose group packs nothing (Width 0, or Darkness and
-        // Hide behind both 0: `sigma_of` in `from_scene`) arrived with a σ of
-        // nothing and takes none, so a frame with every group shut allocates
-        // no atlas and every cell reader multiplies by exactly 1.
+        // Gaussian's one marker cross, one per node and one per name, each at
+        // the resolution its own σ asks for. A caster whose group packs
+        // nothing (either bar at the bottom, or for the node group Width 0 or
+        // Darkness and Hide behind both 0: `geometry_packs`) arrived with a σ
+        // of nothing and takes none, so a frame with every group shut allocates
+        // no atlas and every cell reader
+        // multiplies by exactly 1.
         //
         // The scale handed over is the TARGET's pixels per pane point — the
         // device's times the render scale, which is the term #496 found missing
         // from the field's reach.
         let ppp = screen_descriptor.pixels_per_point.max(f32::EPSILON);
-        let mut packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
-        // Every cross reads the markers' one field, so its entry is written
-        // once that field has its cell; then each caster learns its place.
-        shadow::place_crosses(&mut packed.casters, 0, self.marker_arm_points, &self.crosses);
-        shadow::rank_places(&mut packed.casters, &self.last_of_place);
+        let packed = shadow::pack(&self.casters, ppp * self.render_scale, max_dim);
         // Every receiver, including a label with its own shadow disabled, is
-        // hidden by the hiding casters past its own place in painter order
-        // whose box holds the point (`hiders`, the kinds the test bed lets
-        // hide). A position's cross, node and name are one place, so none of
-        // them hides another.
-        let occluders = shadow::occluders(&packed.casters, &self.hiders);
+        // occluded by the node casters after it in painter order whose box
+        // holds the point. Names immediately follow their owner, so that owner
+        // can never occlude its own text.
+        let occluders = shadow::node_occluders(&packed.casters, &self.node_cells);
         // A placeholder box preserves the caster index for a distance field
-        // evaluated directly by its scene draw, and for each resting cross.
-        // Only a real cell asks for the atlas; a markers-only Distance frame
-        // therefore allocates none while Hide behind is at 0, where nothing
-        // reads the markers' field away from a cross's own draw.
+        // evaluated directly by its scene draw. Only a real cell asks for the
+        // atlas; a markers-only Distance frame therefore allocates no atlas.
         let has_shadow_cells = packed.boxes.iter().any(|b| b.cell[2] > 0.0 && b.cell[3] > 0.0);
         let shadow_wanted = has_shadow_cells.then_some(packed.size);
         // The blur chain runs, and its intermediate is held, when some cell in
@@ -915,12 +900,8 @@ impl LatticeCallback {
                     // One instance at the caster's own index, which is how
                     // the draw finds its shadow: `vs_shadow_box` reads the
                     // quad and the level out of the array at group 3 and
-                    // binds no vertex buffer at all. None at Darkness 0,
-                    // where the name's field is packed for the Hide behind
-                    // bar alone and its box would multiply by exactly 1.
-                    let casts = self.shadow.lattice_text.casts();
-                    if let Some(atlas) = atlas.filter(|_| casts && (l as usize) < pane.caster_count)
-                    {
+                    // binds no vertex buffer at all.
+                    if let Some(atlas) = atlas.filter(|_| (l as usize) < pane.caster_count) {
                         pass.set_bind_group(2, atlas.read(), &[]);
                         pass.set_bind_group(3, &pane.caster_bind_group, &[]);
                         pass.set_pipeline(&scene.shadow_box);

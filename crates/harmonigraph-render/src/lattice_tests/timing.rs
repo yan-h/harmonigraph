@@ -22,8 +22,6 @@
 //! cargo test -p harmonigraph-render -- --ignored --nocapture a_frame_of_names
 //! ```
 //! `PROBE_OCCLUSION=0` compares the same shader with receiver fading disabled.
-//! `PROBE_OCCLUSION_ALL=1` turns every switch of the occlusion test bed on:
-//! every node, name and resting cross hides and is hidden.
 //! `PROBE_TIMER=1` arms the production preparation timer and reports its samples.
 //! Compare with `PROBE_TIMER=0` to measure its overhead with no overlay drawn.
 //! `PROBE_OCTAVES=1` bounds the cost of the default seven-slot shader walks.
@@ -381,11 +379,6 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
     let occlusion = std::env::var("PROBE_OCCLUSION")
         .map(|value| value.parse::<f32>().expect("PROBE_OCCLUSION is a strength"))
         .unwrap_or(1.0);
-    if std::env::var("PROBE_OCCLUSION_ALL").as_deref() == Ok("1") {
-        let all = harmonigraph_scene::LatticeItems { rings: true, names: true, crosses: true };
-        scene.view.occlusion_test =
-            harmonigraph_scene::OcclusionTestBed { hides: all, hidden: all };
-    }
     let instance = wgpu::Instance::default();
     let Ok(adapter) =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -539,11 +532,9 @@ fn time_a_frame_of_names(mut scene: Scene, what: &str) {
                 .iter()
                 .filter(|c| c.level > 0.0 && c.rect[2] > 0.0 && c.rect[3] > 0.0)
                 .count();
-            eprintln!("{what}: target {target:?}, {} shipped instances, {lit} lit halo instances, {landed} casters landed, {} crosses, {} hiding", cb.instances.len(), cb.pluses.len(), cb.hiders.len());
+            eprintln!("{what}: target {target:?}, {} shipped instances, {lit} lit halo instances, {landed} casters landed", cb.instances.len());
         }
-        cb.uniforms.geometry_shadow.occlusion *= occlusion;
-        cb.uniforms.marker_shadow.occlusion *= occlusion;
-        cb.name_occlusion *= occlusion;
+        cb.uniforms.geometry_shadow.occlusion = occlusion;
         let mut encoder = device.create_command_encoder(&Default::default());
         drop(stamped_pass(&mut encoder, &stamp_view, Some(0), None));
         if let Some(stats) = &stats {

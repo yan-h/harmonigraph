@@ -168,11 +168,10 @@ uniform_group! {
         width: f32,
         reach_sigmas: f32,
         depth: f32,
-        /// How strongly this row's ink is hidden by what stands in front of
-        /// it, 0..=1: the Hide behind bar (`ViewConfig::hide_behind`) where the
-        /// occlusion test bed lets the row's items be hidden — a node's rings
-        /// and marks for the geometry row, a resting cross for the marker row —
-        /// and 0 otherwise. A name's rides in the text pipeline's uniforms.
+        /// How much a caster of this group hides the ink of the lattice nodes
+        /// and names behind it, 0..=1: the Hide behind bar
+        /// (`ViewConfig::hide_behind`) for the geometry group, and 0 for the
+        /// markers, which hide nothing.
         occlusion: f32,
     }
 }
@@ -184,21 +183,14 @@ uniform_group! {
     }
 }
 uniform_group! {
-    /// One cell serves all resting markers: a Gaussian's coverage, or, while
-    /// the crosses hide what stands behind them, a distance's evaluated
-    /// profile. A distance leaves it empty otherwise.
+    /// One Gaussian cell serves all resting markers. Distance shadows leave it empty.
     struct MarkerCellParams {
         rect: Float4,
         cell: Float4,
         points_to_texels: f32,
         aa_scale: f32,
         arm_points: f32,
-        /// A Gaussian's source expansion in points; 0 for a distance.
         spread_points: f32,
-        /// What the cell holds and the profile it is evaluated with: x is 0
-        /// for blurred coverage and `shadow::DISTANCE_COVERAGE_KIND` for an
-        /// evaluated distance profile, y its σ in points, z its falloff. w is 0.
-        field: Float4,
     }
 }
 uniform_group! {

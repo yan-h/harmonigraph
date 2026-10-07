@@ -128,11 +128,11 @@ const DISTANCE_COVERAGE_KIND: f32 = 2.0;
 // array they all index is also one place the shape is written down.
 @group(3) @binding(0) var<storage, read> shadow_casters: array<ShadowCaster>;
 
-// Which casters can cover each part of the pane (`shadow::occluders`):
+// Which node casters can cover each part of the pane (`shadow::node_occluders`):
 // columns, rows, the grid's origin in points and its bins per point as f32
 // bits, then `columns * rows + 1` absolute offsets, then each bin's casters in
-// painter order. A surface with no lattice casters binds a zero-column grid.
-@group(3) @binding(1) var<storage, read> occluders: array<u32>;
+// painter order. A surface with no node casters binds a zero-column grid.
+@group(3) @binding(1) var<storage, read> node_occluders: array<u32>;
 const OCCLUDER_HEADER: u32 = 5u;
 
 // How much a caster's Gaussian is multiplied up by before it is spent, which is
@@ -336,43 +336,30 @@ struct SceneOut {
     @location(4) bloom_ink: vec4<f32>,
 };
 
-// How much of a receiver's ink shows through every lattice caster standing in
-// front of it: a node's rings and marks, a resting cross and a name can each
-// hide what is behind them, and each can be a receiver in turn — which do is
-// the occlusion test bed's (`ViewConfig::occlusion_test`), the casters through
-// the grid's lists and the receivers through `occlusion`. Only casters past the
-// receiver's own PLACE in painter order count — a position's cross, its node
-// and its name are one place (`ShadowCaster::map`'s w, `shadow::rank_places`),
-// so none of them hides another. The point's bin lists every caster whose box
-// can hold it, in painter order; the box test is what decides, and also keeps
-// clamped atlas edges from occluding distant ink.
+// Lattice ink, including names, fades through the same foreground-node field.
+// Only node casters LATER than the receiver in painter order count, which
+// excludes the receiver and its name. The point's bin lists every node caster
+// whose box can hold it, in painter order; the box test is what decides, and
+// also keeps clamped atlas edges from occluding distant ink.
 //
-// Each caster hides through its own group's field — a node's the geometry
-// group's, a cross's and a name's the text group's — read as a node's own
-// shadow reads it (`node_shadow_kernel`), every lattice Gaussian fill carrying
-// its coverage in green for the ceiling. `occlusion` scales how much of each
-// caster's field is spent: the caller hands over the Hide behind bar for its
-// own kind of receiver (`rings_hidden`, `crosses_hidden`, a name's
-// `hide_behind`), independent of the visible shadow's Darkness, and the
-// hiding is gone at 0.
-fn ink_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
+// `occlusion` scales how much of each caster's field is spent: the caller
+// hands over the Hide behind bar (`node_occlusion`), independent of the
+// visible shadow's Darkness, and the hiding is gone at 0.
+fn node_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
     let strength = clamp(occlusion, 0.0, 1.0);
     if strength == 0.0 {
         return 1.0;
     }
     let receiver = u32(max(who, 0.0));
     let casters = arrayLength(&shadow_casters);
-    let words = arrayLength(&occluders);
+    let words = arrayLength(&node_occluders);
     if receiver >= casters || words < OCCLUDER_HEADER {
         return 1.0;
     }
-    // The last caster at the receiver's own place: everything up to it stands
-    // behind the receiver or is part of it.
-    let place = u32(max(shadow_casters[receiver].map.w, f32(receiver)));
-    let columns = occluders[0];
-    let rows = occluders[1];
-    let origin = vec2<f32>(bitcast<f32>(occluders[2]), bitcast<f32>(occluders[3]));
-    let bin = floor((points - origin) * bitcast<f32>(occluders[4]));
+    let columns = node_occluders[0];
+    let rows = node_occluders[1];
+    let origin = vec2<f32>(bitcast<f32>(node_occluders[2]), bitcast<f32>(node_occluders[3]));
+    let bin = floor((points - origin) * bitcast<f32>(node_occluders[4]));
     // Written so a NaN fails it: off the grid, no caster's box holds the point.
     if !(all(bin >= vec2<f32>(0.0)) && bin.x < f32(columns) && bin.y < f32(rows)) {
         return 1.0;
@@ -381,11 +368,11 @@ fn ink_visibility(who: f32, points: vec2<f32>, occlusion: f32) -> f32 {
     if slot + 1u >= words {
         return 1.0;
     }
-    let end = min(occluders[slot + 1u], words);
+    let end = min(node_occluders[slot + 1u], words);
     var visibility = 1.0;
-    for (var k = occluders[slot]; k < end; k++) {
-        let at = occluders[k];
-        if at <= place || at >= casters {
+    for (var k = node_occluders[slot]; k < end; k++) {
+        let at = node_occluders[k];
+        if at <= receiver || at >= casters {
             continue;
         }
         let caster = shadow_casters[at];
