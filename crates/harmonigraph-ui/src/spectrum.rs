@@ -67,6 +67,9 @@ pub struct AudioSpectrum {
     /// [`SpectrumHistory`] and
     /// [`AudioSpectrum::push_history`].
     pub(crate) history: SpectrumHistory,
+    /// Counts [`clear_history`](Self::clear_history) calls, so the heatmap's
+    /// colour memory can tell a cleared picture from one that scrolled on.
+    history_epoch: u32,
 }
 
 /// Every drawing surface's heatmap state, indexed by the surface id its copy of
@@ -146,6 +149,7 @@ impl Default for AudioSpectrum {
             anchor: None,
             last_samples: None,
             history: SpectrumHistory::default(),
+            history_epoch: 0,
         }
     }
 }
@@ -501,6 +505,12 @@ impl AudioSpectrum {
     /// Forget the spectrogram history (paired with clearing the roll).
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.history_epoch = self.history_epoch.wrapping_add(1);
+    }
+
+    /// Which clear of the history this is (see `history_epoch`).
+    pub fn history_epoch(&self) -> u32 {
+        self.history_epoch
     }
 
     /// How far behind `now` the newest column sits even when nothing is wrong:

@@ -1705,6 +1705,7 @@ mod tests {
             // `relay_quad` is for.
             points_per_slab: SIZE[0] as f32 / 12.0,
             now: 0.0,
+            history_epoch: 0,
         });
         cb
     }
@@ -3885,6 +3886,7 @@ fn cs_rotation_probe() {
                         points_per_ms: 0.01,
                         points_per_slab: 0.0,
                         now,
+                        history_epoch: 0,
                     },
                     atmosphere::CloudSampling::default().tile_cells,
                 )
