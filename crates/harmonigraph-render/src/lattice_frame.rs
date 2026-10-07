@@ -164,7 +164,7 @@ impl LatticeCallback {
         // instance (`fs_ink_strip`, `vs_glow_splat`, `vs_source_shadow`). A node
         // with no INK left — its Fade run out while its light still releases —
         // paints nothing in the scene pass and fills its cell with nothing, so
-        // its shadow, its scene draw and its occlusion of the nodes behind it
+        // its shadow, its scene draw and its occlusion of what stands behind it
         // are all exactly nothing: the walk below gives it none of the three.
         // `inked` is the same idle gate without the light.
         let ringing = scene.spectral.ring_draws();
@@ -189,6 +189,8 @@ impl LatticeCallback {
         let to_plus = |d: &harmonigraph_scene::PlusInstance| GpuPlus {
             pos_radius: [d.pos.x, d.pos.y, d.pos.z, d.radius],
             color: [d.color.x, d.color.y, d.color.z, d.strength],
+            // Settled once the walk has passed the cross's own position.
+            place: 0,
         };
         // Where each name's glyphs sit in what the caller handed over, per
         // node, so the walk below can put a name at its own node's place in the
@@ -264,8 +266,8 @@ impl LatticeCallback {
         // taps.
         //
         // The geometry group spends its field twice: on its visible shadow
-        // (its Darkness) and on hiding the ink of nodes behind it (the Hide
-        // behind bar, `node_visibility`). Either above 0 packs it, so a node
+        // (its Darkness) and on hiding the ink behind it — rings, marks, names
+        // and resting crosses (the Hide behind bar, `node_visibility`). Either above 0 packs it, so a node
         // at Darkness 0 still hides what it covers. Width 0 packs nothing
         // for either: the field occlusion spends IS the shadow's shape, and
         // a field of no width would hide only what the node's own ink covers
@@ -412,10 +414,11 @@ impl LatticeCallback {
             // The cross, whether or not the node it stands on draws anything:
             // an idle position is exactly where a marker does its work, and the
             // node it belongs to is still what says how far off it is.
-            if let Some(p) = plus_of[i] {
+            let cross = plus_of[i].map(|p| {
                 push_plus(&mut draws, pluses.len() as u32);
                 pluses.push(to_plus(&scene.pluses[p]));
-            }
+                pluses.len() - 1
+            });
             if ships {
                 // A node shipped for its light alone draws nothing here.
                 if inked {
@@ -451,6 +454,12 @@ impl LatticeCallback {
                     text.falloff,
                     text_spread,
                 ));
+            }
+            // The cross stands at this position under its node and name, so
+            // what hides it is what stands past all three: every caster from
+            // here on. Its own node's ring never hides it.
+            if let Some(cross) = cross {
+                pluses[cross].place = casters.len().saturating_sub(1) as u32;
             }
         }
         LatticeCallback {

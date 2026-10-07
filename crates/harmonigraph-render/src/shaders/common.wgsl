@@ -336,11 +336,14 @@ struct SceneOut {
     @location(4) bloom_ink: vec4<f32>,
 };
 
-// Lattice ink, including names, fades through the same foreground-node field.
-// Only node casters LATER than the receiver in painter order count, which
-// excludes the receiver and its name. The point's bin lists every node caster
-// whose box can hold it, in painter order; the box test is what decides, and
-// also keeps clamped atlas edges from occluding distant ink.
+// Lattice ink, including names and resting crosses, fades through the same
+// foreground-node field: only nodes hide. Only node casters LATER than the
+// receiver in painter order count, which excludes the receiver and its name;
+// a cross hands over the last caster at its own position
+// (`PlusInstance::place`), so its own node's ring never hides it. The point's
+// bin lists every node caster whose box can hold it, in painter order; the box
+// test is what decides, and also keeps clamped atlas edges from occluding
+// distant ink.
 //
 // `occlusion` scales how much of each caster's field is spent: the caller
 // hands over the Hide behind bar (`node_occlusion`), independent of the

@@ -729,13 +729,18 @@ struct GpuPlus {
     /// (`PlusInstance::strength`), so a position handing itself over to a name
     /// hands both over together.
     color: [f32; 4],
+    /// The last caster at this cross's own position in the walk — its node's
+    /// or its name's, or the last before it where it stands alone. The rings
+    /// that hide it are the node casters past this (`node_visibility`), so
+    /// the ring of the node it stands under never does.
+    place: u32,
 }
 
 impl GpuPlus {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuPlus>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Uint32],
     };
 }
 

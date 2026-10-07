@@ -294,3 +294,157 @@ fn a_node_at_no_darkness_still_hides_the_node_behind() {
         );
     }
 }
+
+/// The rear ring of [`a_node_behind_another`] alone, lit, with nothing else in
+/// the frame yet.
+fn a_lone_ring() -> Scene {
+    let mut scene = a_node_behind_another(true);
+    scene.nodes.pop();
+    rows_per_node(&mut scene);
+    scene
+}
+
+/// The middle of node `i`'s band at the top of its ring, in world units: where
+/// a cross or a name is put under that ring.
+fn band_top(scene: &Scene, i: usize) -> glam::Vec3 {
+    let n = scene.nodes[i];
+    let mid = 0.5 * (scene.outer_inner + scene.outer_outer) * 1.8 * scene.node_radius * n.scale;
+    n.world_pos + glam::vec3(0.0, mid, 0.0)
+}
+
+/// A position of its own at depth `z` that draws nothing but what is put on
+/// it — an idle node, which ships nothing — returning its index.
+fn a_bare_place(scene: &mut Scene, z: f32) -> usize {
+    let node = scene.nodes.len();
+    scene.nodes.push(harmonigraph_scene::NodeInstance {
+        audio_ring: 0.0,
+        ..harmonigraph_scene::NodeInstance::at(
+            harmonigraph_core::LatticePos::new(node as i32 + 10, 0, 0),
+            glam::vec3(0.0, 0.0, z),
+            1.0,
+            true,
+            0.0,
+            false,
+            node as u32,
+        )
+    });
+    rows_per_node(scene);
+    node
+}
+
+/// A resting cross on position `place`, over `at`, half a world unit to the
+/// tip.
+fn a_cross_on(scene: &mut Scene, place: usize, at: glam::Vec3) {
+    let ground = scene.lattice_ground;
+    scene.pluses.push(one_marker(place, at, 0.5, ground, 1.0));
+}
+
+/// A square name of `side` points on position `place`, centred over `at`.
+fn a_name_on(scene: &Scene, place: usize, at: glam::Vec3, side: f32) -> LatticeLabels {
+    let c = on_screen(scene, [256, 256], at);
+    let rect = [c.x - side / 2.0, c.y - side / 2.0, side, side];
+    names(vec![(place as u32, vec![name_glyph(scene, rect)])])
+}
+
+/// The pixels a shot holds any ink on, out of a black frame.
+fn inked(shot: &[u8]) -> Vec<bool> {
+    shot.chunks_exact(4).map(|px| px[..3] != [0, 0, 0]).collect()
+}
+
+/// A ring in front hides a resting cross behind it, as it hides a ring or a
+/// name, and continuously in the bar: 1% hides next to nothing, and at 0 the
+/// cross off the ring's own ink is the cross with no ring in the frame.
+///
+/// The cross stands over the front ring's band on a position further back, so
+/// the ring's field covers the arms either side of the band. Darkness 0, so
+/// the ring casts no visible shadow and a cross pixel that moves is hidden.
+#[test]
+fn a_ring_in_front_hides_a_cross_behind_it() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else {
+        return;
+    };
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        let mut shot = |ring: bool, hide_behind: f32| {
+            let mut scene = a_lone_ring();
+            scene.nodes[0].world_pos.z = 1.0;
+            let place = a_bare_place(&mut scene, -1.0);
+            let top = band_top(&scene, 0);
+            a_cross_on(&mut scene, place, top);
+            if !ring {
+                scene.nodes[0].activation = 0.0;
+                scene.nodes[0].octaves.fill(0.0);
+            }
+            scene.view.shadow = one_shadow(1.0, 0.0, kernel);
+            scene.view.hide_behind = hide_behind;
+            scene.view.glow_reach = 0.0;
+            scene.view.note_bloom = 0.0;
+            shooter.draw(&scene, LatticeLabels::default())
+        };
+        let alone = shot(false, 1.0);
+        let cross = inked(&alone);
+        let (shown, hidden) = (shot(true, 0.0), shot(true, 1.0));
+        let pairs = || shown.chunks_exact(4).zip(hidden.chunks_exact(4)).enumerate();
+        let faded =
+            pairs().filter(|(i, (s, h))| cross[*i] && brightness(s) - brightness(h) > 6).count();
+        let moved = pairs().filter(|(i, (s, h))| !cross[*i] && s != h).count();
+        assert!(faded > 30, "{kernel:?}: the ring hid only {faded} pixels of the cross behind it");
+        assert_eq!(moved, 0, "{kernel:?}: hiding the cross moved {moved} pixels off it");
+
+        let worst = shot(true, 0.01).iter().zip(&shown).map(|(a, b)| a.abs_diff(*b)).max();
+        assert!(worst <= Some(3), "{kernel:?}: a 1% Hide behind moved the cross {worst:?} codes");
+        let ring = inked(&{
+            let mut scene = a_lone_ring();
+            scene.nodes[0].world_pos.z = 1.0;
+            scene.view.shadow = one_shadow(1.0, 0.0, kernel);
+            scene.view.glow_reach = 0.0;
+            scene.view.note_bloom = 0.0;
+            shooter.draw(&scene, LatticeLabels::default())
+        });
+        let kept = shown
+            .chunks_exact(4)
+            .zip(alone.chunks_exact(4))
+            .enumerate()
+            .filter(|(i, _)| cross[*i] && !ring[*i])
+            .flat_map(|(_, (a, b))| (0..3).map(move |k| a[k].abs_diff(b[k])))
+            .max();
+        assert!(kept <= Some(1), "{kernel:?}: at 0 the ring hid the cross by {kept:?} codes");
+    }
+}
+
+/// A node never hides the cross it stands on or its own name: a lit node with
+/// both over its own band draws the same at every Hide behind. The control
+/// moves the same cross and name to a position behind the node, where the same
+/// ring has to hide plenty of them — so the fixture reaches the path the
+/// exclusion guards.
+#[test]
+fn a_node_never_hides_its_own_cross_or_name() {
+    let Some(mut shooter) = Shooter::new([256, 256]) else {
+        return;
+    };
+    for kernel in
+        [harmonigraph_scene::ShadowKernel::Gaussian, harmonigraph_scene::ShadowKernel::Distance]
+    {
+        let mut moved = |own: bool| {
+            let mut shot = |hide_behind: f32| {
+                let mut scene = a_lone_ring();
+                let behind = a_bare_place(&mut scene, -2.0);
+                let place = if own { 0 } else { behind };
+                let top = band_top(&scene, 0);
+                a_cross_on(&mut scene, place, top);
+                scene.view.shadow = one_shadow(1.0, 0.5, kernel);
+                scene.view.hide_behind = hide_behind;
+                scene.view.glow_reach = 0.0;
+                scene.view.note_bloom = 0.0;
+                // Clear of the crossing, still over the band.
+                let name = a_name_on(&scene, place, top + glam::vec3(0.6, 0.0, 0.0), 6.0);
+                shooter.draw(&scene, name)
+            };
+            differing_pixels(&shot(0.0), &shot(1.0))
+        };
+        let reached = moved(false);
+        assert!(reached > 50, "{kernel:?}: from behind they were hidden by only {reached} pixels");
+        assert_eq!(moved(true), 0, "{kernel:?}: a node hid part of its own cross or name");
+    }
+}

@@ -836,9 +836,11 @@ pub struct ViewConfig {
     /// light in the picture at all, onto the ground and onto whatever ink
     /// stands behind it.
     pub shadow: ShadowSettings,
-    /// How much a lattice node in front hides the ink of the nodes behind it,
-    /// and their names, 0..=1: the "Hide behind" bar, beside the ring and mark
-    /// shadows' Darkness.
+    /// How much a lattice node in front hides the ink behind it — the rings,
+    /// marks and names of the nodes behind it and the resting crosses — 0..=1:
+    /// the "Hide behind" bar, beside the ring and mark shadows' Darkness. Only
+    /// a node's rings and marks hide: names and crosses are hidden and hide
+    /// nothing, and a node never hides its own name or the cross it stands on.
     ///
     /// A bar of its own and not the Darkness, which it followed after #1288:
     /// a shadow dialled light for the ground left a ring in front fading only

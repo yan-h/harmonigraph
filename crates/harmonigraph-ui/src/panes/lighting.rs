@@ -222,9 +222,9 @@ fn shadow_group(
                 .percent()
                 .show(ui)
                 .on_hover_text(
-                    "How much a node in front hides the rings, marks and name of a node behind \
-                     it, whatever the shadow's Darkness. 0% hides nothing; a Width of 0 turns \
-                     it off with the shadow.",
+                    "How much a ring in front hides the rings, marks, names and crosses \
+                     behind it, whatever the shadow's Darkness. 0% hides nothing; a Width of 0 \
+                     turns it off with the shadow.",
                 );
         });
     }
