@@ -126,6 +126,31 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             setter.end_set_parameter(axis_param(axis, lane));
             false
         }
+        MapEdit::Translate(step, lane) => {
+            let from = offsets(params);
+            if let Some(to) = from.translated(step, lane) {
+                let lanes = |o: MapOffsets| {
+                    let (f, e) = (o.fine, o.extension);
+                    [f.threes, f.fives, f.sevens, e.threes, e.fives, e.sevens]
+                };
+                let targets = [
+                    (MapAxis::Fifths, MapOffsetLane::Fine),
+                    (MapAxis::Thirds, MapOffsetLane::Fine),
+                    (MapAxis::Sevenths, MapOffsetLane::Fine),
+                    (MapAxis::Fifths, MapOffsetLane::Extension),
+                    (MapAxis::Thirds, MapOffsetLane::Extension),
+                    (MapAxis::Sevenths, MapOffsetLane::Extension),
+                ];
+                for ((before, after), (axis, lane)) in
+                    lanes(from).into_iter().zip(lanes(to)).zip(targets)
+                {
+                    if before != after {
+                        set(axis_param(axis, lane), after);
+                    }
+                }
+            }
+            false
+        }
         MapEdit::Replace(destination) => {
             let mut document = params.maps.write();
             let mut editor = params.map_editor.lock();

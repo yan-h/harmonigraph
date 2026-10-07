@@ -291,9 +291,34 @@ impl MapOffsets {
             self.fine.sevens + EXTENSION_STEP * self.extension.sevens,
         )
     }
+
+    /// The lanes after `step` units of `lane` on each axis, or `None` when any
+    /// axis would leave its range. A Fine step past ±9 carries into Coarse, so
+    /// every total from −99 to +99 stays one arrow press from its neighbours.
+    pub fn translated(self, step: LatticePos, lane: MapOffsetLane) -> Option<Self> {
+        let axis = |fine: i32, extension: i32, by: i32| {
+            let (mut fine, mut extension) = match lane {
+                MapOffsetLane::Fine => (fine + by, extension),
+                MapOffsetLane::Extension => (fine, extension + by),
+            };
+            while fine > OFFSET_LIMIT {
+                fine -= EXTENSION_STEP;
+                extension += 1;
+            }
+            while fine < -OFFSET_LIMIT {
+                fine += EXTENSION_STEP;
+                extension -= 1;
+            }
+            (extension.abs() <= OFFSET_LIMIT).then_some((fine, extension))
+        };
+        let (f3, e3) = axis(self.fine.threes, self.extension.threes, step.threes)?;
+        let (f5, e5) = axis(self.fine.fives, self.extension.fives, step.fives)?;
+        let (f7, e7) = axis(self.fine.sevens, self.extension.sevens, step.sevens)?;
+        Some(Self { fine: LatticePos::new(f3, f5, f7), extension: LatticePos::new(e3, e5, e7) })
+    }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapOffsetLane {
     Fine,
     Extension,
@@ -335,6 +360,9 @@ pub enum MapEdit {
     BeginOffset(MapAxis, MapOffsetLane),
     Offset(MapAxis, MapOffsetLane, i32),
     EndOffset(MapAxis, MapOffsetLane),
+    /// Move the map from the lattice by whole lane steps (see
+    /// [`MapOffsets::translated`]), each changed lane as one host gesture.
+    Translate(LatticePos, MapOffsetLane),
     Undo,
     /// Copy the selected shape into a new slot and select it.
     Duplicate,
@@ -444,5 +472,25 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &next));
         assert_eq!(&next[0].1, "Other");
         assert!(Arc::ptr_eq(&next, &editor.names(&loaded)));
+    }
+
+    #[test]
+    fn a_fine_step_carries_into_coarse_and_stops_at_the_ends() {
+        let at = |fine, extension| MapOffsets {
+            fine: LatticePos::new(fine, 0, 0),
+            extension: LatticePos::new(extension, 0, 0),
+        };
+        let up = LatticePos::new(1, 0, 0);
+        let down = LatticePos::new(-1, 0, 0);
+        assert_eq!(at(3, 0).translated(up, MapOffsetLane::Fine), Some(at(4, 0)));
+        assert_eq!(at(9, 2).translated(up, MapOffsetLane::Fine), Some(at(0, 3)));
+        assert_eq!(at(-9, 0).translated(down, MapOffsetLane::Fine), Some(at(0, -1)));
+        // A carry keeps the total, whatever the lanes held before.
+        let carried = at(9, 2).translated(up, MapOffsetLane::Fine).unwrap();
+        assert_eq!(carried.total().threes, at(9, 2).total().threes + 1);
+        // Coarse moves alone and leaves fine automation where it was.
+        assert_eq!(at(-3, 0).translated(up, MapOffsetLane::Extension), Some(at(-3, 1)));
+        assert_eq!(at(9, 9).translated(up, MapOffsetLane::Fine), None, "+99 is the end");
+        assert_eq!(at(0, -9).translated(down, MapOffsetLane::Extension), None);
     }
 }

@@ -54,6 +54,19 @@ Recalling a map changes shape and leaves these offsets unchanged.
 Editing and duplicating never record or change the offsets;
 offset changes are host parameter gestures.
 
+With the pointer over the lattice in Lattice Map mode,
+the arrow keys move the map one step at a time.
+Each arrow takes whichever of the fifths and thirds axes points most nearly its way on screen,
+so the assignment dots follow the arrow however the camera is turned;
+in the default Cabinet view Right and Left move along thirds and Up and Down along fifths.
+A plain arrow steps the Fine lane and carries into Coarse past ±9,
+so the total moves by exactly one;
+Shift with an arrow steps Coarse alone.
+Each changed lane is an ordinary host gesture,
+recorded like a drag of its control.
+Sevenths have no arrow and stay on their lanes.
+Arrows do nothing while another control holds the keyboard.
+
 Select a saved map to report an ordinary host parameter gesture,
 or draw discrete held values for Map in Bitwig.
 Use held segments:

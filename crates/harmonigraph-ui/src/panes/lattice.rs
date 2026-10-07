@@ -47,6 +47,17 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
             state.appearance.camera.zoom_by(zoom);
         }
     }
+    // Arrow keys move the map while the pointer is over the lattice, unless a
+    // control elsewhere has the keyboard (a focused handle steps on arrows too).
+    let map_mode = state.runtime.lattice_maps.as_ref().is_some_and(|maps| {
+        maps.playback.engine == harmonigraph_core::lattice_map::TuningEngine::LatticeMap
+    });
+    if map_mode
+        && response.hovered()
+        && ui.memory(|m| m.focused().is_none_or(|id| id == response.id))
+    {
+        state.runtime.map_translation = arrow_translation(ui, &state.appearance.camera, rect);
+    }
     if response.double_clicked()
         && !state.runtime.lattice_maps.as_ref().is_some_and(|m| m.editing())
     {
@@ -92,6 +103,69 @@ pub(crate) fn lattice_pane(ui: &mut egui::Ui, state: &mut PictureState, now: f64
     let window =
         draw_lattice(ui, rect, state, now, surface, background, Some(&response), stats, 1.0);
     state.surfaces.drawn_this_frame = Some(window);
+}
+
+/// The arrow keys pressed this frame as a map translation, Shift for Coarse.
+///
+/// Each arrow takes the fifths or thirds direction that points most nearly
+/// its way on screen, so the dots follow the arrow however the camera is
+/// turned. Sevenths have no arrow: they recede into depth in every default
+/// view and stay on their parameter lanes.
+fn arrow_translation(
+    ui: &egui::Ui,
+    camera: &Camera,
+    rect: egui::Rect,
+) -> Option<(harmonigraph_core::LatticePos, crate::lattice_maps::MapOffsetLane)> {
+    use crate::lattice_maps::MapOffsetLane;
+    use egui::{Key, Modifiers};
+    use harmonigraph_core::LatticePos;
+    let arrows = [
+        (Key::ArrowRight, glam::Vec2::X),
+        (Key::ArrowLeft, glam::Vec2::NEG_X),
+        (Key::ArrowUp, glam::Vec2::Y),
+        (Key::ArrowDown, glam::Vec2::NEG_Y),
+    ];
+    // Shift is read off each press: a plain pattern matches a press with
+    // Shift held too, so Shift is counted first. Both kinds inside one frame
+    // is not a gesture anyone makes; Coarse takes it.
+    let (fine, shifted) = ui.input_mut(|i| {
+        let shifted = arrows.map(|(key, _)| i.count_and_consume_key(Modifiers::SHIFT, key));
+        (arrows.map(|(key, _)| i.count_and_consume_key(Modifiers::NONE, key)), shifted)
+    });
+    let (presses, lane) = if shifted != [0; 4] {
+        (shifted, MapOffsetLane::Extension)
+    } else if fine != [0; 4] {
+        (fine, MapOffsetLane::Fine)
+    } else {
+        return None;
+    };
+    // Screen direction of one step along each axis at the target, y up.
+    let aspect = rect.width() / rect.height().max(1.0);
+    let view_proj = camera.view_proj(aspect);
+    let screen = |world: glam::Vec3| {
+        let clip = view_proj * world.extend(1.0);
+        (clip.w > 0.0).then(|| glam::Vec2::new(clip.x * aspect, clip.y) / clip.w)
+    };
+    let origin = screen(camera.target)?;
+    let along = |world: glam::Vec3| {
+        screen(camera.target + world).map_or(glam::Vec2::ZERO, |p| (p - origin).normalize_or_zero())
+    };
+    let (thirds, fifths) = (along(glam::Vec3::X), along(glam::Vec3::Y));
+    let directions = [
+        (LatticePos::new(0, 1, 0), thirds),
+        (LatticePos::new(0, -1, 0), -thirds),
+        (LatticePos::new(1, 0, 0), fifths),
+        (LatticePos::new(-1, 0, 0), -fifths),
+    ];
+    let mut total = LatticePos::ORIGIN;
+    for ((_, arrow), count) in arrows.iter().zip(presses) {
+        let (step, _) =
+            directions.iter().max_by(|(_, a), (_, b)| a.dot(*arrow).total_cmp(&b.dot(*arrow)))?;
+        for _ in 0..count {
+            total = total + *step;
+        }
+    }
+    (total != LatticePos::ORIGIN).then_some((total, lane))
 }
 
 /// The scene composition shared by the live pane, preview, offline draw and fixtures.
@@ -785,6 +859,66 @@ mod tests {
         assert_eq!(annotations(&mut state, false), 0, "preview/export must omit dots");
         state.appearance.view.show_map_indicators = false;
         assert_eq!(annotations(&mut state, true), 0, "the visibility control must hide dots");
+    }
+
+    #[test]
+    fn arrows_over_the_lattice_translate_the_map_along_the_axis_on_screen() {
+        use crate::lattice_maps::{MapOffsetLane, MapPlayback, MapView};
+        use crate::tests::probe::events_into;
+        use harmonigraph_core::lattice_map::TuningEngine;
+        use harmonigraph_core::LatticePos;
+        let mut state = fresh();
+        state.runtime.lattice_maps = Some(MapView {
+            playback: MapPlayback { engine: TuningEngine::LatticeMap, ..Default::default() },
+            offsets: Default::default(),
+            pending: false,
+            names: Default::default(),
+            edit_shape: false,
+            can_undo: false,
+            full: false,
+        });
+        let ctx = themed();
+        let screen = egui::vec2(400.0, 400.0);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen);
+        let key = |key, modifiers| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let press = |state: &mut PictureState, at: egui::Pos2, keys: Vec<egui::Event>| {
+            let mut events = vec![egui::Event::PointerMoved(at)];
+            events.extend(keys);
+            events_into(&ctx, screen, rect, events, |ui| lattice_pane(ui, state, 0.0, 0));
+            state.runtime.map_translation.take()
+        };
+        let (none, shift) = (egui::Modifiers::NONE, egui::Modifiers::SHIFT);
+        let at = rect.center();
+        press(&mut state, at, vec![]);
+        // Cabinet faces the sheet: thirds run right and fifths up.
+        assert_eq!(
+            press(&mut state, at, vec![key(egui::Key::ArrowRight, none)]),
+            Some((LatticePos::new(0, 1, 0), MapOffsetLane::Fine))
+        );
+        assert_eq!(
+            press(&mut state, at, vec![key(egui::Key::ArrowDown, shift)]),
+            Some((LatticePos::new(-1, 0, 0), MapOffsetLane::Extension))
+        );
+        // Seen from behind, thirds run left, and Right follows the picture.
+        state.appearance.camera.projection = Projection::Orthographic;
+        state.appearance.camera.yaw = std::f32::consts::PI;
+        state.appearance.camera.pitch = 0.0;
+        assert_eq!(
+            press(&mut state, at, vec![key(egui::Key::ArrowRight, none)]),
+            Some((LatticePos::new(0, -1, 0), MapOffsetLane::Fine))
+        );
+        let outside = egui::pos2(-10.0, -10.0);
+        press(&mut state, outside, vec![]);
+        assert_eq!(press(&mut state, outside, vec![key(egui::Key::ArrowUp, none)]), None);
+        state.runtime.lattice_maps.as_mut().unwrap().playback.engine = TuningEngine::Adaptive;
+        press(&mut state, at, vec![]);
+        assert_eq!(press(&mut state, at, vec![key(egui::Key::ArrowUp, none)]), None);
     }
 
     #[test]
