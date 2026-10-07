@@ -281,10 +281,11 @@ pub(crate) struct TextUniforms {
     /// to eight bytes and the scalar before it is the pair that reaches it: the
     /// depth and this size sit together so the struct needs no pad of its own.
     pub(crate) shadow_atlas_size: [f32; 2],
-    /// Foreground lattice nodes fade label coverage by this strength: the
-    /// Hide behind bar (`ViewConfig::hide_behind`), whatever the geometry
-    /// group's Darkness.
-    pub(crate) node_occlusion: f32,
+    /// Whatever stands in front of a lattice name fades its coverage by this
+    /// strength: the Hide behind bar (`ViewConfig::hide_behind`) where the
+    /// occlusion test bed lets names be hidden, whatever
+    /// either group's Darkness. 0 on every other surface.
+    pub(crate) hide_behind: f32,
     pub(crate) _pad: [f32; 3],
 }
 
@@ -1397,7 +1398,7 @@ impl CallbackTrait for TextCallback {
             pixels_per_point: ppp,
             shadow_depth: style.map_or(0.0, |s| s.depth),
             shadow_atlas_size: [1.0; 2],
-            node_occlusion: 0.0,
+            hide_behind: 0.0,
             _pad: [0.0; 3],
         };
 

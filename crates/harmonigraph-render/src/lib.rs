@@ -729,13 +729,18 @@ struct GpuPlus {
     /// (`PlusInstance::strength`), so a position handing itself over to a name
     /// hands both over together.
     color: [f32; 4],
+    /// This cross's own entry among the frame's casters: its place in the walk,
+    /// which is what decides which casters stand in front of it
+    /// (`ink_visibility`) — 0 where the test bed gives crosses no entry. Its
+    /// own SHADOW is the markers' shared field, `casters[0]`.
+    caster: u32,
 }
 
 impl GpuPlus {
     const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<GpuPlus>() as u64,
         step_mode: wgpu::VertexStepMode::Instance,
-        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
+        attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Uint32],
     };
 }
 
@@ -825,8 +830,8 @@ struct LatticeCallback {
     /// Every label's glyphs, in the order the pass draws them.
     glyphs: Vec<GlyphInstance>,
     /// Every caster this frame, in the order the pass draws them: the markers'
-    /// one shared cross first where the field draws any, then one per node
-    /// instance and one per name, interleaved as the walk emits them. What
+    /// one shared cross first where the field draws any, then one per resting
+    /// cross, node instance and name, interleaved as the walk emits them. What
     /// `prepare` packs the shadow atlas from — a pure function of the frame,
     /// which the offline renderer's determinism rests on.
     casters: Vec<shadow::Caster>,
@@ -841,6 +846,21 @@ struct LatticeCallback {
     /// Which caster each node instance's shadow is, by index into `casters` —
     /// parallel to `instances`, since the walk interleaves the two lists.
     node_cells: Vec<u32>,
+    /// Every resting cross that can hide what stands behind it, by its own
+    /// entry in `casters`, which `prepare` fills from the markers' shared
+    /// field once that is packed (`shadow::place_crosses`).
+    crosses: Vec<shadow::Cross>,
+    /// For each caster, the last caster at its own place in the walk — a
+    /// position's cross, node and name being one place (`shadow::rank_places`).
+    last_of_place: Vec<u32>,
+    /// The casters that hide what stands behind them, by index into `casters`:
+    /// each node, name and resting cross whose kind the test bed lets hide
+    /// (`ViewConfig::occlusion_test`), and none at Hide behind 0.
+    hiders: Vec<u32>,
+    /// How strongly a name is hidden by what stands in front of it: the Hide
+    /// behind bar where the test bed lets names be hidden, else 0. The rings'
+    /// and the crosses' ride in `uniforms`' two shadow rows.
+    name_occlusion: f32,
     /// One arm of a resting marker in the pane's points, and 0 where the field
     /// casts nothing: what maps a fragment's place on a cross into the shared
     /// cell. The cell itself is `casters[0]` wherever this is above zero.
@@ -1335,7 +1355,7 @@ struct PaneBuffers {
     caster_buffer: wgpu::Buffer,
     caster_capacity: usize,
     caster_count: usize,
-    /// The words of `shadow::node_occluders`, bound beside the casters.
+    /// The words of `shadow::occluders`, bound beside the casters.
     occluder_buffer: wgpu::Buffer,
     occluder_capacity: usize,
     caster_bind_group: wgpu::BindGroup,
@@ -2373,11 +2393,6 @@ fn create_cell_pipelines(
     shader: &wgpu::ShaderModule,
     uniforms: &wgpu::BindGroupLayout,
 ) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
-    const MAX_COMPONENT: wgpu::BlendComponent = wgpu::BlendComponent {
-        src_factor: wgpu::BlendFactor::One,
-        dst_factor: wgpu::BlendFactor::One,
-        operation: wgpu::BlendOperation::Max,
-    };
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("lattice_cell_pipeline_layout"),
         bind_group_layouts: &[Some(uniforms)],
@@ -2426,11 +2441,10 @@ fn create_cell_pipelines(
         ),
         // No instance data at all: the cell is one cross at the home sheet's
         // size, and what varies between markers is spent where it is read.
-        pipeline(
-            ("vs_plus_cell", "fs_plus_cell"),
-            &[],
-            Some(wgpu::BlendState { color: MAX_COMPONENT, alpha: MAX_COMPONENT }),
-        ),
+        // One quad owns the cell, so it overwrites: an evaluated distance
+        // profile covers the whole cell and replaces the far value the glyphs'
+        // pad pass leaves in every distance cell, which MAX would keep.
+        pipeline(("vs_plus_cell", "fs_plus_cell"), &[], None),
     )
 }
 

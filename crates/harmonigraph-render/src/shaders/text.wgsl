@@ -41,7 +41,10 @@ struct Locals {
     /// Beside the depth above so the pair fills a `vec2`'s 8-byte alignment
     /// with no pad of its own.
     shadow_atlas_size: vec2<f32>,
-    node_occlusion: f32,
+    /// How strongly whatever stands in front of a name on the lattice hides
+    /// it (`ink_visibility`): the Hide behind bar where the occlusion test bed
+    /// lets names be hidden. 0 on every other surface.
+    hide_behind: f32,
     _pad0: f32,
     _pad1: vec2<f32>,
 };
@@ -536,7 +539,7 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
     // the Marker ink bar names, and only its coverage varies across a glyph.
     // Fade both color and coverage, revealing the shadowed background.
     // Keep the result with node ink so later nodes do not shadow it again.
-    let visibility = node_visibility(in.who, in.points, locals.node_occlusion);
+    let visibility = ink_visibility(in.who, in.points, locals.hide_behind);
     let ink = in.fill * cov;
     let alpha = ink.a * visibility;
     let light = glyph_light(in.points);
@@ -559,9 +562,13 @@ fn fs_fill_lit(in: VertexOut) -> SplitOut {
 /// Drawn through [`vs_glyph_cell`], at the cell's own transform rather than the
 /// pane's; nothing here knows or cares which, since `texel` is interpolated
 /// across the quad whatever the quad is mapped to.
+///
+/// Into green as well: on the lattice a name hides what stands behind it, and
+/// that reads the blur's ceiling beside its coverage (`ink_visibility`).
 @fragment
 fn fs_glyph_ink(in: VertexOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(coverage(in, in.texel), 0.0, 0.0, 0.0);
+    let ink = coverage(in, in.texel);
+    return vec4<f32>(ink, ink, 0.0, 0.0);
 }
 
 /// Bilinear sampling written over textureLoad because R32Float is not a
@@ -622,7 +629,7 @@ fn fs_glyph_distance(in: SdfOut) -> @location(0) vec4<f32> {
 
 /// Coverage of the exact same glyph field the Distance renderer stores. This
 /// is the Gaussian producer: one antialiased zero contour, followed by the
-/// shared separable blur.
+/// shared separable blur. Into green as well, for [`fs_glyph_ink`]'s reason.
 @fragment
 fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
     let d = glyph_sdf_distance(in) - in.expansion.x;
@@ -632,7 +639,8 @@ fn fs_glyph_sdf_coverage(in: SdfOut) -> @location(0) vec4<f32> {
         // centre and a vanishing derivative. Retain its sub-texel coverage.
         aa = max(aa, in.expansion.y);
     }
-    return vec4<f32>(clamp(0.5 - d / aa, 0.0, 1.0), 0.0, 0.0, 1.0);
+    let ink = clamp(0.5 - d / aa, 0.0, 1.0);
+    return vec4<f32>(ink, ink, 0.0, 1.0);
 }
 
 @fragment

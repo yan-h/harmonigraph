@@ -124,6 +124,38 @@ pub const GLOW_ACCUMULATION_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 /// Shared bar and load range for [`ViewConfig::hide_behind`].
 pub const HIDE_BEHIND_RANGE: std::ops::RangeInclusive<f32> = 0.0..=1.0;
 
+/// One switch per kind of lattice item: a node's rings and marks, a name, and
+/// a resting cross.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LatticeItems {
+    pub rings: bool,
+    pub names: bool,
+    pub crosses: bool,
+}
+
+/// Which lattice items hide what stands behind them (`hides`) and which can be
+/// hidden by what stands in front (`hidden`) — [`ViewConfig::occlusion_test`].
+///
+/// "Behind" is the picture's painter order: positions back to front, and at
+/// one position its cross, then its node, then its name. The parts of one
+/// position never hide one another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OcclusionTestBed {
+    pub hides: LatticeItems,
+    pub hidden: LatticeItems,
+}
+
+impl Default for OcclusionTestBed {
+    /// The rule the Hide behind bar shipped with: a node's rings hide the rings
+    /// and names behind them, and nothing else hides or is hidden.
+    fn default() -> Self {
+        OcclusionTestBed {
+            hides: LatticeItems { rings: true, names: false, crosses: false },
+            hidden: LatticeItems { rings: true, names: true, crosses: false },
+        }
+    }
+}
+
 /// Purely-visual settings (not host-automatable parameters). The UI layer
 /// persists these separately from plugin parameters.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -836,29 +868,49 @@ pub struct ViewConfig {
     /// light in the picture at all, onto the ground and onto whatever ink
     /// stands behind it.
     pub shadow: ShadowSettings,
-    /// How much a lattice node in front hides the ink of the nodes behind it,
-    /// and their names, 0..=1: the "Hide behind" bar, beside the ring and mark
-    /// shadows' Darkness.
+    /// How much whatever stands in front on the lattice hides the ink of what
+    /// stands behind it, 0..=1: the "Hide behind" bar, beside the ring and mark
+    /// shadows' Darkness. "Behind" is the picture's painter order, and the
+    /// parts of one position — its cross, node and name — never hide one
+    /// another. Which of a node's rings and marks, a name and a resting cross
+    /// hide and which are hidden is [`occlusion_test`](Self::occlusion_test)'s;
+    /// on its defaults a node's rings hide the rings and names behind them.
     ///
     /// A bar of its own and not the Darkness, which it followed after #1288:
     /// a shadow dialled light for the ground left a ring in front fading only
     /// that share of the ring behind it. The two now part, so a light shadow
     /// can stand beside a front node that still hides what it covers.
     ///
-    /// Spent on the caster field the geometry group's Width, kernel and spread
-    /// shape (`node_visibility` in common.wgsl), linearly, so 0 is no hiding
-    /// at all and a hundredth hides next to nothing — no jump at either end.
-    /// The field is packed whenever this or the Darkness is above 0, so a node
-    /// hides what is behind it with no visible shadow at all. Width 0 is still
-    /// the whole group off, this included: the field IS the shadow's shape.
-    /// While the front ink is opaque nothing is lost there, since that ink
-    /// covers the rear ink anyway; under a translucent front node (an
-    /// `IntensitySettings::opacity_rest` below 1) the rear ring shows through at Width 0 and is
-    /// hidden at the first step of Width, a jump this bar does not smooth.
+    /// Spent on each caster's own group's field — a node's the ring and mark
+    /// shadows' Width, kernel and spread, a cross's and a name's the
+    /// notation's (`ink_visibility` in common.wgsl) — linearly, so 0 is no
+    /// hiding at all and a hundredth hides next to nothing: no jump at either
+    /// end. A group's field is packed whenever its Darkness is above 0, or this
+    /// is and one of its items hides, so a caster hides what is behind it with
+    /// no visible shadow at all.
+    /// Width 0 is still the whole group off, this included: the field IS the
+    /// shadow's shape. While the front ink is opaque nothing is lost there,
+    /// since that ink covers the rear ink anyway; under a translucent front node
+    /// (an `IntensitySettings::opacity_rest` below 1) the rear ring shows
+    /// through at Width 0 and is hidden at the first step of Width, a jump this
+    /// bar does not smooth.
     ///
     /// Here rather than on [`ShadowStyle`](crate::ShadowStyle), which all four
     /// groups share and where it would mean nothing for three of them.
+    ///
+    /// WHICH items hide and which are hidden is
+    /// [`occlusion_test`](Self::occlusion_test)'s, while that is being decided.
     pub hide_behind: f32,
+    /// Which lattice items hide what stands behind them and which can be
+    /// hidden, at the one [`hide_behind`](Self::hide_behind) strength: a test
+    /// bed for deciding that rule live, not a settled setting.
+    ///
+    /// Never saved (`serde(skip)`): a project reopens on the defaults, which
+    /// are the rule this bar shipped with, and no saved shape changes. Nor
+    /// does an exported take carry it, the offline renderer drawing the
+    /// defaults.
+    #[serde(skip)]
+    pub occlusion_test: OcclusionTestBed,
     /// How much of the light standing at a LIT slice washes over that slice's
     /// own ink, 0..=1 — a sounding octave indicator, a wedge the analyzer is
     /// reading, and the melody/bass mark that continues one.
@@ -1530,6 +1582,7 @@ impl Default for ViewConfig {
             // A node in front hides all of what its field covers behind it,
             // whatever its visible shadow's Darkness.
             hide_behind: 1.0,
+            occlusion_test: OcclusionTestBed::default(),
             // About a third of the field, where the picture opened on the
             // whole of it: a sounding slice is pulled back out of its own halo
             // and reads as ink rather than as light, while the resting grey

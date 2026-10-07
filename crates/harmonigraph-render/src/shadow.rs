@@ -21,7 +21,10 @@ const SHADOW_SRC: &str = include_str!("shaders/shadow.wgsl");
 
 /// Blurred coverage (red) and its local source-opacity ceiling (green).
 /// The second half-float lets lattice nodes retain Gaussian gain without
-/// clipping away a slice's fade. Fixed casters and distance cells only read red.
+/// clipping away a slice's fade. A caster's own shadow reads only red unless it
+/// is a node's; what hides the ink behind a lattice caster (`ink_visibility` in
+/// common.wgsl) reads both for every caster, so every lattice Gaussian fill
+/// writes its coverage into green as well. Distance cells hold one value.
 ///
 /// Half floats rather than a byte because the blur's tail is MULTIPLIED into
 /// the frame: a tail quantized to 1/255 steps across a wide soft shadow, where
@@ -342,8 +345,14 @@ pub(crate) struct ShadowCaster {
     /// its own scene draw.
     pub cell: [f32; 4],
     /// The map from a point of the pane to a texel of that cell: x/y the
-    /// origin, z the scale, so a texel is `xy + points * z`. w is unused and
-    /// zero: which node casters can cover a point is [`node_occluders`]'.
+    /// origin, z the scale, so a texel is `xy + points * z`.
+    ///
+    /// w is not part of the map: it is the index of the LAST caster standing
+    /// at this caster's own place in the lattice's walk (its cross, its node
+    /// and its name are one place), which `pack` leaves at zero and the lattice
+    /// sets after packing (`rank_places`). `ink_visibility` reads a receiver's,
+    /// so only casters past every part of its own place hide it — which
+    /// casters can cover a point is [`occluders`]'.
     ///
     /// Pre-composed on the CPU rather than sent as (cell origin, box origin,
     /// scale) for the shader to combine: a fragment would otherwise repeat the
@@ -826,7 +835,7 @@ pub(crate) fn read_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 
 /// What binds the casters to the scene pipelines, at group 3: the casters'
-/// kernels at binding 0 and the [`node_occluders`] grid at binding 1, both
+/// kernels at binding 0 and the [`occluders`] grid at binding 1, both
 /// read-only storage.
 ///
 /// A group of its own rather than more bindings beside the atlas, because
@@ -852,15 +861,15 @@ pub(crate) fn caster_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             // The VERTEX stage as well: a caster's quad is its widest term's
             // box, and that box is in here (`vs_shadow_box` in text.wgsl).
             storage(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
-            // Read by `node_visibility` alone, which only fragments call.
+            // Read by `ink_visibility` alone, which only fragments call.
             storage(1, wgpu::ShaderStages::FRAGMENT),
         ],
     })
 }
 
 /// A buffer for `capacity` casters' kernels and the bind group naming it,
-/// for a surface with no node casters: its occluder grid is one zero word,
-/// which `node_visibility` reads as an empty grid.
+/// for a surface with no lattice casters: its occluder grid is one zero word,
+/// which `ink_visibility` reads as an empty grid.
 pub(crate) fn caster_buffer(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -870,7 +879,7 @@ pub(crate) fn caster_buffer(
     (casters, bind_group)
 }
 
-/// Buffers for `casters` kernels and `occluders` words of [`node_occluders`],
+/// Buffers for `casters` kernels and `occluders` words of [`occluders`],
 /// and the bind group naming both.
 ///
 /// The three together because they cannot come apart: a storage buffer's bind
@@ -894,7 +903,7 @@ pub(crate) fn caster_buffers(
     };
     let kernels =
         buffer("lattice_shadow_casters", std::mem::size_of::<ShadowCaster>() * casters.max(1));
-    let grid = buffer("lattice_node_occluders", std::mem::size_of::<u32>() * occluders.max(1));
+    let grid = buffer("lattice_occluders", std::mem::size_of::<u32>() * occluders.max(1));
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("lattice_shadow_casters_bind_group"),
         layout,
@@ -906,28 +915,28 @@ pub(crate) fn caster_buffers(
     (kernels, grid, bind_group)
 }
 
-/// Words ahead of the offsets in [`node_occluders`]: columns, rows, the grid's
+/// Words ahead of the offsets in [`occluders`]: columns, rows, the grid's
 /// origin in points (x then y, as f32 bits) and bins per point (f32 bits).
 pub(crate) const OCCLUDER_HEADER: usize = 5;
 
-/// Bins along the longer side of the node casters' union box.
+/// Bins along the longer side of the occluding casters' union box.
 ///
 /// Coarse on purpose: a bin only has to be small against the spread of the
 /// casters for its list to be a handful rather than all of them. At 1,025
 /// nodes on a 1536-point pane that is about 48 points a bin.
 const OCCLUDER_BINS: f32 = 32.0;
 
-/// Which node casters can cover each part of the pane, for `node_visibility`
+/// Which casters can cover each part of the pane, for `ink_visibility`
 /// (common.wgsl): a coarse grid over the union of their boxes, each bin
 /// listing, in painter order, every caster whose box reaches it.
 ///
-/// The fragment reads its own bin's list and keeps the casters LATER than its
-/// receiver, where it used to follow a linked list through every later node
-/// caster on the pane — about half of them per fragment, 500 steps at 1,025
-/// nodes (#1098). The picture is the same bit for bit: the shader still
-/// applies its exact box test, the list only has to hold every caster whose
-/// box contains the point, and it is walked in the same ascending order, so
-/// the product multiplies the same factors in the same sequence.
+/// The fragment reads its own bin's list and keeps the casters past its
+/// receiver's own place, where it used to follow a linked list through every
+/// later node caster on the pane — about half of them per fragment, 500 steps
+/// at 1,025 nodes (#1098). The picture is the same bit for bit: the shader
+/// still applies its exact box test, the list only has to hold every caster
+/// whose box contains the point, and it is walked in the same ascending order,
+/// so the product multiplies the same factors in the same sequence.
 ///
 /// Holding every containing caster is what the bin ranges below are built
 /// for. Each box is widened by a hundredth of a bin before it is binned, so a
@@ -936,13 +945,14 @@ const OCCLUDER_BINS: f32 = 32.0;
 /// falls off the grid's near edge. A point outside the grid is covered by no
 /// caster, and the shader answers 1 there.
 ///
-/// `node_cells` are the node casters' indices; only those whose shadow lands
-/// (`shade[0] > 0`) occlude, as they did in the list this replaces. Layout,
-/// in `u32` words: [`OCCLUDER_HEADER`], then `cols * rows + 1` absolute
-/// offsets, then the lists. A frame with no occluder is the header alone, a
-/// zero-column grid.
-pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32]) -> Vec<u32> {
-    let mut occluders: Vec<u32> = node_cells
+/// `hiders` are the indices of the casters that may hide what is behind them
+/// — on the lattice every node, resting cross and name, and not the markers'
+/// shared field; only those whose shadow lands (`shade[0] > 0`) occlude.
+/// Layout, in `u32` words: [`OCCLUDER_HEADER`], then `cols * rows + 1`
+/// absolute offsets, then the lists. A frame with no occluder is the header
+/// alone, a zero-column grid.
+pub(crate) fn occluders(casters: &[ShadowCaster], hiders: &[u32]) -> Vec<u32> {
+    let mut occluders: Vec<u32> = hiders
         .iter()
         .copied()
         .filter(|&i| casters.get(i as usize).is_some_and(|c| c.shade[0] > 0.0))
@@ -1019,6 +1029,84 @@ pub(crate) fn node_occluders(casters: &[ShadowCaster], node_cells: &[u32]) -> Ve
     out
 }
 
+/// One resting cross as a caster that hides what stands behind it: where it
+/// stands on the pane and how big, beside the index its entry holds.
+///
+/// Every cross is one picture — the markers' shared field, `casters[field]` —
+/// drawn at its own place and size, so a cross takes no cell of its own and
+/// its entry is written after packing ([`place_crosses`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Cross {
+    /// Its entry, by index into the frame's casters: its place in the walk.
+    pub at: u32,
+    /// The crossing, in the pane's points.
+    pub centre: [f32; 2],
+    /// One arm's length on the pane, in points.
+    pub arm_points: f32,
+    /// Its opacity, which is also the share of its field it spends.
+    pub level: f32,
+}
+
+/// Each cross's entry, as the shared field's cell read at that cross's own
+/// place and size: the field's box and its map scaled from `field_arm` (the
+/// arm the cell was drawn at, in points) to the cross's own arm and moved to
+/// its crossing, at the field's level times the cross's own.
+///
+/// The cell is a picture of the field's cross in the field's own points, so a
+/// cross standing nearer the camera reads the same cell stretched — the same
+/// reading its own visible Gaussian shadow takes (`vs_plus`). What it hides
+/// then reaches further in points as the cross grows, where a node's or a
+/// name's field is one width across the pane. Under Distance this parts from
+/// the cross's own visible shadow, which `plus_paint` evaluates in the cross's
+/// own points; under an orthographic camera every cross is the field's size
+/// and all of them agree.
+///
+/// A field with no cell — its group packs nothing, or the atlas had no room
+/// — hides nothing, and the crosses' entries stay empty.
+pub(crate) fn place_crosses(
+    casters: &mut [ShadowCaster],
+    field: usize,
+    field_arm: f32,
+    crosses: &[Cross],
+) {
+    let Some(&f) = casters.get(field) else { return };
+    let packed = f.shade[0] > 0.0 && f.cell[2] > 0.0 && f.cell[3] > 0.0;
+    if !(packed && field_arm > 0.0 && field_arm.is_finite()) {
+        return;
+    }
+    for cross in crosses {
+        let scale = cross.arm_points / field_arm;
+        if !(scale > 0.0 && scale.is_finite()) {
+            continue;
+        }
+        let Some(entry) = casters.get_mut(cross.at as usize) else { continue };
+        let [x, y] = cross.centre;
+        // A pane point p is the field's point (p - centre) / scale.
+        let k = f.map[2] / scale;
+        *entry = ShadowCaster {
+            rect: [
+                x + f.rect[0] * scale,
+                y + f.rect[1] * scale,
+                f.rect[2] * scale,
+                f.rect[3] * scale,
+            ],
+            cell: f.cell,
+            map: [f.map[0] - x * k, f.map[1] - y * k, k, entry.map[3]],
+            shade: [f.shade[0] * cross.level.clamp(0.0, 1.0), f.shade[1], f.shade[2], f.shade[3]],
+        };
+    }
+}
+
+/// Each caster's place in the lattice's walk, into `map[3]`: `last_of_place[i]`
+/// is the index of the last caster standing where caster `i` stands — a
+/// position's cross, its node and its name being one place. What keeps a node,
+/// its cross and its name from hiding one another (`ink_visibility`).
+pub(crate) fn rank_places(casters: &mut [ShadowCaster], last_of_place: &[u32]) {
+    for (entry, &last) in casters.iter_mut().zip(last_of_place) {
+        entry.map[3] = last as f32;
+    }
+}
+
 /// The two pipelines that sweep blur cells.
 ///
 /// One module and one constructor because they share a cell quad off the same
@@ -1089,9 +1177,9 @@ pub(crate) mod tests {
     use super::*;
     use harmonigraph_scene::REACH_SIGMAS;
 
-    /// The occluder grid holds, for every point, every later node caster whose
-    /// box holds that point, in painter order — which is what makes
-    /// `node_visibility` multiply the same factors in the same order as the
+    /// The occluder grid holds, for every point, every later hiding caster
+    /// whose box holds that point, in painter order — which is what makes
+    /// `ink_visibility` multiply the same factors in the same order as the
     /// linked list through every later node caster it replaced (#1098).
     ///
     /// The fixture is a label receiver with a disabled shadow, overlapped by
@@ -1121,7 +1209,7 @@ pub(crate) mod tests {
         ];
         casters.extend((0..20).map(|i| caster([200.0 + 20.0 * i as f32, 300.0, 15.0, 15.0], 1.0)));
         let node_cells: Vec<u32> = (1..casters.len() as u32).filter(|&i| i != 2).collect();
-        let grid = node_occluders(&casters, &node_cells);
+        let grid = occluders(&casters, &node_cells);
 
         // The shader's own arithmetic, in f32.
         let list = |p: [f32; 2]| -> &[u32] {
@@ -1174,7 +1262,7 @@ pub(crate) mod tests {
         let near = list([52.0, 30.0]);
         assert!(near.contains(&3) && near.contains(&4) && !near.contains(&5));
         assert!(near.iter().all(|&j| j < 7), "the far row reached the label: {near:?}");
-        assert_eq!(node_occluders(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
+        assert_eq!(occluders(&casters, &[2]), vec![0; OCCLUDER_HEADER], "no occluder");
     }
 
     /// A shader's `const NAME: T = value;`, as text.
