@@ -20,6 +20,7 @@ impl ParamBackend for Edits {
             },
             names: MapDocument::default().names(),
             offsets: Default::default(),
+            followed: harmonigraph_core::LatticePos::ORIGIN,
             pending: false,
             edit_shape: false,
             can_undo: false,

@@ -54,6 +54,20 @@ Recalling a map changes shape and leaves these offsets unchanged.
 Editing and duplicating never record or change the offsets;
 offset changes are host parameter gestures.
 
+With the pointer over the lattice in Lattice Map mode,
+the arrow keys move the map one step at a time.
+Each arrow takes whichever of the fifths and thirds axes points most nearly its way on screen,
+so the assignment dots follow the arrow however the camera is turned;
+in the default Cabinet view Right and Left move along thirds and Up and Down along fifths.
+An arrow with neither axis within 60° of its way on screen moves nothing.
+A plain arrow steps the Fine lane and carries into Coarse past ±9,
+so the total moves by exactly one;
+Shift with an arrow steps Coarse alone.
+Each changed lane is an ordinary host gesture,
+recorded like a drag of its control.
+Sevenths have no arrow and stay on their lanes.
+Arrows do nothing while another control holds the keyboard.
+
 Select a saved map to report an ordinary host parameter gesture,
 or draw discrete held values for Map in Bitwig.
 Use held segments:
@@ -74,6 +88,98 @@ Stopped edits and restored maps are visible before audio resumes,
 with a pending-audio indication until adoption.
 Assignment dots and edit previews are editor-only;
 Render preview and offline output exclude them explicitly.
+
+## Follow harmony (prototype)
+
+Follow harmony lets the Hub slide the selected map by itself,
+one generator step at a time,
+so a chord's intervals take their simplest spellings.
+It approaches adaptive tuning from the map's side:
+the shape stays what you drew,
+and only its place on the lattice moves.
+Off is the default;
+Thirds moves along thirds only;
+Thirds and fifths also moves along fifths.
+The parameter is `map-follow`,
+named Map Follow,
+with values 0–2;
+it is automatable,
+so a passage can switch following on and off,
+and it is timestamped with the other map lanes.
+
+With the default shape a thirds step moves one column by a diesis,
+which is the error behind Ab–C sounding as a diminished fourth,
+and almost never a spelling anyone means.
+A fifths step moves one row by a syntonic comma,
+the classic ambiguity,
+so it costs more and is taken only when it clearly helps:
+D F A struck together steps down a fifth,
+which turns the 9/8 D into 10/9 and removes the wolf fifth against A.
+
+The first onset of each attack group decides for the whole group.
+An attack group is every onset on one input sample,
+so a sequenced chord is decided as a chord,
+while a chord played by hand arrives one note at a time and is decided note by note.
+Releases on that sample apply first,
+so a chord change on one sample is weighed against what is actually still held.
+Each candidate is the current place or one step either way along each allowed axis.
+Its score is how much more complex,
+in bits of Tenney height,
+each interval the group would make is spelled than its 12-TET class needs,
+among the group's own notes and against the context,
+plus the cost of the step.
+The context is the one Adaptive uses:
+the held notes,
+or with nothing held the released ones,
+each decayed on the Adaptive half-life.
+A released note weighs half what a note in the chord does,
+so it decides between spellings the chord leaves open,
+but it cannot make the chord keep a wolf of its own.
+The lowest score wins;
+ties keep the current place,
+then go to the candidate farther from the place the offset parameters set.
+
+Following prefers drift.
+Held notes keep the tuning they started with,
+and a note just heard keeps its pitch where the chord allows,
+so a common tone holds still and the map moves around it rather than snapping back.
+D held from D minor into G major takes G and B a comma down with it rather than sounding a wolf against it,
+and the same happens with that D just released.
+I–vi–ii–V–I therefore ends a syntonic comma below where it started,
+and a chain of major-third relations drifts a diesis per lap,
+as in any adaptive just tuning.
+The map returns only when the context asks for it:
+G major straight after C major keeps the G just heard rather than stepping on.
+
+The follow offset adds to the offset parameters and never writes them,
+so it neither fights nor records into their automation.
+It returns to zero when following is turned off,
+when the retuning mode or the follow mode changes,
+and wherever Adaptive clears its released memory:
+after the silence timeout,
+at Stop and loop resets when those are enabled,
+and at an explicit session reset.
+A mode change takes effect at the next attack,
+which starts from the automated place with an empty context,
+so switching following off and on again with nothing played starts over.
+Selecting another saved map keeps the offset,
+so a passage that switches shapes keeps its place on the lattice.
+The lattice and the assignments list show the map where it sounds,
+including the follow offset,
+and the Tuning pane reports how far following has moved it.
+Shape edits are made against that same placement.
+
+This is a prototype.
+The score judges 5-limit consonance only:
+a septimal interval in a shape counts as its excess over the simplest 5-limit spelling of its class,
+or as zero when it is simpler,
+so following neither seeks out nor avoids sevens.
+A node in the context counts once,
+at its strongest weight,
+so an octave doubling adds nothing.
+Changing either mode clears the context,
+so notes held or heard before the change are not weighed.
+In Lattice Map mode the Hub's diagnostic count of context voices now counts mapped voices too.
 
 ## Saved identity and geometry
 

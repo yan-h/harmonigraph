@@ -179,6 +179,12 @@ pub struct HarmonigraphParams {
     pub map_sevenths_extension: IntParam,
     #[id = "tuning-engine"]
     pub tuning_engine: IntParam,
+    /// Whether Lattice Map slides the map by itself (`Follow`), as an index.
+    #[id = "map-follow"]
+    pub map_follow: IntParam,
+    /// Where following has moved the map, packed by [`lattice_maps::pack`]:
+    /// written by the Hub on audio, read by the editor.
+    pub map_followed: Arc<std::sync::atomic::AtomicU64>,
     session: std::sync::OnceLock<Arc<tuning::setup::Shared>>,
     configuration:
         std::sync::OnceLock<Arc<nice_plug::wrapper::clap::configuration::ConfigurationMailbox>>,
@@ -332,6 +338,11 @@ impl Default for HarmonigraphParams {
                     ["Pass through", "Adaptive", "Lattice Map"][value.clamp(0, 2) as usize].into()
                 }))
                 .non_automatable(),
+            map_follow: IntParam::new("Map Follow", 0, IntRange::Linear { min: 0, max: 2 })
+                .with_value_to_string(Arc::new(|value| {
+                    ["Off", "Thirds", "Thirds and fifths"][value.clamp(0, 2) as usize].into()
+                })),
+            map_followed: Default::default(),
             session: std::sync::OnceLock::new(),
             configuration: std::sync::OnceLock::new(),
             editor_state: editor::EguiState::from_size(
@@ -672,7 +683,8 @@ impl Default for Harmonigraph {
 impl Plugin for Harmonigraph {
     fn filter_state(state: &mut nice_plug::plugin::PluginState) {
         // Plain restore bypasses IntParam's range normalization. Repair all six
-        // lanes and default absent lanes so a previous preset cannot leak in.
+        // lanes and Map Follow, and default absent ones so a previous preset
+        // cannot leak in.
         for id in [
             "map-fifths",
             "map-thirds",
@@ -687,6 +699,11 @@ impl Plugin for Harmonigraph {
             };
             state.params.insert(id.into(), nice_plug::plugin::ParamValue::I32(value));
         }
+        let follow = match state.params.get("map-follow") {
+            Some(nice_plug::plugin::ParamValue::I32(value)) => (*value).clamp(0, 2),
+            _ => 0,
+        };
+        state.params.insert("map-follow".into(), nice_plug::plugin::ParamValue::I32(follow));
     }
 
     const NAME: &'static str = "Harmonigraph";
@@ -1000,6 +1017,7 @@ impl ClapPlugin for Harmonigraph {
         "map-fifths-extension",
         "map-thirds-extension",
         "map-sevenths-extension",
+        "map-follow",
     ];
     const CLAP_CONFIGURATION_PARAMS: &'static [&'static str] =
         &["tuning-c-offset", "tuning-three", "tuning-five", "tuning-seven", "tuning-tolerance"];
@@ -1045,6 +1063,7 @@ impl ClapPlugin for Harmonigraph {
             self.params.tuning_engine.value(),
             self.params.map.unmodulated_plain_value(),
             lattice_maps::offsets(&self.params),
+            self.params.map_follow.unmodulated_plain_value(),
         );
         owner.begin(boundary, &self.take, self.presentation_seconds);
     }
@@ -1589,6 +1608,7 @@ mod tests {
             "map-fifths-extension",
             "map-thirds-extension",
             "map-sevenths-extension",
+            "map-follow",
         ];
         for id in operational {
             assert!(host_ids.iter().any(|host| host == id), "missing operational parameter {id}");

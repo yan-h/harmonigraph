@@ -10,6 +10,9 @@ use harmonigraph_scene::FrameParams;
 pub struct VisualRuntime {
     pub lattice_maps: Option<crate::lattice_maps::MapView>,
     pub map_destination: Option<harmonigraph_core::LatticePos>,
+    /// Arrow keys pressed over the lattice, as one map translation.
+    pub map_translation:
+        Option<(harmonigraph_core::LatticePos, crate::lattice_maps::MapOffsetLane)>,
     pub console: Console,
     pub tracker: NoteTracker,
     /// Snapshot of the tuning parameters, refreshed each frame in
@@ -53,6 +56,7 @@ impl Default for VisualRuntime {
         Self {
             lattice_maps: None,
             map_destination: None,
+            map_translation: None,
             console: Console::default(),
             tracker: NoteTracker::new(),
             tuning: Tuning::default(),

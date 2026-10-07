@@ -1,7 +1,7 @@
 //! Editor-owned musical document, bounded audio snapshot and sample-indexed
 //! next-attack state. No editor window is needed for restore or automation.
 use harmonigraph_core::configuration::ResolvedConfig;
-use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
+use harmonigraph_core::lattice_map::{Follow, LatticeMap, TuningEngine};
 use harmonigraph_core::LatticePos;
 use harmonigraph_ui::lattice_maps::*;
 use nice_plug::prelude::*;
@@ -15,6 +15,36 @@ fn engine(value: i32) -> TuningEngine {
         0 => TuningEngine::Off,
         2 => TuningEngine::LatticeMap,
         _ => TuningEngine::Adaptive,
+    }
+}
+
+fn follow(value: i32) -> Follow {
+    match value {
+        1 => Follow::Thirds,
+        2 => Follow::ThirdsAndFifths,
+        _ => Follow::Off,
+    }
+}
+
+/// The follow offset as one atomic word: it only ever moves fifths and thirds.
+pub fn pack(offset: LatticePos) -> u64 {
+    (u64::from(offset.threes as u32) << 32) | u64::from(offset.fives as u32)
+}
+pub fn unpack(word: u64) -> LatticePos {
+    LatticePos::new((word >> 32) as u32 as i32, word as u32 as i32, 0)
+}
+
+/// Where following has moved the map, as the Hub last published it. The Hub
+/// publishes nothing moved while following is off or a mode change has yet to
+/// reach an attack; the parameters mask it as well, because with no process
+/// callbacks running the Hub publishes nothing at all.
+fn followed(params: &crate::HarmonigraphParams) -> LatticePos {
+    let following = engine(params.tuning_engine.value()) == TuningEngine::LatticeMap
+        && follow(params.map_follow.value()) != Follow::Off;
+    if following {
+        unpack(params.map_followed.load(std::sync::atomic::Ordering::Acquire))
+    } else {
+        LatticePos::ORIGIN
     }
 }
 
@@ -49,6 +79,12 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         editor.restore(mailbox.accepted_restore.load(std::sync::atomic::Ordering::Acquire));
     }
     let adopted = *params.map_playback.lock();
+    // An arrow press that has landed, or any other change to the lanes,
+    // retires the memo of what the last press sent.
+    let lanes = offsets(params);
+    if editor.translated.is_some_and(|(read, _)| read != lanes) {
+        editor.translated = None;
+    }
     let selected = params.map.value().clamp(0, 127) as usize;
     let offsets = offsets(params);
     let offset = offsets.total();
@@ -57,11 +93,21 @@ pub fn view(params: &crate::HarmonigraphParams) -> MapView {
         selected,
         offset,
         map: document.map(selected).map(|shape| translated(shape, offset)),
+        follow: follow(params.map_follow.value()),
+    };
+    // Intent is compared before following is added: the Hub's own movement is
+    // not host state waiting for audio to adopt it.
+    let pending = playback != adopted;
+    let followed = followed(params);
+    let shown = MapPlayback {
+        map: playback.map.map(|map| translated(map, map.position + followed)),
+        ..playback
     };
     MapView {
-        playback,
+        playback: shown,
         offsets,
-        pending: playback != adopted,
+        followed,
+        pending,
         names: editor.names(&document),
         edit_shape: editor.edit_shape,
         can_undo: playback.map.is_some() && editor.can_undo(selected),
@@ -126,12 +172,40 @@ pub fn edit(params: &crate::HarmonigraphParams, setter: &ParamSetter<'_>, edit: 
             setter.end_set_parameter(axis_param(axis, lane));
             false
         }
+        MapEdit::Translate(step, lane) => {
+            let seen = offsets(params);
+            let from = match params.map_editor.lock().translated {
+                Some((read, sent)) if read == seen => sent,
+                _ => seen,
+            };
+            if let Some(to) = from.translated(step, lane) {
+                for ((axis, lane, before), (_, _, after)) in
+                    from.lanes().into_iter().zip(to.lanes())
+                {
+                    if before != after {
+                        set(axis_param(axis, lane), after);
+                    }
+                }
+                params.map_editor.lock().translated = Some((seen, to));
+            }
+            false
+        }
+        MapEdit::Follow(mode) => {
+            let value = match mode {
+                Follow::Off => 0,
+                Follow::Thirds => 1,
+                Follow::ThirdsAndFifths => 2,
+            };
+            set(&params.map_follow, value);
+            false
+        }
         MapEdit::Replace(destination) => {
             let mut document = params.maps.write();
             let mut editor = params.map_editor.lock();
             let old = document.map(selected).filter(|_| editor.edit_shape);
             let reshaped = old.is_some_and(|old| {
-                let mut map = translated(old, offset(params));
+                // The destination was picked against the map as it sounds.
+                let mut map = translated(old, offset(params) + followed(params));
                 map.replace(destination) && {
                     map.position = LatticePos::ORIGIN;
                     document.reshape(selected, map)
@@ -195,6 +269,7 @@ const HISTORY: usize = 8192;
 pub struct AudioMaps {
     document: Arc<RwLock<MapDocument>>,
     published: Arc<Mutex<MapPlayback>>,
+    followed: Arc<std::sync::atomic::AtomicU64>,
     bank: [Option<LatticeMap>; MAP_CAPACITY],
     /// Which document state `bank` was built from, or `None` before the first
     /// read — see [`AudioMaps::adopt`] for what that key does and does not say.
@@ -207,6 +282,7 @@ pub struct AudioMaps {
     seed_mode: i32,
     seed_map: i32,
     seed_offset: MapOffsets,
+    seed_follow: i32,
     offsets: MapOffsets,
 }
 impl AudioMaps {
@@ -214,6 +290,7 @@ impl AudioMaps {
         Self {
             document: params.maps.clone(),
             published: params.map_playback.clone(),
+            followed: params.map_followed.clone(),
             bank: [None; MAP_CAPACITY],
             bank_revision: None,
             playback: MapPlayback::default(),
@@ -230,13 +307,19 @@ impl AudioMaps {
             seed_mode: 1,
             seed_map: 0,
             seed_offset: MapOffsets::default(),
+            seed_follow: 0,
             offsets: MapOffsets::default(),
         }
     }
-    pub fn seed(&mut self, mode: i32, map: i32, offset: MapOffsets) {
+    pub fn seed(&mut self, mode: i32, map: i32, offset: MapOffsets, follow: i32) {
         self.seed_mode = mode;
         self.seed_map = map;
         self.seed_offset = offset;
+        self.seed_follow = follow;
+    }
+    /// The Hub's follow offset, for the editor to draw the map where it sounds.
+    pub fn publish_followed(&self, offset: LatticePos) {
+        self.followed.store(pack(offset), std::sync::atomic::Ordering::Release);
     }
     pub fn begin(&mut self, boundary: ConfigurationBoundary) {
         if boundary.steady_time < self.boundary.steady_time + i64::from(self.boundary.frames) {
@@ -271,6 +354,7 @@ impl AudioMaps {
         self.playback.selected = self.seed_map.clamp(0, 127) as usize;
         self.offsets = self.seed_offset;
         self.playback.offset = self.offsets.total();
+        self.set_follow(follow(self.seed_follow));
         self.resolve();
         self.adopted = true;
         self.push(self.boundary.steady_time, config);
@@ -280,6 +364,23 @@ impl AudioMaps {
             self.engine_revision = self.engine_revision.saturating_add(1);
             self.playback.engine = engine;
         }
+    }
+    /// Under Lattice Map a follow mode is a retuning mode for this purpose:
+    /// changing it starts the Hub's context, and so its follow offset, over at
+    /// the next attack. Under any other engine it decides nothing, and must
+    /// not reset Adaptive's context; entering Lattice Map resets it anyway.
+    fn set_follow(&mut self, follow: Follow) {
+        if self.playback.follow != follow {
+            if self.playback.engine == TuningEngine::LatticeMap {
+                self.engine_revision = self.engine_revision.saturating_add(1);
+            }
+            self.playback.follow = follow;
+        }
+    }
+    /// The retuning-mode revision the latest observed state carries, which the
+    /// Hub compares against the one its context was built under.
+    pub fn engine_revision(&self) -> u64 {
+        self.engine_revision
     }
     fn resolve(&mut self) {
         self.playback.map =
@@ -297,6 +398,8 @@ impl AudioMaps {
                 self.playback.selected = (value.round() as i32).clamp(0, 127) as usize;
             } else if id == nice_plug::wrapper::hash_param_id("tuning-engine") {
                 self.set_engine(engine(value.round() as i32));
+            } else if id == nice_plug::wrapper::hash_param_id("map-follow") {
+                self.set_follow(follow(value.round() as i32));
             } else {
                 // CLAP stepped values are indices from zero, unlike saved/plain params.
                 let step = (value.round() as i32).clamp(0, 2 * OFFSET_LIMIT) - OFFSET_LIMIT;

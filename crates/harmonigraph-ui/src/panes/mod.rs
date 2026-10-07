@@ -250,6 +250,10 @@ impl Viewer<'_> {
                     self.params
                         .edit_lattice_map(crate::lattice_maps::MapEdit::Replace(destination));
                 }
+                if let Some((step, lane)) = self.state.runtime.map_translation.take() {
+                    self.params
+                        .edit_lattice_map(crate::lattice_maps::MapEdit::Translate(step, lane));
+                }
             }
             Tab::Tuning => tuning_pane(ui, self.state, self.params, self.now),
             Tab::LatticeSettings => {

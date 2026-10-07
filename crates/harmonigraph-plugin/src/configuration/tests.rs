@@ -2259,7 +2259,7 @@ fn adaptive_settings_restore_preview_save_and_audio_adoption_agree() {
 #[test]
 fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
     use harmonigraph_core::lattice_map::{LatticeMap, TuningEngine};
-    use harmonigraph_ui::lattice_maps::{MapDocument, MapEdit};
+    use harmonigraph_ui::lattice_maps::{MapDocument, MapEdit, MapOffsetLane};
     use std::sync::Arc;
     let _scope = crate::test_scope::enter();
     let mut device = Device::new();
@@ -2362,12 +2362,21 @@ fn lattice_maps_restore_without_editor_preserves_geometry_and_shared_tuning() {
         edit(MapEdit::Duplicate);
         let copied = crate::lattice_maps::view(&plugin.params);
         assert_eq!(&copied.names[2], &(2, "Distant passage copy".into()));
+        // Thirds stand at fine 8, coarse −1: two arrow presses carry into
+        // Coarse rather than stopping at the end of Fine, and the second,
+        // pressed before the host has applied the first, still counts.
+        let right = harmonigraph_core::LatticePos::new(0, 1, 0);
+        edit(MapEdit::Translate(right, MapOffsetLane::Fine));
+        edit(MapEdit::Translate(right, MapOffsetLane::Fine));
     });
     device.run(64, vec![], false);
     device.wrapper().test_inspect_plugin(|plugin| {
         let playback = *plugin.params.map_playback.lock();
+        let moved = crate::lattice_maps::offsets(&plugin.params);
+        assert_eq!((moved.fine.fives, moved.extension.fives), (0, 0), "−2 + 2 is exactly zero");
         assert_eq!(playback.selected, 2, "a duplicate is selected for further edits");
-        assert_eq!(playback.map, Some(changed));
+        let translated = LatticeMap { position: moved.total(), ..changed };
+        assert_eq!(playback.map, Some(translated), "audio adopts the translated shape");
         assert!(
             !crate::lattice_maps::view(&plugin.params).can_undo,
             "undo never reaches past the selected map to slot 1's edits"

@@ -1,5 +1,6 @@
 //! Explicit MIDI assignments. Geometry and fixed generator labels never depend
 //! on acoustic proximity, temperament spelling, or earlier notes.
+use crate::policy::ContextPitch;
 use crate::{LatticePos, Tuning};
 
 pub const COORDINATE_LIMIT: i32 = 4096;
@@ -10,6 +11,74 @@ pub enum TuningEngine {
     #[default]
     Adaptive,
     LatticeMap,
+}
+
+/// Whether Lattice Map moves the selected map by itself, and along which axes.
+///
+/// A prototype of adaptive tuning from the map's side: the map keeps its
+/// shape and the Hub slides it one step at a time so that a chord's intervals
+/// take their simplest spellings. A thirds step moves one column of the default
+/// shape by a diesis, which is almost never a spelling anyone means; a fifths
+/// step moves one row by a syntonic comma, which is the classic ambiguity, so
+/// it costs more and is taken only when it clearly helps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Follow {
+    #[default]
+    Off,
+    Thirds,
+    ThirdsAndFifths,
+}
+
+/// The distinct pitch classes of one attack group a follow decision weighs:
+/// all twelve, fixed so the decision runs on the audio thread without
+/// allocating.
+pub const FOLLOW_GROUP: usize = 12;
+
+/// What each step costs a follow decision, in the bits [`excess`] counts.
+/// A wolf fifth is about 5.5 bits and a Pythagorean third 4, so a fifths step
+/// pays for itself only against an error of that kind.
+const FIFTH_STEP: f64 = 1.0;
+const THIRD_STEP: f64 = 0.25;
+/// What a released note weighs against one sounding in the same chord. A note
+/// just heard keeps its pitch when nothing else decides, which is what makes
+/// the map drift rather than snap back; but it must not outvote the chord's own
+/// intervals, or C E G followed by D F A would keep D's wolf to stay level with
+/// the G before it.
+pub const FOLLOW_RELEASED: f64 = 0.5;
+
+/// The simplest 5-limit spelling of each 12-TET class, as (fifths, thirds).
+const SIMPLEST: [(i32, i32); 12] = [
+    (0, 0),
+    (-1, -1),
+    (2, 0),
+    (1, -1),
+    (0, 1),
+    (-1, 0),
+    (2, 1),
+    (1, 0),
+    (0, -1),
+    (-1, 1),
+    (-2, 0),
+    (1, 1),
+];
+
+/// Tenney height without the twos: `log2` of the odd part of the ratio.
+fn height(v: LatticePos) -> f64 {
+    const LOG2_3: f64 = 1.584_962_500_721_156;
+    const LOG2_5: f64 = 2.321_928_094_887_362;
+    const LOG2_7: f64 = 2.807_354_922_057_604;
+    f64::from(v.threes.unsigned_abs()) * LOG2_3
+        + f64::from(v.fives.unsigned_abs()) * LOG2_5
+        + f64::from(v.sevens.unsigned_abs()) * LOG2_7
+}
+
+/// How many bits more complex an interval is spelled than its 12-TET class
+/// needs: zero for a 3/2 or a 5/4, about 5.5 for the wolf fifth 40/27.
+/// Never negative: a septimal interval simpler than the class's 5-limit
+/// spelling, such as 7/4 against 16/9, counts as zero rather than as a reward.
+pub fn excess(v: LatticePos) -> f64 {
+    let (fifths, thirds) = SIMPLEST[LatticeMap::midi_class(v)];
+    (height(v) - height(LatticePos::new(fifths, thirds, 0))).max(0.0)
 }
 
 /// `Copy` here is load-bearing rather than a convenience: the AUDIO thread
@@ -94,6 +163,83 @@ impl LatticeMap {
         (self.node(key), key * 100_000_000 + self.correction(key, tuning) - pitch)
     }
 
+    /// Where a follow decision moves the map for a group of keys struck
+    /// together, as the next follow offset on top of `self.position`.
+    ///
+    /// Candidates are one step either way along each axis `follow` allows,
+    /// from `current`. Each is scored by the [`excess`] of every interval the
+    /// group's nodes would make among themselves and against `context`, each
+    /// interval to a context node weighted as Adaptive weighs it; a step adds
+    /// its own cost, so the map stays put unless moving makes the chord
+    /// simpler. The context is Adaptive's too: the held notes, or with nothing
+    /// held the released ones, so a common tone keeps its pitch and the map
+    /// drifts rather than snapping back. A node in the context counts once,
+    /// at its strongest weight, as in Adaptive, so an octave doubling adds
+    /// nothing. Ties keep the current place, and otherwise go to the candidate
+    /// farther from the automated place.
+    pub fn follow(
+        &self,
+        follow: Follow,
+        current: LatticePos,
+        context: &[ContextPitch],
+        keys: &[i64],
+    ) -> LatticePos {
+        let fifths: &[i32] = match follow {
+            Follow::Off => return LatticePos::ORIGIN,
+            Follow::Thirds => &[0],
+            Follow::ThirdsAndFifths => &[0, -1, 1],
+        };
+        let mut classes = [false; 12];
+        for key in keys {
+            classes[key.rem_euclid(12) as usize] = true;
+        }
+        // Each context node once, at its strongest weight, gathered before the
+        // candidates so their loop reads each node once.
+        let mut anchors =
+            [(LatticePos::ORIGIN, 0.0); crate::policy::MAX_CONTEXT + crate::policy::MAX_MEMORY];
+        let mut anchored = 0;
+        for (node, weight) in context.iter().filter_map(|c| c.node.map(|node| (node, c.weight))) {
+            if let Some(anchor) = anchors[..anchored].iter_mut().find(|a| a.0 == node) {
+                anchor.1 = f64::max(anchor.1, weight);
+            } else if anchored < anchors.len() {
+                anchors[anchored] = (node, weight);
+                anchored += 1;
+            }
+        }
+        let mut best = (f64::INFINITY, f64::NEG_INFINITY, current);
+        for &df in fifths {
+            for dt in [0, -1, 1] {
+                let offset = current + LatticePos::new(df, dt, 0);
+                let map = LatticeMap { position: self.position + offset, ..*self };
+                if !map.valid() {
+                    continue;
+                }
+                let mut nodes = [LatticePos::ORIGIN; 12];
+                let mut count = 0;
+                for (class, _) in classes.iter().enumerate().filter(|(_, struck)| **struck) {
+                    nodes[count] = map.node(class as i64);
+                    count += 1;
+                }
+                let mut cost = FIFTH_STEP * f64::from(df.abs()) + THIRD_STEP * f64::from(dt.abs());
+                for (i, &node) in nodes[..count].iter().enumerate() {
+                    cost +=
+                        nodes[i + 1..count].iter().map(|&other| excess(other - node)).sum::<f64>();
+                    cost += anchors[..anchored]
+                        .iter()
+                        .map(|&(other, weight)| weight * excess(other - node))
+                        .sum::<f64>();
+                }
+                // The current place wins every tie it is part of.
+                let distance = if offset == current { f64::INFINITY } else { height(offset) };
+                let tied = (cost - best.0).abs() <= 1e-9;
+                if cost < best.0 - 1e-9 || (tied && distance > best.1) {
+                    best = (cost, distance, offset);
+                }
+            }
+        }
+        best.2
+    }
+
     /// The exact destination determines the replaced slot. No source-selection
     /// or temperament canonicalization is involved.
     pub fn replace(&mut self, destination: LatticePos) -> bool {
@@ -153,6 +299,72 @@ mod tests {
         assert_eq!(map.node(1), destination);
         assert!(!map.replace(destination));
         assert!(map.valid());
+    }
+
+    /// The table [`excess`] measures against is the brute-force answer.
+    #[test]
+    fn simplest_spellings_are_the_least_complex_of_each_class() {
+        for (class, &(f, t)) in SIMPLEST.iter().enumerate() {
+            let least = (-8..=8)
+                .flat_map(|f| (-4..=4).map(move |t| LatticePos::new(f, t, 0)))
+                .filter(|&v| LatticeMap::midi_class(v) == class)
+                .map(height)
+                .fold(f64::INFINITY, f64::min);
+            assert!((height(LatticePos::new(f, t, 0)) - least).abs() < 1e-9, "class {class}");
+        }
+        assert_eq!(excess(LatticePos::new(0, 0, 1)), 0.0, "7/4 is not a reward over 16/9");
+    }
+
+    #[test]
+    fn follow_mends_an_obvious_wolf_and_keeps_still_otherwise() {
+        let map = LatticeMap::default();
+        let both = Follow::ThirdsAndFifths;
+        let chord = |offset: LatticePos, keys: &[i64]| {
+            let map = LatticeMap { position: map.position + offset, ..map };
+            keys.iter().map(|&k| map.node(k)).collect::<Vec<_>>()
+        };
+        let pure = |nodes: &[LatticePos]| {
+            nodes.iter().all(|&a| nodes.iter().all(|&b| excess(b - a) < 1e-9 || a == b))
+        };
+        let (d_minor, c_major, a_flat) = ([62, 65, 69], [60, 64, 67], [68, 72, 75]);
+        assert!(!pure(&chord(LatticePos::ORIGIN, &d_minor)), "the fixture must hold the wolf");
+        // D F A from rest: one fifths step makes D 10/9 and the triad pure.
+        let moved = map.follow(both, LatticePos::ORIGIN, &[], &d_minor);
+        assert_eq!(moved, LatticePos::new(-1, 0, 0));
+        assert!(pure(&chord(moved, &d_minor)));
+        assert_eq!(
+            map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &d_minor),
+            LatticePos::ORIGIN
+        );
+        assert_eq!(map.follow(Follow::Off, moved, &[], &c_major), LatticePos::ORIGIN);
+        // A chord already pure, and a lone note, never move the map.
+        assert_eq!(map.follow(both, LatticePos::ORIGIN, &[], &c_major), LatticePos::ORIGIN);
+        assert_eq!(map.follow(both, moved, &[], &[61]), moved);
+        // Ab major takes a thirds step rather than a diminished fourth.
+        let flat = map.follow(Follow::Thirds, LatticePos::ORIGIN, &[], &a_flat);
+        assert_eq!(flat, LatticePos::new(0, -1, 0));
+        assert!(pure(&chord(flat, &a_flat)));
+        // G B D after the moved D minor follows its 10/9 D down a comma rather
+        // than returning, whether that D is still held or was just released,
+        // and with no context at all returning and drifting tie and it drifts.
+        let context = |nodes: Vec<LatticePos>| {
+            nodes
+                .into_iter()
+                .map(|node| ContextPitch { pitch: 0, node: Some(node), weight: 1.0 })
+                .collect::<Vec<_>>()
+        };
+        let drifted = LatticePos::new(-2, 0, 0);
+        let held = chord(moved, &[62]);
+        assert_eq!(map.follow(both, moved, &context(held.clone()), &[67, 71]), drifted);
+        assert!(pure(&[chord(drifted, &[67, 71]), held].concat()));
+        let released = context(chord(moved, &d_minor));
+        assert_eq!(map.follow(both, moved, &released, &[67, 71, 74]), drifted);
+        assert_eq!(map.follow(both, moved, &[], &[67, 71, 74]), drifted);
+        // A released G# an octave doubled weighs as one G#: once, it is not
+        // worth a thirds step for C major; counted twice, it would be.
+        let g_sharp = ContextPitch { pitch: 0, node: Some(map.node(68)), weight: 0.6 };
+        let doubled = [g_sharp, ContextPitch { pitch: 1_200_000_000, ..g_sharp }];
+        assert_eq!(map.follow(both, LatticePos::ORIGIN, &doubled, &c_major), LatticePos::ORIGIN);
     }
 
     #[test]
