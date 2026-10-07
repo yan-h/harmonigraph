@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-analysis"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "harmonigraph-core",
  "realfft",
@@ -1373,18 +1373,18 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-core"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "harmonigraph-golden"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "png",
 ]
 
 [[package]]
 name = "harmonigraph-metal-assets"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
  "sha2",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-offline"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-perf"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "harmonigraph-render",
  "libc",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-plugin"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "baseview",
  "clap-sys",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-record"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "harmonigraph-core",
  "harmonigraph-take",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-render"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1474,7 +1474,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-scene"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "color_space",
  "foldhash 0.2.0",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-standalone"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "egui",
@@ -1499,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-take"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "harmonigraph-core",
  "ron",
@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "harmonigraph-ui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "egui",
  "egui-wgpu",

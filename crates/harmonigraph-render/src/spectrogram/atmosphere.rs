@@ -1968,7 +1968,12 @@ mod tests {
     /// no slice draws a star smaller than asked.
     #[test]
     fn one_star_size_is_one_star_at_every_depth() {
-        let mut settings = harmonigraph_scene::SpectralAtmosphere::default();
+        // The type's spacings, which close from far to near: the captured
+        // look's pack the far three at the floor and open out toward the near.
+        let mut settings = harmonigraph_scene::SpectralAtmosphere {
+            stars: harmonigraph_scene::StarSettings::default(),
+            ..Default::default()
+        };
         for size in [4.0, harmonigraph_scene::STAR_SIZE_MAX] {
             settings.stars.star_size = [size; STAR_SLICES];
             let slices = slices(settings, 0.0);
@@ -2389,6 +2394,9 @@ mod tests {
             settings: harmonigraph_scene::SpectralAtmosphere {
                 cloud_style: harmonigraph_scene::CloudStyle::VelvetScales,
                 cloud_depth: 1.0,
+                // The type's 1x cells: the captured look's are small enough
+                // to draw native, where no dial step would reduce them.
+                material_settings: harmonigraph_scene::MaterialSettings::default(),
                 ..Default::default()
             },
             region: egui::Rect::ZERO,

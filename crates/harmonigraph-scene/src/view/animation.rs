@@ -45,9 +45,9 @@ impl Default for NoteAnimationConfig {
     fn default() -> Self {
         Self {
             order: AnimationOrder::Bidirectional,
-            stagger_spread: 0.538_799_94,
-            radial_start: -0.057_507_753,
-            lit_first: false,
+            stagger_spread: 0.602_636_7,
+            radial_start: -0.034_186_72,
+            lit_first: true,
         }
     }
 }

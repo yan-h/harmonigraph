@@ -846,7 +846,7 @@ const DEFAULT_ANALYZER_CEILING_DB: f32 = -18.606_335;
 /// The top of the heatmap's own colour window.
 /// Kept separate from the analyzer ceiling because both were dialled to their
 /// own values in the live capture.
-const DEFAULT_VOLUME_CEILING_DB: f32 = -28.842_316;
+const DEFAULT_VOLUME_CEILING_DB: f32 = -35.144_592;
 
 /// The tilt settings offered, per analyzer convention (-1.5 dB/oct
 /// increments; see [`SpectrumConfig::tilt`]).
@@ -874,7 +874,7 @@ impl Default for SpectrumConfig {
     fn default() -> Self {
         SpectrumConfig {
             orientation: SpectralOrientation::Right,
-            window: SpectrumWindow::Balanced,
+            window: SpectrumWindow::Fast,
             // One taper — the picture with no averaging in it. The steadier
             // counts cost contrast as well as CPU (see `SpectrumTapers`), so
             // which of them is worth it is a judgement about material, and the
@@ -887,10 +887,11 @@ impl Default for SpectrumConfig {
             ceiling_db: DEFAULT_ANALYZER_CEILING_DB,
             // Meter ballistics: quick enough up that a note's arrival is not
             // behind the ear, slow enough down that the estimator's own noise
-            // wobbling between columns does not draw. 10 ms is inside one hop,
-            // so an arrival is essentially instant; 150 ms is most of a second
-            // of visible decay without holding a chord that has left.
-            attack: 0.010,
+            // wobbling between columns does not draw. Under a tenth of a
+            // second up, as captured from the DAW on 2026-10-07, smooths an
+            // arrival without trailing it; 150 ms is most of a second of
+            // visible decay without holding a chord that has left.
+            attack: 0.086_588_67,
             release: 0.150,
             // The slope that flattens typical musical material — what the
             // analyzer is looked at through nearly all the time, so it is
@@ -901,11 +902,11 @@ impl Default for SpectrumConfig {
             // Bright levels wear their own color; dark ones are lifted only a
             // little toward a pastel of theirs, so quiet contours stay visible
             // without competing with the loud ones.
-            keyline_lift: 0.230_529_95,
-            // The backdrop at about three fifths, reaching nearly to the top,
-            // as captured from the DAW on 2026-09-26; one stripe in two.
-            backdrop_strength: 0.603_898_1,
-            backdrop_height: 0.952_823_6,
+            keyline_lift: 0.422_058_7,
+            // No backdrop, as captured from the DAW on 2026-10-07; its height
+            // and stripe ride inert at their captured values.
+            backdrop_strength: 0.0,
+            backdrop_height: 0.655_113_8,
             backdrop_gap: 1.0,
             atmosphere: harmonigraph_scene::SpectralAtmosphere::default(),
             // The analyzer range captured from the DAW on 2026-09-13.
@@ -913,17 +914,17 @@ impl Default for SpectrumConfig {
             high_midi: 131.344_91,
             show_roll: true,
             // Most of the pane to the roll, as captured from the DAW on
-            // 2026-09-26; the analyzer's own display keeps the rest.
-            roll_fraction: 0.851_343_45,
-            // About forty seconds of history, as captured from the DAW on
-            // 2026-09-26: the last phrase or two, drawn wide enough to read.
-            roll_seconds: 39.149_967,
-            // Thin: a note is a line through the spectrogram at its own
-            // pitch, not a slab over it. At 0.3 semitones a semitone of pitch
-            // axis still separates two neighbouring keys, which is what makes
+            // 2026-10-07; the analyzer's own display keeps the rest.
+            roll_fraction: 0.806_582_03,
+            // Nearly three minutes of history, as captured from the DAW on
+            // 2026-10-07: most of a song on screen at once.
+            roll_seconds: 163.330_38,
+            // About half a semitone: a note is a line through the spectrogram
+            // at its own pitch, not a slab over it, and a gap as wide as the
+            // line still separates two neighbouring keys, which is what makes
             // the roll readable when the pitch range is zoomed out over the
             // whole spectrum.
-            roll_thickness: 0.3,
+            roll_thickness: 0.551_037_2,
             // A long tongue whose fade spans nearly its whole reach: about a
             // third of the analyzer, softening almost from the note itself. A
             // sounding note reaches well into the curve it is making, so which
@@ -961,7 +962,7 @@ impl Default for SpectrumConfig {
                     chroma: false,
                 },
             },
-            volume_floor_db: -64.853_1,
+            volume_floor_db: -68.137_18,
             volume_ceiling_db: DEFAULT_VOLUME_CEILING_DB,
         }
     }

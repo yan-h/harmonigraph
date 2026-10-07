@@ -1393,13 +1393,13 @@ impl Default for ViewConfig {
             // marks rather than a solid annulus, and every layer keeps clear
             // space around it. (The backdrop that holds the whole ring's shape
             // behind them is fixed on.)
-            band_width: 0.188_422_56,
-            // The stack sits about seven tenths of the way out, leaving a broad
+            band_width: 0.137_923_06,
+            // The stack sits about three quarters of the way out, leaving a broad
             // middle for the glow's field while the octave band reads as the
             // node's perimeter. Dialled to 0 the stack seats on the center and
             // its wedges close into pie slices, which is the same node read as
             // one solid measurement.
-            ring_inner: 0.703_436_8,
+            ring_inner: 0.762_950_96,
             // One gap on both axes: the radial padding is what puts the band at
             // its outer edge, and the same width cut angularly is the slicing
             // that reads as distinct marks.
@@ -1456,7 +1456,7 @@ impl Default for ViewConfig {
             fade_shape: 0.313_509_55,
             note_animation: NoteAnimationConfig::default(),
             intensity: crate::IntensitySettings::default(),
-            note_bloom: 1.022_367_7,
+            note_bloom: 0.800_103_1,
             // A hairline step past the band — about an eighth of the band's
             // own width, so a mark reads as its slice carrying on rather than
             // as a second ring around everything.
@@ -1481,44 +1481,45 @@ impl Default for ViewConfig {
             // showing duplicate comma spellings.
             meantone: true,
             marvel: true,
-            render_scale: 1.0,
+            // A slight supersample, as captured from the DAW on 2026-10-07.
+            render_scale: 1.081_869_1,
             // The lattice's bloom strength (`bloom_strength`, retired into
             // `note_bloom` by #1140), which the Spiral shared until it had its
             // own (#1083).
             spiral_bloom: 0.633_927_7,
             // A reach spanning several lattice steps turns each node's light
-            // into a shared field, at just over half strength as captured
-            // from the DAW on 2026-09-26.
-            glow_reach: 6.001_968_4,
+            // into a shared field, at a little under half strength as captured
+            // from the DAW on 2026-10-07.
+            glow_reach: 6.513_377,
             atmosphere: AtmosphereSettings::default(),
-            glow_strength: 0.570_992_95,
+            glow_strength: 0.438_755_4,
             glow_curve: GlowCurve::default(),
             // Four groups at four styles, which is the picture as captured
             // from the DAW: the numbers themselves live in `impl Default for
             // ShadowSettings`, that being the one source of a persisted
             // group's fallback.
             shadow: ShadowSettings::default(),
-            // About two fifths of the field, where the picture opened on the
+            // About a third of the field, where the picture opened on the
             // whole of it: a sounding slice is pulled back out of its own halo
             // and reads as ink rather than as light, while the resting grey
             // around it still wears what it stands in. That is exactly what
             // the bar is for, and the fresh view now uses it.
-            glow_wash: 0.395_398_86,
+            glow_wash: 0.338_466_02,
             // Two thirds of the way round: an octave's arc is softened well
             // into its neighbours rather than cut against them, which is what
             // turns the overlapping fields of a chord into one light instead
             // of a stack of coloured rings.
             glow_blend: 0.669_761_9,
-            // The fixed-peak glow alone: with the blend above carrying a
-            // chord's halos into each other, the per-channel screen
-            // accumulation was adding brightness where they meet on top of a
-            // union that already reads as one light.
-            glow_accumulation: 0.0,
+            // A touch of per-channel screen accumulation over the fixed peak,
+            // as captured from the DAW on 2026-10-07: with the blend above
+            // already carrying a chord's halos into one light, more than this
+            // adds brightness where they meet.
+            glow_accumulation: 0.165_402_4,
             // Slow and fluid, which is what the pair is for: a light that
-            // arrives inside a third of a second and takes a couple of seconds
+            // arrives inside two thirds of a second and takes a couple of seconds
             // to leave, so a halo trails the notes that lit it instead of
             // stepping with them.
-            glow_attack: 0.3,
+            glow_attack: 0.657_963_7,
             glow_release: 2.5,
         }
     }

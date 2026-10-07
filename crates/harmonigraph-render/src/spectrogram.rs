@@ -1511,9 +1511,12 @@ mod tests {
     /// Silence is the claim the look is most likely to break: no star is drawn
     /// over silence, so a quiet pane must settle on the floor EXACTLY — on a
     /// palette whose floor is not black, so an invented black would show —
-    /// rather than a field of faint noise. Run as the fresh Stars ship, with
-    /// their colour response on, so the silence is the one a history fades
-    /// into after sound stops: seven Releases on, nothing of the stars is left.
+    /// rather than a field of faint noise. Run with the fresh colour response
+    /// on, so the silence is the one a history fades into after sound stops:
+    /// ten Releases on, nothing of the stars is left. Seven are not enough on
+    /// this floor — the brightest star's e^-7 residue rounds a level above it.
+    /// Lives are the longest the dial allows, or over the wait every star turns
+    /// over into a new life that carries no history and the fade is never read.
     #[test]
     fn the_starfield_lights_sound_and_leaves_silence_on_the_floor() {
         let Some((device, queue)) = headless_device() else { return };
@@ -1523,6 +1526,7 @@ mod tests {
         let s = &mut cb.atmosphere.as_mut().unwrap().settings;
         s.cloud_style = harmonigraph_scene::CloudStyle::Stars;
         (s.color_pickup, s.color_release) = (fresh.color_pickup, fresh.color_release);
+        s.stars.star_lifetime = harmonigraph_scene::STAR_LIFETIME_MAX;
         s.cloud_depth = 0.0;
         let bare = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 1.0;
@@ -1546,10 +1550,14 @@ mod tests {
         assert!(shape.stars.is_some() && shape.tone.is_none() && shape.tile.is_none());
         assert!(targets.shape().memory.is_some(), "the fresh Stars ran without their history");
         cb.grid.fill(0);
-        cb.atmosphere.as_mut().unwrap().now += 7.0 * f64::from(fresh.color_release);
+        let release = f64::from(fresh.color_release);
+        cb.atmosphere.as_mut().unwrap().now += release;
+        let fading = frame_with(&device, &queue, &mut resources, &cb);
+        cb.atmosphere.as_mut().unwrap().now += 9.0 * release;
         let silent = frame_with(&device, &queue, &mut resources, &cb);
         cb.atmosphere.as_mut().unwrap().settings.cloud_depth = 0.0;
         let floor = frame_with(&device, &queue, &mut resources, &cb);
+        assert_ne!(fading, floor, "the history never carried the stars into the silence");
         assert_eq!(silent, floor, "silence drew something other than the floor");
         assert!(floor.chunks_exact(4).any(|px| px[..3] != [0, 0, 0]), "the floor is black");
     }
@@ -1694,6 +1702,13 @@ mod tests {
                     wash_lobe: 0.55,
                     ..Default::default()
                 },
+                // No tide line, which the probes that want one turn up: the
+                // fresh pool would darken every edge they measure, and would
+                // keep a wash drawn at zero refraction.
+                wash_pool: 0.0,
+                // The type's stars rather than the captured look's, whose
+                // jitter, spacings and sizes the starfield probes are not about.
+                stars: harmonigraph_scene::StarSettings::default(),
                 ..Default::default()
             },
             region: cb.rect,

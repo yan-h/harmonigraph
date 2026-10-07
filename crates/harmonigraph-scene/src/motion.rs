@@ -787,13 +787,15 @@ mod tests {
         scene
     }
     /// The fresh view with every note drawn in full and every slice moving
-    /// at once, so a test about timing reads one slice's progress and one
-    /// node's activation without the fresh intensity routes or stagger in
-    /// them. The tests about orders or intensity set their own.
+    /// at once in its order's own sequence, so a test about timing reads one
+    /// slice's progress and one node's activation without the fresh intensity
+    /// routes, stagger or lit-first reordering in them. The tests about
+    /// orders, lit-first or intensity set their own.
     fn view() -> ViewConfig {
         let mut view =
             ViewConfig { intensity: crate::IntensitySettings::unrouted(), ..ViewConfig::default() };
         view.note_animation.stagger_spread = 0.0;
+        view.note_animation.lit_first = false;
         view
     }
     fn origin(scene: &Scene) -> &crate::NodeInstance {
@@ -1038,12 +1040,19 @@ mod tests {
         assert!((activation - 0.25).abs() < 1e-5, "half the release left, at half: {activation}");
         assert!((glow - 0.25).abs() < 1e-5, "the glow departs with the ink: {glow}");
     }
-    /// Fresh settings route velocity and gain to Opacity, and the glow takes
-    /// the drawn ink there too, the melody mark included: a soft note's halo is
-    /// as faint as its most opaque slice, a loud one's is full.
+    /// With velocity and gain routed to Opacity over a rest of about a third
+    /// (the fresh routes captured on 2026-09-26), the glow takes the drawn ink
+    /// there too, the melody mark included: a soft note's halo is as faint as
+    /// its most opaque slice, a loud one's is full.
     #[test]
-    fn fresh_opacity_routes_dim_the_glow_with_the_ink() {
-        let intensity = crate::IntensitySettings::default();
+    fn opacity_routes_dim_the_glow_with_the_ink() {
+        use crate::IntensitySource;
+        let intensity = crate::IntensitySettings {
+            velocity: IntensitySource { opacity: Some(0.606_835_6), thickness: None },
+            gain: IntensitySource { opacity: Some(0.511_064_47), thickness: None },
+            opacity_rest: 0.302_850_54,
+            ..crate::IntensitySettings::unrouted()
+        };
         let view = ViewConfig { fade_shape: 0.0, intensity, ..view() };
         let held = |velocity| {
             let mut tracker = NoteTracker::new();

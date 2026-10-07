@@ -1655,6 +1655,11 @@ mod tests {
         // A long fade, so the release is a stretch to sample in rather than a
         // frame of it, and the arrival has landed well before the first sample.
         state.runtime.frame_params.fade_time = 1.0;
+        // Every slice moving at once, so the release starts at the key-up. The
+        // stagger delays a slice's departure by its place in the order (and
+        // lit slices first holds the lit one for the whole of it), which can
+        // put the start of the release past the mid-release sample below.
+        state.appearance.view.note_animation.stagger_spread = 0.0;
         assert!(
             state.appearance.view.show_cents,
             "the fresh view draws cents; without them this is one line"

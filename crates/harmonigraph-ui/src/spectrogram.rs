@@ -3534,7 +3534,15 @@ mod tests {
             // Spans that straddle a rung of `live_slab`'s ladder at this pane
             // width: 0.6 s cuts into 16 ms slabs and 0.8 s into 32 ms ones.
             let (near, mid, far) = (0.3f64, 0.6, 0.8);
-            let view = |window: f64| pane(window, 40.0, 64.0);
+            let view = |window: f64| {
+                let mut view = pane(window, 40.0, 64.0);
+                // A colour window the bed and the peak both land inside, as the
+                // one of 2026-09-26 did: one they both clip at the top of draws
+                // every slot the same white, and a mis-slotted slab with it.
+                view.cfg.volume_floor_db = -64.853_1;
+                view.cfg.volume_ceiling_db = -28.842_316;
+                view
+            };
             push(&mut tally, &mut spectrum, 120, 0.0);
             for _ in 0..3 {
                 frame(&mut tally, &mut spectrum, &mut surfaces, &mut headless, &view(mid));

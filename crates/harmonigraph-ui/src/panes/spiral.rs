@@ -1257,6 +1257,10 @@ mod tests {
         let mut state = fresh();
         state.appearance.spectrum.low_midi = 60.0;
         state.appearance.spectrum.high_midi = 96.0;
+        // A colour window whose top is above the tone, so its peak is one
+        // brightest bucket rather than a run clipped to the gradient's top,
+        // which the peak's reading lands anywhere along.
+        state.appearance.spectrum.volume_ceiling_db = 0.0;
         // 1 kHz, the tilt's own pivot, so the slope takes nothing off the level
         // and the peak is the tone's alone.
         let sr = 48_000.0;
