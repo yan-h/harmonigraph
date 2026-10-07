@@ -227,17 +227,9 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
     let Some((device, queue)) = headless_device() else {
         return;
     };
-    for case in [
-        "time",
-        "wrap",
-        "speed-far",
-        "speed-middle",
-        "speed-near",
-        "direction",
-        "lifetime",
-        "width",
-        "held",
-    ] {
+    for case in
+        ["time", "wrap", "speed-far", "speed-middle", "speed-near", "direction", "lifetime", "held"]
+    {
         eprintln!("Stars memory change: {case}");
         let wrap = case == "wrap";
         // A star that does not twinkle keeps its place, and so its colour,
@@ -269,12 +261,6 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
             "speed-near" => a.settings.stars.star_speed[STAR_SLICES - 1] += 0.01,
             "direction" => a.settings.cloud_direction += 0.1,
             "lifetime" => a.settings.stars.star_lifetime += 0.001,
-            "width" => {
-                let previous_width = cb.rect.width();
-                cb.rect.max.x -= 2.0;
-                // The UI keeps the time window fixed while the analyzer grows.
-                a.points_per_ms *= cb.rect.width() / previous_width;
-            }
             _ => {}
         }
         a.now += 0.25;
@@ -284,12 +270,6 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
         assert_eq!(allocated(m), old_size, "{case}: fixture replaced the history allocation");
         let after = pixels(&device, &queue, m);
         let frame = m.frame.as_ref().unwrap();
-        if case == "width" {
-            assert!(
-                frame.slices.iter().zip(old_slices).any(|(new, old)| new.grid != old.grid),
-                "width fixture did not change any grid"
-            );
-        }
         if wrap {
             assert!(
                 old_slices[STAR_SLICES - 1].offset.0[0] > 65530.0
@@ -340,22 +320,18 @@ fn star_color_memory_follows_cells_and_resets_each_new_life() {
     }
 }
 
-/// Width edits carry only while integer cell IDs still name the same stars.
-/// Atlas-budget flooring can change that identity without reallocating history.
+/// A resize, a zoom or a cleared history moves the sound under every star, so
+/// the stars take the new picture's colour at once rather than fading to it —
+/// even where the integer cells still name the same stars. Each case moves one
+/// key entry alone; `spacing` is the cells, which name different stars.
 #[test]
-fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
+fn star_memory_resets_when_the_pane_resizes_zooms_or_clears() {
     let Some((device, queue)) = headless_device() else { return };
-    for budgeted in [false, true] {
+    for case in ["height", "width", "zoom", "clear", "spacing"] {
         let mut cb = fixture(CloudStyle::Stars);
         let a = cb.atmosphere.as_mut().unwrap();
         a.settings.stars.star_speed = [0.0; STAR_SLICES];
-        if budgeted {
-            a.settings.stars.star_spacing_ratio[0] =
-                harmonigraph_scene::atmosphere::STAR_SPACING_MIN;
-            a.settings.stars.star_size[0] = harmonigraph_scene::atmosphere::STAR_SIZE_MIN;
-        }
-        let settings = a.settings;
-        let old_cells = star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells;
+        let old_cells = star_layout(a.settings.stars, cb.rect.width() / cb.rect.height()).cells;
         let mut resources = CallbackResources::default();
         cb.grid.fill(255);
         prepare_once(&device, &queue, &mut resources, &cb);
@@ -364,18 +340,26 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
         let old_slices = old.frame.as_ref().unwrap().slices;
         let old_life = old.frame.as_ref().unwrap().life;
         assert!(pixels(&device, &queue, old).iter().filter(|p| p[3] > 0.1).count() > 1000);
-        if budgeted {
-            cb.rect.max.x += 1.0;
-            assert_ne!(
-                old_cells,
-                star_layout(settings.stars, cb.rect.width() / cb.rect.height()).cells,
-                "fixture did not change atlas-budget cell sizes"
-            );
-        } else {
-            cb.rect.max.y += 1.0;
+        let a = cb.atmosphere.as_mut().unwrap();
+        match case {
+            "height" => cb.rect.max.y += 1.0,
+            "width" => cb.rect.max.x -= 2.0,
+            "zoom" => a.points_per_ms *= 0.9,
+            "clear" => a.history_epoch += 1,
+            _ => {
+                // Small enough that a fresh pane still allocates the held
+                // atlas (5% wider drops it a row bucket), so only the cells
+                // say these are new stars.
+                a.settings.stars.star_spacing_ratio[0] *= 1.02;
+                assert_ne!(
+                    old_cells,
+                    star_layout(a.settings.stars, cb.rect.width() / cb.rect.height()).cells,
+                    "spacing fixture did not change the cells"
+                );
+            }
         }
+        a.now += 1.0 / 60.0;
         cb.grid.fill(0);
-        cb.atmosphere.as_mut().unwrap().now += 1.0 / 60.0;
         prepare_once(&device, &queue, &mut resources, &cb);
         let current = memory(&resources);
         assert_eq!(
@@ -404,12 +388,17 @@ fn star_memory_resets_when_height_or_budgeted_cell_sizes_change() {
                 }
             }
         }
-        assert!(overlap > 1000, "fixture could not have carried stale cells");
+        assert!(overlap > 1000, "{case}: fixture could not have carried stale cells");
         let mut fresh = CallbackResources::default();
         prepare_once(&device, &queue, &mut fresh, &cb);
+        assert_eq!(
+            allocated(memory(&fresh)),
+            allocated(current),
+            "{case}: fixture compares histories of different sizes"
+        );
         assert!(
             pixels(&device, &queue, current) == pixels(&device, &queue, memory(&fresh)),
-            "changed star identity retained stale color"
+            "{case}: retained stale color"
         );
     }
 }

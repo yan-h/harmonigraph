@@ -278,6 +278,7 @@ pub(crate) fn draw_spectrogram(
             // alone would name the rung this frame would freshly choose.
             points_per_slab: (layout.bucket * 1000.0) as f32 * points_per_ms,
             now,
+            history_epoch: spectrum.history_epoch(),
         }),
     ));
 }

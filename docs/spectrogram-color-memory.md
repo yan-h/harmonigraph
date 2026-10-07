@@ -15,6 +15,7 @@ The first frame initializes directly from the current picture, including an expo
 Exports warm history through frames they actually render; audio-analysis preroll does not invent earlier visual frames.
 
 Stars retain one color per depth slice, absolute cell and lifetime.
+A cell is identified only within one pane geometry: a resize or a time zoom moves the sound under it, so either one resets history.
 The previous atlas origin and layout locate each surviving cell, including a drift-period wrap.
 New lives and newly entering cells initialize from current light.
 The geometry atlas still supplies sharp coverage, fringe, size and life fade;
@@ -47,6 +48,8 @@ Memory disabled allocates none of these textures.
 
 History survives changes to the scalar blur target's allocation when its own dimensions are unchanged.
 The reset key includes active material coordinates, source interpretation, palette and active style's color controls.
+It also includes the pane's geometry (size, points per millisecond and per cent) and a history epoch that Clear history advances,
+so a resize, a time zoom or a cleared history shows the new picture at once instead of fading the old one into it.
 Incoming audio, advancing time, response times, Texture mix and unrelated styles' controls are excluded.
 Palette comparisons retain the existing shared-snapshot fast path.
 A backward clock or source endpoint, disabled texture, invalid mapping, or a gap above 30 seconds resets history.

@@ -246,8 +246,10 @@ fn spectrogram_history_stays_bounded() {
     }
     assert!(spec.history().len() <= SpectrumHistory::MAX_COLUMNS, "column count capped");
 
+    let epoch = spec.history_epoch();
     spec.clear_history();
     assert!(spec.history().is_empty());
+    assert_ne!(spec.history_epoch(), epoch, "a clear must reach the colour memory's key");
 }
 
 /// The live path stamps its columns the same way the offline one does, and

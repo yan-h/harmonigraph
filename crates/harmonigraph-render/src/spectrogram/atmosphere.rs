@@ -65,6 +65,9 @@ pub struct SpectrogramAtmosphere {
     /// The pane's clock, which drives the cloud drift. Offline it is the
     /// frame's time, so a render is deterministic.
     pub now: f64,
+    /// Changes whenever the spectrogram's history is cleared, so the colour
+    /// memory starts from the cleared picture instead of fading the old one out.
+    pub history_epoch: u32,
 }
 
 /// Cloud-space sampling offset for a texture travelling at a constant visible
@@ -808,13 +811,19 @@ struct MemoryFrame {
     life: f32,
 }
 
-/// Only coordinate and color interpretation belong to the history key. Sound,
-/// time, response times and Texture mix change the response, not its identity.
+/// Only coordinate and color interpretation, and which history the colour came
+/// from ([`SpectrogramAtmosphere::history_epoch`]), belong to the history key.
+/// Sound, time, response times and Texture mix change the response, not its
+/// identity.
 /// Other styles' dials must not erase the active style's carried color.
-/// Stars locate history by absolute cell and life, independent of width and
-/// motion. Keep height here because it changes the material sampling scale;
-/// the starfield's actual atlas cell sizes and slice bands come from its
-/// `layout` and `slices`.
+/// Stars locate history by absolute cell and life, independent of motion; the
+/// starfield's actual atlas cell sizes and slice bands come from its `layout`
+/// and `slices`.
+///
+/// The pane's geometry is in the key for every style: a resize or zoom moves
+/// the sound under each texel or star, and what it held there is the old
+/// picture's, so carrying it would smear the old picture into the new one.
+/// The same goes for a cleared history.
 fn memory_key(
     atmosphere: SpectrogramAtmosphere,
     size: [f32; 2],
@@ -873,6 +882,7 @@ fn memory_key(
             },
     } = s;
     let mut values = vec![
+        size[0],
         size[1],
         u32::from(pitch_vertical) as f32,
         read.min_midi,
@@ -899,7 +909,6 @@ fn memory_key(
         }
         CloudStyle::VelvetScales => values.extend([
             3.0,
-            size[0],
             cloud_direction,
             cloud_speed,
             velvet_size,
@@ -912,7 +921,6 @@ fn memory_key(
         ]),
         CloudStyle::Watercolor => values.extend([
             1.0,
-            size[0],
             cloud_direction,
             cloud_speed,
             wash_size,
@@ -928,19 +936,20 @@ fn memory_key(
         ]),
     }
     let mut key: Vec<u32> = values.into_iter().map(f32::to_bits).collect();
-    // A resize changes musical density, hence the light a star samples, but
-    // not the absolute cell that owns its carried color.
-    if stars.is_none() {
-        key.extend([atmosphere.points_per_ms.to_bits(), atmosphere.points_per_cent.to_bits()]);
-    }
+    // Points per cent follows from the size and span above; points per ms adds
+    // the window and the divider, which move the time axis at a fixed size.
+    key.extend([
+        atmosphere.points_per_ms.to_bits(),
+        atmosphere.points_per_cent.to_bits(),
+        atmosphere.history_epoch,
+    ]);
     // Different logical grids can share one allocation. DPI or sampling
     // changes must still reset history even in the same bucket.
     key.extend(extent);
     if let Some(layout) = stars {
-        // Stars carry by absolute cell and life across motion edits and width
-        // changes. At the atlas budget, a wider pane can coarsen cells: the
-        // same integer cell then names a new star. A slice's band moves every
-        // centre in it.
+        // Stars carry by absolute cell and life across motion edits. A size
+        // or spacing edit reaches the key as the cells, since the same integer
+        // cell then names a new star. A slice's band moves every centre in it.
         key.extend(layout.cells.map(f32::to_bits));
         key.extend(slices.iter().map(|slice| slice.width.to_bits()));
     }
@@ -2388,6 +2397,7 @@ mod tests {
             points_per_ms: 0.01,
             points_per_slab: 0.0,
             now: 0.0,
+            history_epoch: 0,
         };
         let size = [1920, 1080];
         let density = |a| tone_size(size, 2.0, a, 0.5);
@@ -2471,6 +2481,7 @@ mod tests {
             points_per_ms: 0.01,
             points_per_slab: 0.0,
             now: 0.0,
+            history_epoch: 0,
         };
         let tile = tile_key([1920, 1080], atmosphere, period);
         assert!(tile.is_some(), "the wash drew no tile");
@@ -2537,6 +2548,7 @@ mod tests {
                     points_per_ms: 0.01,
                     points_per_slab: 0.0,
                     now: 0.0,
+                    history_epoch: 0,
                 },
                 cloud_tile,
             )
@@ -2578,6 +2590,7 @@ mod tests {
                     points_per_ms: 0.01,
                     points_per_slab: 0.0,
                     now: 0.0,
+                    history_epoch: 0,
                 },
                 cloud_pixel,
             )
@@ -2636,6 +2649,7 @@ mod tests {
                     points_per_ms: points[0] / (600.0 * 1000.0),
                     points_per_slab,
                     now: 0.0,
+                    history_epoch: 0,
                 },
             )
         };
