@@ -227,18 +227,32 @@ impl Layout {
         self.position == Position::Below && self.folded[0] && self.folded[1]
     }
 
+    /// Which sections take any room: open ones, and folded ones while there is
+    /// a rail to fold them to. With the tab bars hidden a folded section is
+    /// nothing, and the gap beside it would be a bare divider at the edge.
+    fn takes_room(&self, rail: f32) -> [bool; 3] {
+        self.folded.map(|folded| !folded || rail > 0.0)
+    }
+
     fn natural_size(&self, rail: f32, gap: f32) -> Vec2 {
         let sizes = self.laid_out();
         let extent = |index, size| if self.folded[index] { rail } else { size };
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
         let settings = extent(2, sizes.settings);
+        let room = self.takes_room(rail);
         if self.compact() {
-            return vec2(2.0 * rail + settings + 2.0 * gap, 2.0 * rail + gap);
+            return vec2(
+                stack([rail, rail, settings], room, gap).1,
+                stack([rail, rail], [room[0], room[1]], gap).1,
+            );
         }
         match self.position {
-            Position::Right => vec2(a + b + settings + 2.0 * gap, sizes.cross),
-            Position::Below => vec2(sizes.cross + settings + gap, a + b + gap),
+            Position::Right => vec2(stack([a, b, settings], room, gap).1, sizes.cross),
+            Position::Below => vec2(
+                stack([sizes.cross, settings], [true, room[2]], gap).1,
+                stack([a, b], [room[0], room[1]], gap).1,
+            ),
         }
     }
 
@@ -246,13 +260,14 @@ impl Layout {
     /// window resize, and a host refusal only fits a temporary drawing copy.
     fn fit(&mut self, area: Vec2, rail: f32, gap: f32) {
         let folded = self.folded;
+        let room = self.takes_room(rail);
         let compact = self.compact();
         let position = self.position;
         let lent = self.lent();
         let sizes = self.sizes_mut();
         if compact {
             if !folded[2] {
-                sizes.settings = (area.x - 2.0 * (rail + gap)).max(0.0);
+                sizes.settings = (area.x - 2.0 * rail - gaps(room, gap)).max(0.0);
             }
             return;
         }
@@ -263,7 +278,7 @@ impl Layout {
                 // share the same scale or the fitted widths will not fill
                 // the window after the held widths change.
                 let rails = folded.iter().filter(|&&fold| fold).count() as f32 * rail;
-                let free = (area.x - 2.0 * gap - rails).max(0.0);
+                let free = (area.x - gaps(room, gap) - rails).max(0.0);
                 let shown: f32 = [sizes.lattice, sizes.analyzer, sizes.settings]
                     .into_iter()
                     .zip(folded)
@@ -277,7 +292,7 @@ impl Layout {
                 let widths = fit_axis(
                     [sizes.lattice, sizes.analyzer, sizes.settings],
                     folded,
-                    area.x - 2.0 * gap - repaid,
+                    area.x - gaps(room, gap) - repaid,
                     rail,
                 );
                 [sizes.lattice, sizes.analyzer, sizes.settings] = widths;
@@ -290,13 +305,17 @@ impl Layout {
                 }
             }
             Position::Below => {
-                let widths =
-                    fit_axis([sizes.cross, sizes.settings], [false, folded[2]], area.x - gap, rail);
+                let widths = fit_axis(
+                    [sizes.cross, sizes.settings],
+                    [false, folded[2]],
+                    area.x - gaps([true, room[2]], gap),
+                    rail,
+                );
                 [sizes.cross, sizes.settings] = widths;
                 let heights = fit_axis(
                     [sizes.lattice, sizes.analyzer],
                     [folded[0], folded[1]],
-                    area.y - gap,
+                    area.y - gaps([room[0], room[1]], gap),
                     rail,
                 );
                 [sizes.lattice, sizes.analyzer] = heights;
@@ -310,36 +329,52 @@ impl Layout {
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
         let settings = extent(2, sizes.settings);
+        let room = self.takes_room(rail);
         let at = area.min;
+        let column =
+            |x: f32, width: f32| Rect::from_min_size(at + vec2(x, 0.0), vec2(width, area.height()));
         if self.compact() {
-            return [
-                Rect::from_min_size(at, vec2(rail, area.height())),
-                Rect::from_min_size(at + vec2(rail + gap, 0.0), vec2(rail, area.height())),
-                Rect::from_min_size(
-                    at + vec2(2.0 * (rail + gap), 0.0),
-                    vec2(settings, area.height()),
-                ),
-            ];
+            let ([x0, x1, x2], _) = stack([rail, rail, settings], room, gap);
+            return [column(x0, rail), column(x1, rail), column(x2, settings)];
         }
         match self.position {
-            Position::Right => [
-                Rect::from_min_size(at, vec2(a, area.height())),
-                Rect::from_min_size(at + vec2(a + gap, 0.0), vec2(b, area.height())),
-                Rect::from_min_size(
-                    at + vec2(a + b + 2.0 * gap, 0.0),
-                    vec2(settings, area.height()),
-                ),
-            ],
-            Position::Below => [
-                Rect::from_min_size(at, vec2(sizes.cross, a)),
-                Rect::from_min_size(at + vec2(0.0, a + gap), vec2(sizes.cross, b)),
-                Rect::from_min_size(
-                    at + vec2(sizes.cross + gap, 0.0),
-                    vec2(settings, area.height()),
-                ),
-            ],
+            Position::Right => {
+                let ([x0, x1, x2], _) = stack([a, b, settings], room, gap);
+                [column(x0, a), column(x1, b), column(x2, settings)]
+            }
+            Position::Below => {
+                let ([y0, y1], _) = stack([a, b], [room[0], room[1]], gap);
+                let ([_, x], _) = stack([sizes.cross, settings], [true, room[2]], gap);
+                [
+                    Rect::from_min_size(at + vec2(0.0, y0), vec2(sizes.cross, a)),
+                    Rect::from_min_size(at + vec2(0.0, y1), vec2(sizes.cross, b)),
+                    column(x, settings),
+                ]
+            }
         }
     }
+}
+
+/// Where each extent starts along one axis, and where the last one ends, with
+/// a gap only between sections that [`Layout::takes_room`] marks.
+fn stack<const N: usize>(extents: [f32; N], room: [bool; N], gap: f32) -> ([f32; N], f32) {
+    let mut starts = [0.0; N];
+    let mut at = 0.0;
+    let mut any = false;
+    for ((start, extent), room) in starts.iter_mut().zip(extents).zip(room) {
+        if room && std::mem::replace(&mut any, true) {
+            at += gap;
+        }
+        *start = at;
+        at += extent;
+    }
+    (starts, at)
+}
+
+/// The total gap [`stack`] puts between the sections, for [`Layout::fit`],
+/// which must set it aside before it knows their sizes.
+fn gaps<const N: usize>(room: [bool; N], gap: f32) -> f32 {
+    stack([0.0; N], room, gap).1
 }
 
 fn fit_axis<const N: usize>(

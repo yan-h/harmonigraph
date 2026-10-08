@@ -83,3 +83,40 @@ fn a_window_resize_scales_the_width_held_by_a_folded_region() {
         assert!((layout.right.analyzer - (before + held) * scale).abs() < 0.1, "{tab:?}");
     }
 }
+
+#[test]
+fn with_the_tab_bars_hidden_the_open_sections_fill_the_window() {
+    // No rail: a folded section draws nothing, so a gap beside it would be a
+    // bare divider at the window's edge, or a double one between the open
+    // sections either side of it.
+    for position in [Position::Right, Position::Below] {
+        for open in 1..8_usize {
+            let folded = [0, 1, 2].map(|index| open & (1 << index) == 0);
+            let mut layout = Layout { position, folded, ..Layout::default() };
+            let size = layout.natural_size(0.0, 3.0);
+            layout.fit(size, 0.0, 3.0);
+            let area = Rect::from_min_size(egui::Pos2::ZERO, size);
+            let rects = layout.rects(area, 0.0, 3.0);
+            let shown: Vec<Rect> =
+                (0..3).filter(|&index| !folded[index]).map(|index| rects[index]).collect();
+            let bounds = shown.iter().fold(Rect::NOTHING, |bounds, rect| bounds.union(*rect));
+            assert_eq!(bounds, area, "{position:?} {folded:?}");
+            let covered: f32 = shown.iter().map(|rect| rect.area()).sum();
+            let gaps = match (position, shown.len()) {
+                (Position::Right, n) => (n - 1) as f32 * 3.0 * area.height(),
+                // Below: the two pictures share a column beside Settings.
+                (Position::Below, _) => {
+                    let pictures = usize::from(!folded[0]) + usize::from(!folded[1]);
+                    let beside = pictures > 0 && !folded[2];
+                    pictures.saturating_sub(1) as f32 * 3.0 * rects[0].width()
+                        + if beside { 3.0 * area.height() } else { 0.0 }
+                }
+            };
+            assert!(
+                (covered + gaps - area.area()).abs() < 1.0,
+                "{position:?} {folded:?}: {} pt² unaccounted for",
+                area.area() - covered - gaps
+            );
+        }
+    }
+}
