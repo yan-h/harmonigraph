@@ -148,6 +148,15 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// [`pane_inner_margin`].
 pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 
+/// The gap between two rows of a settings pane, egui's `item_spacing.y`.
+///
+/// A settings pane is a tall column of short rows, so this is spent once per
+/// row and buys nothing per point: 3 is enough to keep two bars from reading
+/// as one control, and every point above that is a row fewer on screen.
+///
+/// The design size, at [scale](ui_scale) 1.0.
+pub(crate) const ROW_GAP: f32 = 3.0;
+
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
 ///
@@ -431,12 +440,9 @@ fn style_at(scale: f32) -> egui::Style {
         ..Default::default()
     };
 
-    // A settings pane is a tall column of short rows, so the gap between rows
-    // is spent once per row and buys nothing per point: 4 is enough to keep two
-    // bars from reading as one control, and every point above that is a row
-    // fewer on screen. The gap ACROSS a row is a different question — that one
+    // The gap ACROSS a row is a different question from [`ROW_GAP`] — that one
     // separates a label from the buttons it names — and stays wider.
-    style.spacing.item_spacing = Vec2::new(8.0, 4.0);
+    style.spacing.item_spacing = Vec2::new(8.0, ROW_GAP);
     // `interact_size` is the FLOOR under every control's height — the size egui
     // gives one with no opinion of its own (a checkbox, a text field), and the
     // minimum it grows a button to. That floor is what puts them all on

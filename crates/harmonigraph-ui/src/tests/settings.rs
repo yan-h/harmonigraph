@@ -455,7 +455,7 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
                     // A paired control must fill the column as a whole. Its
                     // slider starts immediately after its actual picture,
                     // rather than being excused for any arbitrary short width.
-                    assert!((r.rect.left() - picture.right() - 4.0).abs() < 0.6);
+                    assert!((r.rect.left() - picture.right() - crate::theme::ROW_GAP).abs() < 0.6);
                     Some(r.rect.right() - picture.left())
                 } else {
                     Some(r.rect.width())

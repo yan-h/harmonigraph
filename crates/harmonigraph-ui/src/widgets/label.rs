@@ -57,7 +57,7 @@ fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
 pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     group_space(ui);
     let under = if ui.layout().is_vertical() { extra(ui) } else { 0.0 };
-    let galley = text.into().into_galley(ui, None, ui.available_width(), egui::TextStyle::Body);
+    let galley = wrapped(ui, text.into());
     let (top, bottom) = cap_trim(ui, &galley);
     let size = egui::vec2(galley.size().x, galley.size().y - top - bottom + under);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
@@ -73,6 +73,31 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     response
 }
 
+/// Baseline to baseline down a wrapped [`label`], at scale 1.
+///
+/// egui's own pitch is the font's, 17 points under 13.5-point type, which is
+/// leading for running prose. The text here is a sentence or two of help
+/// under a heading, and at 1.26 times the type its lines read as separate
+/// rows of a column rather than as one paragraph. 15 is 1.11 times, tight but
+/// clear of a descender meeting the capital under it. A whole number of
+/// points, so every line lands on the same pixel phase at scale 1.
+const LINE_PITCH: f32 = 15.0;
+
+/// `text` laid out the way `ui.label` would — `ui`'s wrap mode across the
+/// width it has, Body as the fallback face — at [`LINE_PITCH`] rather than the
+/// font's own, unless a section sets a pitch of its own.
+fn wrapped(ui: &Ui, text: WidgetText) -> std::sync::Arc<egui::Galley> {
+    let job = text.into_layout_job(ui.style(), egui::TextStyle::Body.into(), ui.text_valign());
+    let mut job = std::sync::Arc::unwrap_or_clone(job);
+    job.wrap =
+        egui::text::TextWrapping::from_wrap_mode_and_width(ui.wrap_mode(), ui.available_width());
+    let pitch = LINE_PITCH * crate::theme::ui_scale(ui.ctx());
+    for section in &mut job.sections {
+        section.format.line_height.get_or_insert(pitch);
+    }
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
 /// How far a line of text or a fold standing alone in a column sits from
 /// whatever is over and under it, ink to ink, at scale 1 — and a section
 /// heading from its rule and its first row.
@@ -80,7 +105,7 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
 /// Every box sits where its ink is (see the module docs), so the row gap alone
 /// would put a line of text as near a bar as two bars sit to each other, which
 /// reads cramped. Bars and buttons keep the row gap between themselves.
-pub(crate) const GROUP_GAP: f32 = 9.0;
+pub(crate) const GROUP_GAP: f32 = 8.0;
 
 fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")

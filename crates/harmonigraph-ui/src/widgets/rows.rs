@@ -19,8 +19,8 @@ const CHECKBOX_CHECK: f32 = 9.0;
 ///
 /// Every other control fills its row edge to edge, so the row gap is the gap
 /// a reader sees between them. egui's box is 14 points, and in a 19-point row
-/// it stands 2.5 points in from each edge — two checkboxes in a row read 9
-/// points apart where two bars read 4, the column's loosest joint. Here the
+/// it stands 2.5 points in from each edge — two checkboxes in a row read 8
+/// points apart where two bars read 3, the column's loosest joint. Here the
 /// row is the line (17 at the design size) and the box 16, so the joint is the
 /// row gap plus a point.
 ///
