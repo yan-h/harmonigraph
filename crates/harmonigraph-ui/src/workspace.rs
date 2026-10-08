@@ -230,7 +230,7 @@ impl Layout {
     /// Which sections take any room: open ones, and folded ones while there is
     /// a rail to fold them to. With the tab bars hidden a folded section is
     /// nothing, and the gap beside it would be a bare divider at the edge.
-    fn shown(&self, rail: f32) -> [bool; 3] {
+    fn takes_room(&self, rail: f32) -> [bool; 3] {
         self.folded.map(|folded| !folded || rail > 0.0)
     }
 
@@ -240,15 +240,18 @@ impl Layout {
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
         let settings = extent(2, sizes.settings);
-        let shown = self.shown(rail);
+        let room = self.takes_room(rail);
         if self.compact() {
-            return vec2(stack([rail, rail, settings], shown, gap).1, 2.0 * rail + gap);
+            return vec2(
+                stack([rail, rail, settings], room, gap).1,
+                stack([rail, rail], [room[0], room[1]], gap).1,
+            );
         }
         match self.position {
-            Position::Right => vec2(stack([a, b, settings], shown, gap).1, sizes.cross),
+            Position::Right => vec2(stack([a, b, settings], room, gap).1, sizes.cross),
             Position::Below => vec2(
-                stack([sizes.cross, settings], [true, shown[2]], gap).1,
-                stack([a, b], [shown[0], shown[1]], gap).1,
+                stack([sizes.cross, settings], [true, room[2]], gap).1,
+                stack([a, b], [room[0], room[1]], gap).1,
             ),
         }
     }
@@ -257,7 +260,7 @@ impl Layout {
     /// window resize, and a host refusal only fits a temporary drawing copy.
     fn fit(&mut self, area: Vec2, rail: f32, gap: f32) {
         let folded = self.folded;
-        let room = self.shown(rail);
+        let room = self.takes_room(rail);
         let compact = self.compact();
         let position = self.position;
         let lent = self.lent();
@@ -326,22 +329,22 @@ impl Layout {
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
         let settings = extent(2, sizes.settings);
-        let shown = self.shown(rail);
+        let room = self.takes_room(rail);
         let at = area.min;
         let column =
             |x: f32, width: f32| Rect::from_min_size(at + vec2(x, 0.0), vec2(width, area.height()));
         if self.compact() {
-            let ([x0, x1, x2], _) = stack([rail, rail, settings], shown, gap);
+            let ([x0, x1, x2], _) = stack([rail, rail, settings], room, gap);
             return [column(x0, rail), column(x1, rail), column(x2, settings)];
         }
         match self.position {
             Position::Right => {
-                let ([x0, x1, x2], _) = stack([a, b, settings], shown, gap);
+                let ([x0, x1, x2], _) = stack([a, b, settings], room, gap);
                 [column(x0, a), column(x1, b), column(x2, settings)]
             }
             Position::Below => {
-                let ([y0, y1], _) = stack([a, b], [shown[0], shown[1]], gap);
-                let ([_, x], _) = stack([sizes.cross, settings], [true, shown[2]], gap);
+                let ([y0, y1], _) = stack([a, b], [room[0], room[1]], gap);
+                let ([_, x], _) = stack([sizes.cross, settings], [true, room[2]], gap);
                 [
                     Rect::from_min_size(at + vec2(0.0, y0), vec2(sizes.cross, a)),
                     Rect::from_min_size(at + vec2(0.0, y1), vec2(sizes.cross, b)),
@@ -353,13 +356,13 @@ impl Layout {
 }
 
 /// Where each extent starts along one axis, and where the last one ends, with
-/// a gap only between sections that are [`Layout::shown`].
-fn stack<const N: usize>(extents: [f32; N], shown: [bool; N], gap: f32) -> ([f32; N], f32) {
+/// a gap only between sections that [`Layout::takes_room`] marks.
+fn stack<const N: usize>(extents: [f32; N], room: [bool; N], gap: f32) -> ([f32; N], f32) {
     let mut starts = [0.0; N];
     let mut at = 0.0;
     let mut any = false;
-    for ((start, extent), shown) in starts.iter_mut().zip(extents).zip(shown) {
-        if shown && std::mem::replace(&mut any, true) {
+    for ((start, extent), room) in starts.iter_mut().zip(extents).zip(room) {
+        if room && std::mem::replace(&mut any, true) {
             at += gap;
         }
         *start = at;
@@ -368,9 +371,10 @@ fn stack<const N: usize>(extents: [f32; N], shown: [bool; N], gap: f32) -> ([f32
     (starts, at)
 }
 
-/// The total gap [`stack`] puts between the shown sections.
-fn gaps<const N: usize>(shown: [bool; N], gap: f32) -> f32 {
-    shown.iter().filter(|&&shown| shown).count().saturating_sub(1) as f32 * gap
+/// The total gap [`stack`] puts between the sections, for [`Layout::fit`],
+/// which must set it aside before it knows their sizes.
+fn gaps<const N: usize>(room: [bool; N], gap: f32) -> f32 {
+    stack([0.0; N], room, gap).1
 }
 
 fn fit_axis<const N: usize>(
