@@ -148,6 +148,15 @@ const WIDGET_RADIUS: CornerRadius = CornerRadius::same(CONTROL_RADIUS);
 /// [`pane_inner_margin`].
 pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 
+/// The gap between two rows of a settings pane, egui's `item_spacing.y`.
+///
+/// A settings pane is a tall column of short rows, so this is spent once per
+/// row and buys nothing per point: 3 is enough to keep two bars from reading
+/// as one control, and every point above that is a row fewer on screen.
+///
+/// The design size, at [scale](ui_scale) 1.0.
+pub(crate) const ROW_GAP: f32 = 3.0;
+
 /// Height of one control row in a settings pane, and of every control that can
 /// make one: a bar's track, a button's frame, a checkbox, a text field.
 ///
@@ -162,7 +171,7 @@ pub(crate) const PANE_INNER_MARGIN: f32 = 8.0;
 ///
 /// The design size, at [scale](ui_scale) 1.0; anything drawing with it wants
 /// [`row_height`].
-pub(crate) const ROW_HEIGHT: f32 = 20.0;
+pub(crate) const ROW_HEIGHT: f32 = 19.0;
 
 /// Height of a section's tab bar, which is also the thickness a folded section
 /// is squeezed to (see [`crate::workspace`]) and the depth of the chrome along
@@ -448,12 +457,9 @@ fn style_at(scale: f32) -> egui::Style {
         ..Default::default()
     };
 
-    // A settings pane is a tall column of short rows, so the gap between rows
-    // is spent once per row and buys nothing per point: 4 is enough to keep two
-    // bars from reading as one control, and every point above that is a row
-    // fewer on screen. The gap ACROSS a row is a different question — that one
+    // The gap ACROSS a row is a different question from [`ROW_GAP`] — that one
     // separates a label from the buttons it names — and stays wider.
-    style.spacing.item_spacing = Vec2::new(8.0, 4.0);
+    style.spacing.item_spacing = Vec2::new(8.0, ROW_GAP);
     // `interact_size` is the FLOOR under every control's height — the size egui
     // gives one with no opinion of its own (a checkbox, a text field), and the
     // minimum it grows a button to. That floor is what puts them all on
@@ -468,16 +474,19 @@ fn style_at(scale: f32) -> egui::Style {
     // any value that fits under the floor draws the same button and any value
     // over it is a button standing taller than its row.
     //
-    // 1 point fits at every scale in [`UI_SCALE_RANGE`], but not by much, and
-    // the margin is worth stating because it is what a session retuning the
-    // type is spending: the padding reaches egui as a whole-point margin while
-    // the type it wraps does not round, so the headroom is narrowest at the two
-    // ENDS of the range rather than at the small end. It is 0.28pt at 0.7
-    // (an 11.72pt line, plus 2, in a 14pt row) and 0.88pt at 1.5, where the
-    // padding rounds up to 2; the design size is the roomiest at 1.28.
-    // `every_settings_row_is_one_row_high` sweeps the range and is what says so
-    // after a change to either.
-    style.spacing.button_padding = Vec2::new(5.0, 1.0);
+    // At a 19-point row that is none at all. Its text lays out on the pixel
+    // grid (17 points at the design size on a 1x display), and a point of
+    // padding each side
+    // is 19 there but 13.7 in a 13.3 row at 0.7, the frame margin rounding to
+    // whole points where the type does not. With none the floor holds at
+    // every scale in [`UI_SCALE_RANGE`], by 1.25pt at its tightest (0.75: a
+    // 13pt line in a 14.25pt row) and 2pt at the design size on a 1x display;
+    // a 2x display rounds the line to half points, which moves either by a
+    // quarter point at most. This is what a
+    // session retuning the type or the row is spending, and
+    // `every_settings_row_is_one_row_high` sweeps the range and says so after
+    // a change to either.
+    style.spacing.button_padding = Vec2::new(5.0, 0.0);
     style.spacing.interact_size = Vec2::new(36.0, ROW_HEIGHT);
     style.spacing.slider_width = 160.0;
     style.spacing.slider_rail_height = 4.0;

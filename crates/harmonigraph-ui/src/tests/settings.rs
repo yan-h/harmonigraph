@@ -436,13 +436,26 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
             _ => None,
         })
         .collect();
+    let fields: Vec<egui::Pos2> = shapes
+        .iter()
+        .filter_map(|cs| match &cs.shape {
+            egui::Shape::Text(t) if t.galley.text() == crate::panes::view::PRESET_NAME_HINT => {
+                Some(t.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .collect();
     shapes
         .iter()
         .filter_map(|cs| match &cs.shape {
+            // The camera preset's name field is a row-high well too, told from
+            // a bar by the hint it holds, as the record panel is by its dot —
+            // not by its width, which the column clamps at the narrow end.
             egui::Shape::Rect(r)
                 if r.fill == well
                     && (r.rect.height() - crate::theme::ROW_HEIGHT).abs() < 0.6
-                    && !dots.iter().any(|&dot| r.rect.contains(dot)) =>
+                    && !dots.iter().any(|&dot| r.rect.contains(dot))
+                    && !fields.iter().any(|&field| r.rect.contains(field)) =>
             {
                 if let Some(picture) = pictures.iter().find(|picture| {
                     r.rect.left() >= picture.right()
@@ -452,7 +465,7 @@ fn bar_track_widths(shapes: &[egui::epaint::ClippedShape]) -> Vec<f32> {
                     // A paired control must fill the column as a whole. Its
                     // slider starts immediately after its actual picture,
                     // rather than being excused for any arbitrary short width.
-                    assert!((r.rect.left() - picture.right() - 4.0).abs() < 0.6);
+                    assert!((r.rect.left() - picture.right() - crate::theme::ROW_GAP).abs() < 0.6);
                     Some(r.rect.right() - picture.left())
                 } else {
                     Some(r.rect.width())

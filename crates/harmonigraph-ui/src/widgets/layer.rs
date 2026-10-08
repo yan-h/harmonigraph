@@ -8,6 +8,7 @@ use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
     track_fill, BAR_TEXT_PAD, HANDLE_W,
 };
+use super::text_at;
 use crate::theme;
 
 /// Gap between two cells, so a stack reads as a row of separate sheets rather
@@ -330,8 +331,7 @@ impl<'a> LayerStrip<'a> {
         job.append("Layers", 0.0, egui::TextFormat::simple(body, text_color));
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let name_at = centered(&label, rect.left() + text_pad);
         painter.galley(name_at, label.clone(), text_color);
         painter.galley(

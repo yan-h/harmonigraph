@@ -11,6 +11,7 @@ use super::bar::{
     TEXT_GAP,
 };
 use super::mesh::gradient_strip;
+use super::text_at;
 use crate::theme;
 
 /// Segments the ramp half of a [`fade_span`](RangeBar::fade_span) fill is drawn
@@ -296,7 +297,7 @@ fn readout_lefts(row: ReadoutRow) -> (f32, f32) {
 /// whole length, which is what makes it scannable.
 ///
 /// **Each end still reads out beside its own handle**, which is where a range's
-/// numbers mean the most, and three text runs fit a 20pt row because the name's
+/// numbers mean the most, and three text runs fit a 19pt row because the name's
 /// zone is taken OUT of the room the numbers roam in — see [`Self::show`] for
 /// the arithmetic that makes that provable rather than lucky.
 ///
@@ -665,8 +666,7 @@ impl<'a> RangeBar<'a> {
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
         let label_width = label.size().x;
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         painter.galley(label_pos, label.clone(), text_color);
 
@@ -1034,7 +1034,7 @@ mod tests {
         }
     }
 
-    /// The bar names itself on its own row: three text runs in a 20pt row,
+    /// The bar names itself on its own row: three text runs in a 19pt row,
     /// the name where a ValueBar puts one and each number beside the handle it
     /// belongs to. What this is worth is the row it saves: a control with no
     /// name of its own costs a label row above it, which is what a range with

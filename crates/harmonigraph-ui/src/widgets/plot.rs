@@ -193,6 +193,6 @@ pub(super) fn curve(plot: &Plot, ui: &Ui, sample: impl Fn(f32) -> (f32, f32), co
 }
 
 pub(crate) fn height(scale: f32) -> f32 {
-    // Three slider rows, including the two standard 4pt gaps between them.
-    (theme::ROW_HEIGHT * 3.0 + 8.0) * scale
+    // Three slider rows and the two row gaps between them.
+    (theme::ROW_HEIGHT * 3.0 + theme::ROW_GAP * 2.0) * scale
 }

@@ -9,6 +9,7 @@ use super::bar::{
     BAR_TEXT_PAD, HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
+use super::text_at;
 use crate::theme;
 
 /// Segments a [`ValueBar::swatch`] track is drawn in: enough that a hue
@@ -540,8 +541,7 @@ impl<'a> ValueBar<'a> {
         );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
         painter.galley(label_pos, label.clone(), text_color);
@@ -913,8 +913,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     );
     let text_pad = BAR_TEXT_PAD * scale;
     let label = elided_name(painter, job, rect.width(), scale, value.size().x);
-    let centered =
-        |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+    let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
     painter.galley(centered(&label, rect.left() + text_pad), label, theme::text_dim());
     painter.galley(
         centered(&value, rect.right() - text_pad - value.size().x),
@@ -1359,9 +1358,9 @@ mod tests {
     /// - the name's budget subtracts the room the readout needs, or the name
     ///   runs over the number (measured: 6pt of overlap at 160, 16pt at 120);
     /// - the name is held to ONE row, or it wraps to two and spills above and
-    ///   below into the bars either side (a 29pt galley in a 20pt track);
-    /// - both runs are offset by half their own height, or they sit a half-line
-    ///   low with 7pt of a 17pt line below the track.
+    ///   below into the bars either side (a 29pt galley in a 19pt track);
+    /// - both runs are centred in the track, or they sit a half-line low with
+    ///   7pt of a 17pt line below the track. How evenly is the next test's.
     ///
     /// Each is a live regression rather than a hypothetical: all three are
     /// clippy-clean and leave the rest of the suite green.
@@ -1414,6 +1413,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A bar's name and readout stand their CAPITALS mid-track, with as much
+    /// air over them as under: the line box they are laid out in carries room
+    /// for descenders under the baseline and next to none over the caps, so
+    /// centring the box, as the bars once did, stands the caps a point low in a
+    /// 19pt track. Measured on the ink of runs with no descender in them.
+    #[test]
+    fn a_bars_text_stands_its_capitals_mid_track() {
+        let mut value = 500.0;
+        let out = painted(300.0, |ui| {
+            ValueBar::new(&mut value, 0.0..=1000.0, "HIGH").show(ui);
+        });
+        let track = out
+            .iter()
+            .find_map(|cs| match &cs.shape {
+                egui::Shape::Rect(r) if r.fill == crate::theme::well() => Some(r.rect),
+                _ => None,
+            })
+            .expect("the bar painted no track");
+        let mut runs = 0;
+        for cs in &out {
+            let egui::Shape::Text(t) = &cs.shape else { continue };
+            let ink = t.galley.mesh_bounds.translate(t.pos.to_vec2());
+            let (over, under) = (ink.top() - track.top(), track.bottom() - ink.bottom());
+            assert!(
+                (over - under).abs() < 0.5,
+                "{:?} stands {over}pt under the track's top and {under}pt over its bottom",
+                t.galley.text(),
+            );
+            runs += 1;
+        }
+        assert_eq!(runs, 2, "the bar painted {runs} runs, not its name and readout");
     }
 
     /// A badged bar still says what drives it when its name has to be elided.

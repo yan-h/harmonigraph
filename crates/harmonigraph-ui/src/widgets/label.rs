@@ -33,6 +33,20 @@ pub(crate) fn cap_trim(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     (top.max(0.0), bottom.max(0.0))
 }
 
+/// Where a run of text standing in `row` at `x` goes: its CAPITALS centred
+/// across the row, not its line box. For every run drawn inside a control —
+/// a bar's name and readout, a switch's or the record button's label.
+///
+/// A line box carries the descender room under the baseline and next to none
+/// over the capitals, so centring the box stands a bar's name and readout about
+/// half a point low — on a 13.5pt line in a 19pt bar, five pixels over the
+/// caps and four under. Centred on the caps the air is even, and stays even at
+/// any row height or [chrome scale](crate::theme::ui_scale). Descenders hang into the
+/// air below, as they do under a trimmed [`label`].
+pub(crate) fn text_at(ui: &Ui, row: egui::Rect, galley: &egui::Galley, x: f32) -> egui::Pos2 {
+    let (top, bottom) = cap_trim(ui, galley);
+    egui::pos2(x, row.center().y - (top + galley.size().y - bottom) * 0.5)
+}
 /// The height of a capital above the baseline in `font`, read off the ink of
 /// an "H". egui caches the layout, so asking every frame is a lookup.
 fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
@@ -57,7 +71,7 @@ fn cap_height(ui: &Ui, font: egui::FontId) -> f32 {
 pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     group_space(ui);
     let under = if ui.layout().is_vertical() { extra(ui) } else { 0.0 };
-    let galley = text.into().into_galley(ui, None, ui.available_width(), egui::TextStyle::Body);
+    let galley = wrapped(ui, text.into());
     let (top, bottom) = cap_trim(ui, &galley);
     let size = egui::vec2(galley.size().x, galley.size().y - top - bottom + under);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
@@ -73,6 +87,32 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
     response
 }
 
+/// Baseline to baseline down a wrapped [`label`], at scale 1.
+///
+/// egui's own pitch is the font's, 17 points under 13.5-point type, which is
+/// leading for running prose. The text here is a sentence or two of help
+/// under a heading, and at 1.26 times the type its lines read as separate
+/// rows of a column rather than as one paragraph. 14 is 1.04 times, tight but
+/// clear of a descender meeting the capital under it; 13 brings the two
+/// within a pixel. A whole number of points, so every line lands on the same
+/// pixel phase at scale 1.
+const LINE_PITCH: f32 = 14.0;
+
+/// `text` laid out the way `ui.label` would — `ui`'s wrap mode across the
+/// width it has, Body as the fallback face — at [`LINE_PITCH`] rather than the
+/// font's own, unless a section sets a pitch of its own.
+fn wrapped(ui: &Ui, text: WidgetText) -> std::sync::Arc<egui::Galley> {
+    let job = text.into_layout_job(ui.style(), egui::TextStyle::Body.into(), ui.text_valign());
+    let mut job = std::sync::Arc::unwrap_or_clone(job);
+    job.wrap =
+        egui::text::TextWrapping::from_wrap_mode_and_width(ui.wrap_mode(), ui.available_width());
+    let pitch = LINE_PITCH * crate::theme::ui_scale(ui.ctx());
+    for section in &mut job.sections {
+        section.format.line_height.get_or_insert(pitch);
+    }
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+
 /// How far a line of text or a fold standing alone in a column sits from
 /// whatever is over and under it, ink to ink, at scale 1 — and a section
 /// heading from its rule and its first row.
@@ -80,7 +120,7 @@ pub fn label(ui: &mut Ui, text: impl Into<WidgetText>) -> Response {
 /// Every box sits where its ink is (see the module docs), so the row gap alone
 /// would put a line of text as near a bar as two bars sit to each other, which
 /// reads cramped. Bars and buttons keep the row gap between themselves.
-pub(crate) const GROUP_GAP: f32 = 9.0;
+pub(crate) const GROUP_GAP: f32 = 6.0;
 
 fn spaced_id() -> egui::Id {
     egui::Id::new("group-spaced")

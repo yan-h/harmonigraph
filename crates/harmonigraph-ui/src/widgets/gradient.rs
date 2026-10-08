@@ -16,6 +16,7 @@ use super::bar::{
     TEXT_GAP,
 };
 use super::mesh::gradient_strip;
+use super::text_at;
 use crate::panes::scene_color;
 use crate::theme;
 
@@ -108,7 +109,7 @@ pub(crate) fn spectrum_track_width(column: f32, scale: f32) -> f32 {
 /// It costs the track that much travel, which is the whole trade and a cheap
 /// one: the track stands for a whole turn at any length, so a shorter one is a
 /// coarser drag and nothing else — 18pt of 400 is a twentieth of a degree per
-/// pixel. A row costs 20pt of a column that already scrolls.
+/// pixel. A row costs 19pt of a column that already scrolls.
 ///
 /// The far end from where the arc starts, so the button sits past the end of
 /// the reading rather than in front of it: the track is cut at the arc's own
@@ -589,9 +590,7 @@ impl<'a> SpectrumBar<'a> {
                 scene_color(circle_at(&circle, g.hue_start + p * FULL_TURN * winding), alpha)
             },
         );
-        let centered = |galley: &egui::Galley, x: f32| {
-            egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
-        };
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, track_rect, galley, x);
         let label_pos = centered(&label, track_rect.left() + text_pad);
         painter.galley(label_pos, label.clone(), span_name_color());
 
@@ -1200,8 +1199,7 @@ impl<'a> SpreadBar<'a> {
         );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
         painter.galley(label_pos, label.clone(), text_color);
