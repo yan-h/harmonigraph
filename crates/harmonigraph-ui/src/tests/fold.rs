@@ -328,6 +328,75 @@ fn a_window_narrowed_past_the_settings_floor_widens_back_to_its_layout() {
     }
 }
 
+/// A window narrow enough that the settings column is drawn on its floor
+/// rather than at its saved width, and still wide enough that a fold's request
+/// clears the minimum window. At 760 the default layout's column would shrink
+/// to about 213 in proportion.
+fn narrowed_past_the_floor(position: Position) -> (DockHarness, SharedState) {
+    let mut state = fresh();
+    state.workspace.layout.position = position;
+    let mut h = DockHarness::new();
+    h.settle(&mut state);
+    h.screen.max.x = h.screen.min.x + 760.0;
+    h.settle(&mut state);
+    let layout = &state.workspace.layout;
+    let saved =
+        if position == Position::Below { layout.below.settings } else { layout.right.settings };
+    assert!(saved < theme::min_settings(1.0) - 10.0, "{position:?}: fixture saved {saved}");
+    (h, state)
+}
+
+/// Where the floor has overridden the saved settings width, a divider still
+/// moves with the pointer from the first point of a drag: the drag starts from
+/// the layout as drawn, not from the saved sizes underneath it.
+#[test]
+fn in_a_window_narrowed_past_the_floor_the_dividers_keep_pace_with_the_pointer() {
+    let cases = [
+        (Position::Right, Section::Settings, -30.0),
+        (Position::Below, Section::Settings, -30.0),
+        (Position::Right, Section::Lattice, 30.0),
+    ];
+    for (position, section, delta) in cases {
+        let (mut h, mut state) = narrowed_past_the_floor(position);
+        let [lattice, analyzer, settings] = state.workspace.layout_runtime.rects;
+        let (left, right) = match (section, position) {
+            (Section::Lattice, _) => (lattice, analyzer),
+            (_, Position::Below) => (lattice, settings),
+            _ => (analyzer, settings),
+        };
+        let origin = egui::pos2((left.right() + right.left()) * 0.5, settings.center().y);
+        let to = origin + egui::vec2(delta, 0.0);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(origin)]);
+        h.frame(&mut state, vec![press(origin, true)]);
+        h.frame(&mut state, vec![egui::Event::PointerMoved(to)]);
+        h.frame(&mut state, vec![press(to, false)]);
+        let after = state.workspace.layout_runtime.rects;
+        let grew = after[section as usize].width()
+            - [lattice, analyzer, settings][section as usize].width();
+        assert!(
+            (grew - delta.abs()).abs() < 0.1,
+            "{position:?}/{section:?}: a {delta}pt drag moved the divider {grew}pt"
+        );
+    }
+}
+
+/// Folding one picture in a window narrowed past the floor leaves the other
+/// drawn at the size it had, as it does in a roomy window.
+#[test]
+fn in_a_window_narrowed_past_the_floor_a_fold_keeps_the_other_pictures_size() {
+    for position in [Position::Right, Position::Below] {
+        for (tab, other) in
+            [(panes::Tab::Lattice, Section::Analyzer), (panes::Tab::Spectral, Section::Lattice)]
+        {
+            let (mut h, mut state) = narrowed_past_the_floor(position);
+            let was = state.workspace.layout_runtime.rects[other as usize].size();
+            h.collapse_click(&mut state, tab);
+            assert!(collapsed(&state, tab), "{position:?} {tab:?} failed to fold");
+            near(state.workspace.layout_runtime.rects[other as usize].size(), was);
+        }
+    }
+}
+
 #[test]
 fn dragging_a_divider_after_a_refused_unfold_keeps_unsqueezed_saved_sizes() {
     let mut state = split_state();

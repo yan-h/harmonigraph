@@ -326,19 +326,18 @@ impl Layout {
         }
     }
 
-    /// Where each section is drawn. An open settings column narrower than
-    /// `floor` is widened to it out of the open pictures beside it, in
-    /// proportion to their widths and as far as they have width to give.
+    /// `sizes` with an open settings column narrower than `floor` widened to
+    /// it out of the open pictures beside it, in proportion to their widths and
+    /// as far as they have width to give. The total is unchanged.
     ///
-    /// Here rather than in [`Self::fit`], which keeps the saved sizes in the
-    /// proportions the window was fitted at: a window narrowed past the floor
-    /// and widened again comes back to the same layout, rather than to one
-    /// whose settings column kept the share the floor took. And the Spiral
-    /// tab's lent width (see [`Self::repaid`]) is reckoned on those
-    /// proportional sizes, so it still adds up to the window it was fitted to.
-    fn rects(&self, area: Rect, rail: f32, gap: f32, floor: f32) -> [Rect; 3] {
-        let mut sizes = self.laid_out();
-        let extent = |index, size| if self.folded[index] { rail } else { size };
+    /// Applied when drawing ([`Self::rects`]) rather than in [`Self::fit`],
+    /// which keeps the saved sizes in the proportions the window was fitted at:
+    /// a window narrowed past the floor and widened again comes back to the same
+    /// layout, rather than to one whose settings column kept the share the floor
+    /// took. And the Spiral tab's lent width (see [`Self::repaid`]) is reckoned
+    /// on those proportional sizes, so it still adds up to the window it was
+    /// fitted to. An edit of the layout saves it first ([`Self::settle`]).
+    fn floored(&self, mut sizes: Sizes, floor: f32) -> Sizes {
         let below = self.position == Position::Below;
         if !self.folded[2] && !self.compact() && sizes.settings < floor {
             let open = |index: usize| !self.folded[index];
@@ -367,6 +366,38 @@ impl Layout {
                 sizes.settings += taken;
             }
         }
+        sizes
+    }
+
+    /// Save the layout as it is drawn, floor and all ([`Self::floored`]), as
+    /// `drawn_as` lays it out. Called when the person starts to edit the
+    /// layout — a divider drag, a fold, a dock move, a region fold — so the
+    /// edit starts from what is on screen: a drag measured against saved sizes
+    /// the floor had overridden would have to make up the difference before the
+    /// column moved, and a fold would hand the other picture back its share of
+    /// it. A window resize alone never calls this.
+    ///
+    /// Not while the Spiral tab is borrowing a folded region's width
+    /// ([`Self::lent`]): the drawn analyzer carries that lend and the saved one
+    /// does not, so saving the drawn width would mean rescaling the region
+    /// widths the lend is made of, and a lend wider than the window has no
+    /// consistent answer at all. A drag there keeps the gap between the saved
+    /// width and the floor, a rarity of a rarity.
+    fn settle(&mut self, drawn_as: &Layout, floor: f32) {
+        if drawn_as.lent() > 0.0 {
+            return;
+        }
+        let sizes = drawn_as.floored(drawn_as.sizes(), floor);
+        match drawn_as.position {
+            Position::Right => self.right = sizes,
+            Position::Below => self.below = sizes,
+        }
+    }
+
+    /// Where each section is drawn: the saved sizes, [`Self::floored`].
+    fn rects(&self, area: Rect, rail: f32, gap: f32, floor: f32) -> [Rect; 3] {
+        let sizes = self.floored(self.laid_out(), floor);
+        let extent = |index, size| if self.folded[index] { rail } else { size };
         let a = extent(0, sizes.lattice);
         let b = extent(1, sizes.analyzer);
         let settings = extent(2, sizes.settings);
@@ -544,13 +575,22 @@ pub(crate) fn show(
     // exactly the size the lend asked for.
     let unchanged = (before.position, before.folded, before.repaid())
         == (layout.position, layout.folded, layout.repaid());
-    dividers(ui, layout, runtime, &drawn, unchanged, scale);
+    dividers(ui, layout, runtime, &drawn, unchanged, scale, floor);
     let reset = std::mem::take(&mut viewer.interaction.reset_layout);
     if repeated {
         viewer.interaction.analyzer_regions.request = None;
         return None;
     }
     let region_request = viewer.interaction.analyzer_regions.request;
+    // An edit of the layout: a fold, a dock move, a region fold, or a switch
+    // between analyzer tabs, which lends or takes back the region width. Each
+    // asks the window for its new size, starting from the layout as drawn.
+    let edited = region_request.is_some()
+        || (before.position, before.folded, before.repaid())
+            != (layout.position, layout.folded, layout.repaid());
+    if edited {
+        layout.settle(&before, floor);
+    }
     if let Some(request) = region_request {
         layout.resize_region(request.region, request.width, theme::min_pane(scale));
         viewer.interaction.analyzer_regions.land();
@@ -559,13 +599,7 @@ pub(crate) fn show(
         viewer.interaction.analyzer_regions = Default::default();
         *layout = Layout { sized: true, ..Layout::default() };
     }
-    // A switch between analyzer tabs lends or takes back the region width,
-    // and asks the window for it the same way a fold does.
-    if reset
-        || region_request.is_some()
-        || (before.position, before.folded, before.repaid())
-            != (layout.position, layout.folded, layout.repaid())
-    {
+    if reset || edited {
         runtime.grip = None;
         runtime.requested = Some(frame);
         runtime.before_request = Some(before);
@@ -767,6 +801,7 @@ fn dividers(
     drawn: &Layout,
     unchanged: bool,
     ui_scale: f32,
+    floor: f32,
 ) {
     let [lattice, analyzer, settings] = runtime.rects;
     let below = drawn.position == Position::Below && !drawn.compact();
@@ -823,12 +858,15 @@ fn dividers(
         });
         if response.drag_started() {
             if let Some(at) = ui.input(|input| input.pointer.press_origin()) {
+                let as_saved = layout.clone();
+                layout.settle(&as_saved, floor);
                 let saved = layout.sizes();
-                let fitted = drawn.sizes();
+                // Against the drawn extent, floor and all, so the divider keeps
+                // pace with the pointer.
                 let (source, target) = if index == 0 {
-                    (saved.lattice, fitted.lattice)
+                    (saved.lattice, if horizontal { lattice.height() } else { lattice.width() })
                 } else {
-                    (saved.settings, fitted.settings)
+                    (saved.settings, settings.width())
                 };
                 let drag_scale = if target > 1.0 { source / target } else { 1.0 };
                 runtime.grip = Some(Grip {
@@ -859,7 +897,6 @@ fn dividers(
                 } else {
                     &mut next.lattice
                 };
-                let floor = theme::min_settings(ui_scale);
                 let delta =
                     delta.clamp(-(*picture - min).max(0.0), (sizes.settings - floor).max(0.0));
                 *picture += delta;
