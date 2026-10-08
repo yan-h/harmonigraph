@@ -1416,10 +1416,10 @@ mod tests {
     }
 
     /// A bar's name and readout stand their CAPITALS mid-track, with as much
-    /// air over them as under: the line box they are laid out in carries room
-    /// for descenders under the baseline and next to none over the caps, so
-    /// centring the box, as the bars once did, stands the caps a point low in a
-    /// 19pt track. Measured on the ink of runs with no descender in them.
+    /// air over them as under. The name's face centres its caps in its own line
+    /// box; the readout's Iosevka stands them high in it, so centring its box
+    /// would leave two points more air under the readout than over it. Measured
+    /// on the ink of runs with no descender in them.
     #[test]
     fn a_bars_text_stands_its_capitals_mid_track() {
         let mut value = 500.0;
@@ -1446,6 +1446,50 @@ mod tests {
             runs += 1;
         }
         assert_eq!(runs, 2, "the bar painted {runs} runs, not its name and readout");
+    }
+
+    /// A bar's name stands at the same height as the text of an egui button
+    /// in a row as tall, at 1x and at 2x (#1481): the two sit stacked in a
+    /// settings pane, and a bar is the only one of them we place ourselves.
+    /// 2x is where they parted when the name was centred on caps measured off
+    /// its ink, which rounds to the device pixel; 1x agreed either way.
+    #[test]
+    fn a_bars_name_stands_level_with_a_buttons_text() {
+        for ppp in [1.0, 2.0] {
+            let ctx = crate::tests::probe::themed_at(ppp);
+            let screen = egui::vec2(300.0, 100.0);
+            let (mut value, mut rows) = (500.0, Vec::new());
+            let out = crate::tests::probe::frame_into(
+                &ctx,
+                screen,
+                egui::Rect::from_min_size(egui::Pos2::ZERO, screen),
+                |ui| {
+                    rows.push(ValueBar::new(&mut value, 0.0..=1000.0, "HIGH").show(ui).rect);
+                    rows.push(ui.button("HIGH").rect);
+                },
+            );
+            assert_eq!(
+                rows[0].height(),
+                rows[1].height(),
+                "the bar and the button stand rows of different heights"
+            );
+            let drop = |row: egui::Rect| {
+                out.shapes
+                    .iter()
+                    .find_map(|cs| match &cs.shape {
+                        egui::Shape::Text(t)
+                            if t.galley.text() == "HIGH"
+                                && row.contains(t.pos + t.galley.size() * 0.5) =>
+                        {
+                            Some(t.pos.y - row.top())
+                        }
+                        _ => None,
+                    })
+                    .expect("a row painted no \"HIGH\"")
+            };
+            let (bar, button) = (drop(rows[0]), drop(rows[1]));
+            assert_eq!(bar, button, "at {ppp}x the bar's name stands {bar}pt under its top and the button's text {button}pt");
+        }
     }
 
     /// A badged bar still says what drives it when its name has to be elided.
