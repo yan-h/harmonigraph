@@ -83,3 +83,20 @@ fn a_window_resize_scales_the_width_held_by_a_folded_region() {
         assert!((layout.right.analyzer - (before + held) * scale).abs() < 0.1, "{tab:?}");
     }
 }
+
+#[test]
+fn with_the_tab_bars_hidden_one_open_section_fills_the_window() {
+    // No rail: a folded section draws nothing, so a gap beside it would be a
+    // bare divider at the window's edge.
+    for position in [Position::Right, Position::Below] {
+        for open in Section::ALL {
+            let mut layout = Layout { position, folded: [true; 3], ..Layout::default() };
+            layout.folded[open as usize] = false;
+            let size = layout.natural_size(0.0, 3.0);
+            layout.fit(size, 0.0, 3.0);
+            let area = Rect::from_min_size(egui::Pos2::ZERO, size);
+            let rects = layout.rects(area, 0.0, 3.0);
+            assert_eq!(rects[open as usize], area, "{position:?} {open:?}");
+        }
+    }
+}
