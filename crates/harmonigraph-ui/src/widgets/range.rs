@@ -7,8 +7,8 @@ use egui::{CornerRadius, Response, Sense, TextStyle, Ui, Vec2};
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
-    TEXT_GAP,
+    text_at, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE,
+    HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::theme;
@@ -665,8 +665,7 @@ impl<'a> RangeBar<'a> {
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
         let label_width = label.size().x;
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         painter.galley(label_pos, label.clone(), text_color);
 

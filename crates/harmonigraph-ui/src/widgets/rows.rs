@@ -212,10 +212,7 @@ pub fn record_button(ui: &mut Ui, on: &mut bool, rolling: bool, label: &str) -> 
             );
         }
         painter.galley(
-            egui::pos2(
-                rect.left() + pad_x + dot_r * 2.0 + gap,
-                rect.center().y - galley.size().y / 2.0,
-            ),
+            super::bar::text_at(ui, rect, &galley, rect.left() + pad_x + dot_r * 2.0 + gap),
             galley,
             theme::text(),
         );

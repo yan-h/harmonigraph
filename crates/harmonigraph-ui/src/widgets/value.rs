@@ -5,7 +5,7 @@ use std::ops::RangeInclusive;
 use egui::{Color32, CornerRadius, Key, Response, Sense, TextEdit, TextStyle, Ui, Vec2};
 
 use super::bar::{
-    bar_radius, bar_width, elided_name, grip_radius, name_color, paint_thumbs, track_fill,
+    bar_radius, bar_width, elided_name, grip_radius, name_color, paint_thumbs, text_at, track_fill,
     BAR_TEXT_PAD, HANDLE_INSET,
 };
 use super::mesh::gradient_strip;
@@ -540,8 +540,7 @@ impl<'a> ValueBar<'a> {
         );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
         painter.galley(label_pos, label.clone(), text_color);
@@ -913,8 +912,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, label: &str, value: &str
     );
     let text_pad = BAR_TEXT_PAD * scale;
     let label = elided_name(painter, job, rect.width(), scale, value.size().x);
-    let centered =
-        |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+    let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
     painter.galley(centered(&label, rect.left() + text_pad), label, theme::text_dim());
     painter.galley(
         centered(&value, rect.right() - text_pad - value.size().x),
@@ -1360,8 +1358,8 @@ mod tests {
     ///   runs over the number (measured: 6pt of overlap at 160, 16pt at 120);
     /// - the name is held to ONE row, or it wraps to two and spills above and
     ///   below into the bars either side (a 29pt galley in a 20pt track);
-    /// - both runs are offset by half their own height, or they sit a half-line
-    ///   low with 7pt of a 17pt line below the track.
+    /// - both runs are centred in the track ([`text_at`]), or they sit a
+    ///   half-line low with 7pt of a 17pt line below the track.
     ///
     /// Each is a live regression rather than a hypothetical: all three are
     /// clippy-clean and leave the rest of the suite green.

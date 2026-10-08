@@ -12,8 +12,8 @@ use harmonigraph_scene::{gradient_color, hue_circle, Gradient, HUE_CIRCLE_N, PIT
 
 use super::bar::{
     bar_radius, bar_width, drag, elided_name, grip_radius, name_color, paint_thumbs, poised,
-    track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE, HANDLE_W,
-    TEXT_GAP,
+    text_at, track_fill, BAR_LABEL_GAP, BAR_TEXT_PAD, GRAB_PX, HANDLE_INSET, HANDLE_REACH_SHARE,
+    HANDLE_W, TEXT_GAP,
 };
 use super::mesh::gradient_strip;
 use crate::panes::scene_color;
@@ -589,9 +589,7 @@ impl<'a> SpectrumBar<'a> {
                 scene_color(circle_at(&circle, g.hue_start + p * FULL_TURN * winding), alpha)
             },
         );
-        let centered = |galley: &egui::Galley, x: f32| {
-            egui::pos2(x, track_rect.center().y - galley.size().y * 0.5)
-        };
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, track_rect, galley, x);
         let label_pos = centered(&label, track_rect.left() + text_pad);
         painter.galley(label_pos, label.clone(), span_name_color());
 
@@ -1200,8 +1198,7 @@ impl<'a> SpreadBar<'a> {
         );
         let text_pad = BAR_TEXT_PAD * scale;
         let label = elided_name(painter, job, rect.width(), scale, reserve);
-        let centered =
-            |galley: &egui::Galley, x: f32| egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+        let centered = |galley: &egui::Galley, x: f32| text_at(ui, rect, galley, x);
         let label_pos = centered(&label, rect.left() + text_pad);
         let value_pos = centered(&value, rect.right() - text_pad - value.size().x);
         painter.galley(label_pos, label.clone(), text_color);

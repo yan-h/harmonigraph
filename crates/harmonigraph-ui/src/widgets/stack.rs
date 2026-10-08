@@ -9,8 +9,8 @@ use harmonigraph_scene::{
 };
 
 use super::bar::{
-    bar_radius, bar_width, drag, grip_radius, name_color, paint_thumbs, poised, track_fill,
-    BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
+    bar_radius, bar_width, drag, grip_radius, name_color, paint_thumbs, poised, text_at,
+    track_fill, BAR_TEXT_PAD, HANDLE_INSET, HANDLE_W,
 };
 use crate::theme;
 
@@ -614,7 +614,7 @@ impl<'a> StackBar<'a> {
                 None
             };
             if let Some(x) = placed.filter(|x| x + w <= rect.right()) {
-                let pos = egui::pos2(x, rect.center().y - name.size().y * 0.5);
+                let pos = text_at(ui, rect, &name, x);
                 painter.galley(pos, name.clone(), text_color);
                 runs.push((pos, name));
                 cursor = x + w;
