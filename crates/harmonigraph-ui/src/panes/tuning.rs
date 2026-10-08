@@ -570,19 +570,12 @@ fn instance_controls(
 ) {
     use crate::params::InstanceEdit;
     let scale = theme::ui_scale(ui.ctx());
-    let compact = ui.available_width() < 220.0 * scale;
     let bulk_control = |ui: &mut egui::Ui, label: &str, retune: bool| {
         let enabled =
             instances.iter().filter(|row| if retune { row.retune } else { row.show }).count();
         let mut all = enabled == instances.len();
         let mixed = enabled != 0 && !all;
-        let response = if compact {
-            // A direct widget can wrap as a whole in the stacked layout.
-            ui.add(egui::Checkbox::new(&mut all, label).indeterminate(mixed))
-        } else {
-            crate::widgets::checkbox_indeterminate(ui, &mut all, label, mixed)
-        };
-        if response
+        if crate::widgets::checkbox_indeterminate(ui, &mut all, label, mixed)
             .on_hover_text(if retune { "Retune all sources" } else { "Show all sources" })
             .clicked()
         {
@@ -600,11 +593,7 @@ fn instance_controls(
     if !instances.iter().any(|row| row.id == selected) {
         selected = instances[0].id;
     }
-    let name_width = if compact {
-        ui.available_width()
-    } else {
-        (ui.available_width() - 140.0 * scale).max(60.0 * scale)
-    };
+    let name_width = (ui.available_width() - 140.0 * scale).max(60.0 * scale);
     let animation_id = selection.with("voice-dots");
     let mut sources = ui
         .data(|data| data.get_temp::<BTreeMap<u64, SourceDots>>(animation_id))
@@ -670,49 +659,35 @@ fn instance_controls(
     };
     let flags = |ui: &mut egui::Ui, row: &crate::params::TuningInstance| {
         let mut retune = row.retune;
-        if crate::widgets::checkbox(ui, &mut retune, if compact { "Retune" } else { "" })
+        if crate::widgets::checkbox(ui, &mut retune, "")
             .on_hover_text("Tune new notes with the selected engine")
             .changed()
         {
             params.edit_tuning_instance(row.id, InstanceEdit::Retune(retune));
         }
         let mut show = row.show;
-        if crate::widgets::checkbox(ui, &mut show, if compact { "Show" } else { "" })
+        if crate::widgets::checkbox(ui, &mut show, "")
             .on_hover_text("Show this instance's output notes")
             .changed()
         {
             params.edit_tuning_instance(row.id, InstanceEdit::Show(show));
         }
     };
-    if compact {
-        ui.horizontal_wrapped(|ui| {
-            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            bulk_control(ui, "Retune all", true);
-            bulk_control(ui, "Show all", false);
-        });
-        for row in instances {
-            ui.push_id(row.id, |ui| {
-                identity(ui, row);
-                ui.vertical(|ui| flags(ui, row));
-            });
-        }
-    } else {
-        egui::Grid::new("tuning-instances")
-            .num_columns(3)
-            .min_row_height(0.0)
-            .spacing(ui.spacing().item_spacing)
-            .show(ui, |ui| {
-                crate::widgets::weak(ui, "Source");
-                bulk_control(ui, "Retune", true);
-                bulk_control(ui, "Show", false);
+    egui::Grid::new("tuning-instances")
+        .num_columns(3)
+        .min_row_height(0.0)
+        .spacing(ui.spacing().item_spacing)
+        .show(ui, |ui| {
+            crate::widgets::weak(ui, "Source");
+            bulk_control(ui, "Retune", true);
+            bulk_control(ui, "Show", false);
+            ui.end_row();
+            for row in instances {
+                ui.push_id(row.id, |ui| identity(ui, row));
+                flags(ui, row);
                 ui.end_row();
-                for row in instances {
-                    ui.push_id(row.id, |ui| identity(ui, row));
-                    flags(ui, row);
-                    ui.end_row();
-                }
-            });
-    }
+            }
+        });
     ui.data_mut(|data| {
         data.insert_temp(selection, selected);
         data.insert_temp(animation_id, sources);

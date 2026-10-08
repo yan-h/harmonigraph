@@ -1832,7 +1832,7 @@ mod tests {
     /// The branch is a deliberate choice — `spectrum_track_width` floors at
     /// zero, so past that point the track stops shrinking and the button stops
     /// moving — and no sweep reaches it: `no_settings_pane_overruns_a_narrow_column`
-    /// bottoms out at 120pt and this needs 20. Which leaves the arithmetic
+    /// bottoms out at the settings floor and this needs 20. Which leaves the arithmetic
     /// under it unexercised, and it is the arithmetic most likely to put the
     /// button's own left edge past the right edge of the row.
     #[test]

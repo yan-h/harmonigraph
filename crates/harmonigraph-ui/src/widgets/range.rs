@@ -679,7 +679,8 @@ impl<'a> RangeBar<'a> {
         // number can push into the name. A bar too narrow to grant even the
         // elided name its width is past that (the readouts then take what room
         // there is and the containment below is the only promise left), which
-        // is well under the 120pt the panes are held to.
+        // is well under the narrowest a pane lays a bar out at
+        // (`theme::SETTINGS_MIN_CONTENT`).
         let region_left = rect.left() + text_pad + label_width + BAR_LABEL_GAP * scale;
         let region_right = rect.right() - text_gap;
 
@@ -1444,9 +1445,9 @@ mod tests {
     /// galley's text is the job's own string — the whole name, elided or not —
     /// and says nothing about what was drawn.
     ///
-    /// 120pt because that is the narrowest column the panes are held to
-    /// (`no_settings_pane_overruns_a_narrow_column`), so it is the width at
-    /// which the eliding has to work rather than an arbitrary squeeze.
+    /// 120pt because this name fits whole at the narrowest a pane lays a bar
+    /// out at ([`crate::theme::SETTINGS_MIN_CONTENT`]), and only a squeeze past it
+    /// makes the name elide. A longer name meets the same eliding at the floor.
     #[test]
     fn a_narrow_row_elides_the_name_rather_than_the_numbers() {
         let narrow = paint_range_bar_wide(120.0, 60.0, 72.0);

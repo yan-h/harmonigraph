@@ -240,11 +240,10 @@ pub(crate) fn ui_scale(ctx: &egui::Context) -> f32 {
 /// moved, which is a caller's cue that a `Ui` built from the old style is now
 /// a frame behind.
 ///
-/// Cheap to call every frame, and meant to be: the factor is stored the same
-/// per-frame way as [`crate::panes::pane_content_right`], so a context that
-/// stops being told falls back to the design size rather than keeping a stale
-/// one, and one that loses the value gets it (and its style) back on the next
-/// frame.
+/// Cheap to call every frame, and meant to be: the factor is stored in the
+/// context's per-frame temp data, so a context that stops being told falls back
+/// to the design size rather than keeping a stale one, and one that loses the
+/// value gets it (and its style) back on the next frame.
 pub fn set_ui_scale(ctx: &egui::Context, scale: f32) -> bool {
     let scale = sane_ui_scale(scale);
     let previous = ctx.data(|d| d.get_temp::<f32>(ui_scale_id()));
@@ -308,6 +307,24 @@ pub(crate) fn tab_bar_height(scale: f32) -> f32 {
 /// is the way to get it out of the way, and it is a click on the arrow.
 pub(crate) fn min_pane(scale: f32) -> f32 {
     4.0 * tab_bar_height(scale)
+}
+
+/// The narrowest a settings pane's content box is ever laid out at, in design
+/// points: where a plot still has room for its exact values beside the picture
+/// (a 112-point well, the gap, and bars wide enough for a name and a readout),
+/// and the Tuning pane's sources still fit their three-column grid.
+///
+/// Above it a narrower column only wraps a row of buttons or turns one into a
+/// dropdown, and each row keeps its place. Below it those two blocks would have
+/// to stack, which moves everything under them by hundreds of points, so the
+/// column stops here instead and neither has a stacked layout to fall back to.
+pub(crate) const SETTINGS_MIN_CONTENT: f32 = 220.0;
+
+/// The narrowest the settings column is dragged or fitted to, at this scale:
+/// [`SETTINGS_MIN_CONTENT`] plus the pane margin either side of it. Only a
+/// window too narrow to hold it at all draws the column any narrower.
+pub(crate) fn min_settings(scale: f32) -> f32 {
+    SETTINGS_MIN_CONTENT * scale + 2.0 * f32::from(dock_pane_margin(scale))
 }
 
 /// Give a scroll area built INSIDE a pane a lane of its own to draw its bar in.

@@ -60,40 +60,21 @@ pub(super) fn elided_name(
     painter.layout_job(job)
 }
 
-/// How wide a bar draws: the width the layout offers, but never past the
-/// visible edge of the pane. Shared by [`ValueBar`] and [`RangeBar`], so every
-/// bar in a settings column comes out the same length and they all narrow
-/// together as the column does.
+/// How wide a bar draws: the width the layout offers, never below zero. Shared
+/// by [`ValueBar`] and [`RangeBar`], so every bar in a settings column comes out
+/// the same length and they all narrow together as the column does.
 ///
-/// `available_width` alone is not enough, and the reason is worth stating
-/// because nothing about it is visible here: egui's
-/// `Region::expand_to_include_rect` unions `max_rect` as well as `min_rect`, so
-/// any control that overruns the column widens the region for everything AFTER
-/// it, and a bar sizing itself from the layout inherits the overrun as a floor
-/// it cannot shrink past. Each bar's minimum length is then the width of the
-/// widest thing above it — several different minimums down one pane, the bars
-/// under a wide control running their value readout off the pane edge while the
-/// ones above compress properly.
-///
-/// [`button_row`] keeps rows and their button labels inside the column, which is
-/// what removes the usual sources; this covers the ones with nowhere to wrap to,
-/// like the record button and the Options field in a very narrow Video pane.
-///
-/// The limit comes from [`crate::panes::pane_content_right`], which the pane
-/// records on the way in. Deliberately not the clip rect: that is the tab BODY,
-/// a [`theme::pane_inner_margin`] wider than the content box on each side, so a
-/// bar clamped to it comes out a margin longer than its neighbours and flush on
-/// the pane border. Outside a pane — the widget's own tests — there is nothing
-/// to hand a value over, and the clip is then the honest fallback.
+/// The layout's width is the column's only while nothing above the bar runs
+/// past the column: egui's `Region::expand_to_include_rect` unions `max_rect`
+/// as well as `min_rect`, so a control that overruns widens the region for
+/// everything after it, and every bar below would inherit the overrun.
+/// `no_settings_pane_overruns_a_narrow_column` holds that nothing does, down to
+/// the narrowest a pane is laid out at ([`theme::SETTINGS_MIN_CONTENT`]).
 ///
 /// [`ValueBar`]: super::value::ValueBar
 /// [`RangeBar`]: super::range::RangeBar
-/// [`button_row`]: super::rows::button_row
 pub(super) fn bar_width(ui: &Ui) -> f32 {
-    let right = ui
-        .data(|d| d.get_temp::<f32>(crate::panes::pane_content_right()))
-        .unwrap_or_else(|| ui.clip_rect().right());
-    ui.available_width().min(right - ui.cursor().left()).max(0.0)
+    ui.available_width().max(0.0)
 }
 
 /// How near a handle the pointer has to start for the drag to take that
