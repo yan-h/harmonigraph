@@ -25,7 +25,7 @@ there is no PIL on Yan's Mac, which is why `png.py` exists.
 
 Copy `kit/` into `$CLAUDE_JOB_DIR/tmp/proto/` (or any scratch directory) and write the prototype there.
 The kit caches the decoded take beside itself, renders are large, and none of it is a tracked file.
-What is worth keeping at the end goes to the places in step 6.
+What is worth keeping at the end goes where the last section says.
 
 ## 1. Pin the brief down with a veto, not a description
 
@@ -94,7 +94,6 @@ three picked looks that are one construction at different settings is a build pl
 - What the existing look's golden frames prove is that the new style did not disturb it: they pass UNBLESSED or something is wrong.
 - Measure cost against the look it sits beside, back to back, and report it rather than quietly trading the look for speed.
 
-Then the ordinary contract applies: both release packages built, draft PR, the `build-handover` skill for the load line.
 After he has turned the dials in Bitwig, read the values back with the `capture-daw-state` skill rather than asking him to describe where they ended up.
 
 ## Where things are kept
